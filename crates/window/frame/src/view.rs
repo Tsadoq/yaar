@@ -7,17 +7,22 @@ use gpui_kit::*;
 
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
+use crate::trace;
 
 /// The root view of the window. It holds no pane yet.
 pub struct Frame {
     link: Entity<KeeperLink>,
+    first_frame_marked: bool,
 }
 
 impl Frame {
     /// A Frame that shows `link` and redraws when it changes.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         cx.observe(&link, |_, _, cx| cx.notify()).detach();
-        Self { link }
+        Self {
+            link,
+            first_frame_marked: false,
+        }
     }
 
     /// The line the empty window shows about the Keeper.
@@ -37,7 +42,11 @@ impl Frame {
 }
 
 impl Render for Frame {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.first_frame_marked {
+            self.first_frame_marked = true;
+            window.on_next_frame(|_, _| trace::mark("first_frame"));
+        }
         let status = self.status_line(cx);
         let theme = cx.theme();
         div()
@@ -88,6 +97,7 @@ pub fn open(
     let weak = link.downgrade();
     cx.spawn(async move |cx| {
         let outcome = attaching.await;
+        trace::mark("keeper_attached");
         weak.update(cx, |link, cx| link.attached(outcome, cx)).ok();
     })
     .detach();

@@ -24,6 +24,7 @@ actions!(
 );
 
 fn main() -> ExitCode {
+    yaar_frame::trace::mark("main");
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.iter().map(String::as_str).collect::<Vec<_>>()[..] {
         [] => {

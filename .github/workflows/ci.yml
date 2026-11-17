@@ -1,0 +1,342 @@
+# The checks that run on every change.
+#
+#   checks-linux    formatting, lints, tests, licences, unused dependencies, layout rules
+#   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
+#   install-linux   the install script, piped as a user would, on five releases
+#   macos           lints, tests, layout rules, release build for both processors, the app
+#
+# Linux runs on x86-64 and on arm64. No job needs a display.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_RETRY: "5"
+  APP_VERSION: 0.1.0
+
+jobs:
+  checks-linux:
+    name: checks linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # A plain image, so that the job proves what a clean system needs.
+    container: ubuntu:24.04
+    timeout-minutes: 45
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git gcc libc6-dev pkg-config libfontconfig-dev \
+            libxkbcommon-x11-dev fonts-dejavu-core
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust toolchain named in rust-toolchain.toml
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+          "$HOME/.cargo/bin/rustc" -vV
+
+      - name: Restore crates and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: checks-${{ runner.os }}-${{ matrix.arch }}-ubuntu24.04-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            checks-${{ runner.os }}-${{ matrix.arch }}-ubuntu24.04-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Check tools
+        run: .github/scripts/install-tools.sh "$HOME/.cargo/bin" nextest deny machete
+
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Lints
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo nextest run --locked --workspace
+
+      - name: Licences, advisories, bans, sources
+        run: cargo deny check
+
+      - name: Unused dependencies
+        run: cargo machete
+
+      - name: Layout rules
+        run: cargo xtask layout
+
+  package-linux:
+    name: package linux ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # Built on the oldest promised release: a program built on a newer one does not start
+    # on an older one.
+    container: ubuntu:22.04
+    timeout-minutes: 45
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git gcc libc6-dev pkg-config libfontconfig-dev \
+            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust toolchain named in rust-toolchain.toml
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+          "$HOME/.cargo/bin/rustc" -vV
+
+      - name: Restore crates and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Notices tool
+        run: .github/scripts/install-tools.sh "$HOME/.cargo/bin" about
+
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - name: Release build
+        run: .github/scripts/release-build.sh
+
+      - name: Third-party notices
+        run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt ${{ matrix.arch }}-unknown-linux-gnu
+
+      - name: The .deb and the archive
+        run: |
+          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-linux.sh \
+            target/release/yaar-review target/release/yaar-keeper "$APP_VERSION" site/download
+
+      - name: Package check
+        run: |
+          dpkg-deb --info site/download/*.deb
+          dpkg-deb --contents site/download/*.deb
+          apt-get install -y --no-install-recommends ./site/download/*.deb
+          yaar-review --version
+          ldd /usr/bin/yaar-review
+          test -x /usr/libexec/yaar-review/yaar-keeper
+          test -s /usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz
+
+      # The key is made here and thrown away with the job. The key of the published
+      # repository belongs to the release job and is never in this workflow.
+      - name: An apt repository signed with a throwaway key, and the install script beside it
+        run: |
+          eval "$(packaging/apt/make-test-key.sh)"
+          export GNUPGHOME YAAR_APT_KEY
+          packaging/apt/make-apt-repo.sh site/apt site/download/*.deb
+          cp packaging/install.sh site/install.sh
+          gpgconf --homedir "$GNUPGHOME" --kill gpg-agent || true
+          rm -rf "$GNUPGHOME"
+          find site -type f | sort
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: site/
+          if-no-files-found: error
+
+  install-linux:
+    name: install ${{ matrix.image }} ${{ matrix.arch }}
+    needs: package-linux
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:12", "debian:13"]
+    runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 15
+    steps:
+      - name: What a user's system has, and a user
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl sudo python3 procps
+          useradd --create-home tester
+          echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: site
+
+      - name: Serve the site as GitHub Pages would
+        run: |
+          cd site
+          nohup python3 -m http.server 8000 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
+          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/install.sh > /dev/null && break; sleep 0.1; done
+
+      - name: The install line, as a user
+        run: |
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
+          dpkg-query -W yaar-review
+          apt-cache policy yaar-review
+
+      - name: The programs run, and the Keeper outlives the Window program
+        run: |
+          yaar-review --version
+          sudo -u tester bash -c '
+            set -euo pipefail
+            first=$(yaar-review --keeper-status); echo "$first"
+            second=$(yaar-review --keeper-status); echo "$second"
+            case "$first" in *"started=true"*) ;; *) echo "the first call did not start a Keeper"; exit 1 ;; esac
+            case "$second" in *"started=false"*) ;; *) echo "the second call started another Keeper"; exit 1 ;; esac
+            pid=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^pid=//p")
+            session=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^session=//p")
+            [ "$pid" = "$session" ] || { echo "the Keeper does not lead its own session"; exit 1; }
+            readlink "/proc/$pid/exe"
+            [ "$(readlink "/proc/$pid/exe")" = /usr/libexec/yaar-review/yaar-keeper ]
+          '
+
+      - name: A second run changes nothing, and the uninstall leaves nothing
+        run: |
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash -s -- --uninstall'
+          ! command -v yaar-review
+          ! test -e /etc/apt/sources.list.d/yaar-review.sources
+          ! test -e /etc/apt/keyrings/yaar-review.asc
+
+  macos:
+    name: macos universal
+    # macOS 26: the version before the current one, which the first release promises on
+    # the strength of this job. No hosted machine runs the current macOS yet.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust toolchain named in rust-toolchain.toml, plus the Intel target
+        run: |
+          rustup toolchain install
+          rustup target add x86_64-apple-darwin
+          rustc -vV
+          sw_vers
+
+      - name: Restore crates and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            macos-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Check tools
+        run: .github/scripts/install-tools.sh "${CARGO_HOME:-$HOME/.cargo}/bin" nextest about
+
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - name: Lints
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo nextest run --locked --workspace
+
+      - name: Layout rules
+        run: cargo xtask layout
+
+      - name: Release build, both processors
+        run: .github/scripts/release-build.sh --target aarch64-apple-darwin --target x86_64-apple-darwin
+
+      - name: Third-party notices
+        run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt aarch64-apple-darwin x86_64-apple-darwin
+
+      # Ad hoc: the Developer ID and the notarization login are not in this workflow.
+      - name: The app, the .zip and the disk image, signed ad hoc
+        run: |
+          T=target
+          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$APP_VERSION" dist \
+            $T/aarch64-apple-darwin/release/yaar-review $T/x86_64-apple-darwin/release/yaar-review \
+            -- $T/aarch64-apple-darwin/release/yaar-keeper $T/x86_64-apple-darwin/release/yaar-keeper
+
+      - name: Signature and processors
+        run: |
+          codesign --verify --deep --strict --verbose=2 dist/YAAR.app
+          codesign --display --verbose=4 dist/YAAR.app
+          lipo -archs dist/YAAR.app/Contents/MacOS/yaar-review
+          lipo -archs dist/YAAR.app/Contents/Helpers/yaar-keeper
+
+      - name: The packaged Window program starts the packaged Keeper, which outlives it
+        run: |
+          export YAAR_SOCKET="$RUNNER_TEMP/k.sock"
+          first=$(dist/YAAR.app/Contents/MacOS/yaar-review --keeper-status); echo "$first"
+          second=$(dist/YAAR.app/Contents/MacOS/yaar-review --keeper-status); echo "$second"
+          case "$first" in *"started=true"*) ;; *) echo "the first call did not start a Keeper"; exit 1 ;; esac
+          case "$second" in *"started=false"*) ;; *) echo "the second call started another Keeper"; exit 1 ;; esac
+          pid=$(printf '%s\n' "$first" | tr ' ' '\n' | sed -n 's/^pid=//p')
+          ps -o pid,ppid,command -p "$pid"
+          ps -o command= -p "$pid" | grep -q 'YAAR.app/Contents/Helpers/yaar-keeper'
+          codesign --verify --verbose=1 "$pid"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-universal
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/SHA256SUMS-macos
+          if-no-files-found: error
