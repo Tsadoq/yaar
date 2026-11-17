@@ -79,6 +79,8 @@ pub fn open(
     let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // What a Linux desktop matches the desktop entry and the icon by.
+        app_id: Some("io.github.tsadoq.yaar".into()),
         titlebar: Some(TitlebarOptions {
             title: Some("YAAR".into()),
             ..Default::default()

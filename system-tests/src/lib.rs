@@ -105,10 +105,32 @@ pub fn attach(socket: &Path) -> (UnixStream, Hello) {
     }
 }
 
-/// Whether a process with this id exists.
+/// Whether a process with this id runs. One that has ended and waits to be collected does
+/// not count: in a container whose first process collects nothing, a Keeper that outlived
+/// its Window stays in that state for good.
 pub fn is_alive(pid: u32) -> bool {
     // SAFETY: signal 0 sends nothing; it only asks whether the process can be signalled.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    let exists = unsafe { libc::kill(pid as libc::pid_t, 0) == 0 };
+    exists && !has_ended(pid)
+}
+
+/// Whether the process is a zombie, read from `/proc/<pid>/stat`: the state is the first
+/// field after the name, and the name ends at the last `)`.
+#[cfg(target_os = "linux")]
+fn has_ended(pid: u32) -> bool {
+    std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|stat| {
+            stat.rsplit_once(')')
+                .map(|(_, rest)| rest.trim_start().starts_with('Z'))
+        })
+        .unwrap_or(false)
+}
+
+/// Elsewhere the system collects a process nobody waits for.
+#[cfg(not(target_os = "linux"))]
+fn has_ended(_pid: u32) -> bool {
+    false
 }
 
 /// Waits until `done` holds, at most `limit`. Returns whether it came to hold.

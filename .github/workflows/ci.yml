@@ -120,7 +120,7 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git gcc libc6-dev pkg-config libfontconfig-dev \
+            ca-certificates curl git gcc g++ libc6-dev pkg-config libfontconfig-dev \
             libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -170,7 +170,7 @@ jobs:
           yaar-review --version
           ldd /usr/bin/yaar-review
           test -x /usr/libexec/yaar-review/yaar-keeper
-          test -s /usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz
+          dpkg-deb --contents site/download/*.deb | grep -q 'usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz'
 
       # The key is made here and thrown away with the job. The key of the published
       # repository belongs to the release job and is never in this workflow.

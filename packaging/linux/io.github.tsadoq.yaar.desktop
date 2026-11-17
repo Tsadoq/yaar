@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=YAAR
+GenericName=Code Review
+Comment=Reviews what a coding agent changes, while it changes it
+Exec=yaar-review
+Icon=io.github.tsadoq.yaar
+Terminal=false
+Categories=Development;
+StartupNotify=true
+StartupWMClass=io.github.tsadoq.yaar

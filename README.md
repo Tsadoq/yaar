@@ -14,7 +14,7 @@ rustup installs it on first use. A `cargo` that ignores that file, such as Homeb
 builds with the wrong compiler: put `~/.cargo/bin` first on your `PATH`.
 
 On Debian and Ubuntu the build also needs
-`gcc libc6-dev pkg-config libfontconfig-dev libxkbcommon-x11-dev`.
+`gcc libc6-dev pkg-config libfontconfig-dev libxkbcommon-x11-dev`, and on Ubuntu 22.04 `g++`.
 
 ```sh
 cargo build --locked --workspace
