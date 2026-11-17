@@ -170,7 +170,8 @@ jobs:
           yaar-review --version
           ldd /usr/bin/yaar-review
           test -x /usr/libexec/yaar-review/yaar-keeper
-          dpkg-deb --contents site/download/*.deb | grep -q 'usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz'
+          dpkg-deb --contents site/download/*.deb > contents.txt
+          grep -q 'usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz' contents.txt
 
       # The key is made here and thrown away with the job. The key of the published
       # repository belongs to the release job and is never in this workflow.
