@@ -105,7 +105,7 @@ pub fn keeper_program() -> Option<PathBuf> {
         "yaar-keeper",                        // a build folder
     ]
     .iter()
-    .map(|relative| folder.join(relative))
+    .filter_map(|relative| folder.join(relative).canonicalize().ok())
     .find(|candidate| candidate.is_file())
 }
 

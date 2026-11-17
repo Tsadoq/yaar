@@ -43,24 +43,22 @@ fn main() -> ExitCode {
 }
 
 fn open_window() {
-    gpui_kit::application()
-        .with_assets(gpui_kit::assets::AllAssets)
-        .run(|cx| {
-            gpui_kit::init(cx);
-            Theme::sync_system_appearance(None, cx);
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
+    gpui_kit::application().run(|cx| {
+        gpui_kit::init(cx);
+        Theme::sync_system_appearance(None, cx);
+        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.on_window_closed(|cx, _| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
-            // The system brings an app it launches to the front. The Window does not push
-            // itself there: a window started in the background stays in the background.
-            yaar_frame::open(yaar_link::socket_path(), VERSION, cx).expect("open the window");
-        });
+        // The system brings an app it launches to the front. The Window does not push
+        // itself there: a window started in the background stays in the background.
+        yaar_frame::open(yaar_link::socket_path(), VERSION, cx).expect("open the window");
+    });
 }
 
 fn keeper_status() -> ExitCode {

@@ -1,0 +1,34 @@
+YAAR: THIRD-PARTY NOTICES
+
+YAAR is licensed under the Apache License, Version 2.0. The programs in this package
+are built from the software listed below. This file is generated from the lock file of
+the build; it reproduces the licence texts and copyright notices of everything linked.
+
+One file of the crate gpui-pre-apple, src/display_link.rs, is changed from the published
+version; the change is described in patches/README.md of the YAAR source.
+
+The Rust standard library is linked into the programs. It is copyright The Rust Project
+Contributors and is used under the Apache License, Version 2.0, reproduced below.
+
+On Linux, portions of this software are copyright (c) The FreeType Project
+(www.freetype.org). All rights reserved. FreeType is used under the FreeType License.
+
+--------------------------------------------------------------------------------
+OVERVIEW
+
+{{#each overview}}
+{{count}} x {{{name}}} ({{{id}}})
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}} ({{{id}}})
+
+Used by:
+{{#each used_by}}
+  {{{crate.name}}} {{{crate.version}}}{{#if crate.repository}}  {{{crate.repository}}}{{/if}}
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

@@ -23,7 +23,8 @@ yaar-link = { path = "crates/shared/link" }
 yaar-frame = { path = "crates/window/frame" }
 # GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
 # of patches/ and the speed check on the reference Mac.
-gpui-kit = "=0.9.1"
+# Without the kit's icon set: the app ships only the icons it uses, and uses none yet.
+gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }
 libc = "0.2"
 serde_json = "1"
 
