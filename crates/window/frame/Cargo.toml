@@ -1,0 +1,19 @@
+[package]
+name = "yaar-frame"
+description = "Frame: the window around the panes, and the link to the Keeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+yaar-link.workspace = true
+gpui-kit.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+# GPUI's test platform, for tests only: the programs users get are built without it.
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

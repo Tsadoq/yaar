@@ -1,0 +1,124 @@
+//! System tests (`B-BUILD`): the whole app through what a user or an agent touches.
+//!
+//! The tests in `tests/` start the built programs. This library holds what they share:
+//! where the programs are, a place for a socket, and a scripted client that speaks the
+//! Link in place of the Window. The stand-in agent CLI joins it when the Switchboard
+//! exists.
+
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::Once;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::{Duration, Instant};
+
+use yaar_link::{Hello, handshake};
+
+/// The path of a built program of the workspace, building both programs first if one is
+/// missing. Cargo puts them in the profile folder, `target/debug` or the like; a test
+/// program runs from `build/` or `deps/` somewhere beneath it, depending on the Cargo
+/// version.
+pub fn program(name: &str) -> PathBuf {
+    let test_exe = std::env::current_exe().expect("the test's own path");
+    let profile_dir = test_exe
+        .ancestors()
+        .find(|folder| {
+            folder
+                .file_name()
+                .is_some_and(|name| name == "build" || name == "deps")
+        })
+        .and_then(Path::parent)
+        .expect("a test program runs from beneath build/ or deps/")
+        .to_owned();
+    let path = profile_dir.join(name);
+    static BUILD: Once = Once::new();
+    BUILD.call_once(|| {
+        if ["yaar-review", "yaar-keeper"]
+            .iter()
+            .all(|program| profile_dir.join(program).is_file())
+        {
+            return;
+        }
+        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+        let mut build = Command::new(cargo);
+        build.args([
+            "build",
+            "--locked",
+            "-p",
+            "yaar-keeper",
+            "-p",
+            "yaar-window",
+        ]);
+        if profile_dir.file_name().is_some_and(|p| p == "release") {
+            build.arg("--release");
+        }
+        let status = build.status().expect("run cargo");
+        assert!(status.success(), "building the programs failed");
+    });
+    assert!(path.is_file(), "{} was not built", path.display());
+    path
+}
+
+/// A folder of the test's own, with a path short enough for a socket on every system.
+/// Removed when dropped.
+pub struct Place(PathBuf);
+
+impl Place {
+    /// A new, empty folder.
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let path = PathBuf::from(format!("/tmp/yaar-st-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("create the test's folder");
+        Self(path)
+    }
+
+    /// Where the Keeper of this test listens.
+    pub fn socket(&self) -> PathBuf {
+        self.0.join("k.sock")
+    }
+}
+
+impl Drop for Place {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The scripted client: connects as a Window would and returns who answered.
+/// Waits up to five seconds for a Keeper to listen.
+pub fn attach(socket: &Path) -> (UnixStream, Hello) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(mut stream) = UnixStream::connect(socket)
+            && let Ok(keeper) = handshake(&mut stream, &Hello::for_this_process("scripted-window"))
+        {
+            return (stream, keeper);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no Keeper at {}",
+            socket.display()
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// Whether a process with this id exists.
+pub fn is_alive(pid: u32) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether the process can be signalled.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+/// Waits until `done` holds, at most `limit`. Returns whether it came to hold.
+pub fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if done() {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    done()
+}

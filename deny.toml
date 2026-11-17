@@ -1,0 +1,56 @@
+# cargo-deny 0.21. Everything outside the lists below fails the check.
+[graph]
+# Only what the four shipped targets compile.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+]
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+    # "Unmaintained" notices with no vulnerability. All arrive through GPUI's dependency
+    # tree; they are read again whenever GPUI is raised.
+    { id = "RUSTSEC-2024-0384", reason = "instant: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2024-0436", reason = "paste: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant 5: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names 4: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive 5: unmaintained, through GPUI" },
+    { id = "RUSTSEC-2026-0543", reason = "chrono: unmaintained, through GPUI" },
+]
+
+[licenses]
+version = 2
+confidence-threshold = 0.8
+# The permissive licences, and MPL-2.0. A dependency under anything else fails.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The crates of this workspace name each other by path.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
