@@ -267,12 +267,7 @@ impl ReviewPane {
                 Side::Old => theme.danger.opacity(0.4),
                 Side::New => theme.success.opacity(0.4),
             };
-            div()
-                .flex_1()
-                .min_w_0()
-                .px_1()
-                .overflow_hidden()
-                .child(line_text(diff, side, line, mark))
+            line_text(diff, index, side, line, mark)
         };
         let go = |side: Side| {
             cx.listener(move |pane, _: &MouseDownEvent, _, cx| pane.go_to(index, side, cx))
@@ -317,13 +312,7 @@ impl ReviewPane {
                 let unchanged = matches!(shown, Row::Context { .. });
                 let half = |side: Side, tint: Hsla| {
                     let half = div()
-                        .debug_selector(|| {
-                            let side = match side {
-                                Side::Old => "old",
-                                Side::New => "new",
-                            };
-                            format!("review-row-{index}-{side}")
-                        })
+                        .debug_selector(|| format!("review-row-{index}-{}", side_name(side)))
                         .w_1_2()
                         .h_full()
                         .flex()
@@ -355,8 +344,21 @@ impl ReviewPane {
     }
 }
 
-/// One line as text, with its changed words marked.
-fn line_text(diff: &ShownDiff, side: Side, line: u32, mark: Hsla) -> StyledText {
+/// The name of a side in the selectors of the pane.
+fn side_name(side: Side) -> &'static str {
+    match side {
+        Side::Old => "old",
+        Side::New => "new",
+    }
+}
+
+/// One line of the diff shown by the row at `index`, as the element that draws it: its
+/// text, with its changed words marked.
+///
+/// The selector of the element carries the text itself, as it is handed to the text
+/// system here and nowhere else: a test cannot read what is drawn, and reads there
+/// which text the row was given.
+fn line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: Hsla) -> Div {
     let text = diff.text(side, line);
     // The marks count the bytes of the line as it is in the file. Where bytes that are
     // no text were replaced, the shown text has other bytes, and nothing is marked.
@@ -376,7 +378,14 @@ fn line_text(diff: &ShownDiff, side: Side, line: u32, mark: Hsla) -> StyledText 
             (marked.start..marked.end.min(end), style)
         })
         .collect::<Vec<_>>();
-    StyledText::new(text[..end].to_owned()).with_highlights(highlights)
+    let drawn = text[..end].to_owned();
+    div()
+        .debug_selector(|| format!("review-text-{index}-{}:{drawn}", side_name(side)))
+        .flex_1()
+        .min_w_0()
+        .px_1()
+        .overflow_hidden()
+        .child(StyledText::new(drawn).with_highlights(highlights))
 }
 
 /// The first seven digits of the id of a commit, as git shortens it.

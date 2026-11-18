@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{
-    ClipboardItem, Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
-    point, px,
+    Bounds, ClipboardItem, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext,
+    VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
 use yaar_frame::SetBase;
@@ -69,6 +69,63 @@ fn reading(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
         }
         read
     })
+}
+
+/// Holds what the rows in view draw to what the pane gives as the text of their lines.
+/// A test cannot read what is drawn, but the element that hands a line to the text
+/// system names in its selector the text it hands over: for each line a row of a diff
+/// shows there is such an element with the text of that line, inside the row, and in
+/// the split view inside the half of its side.
+fn assert_lines_drawn_as_read(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) {
+    let (layout, shown, in_view) = pane.read_with(cx, |pane, _| {
+        (pane.layout(), pane.rows().to_vec(), pane.rows_in_view())
+    });
+    // A line of text is a pixel higher than a row and is cut to it, so it is its middle
+    // that lies in the row, between the left and the right edge of it.
+    let holds = |outer: Bounds<Pixels>, inner: Bounds<Pixels>| {
+        outer.contains(&inner.center())
+            && outer.left() <= inner.left()
+            && inner.right() <= outer.right()
+    };
+    let mut lines = 0;
+    for index in in_view {
+        let PaneRow::Diff { path, row } = &shown[index] else {
+            continue;
+        };
+        let whole = bounds_of_row(index, cx);
+        for (side, name) in [(Side::Old, "old"), (Side::New, "new")] {
+            // The unified view shows an unchanged line once, as the new version has it.
+            let once = layout == Layout::Unified && matches!(row, Row::Context { .. });
+            let Some(line) = row.line(side).filter(|_| !(once && side == Side::Old)) else {
+                continue;
+            };
+            let position = Position {
+                path: path.clone(),
+                side,
+                line,
+            };
+            let text = pane
+                .read_with(cx, |pane, _| pane.text(&position))
+                .unwrap_or_else(|| panic!("the pane shows {position:?} and has no text for it"));
+            let place = drawn(&format!("review-text-{index}-{name}:{text}"), cx)
+                .unwrap_or_else(|| panic!("row {index} does not draw {text:?} for {position:?}"));
+            assert!(place.size.width > px(0.) && place.size.height > px(0.));
+            assert!(
+                holds(whole, place),
+                "{position:?} is drawn at {place:?}, outside row {index} at {whole:?}"
+            );
+            if layout == Layout::Split {
+                let half = drawn(&format!("review-row-{index}-{name}"), cx)
+                    .unwrap_or_else(|| panic!("row {index} has no {name} half"));
+                assert!(
+                    holds(half, place),
+                    "{position:?} is drawn in the other half"
+                );
+            }
+            lines += 1;
+        }
+    }
+    assert!(lines > 0, "no line of a diff is in view");
 }
 
 #[gpui_kit::test]
@@ -173,6 +230,9 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
         .map(|index| bounds_of_row(index, &mut cx).top())
         .collect();
     assert!(tops.is_sorted_by(|above, below| above < below), "{tops:?}");
+    // And each row of a diff draws the line it stands for: the text handed to the text
+    // system in that row is the text of that line.
+    assert_lines_drawn_as_read(&stage.pane, &mut cx);
 }
 
 /// Sends the pane other changes of the workspace on screen, the way a Keeper does: it
@@ -461,6 +521,10 @@ fn switching_between_the_unified_and_the_split_view_keeps_the_line_the_reviewer_
             assert!(drawn.top() >= px(0.) && drawn.bottom() <= WINDOW.height);
             // At the height it was at, so the eye of the reviewer need not look for it.
             assert_eq!(drawn.top(), drawn_before.top());
+            // In this layout too each row in view draws the lines it stands for, a row
+            // of the split view the removed line in its old half and the added one in
+            // its new half.
+            assert_lines_drawn_as_read(pane, &mut cx);
         }
     }
 }
@@ -1108,9 +1172,19 @@ fn a_line_is_held_as_the_file_has_it_whatever_its_bytes_and_however_long_it_is(
     );
     // All of them were drawn, the changed words marked: a mark that fell inside a
     // character would have stopped the frame.
-    for row in 0..7 {
+    for row in 0..8 {
         bounds_of_row(row, &mut cx);
     }
+    // What is drawn of the short lines is the lines. Of the long line it is its start,
+    // up to the last character that lies whole within its first 1,024 bytes: no line
+    // is wrapped, and no window is as wide as that.
+    assert!(drawn("review-text-2-new:caf\u{fffd}", &mut cx).is_some());
+    assert!(drawn("review-text-4-old:naïve ✓ 日本", &mut cx).is_some());
+    assert!(drawn("review-text-6-new:naïve ✗ 日本", &mut cx).is_some());
+    let start = format!("{} 日", "x".repeat(1019));
+    assert_eq!(start.len(), 1023);
+    assert!(drawn(&format!("review-text-5-old:{start}"), &mut cx).is_some());
+    assert!(drawn(&format!("review-text-7-new:{start}"), &mut cx).is_some());
 }
 
 #[gpui_kit::test]

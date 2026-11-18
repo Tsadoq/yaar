@@ -216,8 +216,11 @@ struct ShownDiff {
 /// For tests, which cannot read what is drawn, each row that is laid out carries a
 /// selector that `debug_bounds` finds: `review-row-<index>`, with its index in
 /// [`ReviewPane::rows`]. In the split view the two halves of a row of a diff carry
-/// `review-row-<index>-old` and `review-row-<index>-new` as well. The control that
-/// offers to set a base carries `review-offer-base`.
+/// `review-row-<index>-old` and `review-row-<index>-new` as well. The text of a line is
+/// drawn by an element inside its row that carries `review-text-<index>-old:<text>` or
+/// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
+/// system for that line: the line, or of a line of more than 1,024 bytes its start.
+/// The control that offers to set a base carries `review-offer-base`.
 ///
 /// When the Keeper refuses to read the changes again, the pane keeps the rows it has
 /// and says above them, in a line that carries `review-refused`, that they could not be
