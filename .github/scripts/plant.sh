@@ -13,7 +13,8 @@
 #
 # Everything happens in a copy of the tree under a temporary folder: the plant never
 # reaches the repository or its lock file. The plant goes under each program the packages
-# ship and under the Companion, one at a time.
+# ship and under the Companion, one at a time. A licence is planted under each of the three
+# kinds of dependency cargo has, since the check leaves one of them out unless told not to.
 #
 # "cargo deny failed" would prove nothing: it also fails for a stale lock, a broken
 # manifest or a missing database. So each run is judged twice. Without the plant the check
@@ -44,6 +45,12 @@ case "$KIND" in
   *)       usage ;;
 esac
 
+# The kinds of dependency a plant goes under: all three that cargo has for a licence,
+# one for the other checks, which judge a crate whatever the kind.
+case "$KIND" in
+  licence) SECTIONS="dependencies dev-dependencies build-dependencies" ;;
+  *)       SECTIONS="dependencies" ;;
+esac
 # The programs the packages ship, and the Companion.
 MANIFESTS="crates/window/window/Cargo.toml crates/keeper/keeper/Cargo.toml companions/claude/Cargo.toml"
 # The interface toolkit, by the crate the app names in its manifests.
@@ -217,22 +224,24 @@ echo "control: cargo deny check $CHECK passes on the tree as it is, $TOOLKIT in 
 cp "$TREE/Cargo.lock" "$TMP/lock.kept"
 OFFLINE=$PLANTED_OFFLINE
 for manifest in $MANIFESTS; do
-  cp "$TREE/$manifest" "$TMP/manifest.kept"
-  printf '\n[dependencies.%s]\n%s\n' "$CRATE" "$WHERE" >> "$TREE/$manifest"
+  for section in $SECTIONS; do
+    cp "$TREE/$manifest" "$TMP/manifest.kept"
+    printf '\n[%s.%s]\n%s\n' "$section" "$CRATE" "$WHERE" >> "$TREE/$manifest"
 
-  if deny "$@"; then
-    fail "$CRATE planted in $manifest, and cargo deny check $CHECK passes"
-  fi
-  # Anything but a count of one or more fails: a run that could not be read is no refusal.
-  count=$(refusals) || fail "$CRATE planted in $manifest: jq could not read the diagnostics of the check"
-  if ! [ "$count" -ge 1 ]; then
-    show "$@"
-    fail "$CRATE planted in $manifest: the check fails, but not with '$CODE' for $CRATE"
-  fi
-  echo "$manifest: $CRATE planted, refused ($CODE)"
+    if deny "$@"; then
+      fail "$CRATE planted under [$section] of $manifest, and cargo deny check $CHECK passes"
+    fi
+    # Anything but a count of one or more fails: a run that could not be read is no refusal.
+    count=$(refusals) || fail "$CRATE planted under [$section] of $manifest: jq could not read the diagnostics of the check"
+    if ! [ "$count" -ge 1 ]; then
+      show "$@"
+      fail "$CRATE planted under [$section] of $manifest: the check fails, but not with '$CODE' for $CRATE"
+    fi
+    echo "$manifest: $CRATE planted under [$section], refused ($CODE)"
 
-  cp "$TMP/manifest.kept" "$TREE/$manifest"
-  cp "$TMP/lock.kept" "$TREE/Cargo.lock"
+    cp "$TMP/manifest.kept" "$TREE/$manifest"
+    cp "$TMP/lock.kept" "$TREE/Cargo.lock"
+  done
 done
 
 if [ "$KIND" = git ]; then

@@ -56,6 +56,12 @@ copy
 change deny.toml 's/^    "MIT",$/    "MIT", "GPL-3.0-only",/'
 fails_with "and cargo deny check licenses passes" plant.sh licence
 
+# The check is let leave out the dependencies that only tests and examples need: a crate
+# under a licence outside the list then passes as a dev-dependency.
+copy
+change deny.toml '/^include-dev = true$/d'
+fails_with "under [dev-dependencies] of" plant.sh licence
+
 # The ban list is emptied.
 copy
 change deny.toml '/^    { crate = /d'
