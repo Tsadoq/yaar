@@ -644,15 +644,29 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             .pane
             .read_with(cx, |pane, _| (pane.layout(), pane.position().cloned()))
     };
+    // After each of them every line of every file reads as it did: a key that changed
+    // one would not pass because a later key changed it back.
     for control in controls() {
-        let before = state(&mut cx);
+        let at_first = state(&mut cx);
         cx.simulate_keystrokes(control.keystroke);
         let after_the_key = state(&mut cx);
+        assert_eq!(
+            shown(&stage.pane, &mut cx),
+            before,
+            "after the key {}",
+            control.keystroke
+        );
         cx.update(|window, cx| window.dispatch_action((control.action)(), cx));
         cx.run_until_parked();
         let after_the_action = state(&mut cx);
+        assert_eq!(
+            shown(&stage.pane, &mut cx),
+            before,
+            "after the action {}",
+            control.title
+        );
         assert!(
-            before != after_the_key || after_the_key != after_the_action,
+            at_first != after_the_key || after_the_key != after_the_action,
             "{} did nothing",
             control.title
         );
@@ -685,6 +699,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     ];
     for key in letters_and_digits.iter().map(String::as_str).chain(editing) {
         cx.simulate_keystrokes(key);
+        assert_eq!(shown(&stage.pane, &mut cx), before, "after the key {key}");
     }
     // Text typed as an input method hands it over, not key by key.
     cx.simulate_input("typed");
