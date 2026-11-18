@@ -30,7 +30,7 @@ legacy	alt-shift-e->´	c2b4	ghostty m-ghostty-legacy as+e	macos
 legacy	f	66	ghostty m-ghostty-legacy plain+f
 legacy	shift-f	46	ghostty m-ghostty-legacy s+f
 legacy	ctrl-f	06	ghostty m-ghostty-legacy c+f
-legacy	alt-f->ƒ	c692	ghostty m-ghostty-legacy a+f	macos
+legacy	alt-f->ƒ	c692	ghostty m-ghostty-legacy a+f, cleaned of the accent of the dead key before it (Ghostty: c2b4c692)	macos
 legacy	ctrl-shift-f	06	departure: Ctrl with a letter is its control byte whatever Shift does: Ghostty sends Ctrl-Shift-letter as CSI u, which xterm has no form for (Ghostty: 1b5b3130323b3675, m-ghostty-legacy cs+f)
 legacy	alt-shift-f->Ï	c38f	ghostty m-ghostty-legacy as+f	macos
 legacy	g	67	ghostty m-ghostty-legacy plain+g
@@ -53,7 +53,7 @@ legacy	alt-shift-i->ˆ	cb86	ghostty m-ghostty-legacy as+i	macos
 legacy	j	6a	ghostty m-ghostty-legacy plain+j
 legacy	shift-j	4a	ghostty m-ghostty-legacy s+j
 legacy	ctrl-j	0a	ghostty m-ghostty-legacy c+j
-legacy	alt-j->∆	e28886	ghostty m-ghostty-legacy a+j	macos
+legacy	alt-j->∆	e28886	ghostty m-ghostty-legacy a+j, cleaned of the accent of the dead key before it (Ghostty: cb86e28886)	macos
 legacy	ctrl-shift-j	0a	departure: Ctrl with a letter is its control byte whatever Shift does: Ghostty sends Ctrl-Shift-letter as CSI u, which xterm has no form for (Ghostty: 1b5b3130363b3675, m-ghostty-legacy cs+j)
 legacy	alt-shift-j->Ô	c394	ghostty m-ghostty-legacy as+j	macos
 legacy	k	6b	ghostty m-ghostty-legacy plain+k
@@ -82,7 +82,7 @@ legacy	alt-shift-n->˜	cb9c	ghostty m-ghostty-legacy as+n	macos
 legacy	o	6f	ghostty m-ghostty-legacy plain+o
 legacy	shift-o	4f	ghostty m-ghostty-legacy s+o
 legacy	ctrl-o	0f	ghostty m-ghostty-legacy c+o
-legacy	alt-o->ø	c3b8	ghostty m-ghostty-legacy a+o	macos
+legacy	alt-o->ø	c3b8	ghostty m-ghostty-legacy a+o, cleaned of the accent of the dead key before it (Ghostty: cb9cc3b8)	macos
 legacy	ctrl-shift-o	0f	departure: Ctrl with a letter is its control byte whatever Shift does: Ghostty sends Ctrl-Shift-letter as CSI u, which xterm has no form for (Ghostty: 1b5b3131313b3675, m-ghostty-legacy cs+o)
 legacy	alt-shift-o->Ø	c398	ghostty m-ghostty-legacy as+o	macos
 legacy	p	70	ghostty m-ghostty-legacy plain+p
@@ -123,7 +123,7 @@ legacy	alt-shift-u->¨	c2a8	ghostty m-ghostty-legacy as+u	macos
 legacy	v	76	ghostty m-ghostty-legacy plain+v
 legacy	shift-v	56	ghostty m-ghostty-legacy s+v
 legacy	ctrl-v	16	ghostty m-ghostty-legacy c+v
-legacy	alt-v->√	e2889a	ghostty m-ghostty-legacy a+v	macos
+legacy	alt-v->√	e2889a	ghostty m-ghostty-legacy a+v, cleaned of the accent of the dead key before it (Ghostty: c2a8e2889a)	macos
 legacy	ctrl-shift-v	16	departure: Ctrl with a letter is its control byte whatever Shift does: Ghostty sends Ctrl-Shift-letter as CSI u, which xterm has no form for (Ghostty: 1b5b3131383b3675, m-ghostty-legacy cs+v)	macos
 legacy	alt-shift-v->◊	e2978a	ghostty m-ghostty-legacy as+v	macos
 legacy	w	77	ghostty m-ghostty-legacy plain+w
@@ -220,6 +220,7 @@ legacy	_	5f	ghostty m-ghostty-legacy s+minus
 legacy	ctrl--	2d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34353b3575, m-ghostty-legacy c+minus)
 legacy	ctrl-_	1f	ghostty m-ghostty-legacy cs+minus
 legacy	alt-_->—	e28094	ghostty m-ghostty-legacy as+minus	macos
+legacy	alt-minus->–	e28093	ghostty m-ghostty-legacy a+minus, cleaned of the accent the dead key before it left (Ghostty: 60e28093)	macos
 legacy	=	3d	ghostty m-ghostty-legacy plain+equal
 legacy	+	2b	ghostty m-ghostty-legacy s+equal
 legacy	ctrl-=	3d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b36313b3575, m-ghostty-legacy c+equal)
@@ -297,6 +298,7 @@ legacy	alt-backspace	1b7f	ghostty o-ghostty-us-legacy a+backspace
 legacy	alt-escape	1b1b	ghostty o-ghostty-us-legacy a+escape
 legacy	alt-delete	1b5b333b337e	ghostty o-ghostty-us-legacy a+fwddelete
 legacy	alt-space-> 	c2a0	ghostty m-ghostty-legacy a+space	macos
+legacy	alt-shift-space-> 	20	departure: Ghostty sent ESC SP (1b20, m-ghostty-legacy as+space), which it does when the text of the key is the key itself, so Option-Shift-Space types a plain space on the ABC layout; Option is characters here, and the pane sends the text	macos
 legacy	ctrl-shift-enter	0d	departure: xterm's plain form: Ghostty sends modifyOtherKeys, CSI 27;m;13~, which the app does not implement (Ghostty: 1b5b32373b363b31337e, m-ghostty-legacy cs+return)
 legacy	ctrl-shift-backspace	08	ghostty m-ghostty-legacy cs+backspace
 legacy	ctrl-shift-escape	1b	departure: xterm's plain form: Ghostty sends modifyOtherKeys, CSI 27;m;27~, which the app does not implement (Ghostty: 1b5b32373b363b32377e, m-ghostty-legacy cs+escape)

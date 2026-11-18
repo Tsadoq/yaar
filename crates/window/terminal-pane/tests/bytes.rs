@@ -238,6 +238,18 @@ fn the_pty_in_raw_mode_passes_every_byte_unchanged() {
 
 // ------------------------------------------------------------------------ the test rig
 
+/// A key of the matrix as the platform delivers it. GPUI's parser cannot write the key `-`
+/// together with its text (`alt--->–` splits at the wrong dash), so the matrix calls it
+/// `minus` and the platform's name for it is put back here.
+fn keystroke(key: &str, os: gpui_kit::OperatingSystem) -> Keystroke {
+    let mut keystroke = Keystroke::parse_with_os(key, os)
+        .unwrap_or_else(|error| panic!("the matrix writes the key {key:?}: {error}"));
+    if keystroke.key == "minus" {
+        keystroke.key = "-".to_owned();
+    }
+    keystroke
+}
+
 /// A pane with one terminal, focused, on a pty.
 struct Rig {
     panes: Panes,
@@ -245,6 +257,9 @@ struct Rig {
     id: TerminalId,
     pty: Pty,
     sentinels: usize,
+    // Set when a key took the focus out of the terminal, which the sentinel after it could
+    // not have followed: the focus is put back and the walk reports it.
+    lost_the_focus: bool,
 }
 
 impl Rig {
@@ -270,6 +285,7 @@ impl Rig {
             id,
             pty,
             sentinels: 0,
+            lost_the_focus: false,
         };
         // Whatever the terminal said of itself on the way, and its first size, is behind
         // this: the cells a mouse action aims at are known after it.
@@ -299,23 +315,30 @@ impl Rig {
     /// gives what the program received.
     fn press(&mut self, key: &str) -> Vec<u8> {
         self.cx.update(|window, cx| {
-            let keystroke = Keystroke::parse_with_os(key, cx.platform_info().os)
-                .unwrap_or_else(|error| panic!("the matrix writes the key {key:?}: {error}"));
+            let keystroke = keystroke(key, cx.platform_info().os);
             window.dispatch_keystroke(keystroke, cx);
         });
-        self.cx.run_until_parked();
-        self.settle()
+        self.after_a_key()
     }
 
     /// Presses a key and lets it go, and gives what the program received.
     fn press_and_release(&mut self, key: &str) -> Vec<u8> {
         self.cx.update(|window, cx| {
-            let keystroke = Keystroke::parse_with_os(key, cx.platform_info().os)
-                .unwrap_or_else(|error| panic!("the matrix writes the key {key:?}: {error}"));
+            let keystroke = keystroke(key, cx.platform_info().os);
             window.dispatch_keystroke(keystroke, cx);
             window.key_up(key, cx);
         });
+        self.after_a_key()
+    }
+
+    /// Lets what a key started run out, brings the focus back if the key took it away, and
+    /// gives what the program received.
+    fn after_a_key(&mut self) -> Vec<u8> {
         self.cx.run_until_parked();
+        if !self.has_the_focus() {
+            self.refocus();
+            self.lost_the_focus = true;
+        }
         self.settle()
     }
 
@@ -349,8 +372,7 @@ fn walk_keys(cx: &mut TestAppContext, state: &[u8], file: &str, name: &str, rele
         } else {
             rig.press(&row.key)
         };
-        if !rig.has_the_focus() {
-            rig.refocus();
+        if std::mem::take(&mut rig.lost_the_focus) {
             differences.push(format!(
                 "{}: the key took the focus out of the terminal",
                 row.key
@@ -417,8 +439,7 @@ fn after_a_program_pushed_kitty_flags_7_the_release_of_a_key_sends_what_the_matr
         let mut expected = press.clone();
         expected.extend_from_slice(&row.bytes);
         let got = rig.press_and_release(&row.key);
-        if !rig.has_the_focus() {
-            rig.refocus();
+        if std::mem::take(&mut rig.lost_the_focus) {
             differences.push(format!(
                 "{}: the key took the focus out of the terminal",
                 row.key
@@ -735,7 +756,8 @@ fn modifiers_and_name(key: &str) -> (Vec<&str>, &str) {
         modifiers.push(&prefix[..prefix.len() - 1]);
         rest = &rest[prefix.len()..];
     }
-    (modifiers, rest)
+    // The matrix says `minus` for the key `-` (see `keystroke`).
+    (modifiers, if rest == "minus" { "-" } else { rest })
 }
 
 #[test]
@@ -849,5 +871,41 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
             HashSet::new()
         };
         assert_eq!(cmd, expected, "{state}: the rows with Cmd on {SYSTEM}");
+    }
+}
+
+#[test]
+fn the_matrix_holds_every_mouse_action_with_each_modifier_in_every_state_of_the_mouse() {
+    // A guard on the data's reach, as the one above is for the keys: the alternate screen
+    // is a state of the mouse like the others, and a state with an action left out would
+    // pass in silence.
+    let mut wanted = Vec::new();
+    for modifiers in ["", "shift-", "alt-", "ctrl-"] {
+        for action in ["press", "release", "drag"] {
+            for which in ["left", "middle", "right"] {
+                wanted.push(format!("{modifiers}{action}-{which}"));
+            }
+        }
+        for action in ["move", "wheel-up", "wheel-down"] {
+            wanted.push(format!("{modifiers}{action}"));
+        }
+    }
+    assert_eq!(wanted.len(), 48);
+    for state in [
+        "off",
+        "1000",
+        "1000-sgr",
+        "1002",
+        "1002-sgr",
+        "1003",
+        "1003-sgr",
+        "alt-scroll",
+        "alt-scroll-appcursor",
+    ] {
+        let mut found: Vec<String> = rows(MOUSE, state).into_iter().map(|row| row.key).collect();
+        found.sort();
+        let mut every = wanted.clone();
+        every.sort();
+        assert_eq!(found, every, "the actions of {state}");
     }
 }

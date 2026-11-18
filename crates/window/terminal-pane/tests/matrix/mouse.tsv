@@ -334,7 +334,99 @@ off	ctrl-wheel-down		the pane scrolls its history, and sends the program nothing
 1003-sgr	ctrl-move	1b5b3c35313b343b324d	xterm ctlseqs, mouse tracking
 1003-sgr	ctrl-wheel-up	1b5b3c38303b343b324d	xterm ctlseqs, mouse tracking
 1003-sgr	ctrl-wheel-down	1b5b3c38313b343b324d	xterm ctlseqs, mouse tracking
+alt-scroll	press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
 alt-scroll	wheel-up	1b5b41	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
 alt-scroll	wheel-down	1b5b42	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll	shift-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	shift-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	alt-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	alt-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	ctrl-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	ctrl-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
 alt-scroll-appcursor	wheel-up	1b4f41	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
 alt-scroll-appcursor	wheel-down	1b4f42	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll-appcursor	shift-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	shift-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	alt-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	alt-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	ctrl-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	ctrl-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
