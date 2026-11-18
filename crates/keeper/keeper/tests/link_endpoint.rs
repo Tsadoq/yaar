@@ -133,6 +133,26 @@ fn a_socket_file_left_by_a_dead_keeper_does_not_block_the_next_one() {
     assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
 }
 
+#[test]
+fn the_keeper_still_leaves_when_its_socket_file_was_removed_under_it() {
+    let place = Place::new();
+    let keeper = start(&place, Duration::from_millis(300));
+    let mut window = connect(&place.socket());
+    handshake(&mut window, &Hello::for_this_process("test-window")).expect("hello");
+
+    // Something else removes the file. Nobody can reach the Keeper any more, and it
+    // must not stay for ever because of that.
+    std::fs::remove_file(place.socket()).expect("remove the socket file");
+    drop(window);
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !keeper.is_finished() {
+        assert!(Instant::now() < deadline, "the Keeper did not leave");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(keeper.join().expect("join").expect("run"), Exit::Idle);
+}
+
 /// Connects and says hello, retrying while the stale file is still in the way.
 fn connect_live(socket: &Path) -> UnixStream {
     let deadline = Instant::now() + Duration::from_secs(5);

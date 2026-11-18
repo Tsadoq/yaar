@@ -266,9 +266,11 @@ pub fn run(options: Options) -> io::Result<Exit> {
     let exit = wait_for_the_end(&shared, options.linger);
 
     // Wake the acceptor, which sits in `accept`, so that it sees the end and lets go of
-    // the listener before the socket file is removed.
-    let _ = UnixStream::connect(socket);
-    let _ = acceptor.join();
+    // the listener before the socket file is removed. Where the file is gone already,
+    // nothing wakes the acceptor and nothing reaches it either: it is not waited for.
+    if UnixStream::connect(socket).is_ok() {
+        let _ = acceptor.join();
+    }
 
     // Each thread that serves a Window ends when its connection does.
     for window in shared.tell_nobody_any_more() {
