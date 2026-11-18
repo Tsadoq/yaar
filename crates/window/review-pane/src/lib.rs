@@ -509,6 +509,52 @@ impl ReviewPane {
         None
     }
 
+    pub(crate) fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.step(1, cx);
+    }
+
+    pub(crate) fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.step(-1, cx);
+    }
+
+    pub(crate) fn toggle_layout(
+        &mut self,
+        _: &ToggleLayout,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let was = self.position_row;
+        self.layout = match self.layout {
+            Layout::Unified => Layout::Split,
+            Layout::Split => Layout::Unified,
+        };
+        self.rebuild(cx);
+        // The line of the reviewer has another row now. The view goes with it, so the
+        // line is drawn at the height it was drawn at; and should it have been out of
+        // view before, it is brought in.
+        if let (Some(was), Some(now)) = (was, self.position_row) {
+            self.shift_view(now as f32 - was as f32);
+            self.scroll.scroll_to_item(now, ScrollStrategy::Nearest);
+        }
+    }
+
+    /// Moves the reviewer by `by` lines in the order of the lines, and stays at the
+    /// first and at the last.
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let (Some(position), Some(row)) = (&self.position, self.position_row) else {
+            return;
+        };
+        let stops = stops(&self.rows);
+        let Some(now) = stops.iter().position(|stop| *stop == (row, position.side)) else {
+            return;
+        };
+        let Some(&(row, side)) = now.checked_add_signed(by).and_then(|next| stops.get(next)) else {
+            return;
+        };
+        self.go_to(row, side, cx);
+        self.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+    }
+
     /// Puts the reviewer on a line of the row at `index`: what a click on it does.
     pub(crate) fn go_to(&mut self, index: usize, side: Side, cx: &mut Context<Self>) {
         let PaneRow::Diff { path, row } = &self.rows[index] else {
@@ -600,4 +646,42 @@ fn stops_of(row: &PaneRow) -> impl Iterator<Item = (Side, u32)> {
     old.map(|line| (Side::Old, line))
         .into_iter()
         .chain(new.map(|line| (Side::New, line)))
+}
+
+/// Every line the reviewer can be on, in the one order the lines have, each by the index
+/// of the row that shows it and its side.
+///
+/// The order is that of the unified view: the removed lines of a change, then the lines
+/// added in their place. The split view shows the two beside each other, row by row, so
+/// there the old sides of the rows of one change come first and their new sides after.
+fn stops(rows: &[PaneRow]) -> Vec<(usize, Side)> {
+    let changed = |row: &PaneRow| {
+        matches!(
+            row,
+            PaneRow::Diff {
+                row: Row::Changed { .. },
+                ..
+            }
+        )
+    };
+    let mut stops = Vec::new();
+    let mut index = 0;
+    while index < rows.len() {
+        // The rows of one change in the split view; one row in every other case.
+        let run = rows[index..]
+            .iter()
+            .take_while(|row| changed(row))
+            .count()
+            .max(1);
+        let run = index..index + run;
+        for side in [Side::Old, Side::New] {
+            for index in run.clone() {
+                if stops_of(&rows[index]).any(|(stop, _)| stop == side) {
+                    stops.push((index, side));
+                }
+            }
+        }
+        index = run.end;
+    }
+    stops
 }
