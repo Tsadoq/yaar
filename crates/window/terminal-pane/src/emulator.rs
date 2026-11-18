@@ -196,11 +196,12 @@ struct Scanner {
 }
 
 /// The longest sequence the scanner waits for: the ones it acts on are far shorter, and
-/// a longer one is passed on to the core at once. A sequence that starts `CSI >` or
-/// `CSI ?` is held to this length too and its parameters past it are dropped: the core
-/// reads no more of a push than its first parameter and of a query none, and each must be
-/// seen whole to be made safe. A first parameter that does not fit is read as far as it
-/// goes.
+/// a longer one is passed on to the core at once, whole. A sequence that starts `CSI >`
+/// is held to this length too and its parameters past it are dropped: the core reads no
+/// more of a push than its first parameter, and the push must be seen whole to be made
+/// safe. A first parameter that does not fit is read as far as it goes. Nothing else is
+/// ever cut: a mode reset that runs past this length must reach the core with every
+/// mode in it.
 const MAX_HELD: usize = 64;
 
 /// What a push of keyboard flags goes to the core as: the push cut to the flags the
@@ -289,7 +290,7 @@ impl Scanner {
                 }
             }
             0x20..=0x3f => {
-                let cut = matches!(self.held[2..].first(), Some(b'>' | b'?'));
+                let cut = self.held[2..].first() == Some(&b'>');
                 if cut && self.held.len() >= MAX_HELD {
                     // More of the parameters than the core would read.
                 } else {
@@ -1149,6 +1150,52 @@ mod tests {
         assert_eq!(emulator.title().as_deref(), Some("fourth"));
         emulator.advance(b"\x1b[23t");
         assert_eq!(emulator.title().as_deref(), Some("third"));
+    }
+
+    /// Every parameter of a mode sequence as a sequence of its own: what a program that
+    /// sent its modes one by one would have sent.
+    fn one_by_one(params: &str, last: char) -> String {
+        params
+            .split(';')
+            .map(|mode| format!("{ESC}[?{mode}{last}"))
+            .collect()
+    }
+
+    #[test]
+    fn a_mode_sequence_longer_than_the_scanner_holds_does_what_the_same_modes_sent_one_by_one_do() {
+        let beginning = "\x1b[?1000h\x1b[?1006h\x1b[?2004h";
+        // Modes that change nothing the pane reads, so that the sequence is long and the
+        // ones that matter come last.
+        let padding = "25;12;7;1004;1015;1005;1001;9;1007;1048;45;66;67;69;80";
+        for (last, tail) in [('l', "1003;1002;1006;1000"), ('h', "1000;1003")] {
+            let params = format!("{padding};{tail}");
+            let long = format!("{ESC}[?{params}{last}");
+            assert!(
+                long.len() > MAX_HELD,
+                "the sequence is {} bytes, no longer than the scanner holds",
+                long.len()
+            );
+            let mut whole = emulator();
+            whole.advance(beginning.as_bytes());
+            whole.advance(long.as_bytes());
+            let mut parts = emulator();
+            parts.advance(beginning.as_bytes());
+            parts.advance(one_by_one(&params, last).as_bytes());
+            assert_eq!(whole.modes(), parts.modes(), "a long `{last}`");
+            // The same with the sequence cut in two calls.
+            let mut cut = emulator();
+            cut.advance(beginning.as_bytes());
+            let (first, second) = long.split_at(MAX_HELD - 7);
+            cut.advance(first.as_bytes());
+            cut.advance(second.as_bytes());
+            assert_eq!(cut.modes(), parts.modes(), "a long `{last}`, cut in two");
+            if last == 'l' {
+                assert_eq!(whole.modes().mouse, MouseMode::Off);
+                assert!(!whole.modes().mouse_sgr);
+            } else {
+                assert_eq!(whole.modes().mouse, MouseMode::Motion);
+            }
+        }
     }
 
     #[test]
