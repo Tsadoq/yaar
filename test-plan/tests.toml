@@ -178,7 +178,7 @@ driver = "client"
 runs = "ci"
 proves = []
 slice = 1
-note = "Found while the skeleton was built: a very long user name makes the address too long, and there is no fallback yet."
+note = "Found while the skeleton was built: a very long user name makes the address too long. Two tests, because the row names both programs: the Keeper's own, and the built Window program with a scripted client."
 
 [[test]]
 id = "LAYOUT-01"
@@ -1215,13 +1215,14 @@ slice = 1
 
 [[test]]
 id = "DIFF-02"
-what = "The hunks equal those of git's histogram diff on the recorded corpus of 569 real file changes."
+what = "On the recorded corpus of 569 real file changes the hunks turn the old file into the new one, and they equal those of git's histogram diff on 564; the five that differ are named in the test with the hunks the app gives."
 level = "unit"
 part = "diff"
 through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-001"]
+note = "The corpus and git's hunks are compiled into the test from the crate's folder, so no file is opened when it runs. The pinned diff library places five changes otherwise than git does, measured on all 569 pairs."
 
 [[test]]
 id = "DIFF-03"
@@ -1538,13 +1539,13 @@ proves = ["FR-105", "FR-106"]
 
 [[test]]
 id = "RP-01"
-what = "The pane shows the changes of the workspace line by line."
+what = "The pane shows the changes of the workspace line by line. Above them it shows what they are compared with and the commits of the comparison, and where there is nothing to compare with it offers to set a base."
 level = "component"
 part = "review-pane"
 through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
-proves = ["FR-001"]
+proves = ["FR-001", "FR-005"]
 
 [[test]]
 id = "RP-02"
@@ -2136,6 +2137,7 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["NFR-007"]
+note = "Everything it starts is, so far, the git processes it keeps for file contents. Terminals and agents join the test as they are built."
 
 [[test]]
 id = "HOLD-01"
@@ -2724,6 +2726,7 @@ through = "keys in, with a real Keeper beneath; read back as the requests that r
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", "FR-101", "FR-107", "FR-109", "FR-120"]
+note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built."
 
 [[test]]
 id = "WIN-05"
