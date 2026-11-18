@@ -104,9 +104,11 @@ jobs:
       # packages ship and under the Companion, and passes only if the part of
       # `cargo deny check` that guards against it refuses it by name. Each asks that
       # part alone, so each also fails unless the step `Licences, advisories, bans,
-      # sources` above is still the whole check and nothing else: a real dependency
-      # fails the run there. The seventh switches off what the others guard, one thing
-      # at a time, and passes only if they then fail.
+      # sources` above is still the whole check and nothing else, in a job that may
+      # neither fail without failing the run nor be left out of it: a real dependency
+      # fails the run there. A new key of this job has to be made known to plant.sh.
+      # The seventh switches off what the others guard, one thing at a time, and
+      # passes only if they then fail.
       - name: A dependency under a licence outside the list is refused
         run: .github/scripts/plant.sh licence
 

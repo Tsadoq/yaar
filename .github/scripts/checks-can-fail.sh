@@ -109,10 +109,40 @@ change .github/workflows/ci.yml '/^        run: cargo deny check$/a\
         continue-on-error: true'
 fails_with ">         continue-on-error: true" plant.sh ban wry
 
+# The same, behind a comment. A comment ends nothing: the word still belongs to the step.
+copy
+change .github/workflows/ci.yml '/^        run: cargo deny check$/a\
+      # May fail for now.\
+        continue-on-error: true'
+fails_with ">         continue-on-error: true" plant.sh licence
+
 # The step of the run is gone.
 copy
 change .github/workflows/ci.yml 's/^      - name: Licences, advisories, bans, sources$/      - name: Advisories/'
 fails_with "must hold the step 'Licences, advisories, bans, sources' once" plant.sh git
+
+# The step is there in words only: they are text in the name of the job, and the step
+# that runs is another.
+copy
+change .github/workflows/ci.yml '/^    name: checks linux /c\
+    name: |\
+      - name: Licences, advisories, bans, sources\
+        run: cargo deny check
+s/^      - name: Licences, advisories, bans, sources$/      - name: Advisories/
+s/^        run: cargo deny check$/        run: cargo deny check advisories/'
+fails_with "must be one of the steps of a job" plant.sh ban deno_core
+
+# The job of the step may fail without failing the run.
+copy
+change .github/workflows/ci.yml '/^  checks-linux:$/a\
+    continue-on-error: true'
+fails_with "says 'continue-on-error: true'" plant.sh licence
+
+# The job of the step is left out of the run.
+copy
+change .github/workflows/ci.yml '/^  checks-linux:$/a\
+    if: false'
+fails_with "says 'if: false'" plant.sh ban gpui
 
 # Git sources are no longer refused.
 copy

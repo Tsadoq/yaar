@@ -23,8 +23,9 @@
 # fails too.
 #
 # Each part of the check is asked alone here, while a real dependency meets the whole
-# check in a step of the workflow. So every run also holds the workflow to that step:
-# what is refused here fails the run only through it.
+# check in a step of the workflow. So every run also holds the workflow to that step, and
+# to a job that fails the run when the step fails: what is refused here fails the run
+# only through them.
 #
 # Needs cargo-deny, jq and, for the last one, git. Asks nothing of the network: the crates
 # are those of the lock file, already fetched, and the git repository is made here.
@@ -51,6 +52,7 @@ TOOLKIT=gpui-kit
 WORKFLOW=.github/workflows/ci.yml
 RUN_STEP="Licences, advisories, bans, sources"
 RUN_COMMAND="cargo deny check"
+STEP_LINE="      - name: $RUN_STEP"
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TMP=$(mktemp -d)
@@ -100,20 +102,51 @@ done
 
 # A plant is refused here by one part of the check, asked alone. That says something of
 # the run only while the run asks the whole check of the real tree, and fails when it
-# fails: the workflow must hold that step once, and the step must be its command and
-# nothing else, with no word that would let the run go on after it.
-steps=$(grep -c -x -F -e "      - name: $RUN_STEP" "$TREE/$WORKFLOW") || true
+# fails. So the workflow must hold that step once; the step must be its command and
+# nothing else, with no word that would let the run go on after it; and the job whose
+# step it is must say nothing that could let the run pass when the job fails, or without
+# the job.
+#
+# YAML reads no comment and no empty line, wherever one stands: a key behind a comment
+# still belongs to what stands before the comment. So both are left out first.
+awk '!/^[ \t]*#/ && !/^[ \t]*$/' "$TREE/$WORKFLOW" > "$TMP/workflow"
+steps=$(grep -c -x -F -e "$STEP_LINE" "$TMP/workflow") || true
 [ "$steps" = 1 ] || fail "$WORKFLOW must hold the step '$RUN_STEP' once"
 echo "        run: $RUN_COMMAND" > "$TMP/step.wanted"
 # The lines of the step: those after its name that are indented deeper than a step is.
-awk -v name="      - name: $RUN_STEP" '
+awk -v name="$STEP_LINE" '
   $0 == name { inside = 1; next }
-  /^[ \t]*$/ { next }
   inside && !/^        / { inside = 0 }
-  inside { print }' "$TREE/$WORKFLOW" > "$TMP/step.found"
+  inside { print }' "$TMP/workflow" > "$TMP/step.found"
 if ! diff "$TMP/step.wanted" "$TMP/step.found" >&2; then
   fail "the step '$RUN_STEP' of $WORKFLOW must be 'run: $RUN_COMMAND' and nothing else"
 fi
+# The keys of the job whose step it is: the lines indented as the keys of a job are,
+# between two lines indented less. They are printed only if the step stands under `jobs:`
+# and straight under the `steps:` of that job. The same words elsewhere are text, such as
+# a name written over several lines, and no step that runs.
+awk -v name="$STEP_LINE" '
+  function job_ends() { if (held) printf "%s", keys; held = 0; keys = ""; last = "" }
+  !/^    / { job_ends(); if (!/^ /) top = $0; next }
+  /^    [^ ]/ { keys = keys $0 "\n"; last = $0 }
+  $0 == name && top == "jobs:" && last == "    steps:" { held = 1 }
+  END { job_ends() }' "$TMP/workflow" > "$TMP/job.found"
+[ -s "$TMP/job.found" ] \
+  || fail "the step '$RUN_STEP' of $WORKFLOW must be one of the steps of a job"
+# A job is let say what the job says today, none of which keeps a failed step from
+# failing the run. Any other key is refused, not only `continue-on-error` and `if`: a
+# list of the keys that do harm would miss the same key written in quotes.
+while IFS= read -r line; do
+  case "${line%%:*}" in
+    "    name" | "    strategy" | "    runs-on" | "    container") ;;
+    "    timeout-minutes" | "    steps") ;;
+    *)
+      fail "the job of the step '$RUN_STEP' in $WORKFLOW says '${line#    }':" \
+        "only its name, strategy, runner, container, time limit and steps are known" \
+        "to leave the run failing when the step fails"
+      ;;
+  esac
+done < "$TMP/job.found"
 
 # The planted crate: an empty library that carries the one thing the check looks at.
 PLANT=$TMP/plant/$CRATE
