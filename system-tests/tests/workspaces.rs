@@ -1,6 +1,7 @@
 //! System tests of opening a repository and reading its changes: the built Keeper, a
 //! real repository, and the scripted client in place of the Window.
 
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -177,6 +178,14 @@ fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only(
     assert_eq!(attached.len(), 2, "{attached:?}");
     assert!(attached.iter().all(at_the_socket_file), "{attached:?}");
     assert!(attached.iter().filter(listens).count() <= 1, "{attached:?}");
+
+    // That file is the user's own: a socket that belongs to the user of this test and
+    // that nobody else may connect to.
+    let socket_file = std::fs::symlink_metadata(world.socket()).expect("the socket file");
+    assert!(socket_file.file_type().is_socket());
+    // SAFETY: `geteuid` only reads and cannot fail.
+    assert_eq!(socket_file.uid(), unsafe { libc::geteuid() });
+    assert_eq!(socket_file.mode() & 0o077, 0, "{:o}", socket_file.mode());
 
     // The same for every process that descends from the Keeper. There is one at least,
     // and it holds no socket of any kind; the pipes through which it talks to the Keeper

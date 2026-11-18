@@ -8,6 +8,7 @@
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -33,11 +34,13 @@ impl Scratch {
     /// configuration of the user or of the system, a fixed author and date, an empty
     /// home. It has to be the first statement of a test.
     fn new() -> Scratch {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
         // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
         let root = Path::new("/tmp")
             .canonicalize()
             .expect("the temporary folder")
-            .join(format!("yaar-keeper-requests-{}", std::process::id()));
+            .join(format!("yaar-keeper-requests-{}-{n}", std::process::id()));
         std::fs::create_dir_all(root.join("home")).expect("make the test's folder");
         let settings = [
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
@@ -243,14 +246,36 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
         }],
     }];
     assert_eq!(asking.fact(), Fact::Workspaces(list.clone()));
-    assert_eq!(other.fact(), Fact::Workspaces(list.clone()));
+    assert_eq!(other.fact(), Fact::Workspaces(list));
 
-    // Opening what is open changes nothing, so nothing is told: the next frame each
-    // Window reads below is not a second list.
+    // A worktree made with git, outside the app, is in no fact: no Window has heard of
+    // it. Opening it tells the list that holds it, though the Keeper, which reads the
+    // list from git, finds the same list before and after.
+    git(
+        &repo,
+        &["worktree", "add", "--quiet", "-b", "second", "../linked"],
+    );
+    let linked = scratch.0.join("linked");
+    let second_workspace = asking.open(&linked);
+    let Fact::Workspaces(told) = asking.fact() else {
+        panic!("the list is not told");
+    };
+    assert_eq!(other.fact(), Fact::Workspaces(told.clone()));
+    assert_eq!(
+        told[0].workspaces[1],
+        Workspace {
+            id: second_workspace,
+            path: linked,
+            head: Head::Branch("second".to_owned()),
+        }
+    );
+    // The list is told for a folder that was open already, too.
     assert_eq!(asking.open(&repo), workspace);
+    assert_eq!(asking.fact(), Fact::Workspaces(told.clone()));
+    assert_eq!(other.fact(), Fact::Workspaces(told.clone()));
     assert_eq!(
         asking.ask(Request::ListWorkspaces),
-        Ok(Reply::Workspaces(list))
+        Ok(Reply::Workspaces(told))
     );
 
     // Setting the base, from the other Window: its reply, then the fact to both.

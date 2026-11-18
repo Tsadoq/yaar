@@ -8,13 +8,18 @@
 //! | Request | Answered by | Facts told to every Window |
 //! | --- | --- | --- |
 //! | `ListWorkspaces` | `Workspaces::repositories` | none |
-//! | `OpenFolder` | `Workspaces::open_folder` | `Workspaces`, when the list changed |
+//! | `OpenFolder` | `Workspaces::open_folder` | `Workspaces`, the list as it is then |
 //! | `SetBase` | `Workspaces::set_base` | `ChangesChanged` of that workspace |
 //! | `GetChanges` | `Workspaces::changes` | none |
 //! | `ReadFile` | `Workspaces::file` | none |
 //!
 //! The reply goes out before the facts. A Window that opened a folder therefore learns
 //! the id of the new workspace before the list that holds it.
+//!
+//! The list is told after every folder that was opened, also one that was open already.
+//! Whether it differs from what a Window holds, the Keeper cannot say: the list is read
+//! from git each time, and a worktree made outside the app is in it before any Window
+//! heard of it. A Window that opens such a worktree waits for the list that holds it.
 //!
 //! A version of a file is sent as text unless it is larger than `yaar_link::MAX_CONTENT`,
 //! or holds a zero byte among its first 8,000, which is how git tells that a file is not
@@ -145,7 +150,7 @@ impl Parts {
     }
 }
 
-/// Opens a folder, and tells the list of repositories when opening changed it.
+/// Opens a folder, and tells the list of repositories as it is then.
 fn open_folder(
     workspaces: &Workspaces,
     path: std::path::PathBuf,
@@ -156,16 +161,11 @@ fn open_folder(
     if !path.is_absolute() {
         return Err(Refusal::NoSuchFolder { path });
     }
-    // The list as it was, to tell whether opening changes it. When it cannot be read,
-    // the list after is told in any case.
-    let before = list(workspaces).ok();
     let opened = workspaces.open_folder(&path).map_err(refusal)?;
     // The folder is open now, whatever becomes of the list: a list that cannot be read
     // is told to nobody, and the Window that asks for it next learns why.
-    if let Ok(after) = list(workspaces)
-        && before.as_ref() != Some(&after)
-    {
-        facts.push(Fact::Workspaces(after));
+    if let Ok(list) = list(workspaces) {
+        facts.push(Fact::Workspaces(list));
     }
     Ok(Reply::Opened {
         repository: yaar_link::RepositoryId::new(opened.repository.as_str()),
