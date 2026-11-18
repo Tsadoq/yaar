@@ -28,7 +28,9 @@
 //! File contents of commits come from one git process per worktree that stays running
 //! between reads; every other answer is one run of git.
 
+mod contents;
 mod git;
+mod index;
 mod worktree;
 
 pub use git::{Git, GitError};
