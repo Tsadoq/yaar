@@ -15,8 +15,8 @@ use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AppContext, Bounds, Entity, Pixels, Point, Size, Task, TestAppContext, VisualTestContext,
-    WindowBounds, WindowOptions,
+    Action, AppContext, Bounds, Entity, Pixels, Point, Size, Task, TestAppContext,
+    VisualTestContext, WindowBounds, WindowOptions,
 };
 use yaar_frame::keeper::Attached;
 use yaar_frame::{BuildPane, Frame, KeeperLink, Models, Sidebar, bind, controls};
@@ -52,6 +52,17 @@ pub fn repository(letter: char, workspaces: Vec<Workspace>) -> Repository {
         name: format!("repository-{letter}"),
         workspaces,
     }
+}
+
+/// The key the Frame's table of controls gives an action. A test presses the key the
+/// table has, so that it follows the table when a key changes.
+pub fn key_of<A: Action + Default>() -> &'static str {
+    let name = A::default().name();
+    controls()
+        .into_iter()
+        .find(|control| (control.action)().name() == name)
+        .expect("the action has a row in the table")
+        .keystroke
 }
 
 /// The Keeper, played by the test.

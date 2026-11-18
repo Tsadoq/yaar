@@ -6,16 +6,16 @@
 mod common;
 
 use gpui_kit::{
-    Action, AppContext, Bounds, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size,
-    TestAppContext, VisualTestContext, point, px, size,
+    AppContext, Bounds, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size, TestAppContext,
+    VisualTestContext, point, px, size,
 };
 use yaar_frame::{
     FULL_WIDTH, KeeperLink, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow,
-    ToggleSidebar, UnpinSidebar, WorkspaceList, controls,
+    ToggleSidebar, UnpinSidebar, WorkspaceList,
 };
 use yaar_link::{Fact, Head, Repository, Request, Workspace, WorkspaceId};
 
-use common::{Shown, drawn, id, open_frame, repository, wait_until, workspace};
+use common::{Shown, drawn, id, key_of, open_frame, repository, wait_until, workspace};
 
 /// The size the app's window opens at: wide enough for the full list.
 const WIDE: Size<Pixels> = Size {
@@ -117,16 +117,6 @@ fn click_workspace(workspace: &WorkspaceId, cx: &mut VisualTestContext) {
     let row = drawn(&format!("sidebar-workspace-{workspace}"), cx)
         .expect("the row of the workspace is drawn");
     cx.simulate_click(row.center(), Modifiers::none());
-}
-
-/// The key the table of controls gives an action.
-fn key_of<A: Action + Default>() -> &'static str {
-    let name = A::default().name();
-    controls()
-        .into_iter()
-        .find(|control| (control.action)().name() == name)
-        .expect("the action has a row in the table")
-        .keystroke
 }
 
 /// Two repositories: one with two worktrees, one with a worktree on a branch and one on
