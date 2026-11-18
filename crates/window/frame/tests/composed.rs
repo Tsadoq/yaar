@@ -10,17 +10,17 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{
-    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers, Pixels, Render,
-    Size, Styled, TestAppContext, VisualTestContext, Window, actions, div, px,
+    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers, ParentElement,
+    Pixels, Render, Size, Styled, TestAppContext, VisualTestContext, Window, actions, div, px,
 };
 use yaar_frame::{
-    Asks, BuildPane, Control, FULL_WIDTH, Frame, KEY_CONTEXT, KeeperLink, OpenFolder, Pane, Place,
-    RAIL_WIDTH, SelectNextWorkspace, SelectPreviousWorkspace, SetBase, SidebarForm, ToggleSidebar,
-    bind,
+    Asks, BuildPane, Control, FULL_WIDTH, FocusNextPane, FocusPreviousPane, Frame, KEY_CONTEXT,
+    KeeperLink, OpenFolder, Pane, Place, RAIL_WIDTH, SelectNextWorkspace, SelectPreviousWorkspace,
+    SetBase, SidebarForm, ToggleSidebar, bind,
 };
 use yaar_link::{Refusal, Reply, Repository, Request, WorkspaceId};
 
-use common::{Shown, drawn, id, key_of, open_frame, repository, wait_until, workspace};
+use common::{Shown, drawn, id, key_of, open_frame, pressed, repository, wait_until, workspace};
 
 const WINDOW: Size<Pixels> = Size {
     width: px(1280.),
@@ -645,4 +645,125 @@ fn a_frame_made_for_the_link_alone_has_no_sidebar_no_pane_and_no_notice(cx: &mut
         assert!(frame.panes().is_empty());
         assert_eq!(frame.notice(cx), None);
     });
+}
+
+#[gpui_kit::test]
+fn the_keys_of_next_and_previous_pane_move_the_focus_round_the_panes(cx: &mut TestAppContext) {
+    let kept = Kept::default();
+    let (_shown, mut cx) = showing(
+        &one_repository(),
+        vec![
+            keeping("one", &kept),
+            keeping("two", &kept),
+            keeping("three", &kept),
+        ],
+        cx,
+    );
+    let (next, previous) = (pressed::<FocusNextPane>(), pressed::<FocusPreviousPane>());
+
+    assert_eq!(focused(&kept, &mut cx), [true, false, false]);
+    for expected in [
+        [false, true, false],
+        [false, false, true],
+        [true, false, false],
+    ] {
+        cx.simulate_keystrokes(&next);
+        assert_eq!(focused(&kept, &mut cx), expected, "after {next}");
+    }
+    for expected in [
+        [false, false, true],
+        [false, true, false],
+        [true, false, false],
+    ] {
+        cx.simulate_keystrokes(&previous);
+        assert_eq!(focused(&kept, &mut cx), expected, "after {previous}");
+    }
+}
+
+#[gpui_kit::test]
+fn with_the_focus_in_no_pane_next_goes_to_the_first_pane_and_previous_to_the_last(
+    cx: &mut TestAppContext,
+) {
+    let kept = Kept::default();
+    let (_shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("one", &kept), keeping("two", &kept)],
+        cx,
+    );
+    let (next, previous) = (pressed::<FocusNextPane>(), pressed::<FocusPreviousPane>());
+    let set_base = pressed::<SetBase>();
+
+    // The field for the base holds the focus: it is in no pane.
+    cx.simulate_keystrokes(&set_base);
+    assert!(field_is_open(&mut cx));
+    assert_eq!(focused(&kept, &mut cx), [false, false]);
+    cx.simulate_keystrokes(&next);
+    assert_eq!(focused(&kept, &mut cx), [true, false], "next");
+
+    cx.simulate_keystrokes(&set_base);
+    assert_eq!(focused(&kept, &mut cx), [false, false]);
+    cx.simulate_keystrokes(&previous);
+    assert_eq!(focused(&kept, &mut cx), [false, true], "previous");
+}
+
+/// A pane whose root holds the focus handle it gave the Frame, with a place for the
+/// focus inside it, as a pane that has a list or a terminal in it does.
+struct Nested {
+    focus: FocusHandle,
+    inner: FocusHandle,
+}
+
+impl Render for Nested {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .track_focus(&self.focus)
+            .size_full()
+            .child(div().track_focus(&self.inner).size_full())
+    }
+}
+
+#[gpui_kit::test]
+fn a_pane_holds_the_focus_while_it_is_inside_it_and_next_leaves_for_the_next_pane(
+    cx: &mut TestAppContext,
+) {
+    let kept = Kept::default();
+    let inner = Rc::new(RefCell::new(None::<FocusHandle>));
+    let nested: BuildPane = {
+        let (kept, inner) = (kept.clone(), inner.clone());
+        Box::new(move |_, _, cx| {
+            let focus = cx.focus_handle();
+            let place = cx.focus_handle();
+            kept.borrow_mut().push(focus.clone());
+            *inner.borrow_mut() = Some(place.clone());
+            let view = cx.new(|_| Nested {
+                focus: focus.clone(),
+                inner: place,
+            });
+            Pane {
+                name: "nested",
+                view: view.into(),
+                focus,
+            }
+        })
+    };
+    let (_shown, mut cx) = showing(&one_repository(), vec![nested, keeping("after", &kept)], cx);
+    let place = inner.borrow().clone().expect("the pane's own place");
+    cx.update(|window, cx| place.focus(window, cx));
+    let (next, previous) = (pressed::<FocusNextPane>(), pressed::<FocusPreviousPane>());
+
+    // The focus is inside the first pane, on a handle that is not the pane's own.
+    assert_eq!(focused(&kept, &mut cx), [false, false]);
+    cx.simulate_keystrokes(&next);
+    assert_eq!(focused(&kept, &mut cx), [false, true], "next from inside");
+    cx.simulate_keystrokes(&previous);
+    assert_eq!(focused(&kept, &mut cx), [true, false], "previous goes back");
+
+    // Inside the first pane again: previous goes round to the last, not to the first.
+    cx.update(|window, cx| place.focus(window, cx));
+    cx.simulate_keystrokes(&previous);
+    assert_eq!(
+        focused(&kept, &mut cx),
+        [false, true],
+        "previous from inside"
+    );
 }
