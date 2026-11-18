@@ -307,19 +307,26 @@ fn the_wheel_brings_a_worktree_far_down_the_list_within_reach_of_a_click(cx: &mu
 fn narrower_than_the_set_width_with_nothing_pinned_the_sidebar_is_a_rail_and_wider_the_full_list(
     cx: &mut TestAppContext,
 ) {
-    let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
+    // The width counts from the first frame: a window opened one pixel narrower than the
+    // set width shows the rail without a resize.
+    let (shown, mut cx) = showing(&two_repositories(), wide(RAIL_BELOW - px(1.)), cx);
     let sidebar = &shown.sidebar;
     assert_eq!(pinned(sidebar, &mut cx), None);
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
+    assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
+
+    // The set width itself is not narrower than the set width.
+    cx.simulate_resize(wide(RAIL_BELOW));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
-    // One pixel narrower than the set width is narrower.
+    // One pixel narrower is, also when a resize brings the window there.
     cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
     assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
 
-    // The set width itself is not.
-    cx.simulate_resize(wide(RAIL_BELOW));
+    // The size the app's window opens at.
+    cx.simulate_resize(WIDE);
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
@@ -352,6 +359,10 @@ fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width
     let narrow = wide(RAIL_BELOW - px(1.));
     let narrower = wide(px(500.));
     let wider = wide(px(2000.));
+    // Opened wide with nothing pinned: the full list, by the width.
+    assert_eq!(pinned(sidebar, &mut cx), None);
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
+    assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 
     for (pins, width) in [
         // In a wide window the sidebar is the full list, so the key pins the rail; and
