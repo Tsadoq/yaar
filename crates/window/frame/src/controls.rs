@@ -176,7 +176,8 @@ pub fn controls() -> Vec<Control> {
     ]
 }
 
-/// Binds the key of each control to its action, for the whole app.
+/// Binds the key of each control to its action, in the context that
+/// [`Control::context`] gives: for the whole app where that is none.
 ///
 /// The tables are written by hand and never change while the app runs, so a key or a
 /// context that cannot be read is a mistake in the code: it panics, naming the control.

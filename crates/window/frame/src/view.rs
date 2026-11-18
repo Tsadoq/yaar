@@ -67,7 +67,9 @@ pub struct PaneEntry {
 ///
 /// Its root element sets the key context [`crate::KEY_CONTEXT`]. A key bound in that
 /// context works wherever the focus is in the window, in a pane and in the field for the
-/// base too, unless what has the focus binds the same key for itself.
+/// base too, unless what has the focus binds the same key for itself. A Frame with its
+/// sidebar keeps the focus inside what it draws, so such a key always has a place to
+/// work from.
 ///
 /// For tests, which cannot read what is drawn, two elements carry a selector that
 /// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, and the field
@@ -103,7 +105,8 @@ struct BaseField {
 
 impl Frame {
     /// A Frame that shows `link` and redraws when it changes. It has no sidebar and no
-    /// pane.
+    /// pane, and it gives the focus no place: a key bound in a context, that of the
+    /// Frame included, does nothing in it.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         cx.observe(&link, |_, _, cx| cx.notify()).detach();
         Self {
