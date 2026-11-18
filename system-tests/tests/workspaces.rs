@@ -7,10 +7,11 @@ use std::time::Duration;
 
 use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, Fact, FileSides,
-    FileStatus, Head, Message, Refusal, Repository, Workspace, write_message,
+    FileStatus, Head, Message, Refusal, Repository, TerminalSize, Workspace, write_message,
 };
 use yaar_system_tests::{
-    DEADLINE, Descriptor, Repo, World, attach, descendants_of, descriptors_of, wait_until,
+    DEADLINE, Descriptor, Repo, World, attach, descendants_of, descriptors_of, is_alive,
+    wait_until,
 };
 
 const ONE: &str = "pub fn number() -> u32 {\n    1\n}\n";
@@ -148,15 +149,38 @@ fn sockets_of(pid: u32) -> Vec<Descriptor> {
         .filter(|held| {
             !matches!(
                 held,
-                Descriptor::Pipe | Descriptor::File | Descriptor::KernelSocket(_)
+                Descriptor::Pipe
+                    | Descriptor::Terminal
+                    | Descriptor::File
+                    | Descriptor::KernelSocket(_)
             )
         })
         .collect()
 }
 
+/// The two numbers in the answer to `echo job-$! shell-$$`: the process of the job and
+/// the shell's own. Only digits count, so the terminal's echo of the typed line, which
+/// holds `$!` and `$$`, is never taken for the answer, and a number counts only once the
+/// line that holds it has ended.
+fn job_and_shell(output: &[u8]) -> Option<(u32, u32)> {
+    let text = String::from_utf8_lossy(output);
+    text.match_indices("job-").find_map(|(at, _)| {
+        let line = text[at + "job-".len()..].split_inclusive(['\r', '\n']).next()?;
+        let line = line.strip_suffix(['\r', '\n'])?;
+        let (job, shell) = line.split_once(" shell-")?;
+        Some((job.parse().ok()?, shell.parse().ok()?))
+    })
+}
+
+/// Whether the process is gone: not running, and not one that ended and waits to be
+/// collected.
+fn is_gone(pid: u32) -> bool {
+    !is_alive(pid)
+}
+
 // CLIENT-03.
 #[test]
-fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only() {
+fn the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only() {
     let mut world = World::new();
     let keeper = world.start_keeper();
     let branch = a_branch_with_changes(&world);
@@ -171,10 +195,37 @@ fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only(
         .file(&changes, &file("src/lib.rs", FileStatus::Modified))
         .expect("read the file");
 
+    // A terminal, its shell run in the world as `/bin/sh`. The shell starts a job that
+    // outlives its hang-up and then becomes `cat`, so that the programs of the terminal
+    // are a shell-turned-`cat` and a `sleep`, both started by the Keeper's Dock.
+    let terminal = client
+        .open_terminal(
+            &workspace,
+            TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        )
+        .expect("open a terminal");
+    client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
+    client.type_into(&terminal, b"sleep 300 & echo job-$! shell-$$\r");
+    let said = client.wait_for_output(&terminal, DEADLINE, |bytes| {
+        job_and_shell(bytes).is_some()
+    });
+    let (job, shell) = job_and_shell(&said).expect("the job and the shell");
+    // The shell's own process becomes `cat`: `exec` keeps the pid. The process that
+    // prints the line is the one that turns into `cat`, so `cat` runs once the line is
+    // there. The echo of the typed line shows `$((1+1))`, never `2`.
+    client.type_into(&terminal, b"exec sh -c 'echo ready-$((1+1)); exec cat'\r");
+    client.wait_for_output(&terminal, DEADLINE, |bytes| {
+        bytes.windows(7).any(|window| window == b"ready-2")
+    });
+
     // One listing of every descriptor of the Keeper, with a Window attached. It holds
     // two sockets, both of the unix kind and at the socket file of the world: the one it
     // listens on and the connection of this client. That they show is the proof that
-    // the listing sees the process. No socket is of another kind: no network port.
+    // the listing sees the process. No socket is of another kind: no network port. Its
+    // pseudo-terminal masters show, and are no sockets.
     let at_the_socket_file = |held: &Descriptor| matches!(held, Descriptor::UnixSocket { path: Some(path), .. } if *path == world.socket());
     let listens = |held: &&Descriptor| {
         matches!(
@@ -189,6 +240,8 @@ fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only(
     assert_eq!(attached.len(), 2, "{attached:?}");
     assert!(attached.iter().all(at_the_socket_file), "{attached:?}");
     assert!(attached.iter().filter(listens).count() <= 1, "{attached:?}");
+    let own = descriptors_of(keeper);
+    assert!(own.contains(&Descriptor::Terminal), "{own:?}");
 
     // That file is the user's own: a socket that belongs to the user of this test and
     // that nobody else may connect to.
@@ -198,14 +251,21 @@ fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only(
     assert_eq!(socket_file.uid(), unsafe { libc::geteuid() });
     assert_eq!(socket_file.mode() & 0o077, 0, "{:o}", socket_file.mode());
 
-    // The same for every process that descends from the Keeper. There is one at least,
-    // and it holds no socket of any kind; the pipes through which it talks to the Keeper
-    // show that the listing sees it.
+    // The same for every process that descends from the Keeper: the git process, `cat`
+    // (the shell it replaced) and the `sleep`, three at least. None holds a socket of
+    // any kind. The pipes through which git talks to the Keeper show that the listing
+    // sees it, the terminal that the other two run on shows that it sees them.
     let started = descendants_of(keeper);
-    assert!(!started.is_empty(), "the Keeper keeps no git process");
+    assert!(started.len() >= 3, "{started:?}");
+    assert!(started.contains(&shell), "{shell} not in {started:?}");
+    assert!(started.contains(&job), "{job} not in {started:?}");
     for pid in started {
         let held = descriptors_of(pid);
-        assert!(held.contains(&Descriptor::Pipe), "{pid}: {held:?}");
+        if pid == shell || pid == job {
+            assert!(held.contains(&Descriptor::Terminal), "{pid}: {held:?}");
+        } else {
+            assert!(held.contains(&Descriptor::Pipe), "{pid}: {held:?}");
+        }
         assert_eq!(sockets_of(pid), vec![], "{pid}: {held:?}");
     }
 
@@ -234,12 +294,26 @@ fn the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only(
         "{only:?}"
     );
     assert_eq!(world.client().keeper().pid, keeper);
-    // The git process outlived the Window, and still holds no socket.
+    // The git process and the programs of the terminal outlived the Window, and still
+    // hold no socket.
+    assert!(is_alive(shell), "the terminal's program left with the Window");
+    assert!(is_alive(job), "the job left with the Window");
     let started = descendants_of(keeper);
-    assert!(!started.is_empty(), "the git process left with the Window");
+    assert!(started.len() >= 3, "{started:?}");
     for pid in started {
         assert_eq!(sockets_of(pid), vec![], "{pid}");
     }
+
+    // A world that kills its Keeper ends `cat` by the hang-up of its terminal, but no
+    // hang-up reaches the job, which a shell with job control put in a group of its
+    // own. The test ends it, and leaves when both are gone.
+    // SAFETY: `kill` only sends a signal, to a process this test started.
+    unsafe { libc::kill(job as libc::pid_t, libc::SIGKILL) };
+    drop(world);
+    assert!(
+        wait_until(DEADLINE, || is_gone(job) && is_gone(shell)),
+        "the job ({job}) or the shell ({shell}) is still there"
+    );
 }
 
 #[test]

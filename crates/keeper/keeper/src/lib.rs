@@ -14,6 +14,7 @@
 mod wiring;
 
 use std::fs;
+use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
@@ -37,6 +38,10 @@ const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
 /// Window reads on a thread of its own, so one that takes nothing for this long is stuck
 /// or stopped, and what waits behind it must not wait with it.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How many bytes may wait to be written to one Window. A Window that falls this far
+/// behind, as one that is stopped while a program writes on, is let go.
+const MAX_QUEUED: usize = 64 * 1024 * 1024;
 
 /// How the Keeper is started.
 #[derive(Debug, Clone)]
@@ -96,6 +101,12 @@ struct Shared {
 }
 
 impl Shared {
+    /// The shared state, with the parts started on it: the parts tell the Windows what a
+    /// program of a terminal does, and so need a way to this state.
+    fn start(options: &Options) -> Arc<Shared> {
+        Arc::new_cyclic(|this| Shared::new(Parts::start(options, this.clone())))
+    }
+
     fn new(parts: Parts) -> Shared {
         Shared {
             state: Mutex::new(State {
@@ -111,6 +122,31 @@ impl Shared {
 
     fn lock(&self) -> MutexGuard<'_, State> {
         lock(&self.state)
+    }
+
+    /// Whether anything needs the Keeper to stay, and since when nothing does: no Window
+    /// attached and no program running. Called with the state held, wherever either may
+    /// have changed.
+    fn settle(&self, state: &mut State) {
+        let running = self
+            .parts
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .map_or(0, Parts::running);
+        state.idle_since = if state.windows > 0 || running > 0 {
+            None
+        } else {
+            state.idle_since.or_else(|| Some(Instant::now()))
+        };
+    }
+
+    /// A program of a terminal has ended: the thread that waits for the end looks again.
+    fn program_ended(&self) {
+        // The lock is taken and let go so that the thread is either not yet looking, and
+        // will see it, or already waiting, and is woken: never in between.
+        drop(self.lock());
+        self.changed.notify_all();
     }
 
     /// Puts a Window among those that are told the facts. False when the Keeper is
@@ -137,7 +173,8 @@ impl Shared {
         lock(&self.told).take().unwrap_or_default()
     }
 
-    /// Tells every attached Window these facts, in this order.
+    /// Tells every attached Window these facts, in this order, by queuing them: no Window
+    /// is waited for.
     fn tell(&self, facts: &[Fact]) {
         if facts.is_empty() {
             return;
@@ -152,9 +189,9 @@ impl Shared {
                 continue;
             };
             for window in &windows {
-                // A Window that cannot be told is let go by `send`, and its own thread
+                // A Window that cannot be told is let go by `queue`, and its own thread
                 // sees to the rest.
-                let _ = window.send(&frame);
+                let _ = window.queue(frame.clone());
             }
         }
     }
@@ -168,42 +205,128 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 
 /// One attached Window.
 ///
-/// Its connection is read by the thread that serves it. It is written to by that thread,
-/// for a reply, and by the thread of whichever Window caused a fact: `writing` is held
-/// for a whole frame, so two frames never mix.
+/// Its connection is read by the thread that serves it. Everything the Keeper says to it
+/// is queued and written by a thread of its own, in the order queued, so that nobody who
+/// has something to say waits for a Window that is slow to read: the replies, the facts
+/// and the output of the programs all go through the one queue.
 struct Window {
     stream: UnixStream,
-    writing: Mutex<()>,
+    queue: Mutex<Queue>,
+    queued: Condvar,
+}
+
+#[derive(Default)]
+struct Queue {
+    frames: VecDeque<Vec<u8>>,
+    /// The bytes in `frames`.
+    bytes: usize,
+    /// The connection is let go: nothing is taken any more and nothing is written.
+    closed: bool,
+    /// Nothing more will be queued: the writing thread ends when the frames are written.
+    finished: bool,
 }
 
 impl Window {
-    /// Writes one frame, whole. A Window that takes nothing for [`WRITE_TIMEOUT`], or
-    /// that is gone, is let go: after half a frame nothing more can be said to it.
-    fn send(&self, frame: &[u8]) -> io::Result<()> {
-        let _whole_frame = lock(&self.writing);
+    /// A Window on this connection, and the thread that writes to it.
+    fn new(stream: UnixStream) -> Arc<Window> {
+        let window = Arc::new(Window {
+            stream,
+            queue: Mutex::new(Queue::default()),
+            queued: Condvar::new(),
+        });
+        let writer = Arc::clone(&window);
+        std::thread::spawn(move || writer.write_queued());
+        window
+    }
+
+    /// Queues one frame, whole, and returns at once. A Window that is gone, or whose
+    /// queue would hold more than [`MAX_QUEUED`] bytes, is let go and takes nothing:
+    /// false.
+    fn queue(&self, frame: Vec<u8>) -> bool {
+        let mut queue = lock(&self.queue);
+        if queue.closed {
+            return false;
+        }
+        if queue.bytes + frame.len() > MAX_QUEUED {
+            drop(queue);
+            self.let_go();
+            return false;
+        }
+        queue.bytes += frame.len();
+        queue.frames.push_back(frame);
+        drop(queue);
+        self.queued.notify_one();
+        true
+    }
+
+    /// Nothing more will be queued, as the Window has gone: what is queued is written
+    /// and the writing thread ends.
+    fn finish(&self) {
+        lock(&self.queue).finished = true;
+        self.queued.notify_one();
+    }
+
+    /// Writes the queued frames, one at a time, until the Window is let go or finished.
+    fn write_queued(&self) {
+        loop {
+            let frame = {
+                let mut queue = lock(&self.queue);
+                loop {
+                    if queue.closed {
+                        return;
+                    }
+                    if let Some(frame) = queue.frames.pop_front() {
+                        queue.bytes -= frame.len();
+                        break frame;
+                    }
+                    if queue.finished {
+                        return;
+                    }
+                    queue = self
+                        .queued
+                        .wait(queue)
+                        .unwrap_or_else(PoisonError::into_inner);
+                }
+            };
+            // A Window that takes nothing for [`WRITE_TIMEOUT`], or that is gone, is let
+            // go: after half a frame nothing more can be said to it.
+            if self.write(&frame).is_err() {
+                self.let_go();
+                return;
+            }
+        }
+    }
+
+    /// Writes one frame, whole.
+    fn write(&self, frame: &[u8]) -> io::Result<()> {
         let mut out = &self.stream;
         let mut rest = frame;
-        let sent = loop {
+        loop {
             let began = Instant::now();
             match out.write(rest) {
-                Ok(written) if written == rest.len() => break Ok(()),
+                Ok(written) if written == rest.len() => return Ok(()),
                 // The system waits for room until everything is taken. When it comes
                 // back with less after the whole time allowed, it has given up waiting:
                 // to go on would be to wait that long once more.
                 Ok(_) if began.elapsed() >= WRITE_TIMEOUT => {
-                    break Err(io::ErrorKind::TimedOut.into());
+                    return Err(io::ErrorKind::TimedOut.into());
                 }
                 Ok(written) => rest = &rest[written..],
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                Err(e) => break Err(e),
+                Err(e) => return Err(e),
             }
-        };
-        sent.inspect_err(|_| self.let_go())
+        }
     }
 
-    /// Closes the connection. The thread that reads it finds it closed and ends, and so
-    /// does a write that waits for the Window to take something.
+    /// Closes the connection and drops what was queued. The thread that reads it finds
+    /// it closed and ends, and so does the one that writes to it.
     fn let_go(&self) {
+        let mut queue = lock(&self.queue);
+        queue.closed = true;
+        queue.frames.clear();
+        queue.bytes = 0;
+        drop(queue);
+        self.queued.notify_all();
         let _ = self.stream.shutdown(Shutdown::Both);
     }
 }
@@ -249,7 +372,7 @@ pub fn run(options: Options) -> io::Result<Exit> {
 
     // Only the Keeper that holds the lock opens the database, and it is open before the
     // first Window can ask for anything.
-    let shared = Arc::new(Shared::new(Parts::start(&options)));
+    let shared = Shared::start(&options);
 
     match fs::remove_file(socket) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -326,8 +449,10 @@ fn wait_for_the_end(shared: &Shared, linger: Duration) -> Exit {
         if let Some(exit) = state.exit {
             return exit;
         }
-        let wait = match (state.windows, state.idle_since) {
-            (0, Some(since)) => {
+        // A program that ends by itself leaves the Keeper with nothing to keep.
+        shared.settle(&mut state);
+        let wait = match state.idle_since {
+            Some(since) => {
                 let idle = since.elapsed();
                 if idle >= linger {
                     state.exit = Some(Exit::Idle);
@@ -335,7 +460,7 @@ fn wait_for_the_end(shared: &Shared, linger: Duration) -> Exit {
                 }
                 linger - idle
             }
-            _ => Duration::from_secs(3600),
+            None => Duration::from_secs(3600),
         };
         state = shared
             .changed
@@ -375,15 +500,12 @@ fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<()
     // Every frame but the hello and the stop is spoken between equal versions only: a
     // Window of another version is told no fact and can ask for nothing else.
     let speaks = mine.speaks_with(&theirs);
-    let window = Arc::new(Window {
-        stream,
-        writing: Mutex::new(()),
-    });
+    let window = Window::new(stream);
 
     {
         let mut state = shared.lock();
         state.windows += 1;
-        state.idle_since = None;
+        shared.settle(&mut state);
     }
     let result = if speaks && !shared.admit(&window) {
         // The Keeper is leaving.
@@ -392,12 +514,12 @@ fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<()
         converse(&window, speaks, shared)
     };
     shared.forget(&window);
+    // What is owed to the Window is still written, if it can take it.
+    window.finish();
     {
         let mut state = shared.lock();
         state.windows -= 1;
-        if state.windows == 0 {
-            state.idle_since = Some(Instant::now());
-        }
+        shared.settle(&mut state);
     }
     shared.changed.notify_all();
     result
@@ -405,7 +527,7 @@ fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<()
 
 /// Reads what one Window sends, until it goes away or asks for the stop. `speaks` says
 /// whether it speaks the protocol version of this Keeper.
-fn converse(window: &Window, speaks: bool, shared: &Shared) -> Result<(), LinkError> {
+fn converse(window: &Arc<Window>, speaks: bool, shared: &Shared) -> Result<(), LinkError> {
     loop {
         match read_message(&mut &window.stream) {
             Ok(Message::Shutdown) => {
@@ -453,17 +575,17 @@ fn converse(window: &Window, speaks: bool, shared: &Shared) -> Result<(), LinkEr
 /// Answers one request: the reply to the Window that asked, then the facts the request
 /// led to, to every Window. False when the Window that asked could not be answered and
 /// was let go.
-fn answer(shared: &Shared, window: &Window, id: RequestId, request: Request) -> bool {
+fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request) -> bool {
     // Held until the facts are out, so that they reach the Windows in the order in which
     // the requests were answered.
     let _turn = wiring::waits_its_turn(request.kind()).then(|| lock(&shared.turn));
-    let Outcome { reply, facts } = match shared
+    let Outcome { reply, facts, then } = match shared
         .parts
         .read()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
     {
-        Some(parts) => parts.answer(request),
+        Some(parts) => parts.answer(window, request),
         None => Outcome::failed("the Keeper is leaving"),
     };
     // No request stays without an answer: what does not fit in a frame is answered with
@@ -477,12 +599,17 @@ fn answer(shared: &Shared, window: &Window, id: RequestId, request: Request) -> 
         })
     });
     let answered = match frame {
-        Ok(frame) => window.send(&frame).is_ok(),
+        Ok(frame) => window.queue(frame),
         Err(_) => {
             window.let_go();
             false
         }
     };
+    // What waited for the reply to be on its way, as the output of a terminal it names,
+    // goes after it.
+    if let Some(then) = then {
+        then();
+    }
     // What was done is told, whatever became of the Window that asked for it.
     shared.tell(&facts);
     answered

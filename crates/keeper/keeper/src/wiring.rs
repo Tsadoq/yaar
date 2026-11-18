@@ -43,20 +43,32 @@
 //! Nothing is watched yet. The list of workspaces is read from git when a Window asks
 //! for it, and no fact tells of a worktree or a branch that changed outside the app.
 
-use yaar_link::{Ending, Fact, Refusal, Reply, Request, RequestKind, TerminalSize};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
+
+use yaar_dock::{Dock, DockError, Event, Start};
+use yaar_link::{
+    Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, TerminalSize,
+};
 use yaar_recorder::{CommitId, Git};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
-use crate::Options;
+use crate::{Options, Shared, Window, frame_of};
 
 /// How many of its first bytes say whether a file is text: git's own number.
 const TEXT_PROBE: usize = 8000;
+
+/// The most bytes of a program's output that one frame carries.
+const OUTPUT_FRAME: usize = 64 * 1024;
 
 /// The parts of the Keeper, started and connected.
 pub(crate) struct Parts {
     // Workspaces on git and the Store, or the sentence that says why there is none.
     workspaces: Result<Workspaces, String>,
+    // The terminals and their programs. Dropped with the parts, which ends every program.
+    dock: Dock,
+    // What the programs of the Dock tell the Windows goes through here.
+    shared: Weak<Shared>,
 }
 
 /// What one request leads to.
@@ -65,6 +77,8 @@ pub(crate) struct Outcome {
     pub(crate) reply: Result<Reply, Refusal>,
     /// For every attached Window, the one that asked included, after the reply.
     pub(crate) facts: Vec<Fact>,
+    /// Run once the reply is queued, before the facts are told.
+    pub(crate) then: Option<Box<dyn FnOnce() + Send>>,
 }
 
 impl Outcome {
@@ -75,6 +89,7 @@ impl Outcome {
                 reason: reason.into(),
             }),
             facts: Vec::new(),
+            then: None,
         }
     }
 }
@@ -101,27 +116,38 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
 
 impl Parts {
     /// Starts the parts: finds git, opens the database `yaar_store::FILE_NAME` in the
-    /// folder of `options.data_dir`, and puts Workspaces on both.
+    /// folder of `options.data_dir`, and puts Workspaces on both; and makes the Dock, whose
+    /// programs tell what they do to the Windows of `shared`.
     ///
     /// A Keeper with no git, or with a database it cannot open, still starts and answers
     /// the hello, so that a Window can say what is wrong; each request is then refused
     /// with the reason.
-    pub(crate) fn start(options: &Options) -> Parts {
+    pub(crate) fn start(options: &Options, shared: Weak<Shared>) -> Parts {
         let workspaces = Git::find().map_err(|e| e.to_string()).and_then(|git| {
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
             Ok(Workspaces::new(git, store))
         });
-        Parts { workspaces }
+        Parts {
+            workspaces,
+            dock: Dock::new(),
+            shared,
+        }
     }
 
-    /// Answers one request of a Window.
-    pub(crate) fn answer(&self, request: Request) -> Outcome {
+    /// How many programs of terminals run.
+    pub(crate) fn running(&self) -> usize {
+        self.dock.running()
+    }
+
+    /// Answers one request of `window`.
+    pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Outcome {
         let workspaces = match &self.workspaces {
             Ok(workspaces) => workspaces,
             Err(reason) => return Outcome::failed(reason.clone()),
         };
         let mut facts = Vec::new();
+        let mut then = None;
         let reply = match request {
             Request::ListWorkspaces => list(workspaces).map(Reply::Workspaces),
             Request::OpenFolder { path } => open_folder(workspaces, path, &mut facts),
@@ -155,18 +181,202 @@ impl Parts {
                     })
                 })
                 .map_err(refusal),
-            Request::OpenTerminal { .. } | Request::ResizeTerminal { .. } => todo!(),
+            Request::OpenTerminal {
+                workspace,
+                program,
+                size: at,
+            } => self
+                .open_terminal(workspaces, window, &workspace, &program, at)
+                .map(|(reply, release)| {
+                    then = Some(release);
+                    reply
+                }),
+            Request::ResizeTerminal { terminal, size: to } => self
+                .dock
+                .resize(&yaar_dock::TerminalId::new(terminal.as_str()), size(to))
+                .map(|()| Reply::Done)
+                .map_err(|error| match error {
+                    DockError::UnknownTerminal(_) => Refusal::UnknownTerminal { terminal },
+                    other => Refusal::Failed {
+                        reason: other.to_string(),
+                    },
+                }),
         };
-        Outcome { reply, facts }
+        Outcome {
+            reply,
+            facts,
+            then,
+        }
+    }
+
+    /// Starts `program` in the folder of `workspace`, in a terminal of the Dock. The
+    /// reply names the terminal, and the step that goes with it lets the output of the
+    /// program through: until the reply is queued, nothing of it is sent.
+    fn open_terminal(
+        &self,
+        workspaces: &Workspaces,
+        window: &Arc<Window>,
+        workspace: &yaar_link::WorkspaceId,
+        program: &Program,
+        at: TerminalSize,
+    ) -> Result<(Reply, Box<dyn FnOnce() + Send>), Refusal> {
+        let folder = list(workspaces)?
+            .into_iter()
+            .flat_map(|repository| repository.workspaces)
+            .find(|found| found.id == *workspace)
+            .map(|found| found.path)
+            .ok_or_else(|| Refusal::UnknownWorkspace {
+                workspace: workspace.clone(),
+            })?;
+        // The id is made first, so that the program's environment can name it.
+        let id = yaar_dock::TerminalId::random().map_err(|error| Refusal::Failed {
+            reason: format!("no name for the terminal could be made: {error}"),
+        })?;
+        let start = match program {
+            Program::Shell => Start::shell(folder, size(at)),
+        };
+        let route = Arc::new(Route::new(window));
+        let events = {
+            let (route, shared, id) = (
+                Arc::clone(&route),
+                self.shared.clone(),
+                yaar_link::TerminalId::new(id.as_str()),
+            );
+            Box::new(move |event| route.event(&shared, &id, event))
+        };
+        self.dock
+            .open(id.clone(), start, events)
+            .map_err(|error| Refusal::Failed {
+                reason: error.to_string(),
+            })?;
+        let terminal = yaar_link::TerminalId::new(id.as_str());
+        let shared = self.shared.clone();
+        Ok((
+            Reply::TerminalOpened {
+                terminal: terminal.clone(),
+            },
+            Box::new(move || route.release(&shared, &terminal)),
+        ))
     }
 
     /// Hands what a Window typed to the program of `terminal`. Bytes for a terminal the
     /// Dock does not hold, as one whose program has ended, are dropped: nothing answers
     /// input.
     pub(crate) fn input(&self, terminal: &yaar_link::TerminalId, bytes: &[u8]) {
-        let _ = (terminal, bytes);
-        todo!()
+        let _ = self
+            .dock
+            .write(&yaar_dock::TerminalId::new(terminal.as_str()), bytes);
     }
+}
+
+/// Where the output of one terminal goes: to the Window that opened it, and in order.
+///
+/// The reply that names a terminal must reach its Window before the terminal's first
+/// output, and nothing may be lost in between. The program starts before the reply is
+/// made, so what it writes first is held until the reply is queued, and then queued
+/// behind it.
+struct Route {
+    // Not held for long: a Window that has gone away is gone, though its terminal runs
+    // on, and its connection closes with it.
+    opener: Weak<Window>,
+    state: Mutex<RouteState>,
+}
+
+#[derive(Default)]
+struct RouteState {
+    /// The reply is queued: output goes straight to the opener.
+    released: bool,
+    /// Frames of output that came before the reply was queued, in order.
+    held: Vec<Vec<u8>>,
+    /// The program ended before the reply was queued: the end is told after the output.
+    ended: Option<Ending>,
+}
+
+impl Route {
+    fn new(opener: &Arc<Window>) -> Route {
+        Route {
+            opener: Arc::downgrade(opener),
+            state: Mutex::new(RouteState::default()),
+        }
+    }
+
+    /// Queues frames for the Window that opened the terminal. A Window that is gone takes
+    /// nothing, and the program goes on.
+    fn queue(&self, frames: Vec<Vec<u8>>) {
+        if let Some(opener) = self.opener.upgrade() {
+            for frame in frames {
+                let _ = opener.queue(frame);
+            }
+        }
+    }
+
+    /// What the Dock tells of the terminal, on the Dock's thread for it.
+    fn event(&self, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId, event: Event) {
+        match event {
+            Event::Output(bytes) => {
+                let frames = frames_of(terminal, bytes);
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if state.released {
+                    drop(state);
+                    self.queue(frames);
+                } else {
+                    state.held.extend(frames);
+                }
+            }
+            Event::Ended(how) => {
+                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+                if state.released {
+                    drop(state);
+                    // From this thread, which queued the last output: the end follows
+                    // it on the connection of the Window that opened the terminal.
+                    tell_ended(shared, terminal, ending(how));
+                } else {
+                    state.ended = Some(ending(how));
+                }
+            }
+        }
+    }
+
+    /// The reply that names the terminal is queued: what was held goes out after it, in
+    /// order, and from now on output goes out as it comes.
+    fn release(&self, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId) {
+        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        self.queue(std::mem::take(&mut state.held));
+        state.released = true;
+        let ended = state.ended.take();
+        drop(state);
+        if let Some(how) = ended {
+            tell_ended(shared, terminal, how);
+        }
+    }
+}
+
+/// Tells every Window that the program of a terminal has ended, and wakes the thread
+/// that waits to see whether the Keeper is still needed.
+fn tell_ended(shared: &Weak<Shared>, terminal: &yaar_link::TerminalId, how: Ending) {
+    // The Keeper that is leaving has nobody to tell.
+    if let Some(shared) = shared.upgrade() {
+        shared.tell(&[Fact::TerminalEnded {
+            terminal: terminal.clone(),
+            ending: how,
+        }]);
+        shared.program_ended();
+    }
+}
+
+/// What a program wrote, as the frames that carry it: one for each 64 KiB at most, which
+/// is more than the Dock reads at once, and far under the length of a frame.
+fn frames_of(terminal: &yaar_link::TerminalId, bytes: Vec<u8>) -> Vec<Vec<u8>> {
+    bytes
+        .chunks(OUTPUT_FRAME)
+        .map(|run| {
+            frame_of(&Message::Output {
+                terminal: terminal.clone(),
+                bytes: run.to_vec(),
+            })
+            .expect("64 KiB fit in a frame")
+        })
+        .collect()
 }
 
 /// A size of the Link in the words of the Dock.
