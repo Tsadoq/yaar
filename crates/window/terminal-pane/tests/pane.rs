@@ -614,6 +614,35 @@ fn the_wheel_and_the_scroll_keys_move_through_the_history_and_typing_comes_back(
 }
 
 #[gpui_kit::test]
+fn on_the_alternate_screen_a_step_of_the_wheel_is_an_arrow_key_for_the_program(
+    cx: &mut TestAppContext,
+) {
+    let (panes, mut cx, one) = one_terminal(cx);
+    program_writes(&panes, &one, b"\x1b[?1049h", "full-screen", &mut cx);
+    let over = panes.cell_centre(&one, 0, 1, 1, &mut cx);
+    cx.simulate_mouse_move(over, None, Modifiers::none());
+    let step = |lines: f32| ScrollEvent {
+        position: over,
+        delta: ScrollDelta::Lines(point(0., lines)),
+        ..ScrollEvent::default()
+    };
+    cx.simulate_event(step(1.));
+    assert_eq!(
+        panes.keeper.input(&mut cx),
+        (one.clone(), b"\x1b[A".to_vec())
+    );
+    cx.simulate_event(step(-2.));
+    assert_eq!(
+        panes.keeper.input(&mut cx),
+        (one.clone(), b"\x1b[B\x1b[B".to_vec())
+    );
+    // The application cursor keys change the form of the arrow.
+    program_writes(&panes, &one, b"\x1b[?1h", "cursor-keys", &mut cx);
+    cx.simulate_event(step(1.));
+    assert_eq!(panes.keeper.input(&mut cx), (one, b"\x1bOA".to_vec()));
+}
+
+#[gpui_kit::test]
 fn a_drag_selects_text_and_copy_puts_the_selection_on_the_clipboard(cx: &mut TestAppContext) {
     let (panes, mut cx, one) = one_terminal(cx);
     panes.keeper.output(&one, b"hello world");
