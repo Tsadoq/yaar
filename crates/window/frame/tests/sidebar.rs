@@ -369,6 +369,50 @@ fn a_click_on_the_pin_control_pins_the_form_the_sidebar_does_not_have(cx: &mut T
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
 }
 
+// The two tests below hold the one case where the form on screen is not the pinned one:
+// a rail by the width alone. A toggle that went by what is pinned would pin the rail
+// there, and nothing the user sees would change.
+
+#[gpui_kit::test]
+fn the_key_pins_the_full_list_in_a_window_whose_width_alone_made_the_sidebar_a_rail(
+    cx: &mut TestAppContext,
+) {
+    let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
+    let sidebar = &shown.sidebar;
+    cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
+    assert_eq!(pinned(sidebar, &mut cx), None);
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
+    assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
+
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
+    assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Full));
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
+    assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
+
+    // And back: every press changes what is seen.
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
+    assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Rail));
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
+    assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
+}
+
+#[gpui_kit::test]
+fn a_click_on_the_pin_control_pins_the_full_list_in_a_window_opened_too_narrow_for_it(
+    cx: &mut TestAppContext,
+) {
+    let (shown, mut cx) = showing(&two_repositories(), wide(px(900.)), cx);
+    let sidebar = &shown.sidebar;
+    assert_eq!(pinned(sidebar, &mut cx), None);
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Rail);
+    assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
+
+    let pin = drawn("sidebar-pin", &mut cx).expect("the pin control is drawn");
+    cx.simulate_click(pin.center(), Modifiers::none());
+    assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Full));
+    assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
+    assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
+}
+
 #[gpui_kit::test]
 fn a_sidebar_in_no_frame_is_the_full_list_until_a_form_is_pinned(cx: &mut TestAppContext) {
     let link = cx.new(|_| KeeperLink::new());
