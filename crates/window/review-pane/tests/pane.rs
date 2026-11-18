@@ -23,7 +23,8 @@ use yaar_review_pane::{Layout, PaneRow, Position, ReviewPane, Unshown, controls}
 
 use common::{
     Stage, WINDOW, bounds_of_row, commit, default_base, drawn, file, id, link_up, open,
-    open_window, read_file, rows, since_main, texts, wait_for_files, wait_until, workspace,
+    open_window, read_file, repository, rows, since_main, texts, wait_for_files, wait_until,
+    workspace,
 };
 
 /// The rows of the pane as a reader of a unified diff would write them down: a heading
@@ -596,13 +597,18 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
 
     // And nothing was asked of the Keeper that could change a file. What the keys
     // caused was written to the socket before each of them returned, so it lies before
-    // the question the Window asks when the Keeper now tells it that the changes
-    // changed: reading up to that question reads all of it, without waiting for a time
-    // to pass.
+    // whatever the Window asks next. The Keeper now makes it ask: it puts a workspace
+    // on screen that the Window has not heard of, so the question for the changes of
+    // that one is a question no key can have asked. Reading up to it reads all the keys
+    // caused, without waiting for a time to pass. The changes of the workspace that was
+    // on screen would not do for this: a key that asked for them again would end the
+    // reading before what a later key asked.
     stage
         .keeper
-        .tell(Fact::ChangesChanged { workspace: id('1') });
-    let closing = Request::GetChanges { workspace: id('1') };
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '2', "other",
+        )])]));
+    let closing = Request::GetChanges { workspace: id('2') };
     loop {
         let (_, request) = stage.keeper.request(&mut cx);
         // Of the requests of the Link, these two only read.
