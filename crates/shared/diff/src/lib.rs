@@ -112,7 +112,33 @@ pub struct FileDiff {
 struct Text {
     bytes: Vec<u8>,
     /// Where each line starts in `bytes`.
-    starts: Vec<u32>,
+    starts: Vec<usize>,
+}
+
+impl Text {
+    fn new(bytes: &[u8]) -> Self {
+        let mut starts = Vec::new();
+        let mut start = 0;
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            starts.push(start);
+            start += line.len();
+        }
+        Self {
+            bytes: bytes.to_vec(),
+            starts,
+        }
+    }
+
+    /// The line with the line feed that ends it, if it has one.
+    fn token(&self, line: u32) -> &[u8] {
+        let line = line as usize;
+        let end = self
+            .starts
+            .get(line + 1)
+            .copied()
+            .unwrap_or(self.bytes.len());
+        &self.bytes[self.starts[line]..end]
+    }
 }
 
 impl FileDiff {
@@ -122,24 +148,51 @@ impl FileDiff {
     /// A line ends at a line feed; a last line with none is a line too. The bytes need
     /// not be UTF-8.
     pub fn new(old: &[u8], new: &[u8]) -> Self {
-        todo!()
+        // A line is compared with its line feed, as git compares it: a last line that
+        // gained or lost its line feed is a changed line.
+        let input = imara_diff::InternedInput::new(old, new);
+        let mut diff = imara_diff::Diff::compute(ALGORITHM, &input);
+        // Without this step the changes are right but sit where the algorithm happened to
+        // find them, not where git puts them.
+        diff.postprocess_lines(&input);
+        let hunks = diff
+            .hunks()
+            .map(|hunk| Hunk {
+                old: hunk.before,
+                new: hunk.after,
+            })
+            .collect();
+        Self {
+            old: Text::new(old),
+            new: Text::new(new),
+            hunks,
+        }
+    }
+
+    fn text(&self, side: Side) -> &Text {
+        match side {
+            Side::Old => &self.old,
+            Side::New => &self.new,
+        }
     }
 
     /// The changes, in the order of the file. Two hunks never touch: at least one
     /// unchanged line lies between them.
     pub fn hunks(&self) -> &[Hunk] {
-        todo!()
+        &self.hunks
     }
 
     /// How many lines the version on `side` has.
     pub fn line_count(&self, side: Side) -> u32 {
-        todo!()
+        // The diff refuses a version of more lines than a `u32` counts.
+        self.text(side).starts.len() as u32
     }
 
     /// The bytes of one line of the version on `side`, without the line feed that ends
     /// it. Panics when the version has no such line.
     pub fn line(&self, side: Side, line: u32) -> &[u8] {
-        todo!()
+        let token = self.text(side).token(line);
+        token.strip_suffix(b"\n").unwrap_or(token)
     }
 
     /// The rows of the diff in `layout`, with up to `context` unchanged lines shown
@@ -216,5 +269,127 @@ mod corpus {
     /// Every change of the corpus, in the order of their names.
     pub(crate) fn pairs() -> Vec<Pair> {
         todo!()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    /// A version cut into lines the way git counts them: a line is its bytes with the line
+    /// feed that ends it. The tests cut their own lines, so that the hunks are held to the
+    /// bytes they were given and not to the crate's own account of them.
+    fn lines(bytes: &[u8]) -> Vec<&[u8]> {
+        bytes.split_inclusive(|byte| *byte == b'\n').collect()
+    }
+
+    /// The old version with every hunk applied: its removed lines left out, and the lines
+    /// the hunk names in the new version put in their place.
+    fn applied(old: &[u8], new: &[u8], hunks: &[Hunk]) -> Vec<u8> {
+        let (old, new) = (lines(old), lines(new));
+        let mut out: Vec<&[u8]> = Vec::new();
+        let mut kept = 0;
+        for hunk in hunks {
+            assert!(
+                !(hunk.old.is_empty() && hunk.new.is_empty()),
+                "{hunk:?} changes nothing"
+            );
+            out.extend(&old[kept..hunk.old.start as usize]);
+            assert_eq!(
+                out.len(),
+                hunk.new.start as usize,
+                "{hunk:?} does not sit where its new side says"
+            );
+            out.extend(&new[hunk.new.start as usize..hunk.new.end as usize]);
+            kept = hunk.old.end as usize;
+        }
+        out.extend(&old[kept..]);
+        out.concat()
+    }
+
+    /// Source-like text of 21,220 lines: constants and functions at the left edge, `if`
+    /// blocks nested up to six deep inside the functions, one line in ten blank. Made from
+    /// a fixed seed, so every run diffs the same bytes.
+    fn nested_source() -> Vec<u8> {
+        let mut state: u64 = 0x5eed_0000_0000_d1ff;
+        let mut next = move |below: u64| {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) % below
+        };
+        let mut text = String::new();
+        let mut depth = 0;
+        for number in 0..21_220 {
+            let roll = next(100);
+            let indent = "    ".repeat(depth);
+            let line = if roll < 10 {
+                String::new()
+            } else if depth == 0 && roll < 30 {
+                format!("const LIMIT_{number}: u64 = {};", next(10_000))
+            } else if depth == 0 {
+                depth = 1;
+                format!("fn step_{number}(input: u64) -> u64 {{")
+            } else if roll < 28 && depth < 7 {
+                depth += 1;
+                format!("{indent}if input > {} {{", next(500))
+            } else if roll < 48 {
+                depth -= 1;
+                format!("{}}}", "    ".repeat(depth))
+            } else {
+                format!("{indent}let value_{} = input + {};", next(40), next(500))
+            };
+            text.push_str(&line);
+            text.push('\n');
+        }
+        text.into_bytes()
+    }
+
+    /// The same text with the leading spaces of every line halved, as a formatter set to
+    /// another indent width leaves it.
+    fn reindented(source: &[u8]) -> Vec<u8> {
+        let mut out = Vec::with_capacity(source.len());
+        for line in lines(source) {
+            let spaces = line.iter().take_while(|byte| **byte == b' ').count();
+            out.extend_from_slice(&line[spaces / 2..]);
+        }
+        out
+    }
+
+    // DIFF-01
+    #[test]
+    fn a_file_of_21220_reindented_lines_diffs_in_under_50_ms() {
+        let old = nested_source();
+        let new = reindented(&old);
+        let indented = lines(&old).iter().filter(|line| line[0] == b' ').count();
+        assert_eq!(lines(&old).len(), 21_220);
+        assert_eq!(lines(&new).len(), 21_220);
+        assert!(
+            indented > 14_000,
+            "only {indented} lines are indented: too few to stand for a re-indented file"
+        );
+
+        // The best of several runs: a busy machine can slow any one of them, and the limit
+        // is on what the diff costs, not on what else the machine was doing.
+        let mut best = Duration::MAX;
+        for _ in 0..7 {
+            let start = Instant::now();
+            let diff = FileDiff::new(&old, &new);
+            best = best.min(start.elapsed());
+
+            // A diff that is fast and wrong would pass the limit: it has to be the change.
+            assert_eq!(applied(&old, &new, diff.hunks()), new);
+            let removed: usize = diff.hunks().iter().map(|hunk| hunk.old.len()).sum();
+            assert!(
+                removed >= indented,
+                "{removed} lines removed of {indented} changed"
+            );
+        }
+        assert!(
+            best < Duration::from_millis(50),
+            "the best of 7 runs took {best:?}"
+        );
     }
 }
