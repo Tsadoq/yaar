@@ -18,7 +18,7 @@ use gpui_kit::{
 };
 use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane};
 use yaar_review_pane::ReviewPane;
-use yaar_system_tests::{Repo, Tap, World};
+use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
 use yaar_terminal_pane::TerminalPane;
 
 pub use yaar_system_tests::DEADLINE;
@@ -28,7 +28,10 @@ const PAUSE: Duration = Duration::from_millis(1);
 
 /// The composed Window of one test, in a world of its own, with a tap on its link.
 pub struct Composed {
-    // The tap goes before the world it leads into: fields are dropped in this order.
+    // Fields are dropped in this order. The programs the Keeper started are listed while it
+    // still runs, the tap goes before the world it leads into, and once the world has
+    // ended the Keeper the test waits until the programs are gone too.
+    _listing: ListingPrograms,
     pub tap: Tap,
     pub world: World,
     pub frame: Entity<Frame>,
@@ -45,6 +48,41 @@ pub struct Composed {
     pub repositories: Vec<Repo>,
     /// Counts what the test makes, for names of its own.
     made: u32,
+    _waiting: WaitingForPrograms,
+}
+
+/// The processes the Keeper started, listed while it still runs: dropping this reads them
+/// off the process table, which says no more once the Keeper is gone and its children
+/// belong to the system.
+struct ListingPrograms {
+    keeper: u32,
+    into: Rc<RefCell<Vec<u32>>>,
+}
+
+impl Drop for ListingPrograms {
+    fn drop(&mut self) {
+        *self.into.borrow_mut() = descendants_of(self.keeper);
+    }
+}
+
+/// Waits until every process the Keeper started has ended. The world ends the Keeper
+/// alone, and its terminals' programs end after it, when the closed terminal hangs up on
+/// them: a test that started a process waits until it is gone.
+struct WaitingForPrograms {
+    started: Rc<RefCell<Vec<u32>>>,
+}
+
+impl Drop for WaitingForPrograms {
+    fn drop(&mut self) {
+        let started = self.started.borrow().clone();
+        let gone = wait_for(DEADLINE, || started.iter().all(|pid| !is_alive(*pid)));
+        // A test that already failed says why; a second panic in its unwinding would end
+        // the process before it did.
+        if !gone && !std::thread::panicking() {
+            let left: Vec<u32> = started.into_iter().filter(|pid| is_alive(*pid)).collect();
+            panic!("the programs of the Keeper did not end with it: {left:?}");
+        }
+    }
 }
 
 /// Opens the Window as `yaar_window::open` does: `yaar_window::init`, then the Frame with
@@ -128,8 +166,13 @@ pub fn open_composed(
         .downcast::<TerminalPane>()
         .unwrap_or_else(|_| panic!("the terminal pane builds a TerminalPane"));
 
+    let started: Rc<RefCell<Vec<u32>>> = Rc::default();
     (
         Composed {
+            _listing: ListingPrograms {
+                keeper,
+                into: started.clone(),
+            },
             tap,
             world,
             frame,
@@ -140,6 +183,7 @@ pub fn open_composed(
             _watching_the_keys: watching,
             repositories: Vec::new(),
             made: 0,
+            _waiting: WaitingForPrograms { started },
         },
         cx,
     )

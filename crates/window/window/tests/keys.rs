@@ -230,6 +230,13 @@ impl Walk {
         self.window.click_into_the_review_pane(&mut self.cx);
     }
 
+    /// Whether the focus is in the review pane and in no program.
+    fn in_the_review_pane(&mut self) -> bool {
+        self.window
+            .focus_is_in(yaar_review_pane::KEY_CONTEXT, &mut self.cx)
+            && !self.window.focus_is_in(PROGRAM_CONTEXT, &mut self.cx)
+    }
+
     /// Answers the dialog for a folder and closes the field for a base, when a key
     /// opened one.
     fn tidy(&mut self) {
@@ -478,7 +485,16 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         .filter(|key| without_text(key) != quit)
         .filter(|key| seen.insert(without_text(key).to_owned()))
     {
+        // A key of this leg may have opened a terminal or moved the pane's focus on to
+        // another one: the recorder is made the terminal the pane holds the focus of again
+        // before each key, so that a key that leaks reaches the file that is read.
+        walk.click_into_the_recorder();
         walk.click_into_the_review_pane();
+        if !walk.in_the_review_pane() {
+            walk.differences.push(format!(
+                "{key}: the focus was not in the review pane before it"
+            ));
+        }
         walk.press(key);
         walk.tidy();
         checked += 1;
@@ -488,6 +504,11 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         // reached the program, so that here it is pressed where it runs.
         walk.click_into_the_recorder();
         walk.click_into_the_review_pane();
+        if !walk.in_the_review_pane() {
+            walk.differences.push(format!(
+                "{quit}: the focus was not in the review pane before it"
+            ));
+        }
         let ran = walk.press(&quit);
         if ran != [yaar_window::Quit.name()] {
             walk.differences.push(format!(
@@ -511,5 +532,8 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
         walk.click_into_the_recorder();
         let ran = walk.press(&quit);
         assert_eq!(ran, [yaar_window::Quit.name()], "what {quit} ran");
+        // The test platform keeps the app running, so a key typed after it shows that Quit,
+        // a kept key, sent the program nothing.
+        assert_eq!(walk.sentinel(), b"", "{quit} reached the program");
     }
 }

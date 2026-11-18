@@ -78,8 +78,8 @@ the program once it is composed.
 Closing the window quits the Window and leaves the Keeper, which owns the terminals. The
 Keeper stays for as long as a program runs in one of them, however long that is. A window
 opened again does not show those terminals yet, so a shell left in one cannot be reached
-from the app until that comes. To end the Keeper and every program in it, hang up on it by
-its process name:
+from the app until that comes. To end the Keeper and every program in it, end it by its
+process name:
 
 ```sh
 pkill -x yaar-keeper

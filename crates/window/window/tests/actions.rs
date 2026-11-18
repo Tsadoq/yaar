@@ -10,38 +10,16 @@
 //! the Window's own is outside the walk, and only a reader of that table can tell whether
 //! it belongs there.
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 
-use gpui_kit::{
-    Action, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
-    point, px,
-};
-use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, PROGRAM_CONTEXT, Place, Sends};
+use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
+use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{Origin, Program, Request, RequestKind, Workspace};
-use yaar_system_tests::{DEADLINE, Repo, Tap, World};
+use yaar_system_tests::DEADLINE;
 
 mod common;
 
-use common::wait_until;
-
-/// The composed Window of one test, in a world of its own, with a tap on its link.
-struct Composed {
-    // The tap goes before the world it leads into: fields are dropped in this order.
-    tap: Tap,
-    world: World,
-    frame: Entity<Frame>,
-    models: Models,
-    /// The actions the keystrokes ran since the list was last taken, by name, as the
-    /// test platform tells them.
-    ran: Rc<RefCell<Vec<&'static str>>>,
-    _watching_the_keys: Subscription,
-    /// The repositories the walk made, each opened as a workspace.
-    repositories: Vec<Repo>,
-    /// Counts what the walk makes, for names of its own.
-    made: u32,
-}
+use common::{Composed, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -57,65 +35,17 @@ enum Answer {
     Text(String),
 }
 
-/// Opens the Window the way the program does, with [`yaar_window::init`] and
-/// [`yaar_window::open`], on the socket of a tap that leads to the Keeper of a new world,
-/// and waits until that Keeper has answered.
+/// Opens the composed Window as the tests of its other rows do, in a world of its own with
+/// a tap on its link, and checks that every pane of the Window's list is in it, as well as
+/// in the table of controls.
 fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
-    let mut world = World::new();
-    let keeper = world.start_keeper();
-    let tap = world.tap();
-
-    // A real socket and a real process: the connection is read by a thread, and answered
-    // by a program, that the test executor cannot see.
-    cx.executor().allow_parking();
-    let ran: Rc<RefCell<Vec<&'static str>>> = Rc::default();
-    let watching = cx.update(|cx| {
-        yaar_window::init(cx);
-        let ran = ran.clone();
-        cx.observe_keystrokes(move |event: &KeystrokeEvent, _, _| {
-            if let Some(action) = &event.action {
-                ran.borrow_mut().push(action.name());
-            }
-        })
-    });
-    let Opened {
-        window,
-        frame,
-        models,
-    } = cx
-        .update(|cx| yaar_window::open(tap.socket(), cx))
-        .expect("open the composed Window on the test platform");
-    let mut cx = VisualTestContext::from_window(window, cx);
-
-    wait_until(
-        &mut cx,
-        "the Keeper to answer through the tap",
-        |cx| match models.link.read_with(cx, |link, _| link.status().clone()) {
-            LinkStatus::Starting => false,
-            LinkStatus::Connected(answered) => {
-                assert_eq!(answered.pid, keeper, "the Keeper of the world answered");
-                true
-            }
-            other => panic!("the Window did not reach the Keeper of the world: {other:?}"),
-        },
-    );
-    // Every pane of the list is in the window, as well as in the table of controls.
+    let (window, cx) = common::open_composed(cx, Vec::new());
     let listed: Vec<&str> = yaar_window::panes().iter().map(|pane| pane.name).collect();
-    assert_eq!(frame.read_with(&cx, |frame, _| frame.panes()), listed);
-
-    (
-        Composed {
-            tap,
-            world,
-            frame,
-            models,
-            ran,
-            _watching_the_keys: watching,
-            repositories: Vec::new(),
-            made: 0,
-        },
-        cx,
-    )
+    assert_eq!(
+        window.frame.read_with(&cx, |frame, _| frame.panes()),
+        listed
+    );
+    (window, cx)
 }
 
 /// The controls of the Window that say they send a request of this kind.
@@ -134,12 +64,6 @@ impl Composed {
                 .and_then(|selected| list.workspace(selected))
                 .cloned()
         })
-    }
-
-    /// A number no earlier call gave, for a name of the walk's own.
-    fn next(&mut self) -> u32 {
-        self.made += 1;
-        self.made
     }
 
     /// A new repository of the world with something to review: on a branch that left
@@ -228,12 +152,12 @@ impl Composed {
         );
         self.focus_where_the_key_works(control, cx);
         self.ran.borrow_mut().clear();
-        cx.simulate_keystrokes(control.keystroke);
+        cx.simulate_keystrokes(&control.key());
         assert_eq!(
             self.ran.take(),
             [(control.action)().name()],
             "what the key {} of {} ran",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
@@ -246,13 +170,13 @@ impl Composed {
         assert!(
             !cx.did_prompt_for_paths(),
             "the key {} of {} says it asks for nothing and opened the dialog for a folder",
-            control.keystroke,
+            control.key(),
             control.title
         );
         assert!(
             cx.debug_bounds("frame-base-field").is_none(),
             "the key {} of {} says it asks for nothing and opened the field for a line of text",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
@@ -265,7 +189,7 @@ impl Composed {
                 assert!(
                     cx.did_prompt_for_paths(),
                     "the key {} of {} opens the dialog for a folder",
-                    control.keystroke,
+                    control.key(),
                     control.title
                 );
                 cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
@@ -477,7 +401,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         window.assert_asks_nothing(&control, &mut cx);
         // No such branch exists. The Keeper refuses it, which is all the same here: the
         // request has passed the tap.
-        let closed = window.set_base(&format!("after-{}", control.keystroke), &mut cx);
+        let closed = window.set_base(&format!("after-{}", control.key()), &mut cx);
 
         let passed = window.tap.requests();
         for request in &passed[before..closed] {
@@ -485,7 +409,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
                 request.kind().origin(),
                 Origin::User,
                 "the key {} of {} names no message and sent {request:?}",
-                control.keystroke,
+                control.key(),
                 control.title
             );
         }
