@@ -138,9 +138,9 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
 
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert!(panes.pane.read_with(&cx, |pane, _| pane.split()));
+    // The focused terminal is on the left and the next one in the list on the right.
     let two = shown(&panes, &mut cx);
-    assert_eq!(two.len(), 2);
-    assert_ne!(two[0], two[1]);
+    assert_eq!(two, [t2.clone(), t1.clone()]);
     let (first, second) = (
         drawn("terminal-slot-0", &mut cx).expect("the first slot is drawn"),
         drawn("terminal-slot-1", &mut cx).expect("the second slot is drawn"),
@@ -451,7 +451,13 @@ fn the_window_title_follows_the_title_of_the_focused_terminal(cx: &mut TestAppCo
 
 #[gpui_kit::test]
 fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &mut TestAppContext) {
-    let (panes, mut cx, one) = one_terminal(cx);
+    let (mut panes, mut cx) = open_panes(cx);
+    let (one, two) = (terminal('1'), terminal('2'));
+    panes.open_terminal(&one, &mut cx);
+    panes.open_terminal(&two, &mut cx);
+    // The first terminal has the focus, as the one that ends.
+    panes.press_in_the_app::<PreviousTerminal>(&mut cx);
+    assert_eq!(focused(&panes, &mut cx), Some(one.clone()));
     panes.keeper.output(&one, b"bye");
     wait_for_first_line(&panes, &one, "bye", &mut cx);
     assert!(drawn("terminal-ended", &mut cx).is_none());
@@ -469,13 +475,21 @@ fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &m
     });
     assert!(drawn("terminal-ended", &mut cx).is_some());
     assert_eq!(lines(&panes.pane, &one, &cx)[0], "bye");
-    assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.terminals()), [one]);
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.terminals()),
+        [one.clone(), two.clone()]
+    );
 
-    // The Keeper no longer holds the terminal: what is typed in it is not sent.
+    // The Keeper no longer holds the terminal: what is typed in it is not sent. The
+    // absence is read up to a known input, since input travels on threads that the test
+    // does not wait for: a sentinel typed in the other terminal comes first, or the ended
+    // one sent something before it.
     cx.simulate_input("x");
     cx.simulate_keystrokes("escape");
-    cx.run_until_parked();
-    assert!(panes.keeper.no_input_waits());
+    panes.press_in_the_app::<NextTerminal>(&mut cx);
+    assert_eq!(focused(&panes, &mut cx), Some(two.clone()));
+    cx.simulate_input("s");
+    assert_eq!(panes.keeper.input(&mut cx), (two, b"s".to_vec()));
 }
 
 #[gpui_kit::test]
