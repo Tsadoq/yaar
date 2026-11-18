@@ -264,14 +264,13 @@ impl Window {
 }
 
 /// The number in the answer to `echo shell-$$`, once its line has ended. The echo of the
-/// typed line holds `$$`, never digits.
+/// typed line holds `$$`, never digits, and the prompt of the shell may stand in front of
+/// the answer on its line.
 fn shell_in(heard: &[u8]) -> Option<u32> {
     let text = String::from_utf8_lossy(heard);
     text.split_inclusive(['\r', '\n']).find_map(|line| {
-        line.strip_suffix(['\r', '\n'])?
-            .strip_prefix("shell-")?
-            .parse()
-            .ok()
+        let line = line.strip_suffix(['\r', '\n'])?;
+        line[line.rfind("shell-")? + "shell-".len()..].parse().ok()
     })
 }
 
@@ -331,8 +330,11 @@ fn what_a_program_writes_in_quantity_arrives_whole_and_in_order() {
     let workspace = window.open(&repo);
     let terminal = window.open_terminal(&workspace, SIZE);
 
-    // 20,000 numbers, far more than one read of the program's terminal takes.
-    window.type_into(&terminal, b"seq 1 20000\r");
+    // 20,000 numbers, far more than one read of the program's terminal takes. The line is
+    // typed before the shell has written its prompt, so the prompt can land right where
+    // the program's output starts: the first thing the program writes is a line end, which
+    // leaves the first number alone on its line.
+    window.type_into(&terminal, b"echo; seq 1 20000\r");
     let heard = window.output_until(&terminal, |heard| contains(heard, "\r\n20000\r\n"));
     let numbers: Vec<u32> = String::from_utf8_lossy(&heard)
         .lines()
@@ -358,8 +360,10 @@ fn a_terminal_has_the_size_it_was_opened_with_and_the_one_it_is_resized_to() {
             rows: 0,
         },
     );
-    window.type_into(&terminal, b"stty size\r");
-    window.output_until(&terminal, |heard| contains(heard, "\r\n1 1\r\n"));
+    // The size is told in a line of the program's own making: the prompt of the shell can
+    // stand in front of it, and the echo of the typed line holds no digits.
+    window.type_into(&terminal, b"echo size-$(stty size)\r");
+    window.output_until(&terminal, |heard| contains(heard, "size-1 1\r\n"));
 
     assert_eq!(
         window.ask_amid_output(Request::ResizeTerminal {
@@ -371,8 +375,8 @@ fn a_terminal_has_the_size_it_was_opened_with_and_the_one_it_is_resized_to() {
         }),
         Ok(Reply::Done)
     );
-    window.type_into(&terminal, b"stty size\r");
-    window.output_until(&terminal, |heard| contains(heard, "\r\n30 100\r\n"));
+    window.type_into(&terminal, b"echo size-$(stty size)\r");
+    window.output_until(&terminal, |heard| contains(heard, "size-30 100\r\n"));
     window.stop(keeper);
 }
 
