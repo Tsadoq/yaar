@@ -546,6 +546,7 @@ impl Render for TerminalView {
         });
         let ended = self.ending.map(|ending| {
             div()
+                .debug_selector(|| "terminal-ended".to_owned())
                 .absolute()
                 .bottom_0()
                 .left_0()

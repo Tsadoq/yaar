@@ -92,6 +92,9 @@ pub fn one_repository() -> Repository {
     }
 }
 
+/// What the test keeps of the pane the Frame builds: the pane and its own focus handle.
+type Built = (Entity<TerminalPane>, FocusHandle);
+
 /// The Keeper, played by the test: the other end of the Window's connection.
 ///
 /// A thread of its own reads what the Window sends, since the thread of the test has to
@@ -226,13 +229,13 @@ impl TestKeeper {
     }
 
     /// The next request of the Window but a resize, which this end answers itself.
-    pub fn request(&mut self, cx: &mut TestAppContext) -> (RequestId, Request) {
+    pub fn request(&self, cx: &mut TestAppContext) -> (RequestId, Request) {
         self.next(&self.requests, "a request", cx)
     }
 
     /// The next frame of input the Window sent to a terminal: the terminal and its bytes.
     /// A frame holds what one key or one paste sent, up to 64 KiB. Fails when none comes.
-    pub fn input(&mut self, cx: &mut TestAppContext) -> (TerminalId, Vec<u8>) {
+    pub fn input(&self, cx: &mut TestAppContext) -> (TerminalId, Vec<u8>) {
         self.next(&self.inputs, "input", cx)
     }
 
@@ -280,7 +283,7 @@ impl TestKeeper {
 
     /// Answers the question for the list of workspaces, which has to be the next
     /// request, with these repositories.
-    pub fn list(&mut self, listed: &[Repository], cx: &mut TestAppContext) {
+    pub fn list(&self, listed: &[Repository], cx: &mut TestAppContext) {
         let (id, request) = self.request(cx);
         assert_eq!(request, Request::ListWorkspaces);
         self.reply(id, Ok(Reply::Workspaces(listed.to_vec())));
@@ -399,7 +402,7 @@ pub fn open_panes_tapping(
     let models = cx.update(|cx| Models::new(link.clone(), cx));
 
     // The pane is built by the Window's own builder, wrapped to keep what the test reads.
-    let built: Rc<RefCell<Option<(Entity<TerminalPane>, FocusHandle)>>> = Rc::default();
+    let built: Rc<RefCell<Option<Built>>> = Rc::default();
     let terminal_pane: BuildPane = {
         let build = yaar_terminal_pane::pane();
         let built = built.clone();
@@ -443,7 +446,7 @@ pub fn open_panes_tapping(
     cx.run_until_parked();
 
     let (pane, pane_focus) = built.take().expect("the Frame built the terminal pane");
-    let mut keeper = TestKeeper::attach_tapping(&link, &mut cx, tap);
+    let keeper = TestKeeper::attach_tapping(&link, &mut cx, tap);
     keeper.list(&[one_repository()], &mut cx);
     wait_until(&mut cx, "the workspace on screen", |cx| {
         models

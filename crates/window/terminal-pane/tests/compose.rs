@@ -32,11 +32,7 @@ fn one_terminal(
 }
 
 /// Marks `text` as an input method does while it composes.
-fn compose(
-    text: &str,
-    view: &gpui_kit::Entity<TerminalView>,
-    cx: &mut VisualTestContext,
-) {
+fn compose(text: &str, view: &gpui_kit::Entity<TerminalView>, cx: &mut VisualTestContext) {
     let bounds = drawn("terminal-slot-0", cx).expect("the slot is drawn");
     let handler = ElementInputHandler::new(bounds, view.clone());
     cx.update(|window, cx| TestInput::new(handler, window).compose_text(None, text, None, cx));
@@ -87,7 +83,7 @@ const DEAD_KEYS: [(&str, &str, &str); 10] = [
 fn each_dead_key_pair_gives_the_composed_character_and_an_input_method_marks_and_commits(
     cx: &mut TestAppContext,
 ) {
-    let (mut panes, mut cx, id, view) = one_terminal(cx);
+    let (panes, mut cx, id, view) = one_terminal(cx);
 
     for (accent, second, result) in DEAD_KEYS {
         // The first key: the accent is marked, drawn at the cursor, and sent to nobody.
@@ -118,7 +114,7 @@ fn each_dead_key_pair_gives_the_composed_character_and_an_input_method_marks_and
 
 #[gpui_kit::test]
 fn an_input_method_shows_what_it_composes_and_commits_the_word(cx: &mut TestAppContext) {
-    let (mut panes, mut cx, id, view) = one_terminal(cx);
+    let (panes, mut cx, id, view) = one_terminal(cx);
 
     // Pinyin, as the system composes `nihao`: each state of the composition is shown,
     // and none of it is sent.
@@ -144,7 +140,7 @@ fn an_input_method_shows_what_it_composes_and_commits_the_word(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn a_composition_that_ends_in_nothing_sends_nothing(cx: &mut TestAppContext) {
-    let (mut panes, mut cx, id, view) = one_terminal(cx);
+    let (panes, mut cx, id, view) = one_terminal(cx);
 
     // An empty text cancels what was marked.
     compose("´", &view, &mut cx);
@@ -213,7 +209,8 @@ fn the_candidate_window_is_put_at_the_cursor(cx: &mut TestAppContext) {
     let (panes, mut cx, id, view) = one_terminal(cx);
     let slot = drawn("terminal-slot-0", &mut cx).expect("the slot is drawn");
     let mut handler = ElementInputHandler::new(slot, view.clone());
-    let at_the_cursor = |handler: &mut ElementInputHandler<TerminalView>, cx: &mut VisualTestContext| {
+    let at_the_cursor = |handler: &mut ElementInputHandler<TerminalView>,
+                         cx: &mut VisualTestContext| {
         cx.update(|window, cx| handler.bounds_for_range(0..0, window, cx))
             .expect("the cursor is shown")
     };
@@ -225,11 +222,17 @@ fn the_candidate_window_is_put_at_the_cursor(cx: &mut TestAppContext) {
     // as the bounds say.
     panes.keeper.output(&id, b"abc");
     common::wait_until(&mut cx, "the output", |cx| {
-        common::lines(&panes.pane, &id, cx).first().map(String::as_str) == Some("abc")
+        common::lines(&panes.pane, &id, cx)
+            .first()
+            .map(String::as_str)
+            == Some("abc")
     });
     let third = at_the_cursor(&mut handler, &mut cx);
     assert_eq!(third.size, first.size);
     assert_eq!(third.origin.y, first.origin.y);
     let moved = third.origin.x - first.origin.x;
-    assert!((moved - first.size.width * 3.).abs() < gpui_kit::px(0.01), "{moved:?}");
+    assert!(
+        (moved - first.size.width * 3.).abs() < gpui_kit::px(0.01),
+        "{moved:?}"
+    );
 }
