@@ -1540,7 +1540,7 @@ fn of_many_changed_files_only_a_few_are_on_their_way_at_a_time_from_the_top_of_t
     // whatever the Window asks next. The Keeper makes it ask, by telling that the
     // changes changed: the next thing it hears is the question that follows.
     stage.keeper.tell(changed.clone());
-    let again = stage.keeper.expect(for_the_changes.clone(), &mut cx);
+    let mut again = stage.keeper.expect(for_the_changes.clone(), &mut cx);
 
     // The Keeper takes its time with that one and answers for the files meanwhile.
     // Each answer makes room for one question, and it is for the next file of the
@@ -1554,6 +1554,12 @@ fn of_many_changed_files_only_a_few_are_on_their_way_at_a_time_from_the_top_of_t
             let asked = stage.keeper.expect(read_file(&changes, next), &mut cx);
             on_their_way.push_back(asked);
         }
+        // For one question and no more: a second one would have been written with the
+        // first, and so before the question the Keeper now makes the Window ask. The
+        // Window asks for the changes each time it is told that they changed, and
+        // takes the answer to the last of these questions only.
+        stage.keeper.tell(changed.clone());
+        again = stage.keeper.expect(for_the_changes.clone(), &mut cx);
     }
     assert_eq!(on_their_way.len(), 0);
     // Every file was read in its turn, and the pane shows them all.
