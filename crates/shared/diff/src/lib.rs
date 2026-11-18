@@ -14,10 +14,17 @@
 //!
 //! Lines are counted from 0 here. Whoever shows a line number adds one.
 
+mod words;
+
 use std::ops::Range;
 
 /// The one algorithm of the line diff.
 const ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Histogram;
+
+/// The algorithm that compares the words of one hunk. Not the one of the lines: on a hunk
+/// of thousands of lines that share few words, the histogram diff takes seconds where
+/// this one stays in the tens of milliseconds.
+const WORD_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Myers;
 
 /// The unchanged lines shown around each change unless the caller asks otherwise; git's
 /// own default.
@@ -95,7 +102,14 @@ pub enum Row {
 impl Row {
     /// The line this row shows on `side`, if it shows one there.
     pub fn line(&self, side: Side) -> Option<u32> {
-        todo!()
+        match (self, side) {
+            (Row::Skipped { .. }, _) => None,
+            (Row::Context { old, .. }, Side::Old) | (Row::Removed { old }, Side::Old) => Some(*old),
+            (Row::Context { new, .. }, Side::New) | (Row::Added { new }, Side::New) => Some(*new),
+            (Row::Removed { .. }, Side::New) | (Row::Added { .. }, Side::Old) => None,
+            (Row::Changed { old, .. }, Side::Old) => *old,
+            (Row::Changed { new, .. }, Side::New) => *new,
+        }
     }
 }
 
@@ -203,16 +217,91 @@ impl FileDiff {
     /// [`Row::Context`] rows in the same order, and between them the same lines of the
     /// same hunks.
     pub fn rows(&self, layout: Layout, context: u32) -> Vec<Row> {
-        todo!()
+        // Unchanged lines are shown where they follow a change and where they come before
+        // one. Before the first change nothing has changed yet, unless all is to be shown.
+        let mut after_a_change = if context == u32::MAX { context } else { 0 };
+        let mut rows = Vec::new();
+        // Where the unchanged lines after the last change start, on each side.
+        let (mut old, mut new) = (0, 0);
+        for hunk in &self.hunks {
+            unchanged(&mut rows, old..hunk.old.start, new, after_a_change, context);
+            match layout {
+                Layout::Unified => {
+                    rows.extend(hunk.old.clone().map(|old| Row::Removed { old }));
+                    rows.extend(hunk.new.clone().map(|new| Row::Added { new }));
+                }
+                Layout::Split => {
+                    let (mut removed, mut added) = (hunk.old.clone(), hunk.new.clone());
+                    for _ in 0..removed.len().max(added.len()) {
+                        rows.push(Row::Changed {
+                            old: removed.next(),
+                            new: added.next(),
+                        });
+                    }
+                }
+            }
+            (old, new) = (hunk.old.end, hunk.new.end);
+            after_a_change = context;
+        }
+        let end = self.line_count(Side::Old);
+        unchanged(&mut rows, old..end, new, after_a_change, 0);
+        rows
     }
 
     /// The changed words of the hunk at `index` of [`FileDiff::hunks`].
     ///
     /// Computed when asked, hunk by hunk, so that a caller pays only for the hunks it
-    /// shows.
+    /// shows. Panics when there is no such hunk.
     pub fn emphasis(&self, index: usize) -> Emphasis {
-        todo!()
+        let hunk = &self.hunks[index];
+        let mut emphasis = Emphasis {
+            first: (hunk.old.start, hunk.new.start),
+            ..Emphasis::default()
+        };
+        if hunk.old.is_empty() || hunk.new.is_empty() {
+            return emphasis;
+        }
+
+        let old = words::of_lines(hunk.old.clone().map(|line| self.old.token(line)));
+        let new = words::of_lines(hunk.new.clone().map(|line| self.new.token(line)));
+        let mut input = imara_diff::InternedInput {
+            before: Vec::new(),
+            after: Vec::new(),
+            interner: imara_diff::Interner::new(old.len() + new.len()),
+        };
+        input.update_before(old.iter().map(|word| word.bytes));
+        input.update_after(new.iter().map(|word| word.bytes));
+        let mut diff = imara_diff::Diff::compute(WORD_ALGORITHM, &input);
+        // Where the same words could be marked a little earlier or later, this takes the
+        // later place and joins marks that can be joined, as git does for lines: in
+        // `f(a, a)` after `f(a)` the marked words are `, a` and not `a, `.
+        diff.postprocess_no_heuristic(&input);
+
+        emphasis.old = words::marks(&old, hunk.old.len(), |word| diff.is_removed(word));
+        emphasis.new = words::marks(&new, hunk.new.len(), |word| diff.is_added(word));
+        emphasis
     }
+}
+
+/// Puts a run of unchanged lines into `rows`: its first `head` lines and its last `tail`
+/// lines as they are, and what lies between them, if anything, as one skipped row. `old`
+/// is the run in the old version, `new` where it starts in the new one.
+fn unchanged(rows: &mut Vec<Row>, old: Range<u32>, new: u32, head: u32, tail: u32) {
+    let len = old.end - old.start;
+    let head = head.min(len);
+    let tail = tail.min(len - head);
+    let context = |line: u32| Row::Context {
+        old: old.start + line,
+        new: new + line,
+    };
+    rows.extend((0..head).map(context));
+    if head + tail < len {
+        rows.push(Row::Skipped {
+            old: old.start + head..old.end - tail,
+            new: new + head..new + len - tail,
+        });
+    }
+    rows.extend((len - tail..len).map(context));
 }
 
 /// The words that changed inside the changed lines of one hunk: what a reader's eye should
@@ -224,7 +313,11 @@ impl FileDiff {
 /// adds has nothing marked: the whole line is the change, and its colour already says so.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Emphasis {
+    /// The first line of the hunk in the old version and in the new one.
+    first: (u32, u32),
+    /// The ranges of each removed line, from the first.
     old: Vec<Vec<Range<usize>>>,
+    /// The ranges of each added line, from the first.
     new: Vec<Vec<Range<usize>>>,
 }
 
@@ -233,7 +326,13 @@ impl Emphasis {
     /// They count from the start of the line, as [`FileDiff::line`] returns it. Empty for
     /// a line outside the hunk.
     pub fn of(&self, side: Side, line: u32) -> &[Range<usize>] {
-        todo!()
+        let (first, lines) = match side {
+            Side::Old => (self.first.0, &self.old),
+            Side::New => (self.first.1, &self.new),
+        };
+        line.checked_sub(first)
+            .and_then(|line| lines.get(line as usize))
+            .map_or(&[], Vec::as_slice)
     }
 }
 
@@ -613,5 +712,217 @@ mod tests {
             }
         }
         assert_eq!((as_git, otherwise), (564, 5));
+    }
+
+    /// A small file before and after four changes: a line edited in one word, three
+    /// lines rewritten as two, a line added and a line removed.
+    const BEFORE: &str = r#"fn price(order: &Order) -> u32 {
+    let count = order.count;
+    let unit = order.unit;
+    count * unit
+}
+
+fn label(order: &Order) -> String {
+    let name = order.name.trim();
+    let code = order.code;
+    format!("{name} ({code})")
+}
+
+fn main() {
+    let order = load();
+    println!("{}", label(&order));
+    println!("{}", price(&order));
+}
+"#;
+    const AFTER: &str = r#"fn price(order: &Order) -> u32 {
+    let count = order.quantity;
+    let unit = order.unit;
+    count * unit
+}
+
+fn label(order: &Order) -> String {
+    let name = order.name.to_uppercase();
+    format!("{name}")
+}
+
+fn main() {
+    let order = load();
+    check(&order);
+    println!("{}", label(&order));
+}
+"#;
+
+    fn hunk(old: Range<u32>, new: Range<u32>) -> Hunk {
+        Hunk { old, new }
+    }
+
+    /// What a list of rows shows, whatever its layout: the unchanged and the skipped rows
+    /// as they are, and each run of changed rows as the lines it holds of each version.
+    #[derive(Debug, PartialEq)]
+    enum Shown {
+        Unchanged(Row),
+        Change { old: Vec<u32>, new: Vec<u32> },
+    }
+
+    fn shown(rows: &[Row]) -> Vec<Shown> {
+        let mut shown = Vec::new();
+        for row in rows {
+            if matches!(row, Row::Skipped { .. } | Row::Context { .. }) {
+                shown.push(Shown::Unchanged(row.clone()));
+                continue;
+            }
+            if !matches!(shown.last(), Some(Shown::Change { .. })) {
+                shown.push(Shown::Change {
+                    old: Vec::new(),
+                    new: Vec::new(),
+                });
+            }
+            if let Some(Shown::Change { old, new }) = shown.last_mut() {
+                old.extend(row.line(Side::Old));
+                new.extend(row.line(Side::New));
+            }
+        }
+        shown
+    }
+
+    /// The rows of the changes alone, in order.
+    fn changed(rows: &[Row]) -> Vec<Row> {
+        let unchanged = |row: &&Row| matches!(row, Row::Skipped { .. } | Row::Context { .. });
+        rows.iter().filter(|row| !unchanged(row)).cloned().collect()
+    }
+
+    fn text(diff: &FileDiff, side: Side, line: u32) -> &str {
+        std::str::from_utf8(diff.line(side, line)).expect("a line of the test in UTF-8")
+    }
+
+    /// The marked parts of one line, as text.
+    fn marked<'a>(diff: &'a FileDiff, emphasis: &Emphasis, side: Side, line: u32) -> Vec<&'a str> {
+        let text = text(diff, side, line);
+        emphasis
+            .of(side, line)
+            .iter()
+            .map(|range| &text[range.clone()])
+            .collect()
+    }
+
+    /// What is left of some lines of one side when the marked parts are taken out, with
+    /// nothing between the lines.
+    fn unmarked(diff: &FileDiff, emphasis: &Emphasis, side: Side, lines: Range<u32>) -> String {
+        let mut left = String::new();
+        for line in lines {
+            let text = text(diff, side, line);
+            let mut from = 0;
+            for range in emphasis.of(side, line) {
+                left.push_str(&text[from..range.start]);
+                from = range.end;
+            }
+            left.push_str(&text[from..]);
+        }
+        left
+    }
+
+    // DIFF-03
+    #[test]
+    fn unified_and_split_lay_out_the_same_hunks_and_emphasis_marks_only_the_changed_words() {
+        let diff = FileDiff::new(BEFORE.as_bytes(), AFTER.as_bytes());
+        let hunks = [
+            hunk(1..2, 1..2),
+            hunk(7..10, 7..9),
+            hunk(14..14, 13..14),
+            hunk(15..16, 15..15),
+        ];
+        assert_eq!(diff.hunks(), hunks);
+
+        for context in [0, 1, CONTEXT_LINES, u32::MAX] {
+            let unified = diff.rows(Layout::Unified, context);
+            let split = diff.rows(Layout::Split, context);
+
+            // The same rows around the changes, in the same order, and between them the
+            // same lines of each change: those of the hunks, each hunk once.
+            assert_eq!(shown(&unified), shown(&split), "context {context}");
+            let changes: Vec<Shown> = shown(&unified)
+                .into_iter()
+                .filter(|shown| matches!(shown, Shown::Change { .. }))
+                .collect();
+            let of_the_hunks: Vec<Shown> = hunks
+                .iter()
+                .map(|hunk| Shown::Change {
+                    old: hunk.old.clone().collect(),
+                    new: hunk.new.clone().collect(),
+                })
+                .collect();
+            assert_eq!(changes, of_the_hunks, "context {context}");
+
+            // And they are two layouts: neither holds a changed row of the other's kind.
+            assert!(
+                !unified.iter().any(|row| matches!(row, Row::Changed { .. })),
+                "context {context}"
+            );
+            assert!(
+                !split
+                    .iter()
+                    .any(|row| matches!(row, Row::Removed { .. } | Row::Added { .. })),
+                "context {context}"
+            );
+        }
+
+        // How each layout puts the lines of a change in rows: one under the other, the
+        // removed lines first; or side by side, in order, with a gap where one side of
+        // the change is longer.
+        assert_eq!(
+            changed(&diff.rows(Layout::Unified, CONTEXT_LINES)),
+            [
+                Row::Removed { old: 1 },
+                Row::Added { new: 1 },
+                Row::Removed { old: 7 },
+                Row::Removed { old: 8 },
+                Row::Removed { old: 9 },
+                Row::Added { new: 7 },
+                Row::Added { new: 8 },
+                Row::Added { new: 13 },
+                Row::Removed { old: 15 },
+            ]
+        );
+        let beside = |old, new| Row::Changed { old, new };
+        assert_eq!(
+            changed(&diff.rows(Layout::Split, CONTEXT_LINES)),
+            [
+                beside(Some(1), Some(1)),
+                beside(Some(7), Some(7)),
+                beside(Some(8), Some(8)),
+                beside(Some(9), None),
+                beside(None, Some(13)),
+                beside(Some(15), None),
+            ]
+        );
+
+        // The line edited in one word: that word is marked on each side, where it
+        // stands, and the `count` earlier in the line, which did not change, is not.
+        let edited = diff.emphasis(0);
+        let at = "    let count = order.".len();
+        assert_eq!(edited.of(Side::Old, 1), [at..at + "count".len()]);
+        assert_eq!(edited.of(Side::New, 1), [at..at + "quantity".len()]);
+        assert_eq!(marked(&diff, &edited, Side::Old, 1), ["count"]);
+        assert_eq!(marked(&diff, &edited, Side::New, 1), ["quantity"]);
+        // Its marks are for its own lines only.
+        assert_eq!(edited.of(Side::Old, 7), []);
+        assert_eq!(edited.of(Side::New, 7), []);
+
+        // Three lines rewritten as two. With the marked words taken out both sides read
+        // the same, so every word that changed is marked. And only those are: of the new
+        // lines, all but one word stands in the old ones, in the same order.
+        let rewritten = diff.emphasis(1);
+        assert_eq!(
+            unmarked(&diff, &rewritten, Side::Old, 7..10),
+            unmarked(&diff, &rewritten, Side::New, 7..9)
+        );
+        assert_eq!(marked(&diff, &rewritten, Side::New, 7), ["to_uppercase"]);
+        assert_eq!(rewritten.of(Side::New, 8), []);
+        assert!(marked(&diff, &rewritten, Side::Old, 7).contains(&"trim"));
+
+        // A line that is only added, or only removed, is the change as a whole: nothing
+        // in it is marked.
+        assert_eq!(diff.emphasis(2).of(Side::New, 13), []);
+        assert_eq!(diff.emphasis(3).of(Side::Old, 15), []);
     }
 }
