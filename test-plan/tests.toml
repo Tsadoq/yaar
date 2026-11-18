@@ -1,0 +1,2802 @@
+# The test plan of YAAR: every test, the requirements it proves, and how it reaches the app.
+# `cargo xtask coverage` checks this file against requirements.toml and slices.toml.
+#
+#   level      unit: one module through its public functions
+#              component: one part through the surface the rest of the app uses, with the real things beneath it
+#              system: the whole app through what a user or an agent touches
+#   through    the surface the test goes through
+#   driver     what drives it; the list is in xtask/src/coverage.rs
+#   runs       ci: on every change.  release: before a release, by the checklist named
+#   built      where the test is, once it exists: `file::test function` or `workflow file::step name`
+#
+# A test reaches a part only through its surface. It reads no private state and replaces
+# none of the app's own parts. Stand-ins exist only at the edges: the agent CLI, the language server.
+#
+# A pane test fills the shared models with facts as the Keeper sends them and reads the requests the
+# pane makes. It asserts nothing that only the Keeper can produce: that is for the tests of the whole
+# Window (part = window), which have a real Keeper beneath, and for the system tests.
+#
+# A row with driver = agent runs twice, once with the stand-in speaking as Claude Code and once as pi,
+# through the same contract. A row that runs for one only says why in its note.
+#
+# One requirement often has a row at more than one level. Each catches a different fault: the rule is
+# wrong (unit), the part does not show or ask for it (component), the parts are not joined (system).
+
+[[test]]
+id = "LINK-01"
+what = "A frame comes back as it was sent, fields a later version appended are read, two frames in a row are read one by one, and what is not a frame is refused."
+level = "unit"
+part = "link"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/shared/link/src/lib.rs::a_hello_comes_back_as_it_was_sent",
+    "crates/shared/link/src/lib.rs::a_hello_with_fields_appended_by_a_later_version_is_read",
+    "crates/shared/link/src/lib.rs::two_frames_in_a_row_are_read_one_by_one_and_then_the_end_is_closed",
+    "crates/shared/link/src/lib.rs::what_is_not_a_frame_is_refused",
+]
+
+[[test]]
+id = "LINK-02"
+what = "The socket is where the environment says."
+level = "unit"
+part = "link"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/shared/link/src/lib.rs::the_socket_is_where_the_environment_says",
+]
+
+[[test]]
+id = "LINK-03"
+what = "Only the same protocol version speaks on after the hello."
+level = "unit"
+part = "link"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/shared/link/src/lib.rs::only_the_same_protocol_speaks_on",
+]
+
+[[test]]
+id = "SKEL-07"
+what = "The bytes of the fixed frames are as written down in the test."
+level = "unit"
+part = "link"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/shared/link/src/lib.rs::the_hello_frame_keeps_its_bytes",
+]
+
+[[test]]
+id = "SKEL-01"
+what = "A scripted Window learns the Keeper's version, protocol and process id, and stops it; the socket file is gone afterwards."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/keeper/keeper/tests/link_endpoint.rs::a_window_learns_who_the_keeper_is_and_can_stop_it",
+    "system-tests/tests/skeleton.rs::the_keeper_answers_a_scripted_window_and_stops_when_asked",
+]
+
+[[test]]
+id = "SKEL-02"
+what = "A Window of another protocol version is still answered and still obeyed."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/keeper/keeper/tests/link_endpoint.rs::a_window_of_another_protocol_version_is_still_answered_and_obeyed",
+]
+
+[[test]]
+id = "SKEL-03"
+what = "The Keeper stays while a Window is attached and leaves after the linger once none is."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/keeper/keeper/tests/link_endpoint.rs::the_keeper_leaves_when_no_window_needs_it_and_stays_while_one_does",
+]
+
+[[test]]
+id = "SKEL-04"
+what = "A second Keeper on the same socket steps back; a socket file left by a dead Keeper does not block a new one."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/keeper/keeper/tests/link_endpoint.rs::a_second_keeper_on_the_same_socket_steps_back",
+    "crates/keeper/keeper/tests/link_endpoint.rs::a_socket_file_left_by_a_dead_keeper_does_not_block_the_next_one",
+]
+
+[[test]]
+id = "SKEL-05"
+what = "Both built programs say their version; the Window program starts a Keeper in a session of its own that outlives it, and a second Window finds the same one."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "system-tests/tests/skeleton.rs::the_window_program_starts_a_keeper_that_outlives_it",
+    "system-tests/tests/skeleton.rs::both_programs_say_their_version",
+]
+
+[[test]]
+id = "SKEL-06"
+what = "The Frame says how it stands with the Keeper in each of the four states."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = []
+slice = 0
+built = [
+    "crates/window/frame/tests/frame.rs::the_empty_window_says_how_it_stands_with_the_keeper",
+]
+
+[[test]]
+id = "KEEP-01"
+what = "A socket path longer than the system allows falls back to a short one that Window and Keeper both compute."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = []
+slice = 1
+note = "Found while the skeleton was built: a very long user name makes the address too long, and there is no fallback yet."
+
+[[test]]
+id = "LAYOUT-01"
+what = "The layout check passes on the workspace."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-001", "NFR-005"]
+built = [
+    ".github/workflows/ci.yml::Layout rules",
+]
+
+[[test]]
+id = "LAYOUT-02"
+what = "A planted dependency of one pane on another fails rule 1; of a Keeper crate on the interface toolkit, rule 2; of a Window crate on the Store, rule 3; of anything but the Keeper program on an Adapter, rule 4. Test support in a program users get fails rule 5."
+level = "unit"
+part = "build"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["NFR-001", "NFR-005"]
+built = [
+    "xtask/src/layout.rs::a_sound_workspace_has_no_breach",
+    "xtask/src/layout.rs::a_pane_that_depends_on_another_pane_breaks_rule_1",
+    "xtask/src/layout.rs::gpui_in_the_keeper_breaks_rule_2_also_through_another_crate",
+    "xtask/src/layout.rs::a_window_crate_that_reaches_the_store_breaks_rule_3",
+    "xtask/src/layout.rs::anyone_but_the_keeper_program_naming_an_adapter_breaks_rule_4",
+    "xtask/src/layout.rs::an_adapter_that_reaches_past_the_shared_crates_breaks_rule_4",
+    "xtask/src/layout.rs::test_support_in_a_shipped_program_breaks_rule_5",
+    "xtask/src/layout.rs::what_only_tests_use_does_not_count",
+]
+
+[[test]]
+id = "BUILD-03"
+what = "A dependency with a licence outside the list fails the run."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = []
+slice = 1
+
+[[test]]
+id = "BUILD-04"
+what = "Two release builds of one commit, at two paths, are byte for byte the same."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "release"
+proves = []
+slice = 10
+
+[[test]]
+id = "STACK-03"
+what = "The workspace builds against the upstream toolkit at the fork's revision."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "release"
+proves = []
+slice = 10
+
+[[test]]
+id = "DENY-01"
+what = "A web view or a JavaScript runtime planted among the dependencies of any program the packages ship fails the check, the Companion included; so does a crate of the Zed editor. Only the interface toolkit is allowed."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-015", "NFR-027"]
+
+[[test]]
+id = "LIC-01"
+what = "The licence check of the build passes with Apache-2.0 as the app's licence."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-025"]
+built = [
+    ".github/workflows/ci.yml::Licences, advisories, bans, sources",
+]
+
+[[test]]
+id = "LIC-02"
+what = "Each package contains a notices file with one entry for every linked dependency of its lock file; a dependency with no licence text to reproduce fails the build."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = []
+slice = 10
+note = "The notices are generated today; the count against the lock file is not checked yet."
+
+[[test]]
+id = "PKG-02"
+what = "After the installed Window program ends, its Keeper still runs, on both systems."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["FR-116"]
+built = [
+    ".github/workflows/ci.yml::The programs run, and the Keeper outlives the Window program",
+    ".github/workflows/ci.yml::The packaged Window program starts the packaged Keeper, which outlives it",
+]
+
+[[test]]
+id = "PKG-03"
+what = "The signature of the Mac bundle verifies, and the running Keeper's signature is valid."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028"]
+built = [
+    ".github/workflows/ci.yml::Signature and processors",
+]
+
+[[test]]
+id = "PKG-04"
+what = "Gatekeeper accepts the notarized disk image and the app."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "release"
+proves = ["NFR-028"]
+note = "Done by hand on the reference Mac on 18 November 2026; the release job does not exist yet."
+
+[[test]]
+id = "PKG-05"
+what = "The install line installs the .deb from the apt repository on each promised release of Debian and Ubuntu, on both processors; a second run changes nothing, and the uninstall removes it."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028", "NFR-016"]
+built = [
+    ".github/workflows/ci.yml::The install line, as a user",
+    ".github/workflows/ci.yml::A second run changes nothing, and the uninstall leaves nothing",
+]
+
+[[test]]
+id = "PKG-05M"
+what = "The install line installs the app on macOS and the uninstall removes it."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028"]
+
+[[test]]
+id = "PKG-06"
+what = "A later version arrives with apt-get upgrade."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028"]
+
+[[test]]
+id = "PKG-07"
+what = "apt refuses the repository when its index or a package was changed after signing."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028"]
+
+[[test]]
+id = "PKG-08"
+what = "The packaged app starts from the Dock or the app menu with no terminal: the Mac bundle is an application, and the Linux desktop entry asks for no terminal."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-024"]
+
+[[test]]
+id = "PKG-09"
+what = "After the uninstall no file of the app remains in the user's folders, the Keeper's lock file included."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-028"]
+note = "Found while the skeleton was built: a lock file stays in the user's folder after an uninstall."
+
+[[test]]
+id = "PKG-10"
+what = "One checksum file lists every package of a release, and the install line checks what it downloaded against it."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "release"
+proves = ["NFR-028"]
+note = "Found while the skeleton was built: there is no single checksum file for all packages yet."
+
+[[test]]
+id = "PKG-11"
+what = "The release is tagged on the public repository, and its source holds the licence."
+level = "component"
+part = "package"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "release"
+proves = ["NFR-025"]
+
+[[test]]
+id = "SYS-01"
+what = "The test jobs pass on macOS 26 on Apple silicon and on Ubuntu on x86-64 and arm64."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-016"]
+built = [
+    ".github/workflows/ci.yml::Tests",
+]
+
+[[test]]
+id = "WS-01"
+what = "The changed paths and file contents between a base and the worktree equal git's own diff from the fork point, uncommitted and untracked files included."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-001"]
+
+[[test]]
+id = "WS-02"
+what = "With nothing set, the base is the default branch of the repository, and the changes count from the point where the branch left it."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-002"]
+
+[[test]]
+id = "WS-03"
+what = "The three-step rule names the right base for each recorded shape of repository: with a remote default, without one, with neither main nor master."
+level = "unit"
+part = "workspaces"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-002"]
+
+[[test]]
+id = "WS-04"
+what = "A base the user set, to a branch or to a commit, replaces the default and is still set after the Keeper restarts."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-003"]
+
+[[test]]
+id = "WS-05"
+what = "A worktree created from a branch name lies beside the repository and has that branch as its base."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-004", "FR-014"]
+
+[[test]]
+id = "WS-06"
+what = "On its base branch with an upstream, a workspace shows the commits that are not on the upstream and the uncommitted changes."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-005"]
+
+[[test]]
+id = "BASE-01"
+what = "On a base branch with no upstream in a repository with a remote, the review lists exactly the commits on no remote branch."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-005"]
+
+[[test]]
+id = "BASE-02"
+what = "In a repository with no remote, the review lists the uncommitted changes and offers to set a base."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-005"]
+
+[[test]]
+id = "WS-07"
+what = "Two worktrees of one repository are listed under it, each named by its branch."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-006"]
+
+[[test]]
+id = "WS-08"
+what = "A folder that holds a repository or a worktree becomes a workspace; a folder that holds neither is refused with the reason."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-013"]
+
+[[test]]
+id = "LISTEN-04"
+what = "Two sessions in one worktree editing different files: each write is credited to its session."
+level = "component"
+part = "workspaces"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = []
+slice = 4
+
+[[test]]
+id = "LISTEN-05"
+what = "Two sessions running overlapping shell commands: the written files show as changes no agent made. The known limit, as it stands: a hand edit made while exactly one session runs a shell command is credited to that session."
+level = "component"
+part = "workspaces"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-049"]
+
+[[test]]
+id = "LISTEN-06"
+what = "A file changed by an editor outside the app shows as a change no agent made."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-049", "FR-025"]
+
+[[test]]
+id = "FRAME-01"
+what = "The sidebar lists each repository with its worktrees under it, each named by its branch."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-006"]
+
+[[test]]
+id = "FRAME-02"
+what = "The sidebar shows for each workspace whether its agent works, waits for permission, has finished a turn not yet reviewed, or is not running."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-007", "FR-027"]
+
+[[test]]
+id = "FRAME-03"
+what = "Narrower than the set width with nothing pinned, the sidebar is a rail; wider, it is the full list."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-009"]
+
+[[test]]
+id = "FRAME-04"
+what = "Pinned as a rail or as the full list, the sidebar keeps that form at any width."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-010"]
+
+[[test]]
+id = "FRAME-06"
+what = "A turn that ends in a workspace not on screen changes its state in the sidebar and shows a notice whose control switches to it."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-012"]
+
+[[test]]
+id = "FRAME-08"
+what = "With nothing set the terminal pane is to the right of the review pane; it moves to the left of it or below it, and to no other place."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-015", "FR-016"]
+
+[[test]]
+id = "FRAME-09"
+what = "There are two ways to quit; the plain one is what the usual quit key and menu entry run, and it asks the Keeper to stop nothing."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-116", "FR-118"]
+
+[[test]]
+id = "FRAME-11"
+what = "The settings change what a turn end selects, the time before off-screen language servers stop, the theme, dark or light, and the base of a workspace; each takes effect at once."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-124", "NFR-017"]
+
+[[test]]
+id = "FRAME-12"
+what = "The settings show the disk space of the recorded states, for each workspace and in total, and offer the clean-up."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-126"]
+
+[[test]]
+id = "FRAME-14"
+what = "With no theme chosen the app follows the system's light or dark setting as it changes; after a choice it does not."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["NFR-018"]
+
+[[test]]
+id = "THEME-01"
+what = "A third theme, written in the test as one definition, is accepted and applied."
+level = "unit"
+part = "frame"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["NFR-019"]
+
+[[test]]
+id = "HOLD-07"
+what = "A Window of a newer version meets a running Keeper of an older one and says so."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = []
+slice = 2
+
+[[test]]
+id = "WIN-01"
+what = "In the composed Window with a real Keeper beneath, selecting a workspace shows that worktree's reviews in the review pane and its terminals in the terminal pane."
+level = "component"
+part = "window"
+through = "keys and clicks in, with a real Keeper beneath; read back through the models it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-011"]
+
+[[test]]
+id = "TERM-04"
+what = "The test walks the documented list of kept keys: with a terminal focused each runs its app action and no other key does; with another pane focused, no key reaches the program in the terminal."
+level = "component"
+part = "window"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-122"]
+
+[[test]]
+id = "DOCK-01"
+what = "Three terminals at once, each with its own program; the output of one never reaches another."
+level = "component"
+part = "dock"
+through = "its calls, on a real pseudo-terminal"
+driver = "pty"
+runs = "ci"
+proves = ["FR-017"]
+
+[[test]]
+id = "DOCK-02"
+what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder and by one folder put first on the search path: nothing in it names an editor connection."
+level = "component"
+part = "dock"
+through = "its calls, on a real pseudo-terminal"
+driver = "pty"
+runs = "ci"
+proves = ["FR-018", "FR-040"]
+
+[[test]]
+id = "DOCK-04"
+what = "A launcher starts the start command its Adapter names in a new terminal."
+level = "component"
+part = "dock"
+through = "its calls, on a real pseudo-terminal"
+driver = "pty"
+runs = "ci"
+proves = ["FR-021"]
+
+[[test]]
+id = "DOCK-05"
+what = "A program the app knows nothing of runs in a terminal as any program: keys go in, output comes back."
+level = "component"
+part = "dock"
+through = "its calls, on a real pseudo-terminal"
+driver = "pty"
+runs = "ci"
+proves = ["FR-024"]
+
+[[test]]
+id = "DOCK-07"
+what = "The name pi typed in a shell of the app runs the app's wrapper, which passes every argument on and adds the extension."
+level = "component"
+part = "dock"
+through = "its calls, on a real pseudo-terminal"
+driver = "pty"
+runs = "ci"
+proves = ["FR-022"]
+
+[[test]]
+id = "LISTEN-03"
+what = "Esc during a turn: the stand-in prints the mark Claude Code prints and reports nothing, and the turn ends in the app."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-007"]
+
+[[test]]
+id = "TP-01"
+what = "The pane holds several terminals at once and switches between them."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-017"]
+
+[[test]]
+id = "TP-02"
+what = "The split view shows two terminals at once, and keys go to the focused one."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-020"]
+
+[[test]]
+id = "TP-03"
+what = "Next to the shell the pane offers one launcher for each agent CLI the Keeper names."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-021"]
+
+[[test]]
+id = "TP-04"
+what = "The terminal of an agent that waits at a permission prompt carries the waiting mark."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-027"]
+
+[[test]]
+id = "TP-05"
+what = "An attached review shows at the agent's terminal with a control to view what will be sent and a control to detach it."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-081"]
+
+[[test]]
+id = "TP-06"
+what = "With a review attached and no prompt or dialog reported, the pane offers the one control that types \"Address each comment.\"; with a permission prompt reported, or with no review attached, it does not."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-091", "FR-089"]
+
+[[test]]
+id = "TP-07"
+what = "After each key the pane keeps asking for frames for one second."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = []
+slice = 2
+note = "Half of the typing limit rests on this; it is not built yet."
+
+[[test]]
+id = "TERM-01"
+what = "For each key and each mouse action of the matrix and each state of the terminal, the bytes the program receives equal the expected bytes."
+level = "component"
+part = "terminal-pane"
+through = "keys and the mouse in on the test platform; read back as the bytes a program on a real pseudo-terminal receives"
+driver = "pty"
+runs = "ci"
+proves = ["FR-122"]
+
+[[test]]
+id = "TERM-02"
+what = "The pane answers the query for keyboard flags with exactly the flags its encoder implements."
+level = "unit"
+part = "terminal-pane"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 2
+
+[[test]]
+id = "TERM-03"
+what = "Each dead-key pair gives the composed character; an input method shows marked text while composing and commits the composed word."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-122"]
+
+[[test]]
+id = "SWB-01"
+what = "The state of a session follows its events: works, waits for permission, has finished a turn not yet reviewed, is not running."
+level = "unit"
+part = "switchboard"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-007"]
+
+[[test]]
+id = "SWB-02"
+what = "With several sessions in a workspace the state shown is the first that holds for any: waits for permission, finished and not reviewed, works, not running."
+level = "unit"
+part = "switchboard"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-008"]
+
+[[test]]
+id = "SWB-04"
+what = "The steps of a turn are kept in order, each with its session and its kind, and an edit with its path and lines."
+level = "unit"
+part = "switchboard"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-030"]
+
+[[test]]
+id = "SWB-06"
+what = "After a restart each session that was running has an offer to resume, carrying its Adapter's command and its session id."
+level = "unit"
+part = "switchboard"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-120"]
+
+[[test]]
+id = "LISTEN-01"
+what = "A recorded Claude Code turn with a read, an edit, a new file and a shell write produces the seven events in order, each with its session. The known limit, as it stands: a read through an @ mention or a shell command produces no read step."
+level = "component"
+part = "adapter-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-030", "FR-035"]
+
+[[test]]
+id = "LISTEN-01P"
+what = "A recorded pi turn with a read, an edit, a new file and a shell write produces the same seven events in order; a read through an @ mention or a shell command produces no read step, the known limit."
+level = "component"
+part = "adapter-pi"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-023", "FR-035"]
+slice = 7
+
+[[test]]
+id = "LISTEN-02"
+what = "A permission dialog in Claude Code turns waiting for permission on, and its answer turns it off."
+level = "component"
+part = "adapter-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-027"]
+
+[[test]]
+id = "ADP-03"
+what = "A review of up to 10,000 characters is delivered inside the hook's answer; a longer one as a file outside the repository with the instruction to read it, and the allow hook allows the read of that one file. Put together again, both equal the rendered review."
+level = "component"
+part = "adapter-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-082"]
+
+[[test]]
+id = "ADP-04"
+what = "The delivered text always carries the instruction on how to answer each thread, whatever the user's message was."
+level = "unit"
+part = "adapter-claude"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-090"]
+
+[[test]]
+id = "ADP-05"
+what = "The answer to a permission prompt carries no review; the user's next message does."
+level = "component"
+part = "adapter-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-096"]
+
+[[test]]
+id = "DELIVER-03"
+what = "A message Claude Code starts itself carries no review; the next message the user types does."
+level = "component"
+part = "adapter-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-080"]
+
+[[test]]
+id = "ADP-08"
+what = "A review of 1.5 million characters is delivered whole through pi's extension, with the instruction on how to answer."
+level = "component"
+part = "adapter-pi"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-082", "FR-090"]
+slice = 7
+
+[[test]]
+id = "ADP-09"
+what = "A review attached while pi works goes with the message pi queued, and is marked sent when pi reports that message."
+level = "component"
+part = "adapter-pi"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-093"]
+slice = 7
+
+[[test]]
+id = "COMP-01"
+what = "The hook program answers a permission request with no decision of its own."
+level = "component"
+part = "companion-claude"
+through = "what a CLI reports in, the app's events out"
+driver = "recorded-events"
+runs = "ci"
+proves = ["FR-028"]
+
+[[test]]
+id = "REPLY-02"
+what = "Reply bodies with quotes, backticks, line breaks and shell syntax arrive byte for byte; the reply tool, as listed to the agent, has no way to resolve a thread."
+level = "component"
+part = "companion-claude"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-097", "FR-098"]
+
+[[test]]
+id = "PIX-01"
+what = "The pi extension, loaded by a stand-in for pi's extension interface: it reports the events, hands an attached review whole to the user's message with the instruction on how to answer, reports that message so the comments become sent, and offers the reply tool with no way to resolve."
+level = "component"
+part = "companion-pi"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-023", "FR-082", "FR-090", "FR-097", "FR-098"]
+slice = 7
+note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript."
+
+[[test]]
+id = "STATE-01"
+what = "After three recorded states, git status, the index, the refs, the stash, the reflog and the unreachable objects of the real repository are as before."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["NFR-021", "FR-107"]
+
+[[test]]
+id = "STATE-02"
+what = "The tree of a state equals the tree a commit of everything would have, with a clean filter, line-ending conversion, a force-added ignored file and a large-file pointer."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-046"]
+
+[[test]]
+id = "STATE-03"
+what = "With a hook in the repository, one behind a global hooks path and one in configuration, each failing on purpose, the state is taken and no hook runs."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-046"]
+
+[[test]]
+id = "STATE-05"
+what = "After branch deletion, reflog expiry and garbage collection in the real repository, and after the repository itself is deleted, every state reads completely."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 3
+
+[[test]]
+id = "STATE-06"
+what = "Forty states taken beside a loop that creates and deletes files: none fails."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-046"]
+
+[[test]]
+id = "STATE-08"
+what = "An untracked repository with no commit inside the worktree is left out of the state and reported."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-046"]
+
+[[test]]
+id = "STATE-09"
+what = "After the set time, 30 days with nothing set, the engine has the Recorder delete the state of a turn that no thread, round or reviewed mark names: the store is smaller and the turn stays in the history, marked expired. A state a thread sits on is still there."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-125"]
+
+[[test]]
+id = "REC-01"
+what = "The history of a worktree lists its commits and its recorded states in the order they happened."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-042"]
+
+[[test]]
+id = "REC-02"
+what = "The diff between any two of commits and recorded states equals git's diff of the two trees."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-043", "FR-103"]
+
+[[test]]
+id = "REC-03"
+what = "The commit control makes an ordinary git commit of every uncommitted change with the message given."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-109"]
+
+[[test]]
+id = "REC-04"
+what = "The disk space reported for the recorded states, for each workspace and in total, is what they take on disk; the clean-up removes at once what nothing refers to."
+level = "component"
+part = "recorder"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-126"]
+
+[[test]]
+id = "STORE-01"
+what = "Three hundred kills while a draft is typed: no review is unreadable, no save that returned is missing, at most one character is lost."
+level = "component"
+part = "store"
+through = "its calls, on a real database file"
+driver = "database"
+runs = "ci"
+proves = ["NFR-008"]
+
+[[test]]
+id = "STORE-02"
+what = "With the write-ahead file cut at a random place, the database opens and the sent comments are intact."
+level = "component"
+part = "store"
+through = "its calls, on a real database file"
+driver = "database"
+runs = "ci"
+proves = ["NFR-008"]
+
+[[test]]
+id = "STORE-03"
+what = "Four hundred replies arrive through the Store's calls while a draft is typed: all 400 are there."
+level = "component"
+part = "store"
+through = "its calls, on a real database file"
+driver = "database"
+runs = "ci"
+proves = []
+slice = 6
+
+[[test]]
+id = "STORE-05"
+what = "After git moves a worktree, opening the new path finds its review."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 3
+
+[[test]]
+id = "STORE-06"
+what = "After git removes a worktree, its review is still listed, marked as worktree gone."
+level = "component"
+part = "workspaces"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 3
+
+[[test]]
+id = "STORE-08"
+what = "After the database is closed and opened again every review reads back equal: threads, drafts, rounds, turns and attachment."
+level = "component"
+part = "store"
+through = "its calls, on a real database file"
+driver = "database"
+runs = "ci"
+proves = ["FR-119"]
+
+[[test]]
+id = "STORE-09"
+what = "Every setting is still set after the Keeper restarts: what a turn end selects, the stop time, the theme, the base, the place of the terminal pane, the form of Flow."
+level = "component"
+part = "store"
+through = "its calls, on a real database file"
+driver = "database"
+runs = "ci"
+proves = ["FR-032", "FR-124"]
+
+[[test]]
+id = "DIFF-01"
+what = "A file of 21,220 re-indented lines diffs in under 50 ms."
+level = "unit"
+part = "diff"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 1
+
+[[test]]
+id = "DIFF-02"
+what = "The hunks equal those of git's histogram diff on the recorded corpus of 569 real file changes."
+level = "unit"
+part = "diff"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-001"]
+
+[[test]]
+id = "DIFF-03"
+what = "The unified and the split view are two layouts of the same hunks, and word-level emphasis marks only the changed words."
+level = "unit"
+part = "diff"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-044"]
+
+[[test]]
+id = "REV-01"
+what = "A draft is tied to a path, a side, lines and their text in a tree: on an added line, on a removed line, and on a line outside the diff alike, and the same whether written in Flow or in Changes."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-074", "FR-041", "FR-075"]
+
+[[test]]
+id = "REV-02"
+what = "A comment is a draft until sent and can be edited and deleted; once sent it carries the number of its round and refuses both."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-076", "FR-077"]
+
+[[test]]
+id = "REV-03"
+what = "A follow-up on a sent comment is a draft reply in the same thread."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-078"]
+
+[[test]]
+id = "REV-04"
+what = "The review as text holds every unsent comment on an unresolved thread, each with its path, its lines and the code it sits on, and nothing of a resolved thread."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-079", "FR-084"]
+
+[[test]]
+id = "REV-05"
+what = "Copying a review as text marks the copied comments sent, starts a round and records the state of the worktree, as a submit does."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-088", "FR-046"]
+
+[[test]]
+id = "REV-06"
+what = "Attaching a review attaches every unsent comment on an unresolved thread; after a detach each is still an unsent draft and the user's next message carries no review."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-080", "FR-081"]
+
+[[test]]
+id = "REV-07"
+what = "While a review is attached, an edit changes what will be sent, a new draft joins, and a thread resolved meanwhile leaves; with one thread attached alone a new draft does not join, and that send counts as a round."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-083", "FR-087", "FR-084"]
+
+[[test]]
+id = "REV-08"
+what = "When the message that carries a review is submitted, the attached comments are sent, a round starts, and the state of the worktree is recorded."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-086", "FR-046"]
+slice = 6
+
+[[test]]
+id = "REPLY-04"
+what = "A reply that names a thread of another session's review is refused."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = []
+slice = 6
+
+[[test]]
+id = "REV-10"
+what = "Attaching a review whose agent is not running yields the offer to start that CLI, even while another agent runs there; attaching the review of no agent yields the offer to start any supported CLI."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-094", "FR-095"]
+
+[[test]]
+id = "REV-11"
+what = "A review can be attached while its agent waits at a permission prompt, and stays attached until a message of the user carries it."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-096"]
+
+[[test]]
+id = "REPLY-03"
+what = "A reply without the addressed mark leaves the thread open, waiting for the reviewer; a reply with it makes the thread addressed and not resolved. Only the reviewer's action resolves."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-099", "FR-098"]
+
+[[test]]
+id = "REV-13"
+what = "A resolved thread can be reopened, and one action resolves every addressed thread."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-101"]
+
+[[test]]
+id = "REV-14"
+what = "After a send the round counts as sent until the first edit its agent reports."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-102"]
+
+[[test]]
+id = "REV-15"
+what = "For each round, what changed since its comments were sent is the diff from the state recorded at that send."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-103"]
+
+[[test]]
+id = "REV-16"
+what = "Marking reviewed records the current state as reviewed and the next review starts from it; a commit made through the app changes neither."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-107", "FR-110"]
+
+[[test]]
+id = "REV-17"
+what = "Two sessions in one worktree have a review each; the first supported session takes over the review of no agent; when a session ends its review stays open and the next session of that agent in that worktree takes it over."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-111", "FR-114", "FR-115"]
+
+[[test]]
+id = "REV-17A"
+what = "A workspace with no review of an agent session has exactly one review, which belongs to no agent."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-113"]
+
+[[test]]
+id = "REV-18"
+what = "A file marked viewed loses the mark when its content changes, and keeps it when another file changes."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-045"]
+
+[[test]]
+id = "REV-19"
+what = "At a turn end, what changed since the reviewer's last review is the diff from the state last marked reviewed to the new state."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-047", "FR-048", "FR-038"]
+
+[[test]]
+id = "REV-20"
+what = "A change no agent made is listed under uncommitted changes in every review of its worktree while it is uncommitted; a comment on it belongs to the review it was written in."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-049", "FR-050"]
+
+[[test]]
+id = "REV-23"
+what = "The thread tests pass unchanged on trees taken from recorded states, from commits and from ranges: the engine never asks what kind of change a tree is."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["NFR-004"]
+
+[[test]]
+id = "THREAD-01"
+what = "Unchanged lines below an insertion: the thread shifts, with no notice."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-106"]
+
+[[test]]
+id = "THREAD-02"
+what = "A block of 20 or more letters and digits moved within the file: the thread follows, with no notice."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-106"]
+
+[[test]]
+id = "THREAD-03"
+what = "A rewritten line: the thread sits on the lines that replaced it and says that the code changed; the original text is shown on request."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-105"]
+
+[[test]]
+id = "THREAD-04"
+what = "A deleted line: the thread sits at the point of deletion and says that the code was deleted."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-105"]
+
+[[test]]
+id = "THREAD-05"
+what = "A line inserted inside a commented range: a notice, and the range is kept whole."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-105"]
+
+[[test]]
+id = "THREAD-06"
+what = "A thread on a removed line stays put through three rounds of changes to the new side."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-074"]
+slice = 6
+
+[[test]]
+id = "THREAD-07"
+what = "A file renamed with small edits: its threads follow to the new path."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-106"]
+
+[[test]]
+id = "THREAD-08"
+what = "Three rounds in a row place every thread where the recorded corpus says, for the first and the last state."
+level = "unit"
+part = "review-engine"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-105", "FR-106"]
+
+[[test]]
+id = "RP-01"
+what = "The pane shows the changes of the workspace line by line."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-001"]
+
+[[test]]
+id = "RP-02"
+what = "The pane offers Flow and Changes and switches between them."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-029"]
+
+[[test]]
+id = "RP-03"
+what = "The timeline lists each edit, read and command of the turn in order."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-030"]
+
+[[test]]
+id = "RP-04"
+what = "The live diff shows the diff of the running turn and grows as writes arrive."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-030"]
+
+[[test]]
+id = "RP-06"
+what = "Flow opens as the timeline the first time; the two forms switch at any time, in the middle of a turn included; afterwards Flow opens in the form chosen last."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-031", "FR-032"]
+
+[[test]]
+id = "RP-08"
+what = "Follow is on until the user turns it off with its control. With follow on and the agent at work, Flow moves to each step as it arrives, to a file read as to a file written."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-033", "FR-034", "FR-035"]
+
+[[test]]
+id = "RP-10"
+what = "A scroll, a click or a key in the pane pauses follow, the missed steps are counted, and the offer to resume jumps to the newest step."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-036"]
+
+[[test]]
+id = "RP-11"
+what = "With follow on, a message of the user to the agent switches the pane to Flow; with follow off it does not."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-037"]
+
+[[test]]
+id = "RP-12"
+what = "When a turn ends while Flow is on screen the pane stays in Flow and offers to open in Changes what changed since the last review."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-038"]
+
+[[test]]
+id = "RP-13"
+what = "While Changes is on screen, no fact the Keeper sends moves its scroll position: a step, a turn end, a reply, a thread that moved."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-039"]
+
+[[test]]
+id = "RP-14"
+what = "A comment drafted on a line in Flow shows on that line in Changes."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-041"]
+
+[[test]]
+id = "RP-15"
+what = "Changes shows the tree of commits and turns of the worktree, the uncommitted changes with those no agent made, and the files of the selected change."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-042", "FR-049"]
+
+[[test]]
+id = "RP-16"
+what = "One commit, one turn or a range of them can be selected as the change to review."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-043"]
+
+[[test]]
+id = "RP-17"
+what = "Switching between the unified and the split view keeps the line the reviewer was on."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-044"]
+
+[[test]]
+id = "RP-19"
+what = "When a turn ends, Changes selects what changed since the last review."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-047"]
+
+[[test]]
+id = "RP-20"
+what = "Set to keep the selection, Changes stays as it is at a turn end and offers what changed since the last review."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-048"]
+
+[[test]]
+id = "RP-21"
+what = "Hovering a name in a diff shows what the Navigator reports for it; an answer given while no language server is ready carries the mark that it may be wrong."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-051", "FR-068"]
+
+[[test]]
+id = "RP-22"
+what = "Going to a definition opens the target in a file view, and the return control brings the reviewer back to the place in the diff they left."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-052"]
+
+[[test]]
+id = "RP-23"
+what = "No key and no action changes the content of a file the pane shows."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-053"]
+
+[[test]]
+id = "RP-24"
+what = "The references to a name in a diff are listed and any of them opens."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-054"]
+
+[[test]]
+id = "RP-25"
+what = "On a removed line, in the unified and in the split view, hover and go to definition ask for the old version of the code."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-055"]
+
+[[test]]
+id = "RP-26"
+what = "When no language server is found, a line that stays in the pane says so and offers the download; no dialog opens."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-057", "FR-059"]
+
+[[test]]
+id = "RP-27"
+what = "Before a language server inside a repository first runs, the pane asks, and asks once for that repository."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-062"]
+
+[[test]]
+id = "RP-28"
+what = "The pane shows whether the language server for the code on screen is ready, starting or missing, for a built-in server and for one the user registered alike."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-067"]
+
+[[test]]
+id = "RP-30"
+what = "A comment box opens on any line of a diff, removed lines included, in the unified and in the split view."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-074"]
+
+[[test]]
+id = "RP-31"
+what = "A comment can be written on a line of a file reached through a definition or a reference, whether or not the line is in the diff."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-075"]
+
+[[test]]
+id = "RP-34"
+what = "The copy control puts the review as text on the clipboard and the copied comments show as sent."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-079", "FR-088"]
+
+[[test]]
+id = "RP-35"
+what = "The pane lists all threads, each with its state: draft, sent, addressed, waiting for the reviewer, resolved."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-100"]
+
+[[test]]
+id = "RP-38"
+what = "After a send the pane shows the round as sent until the agent's first edit, and for each round what changed since its comments were sent."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-102", "FR-103"]
+
+[[test]]
+id = "RP-39"
+what = "A thread that moved to rewritten code says that the code changed and shows, on request, the line the comment was written on."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-105"]
+
+[[test]]
+id = "RP-41"
+what = "With one agent session in the worktree the pane names it; with several it lets the reviewer choose whose review to show."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-112"]
+
+[[test]]
+id = "RP-43"
+what = "For each action that vim or tuicr has a key for, the default key of the review pane is that key."
+level = "unit"
+part = "review-pane"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-123"]
+
+[[test]]
+id = "RP-44"
+what = "Text typed in a comment box is saved while the reviewer types, without leaving the box."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["NFR-008"]
+
+[[test]]
+id = "RP-47"
+what = "Attaching a review whose agent is not running shows the offer to start it; attaching the review of no agent shows the offer of each supported CLI."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-094", "FR-095"]
+
+[[test]]
+id = "NAV-06"
+what = "For a supported language with no server found the state is missing, with the offer to download; for any other language there is no offer."
+level = "unit"
+part = "navigator"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-057"]
+
+[[test]]
+id = "NAV-07"
+what = "Of several servers for one language the first of these is used: the one the user registered, the project's own, one installed on the machine, one the app downloaded."
+level = "unit"
+part = "navigator"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-060"]
+
+[[test]]
+id = "NAV-08"
+what = "A server that sits inside a repository does not run before the user said yes, and the answer is remembered for that repository."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-062"]
+
+[[test]]
+id = "NAV-09"
+what = "A downloaded server stays as it is when a newer one is named in the registry, until the user asks for the update."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-063"]
+
+[[test]]
+id = "NAV-11"
+what = "The language servers of the workspace on screen run. Off screen for the set time, 10 minutes with nothing set, they are stopped, the server for the old code included; back on screen they start again."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-064", "FR-065", "FR-066"]
+
+[[test]]
+id = "NAV-13"
+what = "Ready, starting and missing follow from what the server reports, for each built-in row by its own readiness rule."
+level = "unit"
+part = "navigator"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-067"]
+
+[[test]]
+id = "NAV-14"
+what = "A server the user registered shows as starting, then ready, and as missing when its command fails."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-070"]
+
+[[test]]
+id = "NAV-15"
+what = "The text of the registry is read row by row; a row that cannot be read is reported and passed over."
+level = "unit"
+part = "navigator"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["FR-071"]
+
+[[test]]
+id = "LSP-01"
+what = "With no server on the machine, each built-in row downloads into the app's folder, passes its digest and answers hover, definition and references on its fixed project. The rows are TypeScript, JavaScript, Python and Rust."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-057", "FR-058", "FR-056", "FR-051", "FR-052", "FR-054"]
+
+[[test]]
+id = "LSP-02"
+what = "A candidate that exists and fails its trial run is passed over, and the next one is used."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-061"]
+
+[[test]]
+id = "LSP-03"
+what = "A hover asked before the server is ready is answered by text match and marked."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-068"]
+
+[[test]]
+id = "LSP-04"
+what = "A row of the user replaces a built-in row, is started from the one registry file in the app's folder, and is never downloaded: when its command fails, no download is offered for it."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-069", "FR-073", "FR-071"]
+
+[[test]]
+id = "LSP-05"
+what = "A download whose digest differs from its row is refused."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-058"]
+
+[[test]]
+id = "LSP-06"
+what = "A new language added by one row and no change of code answers hover."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["NFR-002"]
+
+[[test]]
+id = "LSP-07"
+what = "After hover, definition and references on each of the three fixed projects, git status with ignored files shows nothing new, and the build folder of the Rust project gains no output."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["NFR-021"]
+
+[[test]]
+id = "OLD-01"
+what = "Hover and definition on a removed line answer from the base: for a symbol the change deleted, and for one whose definition the change moved to another file."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-055"]
+
+[[test]]
+id = "OLD-03"
+what = "A type from a dependency on a removed line resolves, in TypeScript and in Python."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-055"]
+
+[[test]]
+id = "OLD-04"
+what = "After use of the old side, the status, the worktrees and the refs of the repository are unchanged."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["NFR-021"]
+
+[[test]]
+id = "OLD-05"
+what = "No process for the old side runs before the reviewer's first use of a removed line."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-066"]
+
+[[test]]
+id = "OLD-06"
+what = "After another change is selected, the export of the earlier old side is gone."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-066"]
+
+[[test]]
+id = "OLD-07"
+what = "In the diff of a past turn, hover on an unchanged line of the new side answers from the server, and on a line changed since it answers by text match, marked."
+level = "component"
+part = "navigator"
+through = "its calls, with real language servers on small fixed projects"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-055", "FR-068"]
+
+[[test]]
+id = "TEXT-01"
+what = "A name defined in a new untracked file is found; a name that occurs only in an ignored file is not."
+level = "component"
+part = "text-search"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-068"]
+
+[[test]]
+id = "TEXT-03"
+what = "On a repository of 3,000 to 4,000 files the full list arrives within 100 ms once warm."
+level = "component"
+part = "text-search"
+through = "its calls, on a real git repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 8
+
+[[test]]
+id = "CLIENT-01"
+what = "A scripted client opens a folder and receives the workspace with the changes of its branch."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["FR-001", "FR-013"]
+
+[[test]]
+id = "CLIENT-02"
+what = "The Keeper is killed while a draft is typed and started again: every review, the draft included, is as it was left."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["FR-119", "NFR-008"]
+
+[[test]]
+id = "CLIENT-03"
+what = "The Keeper and everything it starts listen on the user's own socket file only: no network port is opened."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["NFR-007"]
+
+[[test]]
+id = "HOLD-01"
+what = "The client leaves while the agent works; the agent finishes its turn; a client that connects later finds the turn, its recorded state, the terminal's screen, and every one of 100 events sent meanwhile, in order."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-116", "FR-117"]
+
+[[test]]
+id = "HOLD-02"
+what = "The client is killed 50 times during a flood of output: the final screen equals that of an uninterrupted run."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["FR-117"]
+
+[[test]]
+id = "HOLD-03"
+what = "The quit that stops everything, with one child that ignores the hang-up: no child is left after 3 s."
+level = "system"
+part = "app"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["FR-118"]
+
+[[test]]
+id = "HOLD-06"
+what = "A client that is stopped does not hold the agent up by more than 100 ms."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-116"]
+
+[[test]]
+id = "UITEST-04"
+what = "One review round with no screen, in a worktree in which nobody commits: a comment, the attach, the user's message, the agent's reply on the thread. Nothing reaches the agent before the test sends Enter, and the text the view control shows equals what the agent received."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-080", "FR-086", "FR-097", "FR-081", "FR-108"]
+
+[[test]]
+id = "AGENT-01"
+what = "A turn with a read, an edit, a new file and a shell write: the client sees works, then finished, receives the steps in order, and a state is recorded with the branch and the index untouched."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-007", "FR-030", "FR-046"]
+
+[[test]]
+id = "AGENT-02"
+what = "One request creates a worktree from a branch name and starts an agent in it."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-014"]
+
+[[test]]
+id = "AGENT-04"
+what = "A program that is neither Claude Code nor pi, and a CLI started around the app's pieces, edit files: no session, no turn, no step, no notice and no offer to attach; the edits show as changes no agent made."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-025", "FR-026", "FR-022"]
+
+[[test]]
+id = "AGENT-08"
+what = "While the agent works, a review is attached and a message submitted: the review goes with the queued message and is marked sent when the agent takes it."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-093"]
+
+[[test]]
+id = "AGENT-09"
+what = "The stand-in started from its launcher and by its name typed in a shell gives the same session either way. The first session in a workspace takes over the review of no agent; when it ends its review stays open, the next session of that agent takes it over, and a session of the other agent does not."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-114", "FR-115", "FR-022"]
+
+[[test]]
+id = "AGENT-12"
+what = "In a home folder made for the test, the settings files of both CLIs are unchanged after the tests, and a marker planted in their credential files is found nowhere in what the app stored."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["NFR-020", "NFR-023"]
+
+[[test]]
+id = "AGENT-13"
+what = "On Linux, traced by the system: neither the Keeper nor a companion opens a credential file of a CLI."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["NFR-023"]
+
+[[test]]
+id = "AGENT-15"
+what = "Everything is killed as a restart of the machine would; started again, the review, its turns and its attachment are as left, each agent that was running has a resume control, and using it runs the CLI's own resume command with the session's id."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-120", "FR-119"]
+
+[[test]]
+id = "AGENT-16"
+what = "The agent asks for permission: the waiting state turns on, the app writes nothing to its terminal, and the state turns off when the client sends the answer as keys."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-027", "FR-028"]
+
+[[test]]
+id = "AGENT-17"
+what = "A second round, in a worktree in which nobody commits: the agent rewrites a commented line, replies to one thread with the addressed mark and to one without. The round shows as sent until its first edit, the thread moves with its notice, the changes since the send are right, one thread is addressed and one waits for the reviewer, and neither is resolved."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-102", "FR-103", "FR-105", "FR-097", "FR-098", "FR-099", "FR-108"]
+
+[[test]]
+id = "AGENT-19"
+what = "Accepting the offer made on attaching starts the CLI in the workspace with the review attached to its first message."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-094", "FR-095"]
+
+[[test]]
+id = "AGENT-14"
+what = "An agent that reports over the socket and runs in no terminal is followed, receives a review and replies to its threads."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["NFR-026"]
+
+[[test]]
+id = "DELIVER-04"
+what = "Two sessions in one worktree, a review attached to one: only that session receives it."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-092", "FR-111"]
+
+[[test]]
+id = "STORE-04"
+what = "At the end of every test with the stand-in agent, after turns, a delivery and replies, no git command that lists files of the worktree names a file of the app."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["NFR-021"]
+
+[[test]]
+id = "LISTEN-07"
+what = "An agent whose process is killed shows as not running."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-007"]
+
+[[test]]
+id = "LOAD-01"
+what = "claude typed in a shell of the app runs the app's hooks and lists its tool."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-022", "FR-018"]
+
+[[test]]
+id = "LOAD-02"
+what = "After /clear, after claude --resume and inside a sub-agent, the app's hooks still run, the earlier review is taken over, and a sub-agent's edits are credited to its parent."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-022", "FR-111", "FR-115"]
+
+[[test]]
+id = "LOAD-03"
+what = "pi, pi --continue, pi list and pi mcp list typed in a shell of the app behave as without the app, and the first two load the extension."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-022", "FR-023"]
+
+[[test]]
+id = "LOAD-04"
+what = "After a session of each CLI, git status with ignored files and a listing of each CLI's settings show no change by the app, and macOS has asked for no keychain access on the app's behalf."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["NFR-020", "NFR-021", "NFR-023"]
+
+[[test]]
+id = "LOAD-05"
+what = "In a folder that shows the trust dialog, no event reaches the app before the user accepts, and the app sends no key to the terminal."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-028"]
+
+[[test]]
+id = "DELIVER-02"
+what = "A review of 200,000 characters with facts planted at five places: all five come back, with no permission dialog, in both CLIs."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-082"]
+
+[[test]]
+id = "REPLY-01"
+what = "A review of 9,000 characters with 5 threads and \"Address each comment.\": 5 replies arrive, each on its thread, with no permission dialog, in both CLIs. Once more with a one-word message: the instruction on how to answer is still followed."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-097", "FR-023", "FR-082", "FR-090"]
+
+[[test]]
+id = "TERM-05"
+what = "Claude Code and pi each pass the steps in the app's terminal: a new line without submit, submit, interrupt, history, paste, the mouse, resize, quit."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-017", "FR-023"]
+
+[[test]]
+id = "CLI-01"
+what = "One live turn per CLI with a read, an edit, a new file and a shell write shows the same steps in Flow as the recorded ones, and the shape of its events equals the recorded ones the tests replay."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-030", "FR-034", "FR-035", "FR-023"]
+
+[[test]]
+id = "CLI-02"
+what = "A real permission dialog turns the waiting state on within 100 ms and off when it is answered."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-027"]
+
+[[test]]
+id = "CLI-03"
+what = "Esc during a turn ends the turn in the app, in both CLIs."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-007", "FR-023"]
+note = "Never run with pi: its login had expired."
+
+[[test]]
+id = "CLI-04"
+what = "A review attached while the agent works goes with the queued message, in both CLIs."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-093", "FR-023"]
+note = "Never run with pi: its login had expired."
+
+[[test]]
+id = "CLI-05"
+what = "After a restart of the machine the resume control brings back the right session, with two sessions in one worktree, in both CLIs."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-120", "FR-023"]
+note = "Never run with pi. pi's command for one of two sessions of a worktree is not found yet: if pi has none, this requirement goes back to the maintainer."
+
+[[test]]
+id = "PERF-01"
+what = "After a restart of the reference Mac, the packaged app shows the diff of a workspace within 0.3 s of its start."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-009"]
+
+[[test]]
+id = "PERF-02"
+what = "In the project's Ubuntu virtual machine, the packaged app shows the diff of a workspace within 0.3 s of a cold start."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-010"]
+
+[[test]]
+id = "PERF-03"
+what = "With one workspace open and idle, the app's own processes use at most 200 MB."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-011"]
+
+[[test]]
+id = "PERF-04"
+what = "A key is on screen at most 10 ms later than in Ghostty, at the median and at the 95th percentile: in the terminal pane idle, in the terminal pane while the agent writes, and in a comment box."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-012"]
+
+[[test]]
+id = "PERF-05"
+what = "Scrolling a diff of 2,200 lines, unified and split, the app draws at the refresh rate of the display, and at most 1% of the frames take longer than two refresh intervals."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-013"]
+
+[[test]]
+id = "PERF-06"
+what = "The terminal pane takes a flood of 200,000 lines in at most 1.5 times the time the program that writes them needs alone."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-014"]
+
+[[test]]
+id = "STACK-02"
+what = "With the setting on the newer frame source the app still runs and draws."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = []
+slice = 10
+
+[[test]]
+id = "SYS-04"
+what = "The whole test suite and this list pass on macOS 27 on the reference Mac."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-016"]
+
+[[test]]
+id = "TERM-06"
+what = "A file of bold, italic, combined and box-drawing text draws as in Ghostty."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = []
+slice = 10
+
+[[test]]
+id = "SCREEN-01"
+what = "The review round of the system test, done by hand in the real window, in the dark and in the light theme: every step looks as its pane test says, and a review shows no vote and no label."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["NFR-024", "NFR-017", "FR-104"]
+
+[[test]]
+id = "SCREEN-02"
+what = "Dead keys and a Pinyin input method typed on the real keyboard give in the terminal pane what they give in Ghostty."
+level = "system"
+part = "app"
+through = "the real window on a lit screen"
+driver = "lit-screen"
+runs = "release"
+checklist = "lit-screen"
+proves = ["FR-122"]
+
+[[test]]
+id = "CONV-01"
+what = "The macOS checklist of windows, menus and system shortcuts is walked and signed by the maintainer."
+level = "system"
+part = "app"
+through = "the real window, by a person with the checklist"
+driver = "person"
+runs = "release"
+checklist = "conventions"
+proves = ["NFR-022", "NFR-018"]
+
+[[test]]
+id = "CONV-02"
+what = "The Linux checklist of windows, menus and system shortcuts is walked and signed by the maintainer."
+level = "system"
+part = "app"
+through = "the real window, by a person with the checklist"
+driver = "person"
+runs = "release"
+checklist = "conventions"
+proves = ["NFR-022", "NFR-018"]
+
+[[test]]
+id = "HW-01"
+what = "Under X11 on Ubuntu 22.04 and on Debian 12, with a hardware graphics driver, the window draws."
+level = "system"
+part = "app"
+through = "the real window on a Linux machine with a graphics driver"
+driver = "linux-hardware"
+runs = "release"
+checklist = "linux-hardware"
+proves = ["NFR-016"]
+note = "With the software driver of those two releases the window stays empty under X11. If a hardware driver fails too, the promise for X11 there goes back to the maintainer."
+
+[[test]]
+id = "HW-02"
+what = "Under Wayland and under X11 the terminal takes keys, dead keys, a compose sequence and the mouse as a native terminal does."
+level = "system"
+part = "app"
+through = "the real window on a Linux machine with a graphics driver"
+driver = "linux-hardware"
+runs = "release"
+checklist = "linux-hardware"
+proves = ["NFR-016", "FR-122"]
+
+[[test]]
+id = "HW-03"
+what = "Memory, typing, scrolling and the flood are measured against their limits on the Linux machine."
+level = "system"
+part = "app"
+through = "the real window on a Linux machine with a graphics driver"
+driver = "linux-hardware"
+runs = "release"
+checklist = "linux-hardware"
+proves = ["NFR-011", "NFR-012", "NFR-013", "NFR-014"]
+note = "Typing is compared with the terminal foot: Ghostty has no official Linux build for Ubuntu 24.04. The requirement names Ghostty, so this reference is the maintainer's to accept."
+
+[[test]]
+id = "SYS-02"
+what = "The package built on Ubuntu 22.04 installs and draws on each of the five promised Linux releases."
+level = "system"
+part = "app"
+through = "the real window on a Linux machine with a graphics driver"
+driver = "linux-hardware"
+runs = "release"
+checklist = "linux-hardware"
+proves = ["NFR-016"]
+
+[[test]]
+id = "SYS-03"
+what = "On a Linux system with no Vulkan driver the app draws and says that it runs in software."
+level = "system"
+part = "app"
+through = "the real window on a Linux machine with a graphics driver"
+driver = "linux-hardware"
+runs = "release"
+checklist = "linux-hardware"
+proves = ["NFR-016"]
+
+[[test]]
+id = "LATER-01"
+what = "With two agents at work in one worktree, Flow shows a marker with each one's name where it is changing, and one named shell for a change made through a shell command."
+level = "component"
+part = "review-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-127"]
+
+[[test]]
+id = "LATER-02"
+what = "A settings screen lists the rows of the language-server registry and changes them."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-072"]
+
+[[test]]
+id = "LATER-03"
+what = "A plugin built outside the repository adds an agent CLI and a pane through the plugin interface, with no change to the app."
+level = "component"
+part = "build"
+through = "the commands and the packages of the build"
+driver = "workflow"
+runs = "ci"
+proves = ["NFR-006"]
+
+[[test]]
+id = "ACT-01"
+what = "For every request of the Link that a user starts, the composed Window has an action with a key, and running the action sends that request. The test walks the list, so a request with no control, or a control with no key, fails."
+level = "component"
+part = "window"
+through = "keys in, with a real Keeper beneath; read back as the requests that reach it"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", "FR-101", "FR-107", "FR-109", "FR-120"]
+
+[[test]]
+id = "WIN-05"
+what = "With a real Keeper and a program that writes down what it receives in a real terminal: over an attach, a view, a detach, the one-click control, a turn end, a notice and a permission prompt, the program received exactly the keys the test typed and the one sentence, and no line end."
+level = "component"
+part = "window"
+through = "keys in, with a real Keeper beneath; read back as what the program in the terminal received"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-019", "FR-028", "FR-085", "FR-089"]
+slice = 6
+
+[[test]]
+id = "WIN-06"
+what = "A Window started against a Keeper that already holds two terminals, a review with a draft and a turn that ended meanwhile shows the terminals' screens, the draft and the finished state."
+level = "component"
+part = "window"
+through = "started against a real Keeper that holds state; read back through the models it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-117"]
+
+[[test]]
+id = "SEAM-03"
+what = "A way of delivery written in the test fulfils the contract and is handed the same rendered text as the three built ones, with no other crate changed."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["NFR-003"]
+slice = 7
+
+[[test]]
+id = "SEAM-05"
+what = "A third pane written in the test joins the Frame, watches the shared model and takes a routed action, with no pane changed."
+level = "component"
+part = "window"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["NFR-005"]
+
+# Requirements no test of the workflow can prove. Each has a check done by hand before a release.
+
+[[by_hand_only]]
+id = "NFR-009"
+why = "A cold start is timed on the reference Mac after a restart, with the real window on a lit screen."
+
+[[by_hand_only]]
+id = "NFR-010"
+why = "The start is timed by hand in the project's Ubuntu virtual machine, which no machine of the workflow can run."
+
+[[by_hand_only]]
+id = "NFR-011"
+why = "Memory is read with the real window open; the test platform draws nothing and holds no textures."
+
+[[by_hand_only]]
+id = "NFR-012"
+why = "Typing is timed from the key to the frame on a lit screen, beside Ghostty on the same machine."
+
+[[by_hand_only]]
+id = "NFR-013"
+why = "Frame times exist only where frames reach a screen."
+
+[[by_hand_only]]
+id = "NFR-014"
+why = "The flood is timed with the real window drawing it."
+
+[[by_hand_only]]
+id = "NFR-022"
+why = "Following a platform's conventions is a judgement: a checklist and the maintainer's sign-off."
+
+[[by_hand_only]]
+id = "FR-104"
+why = "That a review has no votes and no labels is seen by looking at the window; a test of an absence could only ever pass."
