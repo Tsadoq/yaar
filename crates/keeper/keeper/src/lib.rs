@@ -166,20 +166,22 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The side of one attached Window that is written to.
+/// One attached Window.
 ///
-/// A reply comes from the thread that serves the Window, a fact from the thread of
-/// whichever Window caused it. The lock is held for a whole frame, so two frames never
-/// mix.
+/// Its connection is read by the thread that serves it. It is written to by that thread,
+/// for a reply, and by the thread of whichever Window caused a fact: `writing` is held
+/// for a whole frame, so two frames never mix.
 struct Window {
-    out: Mutex<UnixStream>,
+    stream: UnixStream,
+    writing: Mutex<()>,
 }
 
 impl Window {
     /// Writes one frame, whole. A Window that takes nothing for [`WRITE_TIMEOUT`], or
     /// that is gone, is let go: after half a frame nothing more can be said to it.
     fn send(&self, frame: &[u8]) -> io::Result<()> {
-        let mut out = lock(&self.out);
+        let _whole_frame = lock(&self.writing);
+        let mut out = &self.stream;
         let mut rest = frame;
         let sent = loop {
             let began = Instant::now();
@@ -196,14 +198,13 @@ impl Window {
                 Err(e) => break Err(e),
             }
         };
-        sent.inspect_err(|_| {
-            let _ = out.shutdown(Shutdown::Both);
-        })
+        sent.inspect_err(|_| self.let_go())
     }
 
-    /// Closes the connection. The thread that reads it finds it closed and ends.
+    /// Closes the connection. The thread that reads it finds it closed and ends, and so
+    /// does a write that waits for the Window to take something.
     fn let_go(&self) {
-        let _ = lock(&self.out).shutdown(Shutdown::Both);
+        let _ = self.stream.shutdown(Shutdown::Both);
     }
 }
 
@@ -359,40 +360,38 @@ fn accept_windows(listener: UnixListener, shared: Arc<Shared>, options: Options)
     }
 }
 
-fn serve_window(mut stream: UnixStream, shared: &Shared, version: &str) -> Result<(), LinkError> {
+fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<(), LinkError> {
     stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
-    let Message::Hello(theirs) = read_message(&mut stream)? else {
+    let Message::Hello(theirs) = read_message(&mut &stream)? else {
         return Err(LinkError::Malformed("the first frame was not a hello"));
     };
     // The answer goes out whatever the Window's protocol version is: the Window is the
     // one that shows a mismatch, and it may still ask for the stop.
     let mine = Hello::for_this_process(version);
-    write_message(&mut stream, &Message::Hello(mine.clone()))?;
+    write_message(&mut &stream, &Message::Hello(mine.clone()))?;
     stream.set_read_timeout(None)?;
 
     // Every frame but the hello and the stop is spoken between equal versions only: a
     // Window of another version is told no fact and can ask for nothing else.
-    let window = if mine.speaks_with(&theirs) {
-        Some(Arc::new(Window {
-            out: Mutex::new(stream.try_clone()?),
-        }))
-    } else {
-        None
-    };
+    let speaks = mine.speaks_with(&theirs);
+    let window = Arc::new(Window {
+        stream,
+        writing: Mutex::new(()),
+    });
 
     {
         let mut state = shared.lock();
         state.windows += 1;
         state.idle_since = None;
     }
-    let result = match &window {
-        Some(window) if !shared.admit(window) => Ok(()),
-        _ => converse(&mut stream, window.as_ref(), shared),
+    let result = if speaks && !shared.admit(&window) {
+        // The Keeper is leaving.
+        Ok(())
+    } else {
+        converse(&window, speaks, shared)
     };
-    if let Some(window) = &window {
-        shared.forget(window);
-    }
+    shared.forget(&window);
     {
         let mut state = shared.lock();
         state.windows -= 1;
@@ -404,26 +403,22 @@ fn serve_window(mut stream: UnixStream, shared: &Shared, version: &str) -> Resul
     result
 }
 
-/// Reads what one Window sends, until it goes away or asks for the stop. `window` is
-/// where it is answered; none for a Window of another protocol version.
-fn converse(
-    stream: &mut UnixStream,
-    window: Option<&Arc<Window>>,
-    shared: &Shared,
-) -> Result<(), LinkError> {
+/// Reads what one Window sends, until it goes away or asks for the stop. `speaks` says
+/// whether it speaks the protocol version of this Keeper.
+fn converse(window: &Window, speaks: bool, shared: &Shared) -> Result<(), LinkError> {
     loop {
-        match read_message(stream) {
+        match read_message(&mut &window.stream) {
             Ok(Message::Shutdown) => {
                 shared.lock().exit = Some(Exit::Shutdown);
                 return Ok(());
             }
             Ok(Message::Hello(_)) => {}
+            Ok(Message::Request { .. }) if !speaks => {
+                return Err(LinkError::Malformed(
+                    "a Window of another version asked for more than the stop",
+                ));
+            }
             Ok(Message::Request { id, request }) => {
-                let Some(window) = window else {
-                    return Err(LinkError::Malformed(
-                        "a Window of another version asked for more than the stop",
-                    ));
-                };
                 if !answer(shared, window, id, request) {
                     return Ok(());
                 }
