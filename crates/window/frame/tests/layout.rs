@@ -8,9 +8,9 @@ use gpui_kit::{
     AppContext, Bounds, Context, FocusHandle, InteractiveElement, IntoElement, Pixels, Render,
     Size, Styled, TestAppContext, VisualTestContext, Window, div, px, size,
 };
-use yaar_frame::{Beside, BuildPane, FULL_WIDTH, MovePanes, Pane, controls};
+use yaar_frame::{Beside, BuildPane, FULL_WIDTH, MovePanes, Pane};
 
-use common::{drawn, open_frame};
+use common::{drawn, open_frame, pressed};
 
 const WINDOW: Size<Pixels> = Size {
     width: px(1280.),
@@ -40,15 +40,6 @@ fn plain(name: &'static str) -> BuildPane {
             focus,
         }
     })
-}
-
-/// The key the table of the Frame gives Move Panes.
-fn move_panes_key() -> String {
-    controls()
-        .into_iter()
-        .find(|control| (control.action)().name() == gpui_kit::Action::name(&MovePanes))
-        .expect("Move Panes has a row in the table")
-        .key()
 }
 
 fn pane(name: &str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
@@ -112,7 +103,7 @@ fn the_key_of_move_panes_takes_the_second_pane_below_then_to_the_left_then_to_th
     cx: &mut TestAppContext,
 ) {
     let (shown, mut cx) = open_frame(WINDOW, vec![plain("first"), plain("second")], cx);
-    let key = move_panes_key();
+    let key = pressed::<MovePanes>();
 
     // Six presses, two rounds of the three places and no other, each with the bounds
     // that agree with it. The type has three values, so what the model says is one of
@@ -146,7 +137,7 @@ fn the_key_of_move_panes_takes_the_second_pane_below_then_to_the_left_then_to_th
 #[gpui_kit::test]
 fn the_place_of_the_panes_lasts_through_a_resize_of_the_window(cx: &mut TestAppContext) {
     let (shown, mut cx) = open_frame(WINDOW, vec![plain("first"), plain("second")], cx);
-    let key = move_panes_key();
+    let key = pressed::<MovePanes>();
 
     for place in [Beside::Below, Beside::Left] {
         cx.simulate_keystrokes(&key);
@@ -169,7 +160,7 @@ fn the_panes_after_the_first_share_their_half_stacked_beside_it_and_in_a_row_bel
         vec![plain("first"), plain("second"), plain("third")],
         cx,
     );
-    let key = move_panes_key();
+    let key = pressed::<MovePanes>();
     let panes =
         |cx: &mut VisualTestContext| (pane("first", cx), pane("second", cx), pane("third", cx));
 
@@ -208,7 +199,7 @@ fn a_window_with_one_pane_gives_it_the_room_and_the_key_of_move_panes_changes_no
     cx: &mut TestAppContext,
 ) {
     let (shown, mut cx) = open_frame(WINDOW, vec![plain("only")], cx);
-    let key = move_panes_key();
+    let key = pressed::<MovePanes>();
 
     for _ in 0..3 {
         let only = pane("only", &mut cx);

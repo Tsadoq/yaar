@@ -110,9 +110,10 @@ impl Beside {
 /// sidebar keeps the focus inside what it draws, so such a key always has a place to
 /// work from.
 ///
-/// For tests, which cannot read what is drawn, two elements carry a selector that
-/// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, and the field
-/// for the base, `frame-base-field`.
+/// For tests, which cannot read what is drawn, some elements carry a selector that
+/// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, the note about
+/// an older Keeper, `frame-keeper-note`, the field for the base, `frame-base-field`, and
+/// each pane's place, `frame-pane-<name>`.
 pub struct Frame {
     link: Entity<KeeperLink>,
     first_frame_marked: bool,
@@ -615,7 +616,13 @@ impl Frame {
                     .text_color(cx.theme().muted_foreground)
                     .child(self.status_line(cx)),
             )
-            .children(self.keeper_note_line(cx))
+            // A composed Frame draws the note above its panes, where it is seen with them.
+            .children(
+                self.composed
+                    .is_none()
+                    .then(|| self.keeper_note_line(cx))
+                    .flatten(),
+            )
     }
 }
 

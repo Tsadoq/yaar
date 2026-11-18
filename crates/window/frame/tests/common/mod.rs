@@ -65,6 +65,17 @@ pub fn key_of<A: Action + Default>() -> &'static str {
         .keystroke
 }
 
+/// The key the Frame's table gives an action, as a user presses it on the system the app
+/// is built for: `secondary` written out.
+pub fn pressed<A: Action + Default>() -> String {
+    let name = A::default().name();
+    controls()
+        .into_iter()
+        .find(|control| (control.action)().name() == name)
+        .expect("the action has a row in the table")
+        .key()
+}
+
 /// The Keeper, played by the test.
 pub struct KeeperEnd {
     stream: UnixStream,
