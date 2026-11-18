@@ -83,6 +83,30 @@ deny = [
     { crate = "javascriptcore-rs", reason = "a JavaScript runtime" },
     { crate = "javascriptcore-rs-sys", reason = "a JavaScript runtime" },
     { crate = "objc2-java-script-core", reason = "a JavaScript runtime" },
+    # The app is no fork of the Zed editor, and Zed publishes crates of its own on the
+    # registry, where no rule on sources stops them. The interface toolkit is another
+    # project's fork under other names (gpui-kit, gpui-pre and their parts): no line here
+    # names it.
+    { crate = "gpui", reason = "a crate of the Zed editor" },
+    { crate = "gpui-macros", reason = "a crate of the Zed editor" },
+    { crate = "zed_extension_api", reason = "a crate of the Zed editor" },
+    { crate = "zed-collections", reason = "a crate of the Zed editor" },
+    { crate = "zed-derive-refineable", reason = "a crate of the Zed editor" },
+    { crate = "zed-http-client", reason = "a crate of the Zed editor" },
+    { crate = "zed-media", reason = "a crate of the Zed editor" },
+    { crate = "zed-perf", reason = "a crate of the Zed editor" },
+    { crate = "zed-refineable", reason = "a crate of the Zed editor" },
+    { crate = "zed-reqwest", reason = "a crate of the Zed editor" },
+    { crate = "zed-semantic-version", reason = "a crate of the Zed editor" },
+    { crate = "zed-sum-tree", reason = "a crate of the Zed editor" },
+    { crate = "zed-util", reason = "a crate of the Zed editor" },
+    { crate = "zed-util-macros", reason = "a crate of the Zed editor" },
+    # Libraries Zed forked and publishes. The toolkit links the first two, and only the
+    # crates of the toolkit named here may: anything else that asks for one is refused.
+    # The third it links only to capture the screen, which the app does not do.
+    { crate = "zed-font-kit", wrappers = ["gpui-pre-apple", "gpui-pre-wgpu"], reason = "a crate Zed publishes, let in beneath the interface toolkit only" },
+    { crate = "zed-xim", wrappers = ["gpui-pre-linux"], reason = "a crate Zed publishes, let in beneath the interface toolkit only" },
+    { crate = "zed-scap", reason = "a crate Zed publishes, which the interface toolkit does not link as the app builds it" },
 ]
 
 [sources]
