@@ -33,6 +33,13 @@ const PAIRING_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Histogra
 /// be, and the shortest change is what a reader expects to see marked.
 const WORD_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Myers;
 
+/// The most words, of both sides together, that a hunk may hold and still have its words
+/// compared. Comparing words costs up to the square of their number, and a hunk has no
+/// largest size: one of twenty thousand rewritten lines took many seconds. With this many
+/// words the hardest hunk that was tried took 13 ms where it was measured, and of the
+/// 3,780 hunks of the recorded changes that have lines on both sides, two hold more.
+const MOST_WORDS: usize = 4096;
+
 /// The unchanged lines shown around each change unless the caller asks otherwise; git's
 /// own default.
 pub const CONTEXT_LINES: u32 = 3;
@@ -259,7 +266,9 @@ impl FileDiff {
     /// The changed words of the hunk at `index` of [`FileDiff::hunks`].
     ///
     /// Computed when asked, hunk by hunk, so that a caller pays only for the hunks it
-    /// shows. Panics when there is no such hunk.
+    /// shows. What one hunk costs is bounded: a hunk of more than 4,096 words, both sides
+    /// together, is not compared and has nothing marked. Panics when there is no such
+    /// hunk.
     pub fn emphasis(&self, index: usize) -> Emphasis {
         let hunk = &self.hunks[index];
         let mut emphasis = Emphasis {
@@ -270,8 +279,14 @@ impl FileDiff {
             return emphasis;
         }
 
-        let old = words::of_lines(hunk.old.clone().map(|line| self.old.token(line)));
-        let new = words::of_lines(hunk.new.clone().map(|line| self.new.token(line)));
+        let removed = hunk.old.clone().map(|line| self.old.token(line));
+        let added = hunk.new.clone().map(|line| self.new.token(line));
+        let Some(old) = words::of_lines(removed, MOST_WORDS) else {
+            return emphasis;
+        };
+        let Some(new) = words::of_lines(added, MOST_WORDS - old.all.len()) else {
+            return emphasis;
+        };
         let mut input = imara_diff::InternedInput {
             before: Vec::new(),
             after: Vec::new(),
@@ -346,6 +361,10 @@ fn unchanged(rows: &mut Vec<Row>, old: Range<u32>, new: u32, head: u32, tail: u3
 /// Every other line of the hunk was removed or added as a whole and has nothing marked,
 /// and so has every line of a hunk that only removes or only adds: the whole line is the
 /// change, and its colour already says so.
+///
+/// A hunk of more than 4,096 words, both sides together, has nothing marked either. Its
+/// words are not compared, since that could take longer than a reader would wait, and a
+/// change of that size is read line by line anyway.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Emphasis {
     /// The first line of the hunk in the old version and in the new one.
@@ -1261,6 +1280,92 @@ fn main() {
     }
 
     #[test]
+    fn a_hunk_of_more_than_4096_words_has_nothing_marked() {
+        // One line: `key`, then a space and a letter `count` times, then `end` and the
+        // line feed.
+        let line = |letter: &str, count: usize, end: &str| {
+            format!("key{}{end}\n", format!(" {letter}").repeat(count))
+        };
+        // With 1,022 letters on the old side and 1,024 on the new one that is 2,046 and
+        // 2,050 words, the line feeds among them, 4,096 together: the most that are
+        // compared.
+        let (old, new) = (line("a", 1022, ""), line("b", 1024, ""));
+        let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+        assert_eq!(diff.hunks(), [hunk(0..1, 0..1)]);
+        let emphasis = diff.emphasis(0);
+        assert!(!emphasis.of(Side::Old, 0).is_empty());
+        assert!(!emphasis.of(Side::New, 0).is_empty());
+        assert_eq!(
+            unmarked(&diff, &emphasis, Side::Old, 0..1),
+            unmarked(&diff, &emphasis, Side::New, 0..1)
+        );
+
+        // One word more, on either side, and the hunk is not compared.
+        for (old, new) in [
+            (line("a", 1022, ";"), new.clone()),
+            (old, line("b", 1024, ";")),
+        ] {
+            let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+            assert_eq!(diff.hunks(), [hunk(0..1, 0..1)]);
+            let emphasis = diff.emphasis(0);
+            assert_eq!(emphasis.of(Side::Old, 0), []);
+            assert_eq!(emphasis.of(Side::New, 0), []);
+        }
+    }
+
+    /// `count` lines on each side, every old line the same and every new line the same:
+    /// 11 and 16 words, the line feeds among them, of which the two sides share few, and
+    /// those many times over. Comparing such words is what costs the most.
+    fn rewritten_lines(count: usize) -> (String, String) {
+        (
+            "x = x + 1;\n".repeat(count),
+            "y = (y, 2) - y;\n".repeat(count),
+        )
+    }
+
+    /// One line of `count` one-letter words with a space after each, the letters taken
+    /// from eight in an order that `step` sets.
+    fn long_line(count: usize, step: usize) -> String {
+        let mut line: String = (0..count)
+            .flat_map(|word| [b"abcdefgh"[(word * step + word / 7) % 8] as char, ' '])
+            .collect();
+        line.push('\n');
+        line
+    }
+
+    #[test]
+    fn the_marks_of_one_hunk_take_under_50_ms_however_many_words_it_holds() {
+        let (few_old, few_new) = rewritten_lines(150);
+        let (many_old, many_new) = rewritten_lines(20_000);
+        let hunks = [
+            // 4,050 words in 300 lines, and 4,002 words in two: under the limit.
+            (few_old, few_new, true),
+            (long_line(1000, 3), long_line(1000, 5), true),
+            // A whole file rewritten, 540,000 words; and two lines of 200,001 each.
+            (many_old, many_new, false),
+            (long_line(100_000, 3), long_line(100_000, 5), false),
+        ];
+        for (old, new, compared) in hunks {
+            let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+            let lines = diff.line_count(Side::Old);
+            assert_eq!(diff.hunks(), [hunk(0..lines, 0..lines)]);
+
+            let mut best = Duration::MAX;
+            for _ in 0..5 {
+                let start = Instant::now();
+                let emphasis = diff.emphasis(0);
+                best = best.min(start.elapsed());
+                let marked = (0..lines).any(|line| !emphasis.of(Side::Old, line).is_empty());
+                assert_eq!(marked, compared, "a hunk of {lines} lines on each side");
+            }
+            assert!(
+                best < Duration::from_millis(50),
+                "the best of 5 runs took {best:?} for a hunk of {lines} lines on each side"
+            );
+        }
+    }
+
+    #[test]
     fn on_the_recorded_changes_the_marks_are_in_order_inside_their_lines_and_a_marked_line_is_a_line_of_the_other_side_but_for_the_marks()
      {
         let (mut marked_lines, mut marked_bytes) = (0, 0);
@@ -1331,7 +1436,8 @@ fn main() {
 
         // The invariants above hold as well when a line that was edited has nothing
         // marked. So the sum of what is marked on the whole corpus is written down: a
-        // change to which words are marked shows here and has to be looked at.
-        assert_eq!((marked_lines, marked_bytes), (10_030, 164_114));
+        // change to which words are marked shows here and has to be looked at. Two hunks
+        // of the corpus, both of `p0135`, hold too many words to be compared.
+        assert_eq!((marked_lines, marked_bytes), (10_018, 163_656));
     }
 }
