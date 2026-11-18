@@ -440,11 +440,25 @@ fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remo
  {
     let scratch = Scratch::new();
     let clone = a_clone(&scratch);
-    // One commit that reaches the remote under another branch, then two that reach no
-    // remote at all. `main` follows nothing.
+    // One commit that reaches the remote under another branch, one that reaches only a
+    // second remote, then two that reach no remote at all. `main` follows nothing.
     write(&clone, "a.txt", "three\n");
     let on_a_remote_branch = commit_all(&clone, "third, pushed to another branch");
     git(&clone, &["push", "--quiet", "origin", "main:topic"]);
+    git(scratch.path(), &["init", "--quiet", "--bare", "fork.git"]);
+    let fork = scratch.join("fork.git");
+    git(
+        &clone,
+        &[
+            "remote",
+            "add",
+            "fork",
+            fork.to_str().expect("a path of text"),
+        ],
+    );
+    write(&clone, "a.txt", "three and a half\n");
+    let on_a_second_remote = commit_all(&clone, "pushed to the second remote only");
+    git(&clone, &["push", "--quiet", "fork", "main:kept"]);
     write(&clone, "a.txt", "four\n");
     let fourth = commit_all(&clone, "fourth, on no remote");
     write(&clone, "b.txt", "new, and committed\n");
@@ -474,8 +488,16 @@ fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remo
     );
     assert_eq!(
         rev_list(&clone, &["HEAD", "--not", "origin/main"]).len(),
-        3,
+        4,
         "{on_a_remote_branch} is not on origin/main"
+    );
+    // A branch of any remote counts, not only of `origin`: the commit that reached
+    // only the second remote is left out as well, and the case is seen to tell the two
+    // lists apart.
+    assert_eq!(
+        rev_list(&clone, &["HEAD", "--not", "--remotes=origin"]).len(),
+        3,
+        "{on_a_second_remote} is on a branch of the second remote"
     );
 
     // The same with no default recorded by the remote: the base is `main` itself.
