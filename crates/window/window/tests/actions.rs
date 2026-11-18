@@ -20,7 +20,7 @@ use gpui_kit::{
     point, px,
 };
 use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, Place, Sends};
-use yaar_link::{Origin, Request, RequestKind, Workspace};
+use yaar_link::{Origin, Program, Request, RequestKind, Workspace};
 use yaar_system_tests::{DEADLINE, Repo, Tap, World};
 
 /// The composed Window of one test, in a world of its own, with a tap on its link.
@@ -40,9 +40,14 @@ struct Composed {
     made: u32,
 }
 
+/// Which request a step of the walk waits for on the tap.
+type Wanted = Box<dyn Fn(&Request) -> bool>;
+
 /// What the walk has to give when a control asks the user for something.
 #[derive(Debug)]
 enum Answer {
+    /// Nothing: the key alone sends the request.
+    Nothing,
     /// The folder to choose in the dialog.
     Folder(PathBuf),
     /// The line to type into the field, before Enter.
@@ -185,7 +190,8 @@ impl Composed {
     /// pressed where the focus happens to be.
     fn focus_where_the_key_works(&mut self, control: &Control, cx: &mut VisualTestContext) {
         match control.place {
-            Place::Anywhere => {}
+            // A kept key works wherever the focus is, as a key that works anywhere does.
+            Place::Anywhere | Place::Kept => {}
             Place::In(yaar_review_pane::KEY_CONTEXT) => {
                 // The first row of the Review pane, at its left end: an offer to set a
                 // base, where the row holds one, lies further right.
@@ -249,6 +255,7 @@ impl Composed {
     /// Gives what `control` asks the user for after its key.
     fn give(&mut self, control: &Control, answer: &Answer, cx: &mut VisualTestContext) {
         match (control.asks, answer) {
+            (Asks::Nothing, Answer::Nothing) => self.assert_asks_nothing(control, cx),
             (Asks::Folder, Answer::Folder(folder)) => {
                 assert!(
                     cx.did_prompt_for_paths(),
@@ -283,25 +290,52 @@ impl Composed {
         for control in controls {
             // No arm catches the rest: a kind added to the Link stops this from
             // compiling until somebody says here how to walk it.
-            let (answer, request) = match kind {
+            let (answer, wanted): (Answer, Wanted) = match kind {
                 RequestKind::OpenFolder => {
                     let folder = self.new_repository();
+                    let request = Request::OpenFolder {
+                        path: folder.clone(),
+                    };
                     (
-                        Answer::Folder(folder.clone()),
-                        Request::OpenFolder { path: folder },
+                        Answer::Folder(folder),
+                        Box::new(move |passed| *passed == request),
                     )
                 }
                 RequestKind::SetBase => {
                     let (on_screen, branch) = self.new_branch_on_screen(cx);
+                    let request = Request::SetBase {
+                        workspace: on_screen.id,
+                        base: branch.clone(),
+                    };
                     (
-                        Answer::Text(branch.clone()),
-                        Request::SetBase {
-                            workspace: on_screen.id,
-                            base: branch,
-                        },
+                        Answer::Text(branch),
+                        Box::new(move |passed| *passed == request),
                     )
                 }
-                RequestKind::ListWorkspaces | RequestKind::GetChanges | RequestKind::ReadFile => {
+                RequestKind::OpenTerminal => {
+                    // A shell for the workspace on screen, at whatever size the pane lays
+                    // a terminal out at. Only the step that asks for a terminal sends one.
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk opens a terminal");
+                    (
+                        Answer::Nothing,
+                        Box::new(move |passed| {
+                            matches!(
+                                passed,
+                                Request::OpenTerminal {
+                                    workspace,
+                                    program: Program::Shell,
+                                    ..
+                                } if *workspace == on_screen.id
+                            )
+                        }),
+                    )
+                }
+                RequestKind::ListWorkspaces
+                | RequestKind::GetChanges
+                | RequestKind::ReadFile
+                | RequestKind::ResizeTerminal => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
             };
@@ -309,10 +343,10 @@ impl Composed {
             self.press(&control, cx);
             self.give(&control, &answer, cx);
             // The Window writes a request before the action that asked returns, so it
-            // is on its way by now. The folder and the branch are new with each step:
-            // no request of an earlier step answers this wait.
-            self.tap
-                .wait_for_request(DEADLINE, |passed| *passed == request);
+            // is on its way by now. The folder and the branch are new with each step,
+            // and a terminal is asked for by this step alone: no request of an earlier
+            // step answers this wait.
+            self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.

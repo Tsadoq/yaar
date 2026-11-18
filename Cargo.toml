@@ -24,8 +24,10 @@ yaar-diff = { path = "crates/shared/diff" }
 yaar-recorder = { path = "crates/keeper/recorder" }
 yaar-store = { path = "crates/keeper/store" }
 yaar-workspaces = { path = "crates/keeper/workspaces" }
+yaar-dock = { path = "crates/keeper/dock" }
 yaar-frame = { path = "crates/window/frame" }
 yaar-review-pane = { path = "crates/window/review-pane" }
+yaar-terminal-pane = { path = "crates/window/terminal-pane" }
 yaar-system-tests = { path = "system-tests" }
 # GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
 # of patches/ and the speed check on the reference Mac.
@@ -45,6 +47,10 @@ ruzstd = "=0.9.1"
 rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled"] }
 # Hands what one thread reads to the thread that draws.
 async-channel = "2.5"
+# The terminal emulator of the Terminal pane, at an exact version: the app paints its
+# grid and encodes the keys itself, and the answers it gives programs rest on this
+# version's handling of the escape sequences. Without its optional serde support.
+alacritty_terminal = { version = "=0.26.0", default-features = false }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

@@ -12,6 +12,13 @@
 //! | `SetBase` | `Workspaces::set_base` | `ChangesChanged` of that workspace |
 //! | `GetChanges` | `Workspaces::changes` | none |
 //! | `ReadFile` | `Workspaces::file` | none |
+//! | `OpenTerminal` | `Dock::open`, in the folder of the workspace | none; later `TerminalEnded` |
+//! | `ResizeTerminal` | `Dock::resize` | none |
+//!
+//! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
+//! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
+//! that opened the terminal, and only after the reply that named it. When the program
+//! ends, every Window is told `Fact::TerminalEnded`, after the last output.
 //!
 //! The reply goes out before the facts. A Window that opened a folder therefore learns
 //! the id of the new workspace before the list that holds it.
@@ -36,7 +43,7 @@
 //! Nothing is watched yet. The list of workspaces is read from git when a Window asks
 //! for it, and no fact tells of a worktree or a branch that changed outside the app.
 
-use yaar_link::{Fact, Refusal, Reply, Request, RequestKind};
+use yaar_link::{Ending, Fact, Refusal, Reply, Request, RequestKind, TerminalSize};
 use yaar_recorder::{CommitId, Git};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
@@ -86,6 +93,9 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         RequestKind::ListWorkspaces => true,
         // What these read, no fact carries: a Window that is told of a change asks again.
         RequestKind::GetChanges | RequestKind::ReadFile => false,
+        // They lead to no fact, and a program that takes its time to start must not hold
+        // up the Windows' other questions.
+        RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
     }
 }
 
@@ -145,8 +155,33 @@ impl Parts {
                     })
                 })
                 .map_err(refusal),
+            Request::OpenTerminal { .. } | Request::ResizeTerminal { .. } => todo!(),
         };
         Outcome { reply, facts }
+    }
+
+    /// Hands what a Window typed to the program of `terminal`. Bytes for a terminal the
+    /// Dock does not hold, as one whose program has ended, are dropped: nothing answers
+    /// input.
+    pub(crate) fn input(&self, terminal: &yaar_link::TerminalId, bytes: &[u8]) {
+        let _ = (terminal, bytes);
+        todo!()
+    }
+}
+
+/// A size of the Link in the words of the Dock.
+fn size(size: TerminalSize) -> yaar_dock::Size {
+    yaar_dock::Size {
+        columns: size.columns,
+        rows: size.rows,
+    }
+}
+
+/// How a program ended, in the words of the Link.
+fn ending(ending: yaar_dock::Ending) -> Ending {
+    match ending {
+        yaar_dock::Ending::Exited(code) => Ending::Exited(code),
+        yaar_dock::Ending::Signalled(signal) => Ending::Signalled(signal),
     }
 }
 

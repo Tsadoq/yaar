@@ -9,7 +9,9 @@
 //! - [`init`], which prepares the app before a window opens;
 //! - [`open`], which opens the window with every pane, linked to the Keeper;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
-//!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them.
+//!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
+//! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
+//!   documented set of keys that never reach the program in a terminal.
 
 use std::path::PathBuf;
 
@@ -31,7 +33,16 @@ actions!(
 /// The panes of the Window, in the order they are laid out. Both [`controls`] and
 /// [`open`] read this list and nothing else about panes.
 pub fn panes() -> Vec<PaneEntry> {
-    vec![yaar_review_pane::entry()]
+    vec![yaar_review_pane::entry(), yaar_terminal_pane::entry()]
+}
+
+/// The documented set of keys that never reach a program in a terminal: every control of
+/// [`controls`] whose key works while a terminal has the focus. On macOS these are the
+/// Cmd keys of the app, the kept keys of the Frame and the terminal's own copy, paste and
+/// scrolling of the history; on Linux the kept keys and the terminal's own alone, since
+/// there the app's keys are Ctrl keys, and every other Ctrl key belongs to the program.
+pub fn kept_keys() -> Vec<Control> {
+    todo!()
 }
 
 /// Every action of the Window that has a key.

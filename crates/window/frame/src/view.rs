@@ -44,6 +44,31 @@ pub struct PaneEntry {
     pub build: fn() -> BuildPane,
 }
 
+/// Where the panes after the first lie, beside the first: the terminal pane beside the
+/// review pane, in the app as the Window program composes it. There is no other place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Beside {
+    /// To the right of the first pane. Where they lie until the user moves them.
+    #[default]
+    Right,
+    /// Below the first pane.
+    Below,
+    /// To the left of the first pane.
+    Left,
+}
+
+impl Beside {
+    /// The place [`crate::MovePanes`] moves the panes to from here: right, below, left,
+    /// and right again.
+    pub fn next(self) -> Beside {
+        match self {
+            Beside::Right => Beside::Below,
+            Beside::Below => Beside::Left,
+            Beside::Left => Beside::Right,
+        }
+    }
+}
+
 /// The root view of the window: the sidebar, the panes, and a line that says how the
 /// Window stands with the Keeper while there is nothing else to show.
 ///
@@ -55,7 +80,19 @@ pub struct PaneEntry {
 ///   screen there is nothing to set a base for, and no field opens;
 /// - [`crate::ToggleSidebar`] and [`crate::UnpinSidebar`] pin and unpin the sidebar;
 /// - [`crate::SelectNextWorkspace`] and [`crate::SelectPreviousWorkspace`] change the
-///   workspace on screen.
+///   workspace on screen;
+/// - [`crate::FocusNextPane`] and [`crate::FocusPreviousPane`] move the focus from pane
+///   to pane, in the order they are laid out, round from the last to the first;
+/// - [`crate::MovePanes`] moves the panes after the first to the next place of
+///   [`Beside`].
+///
+/// The first pane fills half the room beside the sidebar; the panes after it share the
+/// other half, one above the other when they lie to the right or the left of the first,
+/// side by side when they lie below it. Each pane is drawn inside an element with the
+/// selector `frame-pane-<name>`, which `debug_bounds` finds while it is drawn.
+///
+/// The Frame's root element hands every action a pane routed through
+/// [`crate::Models::routes`] to that pane.
 ///
 /// It shows the reason when the Keeper refuses what the user asked. Whenever the window
 /// comes to the front it asks for the list of workspaces and for the changes again,
@@ -199,6 +236,24 @@ impl Frame {
         self.composed.as_ref().map(|composed| &composed.sidebar)
     }
 
+    /// Where the panes after the first lie now. [`Beside::Right`] until the user moves
+    /// them; the choice lasts as long as the window. The Frame lays the panes out from
+    /// this value.
+    pub fn beside(&self) -> Beside {
+        todo!()
+    }
+
+    /// What the window says about a Keeper of an older version than its own, as the
+    /// sentence it draws under the selector `frame-keeper-note`; none with a Keeper of the
+    /// same version, of a newer one, or with none reached. It names the Keeper's version
+    /// and says that the Keeper and what it runs go on under that version: with another
+    /// protocol the window can ask that Keeper for nothing, with the same one it works
+    /// with it as it is.
+    pub fn keeper_note(&self, cx: &App) -> Option<String> {
+        let _ = cx;
+        todo!()
+    }
+
     /// The names of the panes, in the order they are laid out.
     pub fn panes(&self) -> Vec<&'static str> {
         self.composed
@@ -234,6 +289,7 @@ impl Frame {
                 keeper.app_version
             ),
             LinkStatus::Failed(why) => format!("No Keeper: {why}"),
+            LinkStatus::Lost(why) => format!("The Keeper went away: {why}"),
         }
     }
 
@@ -508,6 +564,7 @@ impl Render for Frame {
                 .child(self.status_line(cx))
         });
 
+        let root = composed.models.routes.apply(root);
         root.flex()
             .flex_row()
             .track_focus(&composed.focus)

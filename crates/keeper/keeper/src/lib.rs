@@ -423,8 +423,23 @@ fn converse(window: &Window, speaks: bool, shared: &Shared) -> Result<(), LinkEr
                     return Ok(());
                 }
             }
-            // Only the Keeper answers and tells.
-            Ok(Message::Reply { .. } | Message::Fact(_)) => {
+            Ok(Message::Input { .. }) if !speaks => {
+                return Err(LinkError::Malformed(
+                    "a Window of another version asked for more than the stop",
+                ));
+            }
+            Ok(Message::Input { terminal, bytes }) => {
+                if let Some(parts) = shared
+                    .parts
+                    .read()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .as_ref()
+                {
+                    parts.input(&terminal, &bytes);
+                }
+            }
+            // Only the Keeper answers, tells, and passes on what a program wrote.
+            Ok(Message::Reply { .. } | Message::Fact(_) | Message::Output { .. }) => {
                 return Err(LinkError::Malformed(
                     "a Window sent what only the Keeper sends",
                 ));

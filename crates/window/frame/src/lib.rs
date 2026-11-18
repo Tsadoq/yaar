@@ -17,30 +17,37 @@
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
-//!   context the Frame sets around everything it draws;
+//!   context the Frame sets around everything it draws, and [`PROGRAM_CONTEXT`] the one
+//!   an element sets that hands every key to a program;
+//! - [`Routes`], through which a pane takes actions run anywhere in the window, and
+//!   [`Beside`], where the panes after the first lie;
 //! - [`keeper`], which finds or starts the Keeper. It uses no interface code;
 //! - [`trace`], the marks by which a start is timed from outside.
 //!
 //! How the parts of the Window talk. What the Keeper tells arrives at the [`KeeperLink`]
 //! and changes a shared model; a pane observes the models it shows. A pane that needs
 //! more asks the Keeper through the models. What the user wants travels as an action,
-//! which the Frame or the pane with the focus handles. No pane holds another pane.
+//! which the Frame or the pane with the focus handles, or the pane that routed it through
+//! [`Routes`]. No pane holds another pane.
 
 mod controls;
 pub mod keeper;
 mod link_model;
 mod models;
+mod routes;
 mod sidebar;
 pub mod trace;
 mod view;
 
 pub use controls::{
-    Asks, Control, KEY_CONTEXT, OpenFolder, Place, SelectNextWorkspace, SelectPreviousWorkspace,
-    Sends, SetBase, ToggleSidebar, UnpinSidebar, bind, controls,
+    Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
+    PROGRAM_CONTEXT, Place, SelectNextWorkspace, SelectPreviousWorkspace, Sends, SetBase,
+    ToggleSidebar, UnpinSidebar, bind, controls,
 };
-pub use link_model::{AskError, KeeperLink, LinkStatus};
+pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
+pub use routes::Routes;
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
 };
-pub use view::{BuildPane, Frame, Opened, Pane, PaneEntry, open};
+pub use view::{Beside, BuildPane, Frame, Opened, Pane, PaneEntry, open};

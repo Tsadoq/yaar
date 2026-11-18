@@ -156,6 +156,17 @@ impl World {
         }
     }
 
+    /// A program of this world that writes down what it receives on a terminal, and
+    /// returns its path: a program the app knows nothing of.
+    ///
+    /// Started with the path of a file as its one argument, as when that line is typed
+    /// in a shell of the app, it puts its terminal into raw mode with no echo and then
+    /// appends every byte it reads to the file, as it reads it, unchanged. It reads until
+    /// its terminal ends. The file therefore holds exactly the bytes the program received.
+    pub fn key_recorder(&self) -> PathBuf {
+        todo!()
+    }
+
     /// A scripted client attached to the Keeper of this world, as a Window would attach.
     pub fn client(&self) -> Client {
         Client::attach(&self.socket())

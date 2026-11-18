@@ -15,9 +15,9 @@ use std::time::{Duration, Instant};
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, Fact, FileSides,
-    FileStatus, Head, Hello, MAX_CONTENT, Message, PROTOCOL_VERSION, Refusal, Reply, Repository,
-    Request, RequestId, RequestKind, Workspace, WorkspaceId, handshake, read_message,
-    write_message,
+    FileStatus, Head, Hello, MAX_CONTENT, Message, PROTOCOL_VERSION, Program, Refusal, Reply,
+    Repository, Request, RequestId, RequestKind, TerminalId, TerminalSize, Workspace, WorkspaceId,
+    handshake, read_message, write_message,
 };
 
 /// What the one file of a new repository holds.
@@ -479,6 +479,21 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                 since: None,
                 old_path: PathBuf::from("a.txt"),
                 path: PathBuf::from("a.txt"),
+            },
+            RequestKind::OpenTerminal => Request::OpenTerminal {
+                workspace: workspace.clone(),
+                program: Program::Shell,
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
+            },
+            RequestKind::ResizeTerminal => Request::ResizeTerminal {
+                terminal: TerminalId::new("0".repeat(32)),
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
             },
         };
         assert_eq!(

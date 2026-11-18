@@ -18,6 +18,7 @@ use yaar_link::{
 };
 
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
+use crate::routes::Routes;
 
 /// The shared models, as one handle. Cheap to clone.
 #[derive(Clone)]
@@ -28,6 +29,8 @@ pub struct Models {
     pub workspaces: Entity<WorkspaceList>,
     /// The changes of the workspace on screen.
     pub changes: Entity<WorkspaceChanges>,
+    /// Where a pane puts the actions it takes from wherever the focus is in the window.
+    pub routes: Routes,
 }
 
 impl Models {
@@ -39,6 +42,7 @@ impl Models {
             link,
             workspaces,
             changes,
+            routes: Routes::default(),
         }
     }
 }

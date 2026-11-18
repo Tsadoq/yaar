@@ -16,6 +16,12 @@
 //! the context of that pane. A row of a table says where its key works, and
 //! [`Control::context`] alone says which context that is on the system the app is built
 //! for.
+//!
+//! A program in a terminal takes every key but a few. The element that shows such a
+//! program sets [`PROGRAM_CONTEXT`]. There a key of the Frame or of the Window program
+//! works only where it is a Cmd key, on macOS; every other key reaches the program, except
+//! the documented kept keys: a row with [`Place::Kept`], and a row bound in
+//! [`PROGRAM_CONTEXT`] itself, as a terminal's own copy and paste.
 
 use gpui_kit::*;
 use yaar_link::RequestKind;
@@ -37,12 +43,25 @@ actions!(
         SelectNextWorkspace,
         /// Puts the previous workspace of the sidebar on screen.
         SelectPreviousWorkspace,
+        /// Moves the focus to the next pane, in the order the panes are laid out, and from
+        /// the last to the first.
+        FocusNextPane,
+        /// Moves the focus to the previous pane, and from the first to the last.
+        FocusPreviousPane,
+        /// Moves the panes after the first to the next place beside the first: from the
+        /// right to below it, from below to its left, from its left to the right. See
+        /// [`crate::Beside`].
+        MovePanes,
     ]
 );
 
 /// The key context of the Frame. Its root element sets it, so it holds wherever the focus
 /// is in what the Frame draws, a pane included.
 pub const KEY_CONTEXT: &str = "Frame";
+
+/// The key context of an element that hands every key to a program, as a terminal does.
+/// Inside it only the kept keys run actions of the app: see the doc of this module.
+pub const PROGRAM_CONTEXT: &str = "Program";
 
 /// Whether `secondary`, the modifier of the app's own keys, is the Cmd key on the system
 /// the app is built for. It is on macOS, and it is Ctrl on every other system.
@@ -55,6 +74,10 @@ pub enum Place {
     Anywhere,
     /// Where this GPUI key context is, and nowhere else: a key of a pane.
     In(&'static str),
+    /// Wherever the focus is in the window, a program in a terminal included: one of the
+    /// documented kept keys of the Frame, which never reach a program. It is bound with
+    /// [`KEY_CONTEXT`] on every system, since it is no Cmd key.
+    Kept,
 }
 
 impl Place {
@@ -64,6 +87,7 @@ impl Place {
     fn context(self, secondary_is_cmd: bool) -> Option<&'static str> {
         match self {
             Place::In(context) => Some(context),
+            Place::Kept => Some(KEY_CONTEXT),
             Place::Anywhere if secondary_is_cmd => None,
             Place::Anywhere => Some(KEY_CONTEXT),
         }

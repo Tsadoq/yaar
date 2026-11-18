@@ -10,7 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use gpui_kit::*;
 use yaar_link::{
-    Fact, Hello, Message, Refusal, Reply, Request, RequestId, read_message, write_message,
+    Fact, Hello, Message, Refusal, Reply, Request, RequestId, TerminalId, read_message,
+    write_message,
 };
 
 use crate::keeper::Attached;
@@ -27,6 +28,11 @@ pub enum LinkStatus {
     OtherVersion(Hello),
     /// No Keeper could be reached.
     Failed(String),
+    /// The connection to a Keeper of the Window's protocol ended, for the reason given:
+    /// the Keeper closed it or went away, it failed, it took nothing for too long, or the
+    /// Keeper sent what a Keeper does not say. Nothing is asked or sent on it any more,
+    /// and the Window does not look for a Keeper again by itself.
+    Lost(String),
 }
 
 /// Why a question to the Keeper brought no answer.
@@ -60,8 +66,13 @@ impl std::error::Error for AskError {}
 /// - Observing it tells when [`KeeperLink::status`] changes.
 /// - [`KeeperLink::ask`] sends a request and gives its answer.
 /// - Subscribing to it gives every [`Fact`] the Keeper tells, in the order they arrive.
+/// - [`KeeperLink::send_input`] sends what is typed into a terminal, and
+///   [`KeeperLink::take_output`] gives what the program of a terminal writes.
 ///
-/// Nothing else in the Window writes to the connection or reads from it.
+/// Nothing else in the Window writes to the connection or reads from it. One thread of
+/// the link's own writes every frame, in the order they were given, so that no call made
+/// on the thread that draws ever waits for the Keeper to read. A Keeper that takes
+/// nothing of a frame for 5 seconds is let go: the status becomes [`LinkStatus::Lost`].
 ///
 /// An answer and a fact reach those who wait for them in no order the Window could rely
 /// on: an answer the Keeper wrote before a fact may be heard after it. Whoever keeps
@@ -134,6 +145,12 @@ impl Shared {
         }
     }
 
+    /// Keeps output of a terminal for whoever takes it: see [`KeeperLink::take_output`].
+    fn output(&self, terminal: TerminalId, bytes: Vec<u8>) {
+        let _ = (terminal, bytes);
+        todo!()
+    }
+
     /// Ends the connection: nothing more is asked, and everyone who waits learns that
     /// no answer comes, by the channel of the answer closing.
     fn end(&self) {
@@ -188,13 +205,37 @@ fn read(mut stream: UnixStream, shared: &Shared) {
                     break;
                 }
             }
+            Ok(Message::Output { terminal, bytes }) => shared.output(terminal, bytes),
             // The Keeper closed, the connection failed, or what came is nothing a Keeper
             // says after its hello. After any of them the next bytes cannot be trusted.
-            Ok(Message::Hello(_) | Message::Shutdown | Message::Request { .. }) | Err(_) => break,
+            Ok(
+                Message::Hello(_)
+                | Message::Shutdown
+                | Message::Request { .. }
+                | Message::Input { .. },
+            )
+            | Err(_) => break,
         }
     }
     shared.end();
     let _ = stream.shutdown(Shutdown::Both);
+}
+
+/// What the program of one terminal writes, as the Window reads it: see
+/// [`KeeperLink::take_output`].
+pub struct TerminalOutput(async_channel::Receiver<Vec<u8>>);
+
+impl TerminalOutput {
+    /// The next bytes the program wrote, waiting until they arrive; none once its output
+    /// has ended.
+    pub async fn next(&self) -> Option<Vec<u8>> {
+        self.0.recv().await.ok()
+    }
+
+    /// The next bytes the program wrote, if they have arrived; does not wait.
+    pub fn ready(&self) -> Option<Vec<u8>> {
+        self.0.try_recv().ok()
+    }
 }
 
 impl EventEmitter<Fact> for KeeperLink {}
@@ -211,12 +252,14 @@ impl KeeperLink {
     /// Asks the Keeper, and resolves with its reply or its refusal. The reply is of
     /// whatever kind the Keeper sent: the caller checks that it is the kind it asked for.
     ///
-    /// The request is written before this returns, so requests reach the Keeper in the
-    /// order they were asked. The answer comes when the Keeper sends it; dropping the
-    /// task drops the answer and takes nothing back. While the status is anything but
+    /// The request is handed to the writing thread before this returns, so requests and
+    /// input reach the Keeper in the order they were given; this never waits for the
+    /// Keeper to read. The answer comes when the Keeper sends it; dropping the task drops
+    /// the answer and takes nothing back. While the status is anything but
     /// [`LinkStatus::Connected`] nothing is sent and the task resolves to
     /// [`AskError::NotLinked`]; so does every waiting task when the connection ends, and
-    /// every later one. The status does not change when the connection ends.
+    /// every later one. When the connection ends the status becomes
+    /// [`LinkStatus::Lost`].
     ///
     /// A request too long for one frame is not sent either; it is refused with
     /// [`Refusal::Failed`], and the connection goes on.
@@ -267,6 +310,27 @@ impl KeeperLink {
             Ok(Err(refusal)) => Err(AskError::Refused(refusal)),
             Err(_) => Err(AskError::NotLinked),
         })
+    }
+
+    /// Sends `bytes` to the program of `terminal`, as one [`Message::Input`] frame: what
+    /// the user typed or pasted, or what the terminal answers the program. It leaves after
+    /// every request and every input given before it, and nothing answers it. While the
+    /// status is anything but [`LinkStatus::Connected`] the bytes are dropped.
+    pub fn send_input(&mut self, terminal: &TerminalId, bytes: Vec<u8>) {
+        let _ = (terminal, bytes);
+        todo!()
+    }
+
+    /// What the program of `terminal` writes, from the first [`Message::Output`] of that
+    /// terminal the link read on: output that arrives before this is called waits for
+    /// it, so nothing between the reply that named the terminal and this call is lost.
+    /// Given once for each terminal; a second call gives none.
+    ///
+    /// The bytes end, after the last of them, when the Keeper tells
+    /// [`Fact::TerminalEnded`] for the terminal, and when the connection ends.
+    pub fn take_output(&mut self, terminal: &TerminalId) -> Option<TerminalOutput> {
+        let _ = terminal;
+        todo!()
     }
 
     /// How the Window stands with the Keeper.

@@ -24,7 +24,11 @@ pub enum Descriptor {
     OtherSocket(String),
     /// One end of a pipe.
     Pipe,
-    /// A file, a folder, a device, or anything else that is no socket and no pipe.
+    /// A terminal device: the end of a pseudo-terminal the Keeper holds, or the terminal a
+    /// program runs on. Neither is a socket.
+    Terminal,
+    /// A file, a folder, a device that is no terminal, or anything else that is no
+    /// socket and no pipe.
     File,
 }
 

@@ -18,7 +18,8 @@ use std::time::{Duration, Instant};
 
 use yaar_link::{
     ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Refusal, Reply, Repository,
-    RepositoryId, Request, RequestId, WorkspaceId, handshake, read_message, write_message,
+    RepositoryId, Request, RequestId, TerminalId, TerminalSize, WorkspaceId, handshake,
+    read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -27,7 +28,9 @@ pub const DEADLINE: Duration = Duration::from_secs(10);
 /// A connection to a Keeper, speaking the Link as a Window speaks it.
 ///
 /// There is one call for each request of the Link. Facts that arrive while a call waits
-/// for its reply are kept, in order, for [`Client::wait_for_fact`].
+/// for its reply are kept, in order, for [`Client::wait_for_fact`]. What the program of a
+/// terminal writes is kept, as the bytes that came, for [`Client::wait_for_output`],
+/// whichever call was waiting when it arrived.
 pub struct Client {
     stream: UnixStream,
     keeper: Hello,
@@ -159,6 +162,51 @@ impl Client {
             Reply::File(sides) => Ok(sides),
             other => panic!("asked for a file, the Keeper answered {other:?}"),
         }
+    }
+
+    /// Opens a terminal with the user's shell in it for a workspace, at `size`, and
+    /// returns its id.
+    pub fn open_terminal(
+        &mut self,
+        workspace: &WorkspaceId,
+        size: TerminalSize,
+    ) -> Result<TerminalId, Refusal> {
+        let _ = (workspace, size);
+        todo!()
+    }
+
+    /// Tells the Keeper that a terminal is shown at a new size.
+    pub fn resize_terminal(
+        &mut self,
+        terminal: &TerminalId,
+        size: TerminalSize,
+    ) -> Result<(), Refusal> {
+        let _ = (terminal, size);
+        todo!()
+    }
+
+    /// Sends bytes to the program of a terminal, as a Window sends what the user types.
+    /// Nothing answers them.
+    pub fn type_into(&mut self, terminal: &TerminalId, bytes: &[u8]) {
+        let _ = (terminal, bytes);
+        todo!()
+    }
+
+    /// Waits until everything the program of `terminal` has written so far, as one run
+    /// of bytes, is accepted by `wanted`, and returns that run. Panics, with what came,
+    /// when it is not accepted within `limit`.
+    ///
+    /// A test that types a command and waits for its answer should look for text the
+    /// command prints and does not hold itself, as `echo yaar-$((40 + 2))` prints
+    /// `yaar-42`: the terminal echoes what is typed.
+    pub fn wait_for_output(
+        &mut self,
+        terminal: &TerminalId,
+        limit: Duration,
+        wanted: impl FnMut(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let _ = (terminal, limit, wanted);
+        todo!()
     }
 
     /// Waits for a fact that `wanted` accepts, among those kept and those still to

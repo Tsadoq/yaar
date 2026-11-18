@@ -8,6 +8,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::LinkError;
+use crate::terminal::{
+    Ending, Program, TerminalId, TerminalSize, read_ending, read_program, read_size, write_ending,
+    write_program, write_size,
+};
 use crate::wire::{In, Out};
 use crate::workspace::{
     Changes, FileSides, Repository, RepositoryId, WorkspaceId, read_changes, read_repository,
@@ -88,6 +92,10 @@ request_kinds! {
     GetChanges = 4, Window;
     /// See [`Request::ReadFile`].
     ReadFile = 5, Window;
+    /// See [`Request::OpenTerminal`].
+    OpenTerminal = 6, User;
+    /// See [`Request::ResizeTerminal`].
+    ResizeTerminal = 7, Window;
 }
 
 impl RequestKind {
@@ -147,6 +155,32 @@ pub enum Request {
         /// The path of the file now, relative to the folder of the worktree.
         path: PathBuf,
     },
+    /// Open a new terminal for a workspace and start `program` in it, in the folder of
+    /// the worktree, at `size`. Answered by [`Reply::TerminalOpened`]; refused when the
+    /// Keeper knows no such workspace or the program cannot be started.
+    ///
+    /// From the reply on, what the program writes comes to the Window that asked, as
+    /// [`crate::Message::Output`] frames, and what the Window sends as
+    /// [`crate::Message::Input`] goes to the program. The reply reaches the Window before
+    /// the first output of the terminal, and no output is lost in between. When the
+    /// program ends, every Window is told [`Fact::TerminalEnded`], after the last output.
+    OpenTerminal {
+        /// The workspace the terminal belongs to.
+        workspace: WorkspaceId,
+        /// What to run in it.
+        program: Program,
+        /// How large the Window will show it.
+        size: TerminalSize,
+    },
+    /// The Window shows a terminal at another size now: tell its program. Answered by
+    /// [`Reply::Done`]; refused with [`Refusal::UnknownTerminal`] when the Keeper holds no
+    /// such terminal, as after its program ended.
+    ResizeTerminal {
+        /// The terminal.
+        terminal: TerminalId,
+        /// Its new size.
+        size: TerminalSize,
+    },
 }
 
 impl Request {
@@ -158,6 +192,8 @@ impl Request {
             Self::SetBase { .. } => RequestKind::SetBase,
             Self::GetChanges { .. } => RequestKind::GetChanges,
             Self::ReadFile { .. } => RequestKind::ReadFile,
+            Self::OpenTerminal { .. } => RequestKind::OpenTerminal,
+            Self::ResizeTerminal { .. } => RequestKind::ResizeTerminal,
         }
     }
 }
@@ -180,6 +216,11 @@ pub enum Reply {
     Changes(Changes),
     /// The two versions of the file asked about.
     File(FileSides),
+    /// The terminal is open and its program started.
+    TerminalOpened {
+        /// The name of the new terminal.
+        terminal: TerminalId,
+    },
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -222,8 +263,14 @@ pub enum Refusal {
         /// The path that was given.
         path: PathBuf,
     },
-    /// Something the user cannot mend from here went wrong: git is missing or failed, or
-    /// the database could not be written.
+    /// The Keeper holds no terminal by this id: it never opened one, or its program has
+    /// ended.
+    UnknownTerminal {
+        /// The id that was given.
+        terminal: TerminalId,
+    },
+    /// Something the user cannot mend from here went wrong: git is missing or failed, the
+    /// database could not be written, or a program could not be started.
     Failed {
         /// What went wrong, as a sentence.
         reason: String,
@@ -260,6 +307,9 @@ impl fmt::Display for Refusal {
             Self::OutsideWorkspace { path } => {
                 write!(f, "{} is outside the worktree", path.display())
             }
+            Self::UnknownTerminal { terminal } => {
+                write!(f, "there is no terminal {terminal}")
+            }
             Self::Failed { reason } => f.write_str(reason),
         }
     }
@@ -281,6 +331,14 @@ pub enum Fact {
     ChangesChanged {
         /// The workspace.
         workspace: WorkspaceId,
+    },
+    /// The program of this terminal has ended, and the Keeper holds the terminal no more.
+    /// Told after the last [`crate::Message::Output`] of the terminal.
+    TerminalEnded {
+        /// The terminal.
+        terminal: TerminalId,
+        /// How its program ended.
+        ending: Ending,
     },
 }
 
@@ -306,6 +364,19 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.path(old_path);
             out.path(path);
         }
+        Request::OpenTerminal {
+            workspace,
+            program,
+            size,
+        } => {
+            out.text(workspace.as_str());
+            write_program(out, program);
+            write_size(out, *size);
+        }
+        Request::ResizeTerminal { terminal, size } => {
+            out.text(terminal.as_str());
+            write_size(out, *size);
+        }
     }
 }
 
@@ -330,6 +401,15 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
             since: input.optional(In::text)?,
             old_path: input.path()?,
             path: input.path()?,
+        },
+        RequestKind::OpenTerminal => Request::OpenTerminal {
+            workspace: WorkspaceId::new(input.text()?),
+            program: read_program(input)?,
+            size: read_size(input)?,
+        },
+        RequestKind::ResizeTerminal => Request::ResizeTerminal {
+            terminal: TerminalId::new(input.text()?),
+            size: read_size(input)?,
         },
     };
     Ok((id, request))
@@ -361,6 +441,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::File(sides) => {
                     out.u16(4);
                     write_sides(out, sides);
+                }
+                Reply::TerminalOpened { terminal } => {
+                    out.u16(5);
+                    out.text(terminal.as_str());
                 }
             }
         }
@@ -399,6 +483,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                     out.u16(8);
                     out.path(path);
                 }
+                Refusal::UnknownTerminal { terminal } => {
+                    out.u16(9);
+                    out.text(terminal.as_str());
+                }
             }
         }
     }
@@ -418,6 +506,9 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             },
             3 => Reply::Changes(read_changes(input)?),
             4 => Reply::File(read_sides(input)?),
+            5 => Reply::TerminalOpened {
+                terminal: TerminalId::new(input.text()?),
+            },
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {
@@ -445,6 +536,9 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             8 => Refusal::CopiedWorktree {
                 path: input.path()?,
             },
+            9 => Refusal::UnknownTerminal {
+                terminal: TerminalId::new(input.text()?),
+            },
             _ => return Err(LinkError::Malformed("unknown kind of refusal")),
         }),
         _ => return Err(LinkError::Malformed("a reply is neither done nor refused")),
@@ -462,6 +556,11 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.u16(2);
             out.text(workspace.as_str());
         }
+        Fact::TerminalEnded { terminal, ending } => {
+            out.u16(3);
+            out.text(terminal.as_str());
+            write_ending(out, *ending);
+        }
     }
 }
 
@@ -470,6 +569,10 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
         1 => Fact::Workspaces(input.list(read_repository)?),
         2 => Fact::ChangesChanged {
             workspace: WorkspaceId::new(input.text()?),
+        },
+        3 => Fact::TerminalEnded {
+            terminal: TerminalId::new(input.text()?),
+            ending: read_ending(input)?,
         },
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })
