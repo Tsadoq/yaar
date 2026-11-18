@@ -378,6 +378,14 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
     let mut checked = 0;
     for control in kept.iter().filter(|control| control.key() != quit) {
         walk.click_into_the_recorder();
+        // A key that works anywhere would run its action wherever the focus is, so the
+        // focus is checked before the press and not left to the sentinel that follows.
+        if !walk.in_the_recorder() {
+            walk.differences.push(format!(
+                "{}: the focus was not in the recorder before it",
+                control.title
+            ));
+        }
         let ran = walk.press(&control.key());
         let name = (control.action)().name();
         if ran != [name] {
@@ -419,8 +427,13 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
             walk.differences
                 .push(format!("{title} twice: the focus is not in the recorder"));
         }
-        // It reaches the file, which the wait for it shows.
-        walk.sentinel();
+        // Neither press sent the program anything: the sentinel is the first thing the
+        // file gains.
+        let sent = walk.sentinel();
+        if !sent.is_empty() {
+            walk.differences
+                .push(format!("{title} twice: the program received {sent:02x?}"));
+        }
         checked += 1;
     }
     walk.assert_no_difference("kept keys with a terminal focused", checked);
