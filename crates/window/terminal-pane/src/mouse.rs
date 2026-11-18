@@ -7,21 +7,7 @@
 
 use gpui_kit::Modifiers;
 
-use crate::keys::Modes;
-
-/// Which mouse actions a program asked to be told of.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum MouseMode {
-    /// None.
-    #[default]
-    Off,
-    /// Presses and releases, and the wheel (mode 1000).
-    Click,
-    /// Those, and moves while a button is held (mode 1002).
-    Drag,
-    /// Those, and every move (mode 1003).
-    Motion,
-}
+use crate::modes::Modes;
 
 /// A button of the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

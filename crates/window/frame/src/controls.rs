@@ -22,6 +22,10 @@
 //! works only where it is a Cmd key, on macOS; every other key reaches the program, except
 //! the documented kept keys: a row with [`Place::Kept`], and a row bound in
 //! [`PROGRAM_CONTEXT`] itself, as a terminal's own copy and paste.
+//!
+//! The toolkit binds a few keys of its own for the whole window: Tab and Shift-Tab, which
+//! move the focus between fields, and, off macOS, Ctrl-C and Ctrl-Shift-I. A program needs
+//! them, and [`release_program_keys`] gives them back to it.
 
 use gpui_kit::*;
 use yaar_link::RequestKind;
@@ -70,13 +74,18 @@ const SECONDARY_IS_CMD: bool = cfg!(target_os = "macos");
 /// Where the key of a control works.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Place {
-    /// Wherever the focus is in the window: a key of the Frame or of the Window program.
+    /// Wherever the focus is in the window, except, on a system where `secondary` is not
+    /// the Cmd key, inside an element that sets [`PROGRAM_CONTEXT`]: there the key goes
+    /// to the program. A key of the Frame, of the Window program, or a pane's key that
+    /// works from anywhere.
     Anywhere,
     /// Where this GPUI key context is, and nowhere else: a key of a pane.
     In(&'static str),
-    /// Wherever the focus is in the window, a program in a terminal included: one of the
-    /// documented kept keys of the Frame, which never reach a program. It is bound with
-    /// [`KEY_CONTEXT`] on every system, since it is no Cmd key.
+    /// Wherever the focus is in the window, inside an element that sets
+    /// [`PROGRAM_CONTEXT`] too, on every system: one of the documented kept keys of the
+    /// Frame, which never reach a program. The only place of a key of the Frame that works
+    /// inside a program off macOS. It is bound with [`KEY_CONTEXT`] on every system, since
+    /// it is no Cmd key.
     Kept,
 }
 
@@ -144,6 +153,40 @@ impl Control {
     pub fn context(&self) -> Option<&'static str> {
         self.place.context(SECONDARY_IS_CMD)
     }
+
+    /// The key as [`bind`] binds it on the system the app is built for: the keystroke
+    /// with `secondary` written out, as `cmd` where it is the Cmd key and as `ctrl`
+    /// elsewhere; every other key as the table writes it. `secondary-alt-p` is
+    /// `cmd-alt-p` on macOS and `ctrl-alt-p` on Linux.
+    pub fn key(&self) -> String {
+        todo!()
+    }
+}
+
+/// The keys the toolkit binds for the whole window that a program in a terminal must
+/// get: Tab and Shift-Tab, which the toolkit's root binds to move the focus, and off
+/// macOS Ctrl-C, which it binds to copy, and Ctrl-Shift-I, which opens the inspector in a
+/// build with debug assertions. On macOS the toolkit's copy and inspector are Cmd keys,
+/// which are the app's.
+pub const PROGRAM_KEYS: &[&str] = if SECONDARY_IS_CMD {
+    &["tab", "shift-tab"]
+} else {
+    &["tab", "shift-tab", "ctrl-c", "ctrl-shift-i"]
+};
+
+/// Gives a program the keys of [`PROGRAM_KEYS`] back: binds each to nothing in
+/// [`PROGRAM_CONTEXT`]. A binding to nothing in a deeper context hides the bindings of the
+/// same key that it outranks, so the key goes on, as no action, to the element that shows
+/// the program, whose key listener sends it.
+///
+/// Call it after `gpui_kit::init`: of two bindings at the same depth the later wins, and
+/// the toolkit binds the inspector's key with no context, which is as deep as any.
+pub fn release_program_keys(cx: &mut App) {
+    cx.bind_keys(
+        PROGRAM_KEYS
+            .iter()
+            .map(|key| KeyBinding::new(key, NoAction, Some(PROGRAM_CONTEXT))),
+    );
 }
 
 /// The actions of the Frame itself.

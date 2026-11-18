@@ -249,6 +249,10 @@ impl Frame {
     /// and says that the Keeper and what it runs go on under that version: with another
     /// protocol the window can ask that Keeper for nothing, with the same one it works
     /// with it as it is.
+    ///
+    /// The window's own version is this crate's. The workspace gives every crate the
+    /// app's one version, and the Window program tells the Keeper the same in its hello,
+    /// so the two cannot differ.
     pub fn keeper_note(&self, cx: &App) -> Option<String> {
         let _ = cx;
         todo!()

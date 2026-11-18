@@ -312,10 +312,12 @@ impl KeeperLink {
         })
     }
 
-    /// Sends `bytes` to the program of `terminal`, as one [`Message::Input`] frame: what
-    /// the user typed or pasted, or what the terminal answers the program. It leaves after
-    /// every request and every input given before it, and nothing answers it. While the
-    /// status is anything but [`LinkStatus::Connected`] the bytes are dropped.
+    /// Sends `bytes` to the program of `terminal`, as [`Message::Input`] frames: what
+    /// the user typed or pasted, or what the terminal answers the program. Bytes are cut
+    /// into frames of at most 64 KiB, in order, so that a paste of any length goes out and
+    /// no frame is too long for the Link. They leave after every request and every input
+    /// given before them, and nothing answers them. While the status is anything but
+    /// [`LinkStatus::Connected`] the bytes are dropped.
     pub fn send_input(&mut self, terminal: &TerminalId, bytes: Vec<u8>) {
         let _ = (terminal, bytes);
         todo!()

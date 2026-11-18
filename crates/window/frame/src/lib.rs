@@ -18,7 +18,8 @@
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
 //!   context the Frame sets around everything it draws, and [`PROGRAM_CONTEXT`] the one
-//!   an element sets that hands every key to a program;
+//!   an element sets that hands every key to a program, which [`release_program_keys`]
+//!   gives the keys the toolkit binds for the whole window;
 //! - [`Routes`], through which a pane takes actions run anywhere in the window, and
 //!   [`Beside`], where the panes after the first lie;
 //! - [`keeper`], which finds or starts the Keeper. It uses no interface code;
@@ -41,8 +42,8 @@ mod view;
 
 pub use controls::{
     Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
-    PROGRAM_CONTEXT, Place, SelectNextWorkspace, SelectPreviousWorkspace, Sends, SetBase,
-    ToggleSidebar, UnpinSidebar, bind, controls,
+    PROGRAM_CONTEXT, PROGRAM_KEYS, Place, SelectNextWorkspace, SelectPreviousWorkspace, Sends,
+    SetBase, ToggleSidebar, UnpinSidebar, bind, controls, release_program_keys,
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};

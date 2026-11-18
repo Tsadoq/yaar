@@ -37,11 +37,14 @@ impl fmt::Display for TerminalId {
 }
 
 /// The size of a terminal, in character cells: what its program is told it has.
+///
+/// The Link carries any value. The Keeper takes a 0 as 1, since a terminal holds at least
+/// one cell each way.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerminalSize {
-    /// How many characters a line holds. At least 1.
+    /// How many characters a line holds.
     pub columns: u16,
-    /// How many lines the screen holds. At least 1.
+    /// How many lines the screen holds.
     pub rows: u16,
 }
 

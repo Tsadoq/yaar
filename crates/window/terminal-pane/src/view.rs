@@ -6,7 +6,14 @@
 //! [`crate::encode_key`] encodes; a key that types text is left to the view's input
 //! handler, which sends the committed text and holds marked text while an input method
 //! or a dead key composes. The view sets [`yaar_frame::PROGRAM_CONTEXT`], so that no key
-//! of the Frame that is no Cmd key and no kept key fires while it has the focus.
+//! of the Frame that is no Cmd key and no kept key fires while it has the focus, and so
+//! that the keys the toolkit binds for the whole window reach the program too
+//! ([`yaar_frame::release_program_keys`]).
+//!
+//! The painter lays the grid of cells from the top left corner of the view's element,
+//! with no margin: the cell at column `c` and line `l` starts `c` cell widths right of the
+//! element's left edge and `l` cell heights below its top edge, and the terminal has as
+//! many columns and lines as whole cells fit.
 
 use std::ops::Range;
 

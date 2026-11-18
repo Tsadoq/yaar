@@ -17,7 +17,7 @@ use alacritty_terminal::Term;
 use alacritty_terminal::event::{Event, EventListener};
 use yaar_link::TerminalSize;
 
-use crate::keys::Modes;
+use crate::modes::Modes;
 
 /// How many lines a terminal keeps above its screen.
 pub const HISTORY_LINES: usize = 10_000;

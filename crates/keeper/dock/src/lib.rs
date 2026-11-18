@@ -5,13 +5,18 @@
 //! Surface:
 //! - [`Dock`], which opens terminals, hands each the bytes typed for it, tells it its new
 //!   size, tells what its program writes and how the program ended, and stops them all;
+//! - [`TerminalId::random`], the id a caller gives a terminal before it is opened, so
+//!   that the caller can name it in the program's environment;
 //! - [`Start`], what a terminal runs, with [`Start::shell`] for the user's shell and
 //!   [`Start::program`] for any other program, and [`user_shell`];
 //! - [`Size`], [`TerminalId`], [`Event`], [`Ending`] and [`DockError`], in the Dock's own
 //!   words: the Keeper program puts them into those of the Link.
 //!
 //! The Dock knows nothing of the Link, of Windows or of agents. It runs programs on
-//! pseudo-terminals and passes bytes both ways. It keeps no copy of what a program wrote:
+//! pseudo-terminals and passes bytes both ways. Of a program's environment it decides
+//! only what says which terminal the program runs in ([`TERMINAL_VARIABLES`],
+//! [`LEFT_OUT_VARIABLES`]); the rest comes from the caller through [`Start::env`]. It
+//! keeps no copy of what a program wrote:
 //! the ring of recent output, for a Window that attaches later, and the watch for the turn
 //! marks come with the slices that need them.
 //!
@@ -33,18 +38,52 @@ const STOP_SIGNALS: [libc::c_int; 3] = [libc::SIGHUP, libc::SIGTERM, libc::SIGKI
 /// The variables every program of a terminal finds set, whatever the Keeper's own
 /// environment holds: what kind of terminal it runs in. `TERM` names a description every
 /// system has, and the app's emulator answers as the terminal that name stands for.
-pub const TERMINAL_VARIABLES: [(&str, &str); 3] = [
+/// `TERM_PROGRAM_VERSION` is the app's version, which every crate of the workspace has.
+///
+/// They live here, not with the caller, because they describe the terminal the Dock
+/// makes, the same for every program in it.
+pub const TERMINAL_VARIABLES: [(&str, &str); 4] = [
     ("TERM", "xterm-256color"),
     ("COLORTERM", "truecolor"),
     ("TERM_PROGRAM", "yaar"),
+    ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION")),
+];
+
+/// Variables of the Keeper's own environment that no program of a terminal gets: each
+/// names another terminal, or a multiplexer, that the Keeper was started from. A program
+/// that found them beside [`TERMINAL_VARIABLES`] would take the app's terminal for that
+/// one, and send it what only that one understands.
+pub const LEFT_OUT_VARIABLES: [&str; 22] = [
+    "TERM_SESSION_ID",
+    "ITERM_SESSION_ID",
+    "ITERM_PROFILE",
+    "LC_TERMINAL",
+    "LC_TERMINAL_VERSION",
+    "KITTY_WINDOW_ID",
+    "KITTY_PID",
+    "KITTY_PUBLIC_KEY",
+    "KITTY_LISTEN_ON",
+    "GHOSTTY_RESOURCES_DIR",
+    "GHOSTTY_BIN_DIR",
+    "GHOSTTY_SHELL_FEATURES",
+    "WEZTERM_PANE",
+    "WEZTERM_EXECUTABLE",
+    "WEZTERM_UNIX_SOCKET",
+    "ALACRITTY_WINDOW_ID",
+    "ALACRITTY_SOCKET",
+    "VTE_VERSION",
+    "WT_SESSION",
+    "TMUX",
+    "TMUX_PANE",
+    "STY",
 ];
 
 /// The most bytes that wait for one program to read them; see [`Dock::write`].
 pub const MAX_WAITING_INPUT: usize = 16 * 1024 * 1024;
 
-/// Names one terminal of the Dock: 32 lowercase hexadecimal digits read from
-/// `/dev/urandom` when it is opened, so that no two terminals share one, also across
-/// restarts of the Keeper.
+/// Names one terminal of the Dock: 32 lowercase hexadecimal digits from `/dev/urandom`,
+/// made by [`TerminalId::random`] before the terminal is opened, so that no two terminals
+/// share one, also across restarts of the Keeper.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TerminalId(String);
 
@@ -52,6 +91,12 @@ impl TerminalId {
     /// The id with this text, as the Keeper hands it back.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
+    }
+
+    /// A new id: 16 bytes of `/dev/urandom` as 32 lowercase hexadecimal digits. Fails
+    /// only when `/dev/urandom` cannot be read.
+    pub fn random() -> io::Result<TerminalId> {
+        todo!()
     }
 
     /// The text of the id.
@@ -111,7 +156,8 @@ pub struct Start {
     /// The size of its terminal at the start.
     pub size: Size,
     /// Variables set for the program on top of the Keeper's own environment and of
-    /// [`TERMINAL_VARIABLES`]. Of two with one name, the later wins.
+    /// [`TERMINAL_VARIABLES`]: what the caller adds, as the id of the terminal. Of two
+    /// with one name, the later wins.
     pub env: Vec<(OsString, OsString)>,
 }
 
@@ -156,6 +202,9 @@ pub enum DockError {
     /// The Dock holds no terminal by this id: it never opened one, or its program has
     /// ended.
     UnknownTerminal(TerminalId),
+    /// The Dock holds a terminal by this id already, running or ended: an id names one
+    /// terminal only.
+    TakenId(TerminalId),
 }
 
 impl fmt::Display for DockError {
@@ -165,6 +214,7 @@ impl fmt::Display for DockError {
                 write!(f, "{} could not be started: {reason}", program.display())
             }
             Self::UnknownTerminal(terminal) => write!(f, "there is no terminal {terminal}"),
+            Self::TakenId(terminal) => write!(f, "the terminal {terminal} exists already"),
         }
     }
 }
@@ -192,22 +242,24 @@ impl Dock {
         todo!()
     }
 
-    /// Opens a terminal of `start.size`, starts `start.program` in it and returns the
-    /// terminal's id. From then on `events` is told what the program writes, and at last
-    /// how it ended.
+    /// Opens a terminal of `start.size` under the name `id`, which the caller made with
+    /// [`TerminalId::random`], and starts `start.program` in it. From then on `events` is
+    /// told what the program writes, and at last how it ended.
     ///
-    /// The program gets the Keeper's environment with [`TERMINAL_VARIABLES`] and then
-    /// `start.env` set on top; its standard input, output and error are the terminal;
-    /// and it holds no other descriptor of the Keeper: no socket, no pipe, no other
-    /// terminal.
-    pub fn open(&self, start: Start, events: Events) -> Result<TerminalId, DockError> {
-        let _ = (start, events);
+    /// The program gets the Keeper's environment without [`LEFT_OUT_VARIABLES`], with
+    /// [`TERMINAL_VARIABLES`] and then `start.env` set on top; its standard input, output
+    /// and error are the terminal; and it holds no other descriptor of the Keeper: no
+    /// socket, no pipe, no other terminal. An `id` the Dock holds already is refused with
+    /// [`DockError::TakenId`], and nothing is started.
+    pub fn open(&self, id: TerminalId, start: Start, events: Events) -> Result<(), DockError> {
+        let _ = (id, start, events);
         todo!()
     }
 
     /// Hands `bytes` to the program of `terminal`, after everything handed to it before,
     /// and returns at once: the bytes wait until the program reads them. While
-    /// [`MAX_WAITING_INPUT`] bytes wait, what more is handed is dropped.
+    /// [`MAX_WAITING_INPUT`] bytes wait, what more is handed is dropped, and nothing
+    /// reports it: the call still returns `Ok`.
     pub fn write(&self, terminal: &TerminalId, bytes: &[u8]) -> Result<(), DockError> {
         let _ = (terminal, bytes);
         todo!()
@@ -226,10 +278,13 @@ impl Dock {
         todo!()
     }
 
-    /// Stops every program and returns when none is left: the hang-up signal to each
-    /// program's process group, then to those still there after [`STOP_STEP`] the
-    /// terminate signal, and after one more step the kill signal. Each terminal's
-    /// [`Events`] is told its end, as when a program ends by itself.
+    /// Stops every program and what it started, and returns when none is left: the
+    /// hang-up signal to every process of each terminal's session, then to those still
+    /// there after [`STOP_STEP`] the terminate signal, and after one more step the kill
+    /// signal. A terminal's session is the one its program leads: the program, its
+    /// children, and the jobs a shell put in process groups of their own. A process that
+    /// left the session, as a daemon does, is not reached. Each terminal's [`Events`] is
+    /// told its end, as when a program ends by itself.
     pub fn stop_all(&self) {
         let _ = STOP_SIGNALS;
         todo!()

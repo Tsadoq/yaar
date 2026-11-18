@@ -22,6 +22,7 @@
 
 mod emulator;
 mod keys;
+mod modes;
 mod mouse;
 mod view;
 
@@ -29,14 +30,12 @@ use std::time::Duration;
 
 use gpui_kit::*;
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
-use yaar_link::{Program, Reply, Request, RequestKind, TerminalId, TerminalSize};
+use yaar_link::{Program, Reply, Request, RequestKind, TerminalId, TerminalSize, WorkspaceId};
 
 pub use emulator::{Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Screen, Style};
-pub use keys::{
-    IMPLEMENTED_FLAGS, KeyboardFlags, Modes, OptionKey, encode_focus, encode_key, encode_paste,
-    encode_release,
-};
-pub use mouse::{MouseAction, MouseButton, MouseMode, encode_mouse};
+pub use keys::{OptionKey, encode_focus, encode_key, encode_paste, encode_release};
+pub use modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
+pub use mouse::{MouseAction, MouseButton, encode_mouse};
 pub use view::TerminalView;
 
 actions!(
@@ -123,8 +122,21 @@ pub fn controls() -> Vec<Control> {
 /// The Terminal pane: the terminals the Window opened, the one or two it shows, and the
 /// one that has the focus.
 ///
-/// It takes [`NewTerminal`] from wherever the focus is in the window, through the Frame's
-/// routes.
+/// It takes [`NewTerminal`], [`NextTerminal`], [`PreviousTerminal`] and [`ToggleSplit`]
+/// from wherever the focus is in the window, through the Frame's routes. Each terminal
+/// keeps the workspace it was opened for.
+///
+/// When the pane's own focus handle gains the focus, as when the Frame moves the focus
+/// from pane to pane, the pane hands it on to the view of [`TerminalPane::focused`], so
+/// that the keys reach that terminal; with no terminal the focus stays on the pane.
+///
+/// After every key typed while the focus is inside the pane, a key that runs an action
+/// included, the pane asks for a frame at every frame for [`FRAMES_AFTER_A_KEY`]. It
+/// learns of each key through a keystroke interceptor, which sees a key before any
+/// binding or key listener takes it.
+///
+/// The window's title is `YAAR` until the program of the focused terminal gives a title,
+/// and then that title followed by ` - YAAR`; it follows the focused terminal.
 pub struct TerminalPane {
     models: Models,
     focus: FocusHandle,
@@ -132,8 +144,6 @@ pub struct TerminalPane {
     size: TerminalSize,
     /// Why the last terminal asked for was not opened, until the next is asked for.
     notice: Option<String>,
-    /// The question for a new terminal, while it waits for its answer.
-    opening: Option<Task<()>>,
 }
 
 impl TerminalPane {
@@ -146,7 +156,6 @@ impl TerminalPane {
             focus: cx.focus_handle(),
             size: FIRST_SIZE,
             notice: None,
-            opening: None,
         }
     }
 
@@ -185,14 +194,15 @@ impl TerminalPane {
 
     /// Asks the Keeper for a new terminal for the workspace on screen, at the size the
     /// pane lays terminals out at. With no workspace on screen there is nothing to open
-    /// one in, and nothing is asked.
+    /// one in, and nothing is asked. Every question waits for its own answer: a second
+    /// terminal asked for before the first answer came loses neither.
     fn new_terminal(&mut self, _: &NewTerminal, _: &mut Window, cx: &mut Context<Self>) {
         let Some(workspace) = self.models.workspaces.read(cx).selected().cloned() else {
             return;
         };
         self.notice = None;
         let request = Request::OpenTerminal {
-            workspace,
+            workspace: workspace.clone(),
             program: Program::Shell,
             size: self.size,
         };
@@ -200,19 +210,27 @@ impl TerminalPane {
             .models
             .link
             .update(cx, |link, cx| link.ask(request, cx));
-        self.opening = Some(cx.spawn(async move |pane, cx| {
+        // Detached, not kept: a task that is dropped is cancelled, and its answer lost.
+        // The pane is held weakly, so a pane that is gone takes no answer.
+        cx.spawn(async move |pane, cx| {
             let answer = asked.await;
-            pane.update(cx, |pane, cx| pane.opened(answer, cx)).ok();
-        }));
+            pane.update(cx, |pane, cx| pane.opened(workspace, answer, cx))
+                .ok();
+        })
+        .detach();
         cx.notify();
     }
 
-    /// Takes the Keeper's answer to the question for a new terminal.
-    fn opened(&mut self, answer: Result<Reply, AskError>, cx: &mut Context<Self>) {
-        self.opening = None;
+    /// Takes the Keeper's answer to the question for a new terminal of `workspace`.
+    fn opened(
+        &mut self,
+        workspace: WorkspaceId,
+        answer: Result<Reply, AskError>,
+        cx: &mut Context<Self>,
+    ) {
         match answer {
             Ok(Reply::TerminalOpened { terminal }) => {
-                let _ = terminal;
+                let _ = (workspace, terminal);
                 todo!()
             }
             Ok(_) => self.notice = Some(AskError::Unexpected.to_string()),

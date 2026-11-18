@@ -62,10 +62,12 @@ pub fn controls() -> Vec<Control> {
     controls
 }
 
-/// Prepares the app: the toolkit, the theme of the system, the keys of [`controls`], and
-/// what quitting means.
+/// Prepares the app: the toolkit, the theme of the system, the keys of [`controls`], the
+/// toolkit's own keys given back to a program in a terminal, and what quitting means.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    // After the toolkit, whose bindings it has to outrank.
+    yaar_frame::release_program_keys(cx);
     Theme::sync_system_appearance(None, cx);
     yaar_frame::bind(&controls(), cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
