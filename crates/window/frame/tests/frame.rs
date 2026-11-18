@@ -2,6 +2,7 @@
 //! The Frame is read through the model it shows, as a pane would read it.
 
 use std::os::unix::net::UnixStream;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AppContext, Bounds, Point, TestAppContext, VisualTestContext, WindowBounds, WindowOptions, px,
@@ -11,9 +12,11 @@ use yaar_frame::keeper::Attached;
 use yaar_frame::{Frame, KeeperLink, LinkStatus};
 use yaar_link::{Hello, PROTOCOL_VERSION};
 
-fn keeper(protocol: u16) -> Attached {
-    let (stream, _other_end) = UnixStream::pair().expect("socket pair");
-    Attached {
+/// A Keeper of this protocol, and the end of the connection it holds: the connection
+/// lasts as long as that end does.
+fn keeper(protocol: u16) -> (Attached, UnixStream) {
+    let (stream, other_end) = UnixStream::pair().expect("socket pair");
+    let attached = Attached {
         stream,
         keeper: Hello {
             protocol,
@@ -21,7 +24,8 @@ fn keeper(protocol: u16) -> Attached {
             app_version: "9.9.9".to_owned(),
         },
         started: false,
-    }
+    };
+    (attached, other_end)
 }
 
 #[gpui_kit::test]
@@ -62,18 +66,38 @@ fn the_empty_window_says_how_it_stands_with_the_keeper(cx: &mut TestAppContext) 
         "Starting the Keeper"
     );
 
-    link.update(&mut cx, |l, cx| {
-        l.attached(Ok(keeper(PROTOCOL_VERSION)), cx)
-    });
+    // The connection is read by a real thread, which the test executor cannot see.
+    cx.executor().allow_parking();
+    let (attached, other_end) = keeper(PROTOCOL_VERSION);
+    link.update(&mut cx, |l, cx| l.attached(Ok(attached), cx));
     draw(&mut cx);
     assert_eq!(
         frame.read_with(&cx, |f, cx| f.status_line(cx)),
         "Keeper 9.9.9 is running"
     );
 
-    link.update(&mut cx, |l, cx| {
-        l.attached(Ok(keeper(PROTOCOL_VERSION + 1)), cx)
-    });
+    // The Keeper goes away: the window says so, and says why.
+    drop(other_end);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !matches!(
+        link.read_with(&cx, |l, _| l.status().clone()),
+        LinkStatus::Lost(_)
+    ) {
+        assert!(
+            Instant::now() < deadline,
+            "the loss of the Keeper was not shown"
+        );
+        cx.run_until_parked();
+        std::thread::park_timeout(Duration::from_millis(1));
+    }
+    draw(&mut cx);
+    assert_eq!(
+        frame.read_with(&cx, |f, cx| f.status_line(cx)),
+        "The Keeper went away: the other side closed the connection"
+    );
+
+    let (attached, _other_end) = keeper(PROTOCOL_VERSION + 1);
+    link.update(&mut cx, |l, cx| l.attached(Ok(attached), cx));
     draw(&mut cx);
     assert!(matches!(
         link.read_with(&cx, |l, _| l.status().clone()),
