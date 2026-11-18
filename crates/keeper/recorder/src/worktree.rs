@@ -192,15 +192,17 @@ impl From<GitError> for OpenError {
 /// keeps its `Worktree`.
 ///
 /// It also keeps which hooks the configuration defined when it was opened, to turn each
-/// off by name in every run. A hook defined later is not among them until the worktree
-/// is opened again; no call here does what such a hook waits for.
+/// off by name in every run. [`Worktree::changed_paths`], the one call during which git
+/// does what a hook can wait for, asks for them again, so that a hook defined since is
+/// turned off too.
 #[derive(Debug)]
 pub struct Worktree {
     git: Git,
     root: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
-    // The setting that turns off each hook the configuration defines.
+    // The setting that turns off each hook the configuration defined when this was
+    // opened.
     hooks_off: Vec<OsString>,
     // The running process that hands out file contents, once one was asked for.
     contents: Mutex<Option<Contents>>,
@@ -520,8 +522,11 @@ impl Worktree {
     /// nor locked.
     pub fn changed_paths(&self, since: Option<&CommitId>) -> Result<Vec<ChangedPath>, GitError> {
         let index = IndexCopy::of(&self.git_dir.join("index"))?;
+        // git writes the copy when it has brought it up to date, and a hook can wait
+        // for that: the hooks are those defined now, not those of when this was opened.
+        let hooks_off = hooks_off(&self.git, Place::Folder(&self.root))?;
         let run = |args: &[&str]| {
-            let mut command = self.git.command(Place::Folder(&self.root), &self.hooks_off);
+            let mut command = self.git.command(Place::Folder(&self.root), &hooks_off);
             command.env("GIT_INDEX_FILE", index.file()).args(args);
             finish(command)
         };

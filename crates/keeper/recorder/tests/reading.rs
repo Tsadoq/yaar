@@ -291,6 +291,8 @@ fn no_hook_and_no_monitor_of_the_user_runs_when_the_changes_are_read() {
     write(&repo, "a.txt", "the same\n");
     let head = CommitId::new(commit_all(&repo, "start"));
     touch(&repo, "a.txt");
+    // Opened before the user defines any of them, as a Keeper that runs for days has.
+    let worktree = open(&repo);
 
     // Three programs of the user that git starts when it reads the files and brings its
     // list of them up to date: a hook in the hooks folder, a hook the configuration
@@ -319,7 +321,6 @@ fn no_hook_and_no_monitor_of_the_user_runs_when_the_changes_are_read() {
         &note("told"),
     );
 
-    let worktree = open(&repo);
     assert_eq!(worktree.changed_paths(Some(&head)).expect("paths"), vec![]);
     assert_eq!(worktree.changed_paths(None).expect("paths").len(), 1);
     assert!(!ran.exists(), "ran: {:?}", std::fs::read_to_string(&ran));
