@@ -1,0 +1,48 @@
+# One workspace, one crate per component of the architecture. The rules between the crates
+# are checked by `cargo xtask layout`.
+[workspace]
+resolver = "3"
+members = [
+    "crates/shared/*",
+    "crates/keeper/*",
+    "crates/window/*",
+    "companions/claude",
+    "system-tests",
+    "xtask",
+]
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+yaar-link = { path = "crates/shared/link" }
+yaar-frame = { path = "crates/window/frame" }
+# GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
+# of patches/ and the speed check on the reference Mac.
+# Without the kit's icon set: the app ships only the icons it uses, and uses none yet.
+gpui-kit = { version = "=0.9.1", default-features = false, features = ["component"] }
+libc = "0.2"
+serde_json = "1"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[profile.dev]
+debug = 0
+
+[profile.release]
+opt-level = 3
+debug = false
+
+# The one changed file of GPUI: the older frame source is the default on macOS.
+# See patches/README.md.
+[patch.crates-io]
+gpui-pre-apple = { path = "vendor/gpui-pre-apple-0.3.12" }

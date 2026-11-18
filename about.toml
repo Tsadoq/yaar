@@ -1,0 +1,19 @@
+# cargo-about 0.9: the third-party notices that every package carries.
+# The same licences as deny.toml allows; a dependency under any other fails the generation.
+accepted = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "0BSD",
+    "CC0-1.0",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+# Only what is linked into the programs.
+ignore-build-dependencies = true
+ignore-dev-dependencies = true

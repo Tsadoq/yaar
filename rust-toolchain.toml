@@ -1,0 +1,5 @@
+# One compiler for every machine. Raised on purpose, never by itself.
+[toolchain]
+channel = "1.100.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]
