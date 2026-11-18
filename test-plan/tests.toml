@@ -662,6 +662,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-015", "FR-016"]
+note = "Shown with two panes the test writes: the Frame knows the first pane and the panes after it. That the review pane is first and the terminal pane second is the list of the Window program, held by a test of yaar-window."
 
 [[test]]
 id = "FRAME-09"
@@ -723,6 +724,7 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 2
+note = "Older means a lower protocol, or the same protocol and a lower version of the app. The test shows both."
 
 [[test]]
 id = "WIN-01"
@@ -743,6 +745,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-122"]
+note = "The list is yaar_window::kept_keys(). On Linux it is the six keys of the decision on kept keys. A key that is not kept reaches the program with the bytes TERM-01 expects in the legacy state, which for a Cmd key with no action on macOS are none. The absence is as strong as the keys the test presses: the keys of TERM-01's matrix and of every control."
 
 [[test]]
 id = "DOCK-01"
@@ -756,7 +759,7 @@ proves = ["FR-017"]
 
 [[test]]
 id = "DOCK-02"
-what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder and by one folder put first on the search path: nothing in it names an editor connection."
+what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by one folder put first on the search path, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
 level = "component"
 part = "dock"
 through = "its calls, on a real pseudo-terminal"
@@ -874,7 +877,7 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 2
-note = "Half of the typing limit rests on this; it is not built yet."
+note = "Read through the frames the window is asked for, on the test platform's clock. Half of the typing limit rests on this."
 
 [[test]]
 id = "TERM-01"
@@ -885,6 +888,7 @@ through = "keys and the mouse in on the test platform; read back as the bytes a 
 driver = "pty"
 runs = "ci"
 proves = ["FR-122"]
+note = "The expected bytes are Ghostty's, recorded in phase 4, with the departures the test lists; the mouse rows are written from xterm's rules. The rows of Option follow the layout of the test platform: Meta on Linux, characters on macOS."
 
 [[test]]
 id = "TERM-02"
@@ -906,6 +910,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-122"]
+note = "Dead keys and the input method are driven through the terminal's input handler, as the system's input method drives it; the system's own input methods are SCREEN-02, by hand. The dead-key pairs are those of the ABC layout, and of the U.S. layout with Option set to characters: on the U.S. layout the app's default makes Option Meta, which composes nothing."
 
 [[test]]
 id = "SWB-01"
@@ -2216,7 +2221,7 @@ proves = ["NFR-007"]
 built = [
     "system-tests/tests/workspaces.rs::the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only",
 ]
-note = "Everything it starts is, so far, the git processes it keeps for file contents. Terminals and agents join the test as they are built."
+note = "Everything it starts: the git processes it keeps for file contents, the programs of its terminals and what those start. Agents join the test as they are built."
 
 [[test]]
 id = "HOLD-01"
@@ -2247,6 +2252,7 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-118"]
+note = "The stop reaches every process of each terminal's session, background jobs of a shell included; a process that left the session by setsid, as a daemon, is not reached."
 
 [[test]]
 id = "HOLD-06"
@@ -2809,7 +2815,7 @@ built = [
     "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
     "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
 ]
-note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built."
+note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built. Opening a terminal is the user's; telling a terminal's size is the Window's."
 
 [[test]]
 id = "WIN-05"
@@ -2852,6 +2858,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["NFR-005"]
+note = "No pane changed: the test pane needs only the Frame's surface and joins beside the unchanged list of the Window program. That the commits adding a pane change no file of another pane is read from the history at the merge, not by the test."
 
 # Requirements no test of the workflow can prove. Each has a check done by hand before a release.
 
