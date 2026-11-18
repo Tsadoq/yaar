@@ -370,6 +370,70 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
     assert_eq!(changes.files.len(), 2);
 }
 
+// WS-06, where the upstream is a local branch: a base branch may follow a branch of its
+// own repository, and that needs no remote at all.
+#[test]
+fn a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branch_and_what_is_uncommitted()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    commit_all(&repo, "first");
+    write(&repo, "a.txt", "two\n");
+    let second = commit_all(&repo, "second");
+    git(
+        &repo,
+        &["switch", "--quiet", "-c", "develop", "--track", "main"],
+    );
+    write(&repo, "a.txt", "three\n");
+    let third = commit_all(&repo, "third, on develop");
+    write(&repo, "b.txt", "new, and committed\n");
+    let fourth = commit_all(&repo, "fourth, on develop");
+    write(&repo, "a.txt", "four, not committed\n");
+    write(&repo, "untracked.txt", "not committed either\n");
+    // A tag with the name of the upstream, on the newest commit. Read by its short name,
+    // `main` is this tag, and no commit would be left to list.
+    git(&repo, &["tag", "main", &fourth]);
+    assert_eq!(git(&repo, &["rev-parse", "main^{commit}"]), fourth);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), second);
+    assert_eq!(git(&repo, &["remote"]), "");
+
+    let workspaces = workspaces(&scratch);
+    let workspace = open(&workspaces, &repo);
+    // `develop` is the nearest of the usual names, so it is the base, and the workspace
+    // is on it.
+    assert_eq!(
+        workspaces.base(&workspace).expect("base"),
+        Some(default_base("develop"))
+    );
+    let changes = workspaces.changes(&workspace).expect("changes");
+    assert_eq!(
+        changes,
+        Changes {
+            comparison: Comparison::NotOnUpstream {
+                base: default_base("develop"),
+                upstream: "main".to_owned(),
+            },
+            counted_from: Some(CommitId::new(&fourth)),
+            commits: vec![
+                commit(&fourth, "fourth, on develop"),
+                commit(&third, "third, on develop"),
+            ],
+            // What is not committed, and nothing of the two commits: `b.txt` is theirs.
+            files: vec![
+                changed("a.txt", Change::Modified),
+                changed("untracked.txt", Change::Added),
+            ],
+        }
+    );
+    // Exactly the commits that are not on the branch `main`, as git lists them.
+    assert_eq!(
+        ids(&changes.commits),
+        rev_list(&repo, &["HEAD", "--not", "refs/heads/main"])
+    );
+}
+
 // BASE-01.
 #[test]
 fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remote_branch_are_listed()
