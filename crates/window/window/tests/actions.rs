@@ -13,15 +13,18 @@
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
 
 use gpui_kit::{
     Action, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
     point, px,
 };
-use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, Place, Sends};
+use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{Origin, Program, Request, RequestKind, Workspace};
 use yaar_system_tests::{DEADLINE, Repo, Tap, World};
+
+mod common;
+
+use common::wait_until;
 
 /// The composed Window of one test, in a world of its own, with a tap on its link.
 struct Composed {
@@ -115,23 +118,6 @@ fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
     )
 }
 
-/// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
-fn wait_until(
-    cx: &mut VisualTestContext,
-    what: &str,
-    mut holds: impl FnMut(&mut VisualTestContext) -> bool,
-) {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        cx.run_until_parked();
-        if holds(cx) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "waited in vain for {what}");
-        std::thread::park_timeout(std::time::Duration::from_millis(1));
-    }
-}
-
 /// The controls of the Window that say they send a request of this kind.
 fn controls_that_send(kind: RequestKind) -> Vec<Control> {
     yaar_window::controls()
@@ -187,30 +173,49 @@ impl Composed {
     }
 
     /// Puts the focus where the key of `control` works. A key that works anywhere is
-    /// pressed where the focus happens to be.
+    /// pressed where the focus happens to be, unless that is inside a terminal: off macOS
+    /// such a key does nothing there, so the focus is first put in the review pane, which
+    /// on macOS does no harm. New Terminal, Next Terminal and Previous Terminal move the
+    /// focus into a terminal, and so does a click into one, so this is looked at before
+    /// every key.
     fn focus_where_the_key_works(&mut self, control: &Control, cx: &mut VisualTestContext) {
         match control.place {
-            // A kept key works wherever the focus is, as a key that works anywhere does.
-            Place::Anywhere | Place::Kept => {}
-            Place::In(yaar_review_pane::KEY_CONTEXT) => {
-                // The first row of the Review pane, at its left end: an offer to set a
-                // base, where the row holds one, lies further right.
-                let mut row = None;
-                wait_until(cx, "the first row of the Review pane", |cx| {
-                    row = cx.debug_bounds("review-row-0");
-                    row.is_some()
-                });
-                let row = row.expect("the row is drawn");
-                cx.simulate_click(
-                    point(row.left() + px(2.), row.center().y),
-                    Modifiers::none(),
-                );
+            // A kept key works wherever the focus is.
+            Place::Kept => {}
+            Place::Anywhere => {
+                if cx.update(|window, _| {
+                    window
+                        .context_stack()
+                        .iter()
+                        .any(|context| context.contains(PROGRAM_CONTEXT))
+                }) {
+                    self.click_into(cx, "review-row-0");
+                }
             }
+            // The first row of the Review pane, at its left end: an offer to set a base,
+            // where the row holds one, lies further right.
+            Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-row-0"),
+            // The view of the terminal on screen.
+            Place::In(PROGRAM_CONTEXT) => self.click_into(cx, "terminal-slot-0"),
             Place::In(other) => panic!(
                 "{} works in the context {other:?}, and the walk does not know where that is",
                 control.title
             ),
         }
+    }
+
+    /// Clicks at the left end of an element, once it is drawn.
+    fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
+        let mut found = None;
+        wait_until(cx, selector, |cx| {
+            found = cx.debug_bounds(selector);
+            found.is_some()
+        });
+        let found = found.expect("the element is drawn");
+        cx.simulate_click(
+            point(found.left() + px(2.), found.center().y),
+            Modifiers::none(),
+        );
     }
 
     /// Presses the key of `control` where it works, as a user does. Fails when the
@@ -429,6 +434,12 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     // to, and so set off the questions the Window asks by itself.
     window.walk(RequestKind::OpenFolder, &mut cx);
     window.walk(RequestKind::OpenFolder, &mut cx);
+    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
+    // terminal pane have a terminal to act on and the focus is inside one.
+    window.walk(RequestKind::OpenTerminal, &mut cx);
+    wait_until(&mut cx, "the terminal on screen", |cx| {
+        cx.debug_bounds("terminal-slot-0").is_some()
+    });
 
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
