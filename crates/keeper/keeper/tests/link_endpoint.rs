@@ -167,8 +167,16 @@ fn connect_live(socket: &Path) -> UnixStream {
     }
 }
 
-/// A socket path too long to bind, that no other test and no other run asks for. The
-/// folder of the short place it leads to is removed when the test ends.
+/// A path for a socket in the folder of `place` that is `length` bytes long, to the byte.
+fn socket_of(place: &Place, length: usize) -> PathBuf {
+    let folder = place.0.as_os_str().len() + "/".len();
+    let path = place.0.join("s".repeat(length - folder));
+    assert_eq!(path.as_os_str().len(), length);
+    path
+}
+
+/// A socket path too long to bind by one byte, that no other test and no other run asks
+/// for. The folder of the short place it leads to is removed when the test ends.
 struct TooLong {
     wanted: PathBuf,
     short: PathBuf,
@@ -176,10 +184,7 @@ struct TooLong {
 
 impl TooLong {
     fn new(place: &Place) -> Self {
-        let wanted = place
-            .0
-            .join("d".repeat(yaar_link::SOCKET_PATH_MAX))
-            .join("keeper.sock");
+        let wanted = socket_of(place, yaar_link::SOCKET_PATH_MAX + 1);
         let short = yaar_link::socket_address(&wanted);
         Self { wanted, short }
     }
@@ -228,10 +233,28 @@ fn attach_as_a_window(wanted: &Path) -> (UnixStream, Hello) {
 #[test]
 fn a_socket_path_longer_than_the_system_allows_is_served_at_the_short_one_both_sides_compute() {
     let place = Place::new();
+
+    // What the system allows, to the byte: a Keeper told to listen at a path of that
+    // length listens at the path itself, and a Window finds it there.
+    let fits = socket_of(&place, yaar_link::SOCKET_PATH_MAX);
+    let keeper = start_at(&fits, &place);
+    let (mut window, who) = attach_as_a_window(&fits);
+    assert_eq!(who.pid, std::process::id());
+    assert_eq!(
+        window.peer_addr().expect("where it leads").as_pathname(),
+        Some(fits.as_path())
+    );
+    write_message(&mut window, &Message::Shutdown).expect("shutdown");
+    assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
+
+    // One byte more, in the same folder, and the system itself refuses the path: the
+    // Keeper cannot be listening there.
     let long = TooLong::new(&place);
-    assert!(long.wanted.as_os_str().len() > yaar_link::SOCKET_PATH_MAX);
+    assert_eq!(
+        long.wanted.as_os_str().len(),
+        yaar_link::SOCKET_PATH_MAX + 1
+    );
     assert!(long.short.as_os_str().len() <= yaar_link::SOCKET_PATH_MAX);
-    // The system itself refuses the long path, so the Keeper cannot be listening there.
     assert!(std::os::unix::net::UnixListener::bind(&long.wanted).is_err());
 
     let keeper = start_at(&long.wanted, &place);
