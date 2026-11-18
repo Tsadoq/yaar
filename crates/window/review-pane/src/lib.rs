@@ -558,7 +558,9 @@ impl ReviewPane {
 
     /// Puts the reviewer on a line of the row at `index`: what a click on it does.
     pub(crate) fn go_to(&mut self, index: usize, side: Side, cx: &mut Context<Self>) {
-        let PaneRow::Diff { path, row } = &self.rows[index] else {
+        // A click is told by the index its row had when it was drawn. The rows may have
+        // changed since, and then there may be no such row, or no line in it.
+        let Some(PaneRow::Diff { path, row }) = self.rows.get(index) else {
             return;
         };
         let Some(line) = row.line(side) else {

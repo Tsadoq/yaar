@@ -2,6 +2,7 @@
 //! are built.
 
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
@@ -20,6 +21,9 @@ pub(crate) const ROW_HEIGHT: Pixels = px(20.);
 
 /// The width of a column of line numbers: six digits.
 const NUMBER_WIDTH: Pixels = px(56.);
+
+/// The width of the column that holds the sign of a line in the unified view.
+const SIGN_WIDTH: Pixels = px(20.);
 
 /// How much of a line is handed to the text system, in bytes. A line is never wrapped
 /// and what does not fit beside the numbers is cut off, so the rest of a line of a
@@ -65,7 +69,7 @@ impl ShownDiff {
 
 /// Tells the pane which rows the list laid out. The list hands that range to what
 /// decorates it, once for each frame, and to nothing else.
-struct InView(Rc<std::cell::RefCell<Range<usize>>>);
+struct InView(Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
     fn compute(
@@ -274,11 +278,12 @@ impl ReviewPane {
                     })
             }
             (Layout::Unified, _) => {
-                // In this layout a row shows one line.
-                let (side, tint) = match shown {
-                    Row::Removed { .. } => (Side::Old, Some(removed)),
-                    Row::Added { .. } => (Side::New, Some(added)),
-                    _ => (Side::New, None),
+                // In this layout a row shows one line. Its sign says what its colour
+                // says, for a reader who cannot tell the two colours apart.
+                let (side, sign, tint) = match shown {
+                    Row::Removed { .. } => (Side::Old, "-", Some(removed)),
+                    Row::Added { .. } => (Side::New, "+", Some(added)),
+                    _ => (Side::New, "", None),
                 };
                 let Some(line) = shown.line(side) else {
                     return row;
@@ -289,6 +294,7 @@ impl ReviewPane {
                     .on_mouse_down(MouseButton::Left, go(side))
                     .child(number(shown.line(Side::Old)))
                     .child(number(shown.line(Side::New)))
+                    .child(div().flex_none().w(SIGN_WIDTH).px_1().child(sign))
                     .child(text(side, line));
                 match tint {
                     Some(tint) => row.bg(tint),
