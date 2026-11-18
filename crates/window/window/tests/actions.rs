@@ -337,6 +337,9 @@ impl Composed {
             .into_iter()
             .next()
             .expect("a control of the Window sends SetBase");
+        // The request is looked for from here on: an earlier one that set a base of the
+        // same name is not the one this call sent.
+        let from = self.tap.requests().len();
         self.press(&control, cx);
         self.give(&control, &Answer::Text(base.to_owned()), cx);
         let sets_it = |request: &Request| match request {
@@ -344,11 +347,11 @@ impl Composed {
             _ => false,
         };
         self.tap.wait_for_request(DEADLINE, sets_it);
-        self.tap
-            .requests()
+        let found = self.tap.requests()[from..]
             .iter()
             .position(sets_it)
-            .expect("the tap lists the request it waited for")
+            .expect("the tap lists the request it waited for");
+        from + found
     }
 }
 
