@@ -56,6 +56,20 @@ impl Out {
             each(self, item);
         }
     }
+
+    pub(crate) fn optional<T: ?Sized>(
+        &mut self,
+        value: Option<&T>,
+        write: impl FnOnce(&mut Out, &T),
+    ) {
+        match value {
+            None => self.u8(0),
+            Some(value) => {
+                self.u8(1);
+                write(self, value);
+            }
+        }
+    }
 }
 
 /// The body of a frame while it is read.
@@ -126,6 +140,17 @@ impl<'a> In<'a> {
             items.push(each(self)?);
         }
         Ok(items)
+    }
+
+    pub(crate) fn optional<T>(
+        &mut self,
+        read: impl FnOnce(&mut In<'a>) -> Result<T, LinkError>,
+    ) -> Result<Option<T>, LinkError> {
+        match self.u8()? {
+            0 => Ok(None),
+            1 => read(self).map(Some),
+            _ => Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+        }
     }
 
     /// Ends the reading: a frame that holds more than its fields is refused.

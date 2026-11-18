@@ -2,6 +2,8 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::process::Child;
+use std::sync::Mutex;
 
 use crate::git::{Git, GitError};
 
@@ -70,7 +72,8 @@ pub struct LocalBranch {
     /// How many commits the checked-out commit has that this branch does not: the
     /// distance from the point where the two part to what is checked out.
     pub ahead: u32,
-    /// The branch it follows, by its short name: `origin/main`.
+    /// The branch it follows, by its short name: `origin/main`. None also when the
+    /// branch it was set to follow is no longer there.
     pub upstream: Option<String>,
 }
 
@@ -173,12 +176,20 @@ impl From<GitError> for OpenError {
 ///
 /// It holds no answer of git: every call asks again, so it always tells what is there
 /// now. It may be used from several threads at once.
+///
+/// What it does keep is one running git process that hands out the contents of files in
+/// commits, started at the first [`Worktree::content_at`] and asked again at each later
+/// one, so that reading many files starts git once. The process ends, and is waited for,
+/// when the `Worktree` is dropped. Whoever reads files of a worktree again and again
+/// keeps its `Worktree`.
 #[derive(Debug)]
 pub struct Worktree {
     git: Git,
     root: PathBuf,
     git_dir: PathBuf,
     common_dir: PathBuf,
+    // The running process that hands out file contents, once one was asked for.
+    contents: Mutex<Option<Child>>,
 }
 
 impl Worktree {
@@ -254,7 +265,11 @@ impl Worktree {
     }
 
     /// The content of the file at `path` in `commit`; none when the commit has no file
-    /// there. A link is given as the path it points at, as git stores it.
+    /// there, and also when git knows no such commit, which [`Worktree::resolve`] tells
+    /// apart. A link is given as the path it points at, as git stores it.
+    ///
+    /// Answered by the one process this worktree keeps for contents; a process that has
+    /// died is started again once.
     pub fn content_at(&self, commit: &CommitId, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
         todo!()
     }

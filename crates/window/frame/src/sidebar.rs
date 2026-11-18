@@ -69,6 +69,10 @@ pub struct Sidebar {
 
 impl Sidebar {
     /// A sidebar that lists `workspaces`, with neither form pinned.
+    ///
+    /// By itself it knows no window. It follows the width of a window only inside a
+    /// [`crate::Frame`] made by [`crate::Frame::with_panes`], which watches its window
+    /// and tells the sidebar; until it is told a width, the form is the full list.
     pub fn new(workspaces: Entity<WorkspaceList>, cx: &mut Context<Self>) -> Self {
         todo!()
     }
@@ -89,7 +93,8 @@ impl Sidebar {
         todo!()
     }
 
-    /// The rows the sidebar shows, top to bottom.
+    /// The rows the sidebar shows, top to bottom. These are the rows it draws from, not
+    /// a second account of them.
     pub fn rows(&self, cx: &App) -> Vec<SidebarRow> {
         todo!()
     }

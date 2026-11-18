@@ -13,9 +13,19 @@
 //! | `GetChanges` | `Workspaces::changes` | none |
 //! | `ReadFile` | `Workspaces::file` | none |
 //!
+//! The reply goes out before the facts. A Window that opened a folder therefore learns
+//! the id of the new workspace before the list that holds it.
+//!
 //! A version of a file is sent as text unless it is larger than `yaar_link::MAX_CONTENT`,
 //! or holds a zero byte among its first 8,000, which is how git tells that a file is not
 //! text; of such a version only the size is sent.
+//!
+//! A reply too large for one frame, as the changes of a folder with a hundred thousand
+//! new files can be, is not sent: the Window that asked gets `Refusal::Failed` with the
+//! reason in its place, so that no request stays without an answer.
+//!
+//! Nothing is watched yet. The list of workspaces is read from git when a Window asks
+//! for it, and no fact tells of a worktree or a branch that changed outside the app.
 
 use std::io;
 

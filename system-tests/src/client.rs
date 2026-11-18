@@ -17,7 +17,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use yaar_link::{
-    Changes, Fact, FileSides, Hello, Refusal, Reply, Repository, RepositoryId, Request, WorkspaceId,
+    ChangedFile, Changes, Fact, FileSides, Hello, Refusal, Reply, Repository, RepositoryId,
+    Request, WorkspaceId,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -36,8 +37,9 @@ pub struct Client {
 
 impl Client {
     /// Connects to the Keeper asked to listen at `socket` and exchanges hellos, waiting
-    /// up to [`DEADLINE`] for a Keeper to listen. The socket is reached where
-    /// `yaar_link::socket_address` puts it.
+    /// up to [`DEADLINE`] for a Keeper to listen. The socket is reached through
+    /// `yaar_link::connect`, as a Window reaches it: where `yaar_link::socket_address`
+    /// puts it, and only when what is there is the user's own.
     pub fn attach(socket: &Path) -> Client {
         todo!()
     }
@@ -72,8 +74,10 @@ impl Client {
         todo!()
     }
 
-    /// Asks for the two versions of one file of a workspace.
-    pub fn file(&mut self, workspace: &WorkspaceId, path: &Path) -> Result<FileSides, Refusal> {
+    /// Asks for the two versions of one file of `changes`, as a Window does: the old
+    /// one in the commit the changes are counted from, at the path the file had there,
+    /// and the new one in the worktree. For a new file no old version is asked for.
+    pub fn file(&mut self, changes: &Changes, file: &ChangedFile) -> Result<FileSides, Refusal> {
         todo!()
     }
 

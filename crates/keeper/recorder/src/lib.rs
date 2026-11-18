@@ -10,7 +10,8 @@
 //! - what those return: [`Head`], [`CommitId`], [`Commit`], [`Refs`], [`ChangedPath`],
 //!   [`Listed`].
 //!
-//! Recording states comes with the review round; nothing here writes.
+//! The writing side, which records a state of the worktree, is not built yet: nothing
+//! here writes so far.
 //!
 //! No other crate starts git. Whatever the rest of the Keeper wants to know of a
 //! repository it asks here, in the words above; that a branch is a ref and a version of a
@@ -23,6 +24,9 @@
 //!   file-system monitor, which is a program the configuration can name;
 //! - takes no lock it can do without, so it does not rewrite the index to refresh it;
 //! - never asks at a terminal, and reads git's answers in git's own language.
+//!
+//! File contents of commits come from one git process per worktree that stays running
+//! between reads; every other answer is one run of git.
 
 mod git;
 mod worktree;

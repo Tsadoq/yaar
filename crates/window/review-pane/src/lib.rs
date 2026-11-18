@@ -3,8 +3,8 @@
 //! Owns: Flow and Changes, unified and split diff, threads and comment boxes, file views, follow.
 //!
 //! Surface:
-//! - [`pane`], which builds the pane for the Frame: the one line the Window program
-//!   needs;
+//! - [`entry`], the pane as the Window program registers it: the one line that program
+//!   needs. It holds [`pane`], which builds the pane for the Frame, and [`controls`];
 //! - [`ReviewPane`], the view, and the model of what it shows: its [`PaneRow`]s, its
 //!   [`Layout`], and the [`Position`] of the line the reviewer is on;
 //! - [`controls`], the actions of the pane with their keys: [`LineDown`], [`LineUp`],
@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use gpui_kit::*;
 use yaar_diff::{Row, Side};
-use yaar_frame::{BuildPane, Control, Models};
+use yaar_frame::{BuildPane, Control, Models, PaneEntry};
 use yaar_link::FileStatus;
 
 pub use yaar_diff::Layout;
@@ -44,14 +44,26 @@ pub const KEY_CONTEXT: &str = "ReviewPane";
 /// The layout a diff is shown in until the reviewer switches it.
 pub const FIRST_LAYOUT: Layout = Layout::Unified;
 
-/// Builds the Review pane for a window. Its name in the Frame is `review`.
+/// The name of the pane in the Frame.
+pub const NAME: &str = "review";
+
+/// The pane as the Window program registers it: its name, its keys and its builder.
+pub fn entry() -> PaneEntry {
+    PaneEntry {
+        name: NAME,
+        controls,
+        build: pane,
+    }
+}
+
+/// Builds the Review pane for a window, under the name [`NAME`].
 pub fn pane() -> BuildPane {
     todo!()
 }
 
 /// The actions of the pane with their keys, all in [`KEY_CONTEXT`]: `j` and `down` for
 /// [`LineDown`], `k` and `up` for [`LineUp`], `s` for [`ToggleLayout`]. None of them
-/// sends a request a user starts.
+/// sends a message a user starts.
 pub fn controls() -> Vec<Control> {
     todo!()
 }
@@ -84,13 +96,16 @@ pub enum Unshown {
 /// One row of the pane, top to bottom.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaneRow {
-    /// The line that says what the changes are compared with. When there is nothing to
-    /// compare with, it says so and offers to set a base.
+    /// The line that says what the changes are compared with: the first row, once the
+    /// changes are here. When there is nothing to compare with, it says why and offers
+    /// to set a base.
     Comparison {
-        /// Whether the row offers to set a base.
+        /// Whether the row offers to set a base: with
+        /// `yaar_link::Comparison::NothingToCompare`, and with no other comparison.
         offers_base: bool,
     },
-    /// A commit of the comparison.
+    /// A commit of the comparison. The commits follow the comparison line, newest first,
+    /// before the first file.
     Commit {
         /// Its full id.
         id: String,
@@ -154,7 +169,9 @@ impl ReviewPane {
         todo!()
     }
 
-    /// The rows of the pane, top to bottom, in the layout it has now.
+    /// The rows of the pane, top to bottom, in the layout it has now: the comparison
+    /// line, its commits, then each changed file with the rows of its diff. These are
+    /// the rows the pane draws from, not a second account of them.
     pub fn rows(&self) -> &[PaneRow] {
         todo!()
     }

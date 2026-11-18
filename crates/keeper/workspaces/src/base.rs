@@ -27,7 +27,8 @@ pub fn default_base(head: &Head, refs: &Refs) -> Option<String> {
 
 /// Whether a workspace is on its base branch: the branch checked out is `base` itself,
 /// or `base` is a branch of a remote and the branch checked out is the local branch of
-/// the same name. Never when no branch is checked out, or when `base` is a commit.
+/// the same name, `main` against `origin/main`. Never when no branch is checked out, or
+/// when `base` is a commit.
 pub fn on_base_branch(head: &Head, base: &str, refs: &Refs) -> bool {
     todo!()
 }

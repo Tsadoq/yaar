@@ -31,6 +31,9 @@ pub enum AskError {
     /// There is no Keeper to ask: none is reached yet, the one reached speaks another
     /// protocol version, or the connection ended before the answer came.
     NotLinked,
+    /// The Keeper answered with a reply of another kind than the request has. Whoever
+    /// asks for one kind of reply turns any other into this.
+    Unexpected,
 }
 
 impl fmt::Display for AskError {
@@ -38,6 +41,7 @@ impl fmt::Display for AskError {
         match self {
             Self::Refused(refusal) => refusal.fmt(f),
             Self::NotLinked => write!(f, "the Keeper is not reached"),
+            Self::Unexpected => write!(f, "the Keeper answered something else than was asked"),
         }
     }
 }
@@ -72,7 +76,8 @@ impl KeeperLink {
         }
     }
 
-    /// Asks the Keeper, and resolves with its reply or its refusal.
+    /// Asks the Keeper, and resolves with its reply or its refusal. The reply is of
+    /// whatever kind the Keeper sent: the caller checks that it is the kind it asked for.
     ///
     /// The request is written before this returns, so requests reach the Keeper in the
     /// order they were asked. The answer comes when the Keeper sends it; dropping the

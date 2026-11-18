@@ -37,6 +37,9 @@ toml = "1"
 # The line diff, at an exact version: the hunks have to stay those of git's histogram diff.
 # Without its printer of unified diffs, which the app does not use.
 imara-diff = { version = "=0.2.0", default-features = false }
+# Unpacks the recorded changes that the tests of the diff are held to. For tests only: no
+# program a user gets holds it. Not older than 0.9.1, which bounds what a block unpacks to.
+ruzstd = "=0.9.1"
 # SQLite compiled into the Keeper, at an exact version: the binding fixes the version of
 # SQLite itself.
 rusqlite = { version = "=0.42.0", default-features = false, features = ["bundled"] }

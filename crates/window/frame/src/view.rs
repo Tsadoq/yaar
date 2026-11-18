@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 
+use crate::controls::Control;
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
 use crate::models::Models;
@@ -22,9 +23,22 @@ pub struct Pane {
     pub focus: FocusHandle,
 }
 
-/// Builds one pane for a window, from the shared models. This is all a pane's crate
-/// gives the Window program, and all the Frame asks of a pane.
+/// Builds one pane for a window, from the shared models: all the Frame asks of a pane.
 pub type BuildPane = Box<dyn FnOnce(&Models, &mut Window, &mut App) -> Pane>;
+
+/// One pane, as its crate hands it to the Window program: everything that has to be
+/// registered for the pane to work, as one value. The Window program keeps one list of
+/// these and reads both the keys and the panes from it, so a pane cannot be in the
+/// window without its keys or the other way round.
+#[derive(Debug, Clone, Copy)]
+pub struct PaneEntry {
+    /// The name of the pane, as [`Pane::name`] carries it.
+    pub name: &'static str,
+    /// The actions of the pane with their keys.
+    pub controls: fn() -> Vec<Control>,
+    /// Makes the builder of the pane for one window.
+    pub build: fn() -> BuildPane,
+}
 
 /// The root view of the window: the sidebar, the panes, and a line that says how the
 /// Window stands with the Keeper while there is nothing else to show.
@@ -38,8 +52,9 @@ pub type BuildPane = Box<dyn FnOnce(&Models, &mut Window, &mut App) -> Pane>;
 /// - [`crate::SelectNextWorkspace`] and [`crate::SelectPreviousWorkspace`] change the
 ///   workspace on screen.
 ///
-/// It shows the reason when the Keeper refuses what the user asked, and asks for the
-/// changes again whenever the window comes to the front.
+/// It shows the reason when the Keeper refuses what the user asked. Whenever the window
+/// comes to the front it asks for the list of workspaces and for the changes again,
+/// by [`crate::WorkspaceList::refresh`] and [`crate::WorkspaceChanges::refresh`].
 pub struct Frame {
     link: Entity<KeeperLink>,
     first_frame_marked: bool,
@@ -86,7 +101,7 @@ impl Frame {
     }
 
     /// Why the Keeper refused the last thing the user asked for, as the sentence the
-    /// Frame shows; none when nothing is shown.
+    /// Frame shows; none when nothing is shown. The Frame draws this very sentence.
     pub fn notice(&self, cx: &App) -> Option<String> {
         todo!()
     }

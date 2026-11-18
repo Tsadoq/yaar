@@ -10,7 +10,8 @@
 //! - what those carry: [`Repository`], [`Workspace`], [`Changes`], [`FileSides`] and their
 //!   parts;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
-//!   by the same rule.
+//!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
+//!   reaches the Keeper makes sure it is the user's own.
 //!
 //! A message travels as one frame: a length of four bytes, little endian, that counts what
 //! follows; one byte that names the kind; the payload.
@@ -30,12 +31,13 @@ mod workspace;
 
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use workspace::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, FileSides, FileStatus,
-    Head, MAX_CONTENT, Repository, RepositoryId, Workspace, WorkspaceId,
+    Head, MAX_CONTENT, NoComparison, Repository, RepositoryId, Workspace, WorkspaceId,
 };
 
 use wire::{In, Out};
@@ -320,11 +322,48 @@ pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 1
 /// The Keeper applies this to the path it is told to listen at, and whoever connects
 /// applies it to the same path, so the two meet without having to agree on anything else.
 /// The rule is as fixed as the two frames that never change: a Window of one version has
-/// to find the Keeper of another. The folder of the short path belongs to the Keeper,
-/// which creates it for the user alone and refuses one that somebody else owns.
+/// to find the Keeper of another.
+///
+/// The short path lies where any user can make folders, under a name anyone can compute.
+/// It is therefore used only while its folder is the user's own: the Keeper makes the
+/// folder for the user alone, and both the Keeper before it binds and whoever connects
+/// refuse it otherwise, by [`check_private_folder`]. Connect through [`connect`], which
+/// does this.
 pub fn socket_address(wanted: &Path) -> PathBuf {
     let _ = wanted;
     todo!()
+}
+
+/// Connects to the socket wanted at `wanted`, where [`socket_address`] puts it, and makes
+/// sure that the other end is the user's own.
+///
+/// Two things are refused, both with [`io::ErrorKind::PermissionDenied`]:
+/// - a short path whose folder is not the user's own, by [`check_private_folder`], before
+///   anything is connected;
+/// - on any path, a process at the other end that runs as another user.
+///
+/// Where nothing listens the error is the system's own, as from connecting directly.
+pub fn connect(wanted: &Path) -> io::Result<UnixStream> {
+    let _ = (wanted, this_user());
+    todo!()
+}
+
+/// Passes when `folder` is one that only the user of this process can use: a folder and
+/// not a link to one, owned by that user, and closed to everybody else. Anything else is
+/// refused with [`io::ErrorKind::PermissionDenied`]; a folder that is not there is the
+/// system's own error.
+///
+/// The Keeper calls this on the folder of a short socket path after making it, and
+/// [`connect`] calls it before connecting there.
+pub fn check_private_folder(folder: &Path) -> io::Result<()> {
+    let _ = folder;
+    todo!()
+}
+
+/// The user this process runs as.
+fn this_user() -> u32 {
+    // SAFETY: `geteuid` only reads and cannot fail.
+    unsafe { libc::geteuid() }
 }
 
 #[cfg(test)]
@@ -491,7 +530,6 @@ mod tests {
             Repository {
                 id: RepositoryId::new("0123456789abcdef0123456789abcdef"),
                 name: "yaar".to_owned(),
-                git_dir: PathBuf::from("/home/a/gits/yaar/.git"),
                 workspaces: vec![
                     Workspace {
                         id: WorkspaceId::new("11111111111111111111111111111111"),
@@ -508,11 +546,13 @@ mod tests {
             Repository {
                 id: RepositoryId::new("fedcba9876543210fedcba9876543210"),
                 name: "empty".to_owned(),
-                git_dir: PathBuf::from("/srv/empty.git"),
                 workspaces: Vec::new(),
             },
         ]
     }
+
+    /// The full id of a commit, as the Link carries it.
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn base(name: &str, source: BaseSource) -> Base {
         Base {
@@ -521,10 +561,11 @@ mod tests {
         }
     }
 
-    fn changes(comparison: Comparison) -> Changes {
+    fn changes(comparison: Comparison, counted_from: Option<&str>) -> Changes {
         Changes {
             workspace: WorkspaceId::new("11111111111111111111111111111111"),
             comparison,
+            counted_from: counted_from.map(str::to_owned),
             commits: vec![Commit {
                 id: "89abcdef0123456789abcdef0123456789abcdef".to_owned(),
                 summary: "Say what the change does".to_owned(),
@@ -569,9 +610,18 @@ mod tests {
             },
             Request::ReadFile {
                 workspace: workspace.clone(),
-                path: PathBuf::from("src/lib.rs"),
+                since: Some(COMMIT.to_owned()),
+                old_path: PathBuf::from("src/was here.rs"),
+                path: PathBuf::from("src/moved.rs"),
             },
         ];
+        // The same kind of request, asking for no old version.
+        let without_old = Request::ReadFile {
+            workspace: workspace.clone(),
+            since: None,
+            old_path: PathBuf::from("src/new.rs"),
+            path: PathBuf::from("src/new.rs"),
+        };
         let replies = [
             Reply::Done,
             Reply::Workspaces(two_repositories()),
@@ -580,21 +630,53 @@ mod tests {
                 repository: RepositoryId::new("0123456789abcdef0123456789abcdef"),
                 workspace: workspace.clone(),
             },
-            Reply::Changes(changes(Comparison::SinceBase {
-                base: base("origin/main", BaseSource::Default),
-                fork_point: "0123456789abcdef0123456789abcdef01234567".to_owned(),
-            })),
-            Reply::Changes(changes(Comparison::NotOnUpstream {
-                base: base("main", BaseSource::Default),
-                upstream: "origin/main".to_owned(),
-            })),
-            Reply::Changes(changes(Comparison::OnNoRemoteBranch {
-                base: base("trunk", BaseSource::User),
-            })),
-            Reply::Changes(changes(Comparison::NothingToCompare {
-                base: Some(base("main", BaseSource::Default)),
-            })),
-            Reply::Changes(changes(Comparison::NothingToCompare { base: None })),
+            Reply::Changes(changes(
+                Comparison::SinceBase {
+                    base: base("origin/main", BaseSource::Default),
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::NotOnUpstream {
+                    base: base("origin/main", BaseSource::Default),
+                    upstream: "origin/main".to_owned(),
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::OnNoRemoteBranch {
+                    base: base("trunk", BaseSource::User),
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::NothingToCompare {
+                    base: Some(base("main", BaseSource::Default)),
+                    why: NoComparison::NoRemote,
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::NothingToCompare {
+                    base: Some(base(COMMIT, BaseSource::User)),
+                    why: NoComparison::BaseGone,
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::NothingToCompare {
+                    base: Some(base("main", BaseSource::Default)),
+                    why: NoComparison::NoSharedCommit,
+                },
+                Some(COMMIT),
+            )),
+            Reply::Changes(changes(
+                Comparison::NothingToCompare {
+                    base: None,
+                    why: NoComparison::NoBase,
+                },
+                None,
+            )),
             Reply::File(FileSides {
                 old: Content::Absent,
                 new: Content::Text(b"fn main() {}\n".to_vec()),
@@ -615,6 +697,9 @@ mod tests {
             },
             Refusal::BareRepository {
                 path: PathBuf::from("/srv/empty.git"),
+            },
+            Refusal::CopiedWorktree {
+                path: PathBuf::from("/home/a/gits/yaar copy"),
             },
             Refusal::UnknownWorkspace {
                 workspace: workspace.clone(),
@@ -641,6 +726,10 @@ mod tests {
                 request,
             });
         }
+        messages.push(Message::Request {
+            id: RequestId(u32::MAX),
+            request: without_old,
+        });
         for reply in replies {
             messages.push(Message::Reply {
                 to: RequestId(u32::MAX),
@@ -680,7 +769,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert_eq!(tried, RequestKind::ALL);
+        // One of each, in the order of the table; the last kind is tried a second time.
+        assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
+        assert_eq!(tried[RequestKind::ALL.len()..], [RequestKind::ReadFile]);
     }
 
     #[test]

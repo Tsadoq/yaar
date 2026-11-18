@@ -115,6 +115,9 @@ pub enum Request {
     },
     /// Count the changes of a workspace from this branch or commit from now on. Answered
     /// by [`Reply::Done`], or refused when git knows no such branch or commit.
+    ///
+    /// A branch is followed: the base moves when the branch does. Anything else the user
+    /// wrote is kept as the commit it names now, and stays that commit.
     SetBase {
         /// The workspace.
         workspace: WorkspaceId,
@@ -126,12 +129,22 @@ pub enum Request {
         /// The workspace.
         workspace: WorkspaceId,
     },
-    /// The two versions of one file of a workspace: at the point the workspace is compared
-    /// with, and in the worktree. Answered by [`Reply::File`].
+    /// The two versions of one changed file of a workspace. The Window names both, from
+    /// the [`Changes`] it holds: the old one by the commit the changes are counted from
+    /// and the path the file had there, the new one by its path in the worktree. The two
+    /// versions therefore belong to the list they were asked from, whatever happened to
+    /// the base or the branch since. Answered by [`Reply::File`]; refused when a path
+    /// leads out of the worktree or git knows no such commit.
     ReadFile {
         /// The workspace.
         workspace: WorkspaceId,
-        /// The path of the file, relative to the folder of the worktree.
+        /// The commit the old version is read in: [`Changes::counted_from`]. With none,
+        /// no old version is read and the reply holds none.
+        since: Option<String>,
+        /// The path the file had in that commit, relative to the folder of the worktree:
+        /// its path now, or for a renamed file the path it had before.
+        old_path: PathBuf,
+        /// The path of the file now, relative to the folder of the worktree.
         path: PathBuf,
     },
 }
@@ -188,6 +201,12 @@ pub enum Refusal {
         /// The folder that was given.
         path: PathBuf,
     },
+    /// The folder is a copy of a worktree and shares the original's git folder, so git
+    /// cannot tell the two apart. A worktree made by git has to be opened instead.
+    CopiedWorktree {
+        /// The folder that was given.
+        path: PathBuf,
+    },
     /// The Keeper knows no workspace by this id.
     UnknownWorkspace {
         /// The id that was given.
@@ -227,6 +246,11 @@ impl fmt::Display for Refusal {
                 "{} is a repository with no files checked out; open one of its worktrees",
                 path.display()
             ),
+            Self::CopiedWorktree { path } => write!(
+                f,
+                "{} is a copy of a worktree and shares its git folder; make a worktree with git",
+                path.display()
+            ),
             Self::UnknownWorkspace { workspace } => {
                 write!(f, "there is no workspace {workspace}")
             }
@@ -246,8 +270,11 @@ impl std::error::Error for Refusal {}
 /// Something the Keeper tells every attached Window, unasked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fact {
-    /// The list of repositories and workspaces is now this: a folder was opened, a
-    /// worktree appeared or went, or a branch was switched.
+    /// The list of repositories and workspaces is now this. Told when a folder was opened.
+    ///
+    /// The Keeper does not watch the repositories yet: a worktree made or removed, or a
+    /// branch switched, outside the app is in no fact. A Window asks for the list again
+    /// when it comes to the front.
     Workspaces(Vec<Repository>),
     /// The changes of this workspace are no longer what the Keeper last answered: its
     /// base was set, or its files or commits changed. A Window that shows them asks again.
@@ -268,8 +295,15 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(base);
         }
         Request::GetChanges { workspace } => out.text(workspace.as_str()),
-        Request::ReadFile { workspace, path } => {
+        Request::ReadFile {
+            workspace,
+            since,
+            old_path,
+            path,
+        } => {
             out.text(workspace.as_str());
+            out.optional(since.as_deref(), Out::text);
+            out.path(old_path);
             out.path(path);
         }
     }
@@ -293,6 +327,8 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         },
         RequestKind::ReadFile => Request::ReadFile {
             workspace: WorkspaceId::new(input.text()?),
+            since: input.optional(In::text)?,
+            old_path: input.path()?,
             path: input.path()?,
         },
     };
@@ -359,6 +395,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                     out.u16(7);
                     out.text(reason);
                 }
+                Refusal::CopiedWorktree { path } => {
+                    out.u16(8);
+                    out.path(path);
+                }
             }
         }
     }
@@ -401,6 +441,9 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             },
             7 => Refusal::Failed {
                 reason: input.text()?,
+            },
+            8 => Refusal::CopiedWorktree {
+                path: input.path()?,
             },
             _ => return Err(LinkError::Malformed("unknown kind of refusal")),
         }),

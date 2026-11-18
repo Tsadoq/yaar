@@ -183,3 +183,38 @@ impl Emphasis {
         todo!()
     }
 }
+
+/// The recorded changes of real files that the line diff is held to.
+///
+/// The data lies in the folder `corpus` of this crate and is compiled into the test
+/// program, so a test opens no file:
+/// - `pairs.tar.zst`, the two versions of every change, `pNNNN/a.<ext>` and
+///   `pNNNN/b.<ext>`, as one archive;
+/// - `hunks.tsv`, the hunks `git diff --diff-algorithm=histogram` gave for each change,
+///   one line for each, under a first line that names the git that was run;
+/// - `pins.tsv`, where each change comes from: the project, the two commits, the paths;
+/// - `NOTICE.md` and the licence texts of the projects the changes are copied from;
+/// - `record.sh`, which writes `hunks.tsv` again from the archive.
+#[cfg(test)]
+mod corpus {
+    use ruzstd::decoding::StreamingDecoder;
+
+    use crate::Hunk;
+
+    /// One recorded change of one file.
+    pub(crate) struct Pair {
+        /// Its name in the corpus: `p0000`.
+        pub(crate) id: String,
+        /// The file before the change.
+        pub(crate) old: Vec<u8>,
+        /// The file after it.
+        pub(crate) new: Vec<u8>,
+        /// The hunks git gave.
+        pub(crate) git_hunks: Vec<Hunk>,
+    }
+
+    /// Every change of the corpus, in the order of their names.
+    pub(crate) fn pairs() -> Vec<Pair> {
+        todo!()
+    }
+}

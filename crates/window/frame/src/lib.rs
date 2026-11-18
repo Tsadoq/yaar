@@ -7,7 +7,8 @@
 //!
 //! Surface:
 //! - [`Frame`], the root view of the window, and [`open`], which opens it with the panes
-//!   it is given: a [`BuildPane`] for each, which makes a [`Pane`];
+//!   it is given: a [`BuildPane`] for each, which makes a [`Pane`]. A pane's crate hands
+//!   the Window program one [`PaneEntry`], which holds the builder and the keys;
 //! - [`KeeperLink`], the model that says how the Window stands with the Keeper, through
 //!   which the Window asks the Keeper and hears its facts;
 //! - [`Models`], the shared models a pane observes: [`WorkspaceList`], the repositories
@@ -32,7 +33,7 @@ pub mod trace;
 mod view;
 
 pub use controls::{
-    Asks, Control, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, SetBase,
+    Asks, Control, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, Sends, SetBase,
     ToggleSidebar, UnpinSidebar, bind, controls,
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus};
@@ -40,4 +41,4 @@ pub use models::{Models, WorkspaceChanges, WorkspaceList};
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
 };
-pub use view::{BuildPane, Frame, Opened, Pane, open};
+pub use view::{BuildPane, Frame, Opened, Pane, PaneEntry, open};

@@ -61,8 +61,6 @@ pub struct Repository {
     pub id: RepositoryId,
     /// The name to show: the name of the folder that holds the repository.
     pub name: String,
-    /// The git folder all its worktrees share.
-    pub git_dir: PathBuf,
     /// Its worktrees, the main one first, then in the order git lists them.
     pub workspaces: Vec<Workspace>,
 }
@@ -103,7 +101,7 @@ impl Head {
 /// What the changes of a workspace are counted from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Base {
-    /// The branch or commit as the user would write it: `origin/main`, `main`, `1a2b3c4`.
+    /// A branch by its short name, `origin/main` or `main`, or a commit by its full id.
     pub name: String,
     /// Who chose it.
     pub source: BaseSource,
@@ -125,6 +123,14 @@ pub struct Changes {
     pub workspace: WorkspaceId,
     /// What they are compared with.
     pub comparison: Comparison,
+    /// The commit the files are counted from, by its full id: the point where the branch
+    /// left its base in [`Comparison::SinceBase`], the commit that is checked out in every
+    /// other comparison. None only where nothing is committed yet.
+    ///
+    /// A Window hands it back in [`crate::Request::ReadFile`] to name the old version of
+    /// a file, so the two versions it gets belong to this list whatever happened to the
+    /// base or the branch since. It is a name to the Window, which reads nothing into it.
+    pub counted_from: Option<String>,
     /// The commits of the comparison, newest first.
     pub commits: Vec<Commit>,
     /// The changed files, ordered by path.
@@ -136,36 +142,54 @@ pub struct Changes {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Comparison {
     /// The branch of the workspace against its base. The commits are those of the branch
-    /// since `fork_point`; the files are everything that differs between `fork_point` and
-    /// the worktree as it is on disk, uncommitted and untracked files included.
+    /// since the point where it left the base, which is [`Changes::counted_from`]; the
+    /// files are everything that differs between that point and the worktree as it is on
+    /// disk, uncommitted and untracked files included.
     SinceBase {
         /// The base.
         base: Base,
-        /// The commit where the branch left the base, by its full id.
-        fork_point: String,
     },
     /// The workspace is on its base branch, which has an upstream. The commits are those
     /// not on the upstream; the files are the uncommitted changes.
     NotOnUpstream {
-        /// The base, which is the branch checked out.
+        /// The base, as the Keeper found it or the user set it. The branch checked out is
+        /// that branch, or the local branch of the same name when the base is a branch of
+        /// a remote: `main` against `origin/main`.
         base: Base,
-        /// The upstream of that branch, by its short name: `origin/main`.
+        /// The upstream of the branch checked out, by its short name: `origin/main`.
         upstream: String,
     },
     /// The workspace is on its base branch, which has no upstream, in a repository with a
     /// remote. The commits are those on no branch of any remote; the files are the
     /// uncommitted changes.
     OnNoRemoteBranch {
-        /// The base, which is the branch checked out.
+        /// The base, as the Keeper found it or the user set it. The branch checked out is
+        /// that branch or its local twin, as in [`Comparison::NotOnUpstream`].
         base: Base,
     },
-    /// There is nothing to compare the branch with: it is the base branch of a repository
-    /// with no remote, or no base was found. No commits; the files are the uncommitted
-    /// changes. The Window offers to set a base.
+    /// There is nothing to compare the branch with. No commits; the files are the
+    /// uncommitted changes. The Window says why and offers to set a base.
     NothingToCompare {
-        /// The base, when one was found.
+        /// The base, when there is one.
         base: Option<Base>,
+        /// Why there is nothing to compare with.
+        why: NoComparison,
     },
+}
+
+/// Why there is nothing to compare a workspace with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoComparison {
+    /// The workspace is on its base branch, in a repository with no remote.
+    NoRemote,
+    /// No base was found and the user set none.
+    NoBase,
+    /// The base the user set names nothing git knows any more: the branch was deleted,
+    /// or the commit is gone.
+    BaseGone,
+    /// The branch and its base share no commit, or nothing is committed on the branch
+    /// yet.
+    NoSharedCommit,
 }
 
 /// One commit, as a list shows it.
@@ -205,7 +229,7 @@ pub enum FileStatus {
 /// The two versions of one file of a comparison: before and now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSides {
-    /// The file as it was at the point the workspace is compared with.
+    /// The file as it was in the commit the request named, at the path it had there.
     pub old: Content,
     /// The file as it is in the worktree.
     pub new: Content,
@@ -237,7 +261,6 @@ pub const MAX_CONTENT: u64 = 4 * 1024 * 1024;
 pub(crate) fn write_repository(out: &mut Out, repository: &Repository) {
     out.text(repository.id.as_str());
     out.text(&repository.name);
-    out.path(&repository.git_dir);
     out.list(&repository.workspaces, |out, workspace| {
         out.text(workspace.id.as_str());
         out.path(&workspace.path);
@@ -258,7 +281,6 @@ pub(crate) fn read_repository(input: &mut In<'_>) -> Result<Repository, LinkErro
     Ok(Repository {
         id: RepositoryId(input.text()?),
         name: input.text()?,
-        git_dir: input.path()?,
         workspaces: input.list(|input| {
             Ok(Workspace {
                 id: WorkspaceId(input.text()?),
@@ -295,10 +317,9 @@ fn read_base(input: &mut In<'_>) -> Result<Base, LinkError> {
 pub(crate) fn write_changes(out: &mut Out, changes: &Changes) {
     out.text(changes.workspace.as_str());
     match &changes.comparison {
-        Comparison::SinceBase { base, fork_point } => {
+        Comparison::SinceBase { base } => {
             out.u8(0);
             write_base(out, base);
-            out.text(fork_point);
         }
         Comparison::NotOnUpstream { base, upstream } => {
             out.u8(1);
@@ -309,17 +330,18 @@ pub(crate) fn write_changes(out: &mut Out, changes: &Changes) {
             out.u8(2);
             write_base(out, base);
         }
-        Comparison::NothingToCompare { base } => {
+        Comparison::NothingToCompare { base, why } => {
             out.u8(3);
-            match base {
-                None => out.u8(0),
-                Some(base) => {
-                    out.u8(1);
-                    write_base(out, base);
-                }
-            }
+            out.optional(base.as_ref(), write_base);
+            out.u8(match why {
+                NoComparison::NoRemote => 0,
+                NoComparison::NoBase => 1,
+                NoComparison::BaseGone => 2,
+                NoComparison::NoSharedCommit => 3,
+            });
         }
     }
+    out.optional(changes.counted_from.as_deref(), Out::text);
     out.list(&changes.commits, |out, commit| {
         out.text(&commit.id);
         out.text(&commit.summary);
@@ -343,7 +365,6 @@ pub(crate) fn read_changes(input: &mut In<'_>) -> Result<Changes, LinkError> {
     let comparison = match input.u8()? {
         0 => Comparison::SinceBase {
             base: read_base(input)?,
-            fork_point: input.text()?,
         },
         1 => Comparison::NotOnUpstream {
             base: read_base(input)?,
@@ -353,14 +374,18 @@ pub(crate) fn read_changes(input: &mut In<'_>) -> Result<Changes, LinkError> {
             base: read_base(input)?,
         },
         3 => Comparison::NothingToCompare {
-            base: match input.u8()? {
-                0 => None,
-                1 => Some(read_base(input)?),
-                _ => return Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+            base: input.optional(read_base)?,
+            why: match input.u8()? {
+                0 => NoComparison::NoRemote,
+                1 => NoComparison::NoBase,
+                2 => NoComparison::BaseGone,
+                3 => NoComparison::NoSharedCommit,
+                _ => return Err(LinkError::Malformed("unknown reason for no comparison")),
             },
         },
         _ => return Err(LinkError::Malformed("unknown kind of comparison")),
     };
+    let counted_from = input.optional(In::text)?;
     let commits = input.list(|input| {
         Ok(Commit {
             id: input.text()?,
@@ -384,6 +409,7 @@ pub(crate) fn read_changes(input: &mut In<'_>) -> Result<Changes, LinkError> {
     Ok(Changes {
         workspace,
         comparison,
+        counted_from,
         commits,
         files,
     })

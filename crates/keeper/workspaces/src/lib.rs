@@ -9,64 +9,36 @@
 //! - [`default_base`] and [`on_base_branch`], the two rules behind the base, as plain
 //!   functions of what git reports;
 //! - what those return: [`Repository`], [`Workspace`], [`Base`], [`Changes`],
-//!   [`Comparison`], [`FileSides`], and [`WorkspaceError`] with the [`Refusal`] a user
-//!   can mend.
+//!   [`Comparison`] with [`NoComparison`], [`FileSides`], and [`WorkspaceError`] with the
+//!   [`Refusal`] a user can mend.
 //!
 //! A workspace is one worktree. It is recognised by an id written once into the git
 //! folder of that worktree, in a file named [`ID_FILE`]: the id stays with the worktree
 //! when the folder is moved, and git lists nothing in that place. Everything else the app
 //! keeps about a workspace is in the Store, under that id.
 //!
+//! A folder that is copied takes the id file along. [`Workspaces::open_folder`] says what
+//! becomes of an id found in two places.
+//!
 //! This crate starts no git and opens no database: it asks the Recorder and the Store.
 
 mod base;
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-use yaar_recorder::{Git, GitError};
+use yaar_recorder::{Git, GitError, Worktree};
 use yaar_store::{Store, StoreError};
 
 pub use base::{default_base, on_base_branch};
 pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs};
+pub use yaar_store::{RepositoryId, WorkspaceId};
 
 /// The name of the file, in the git folder of a worktree, that holds the id of its
 /// workspace: 32 lowercase hexadecimal digits and a line feed.
-pub const ID_FILE: &str = "yaar-id";
-
-/// Names one workspace. It is the content of [`ID_FILE`]: 32 lowercase hexadecimal
-/// digits, drawn at random when the worktree is first seen.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WorkspaceId(String);
-
-impl WorkspaceId {
-    /// The id with this text.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    /// The text of the id.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Names one repository: 32 lowercase hexadecimal digits, drawn at random when the
-/// repository is first opened and kept in the Store with the git folder of the repository.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RepositoryId(String);
-
-impl RepositoryId {
-    /// The id with this text.
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
-    }
-
-    /// The text of the id.
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
+pub const ID_FILE: &str = "ade-id";
 
 /// A repository the user opened, with its worktrees as git lists them now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,7 +76,7 @@ pub struct Opened {
 /// What the changes of a workspace are counted from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Base {
-    /// The branch or commit, as the user would write it to git.
+    /// A branch by its short name, as [`Refs`] lists it, or a commit by its full id.
     pub name: String,
     /// Who chose it.
     pub source: BaseSource,
@@ -126,43 +98,64 @@ pub enum Comparison {
     SinceBase {
         /// The base.
         base: Base,
-        /// Where the branch left it.
-        fork_point: CommitId,
     },
     /// On its base branch, which follows an upstream.
     NotOnUpstream {
-        /// The base, which is the branch checked out.
+        /// The base, as [`Workspaces::base`] returns it. The branch checked out is that
+        /// branch, or the local branch of the same name when the base is a branch of a
+        /// remote: `main` against `origin/main`.
         base: Base,
-        /// The branch it follows, by its short name.
+        /// The branch that the branch checked out follows, by its short name.
         upstream: String,
     },
     /// On its base branch, which follows nothing, in a repository with a remote.
     OnNoRemoteBranch {
-        /// The base, which is the branch checked out.
+        /// The base, as [`Workspaces::base`] returns it; the branch checked out is that
+        /// branch or its local twin, as in [`Comparison::NotOnUpstream`].
         base: Base,
     },
-    /// Nothing to compare with: on the base branch of a repository with no remote, or
-    /// with no base found. Whoever shows this offers to set a base.
+    /// Nothing to compare with. Whoever shows this says why and offers to set a base.
     NothingToCompare {
-        /// The base, when one was found.
+        /// The base, when there is one.
         base: Option<Base>,
+        /// Why there is nothing to compare with.
+        why: NoComparison,
     },
+}
+
+/// Why there is nothing to compare a workspace with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoComparison {
+    /// The workspace is on its base branch, in a repository with no remote.
+    NoRemote,
+    /// [`default_base`] found no base and the user set none.
+    NoBase,
+    /// The base the user set names nothing git knows any more.
+    BaseGone,
+    /// The branch and its base share no commit, or nothing is committed on the branch
+    /// yet.
+    NoSharedCommit,
 }
 
 /// The changes of one workspace.
 ///
-/// | [`Comparison`] | `commits` | `files` differ between |
+/// | [`Comparison`] | `counted_from` | `commits` |
 /// | --- | --- | --- |
-/// | `SinceBase` | of the branch since the fork point | the fork point and the files on disk |
-/// | `NotOnUpstream` | not on the upstream | the checked-out commit and the files on disk |
-/// | `OnNoRemoteBranch` | on no branch of any remote | the same |
-/// | `NothingToCompare` | none | the same |
+/// | `SinceBase` | the point where the branch left the base | of the branch since that point |
+/// | `NotOnUpstream` | the commit checked out | not on the upstream |
+/// | `OnNoRemoteBranch` | the commit checked out | on no branch of any remote |
+/// | `NothingToCompare` | the commit checked out, if any | none |
 ///
-/// "The files on disk" takes in what is not committed and what git does not track yet.
+/// `files` are the paths that differ between `counted_from` and the files on disk, which
+/// takes in what is not committed and what git does not track yet. With nothing committed
+/// every file on disk that git does not ignore is new.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Changes {
     /// What the workspace is compared with.
     pub comparison: Comparison,
+    /// The commit the files are counted from; none only where nothing is committed yet.
+    /// [`Workspaces::file`] reads the old version of a file in it.
+    pub counted_from: Option<CommitId>,
     /// The commits of the comparison, newest first.
     pub commits: Vec<Commit>,
     /// The changed files, ordered by path.
@@ -173,7 +166,7 @@ pub struct Changes {
 /// exist.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileSides {
-    /// The file at the commit the files of [`Changes`] are counted from.
+    /// The file in the commit that was named, at the path it had there.
     pub old: Option<Vec<u8>>,
     /// The file on disk.
     pub new: Option<Vec<u8>>,
@@ -188,6 +181,8 @@ pub enum Refusal {
     NotARepository(PathBuf),
     /// The folder is a repository with no files checked out.
     BareRepository(PathBuf),
+    /// The folder is a copy of a worktree that shares the git folder of the original.
+    CopiedWorktree(PathBuf),
     /// No workspace has this id.
     UnknownWorkspace(WorkspaceId),
     /// git knows no branch and no commit by this name.
@@ -210,7 +205,12 @@ impl fmt::Display for Refusal {
                 "{} is a repository with no files checked out",
                 path.display()
             ),
-            Self::UnknownWorkspace(id) => write!(f, "there is no workspace {}", id.as_str()),
+            Self::CopiedWorktree(path) => write!(
+                f,
+                "{} is a copy of a worktree and shares its git folder",
+                path.display()
+            ),
+            Self::UnknownWorkspace(id) => write!(f, "there is no workspace {id}"),
             Self::UnknownRevision(name) => {
                 write!(f, "git knows no branch and no commit named {name}")
             }
@@ -270,10 +270,15 @@ impl From<StoreError> for WorkspaceError {
 /// What it knows outlives it: a second `Workspaces` on the same Store lists the same
 /// repositories, with the same ids and the same bases. It may be used from several
 /// threads at once.
+///
+/// It keeps the worktree of each workspace it has read, and with it the one git process
+/// that worktree keeps for file contents; a worktree that moved is opened again.
 #[derive(Debug)]
 pub struct Workspaces {
     git: Git,
     store: Store,
+    // The worktrees read so far, kept for their running git process.
+    worktrees: Mutex<BTreeMap<WorkspaceId, Arc<Worktree>>>,
 }
 
 impl Workspaces {
@@ -289,6 +294,17 @@ impl Workspaces {
     /// The folder may be the worktree itself or any folder inside it. Refused, with the
     /// reason, are a path that is no folder, a folder in no repository, and a repository
     /// with no files checked out.
+    ///
+    /// An id the Store already holds at another path:
+    /// - is the same workspace, moved, when that path no longer holds a worktree with
+    ///   this id: the Store is brought up to date;
+    /// - belongs to a copy when the other path still holds it. A copy of a whole
+    ///   repository has a git folder of its own: it is another repository, and its
+    ///   workspace gets a new id, written over the copied one. A copy of one linked
+    ///   worktree shares the git folder of the original, so git lists one worktree for
+    ///   the two folders: it is refused with [`Refusal::CopiedWorktree`].
+    ///
+    /// The user is not asked; that question comes when there are reviews to lose.
     pub fn open_folder(&self, folder: &Path) -> Result<Opened, WorkspaceError> {
         todo!()
     }
@@ -301,7 +317,8 @@ impl Workspaces {
     }
 
     /// What the changes of a workspace are counted from: the base the user set, else the
-    /// default branch of the repository by [`default_base`], else nothing.
+    /// default branch of the repository by [`default_base`], else nothing. A base the
+    /// user set is returned as it is kept, whether or not git still knows it.
     pub fn base(&self, workspace: &WorkspaceId) -> Result<Option<Base>, WorkspaceError> {
         todo!()
     }
@@ -309,6 +326,11 @@ impl Workspaces {
     /// Sets the base of a workspace to a branch or a commit, as the user wrote it. It
     /// replaces the default from now on, and a later `Workspaces` on the same Store still
     /// finds it. Refused when git knows nothing by that name.
+    ///
+    /// What is kept, and returned, depends on what the text names. A branch, local or of
+    /// a remote, is kept by its short name and followed: the base moves when the branch
+    /// does. Anything else, a tag, an id cut short, `HEAD~3`, is kept as the full id of
+    /// the commit it names now, so that the base stays where the user put it.
     pub fn set_base(
         &self,
         workspace: &WorkspaceId,
@@ -318,16 +340,36 @@ impl Workspaces {
     }
 
     /// The changes of a workspace as they are now; see [`Changes`] for what they hold in
-    /// each case. The workspace is on its base branch when [`on_base_branch`] says so.
+    /// each case. The comparison is the first of these that applies:
+    ///
+    /// 1. there is no base: `NothingToCompare`, [`NoComparison::NoBase`];
+    /// 2. the base, which then is one the user set, names nothing git knows:
+    ///    `NothingToCompare`, [`NoComparison::BaseGone`];
+    /// 3. the workspace is on its base branch, by [`on_base_branch`]: `NotOnUpstream`
+    ///    when the branch checked out follows a branch that exists, else
+    ///    `OnNoRemoteBranch` when the repository has a remote, else `NothingToCompare`,
+    ///    [`NoComparison::NoRemote`];
+    /// 4. what is checked out shares a commit with the base: `SinceBase`;
+    /// 5. otherwise `NothingToCompare`, [`NoComparison::NoSharedCommit`].
     pub fn changes(&self, workspace: &WorkspaceId) -> Result<Changes, WorkspaceError> {
         todo!()
     }
 
-    /// The two versions of one file of a workspace, as [`Changes`] compares them: at the
-    /// commit its files are counted from, and on disk. For a renamed file, give its path
-    /// now; the old version is read at the path it had. Refused when the path leads out
-    /// of the worktree.
-    pub fn file(&self, workspace: &WorkspaceId, path: &Path) -> Result<FileSides, WorkspaceError> {
+    /// The two versions of one file of a workspace: the old one in the commit `since`, at
+    /// `old_path`, and the new one on disk, at `path`. Both paths are relative to the
+    /// folder of the worktree. The caller takes `since` from [`Changes::counted_from`]
+    /// and, for a renamed file, `old_path` from the path it had; each version is one
+    /// read, and nothing about the base or the branch is asked again.
+    ///
+    /// With `since` none the old version is none. Refused when a path leads out of the
+    /// worktree, and when git knows no commit `since`.
+    pub fn file(
+        &self,
+        workspace: &WorkspaceId,
+        since: Option<&CommitId>,
+        old_path: &Path,
+        path: &Path,
+    ) -> Result<FileSides, WorkspaceError> {
         todo!()
     }
 }

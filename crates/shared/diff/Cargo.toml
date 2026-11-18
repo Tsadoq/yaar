@@ -9,5 +9,8 @@ publish.workspace = true
 [dependencies]
 imara-diff.workspace = true
 
+[dev-dependencies]
+ruzstd.workspace = true
+
 [lints]
 workspace = true

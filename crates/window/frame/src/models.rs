@@ -4,10 +4,10 @@
 //! A pane is handed the [`Models`] when it is built. It observes the models it shows,
 //! and asks the Keeper through them; it holds no other pane and no connection of its own.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use gpui_kit::*;
-use yaar_link::{Changes, FileSides, Refusal, Repository, Workspace, WorkspaceId};
+use yaar_link::{ChangedFile, Changes, FileSides, Refusal, Repository, Workspace, WorkspaceId};
 
 use crate::link_model::{AskError, KeeperLink};
 
@@ -31,10 +31,11 @@ impl Models {
 
 /// The repositories the user opened, their worktrees, and which workspace is on screen.
 ///
-/// It asks the Keeper for the list when the link is connected, and takes every list the
-/// Keeper tells afterwards. The workspace on screen is the Window's own choice: the
-/// first of the list until the user selects another, and a workspace the user just
-/// opened. When that workspace leaves the list, the first of the list takes its place.
+/// It asks the Keeper for the list when the link is connected and whenever
+/// [`WorkspaceList::refresh`] is called, and takes every list the Keeper tells in
+/// between. The workspace on screen is the Window's own choice: the first of the list
+/// until the user selects another, and a workspace the user just opened. When that
+/// workspace leaves the list, the first of the list takes its place.
 pub struct WorkspaceList {
     link: Entity<KeeperLink>,
     repositories: Vec<Repository>,
@@ -81,8 +82,17 @@ impl WorkspaceList {
         todo!()
     }
 
+    /// Asks the Keeper again for the list. The Frame calls it when the window comes to
+    /// the front: a worktree made or a branch switched outside the app is in no fact.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) {
+        todo!()
+    }
+
     /// Asks the Keeper to open a folder. When it is opened, its workspace is put on
     /// screen; when it is refused, [`WorkspaceList::refusal`] says why.
+    ///
+    /// The Keeper answers with the id of the workspace before it tells the list that
+    /// holds it. The workspace comes on screen when both are here, whichever is first.
     pub fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
         todo!()
     }
@@ -153,10 +163,18 @@ impl WorkspaceChanges {
         todo!()
     }
 
-    /// Asks the Keeper for the two versions of one file of the workspace on screen:
-    /// how a pane gets what it diffs. `path` is the path of a changed file as
-    /// [`Changes`] lists it.
-    pub fn file(&self, path: &Path, cx: &mut Context<Self>) -> Task<Result<FileSides, AskError>> {
+    /// Asks the Keeper for the two versions of one changed file of the workspace on
+    /// screen: how a pane gets what it diffs. `file` is a file of
+    /// [`WorkspaceChanges::changes`].
+    ///
+    /// The old version is asked for in the commit those changes are counted from, at the
+    /// path the file had there, so the two versions belong to the list the pane holds.
+    /// A new file has no old version, and none is asked for.
+    pub fn file(
+        &self,
+        file: &ChangedFile,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<FileSides, AskError>> {
         todo!()
     }
 }

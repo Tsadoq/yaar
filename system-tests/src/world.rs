@@ -78,8 +78,8 @@ impl World {
     }
 }
 
-/// A git repository of a world, driven as a user drives git: by commands. The author, the committer and the dates are fixed, so the same steps give
-/// the same commits.
+/// A git repository of a world, driven as a user drives git: by commands. The author,
+/// the committer and the dates are fixed, so the same steps give the same commits.
 pub struct Repo {
     root: PathBuf,
     world: PathBuf,
@@ -113,8 +113,14 @@ impl Repo {
 ///
 /// It listens at [`Tap::socket`]. Each connection made there is joined to a connection of
 /// its own to the Keeper, and every frame is passed on unchanged, both ways.
+///
+/// The tap keeps every request, and a place in that list up to which the waits have
+/// read. [`Tap::requests`] gives the whole list; [`Tap::wait_for_request`] looks only
+/// past the place and moves it.
 pub struct Tap {
     socket: PathBuf,
+    // How many requests the waits have passed.
+    read: usize,
 }
 
 impl Tap {
@@ -123,14 +129,22 @@ impl Tap {
         todo!()
     }
 
-    /// Every request that passed towards the Keeper so far, in order.
+    /// Every request that passed towards the Keeper so far, in order, whatever the
+    /// waits have read.
     pub fn requests(&self) -> Vec<Request> {
         todo!()
     }
 
-    /// Waits until a request that `wanted` accepts has passed, at most `limit`. Panics,
-    /// with the requests seen, when none comes.
-    pub fn wait_for_request(&self, limit: Duration, wanted: impl Fn(&Request) -> bool) -> Request {
+    /// Waits for a request that `wanted` accepts, at most `limit`, and returns it. Only
+    /// requests that no earlier wait has passed are looked at, and this wait passes the
+    /// one it returns and every request before it: a request seen once does not answer
+    /// a second wait, as with the facts of [`Client::wait_for_fact`]. Panics, with the
+    /// requests looked at, when none comes.
+    pub fn wait_for_request(
+        &mut self,
+        limit: Duration,
+        wanted: impl Fn(&Request) -> bool,
+    ) -> Request {
         todo!()
     }
 }

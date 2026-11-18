@@ -87,7 +87,10 @@ impl Shared {
 /// Serves Windows on the socket until asked to stop or until nothing needs the Keeper.
 ///
 /// The socket is bound at [`yaar_link::socket_address`] of `options.socket`, so that a
-/// path too long for the system still leads Windows to this Keeper.
+/// path too long for the system still leads Windows to this Keeper. The folder of such a
+/// short path is made for the user alone and has to pass
+/// [`yaar_link::check_private_folder`], or the Keeper does not start: anyone can make
+/// that folder first. The lock file lies beside the socket really bound.
 ///
 /// Returns at once with [`Exit::AlreadyRunning`] when another Keeper holds the socket.
 pub fn run(options: Options) -> io::Result<Exit> {
