@@ -6,8 +6,8 @@
 mod common;
 
 use gpui_kit::{
-    Action, AppContext, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size, TestAppContext,
-    VisualTestContext, point, px, size,
+    Action, AppContext, Bounds, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size,
+    TestAppContext, VisualTestContext, point, px, size,
 };
 use yaar_frame::{
     FULL_WIDTH, KeeperLink, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow,
@@ -46,6 +46,42 @@ fn drawn_width(cx: &mut VisualTestContext) -> Pixels {
         .expect("the sidebar is drawn")
         .size
         .width
+}
+
+/// Holds what is drawn to what [`Sidebar::rows`] lists: every row of the list is drawn,
+/// inside the sidebar, and each one under the one the list has before it.
+fn assert_drawn_as_listed(sidebar: &Entity<Sidebar>, cx: &mut VisualTestContext) {
+    let whole = drawn("sidebar", cx).expect("the sidebar is drawn");
+    let mut above: Option<(SidebarRow, Bounds<Pixels>)> = None;
+    for row in rows(sidebar, cx) {
+        let selector = match &row {
+            SidebarRow::Repository { id, .. } => format!("sidebar-repository-{id}"),
+            SidebarRow::Workspace { id, .. } => format!("sidebar-workspace-{id}"),
+        };
+        let Some(place) = drawn(&selector, cx) else {
+            panic!("{row:?} is listed and not drawn");
+        };
+        assert!(
+            place.size.width > px(0.) && place.size.height > px(0.),
+            "{row:?} is drawn with no room: {place:?}"
+        );
+        assert!(
+            whole.left() <= place.left()
+                && place.right() <= whole.right()
+                && whole.top() <= place.top()
+                && place.bottom() <= whole.bottom(),
+            "{row:?} is drawn at {place:?}, outside the sidebar at {whole:?}"
+        );
+        if let Some((above, ends)) = &above {
+            assert!(
+                ends.bottom() <= place.top(),
+                "{row:?} starts at {:?}, which is not under {above:?}, which ends at {:?}",
+                place.top(),
+                ends.bottom()
+            );
+        }
+        above = Some((row, place));
+    }
 }
 
 fn repository_row(repository: &Repository) -> SidebarRow {
@@ -156,6 +192,7 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
     shown
         .keeper
         .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
+    assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
     // What it tells when a worktree was made there and a second repository was opened.
     let listed = two_repositories();
@@ -172,6 +209,8 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
     wait_until(&mut cx, "both repositories in the sidebar", |cx| {
         shown.sidebar.read_with(cx, |sidebar, cx| sidebar.rows(cx)) == every_row
     });
+    // What is drawn is that list: each repository above its own worktrees.
+    assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
     // A click on a worktree puts it on screen: the sidebar marks it, the shared list has
     // it selected, and its changes are asked for.
@@ -198,6 +237,7 @@ fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_i
             .collect()
     };
     assert_eq!(names(&rows(&shown.sidebar, &mut cx)), names(&every_row));
+    assert_drawn_as_listed(&shown.sidebar, &mut cx);
 }
 
 #[gpui_kit::test]
@@ -210,6 +250,9 @@ fn the_rail_holds_the_same_rows_and_a_click_on_a_mark_puts_its_workspace_on_scre
     cx.simulate_resize(wide(RAIL_BELOW - px(1.)));
     assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Rail);
     assert_eq!(rows(&shown.sidebar, &mut cx), as_full_list);
+    // Drawn narrower, and still each repository above its own worktrees.
+    assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
+    assert_drawn_as_listed(&shown.sidebar, &mut cx);
 
     // The mark of a workspace lies inside the rail, and takes the click.
     let mark = drawn(&format!("sidebar-workspace-{}", id('2')), &mut cx)

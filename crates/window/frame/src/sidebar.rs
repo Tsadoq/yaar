@@ -64,9 +64,10 @@ pub enum SidebarRow {
 /// A click on a workspace puts it on screen. A click on the pin control does what
 /// [`crate::ToggleSidebar`] does.
 ///
-/// For tests, which cannot read what is drawn, three kinds of element carry a selector
-/// that `debug_bounds` finds: the sidebar as a whole, `sidebar`; each workspace row,
-/// `sidebar-workspace-<id>`; and the pin control, `sidebar-pin`.
+/// For tests, which cannot read what is drawn, four kinds of element carry a selector
+/// that `debug_bounds` finds: the sidebar as a whole, `sidebar`; each repository row,
+/// `sidebar-repository-<id>`; each workspace row, `sidebar-workspace-<id>`; and the pin
+/// control, `sidebar-pin`.
 pub struct Sidebar {
     workspaces: Entity<WorkspaceList>,
     pinned: Option<SidebarForm>,
@@ -167,24 +168,28 @@ impl Sidebar {
     fn row(&self, row: SidebarRow, colors: &Colors, cx: &mut Context<Self>) -> AnyElement {
         let rail = self.form == SidebarForm::Rail;
         match row {
-            // In the rail a repository is the line between two groups of marks.
-            SidebarRow::Repository { .. } if rail => div()
-                .mx_2()
-                .my_1()
-                .h(px(1.))
-                .flex_none()
-                .bg(colors.border)
-                .into_any_element(),
-            SidebarRow::Repository { name, .. } => div()
-                .px_3()
-                .pt_3()
-                .pb_1()
-                .flex_none()
-                .text_xs()
-                .text_color(colors.muted)
-                .truncate()
-                .child(name)
-                .into_any_element(),
+            SidebarRow::Repository { id, name } => {
+                let row = div()
+                    .debug_selector(move || format!("sidebar-repository-{id}"))
+                    .flex_none();
+                if rail {
+                    // In the rail a repository is the line between two groups of marks.
+                    row.mx_2()
+                        .my_1()
+                        .h(px(1.))
+                        .bg(colors.border)
+                        .into_any_element()
+                } else {
+                    row.px_3()
+                        .pt_3()
+                        .pb_1()
+                        .text_xs()
+                        .text_color(colors.muted)
+                        .truncate()
+                        .child(name)
+                        .into_any_element()
+                }
+            }
             SidebarRow::Workspace { id, name, selected } => {
                 let selector = format!("sidebar-workspace-{id}");
                 let row = div()
