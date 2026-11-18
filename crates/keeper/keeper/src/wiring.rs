@@ -71,6 +71,9 @@ pub(crate) struct Parts {
     shared: Weak<Shared>,
 }
 
+/// A step that waits for a reply to be queued, and runs after it.
+pub(crate) type Step = Box<dyn FnOnce() + Send>;
+
 /// What one request leads to.
 pub(crate) struct Outcome {
     /// For the Window that asked.
@@ -78,7 +81,7 @@ pub(crate) struct Outcome {
     /// For every attached Window, the one that asked included, after the reply.
     pub(crate) facts: Vec<Fact>,
     /// Run once the reply is queued, before the facts are told.
-    pub(crate) then: Option<Box<dyn FnOnce() + Send>>,
+    pub(crate) then: Option<Step>,
 }
 
 impl Outcome {
@@ -202,11 +205,7 @@ impl Parts {
                     },
                 }),
         };
-        Outcome {
-            reply,
-            facts,
-            then,
-        }
+        Outcome { reply, facts, then }
     }
 
     /// Starts `program` in the folder of `workspace`, in a terminal of the Dock. The
@@ -219,7 +218,7 @@ impl Parts {
         workspace: &yaar_link::WorkspaceId,
         program: &Program,
         at: TerminalSize,
-    ) -> Result<(Reply, Box<dyn FnOnce() + Send>), Refusal> {
+    ) -> Result<(Reply, Step), Refusal> {
         let folder = list(workspaces)?
             .into_iter()
             .flat_map(|repository| repository.workspaces)
@@ -611,6 +610,48 @@ mod tests {
                 size: yaar_link::MAX_CONTENT + 1
             }
         );
+    }
+
+    #[test]
+    fn the_words_of_the_dock_become_those_of_the_link() {
+        assert_eq!(
+            size(TerminalSize {
+                columns: 120,
+                rows: 40
+            }),
+            yaar_dock::Size {
+                columns: 120,
+                rows: 40
+            }
+        );
+        assert_eq!(ending(yaar_dock::Ending::Exited(3)), Ending::Exited(3));
+        assert_eq!(
+            ending(yaar_dock::Ending::Signalled(9)),
+            Ending::Signalled(9)
+        );
+    }
+
+    #[test]
+    fn what_a_program_writes_is_cut_into_frames_of_at_most_64_kib_and_loses_nothing() {
+        let terminal = yaar_link::TerminalId::new("0".repeat(32));
+        let bytes: Vec<u8> = (0..150_000u32).map(|n| (n % 251) as u8).collect();
+        let frames = frames_of(&terminal, bytes.clone());
+        assert_eq!(frames.len(), 3);
+        let mut joined = Vec::new();
+        for frame in frames {
+            let Ok(Message::Output {
+                terminal: from,
+                bytes,
+            }) = yaar_link::read_message(&mut frame.as_slice())
+            else {
+                panic!("not a frame of output");
+            };
+            assert_eq!(from, terminal);
+            assert!(bytes.len() <= OUTPUT_FRAME);
+            joined.extend(bytes);
+        }
+        assert_eq!(joined, bytes);
+        assert!(frames_of(&terminal, Vec::new()).is_empty());
     }
 
     #[test]

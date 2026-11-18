@@ -2,8 +2,9 @@
 //!
 //! It starts the Keeper's components and connects them: it listens on its socket, tells
 //! each Window who it is, hands each request of a Window to the part that answers it,
-//! tells every attached Window what changed, and leaves when it is asked to or when
-//! nothing needs it any more.
+//! tells every attached Window what changed, runs the programs of the terminals and passes
+//! their bytes both ways, and leaves when it is asked to or when nothing needs it any
+//! more: no Window is attached and no program runs.
 //!
 //! Surface: [`run`] with its [`Options`], and the [`Exit`] it returns. The program
 //! `yaar-keeper` is this function behind a command line. Everything else a Window can
@@ -13,8 +14,8 @@
 
 mod wiring;
 
-use std::fs;
 use std::collections::VecDeque;
+use std::fs;
 use std::io::{self, Write};
 use std::net::Shutdown;
 use std::os::fd::AsRawFd;
@@ -48,7 +49,7 @@ const MAX_QUEUED: usize = 64 * 1024 * 1024;
 pub struct Options {
     /// Where to listen.
     pub socket: PathBuf,
-    /// How long to stay with no Window attached and nothing to keep alive.
+    /// How long to stay with no Window attached and no program of a terminal running.
     pub linger: Duration,
     /// The version to tell each Window.
     pub app_version: String,
@@ -74,7 +75,7 @@ impl Options {
 pub enum Exit {
     /// A Window asked for the stop-everything quit.
     Shutdown,
-    /// No Window was attached and nothing was left to keep alive for the linger time.
+    /// No Window was attached and no program of a terminal ran for the linger time.
     Idle,
     /// Another Keeper already serves this socket.
     AlreadyRunning,
@@ -348,7 +349,8 @@ fn frame_of(message: &Message) -> io::Result<Vec<u8>> {
 ///
 /// Returns at once with [`Exit::AlreadyRunning`] when another Keeper holds the socket.
 /// Before it returns for any other reason, every Window still attached is let go and the
-/// parts are ended: the git processes they keep, and the database.
+/// parts are ended: the programs of the terminals and what they started, the git
+/// processes the Keeper keeps, and the database.
 pub fn run(options: Options) -> io::Result<Exit> {
     let socket = yaar_link::socket_address(&options.socket);
     let socket = socket.as_path();
@@ -613,4 +615,61 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
     // What was done is told, whatever became of the Window that asked for it.
     shared.tell(&facts);
     answered
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+
+    fn pair() -> (Arc<Window>, UnixStream) {
+        let (ours, theirs) = UnixStream::pair().expect("a pair of sockets");
+        theirs
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("set the deadline of a read");
+        (Window::new(ours), theirs)
+    }
+
+    #[test]
+    fn what_is_queued_for_a_window_is_written_whole_in_the_order_queued_also_after_it_is_finished()
+    {
+        let (window, mut theirs) = pair();
+        let frames: Vec<Vec<u8>> = (0..50u8).map(|n| vec![n; 1000 + n as usize]).collect();
+        for frame in &frames {
+            assert!(window.queue(frame.clone()));
+        }
+        // The Window's own thread has nothing more to say: what is owed is still sent.
+        window.finish();
+        for frame in &frames {
+            let mut got = vec![0u8; frame.len()];
+            theirs.read_exact(&mut got).expect("a whole frame");
+            assert_eq!(&got, frame);
+        }
+    }
+
+    #[test]
+    fn a_window_that_falls_more_than_the_limit_behind_is_let_go_and_takes_nothing_more() {
+        // Nobody reads from `theirs`: what the sockets hold is a few hundred kilobytes,
+        // and the rest waits in the queue.
+        let (window, mut theirs) = pair();
+        let megabyte = vec![b'x'; 1 << 20];
+        let mut queued = 0;
+        while window.queue(megabyte.clone()) {
+            queued += 1;
+            assert!(queued < 200, "the queue has no limit");
+        }
+        assert!(
+            (MAX_QUEUED >> 20..=(MAX_QUEUED >> 20) + 1).contains(&queued),
+            "{queued} megabytes were taken"
+        );
+        assert!(
+            !window.queue(vec![0]),
+            "a Window that was let go takes nothing"
+        );
+
+        // The connection is closed: what was written comes, and then the end.
+        let mut rest = Vec::new();
+        theirs.read_to_end(&mut rest).expect("read to the end");
+        assert!(rest.len() < MAX_QUEUED, "{} bytes", rest.len());
+    }
 }

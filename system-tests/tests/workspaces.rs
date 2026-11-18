@@ -10,8 +10,7 @@ use yaar_link::{
     FileStatus, Head, Message, Refusal, Repository, TerminalSize, Workspace, write_message,
 };
 use yaar_system_tests::{
-    DEADLINE, Descriptor, Repo, World, attach, descendants_of, descriptors_of, is_alive,
-    wait_until,
+    DEADLINE, Descriptor, Repo, World, attach, descendants_of, descriptors_of, is_alive, wait_until,
 };
 
 const ONE: &str = "pub fn number() -> u32 {\n    1\n}\n";
@@ -165,11 +164,33 @@ fn sockets_of(pid: u32) -> Vec<Descriptor> {
 fn job_and_shell(output: &[u8]) -> Option<(u32, u32)> {
     let text = String::from_utf8_lossy(output);
     text.match_indices("job-").find_map(|(at, _)| {
-        let line = text[at + "job-".len()..].split_inclusive(['\r', '\n']).next()?;
+        let line = text[at + "job-".len()..]
+            .split_inclusive(['\r', '\n'])
+            .next()?;
         let line = line.strip_suffix(['\r', '\n'])?;
         let (job, shell) = line.split_once(" shell-")?;
         Some((job.parse().ok()?, shell.parse().ok()?))
     })
+}
+
+/// A background job of a shell in a terminal. No hang-up of the terminal reaches it, so
+/// a test that fails with it running would leave it for the time of its sleep: it is
+/// ended when the guard is dropped, and by [`Job::kill`] when the test is done with it.
+struct Job(Option<u32>);
+
+impl Job {
+    fn kill(&mut self) {
+        if let Some(pid) = self.0.take() {
+            // SAFETY: `kill` only sends a signal, to a process this test started.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
+impl Drop for Job {
+    fn drop(&mut self) {
+        self.kill();
+    }
 }
 
 /// Whether the process is gone: not running, and not one that ended and waits to be
@@ -209,10 +230,9 @@ fn the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only() {
         .expect("open a terminal");
     client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
     client.type_into(&terminal, b"sleep 300 & echo job-$! shell-$$\r");
-    let said = client.wait_for_output(&terminal, DEADLINE, |bytes| {
-        job_and_shell(bytes).is_some()
-    });
+    let said = client.wait_for_output(&terminal, DEADLINE, |bytes| job_and_shell(bytes).is_some());
     let (job, shell) = job_and_shell(&said).expect("the job and the shell");
+    let mut sleeping = Job(Some(job));
     // The shell's own process becomes `cat`: `exec` keeps the pid. The process that
     // prints the line is the one that turns into `cat`, so `cat` runs once the line is
     // there. The echo of the typed line shows `$((1+1))`, never `2`.
@@ -296,7 +316,10 @@ fn the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only() {
     assert_eq!(world.client().keeper().pid, keeper);
     // The git process and the programs of the terminal outlived the Window, and still
     // hold no socket.
-    assert!(is_alive(shell), "the terminal's program left with the Window");
+    assert!(
+        is_alive(shell),
+        "the terminal's program left with the Window"
+    );
     assert!(is_alive(job), "the job left with the Window");
     let started = descendants_of(keeper);
     assert!(started.len() >= 3, "{started:?}");
@@ -307,8 +330,7 @@ fn the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only() {
     // A world that kills its Keeper ends `cat` by the hang-up of its terminal, but no
     // hang-up reaches the job, which a shell with job control put in a group of its
     // own. The test ends it, and leaves when both are gone.
-    // SAFETY: `kill` only sends a signal, to a process this test started.
-    unsafe { libc::kill(job as libc::pid_t, libc::SIGKILL) };
+    sleeping.kill();
     drop(world);
     assert!(
         wait_until(DEADLINE, || is_gone(job) && is_gone(shell)),

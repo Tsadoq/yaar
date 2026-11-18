@@ -91,13 +91,19 @@ pub fn descendants_of(pid: u32) -> Vec<u32> {
 /// Whether a link of `/proc/<pid>/fd` leads to the device of a pseudo-terminal: the file
 /// a master is made by opening, or the slave end a program runs on.
 fn is_terminal_on_linux(path: &str) -> bool {
-    path == "/dev/ptmx" || path.strip_prefix("/dev/pts/").is_some_and(|n| !n.is_empty())
+    path == "/dev/ptmx"
+        || path
+            .strip_prefix("/dev/pts/")
+            .is_some_and(|n| !n.is_empty())
 }
 
 /// Whether a character device `lsof` names is a pseudo-terminal of macOS: the file a
 /// master is made by opening, or the slave end a program runs on.
 fn is_terminal_on_macos(name: &str) -> bool {
-    name == "/dev/ptmx" || name.strip_prefix("/dev/ttys").is_some_and(|n| !n.is_empty())
+    name == "/dev/ptmx"
+        || name
+            .strip_prefix("/dev/ttys")
+            .is_some_and(|n| !n.is_empty())
 }
 
 /// What a link in `/proc/<pid>/fd` leads to, with the content of `/proc/net/unix` to

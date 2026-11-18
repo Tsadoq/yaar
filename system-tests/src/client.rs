@@ -18,8 +18,8 @@ use std::time::{Duration, Instant};
 
 use yaar_link::{
     ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Program, Refusal, Reply,
-    Repository, RepositoryId, Request, RequestId, TerminalId, TerminalSize, WorkspaceId,
-    handshake, read_message, write_message,
+    Repository, RepositoryId, Request, RequestId, TerminalId, TerminalSize, WorkspaceId, handshake,
+    read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.

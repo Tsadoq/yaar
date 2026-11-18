@@ -173,11 +173,8 @@ impl World {
     pub fn key_recorder(&self) -> PathBuf {
         let script = self.root.join("key-recorder");
         // `cat` with no options reads and writes at once, on every system.
-        fs::write(
-            &script,
-            "#!/bin/sh\nstty raw -echo\nexec cat >> \"$1\"\n",
-        )
-        .expect("write the script of the key recorder");
+        fs::write(&script, "#!/bin/sh\nstty raw -echo\nexec cat >> \"$1\"\n")
+            .expect("write the script of the key recorder");
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
             .expect("make the key recorder runnable");
         script
