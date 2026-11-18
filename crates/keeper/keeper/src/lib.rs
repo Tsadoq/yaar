@@ -176,11 +176,27 @@ struct Window {
 }
 
 impl Window {
-    /// Writes one frame, whole. A Window that does not take it within [`WRITE_TIMEOUT`],
-    /// or that is gone, is let go: after half a frame nothing more can be said to it.
+    /// Writes one frame, whole. A Window that takes nothing for [`WRITE_TIMEOUT`], or
+    /// that is gone, is let go: after half a frame nothing more can be said to it.
     fn send(&self, frame: &[u8]) -> io::Result<()> {
         let mut out = lock(&self.out);
-        out.write_all(frame).inspect_err(|_| {
+        let mut rest = frame;
+        let sent = loop {
+            let began = Instant::now();
+            match out.write(rest) {
+                Ok(written) if written == rest.len() => break Ok(()),
+                // The system waits for room until everything is taken. When it comes
+                // back with less after the whole time allowed, it has given up waiting:
+                // to go on would be to wait that long once more.
+                Ok(_) if began.elapsed() >= WRITE_TIMEOUT => {
+                    break Err(io::ErrorKind::TimedOut.into());
+                }
+                Ok(written) => rest = &rest[written..],
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                Err(e) => break Err(e),
+            }
+        };
+        sent.inspect_err(|_| {
             let _ = out.shutdown(Shutdown::Both);
         })
     }
