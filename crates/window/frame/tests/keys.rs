@@ -153,22 +153,37 @@ fn on_linux_each_action_of_the_frame_runs_on_the_ctrl_key_chosen_for_it(cx: &mut
     press_the_keys_chosen_for(OperatingSystem::Linux, cx);
 }
 
+#[test]
+fn every_key_of_the_frame_works_anywhere() {
+    // Where a key works is written in its row, and the context it is bound with follows
+    // from that by system. A key of the Frame placed in the Frame's own context would
+    // work as now on every system but macOS, where it would be a Cmd key that does
+    // nothing while the focus is where the context is not. Off macOS no pressed key can
+    // tell the two rows apart, so the rows are read here.
+    for control in controls() {
+        assert_eq!(control.place, Place::Anywhere, "{}", control.title);
+    }
+}
+
 #[gpui_kit::test]
-fn outside_the_context_of_the_frame_a_key_of_the_table_works_only_if_it_is_bound_with_none(
+fn outside_the_context_of_the_frame_the_keys_of_the_table_work_on_macos_and_on_no_other_system(
     cx: &mut TestAppContext,
 ) {
     let ran = bind_the_table(cx);
     let (probe, cx) = open_probe(KEY_CONTEXT, cx);
     probe.update_in(cx, |probe, window, cx| probe.outside.focus(window, cx));
 
-    // A Cmd key is bound with no context and works wherever the focus is. A Ctrl key is
-    // one a program in a terminal waits for, so it carries the context of the Frame and
-    // does nothing where that context is not.
+    // On macOS the keys are Cmd keys and work wherever the focus is. On every other
+    // system they are Ctrl keys, which a program in a terminal waits for, so they do
+    // nothing where the context of the Frame is not. What is expected is written here by
+    // system and not asked of the table, which would then be held to its own answer.
+    let work_here = cfg!(target_os = "macos");
     for control in controls() {
         cx.simulate_keystrokes(control.keystroke);
-        let expected = match control.context() {
-            None => vec![(control.action)().name()],
-            Some(_) => Vec::new(),
+        let expected = if work_here {
+            vec![(control.action)().name()]
+        } else {
+            Vec::new()
         };
         assert_eq!(
             ran.take(),
