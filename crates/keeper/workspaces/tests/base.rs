@@ -172,6 +172,23 @@ fn in_a_clone_the_default_base_is_the_branch_the_remote_recorded_and_not_the_loc
     );
 }
 
+/// The Workspaces of a Keeper that started again on the database of the one before, after
+/// what a Window does first with it: it asks for the list, which has to hold the
+/// workspace still, and opens the folder again, which has to give the same workspace.
+fn restarted(scratch: &Scratch, folder: &Path, workspace: &WorkspaceId) -> Workspaces {
+    let keeper = workspaces(scratch);
+    let listed: Vec<WorkspaceId> = keeper
+        .repositories()
+        .expect("repositories")
+        .into_iter()
+        .flat_map(|repository| repository.workspaces)
+        .map(|listed| listed.id)
+        .collect();
+    assert_eq!(listed, [workspace.clone()]);
+    assert_eq!(&open(&keeper, folder), workspace);
+    keeper
+}
+
 // WS-04.
 #[test]
 fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives_the_keeper() {
@@ -236,9 +253,11 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     assert_eq!(keeper.changes(&workspace).expect("changes"), since_release);
 
     // The Keeper restarts: every Workspaces and every Store is dropped, and new ones
-    // are opened on the same database file.
+    // are opened on the same database file. A Window that comes back asks for the list
+    // first, and its user may open the folder again: both keep the workspace anew, and
+    // neither may lose its base.
     drop(keeper);
-    let keeper = workspaces(&scratch);
+    let keeper = restarted(&scratch, &repo, &workspace);
     assert_eq!(
         keeper.base(&workspace).expect("base"),
         Some(set_by_the_user("release"))
@@ -266,7 +285,7 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     assert_eq!(keeper.changes(&workspace).expect("changes"), since_third);
 
     drop(keeper);
-    let keeper = workspaces(&scratch);
+    let keeper = restarted(&scratch, &repo, &workspace);
     assert_eq!(
         keeper.base(&workspace).expect("base"),
         Some(set_by_the_user(&third))
@@ -289,7 +308,12 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
     let scratch = Scratch::new();
     let clone = a_clone(&scratch);
     write(&clone, "a.txt", "three\n");
-    let third = commit_all(&clone, "third, not pushed");
+    let third = commit_all(&clone, "third, pushed to another branch");
+    // The third commit reaches the remote under another branch. It is still not on the
+    // upstream, which is what the row asks about: "on no branch of any remote" would
+    // list one commit here, and "not on the upstream" lists two.
+    let to_another_branch = format!("{third}:refs/heads/topic");
+    git(&clone, &["push", "--quiet", "origin", &to_another_branch]);
     write(&clone, "b.txt", "new, and committed\n");
     let fourth = commit_all(&clone, "fourth, not pushed");
     write(&clone, "a.txt", "four, not committed\n");
@@ -305,7 +329,7 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
         counted_from: Some(CommitId::new(&fourth)),
         commits: vec![
             commit(&fourth, "fourth, not pushed"),
-            commit(&third, "third, not pushed"),
+            commit(&third, "third, pushed to another branch"),
         ],
         // What is not committed, and nothing of the two commits: `b.txt` is theirs.
         files: vec![
@@ -324,6 +348,11 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
     assert_eq!(
         ids(&changes.commits),
         rev_list(&clone, &["HEAD", "--not", "origin/main"])
+    );
+    assert_eq!(
+        rev_list(&clone, &["HEAD", "--not", "--remotes"]),
+        [fourth.clone()],
+        "{third} is on origin/topic"
     );
 
     // With no default recorded by the remote the base is `main` itself, and the
