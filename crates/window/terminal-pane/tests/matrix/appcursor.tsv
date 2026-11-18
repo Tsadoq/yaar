@@ -311,12 +311,12 @@ appcursor	up	1b4f41	ghostty m-ghostty-appcursor plain+up
 appcursor	shift-up	1b5b313b3241	ghostty m-ghostty-appcursor s+up
 appcursor	alt-up	1b5b313b3341	ghostty m-ghostty-appcursor a+up
 appcursor	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-appcursor	cmd-up		ghostty m-ghostty-appcursor m+up	macos
+appcursor	cmd-up		ghostty m-ghostty-appcursor m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	down	1b4f42	ghostty m-ghostty-appcursor plain+down
 appcursor	shift-down	1b5b313b3242	ghostty m-ghostty-appcursor s+down
 appcursor	alt-down	1b5b313b3342	ghostty m-ghostty-appcursor a+down
 appcursor	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-appcursor	cmd-down		ghostty m-ghostty-appcursor m+down	macos
+appcursor	cmd-down		ghostty m-ghostty-appcursor m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	left	1b4f44	ghostty m-ghostty-appcursor plain+left
 appcursor	shift-left	1b5b313b3244	ghostty m-ghostty-appcursor s+left
 appcursor	alt-left	1b62	ghostty m-ghostty-appcursor a+left
@@ -331,20 +331,20 @@ appcursor	home	1b4f48	ghostty m-ghostty-appcursor plain+home
 appcursor	shift-home	1b5b313b3248	ghostty m-ghostty-appcursor s+home
 appcursor	alt-home	1b5b313b3348	ghostty m-ghostty-appcursor a+home
 appcursor	ctrl-home	1b5b313b3548	ghostty m-ghostty-appcursor c+home
-appcursor	cmd-home		ghostty m-ghostty-appcursor m+home	macos
+appcursor	cmd-home		ghostty m-ghostty-appcursor m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	end	1b4f46	ghostty m-ghostty-appcursor plain+end
 appcursor	shift-end	1b5b313b3246	ghostty m-ghostty-appcursor s+end
 appcursor	alt-end	1b5b313b3346	ghostty m-ghostty-appcursor a+end
 appcursor	ctrl-end	1b5b313b3546	ghostty m-ghostty-appcursor c+end
-appcursor	cmd-end		ghostty m-ghostty-appcursor m+end	macos
+appcursor	cmd-end		ghostty m-ghostty-appcursor m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	pageup	1b5b357e	ghostty m-ghostty-appcursor plain+pageup
 appcursor	alt-pageup	1b5b353b337e	ghostty m-ghostty-appcursor a+pageup
 appcursor	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-appcursor c+pageup
-appcursor	cmd-pageup		ghostty m-ghostty-appcursor m+pageup	macos
+appcursor	cmd-pageup		ghostty m-ghostty-appcursor m+pageup (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	pagedown	1b5b367e	ghostty m-ghostty-appcursor plain+pagedown
 appcursor	alt-pagedown	1b5b363b337e	ghostty m-ghostty-appcursor a+pagedown
 appcursor	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-appcursor c+pagedown
-appcursor	cmd-pagedown		ghostty m-ghostty-appcursor m+pagedown	macos
+appcursor	cmd-pagedown		ghostty m-ghostty-appcursor m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 appcursor	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
 appcursor	f1	1b4f50	ghostty m-ghostty-appcursor plain+f1
 appcursor	f2	1b4f51	ghostty m-ghostty-appcursor plain+f2

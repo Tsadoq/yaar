@@ -2,153 +2,153 @@ kitty1	a	61	ghostty m-ghostty-kitty5 plain+a
 kitty1	shift-a	41	ghostty m-ghostty-kitty5 s+a
 kitty1	ctrl-a	1b5b39373b3575	ghostty m-ghostty-kitty5 c+a
 kitty1	alt-a->å	c3a5	ghostty m-ghostty-legacy a+a	macos
-kitty1	ctrl-shift-a	1b5b39373b3675	ghostty m-ghostty-kitty5 cs+a
+kitty1	ctrl-shift-a	1b5b39373b3675	ghostty m-ghostty-kitty5 cs+a (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-a->Å	c385	ghostty m-ghostty-legacy as+a	macos
 kitty1	b	62	ghostty m-ghostty-kitty5 plain+b
 kitty1	shift-b	42	ghostty m-ghostty-kitty5 s+b
 kitty1	ctrl-b	1b5b39383b3575	ghostty m-ghostty-kitty5 c+b
 kitty1	alt-b->∫	e288ab	ghostty m-ghostty-legacy a+b	macos
-kitty1	ctrl-shift-b	1b5b39383b3675	ghostty m-ghostty-kitty5 cs+b
+kitty1	ctrl-shift-b	1b5b39383b3675	ghostty m-ghostty-kitty5 cs+b (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-b->ı	c4b1	ghostty m-ghostty-legacy as+b	macos
 kitty1	c	63	ghostty m-ghostty-kitty5 plain+c
 kitty1	shift-c	43	ghostty m-ghostty-kitty5 s+c
 kitty1	ctrl-c	1b5b39393b3575	ghostty m-ghostty-kitty5 c+c
 kitty1	alt-c->ç	c3a7	ghostty m-ghostty-legacy a+c	macos
-kitty1	ctrl-shift-c	1b5b39393b3675	ghostty m-ghostty-kitty5 cs+c	macos
+kitty1	ctrl-shift-c	1b5b39393b3675	ghostty m-ghostty-kitty5 cs+c (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	macos
 kitty1	alt-shift-c->Ç	c387	ghostty m-ghostty-legacy as+c	macos
 kitty1	d	64	ghostty m-ghostty-kitty5 plain+d
 kitty1	shift-d	44	ghostty m-ghostty-kitty5 s+d
 kitty1	ctrl-d	1b5b3130303b3575	ghostty m-ghostty-kitty5 c+d
 kitty1	alt-d->∂	e28882	ghostty m-ghostty-legacy a+d	macos
-kitty1	ctrl-shift-d	1b5b3130303b3675	ghostty m-ghostty-kitty5 cs+d
+kitty1	ctrl-shift-d	1b5b3130303b3675	ghostty m-ghostty-kitty5 cs+d (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-d->Î	c38e	ghostty m-ghostty-legacy as+d	macos
 kitty1	e	65	ghostty m-ghostty-kitty5 plain+e
 kitty1	shift-e	45	ghostty m-ghostty-kitty5 s+e
 kitty1	ctrl-e	1b5b3130313b3575	ghostty m-ghostty-kitty5 c+e
-kitty1	ctrl-shift-e	1b5b3130313b3675	ghostty m-ghostty-kitty5 cs+e
+kitty1	ctrl-shift-e	1b5b3130313b3675	ghostty m-ghostty-kitty5 cs+e (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-e->´	c2b4	ghostty m-ghostty-legacy as+e	macos
 kitty1	f	66	ghostty m-ghostty-kitty5 plain+f
 kitty1	shift-f	46	ghostty m-ghostty-kitty5 s+f
 kitty1	ctrl-f	1b5b3130323b3575	ghostty m-ghostty-kitty5 c+f
 kitty1	alt-f->ƒ	c692	ghostty m-ghostty-legacy a+f	macos
-kitty1	ctrl-shift-f	1b5b3130323b3675	ghostty m-ghostty-kitty5 cs+f
+kitty1	ctrl-shift-f	1b5b3130323b3675	ghostty m-ghostty-kitty5 cs+f (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-f->Ï	c38f	ghostty m-ghostty-legacy as+f	macos
 kitty1	g	67	ghostty m-ghostty-kitty5 plain+g
 kitty1	shift-g	47	ghostty m-ghostty-kitty5 s+g
 kitty1	ctrl-g	1b5b3130333b3575	ghostty m-ghostty-kitty5 c+g
 kitty1	alt-g->©	c2a9	ghostty m-ghostty-legacy a+g	macos
-kitty1	ctrl-shift-g	1b5b3130333b3675	ghostty m-ghostty-kitty5 cs+g
+kitty1	ctrl-shift-g	1b5b3130333b3675	ghostty m-ghostty-kitty5 cs+g (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-g->˝	cb9d	ghostty m-ghostty-legacy as+g	macos
 kitty1	h	68	ghostty m-ghostty-kitty5 plain+h
 kitty1	shift-h	48	ghostty m-ghostty-kitty5 s+h
 kitty1	ctrl-h	1b5b3130343b3575	ghostty m-ghostty-kitty5 c+h
 kitty1	alt-h->˙	cb99	ghostty m-ghostty-legacy a+h	macos
-kitty1	ctrl-shift-h	1b5b3130343b3675	ghostty m-ghostty-kitty5 cs+h
+kitty1	ctrl-shift-h	1b5b3130343b3675	ghostty m-ghostty-kitty5 cs+h (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-h->Ó	c393	ghostty m-ghostty-legacy as+h	macos
 kitty1	i	69	ghostty m-ghostty-kitty5 plain+i
 kitty1	shift-i	49	ghostty m-ghostty-kitty5 s+i
 kitty1	ctrl-i	1b5b3130353b3575	ghostty m-ghostty-kitty5 c+i
-kitty1	ctrl-shift-i	1b5b3130353b3675	ghostty m-ghostty-kitty5 cs+i
+kitty1	ctrl-shift-i	1b5b3130353b3675	ghostty m-ghostty-kitty5 cs+i (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-i->ˆ	cb86	ghostty m-ghostty-legacy as+i	macos
 kitty1	j	6a	ghostty m-ghostty-kitty5 plain+j
 kitty1	shift-j	4a	ghostty m-ghostty-kitty5 s+j
 kitty1	ctrl-j	1b5b3130363b3575	ghostty m-ghostty-kitty5 c+j
 kitty1	alt-j->∆	e28886	ghostty m-ghostty-legacy a+j	macos
-kitty1	ctrl-shift-j	1b5b3130363b3675	ghostty m-ghostty-kitty5 cs+j
+kitty1	ctrl-shift-j	1b5b3130363b3675	ghostty m-ghostty-kitty5 cs+j (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-j->Ô	c394	ghostty m-ghostty-legacy as+j	macos
 kitty1	k	6b	ghostty m-ghostty-kitty5 plain+k
 kitty1	shift-k	4b	ghostty m-ghostty-kitty5 s+k
 kitty1	ctrl-k	1b5b3130373b3575	ghostty m-ghostty-kitty5 c+k
 kitty1	alt-k->˚	cb9a	ghostty m-ghostty-legacy a+k	macos
-kitty1	ctrl-shift-k	1b5b3130373b3675	ghostty m-ghostty-kitty5 cs+k
+kitty1	ctrl-shift-k	1b5b3130373b3675	ghostty m-ghostty-kitty5 cs+k (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-k->	efa3bf	ghostty m-ghostty-legacy as+k	macos
 kitty1	l	6c	ghostty m-ghostty-kitty5 plain+l
 kitty1	shift-l	4c	ghostty m-ghostty-kitty5 s+l
 kitty1	ctrl-l	1b5b3130383b3575	ghostty m-ghostty-kitty5 c+l
 kitty1	alt-l->¬	c2ac	ghostty m-ghostty-legacy a+l	macos
-kitty1	ctrl-shift-l	1b5b3130383b3675	ghostty m-ghostty-kitty5 cs+l
+kitty1	ctrl-shift-l	1b5b3130383b3675	ghostty m-ghostty-kitty5 cs+l (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-l->Ò	c392	ghostty m-ghostty-legacy as+l	macos
 kitty1	m	6d	ghostty m-ghostty-kitty5 plain+m
 kitty1	shift-m	4d	ghostty m-ghostty-kitty5 s+m
 kitty1	ctrl-m	1b5b3130393b3575	ghostty m-ghostty-kitty5 c+m
 kitty1	alt-m->µ	c2b5	ghostty m-ghostty-legacy a+m	macos
-kitty1	ctrl-shift-m	1b5b3130393b3675	ghostty m-ghostty-kitty5 cs+m
+kitty1	ctrl-shift-m	1b5b3130393b3675	ghostty m-ghostty-kitty5 cs+m (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-m->Â	c382	ghostty m-ghostty-legacy as+m	macos
 kitty1	n	6e	ghostty m-ghostty-kitty5 plain+n
 kitty1	shift-n	4e	ghostty m-ghostty-kitty5 s+n
 kitty1	ctrl-n	1b5b3131303b3575	ghostty m-ghostty-kitty5 c+n
-kitty1	ctrl-shift-n	1b5b3131303b3675	ghostty m-ghostty-kitty5 cs+n
+kitty1	ctrl-shift-n	1b5b3131303b3675	ghostty m-ghostty-kitty5 cs+n (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-n->˜	cb9c	ghostty m-ghostty-legacy as+n	macos
 kitty1	o	6f	ghostty m-ghostty-kitty5 plain+o
 kitty1	shift-o	4f	ghostty m-ghostty-kitty5 s+o
 kitty1	ctrl-o	1b5b3131313b3575	ghostty m-ghostty-kitty5 c+o
 kitty1	alt-o->ø	c3b8	ghostty m-ghostty-legacy a+o	macos
-kitty1	ctrl-shift-o	1b5b3131313b3675	ghostty m-ghostty-kitty5 cs+o
+kitty1	ctrl-shift-o	1b5b3131313b3675	ghostty m-ghostty-kitty5 cs+o (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-o->Ø	c398	ghostty m-ghostty-legacy as+o	macos
 kitty1	p	70	ghostty m-ghostty-kitty5 plain+p
 kitty1	shift-p	50	ghostty m-ghostty-kitty5 s+p
 kitty1	ctrl-p	1b5b3131323b3575	ghostty m-ghostty-kitty5 c+p
 kitty1	alt-p->π	cf80	ghostty m-ghostty-legacy a+p	macos
-kitty1	ctrl-shift-p	1b5b3131323b3675	ghostty m-ghostty-kitty5 cs+p
+kitty1	ctrl-shift-p	1b5b3131323b3675	ghostty m-ghostty-kitty5 cs+p (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-p->∏	e2888f	ghostty m-ghostty-legacy as+p	macos
 kitty1	q	71	ghostty m-ghostty-kitty5 plain+q
 kitty1	shift-q	51	ghostty m-ghostty-kitty5 s+q
 kitty1	ctrl-q	1b5b3131333b3575	ghostty m-ghostty-kitty5 c+q
 kitty1	alt-q->œ	c593	ghostty m-ghostty-legacy a+q	macos
-kitty1	ctrl-shift-q	1b5b3131333b3675	ghostty m-ghostty-kitty5 cs+q
+kitty1	ctrl-shift-q	1b5b3131333b3675	ghostty m-ghostty-kitty5 cs+q (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-q->Œ	c592	ghostty m-ghostty-legacy as+q	macos
 kitty1	r	72	ghostty m-ghostty-kitty5 plain+r
 kitty1	shift-r	52	ghostty m-ghostty-kitty5 s+r
 kitty1	ctrl-r	1b5b3131343b3575	ghostty m-ghostty-kitty5 c+r
 kitty1	alt-r->®	c2ae	ghostty m-ghostty-legacy a+r	macos
-kitty1	ctrl-shift-r	1b5b3131343b3675	ghostty m-ghostty-kitty5 cs+r
+kitty1	ctrl-shift-r	1b5b3131343b3675	ghostty m-ghostty-kitty5 cs+r (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-r->‰	e280b0	ghostty m-ghostty-legacy as+r	macos
 kitty1	s	73	ghostty m-ghostty-kitty5 plain+s
 kitty1	shift-s	53	ghostty m-ghostty-kitty5 s+s
 kitty1	ctrl-s	1b5b3131353b3575	ghostty m-ghostty-kitty5 c+s
 kitty1	alt-s->ß	c39f	ghostty m-ghostty-legacy a+s	macos
-kitty1	ctrl-shift-s	1b5b3131353b3675	ghostty m-ghostty-kitty5 cs+s
+kitty1	ctrl-shift-s	1b5b3131353b3675	ghostty m-ghostty-kitty5 cs+s (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-s->Í	c38d	ghostty m-ghostty-legacy as+s	macos
 kitty1	t	74	ghostty m-ghostty-kitty5 plain+t
 kitty1	shift-t	54	ghostty m-ghostty-kitty5 s+t
 kitty1	ctrl-t	1b5b3131363b3575	ghostty m-ghostty-kitty5 c+t
 kitty1	alt-t->†	e280a0	ghostty m-ghostty-legacy a+t	macos
-kitty1	ctrl-shift-t	1b5b3131363b3675	ghostty m-ghostty-kitty5 cs+t
+kitty1	ctrl-shift-t	1b5b3131363b3675	ghostty m-ghostty-kitty5 cs+t (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-t->ˇ	cb87	ghostty m-ghostty-legacy as+t	macos
 kitty1	u	75	ghostty m-ghostty-kitty5 plain+u
 kitty1	shift-u	55	ghostty m-ghostty-kitty5 s+u
 kitty1	ctrl-u	1b5b3131373b3575	ghostty m-ghostty-kitty5 c+u
-kitty1	ctrl-shift-u	1b5b3131373b3675	ghostty m-ghostty-kitty5 cs+u
+kitty1	ctrl-shift-u	1b5b3131373b3675	ghostty m-ghostty-kitty5 cs+u (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-u->¨	c2a8	ghostty m-ghostty-legacy as+u	macos
 kitty1	v	76	ghostty m-ghostty-kitty5 plain+v
 kitty1	shift-v	56	ghostty m-ghostty-kitty5 s+v
 kitty1	ctrl-v	1b5b3131383b3575	ghostty m-ghostty-kitty5 c+v
 kitty1	alt-v->√	e2889a	ghostty m-ghostty-legacy a+v	macos
-kitty1	ctrl-shift-v	1b5b3131383b3675	ghostty m-ghostty-kitty5 cs+v	macos
+kitty1	ctrl-shift-v	1b5b3131383b3675	ghostty m-ghostty-kitty5 cs+v (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	macos
 kitty1	alt-shift-v->◊	e2978a	ghostty m-ghostty-legacy as+v	macos
 kitty1	w	77	ghostty m-ghostty-kitty5 plain+w
 kitty1	shift-w	57	ghostty m-ghostty-kitty5 s+w
 kitty1	ctrl-w	1b5b3131393b3575	ghostty m-ghostty-kitty5 c+w
 kitty1	alt-w->∑	e28891	ghostty m-ghostty-legacy a+w	macos
-kitty1	ctrl-shift-w	1b5b3131393b3675	ghostty m-ghostty-kitty5 cs+w
+kitty1	ctrl-shift-w	1b5b3131393b3675	ghostty m-ghostty-kitty5 cs+w (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-w->„	e2809e	ghostty m-ghostty-legacy as+w	macos
 kitty1	x	78	ghostty m-ghostty-kitty5 plain+x
 kitty1	shift-x	58	ghostty m-ghostty-kitty5 s+x
 kitty1	ctrl-x	1b5b3132303b3575	ghostty m-ghostty-kitty5 c+x
 kitty1	alt-x->≈	e28988	ghostty m-ghostty-legacy a+x	macos
-kitty1	ctrl-shift-x	1b5b3132303b3675	ghostty m-ghostty-kitty5 cs+x
+kitty1	ctrl-shift-x	1b5b3132303b3675	ghostty m-ghostty-kitty5 cs+x (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-x->˛	cb9b	ghostty m-ghostty-legacy as+x	macos
 kitty1	y	79	ghostty m-ghostty-kitty5 plain+y
 kitty1	shift-y	59	ghostty m-ghostty-kitty5 s+y
 kitty1	ctrl-y	1b5b3132313b3575	ghostty m-ghostty-kitty5 c+y
 kitty1	alt-y->¥	c2a5	ghostty m-ghostty-legacy a+y	macos
-kitty1	ctrl-shift-y	1b5b3132313b3675	ghostty m-ghostty-kitty5 cs+y
+kitty1	ctrl-shift-y	1b5b3132313b3675	ghostty m-ghostty-kitty5 cs+y (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-y->Á	c381	ghostty m-ghostty-legacy as+y	macos
 kitty1	z	7a	ghostty m-ghostty-kitty5 plain+z
 kitty1	shift-z	5a	ghostty m-ghostty-kitty5 s+z
 kitty1	ctrl-z	1b5b3132323b3575	ghostty m-ghostty-kitty5 c+z
 kitty1	alt-z->Ω	cea9	ghostty m-ghostty-legacy a+z	macos
-kitty1	ctrl-shift-z	1b5b3132323b3675	ghostty m-ghostty-kitty5 cs+z
+kitty1	ctrl-shift-z	1b5b3132323b3675	ghostty m-ghostty-kitty5 cs+z (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty1	alt-shift-z->¸	c2b8	ghostty m-ghostty-legacy as+z	macos
 kitty1	0	30	ghostty m-ghostty-kitty5 plain+0
 kitty1	)	29	ghostty m-ghostty-kitty5 s+0
@@ -311,12 +311,12 @@ kitty1	up	1b5b41	ghostty m-ghostty-kitty5 plain+up
 kitty1	shift-up	1b5b313b3241	ghostty m-ghostty-kitty5 s+up
 kitty1	alt-up	1b5b313b3341	ghostty o-ghostty-us-kitty5 a+up
 kitty1	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty1	cmd-up		ghostty m-ghostty-kitty5 m+up	macos
+kitty1	cmd-up		ghostty m-ghostty-kitty5 m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	down	1b5b42	ghostty m-ghostty-kitty5 plain+down
 kitty1	shift-down	1b5b313b3242	ghostty m-ghostty-kitty5 s+down
 kitty1	alt-down	1b5b313b3342	ghostty o-ghostty-us-kitty5 a+down
 kitty1	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty1	cmd-down		ghostty m-ghostty-kitty5 m+down	macos
+kitty1	cmd-down		ghostty m-ghostty-kitty5 m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	left	1b5b44	ghostty m-ghostty-kitty5 plain+left
 kitty1	shift-left	1b5b313b3244	ghostty m-ghostty-kitty5 s+left
 kitty1	alt-left	1b62	ghostty o-ghostty-us-kitty5 a+left
@@ -331,20 +331,20 @@ kitty1	home	1b5b48	ghostty m-ghostty-kitty5 plain+home
 kitty1	shift-home	1b5b313b3248	ghostty m-ghostty-kitty5 s+home
 kitty1	alt-home	1b5b313b3348	ghostty o-ghostty-us-kitty5 a+home
 kitty1	ctrl-home	1b5b313b3548	ghostty m-ghostty-kitty5 c+home
-kitty1	cmd-home		ghostty m-ghostty-kitty5 m+home	macos
+kitty1	cmd-home		ghostty m-ghostty-kitty5 m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	end	1b5b46	ghostty m-ghostty-kitty5 plain+end
 kitty1	shift-end	1b5b313b3246	ghostty m-ghostty-kitty5 s+end
 kitty1	alt-end	1b5b313b3346	ghostty o-ghostty-us-kitty5 a+end
 kitty1	ctrl-end	1b5b313b3546	ghostty m-ghostty-kitty5 c+end
-kitty1	cmd-end		ghostty m-ghostty-kitty5 m+end	macos
+kitty1	cmd-end		ghostty m-ghostty-kitty5 m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	pageup	1b5b357e	ghostty m-ghostty-kitty5 plain+pageup
 kitty1	alt-pageup	1b5b353b337e	ghostty o-ghostty-us-kitty5 a+pageup
 kitty1	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-kitty5 c+pageup
-kitty1	cmd-pageup		ghostty m-ghostty-kitty5 m+pageup	macos
+kitty1	cmd-pageup		ghostty m-ghostty-kitty5 m+pageup (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	pagedown	1b5b367e	ghostty m-ghostty-kitty5 plain+pagedown
 kitty1	alt-pagedown	1b5b363b337e	ghostty o-ghostty-us-kitty5 a+pagedown
 kitty1	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-kitty5 c+pagedown
-kitty1	cmd-pagedown		ghostty m-ghostty-kitty5 m+pagedown	macos
+kitty1	cmd-pagedown		ghostty m-ghostty-kitty5 m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
 kitty1	f1	1b5b50	ghostty m-ghostty-kitty5 plain+f1
 kitty1	f2	1b5b51	ghostty m-ghostty-kitty5 plain+f2
@@ -359,57 +359,57 @@ kitty1	f10	1b5b32317e	ghostty m-ghostty-kitty5 plain+f10
 kitty1	f11	1b5b32337e	not compared: macOS keeps F11 (Show Desktop): Ghostty never saw it
 kitty1	f12	1b5b32347e	ghostty m-ghostty-kitty5 plain+f12
 kitty1	alt-a	1b5b39373b3375	ghostty o-ghostty-us-kitty5 a+a	linux
-kitty1	alt-shift-a	1b5b39373b3475	ghostty o-ghostty-us-kitty5 as+a	linux
+kitty1	alt-shift-a	1b5b39373b3475	ghostty o-ghostty-us-kitty5 as+a (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-b	1b5b39383b3375	ghostty o-ghostty-us-kitty5 a+b	linux
-kitty1	alt-shift-b	1b5b39383b3475	ghostty o-ghostty-us-kitty5 as+b	linux
+kitty1	alt-shift-b	1b5b39383b3475	ghostty o-ghostty-us-kitty5 as+b (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-c	1b5b39393b3375	ghostty o-ghostty-us-kitty5 a+c	linux
-kitty1	alt-shift-c	1b5b39393b3475	ghostty o-ghostty-us-kitty5 as+c	linux
+kitty1	alt-shift-c	1b5b39393b3475	ghostty o-ghostty-us-kitty5 as+c (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-d	1b5b3130303b3375	ghostty o-ghostty-us-kitty5 a+d	linux
-kitty1	alt-shift-d	1b5b3130303b3475	ghostty o-ghostty-us-kitty5 as+d	linux
+kitty1	alt-shift-d	1b5b3130303b3475	ghostty o-ghostty-us-kitty5 as+d (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-e	1b5b3130313b3375	ghostty o-ghostty-us-kitty5 a+e	linux
-kitty1	alt-shift-e	1b5b3130313b3475	ghostty o-ghostty-us-kitty5 as+e	linux
+kitty1	alt-shift-e	1b5b3130313b3475	ghostty o-ghostty-us-kitty5 as+e (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-f	1b5b3130323b3375	ghostty o-ghostty-us-kitty5 a+f	linux
-kitty1	alt-shift-f	1b5b3130323b3475	ghostty o-ghostty-us-kitty5 as+f	linux
+kitty1	alt-shift-f	1b5b3130323b3475	ghostty o-ghostty-us-kitty5 as+f (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-g	1b5b3130333b3375	ghostty o-ghostty-us-kitty5 a+g	linux
-kitty1	alt-shift-g	1b5b3130333b3475	ghostty o-ghostty-us-kitty5 as+g	linux
+kitty1	alt-shift-g	1b5b3130333b3475	ghostty o-ghostty-us-kitty5 as+g (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-h	1b5b3130343b3375	ghostty o-ghostty-us-kitty5 a+h	linux
-kitty1	alt-shift-h	1b5b3130343b3475	ghostty o-ghostty-us-kitty5 as+h	linux
+kitty1	alt-shift-h	1b5b3130343b3475	ghostty o-ghostty-us-kitty5 as+h (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-i	1b5b3130353b3375	ghostty o-ghostty-us-kitty5 a+i	linux
-kitty1	alt-shift-i	1b5b3130353b3475	ghostty o-ghostty-us-kitty5 as+i	linux
+kitty1	alt-shift-i	1b5b3130353b3475	ghostty o-ghostty-us-kitty5 as+i (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-j	1b5b3130363b3375	ghostty o-ghostty-us-kitty5 a+j	linux
-kitty1	alt-shift-j	1b5b3130363b3475	ghostty o-ghostty-us-kitty5 as+j	linux
+kitty1	alt-shift-j	1b5b3130363b3475	ghostty o-ghostty-us-kitty5 as+j (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-k	1b5b3130373b3375	ghostty o-ghostty-us-kitty5 a+k	linux
-kitty1	alt-shift-k	1b5b3130373b3475	ghostty o-ghostty-us-kitty5 as+k	linux
+kitty1	alt-shift-k	1b5b3130373b3475	ghostty o-ghostty-us-kitty5 as+k (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-l	1b5b3130383b3375	ghostty o-ghostty-us-kitty5 a+l	linux
-kitty1	alt-shift-l	1b5b3130383b3475	ghostty o-ghostty-us-kitty5 as+l	linux
+kitty1	alt-shift-l	1b5b3130383b3475	ghostty o-ghostty-us-kitty5 as+l (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-m	1b5b3130393b3375	ghostty o-ghostty-us-kitty5 a+m	linux
-kitty1	alt-shift-m	1b5b3130393b3475	ghostty o-ghostty-us-kitty5 as+m	linux
+kitty1	alt-shift-m	1b5b3130393b3475	ghostty o-ghostty-us-kitty5 as+m (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-n	1b5b3131303b3375	ghostty o-ghostty-us-kitty5 a+n	linux
-kitty1	alt-shift-n	1b5b3131303b3475	ghostty o-ghostty-us-kitty5 as+n	linux
+kitty1	alt-shift-n	1b5b3131303b3475	ghostty o-ghostty-us-kitty5 as+n (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-o	1b5b3131313b3375	ghostty o-ghostty-us-kitty5 a+o	linux
-kitty1	alt-shift-o	1b5b3131313b3475	ghostty o-ghostty-us-kitty5 as+o	linux
+kitty1	alt-shift-o	1b5b3131313b3475	ghostty o-ghostty-us-kitty5 as+o (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-p	1b5b3131323b3375	ghostty o-ghostty-us-kitty5 a+p	linux
-kitty1	alt-shift-p	1b5b3131323b3475	ghostty o-ghostty-us-kitty5 as+p	linux
+kitty1	alt-shift-p	1b5b3131323b3475	ghostty o-ghostty-us-kitty5 as+p (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-q	1b5b3131333b3375	ghostty o-ghostty-us-kitty5 a+q	linux
-kitty1	alt-shift-q	1b5b3131333b3475	ghostty o-ghostty-us-kitty5 as+q	linux
+kitty1	alt-shift-q	1b5b3131333b3475	ghostty o-ghostty-us-kitty5 as+q (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-r	1b5b3131343b3375	ghostty o-ghostty-us-kitty5 a+r	linux
-kitty1	alt-shift-r	1b5b3131343b3475	ghostty o-ghostty-us-kitty5 as+r	linux
+kitty1	alt-shift-r	1b5b3131343b3475	ghostty o-ghostty-us-kitty5 as+r (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-s	1b5b3131353b3375	ghostty o-ghostty-us-kitty5 a+s	linux
-kitty1	alt-shift-s	1b5b3131353b3475	ghostty o-ghostty-us-kitty5 as+s	linux
+kitty1	alt-shift-s	1b5b3131353b3475	ghostty o-ghostty-us-kitty5 as+s (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-t	1b5b3131363b3375	ghostty o-ghostty-us-kitty5 a+t	linux
-kitty1	alt-shift-t	1b5b3131363b3475	ghostty o-ghostty-us-kitty5 as+t	linux
+kitty1	alt-shift-t	1b5b3131363b3475	ghostty o-ghostty-us-kitty5 as+t (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-u	1b5b3131373b3375	ghostty o-ghostty-us-kitty5 a+u	linux
-kitty1	alt-shift-u	1b5b3131373b3475	ghostty o-ghostty-us-kitty5 as+u	linux
+kitty1	alt-shift-u	1b5b3131373b3475	ghostty o-ghostty-us-kitty5 as+u (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-v	1b5b3131383b3375	ghostty o-ghostty-us-kitty5 a+v	linux
-kitty1	alt-shift-v	1b5b3131383b3475	ghostty o-ghostty-us-kitty5 as+v	linux
+kitty1	alt-shift-v	1b5b3131383b3475	ghostty o-ghostty-us-kitty5 as+v (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-w	1b5b3131393b3375	ghostty o-ghostty-us-kitty5 a+w	linux
-kitty1	alt-shift-w	1b5b3131393b3475	ghostty o-ghostty-us-kitty5 as+w	linux
+kitty1	alt-shift-w	1b5b3131393b3475	ghostty o-ghostty-us-kitty5 as+w (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-x	1b5b3132303b3375	ghostty o-ghostty-us-kitty5 a+x	linux
-kitty1	alt-shift-x	1b5b3132303b3475	ghostty o-ghostty-us-kitty5 as+x	linux
+kitty1	alt-shift-x	1b5b3132303b3475	ghostty o-ghostty-us-kitty5 as+x (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-y	1b5b3132313b3375	ghostty o-ghostty-us-kitty5 a+y	linux
-kitty1	alt-shift-y	1b5b3132313b3475	ghostty o-ghostty-us-kitty5 as+y	linux
+kitty1	alt-shift-y	1b5b3132313b3475	ghostty o-ghostty-us-kitty5 as+y (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-z	1b5b3132323b3375	ghostty o-ghostty-us-kitty5 a+z	linux
-kitty1	alt-shift-z	1b5b3132323b3475	ghostty o-ghostty-us-kitty5 as+z	linux
+kitty1	alt-shift-z	1b5b3132323b3475	ghostty o-ghostty-us-kitty5 as+z (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
 kitty1	alt-0	1b5b34383b3375	ghostty o-ghostty-us-kitty5 a+0	linux
 kitty1	alt-)	1b5b34313b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34383b3475, o-ghostty-us-kitty5 as+0)	linux
 kitty1	alt-1	1b5b34393b3375	ghostty o-ghostty-us-kitty5 a+1	linux

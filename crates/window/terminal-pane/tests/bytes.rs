@@ -74,7 +74,7 @@ struct Row {
 }
 
 fn unhex(text: &str) -> Vec<u8> {
-    assert!(text.len() % 2 == 0, "odd hex {text:?}");
+    assert!(text.len().is_multiple_of(2), "odd hex {text:?}");
     (0..text.len())
         .step_by(2)
         .map(|at| u8::from_str_radix(&text[at..at + 2], 16).expect("hex"))
@@ -799,7 +799,7 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
                 .filter(|(of, name)| of == state && names.contains(&name.as_str()))
                 .count()
         };
-        let mut check = |names: &[&str], full: usize| {
+        let check = |names: &[&str], full: usize| {
             let found: usize = names
                 .iter()
                 .map(|name| count.get(*name).copied().unwrap_or(0))
