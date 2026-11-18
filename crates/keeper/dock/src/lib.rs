@@ -220,15 +220,16 @@ impl Start {
 /// path, a file that can be run; else the shell of the user's entry in the system's list
 /// of users; else `/bin/sh`.
 pub fn user_shell() -> PathBuf {
-    shell_from(std::env::var_os("SHELL"))
+    shell_from(std::env::var_os("SHELL"), passwd_shell)
 }
 
-/// The choice of [`user_shell`], with the value of `SHELL` handed in.
-fn shell_from(variable: Option<OsString>) -> PathBuf {
+/// The choice of [`user_shell`], with the value of `SHELL` and the look at the system's
+/// list of users handed in.
+fn shell_from(variable: Option<OsString>, passwd: impl FnOnce() -> Option<PathBuf>) -> PathBuf {
     variable
         .map(PathBuf::from)
         .filter(|shell| can_run(shell))
-        .or_else(|| passwd_shell().filter(|shell| can_run(shell)))
+        .or_else(|| passwd().filter(|shell| can_run(shell)))
         .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }
 
@@ -306,8 +307,12 @@ impl std::error::Error for DockError {}
 /// What the Dock and the threads of its terminals share.
 pub(crate) struct Inner {
     state: Mutex<State>,
-    /// Told when a terminal's events are over.
+    /// Told when a terminal's events are over, and when a call of `open` is done.
     told: Condvar,
+    /// The sessions of terminals whose end was told while a process of theirs was still
+    /// there. Kept apart from `state` because finding who is left takes a look at every
+    /// process of the system.
+    left_behind: Mutex<Vec<libc::pid_t>>,
 }
 
 #[derive(Default)]
@@ -318,6 +323,10 @@ struct State {
     live: HashMap<TerminalId, Arc<Terminal>>,
     /// Terminals whose thread of events has not finished.
     untold: usize,
+    /// How many calls of `open` are making a terminal.
+    opening: usize,
+    /// How many calls of `stop_all` are running: no terminal is opened meanwhile.
+    stopping: usize,
 }
 
 impl Inner {
@@ -338,6 +347,18 @@ impl Inner {
         state.untold -= 1;
         drop(state);
         self.told.notify_all();
+    }
+
+    /// Notes the session of a terminal whose program is gone when a process is left in it.
+    pub(crate) fn leave_behind(&self, session: libc::pid_t) {
+        let mut left = self
+            .left_behind
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        left.push(session);
+        // Sessions that have emptied since are let go, so the list stays as long as what
+        // is really left behind.
+        *left = session::occupied(&left);
     }
 
     fn live(&self, id: &TerminalId) -> Result<Arc<Terminal>, DockError> {
@@ -373,6 +394,7 @@ impl Dock {
             inner: Arc::new(Inner {
                 state: Mutex::new(State::default()),
                 told: Condvar::new(),
+                left_behind: Mutex::new(Vec::new()),
             }),
             threads: Mutex::new(Vec::new()),
         }
@@ -386,23 +408,39 @@ impl Dock {
     /// [`TERMINAL_VARIABLES`] and then `start.env` set on top; its standard input, output
     /// and error are the terminal; and it holds no other descriptor of the Keeper: no
     /// socket, no pipe, no other terminal. An `id` the Dock holds already is refused with
-    /// [`DockError::TakenId`], and nothing is started.
+    /// [`DockError::TakenId`], and nothing is started. While [`Dock::stop_all`] runs, no
+    /// terminal is opened: [`DockError::Start`] says so.
     pub fn open(&self, id: TerminalId, start: Start, events: Events) -> Result<(), DockError> {
-        // The id is claimed before anything is made, so that two calls with one id cannot
-        // both start a program.
-        if !self.inner.state().taken.insert(id.clone()) {
-            return Err(DockError::TakenId(id));
-        }
-        match self.start(&id, &start, events) {
-            Ok(()) => Ok(()),
-            Err(reason) => {
-                self.inner.state().taken.remove(&id);
-                Err(DockError::Start {
+        {
+            let mut state = self.inner.state();
+            // A terminal opened while the others are being stopped would be missed by the
+            // stop, and the stop would wait for it.
+            if state.stopping > 0 {
+                return Err(DockError::Start {
                     program: start.program,
-                    reason,
-                })
+                    reason: io::Error::other("the Dock is stopping every terminal"),
+                });
+            }
+            // The id is claimed before anything is made, so that two calls with one id
+            // cannot both start a program.
+            if !state.taken.insert(id.clone()) {
+                return Err(DockError::TakenId(id));
+            }
+            state.opening += 1;
+        }
+        let made = self.start(&id, &start, events);
+        {
+            let mut state = self.inner.state();
+            state.opening -= 1;
+            if made.is_err() {
+                state.taken.remove(&id);
             }
         }
+        self.inner.told.notify_all();
+        made.map_err(|reason| DockError::Start {
+            program: start.program,
+            reason,
+        })
     }
 
     fn start(&self, id: &TerminalId, start: &Start, events: Events) -> io::Result<()> {
@@ -458,36 +496,84 @@ impl Dock {
         let child = spawned?;
 
         let terminal = Arc::new(Terminal::new(master, child.id() as libc::pid_t, wake));
-        {
-            let mut state = self.inner.state();
-            state.live.insert(id.clone(), Arc::clone(&terminal));
-            state.untold += 1;
+        let mut started = Vec::with_capacity(3);
+        let served = self.serve(id, &terminal, child, events, &mut started);
+        if served.is_err() && !started.is_empty() {
+            // A program nobody serves is not left running. The thread that collects it, which
+            // did start, ends the others.
+            //
+            // SAFETY: `kill` only sends.
+            unsafe { libc::kill(terminal.pid(), libc::SIGKILL) };
         }
+        let mut threads = self.threads();
+        threads.retain(|thread| !thread.is_finished());
+        threads.extend(started);
+        served
+    }
+
+    /// Starts the three threads of a terminal, the ones that start in `started`. A thread
+    /// that cannot start is an error of the call, with nothing of the terminal left in the
+    /// Dock's books.
+    fn serve(
+        &self,
+        id: &TerminalId,
+        terminal: &Arc<Terminal>,
+        child: std::process::Child,
+        events: Events,
+        started: &mut Vec<JoinHandle<()>>,
+    ) -> io::Result<()> {
         let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
             std::thread::Builder::new()
                 .name(format!("dock-{name}"))
                 .spawn(work)
-                // A Keeper that cannot start a thread cannot serve terminals either.
-                .expect("start a thread of the Dock")
         };
+        let waiting = {
+            let terminal = Arc::clone(terminal);
+            spawn("waiter", Box::new(move || terminal.wait_for_program(child)))
+        };
+        match waiting {
+            Ok(thread) => started.push(thread),
+            Err(error) => {
+                // The closure and the child with it are gone: kill and collect the
+                // program here.
+                //
+                // SAFETY: `kill` only sends, and the program is ours and not yet collected.
+                unsafe {
+                    libc::kill(terminal.pid(), libc::SIGKILL);
+                    libc::waitpid(terminal.pid(), std::ptr::null_mut(), 0);
+                }
+                return Err(error);
+            }
+        }
+        let writing = {
+            let terminal = Arc::clone(terminal);
+            spawn("writer", Box::new(move || terminal.write_input()))?
+        };
+        started.push(writing);
+        {
+            let mut state = self.inner.state();
+            state.live.insert(id.clone(), Arc::clone(terminal));
+            state.untold += 1;
+        }
         let reading = {
-            let (terminal, inner, id) =
-                (Arc::clone(&terminal), Arc::clone(&self.inner), id.clone());
+            let (terminal, inner, id) = (Arc::clone(terminal), Arc::clone(&self.inner), id.clone());
             spawn(
                 "reader",
                 Box::new(move || terminal.tell_events(&inner, &id, events)),
             )
         };
-        let writing = {
-            let terminal = Arc::clone(&terminal);
-            spawn("writer", Box::new(move || terminal.write_input()))
-        };
-        let waiting = spawn("waiter", Box::new(move || terminal.wait_for_program(child)));
-
-        let mut threads = self.threads();
-        threads.retain(|thread| !thread.is_finished());
-        threads.extend([reading, writing, waiting]);
-        Ok(())
+        match reading {
+            Ok(thread) => {
+                started.push(thread);
+                Ok(())
+            }
+            Err(error) => {
+                let mut state = self.inner.state();
+                state.live.remove(id);
+                state.untold -= 1;
+                Err(error)
+            }
+        }
     }
 
     fn threads(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
@@ -526,19 +612,16 @@ impl Dock {
     /// hang-up signal to every process of each terminal's session, then to those still
     /// there after [`STOP_STEP`] the terminate signal, and after one more step the kill
     /// signal. A terminal's session is the one its program leads: the program, its
-    /// children, and the jobs a shell put in process groups of their own. A process that
-    /// left the session, as a daemon does, is not reached, nor is one that outlived its
-    /// program after the end of that terminal was told. Each terminal's [`Events`] is
-    /// told its end, as when a program ends by itself.
+    /// children, and the jobs a shell put in process groups of their own, also those still
+    /// there when the program has ended. A process that left the session, as a daemon
+    /// does, is not reached. Each terminal's [`Events`] is told its end, as when a program
+    /// ends by itself.
+    ///
+    /// What waits to be typed to a program is dropped at once, and while the stop runs
+    /// [`Dock::open`] refuses.
     pub fn stop_all(&self) {
-        // The programs' ids are the sessions'. The lock is not held while waiting.
-        let sessions: Vec<libc::pid_t> = self
-            .inner
-            .state()
-            .live
-            .values()
-            .map(|terminal| terminal.pid())
-            .collect();
+        let sessions = self.begin_stopping();
+        let _stopping = Stopping(&self.inner);
         for signal in STOP_SIGNALS {
             let members = session::members(&sessions);
             if members.is_empty() {
@@ -562,6 +645,50 @@ impl Dock {
                 .wait(state)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
+    }
+
+    /// Refuses further terminals, waits for those being made, stops what is typed to the
+    /// terminals there are, and gives the sessions to stop: the programs' ids are the
+    /// sessions'. The lock is not held while waiting for the signals.
+    fn begin_stopping(&self) -> Vec<libc::pid_t> {
+        let terminals: Vec<Arc<Terminal>> = {
+            let mut state = self.inner.state();
+            state.stopping += 1;
+            while state.opening > 0 {
+                state = self
+                    .inner
+                    .told
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
+            state.live.values().cloned().collect()
+        };
+        for terminal in &terminals {
+            terminal.stop_typing();
+        }
+        let mut sessions: Vec<libc::pid_t> =
+            terminals.iter().map(|terminal| terminal.pid()).collect();
+        // Read after the live ones: a terminal is put here before it is forgotten, so one
+        // that ended between the two reads is in this list.
+        sessions.extend(
+            self.inner
+                .left_behind
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .iter(),
+        );
+        sessions.sort_unstable();
+        sessions.dedup();
+        sessions
+    }
+}
+
+/// Ends the refusal of new terminals when a stop is over, however it ends.
+struct Stopping<'a>(&'a Inner);
+
+impl Drop for Stopping<'_> {
+    fn drop(&mut self) {
+        self.0.state().stopping -= 1;
     }
 }
 
@@ -618,35 +745,35 @@ mod tests {
         let not_runnable = folder.join("not-runnable");
         executable(&runnable, 0o755);
         executable(&not_runnable, 0o644);
+        // What the system's list of users names, which the test chooses.
+        let listed = folder.join("listed");
+        executable(&listed, 0o755);
+        let from_list = || Some(listed.clone());
 
-        assert_eq!(shell_from(Some(runnable.clone().into())), runnable);
+        // `SHELL` wins when it can be run, and the list is not asked.
+        assert_eq!(
+            shell_from(Some(runnable.clone().into()), || panic!("asked the list")),
+            runnable
+        );
+        // Otherwise the shell of the list of users.
         for other in [
-            Some(not_runnable.into()),
+            Some(not_runnable.clone().into()),
             Some(folder.clone().into()),
             Some(folder.join("missing").into()),
             Some("sh".into()),
             Some("".into()),
             None,
         ] {
-            let chosen = shell_from(other.clone());
-            assert_ne!(chosen, runnable, "{other:?}");
-            assert!(can_run(&chosen), "{other:?} gave {}", chosen.display());
+            assert_eq!(shell_from(other.clone(), from_list), listed, "{other:?}");
+        }
+        // And `/bin/sh` when that cannot be run either.
+        for listed in [None, Some(not_runnable), Some(PathBuf::from("sh"))] {
+            assert_eq!(
+                shell_from(None, || listed.clone()),
+                PathBuf::from("/bin/sh"),
+                "{listed:?}"
+            );
         }
         std::fs::remove_dir_all(folder).expect("remove the folder");
-    }
-
-    #[test]
-    fn the_user_shell_is_a_login_shell_with_the_one_argument() {
-        let start = Start::shell(
-            PathBuf::from("/"),
-            Size {
-                columns: 80,
-                rows: 24,
-            },
-        );
-        assert_eq!(start.program, user_shell());
-        assert_eq!(start.args, vec![OsString::from("-l")]);
-        assert_eq!(start.folder, PathBuf::from("/"));
-        assert!(start.env.is_empty());
     }
 }

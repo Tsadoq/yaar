@@ -20,6 +20,19 @@ pub(crate) fn members(sessions: &[pid_t]) -> Vec<pid_t> {
         .collect()
 }
 
+/// The ones of `sessions` that still have a live process.
+pub(crate) fn occupied(sessions: &[pid_t]) -> Vec<pid_t> {
+    let mut found: Vec<pid_t> = members(sessions)
+        .into_iter()
+        // SAFETY: as above.
+        .map(|pid| unsafe { libc::getsid(pid) })
+        .filter(|session| sessions.contains(session))
+        .collect();
+    found.sort_unstable();
+    found.dedup();
+    found
+}
+
 #[cfg(not(target_os = "macos"))]
 fn all_processes() -> Vec<pid_t> {
     let Ok(entries) = std::fs::read_dir("/proc") else {

@@ -673,6 +673,43 @@ fn a_program_that_reads_nothing_does_not_hold_up_the_caller() {
 }
 
 #[test]
+fn terminals_fed_more_than_their_programs_read_are_still_stopped_by_the_hang_up_alone() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // Programs that read nothing, with the terminal's echo on: what is typed to them is
+    // echoed back, so a Dock that keeps typing into a terminal whose programs are dying
+    // keeps the terminal busy and the programs from leaving.
+    let mut terminals = Vec::new();
+    for n in 0..4 {
+        let script = scratch.script(&format!("deaf{n}"), "echo ready\nsleep 300\n");
+        let (id, watch) = open(&dock, scratch.start(script));
+        watch.wait_for_line("ready");
+        terminals.push((id, watch));
+    }
+    let megabyte = vec![b'x'; 1024 * 1024];
+    for (id, _) in &terminals {
+        for _ in 0..16 {
+            dock.write(id, &megabyte).expect("write");
+        }
+    }
+
+    let stopping = Instant::now();
+    dock.stop_all();
+    assert!(
+        stopping.elapsed() < STOP_STEP,
+        "took {:?}",
+        stopping.elapsed()
+    );
+    // Every one took the hang-up: none needed the terminate or the kill signal.
+    for (_, watch) in &terminals {
+        assert_eq!(
+            watch.events().last(),
+            Some(&Event::Ended(Ending::Signalled(libc::SIGHUP)))
+        );
+    }
+}
+
+#[test]
 fn what_is_typed_in_many_writes_and_one_big_one_reaches_the_program_whole_and_in_order() {
     let scratch = Scratch::new();
     let stored = scratch.path().join("stored");
@@ -698,6 +735,12 @@ fn what_is_typed_in_many_writes_and_one_big_one_reaches_the_program_whole_and_in
     assert_eq!(std::fs::read(&stored).expect("the stored bytes"), typed);
 }
 
+// The reader goes on to the end of the terminal when the program has been collected, and
+// does not stop at the hang-up the master reports. No test can fail on that here: on macOS
+// a program that exits waits, in closing its terminal, until the master has read what it
+// wrote, so nothing is left to read once it is collected (a consumer that held the reader
+// up kept the program from exiting at all). This test shows only that a burst of output is
+// read whole and told before the end; the guard itself is shown on Linux or not at all.
 #[test]
 fn output_written_just_before_the_program_exits_is_not_lost() {
     let scratch = Scratch::new();
@@ -745,6 +788,105 @@ fn a_process_the_program_left_behind_does_not_keep_the_end_from_being_told() {
         );
     }
     assert!(!is_gone(left.0), "the job did not outlive the program");
+    drop(left);
+}
+
+#[test]
+fn a_process_left_behind_by_an_ended_program_is_still_stopped_with_the_dock() {
+    let scratch = Scratch::new();
+    // As in the test above: the job ignores the hang-up and outlives the program.
+    let script = scratch.script(
+        "leaves",
+        "trap '' HUP\nsleep 300 &\necho \"left $!\"\necho done\n",
+    );
+    let dock = Dock::new();
+    let (_, watch) = open(&dock, scratch.start(script));
+    let events = watch.wait_for_line("done");
+    let left = Reap(number_after(&events, "left "));
+    watch.wait_for_end();
+    assert!(!is_gone(left.0), "the job did not outlive the program");
+
+    // The terminal has ended, and what its program left behind is stopped all the same:
+    // it ignores the hang-up and takes the terminate signal.
+    dock.stop_all();
+    assert!(is_gone(left.0), "the job is still there");
+}
+
+#[test]
+fn no_terminal_is_opened_while_the_others_are_being_stopped() {
+    let scratch = Scratch::new();
+    // Says so when it is hung up, and then neither leaves nor takes the terminate signal:
+    // the stop takes two steps and is under way for as long as that.
+    let stubborn = scratch.script(
+        "stubborn",
+        "trap 'echo hup' HUP\ntrap '' TERM\necho ready\nwhile :; do sleep 1; done\n",
+    );
+    let marker = scratch.path().join("started");
+    let late = scratch.script("late", &format!("touch '{}'\nsleep 3\n", marker.display()));
+    let dock = Arc::new(Dock::new());
+    let (_, watch) = open(&dock, scratch.start(stubborn));
+    watch.wait_for_line("ready");
+
+    let stopping = {
+        let dock = Arc::clone(&dock);
+        std::thread::spawn(move || dock.stop_all())
+    };
+    // The hang-up has gone out: the stop is under way.
+    watch.wait_for_line("hup");
+    let (_, events) = Watch::new();
+    let refused = dock.open(
+        TerminalId::random().expect("an id"),
+        scratch.start(late),
+        events,
+    );
+    assert!(
+        matches!(refused, Err(DockError::Start { .. })),
+        "{refused:?}"
+    );
+    stopping.join().expect("the stop ends");
+    assert_eq!(dock.running(), 0);
+    assert!(!marker.exists(), "the refused program was started");
+}
+
+#[test]
+fn the_users_shell_is_started_as_a_login_shell_in_the_folder_it_is_given() {
+    let scratch = Scratch::new();
+    let shell = scratch.script("shell", "echo \"args $*\"\npwd -P\n");
+    // SAFETY: changing the environment is sound only while no other thread reads it, as
+    // a thread that starts a process does. No thread of this test exists yet, and
+    // `cargo nextest` gives each test a process of its own. The shell is this test's own:
+    // nothing of the user's environment is read.
+    unsafe { std::env::set_var("SHELL", &shell) };
+    let dock = Dock::new();
+    let (_, watch) = open(&dock, Start::shell(scratch.path().to_owned(), SIZE));
+    let events = watch.wait_for_end();
+
+    assert_eq!(
+        lines(&events),
+        ["args -l".to_owned(), scratch.path().display().to_string()]
+    );
+}
+
+#[test]
+fn a_process_left_behind_that_keeps_writing_does_not_keep_the_end_from_being_told() {
+    let scratch = Scratch::new();
+    // The shell exits at once; its background job ignores the hang-up and writes to the
+    // terminal for as long as it can, so that the terminal never runs dry. macOS takes the
+    // terminal from the job when the shell exits, so the end is not held up there and this
+    // test cannot fail on it; where the job keeps the terminal, the Dock must read only a
+    // bounded amount once it lets the terminal go.
+    let script = scratch.script(
+        "chatters",
+        "trap '' HUP\n(while :; do echo chatter; done) &\necho \"left $!\"\necho done\n",
+    );
+    let dock = Dock::new();
+    let (_, watch) = open(&dock, scratch.start(script));
+    let events = watch.wait_for_line("done");
+    let left = Reap(number_after(&events, "left "));
+
+    let events = watch.wait_for_end();
+    assert_eq!(events.last(), Some(&Event::Ended(Ending::Exited(0))));
+    assert_eq!(dock.running(), 0);
     drop(left);
 }
 

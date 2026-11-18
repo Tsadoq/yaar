@@ -20,6 +20,15 @@ const LEFTOVER_WAIT: Duration = Duration::from_secs(1);
 /// What one read takes at most.
 const READ_SIZE: usize = 32 * 1024;
 
+/// What one write hands the terminal at most: a program's terminal takes only what its
+/// line discipline holds, and the writer looks again at whether it should go on between
+/// two pieces.
+const WRITE_SIZE: usize = 16 * 1024;
+
+/// The most `drain` reads: a process the program left behind may write for ever, and the
+/// terminal must still be let go.
+const DRAIN_LIMIT: usize = 1024 * 1024;
+
 /// How the program ended, and when it was collected.
 #[derive(Clone, Copy)]
 struct Collected {
@@ -81,6 +90,14 @@ impl Terminal {
         true
     }
 
+    /// Takes nothing more for the program and drops what waits: the program is being
+    /// stopped, and what is typed into a terminal whose programs are dying only keeps the
+    /// terminal busy.
+    pub(crate) fn stop_typing(&self) {
+        locked(&self.input).close();
+        self.input_ready.notify_all();
+    }
+
     /// Collects the program and tells the other threads.
     pub(crate) fn wait_for_program(&self, mut child: Child) {
         let ending = match child.wait() {
@@ -123,7 +140,13 @@ impl Terminal {
             };
             let mut offset = 0;
             while offset < chunk.len() {
-                match pty::write(master, &chunk[offset..]) {
+                // Looked at between every two writes: a stop must not wait for a long
+                // chunk to be fed into a terminal that is going away.
+                if locked(&self.input).is_closed() {
+                    break 'chunks;
+                }
+                let end = chunk.len().min(offset + WRITE_SIZE);
+                match pty::write(master, &chunk[offset..end]) {
                     Ok(Some(count)) => {
                         offset += count;
                         locked(&self.input).written(count);
@@ -154,6 +177,10 @@ impl Terminal {
         let retired = Retired { inner, id };
         self.read_to_the_end(&mut events);
         let ending = self.wait_until_collected();
+        // A process the program left behind stays the Dock's to stop. It is noted before
+        // the terminal is forgotten, so that a stop finds the session in one list or the
+        // other.
+        inner.leave_behind(self.pid);
         // The terminal no longer runs a program once the end is told.
         inner.forget(id);
         events(Event::Ended(ending));
@@ -198,15 +225,23 @@ impl Terminal {
         }
     }
 
-    /// Reads what the terminal holds now, and no more.
+    /// Reads what the terminal holds now, and no more than a bounded amount: a process the
+    /// program left behind may keep writing, and the terminal then never runs dry.
     fn drain(&self, events: &mut Events, buffer: &mut [u8]) {
         let master = self.master();
-        while let Ok((ready, _)) = pty::wait(master, libc::POLLIN, None, Some(0)) {
+        let mut read = 0;
+        while read < DRAIN_LIMIT {
+            let Ok((ready, _)) = pty::wait(master, libc::POLLIN, None, Some(0)) else {
+                return;
+            };
             if !ready {
                 return;
             }
             match pty::read(master, buffer) {
-                Ok(Some(count)) if count > 0 => events(Event::Output(buffer[..count].to_vec())),
+                Ok(Some(count)) if count > 0 => {
+                    read += count;
+                    events(Event::Output(buffer[..count].to_vec()));
+                }
                 _ => return,
             }
         }
