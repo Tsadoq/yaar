@@ -10,13 +10,16 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{
-    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Pixels, Render, Size,
-    Styled, TestAppContext, VisualTestContext, Window, div, px,
+    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers, Pixels, Render,
+    Size, Styled, TestAppContext, VisualTestContext, Window, div, px,
 };
-use yaar_frame::{BuildPane, FULL_WIDTH, Frame, KeeperLink, Pane, RAIL_WIDTH, SidebarForm};
+use yaar_frame::{
+    BuildPane, FULL_WIDTH, Frame, KeeperLink, OpenFolder, Pane, RAIL_WIDTH, SelectNextWorkspace,
+    SelectPreviousWorkspace, SetBase, SidebarForm, ToggleSidebar,
+};
 use yaar_link::{Refusal, Reply, Repository, Request, WorkspaceId};
 
-use common::{Shown, drawn, id, open_frame, repository, wait_until, workspace};
+use common::{Shown, drawn, id, key_of, open_frame, repository, wait_until, workspace};
 
 const WINDOW: Size<Pixels> = Size {
     width: px(1280.),
@@ -121,7 +124,7 @@ fn the_key_of_open_folder_asks_for_a_folder_and_sends_the_one_chosen(cx: &mut Te
 
     // Given up in the dialog: nothing is asked of the Keeper. The request read further
     // down is the next one the Window sends, so nothing went out here.
-    cx.simulate_keystrokes("cmd-o");
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
     assert!(cx.did_prompt_for_paths(), "the folder dialog is open");
     cx.simulate_path_prompt_response(|asked| {
         assert!(asked.directories, "the dialog offers folders");
@@ -132,7 +135,7 @@ fn the_key_of_open_folder_asks_for_a_folder_and_sends_the_one_chosen(cx: &mut Te
     cx.run_until_parked();
     assert_eq!(notice(&shown, &mut cx), None);
 
-    cx.simulate_keystrokes("cmd-o");
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
     let folder = PathBuf::from("/gits/opened");
     cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
     let asked = shown.keeper.expect(
@@ -169,7 +172,7 @@ fn a_refusal_of_the_keeper_is_shown_until_the_user_asks_again(cx: &mut TestAppCo
     assert_eq!(notice(&shown, &mut cx), None);
     assert_eq!(drawn("frame-notice", &mut cx), None);
 
-    cx.simulate_keystrokes("cmd-o");
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
     let folder = PathBuf::from("/tmp/plain folder");
     cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
     let asked = shown.keeper.expect(
@@ -196,7 +199,7 @@ fn a_refusal_of_the_keeper_is_shown_until_the_user_asks_again(cx: &mut TestAppCo
     assert_eq!(on_screen(&shown, &mut cx), Some(id('1')));
 
     // Asking for the next thing takes the notice away, before any answer.
-    cx.simulate_keystrokes("cmd-o");
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
     cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/gits/other")]));
     shown.keeper.expect(
         Request::OpenFolder {
@@ -213,7 +216,7 @@ fn the_key_of_set_base_opens_a_field_and_enter_sends_what_was_typed(cx: &mut Tes
     let (mut shown, mut cx) = showing(&one_repository(), Vec::new(), cx);
     assert!(!field_is_open(&mut cx));
 
-    cx.simulate_keystrokes("cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SetBase>());
     assert!(field_is_open(&mut cx));
     // The keys typed next go to the field, also those that are keys of a pane elsewhere.
     cx.simulate_input("origin/jks");
@@ -228,7 +231,7 @@ fn the_key_of_set_base_opens_a_field_and_enter_sends_what_was_typed(cx: &mut Tes
     assert!(!field_is_open(&mut cx), "Enter closes the field");
 
     // The keys of the Frame work again where the field was.
-    cx.simulate_keystrokes("cmd-b");
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
 
     // A base git does not know: the Keeper says so, and the Frame shows it.
@@ -242,7 +245,8 @@ fn the_key_of_set_base_opens_a_field_and_enter_sends_what_was_typed(cx: &mut Tes
 
     // The base is that of the workspace on screen when Enter is pressed, and a field
     // opened again is empty.
-    cx.simulate_keystrokes("cmd-alt-down cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SelectNextWorkspace>());
+    cx.simulate_keystrokes(key_of::<SetBase>());
     shown.keeper.expect(get_changes('2'), &mut cx);
     assert!(field_is_open(&mut cx));
     assert_eq!(notice(&shown, &mut cx), Some(refusal.to_string()));
@@ -264,11 +268,11 @@ fn a_field_given_up_or_left_empty_sets_no_base(cx: &mut TestAppContext) {
     let (mut shown, mut cx) = showing(&one_repository(), Vec::new(), cx);
 
     // Escape gives up: the field closes and what was typed is gone.
-    cx.simulate_keystrokes("cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SetBase>());
     cx.simulate_input("givenup");
     cx.simulate_keystrokes("escape");
     assert!(!field_is_open(&mut cx), "Escape closes the field");
-    cx.simulate_keystrokes("cmd-b");
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(
         pinned(&shown, &mut cx),
         Some(SidebarForm::Rail),
@@ -277,7 +281,7 @@ fn a_field_given_up_or_left_empty_sets_no_base(cx: &mut TestAppContext) {
 
     // Enter in an empty field, or in one that holds blanks only, asks nothing and
     // leaves the field open.
-    cx.simulate_keystrokes("cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SetBase>());
     cx.simulate_keystrokes("enter");
     assert!(field_is_open(&mut cx));
     cx.simulate_input("  ");
@@ -287,7 +291,7 @@ fn a_field_given_up_or_left_empty_sets_no_base(cx: &mut TestAppContext) {
     // The key again while the field is open leaves it as it is.
     cx.simulate_keystrokes("backspace backspace");
     cx.simulate_input("ma");
-    cx.simulate_keystrokes("cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SetBase>());
     cx.simulate_input("in");
     cx.simulate_keystrokes("enter");
 
@@ -307,13 +311,13 @@ fn with_no_workspace_on_screen_the_key_of_set_base_opens_no_field(cx: &mut TestA
     let (mut shown, mut cx) = showing(&[], Vec::new(), cx);
     assert_eq!(on_screen(&shown, &mut cx), None);
 
-    cx.simulate_keystrokes("cmd-shift-b");
+    cx.simulate_keystrokes(key_of::<SetBase>());
     assert!(!field_is_open(&mut cx));
     cx.simulate_input("main");
     cx.simulate_keystrokes("enter");
 
     // The next thing the Keeper hears is the folder opened afterwards.
-    cx.simulate_keystrokes("cmd-o");
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
     cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/gits/first")]));
     shown.keeper.expect(
         Request::OpenFolder {
@@ -332,14 +336,14 @@ fn the_keys_of_next_and_previous_workspace_change_the_workspace_on_screen(cx: &m
     let (mut shown, mut cx) = showing(&listed, Vec::new(), cx);
     assert_eq!(on_screen(&shown, &mut cx), Some(id('1')));
 
-    cx.simulate_keystrokes("cmd-alt-down");
+    cx.simulate_keystrokes(key_of::<SelectNextWorkspace>());
     assert_eq!(on_screen(&shown, &mut cx), Some(id('2')));
     shown.keeper.expect(get_changes('2'), &mut cx);
-    cx.simulate_keystrokes("cmd-alt-down");
+    cx.simulate_keystrokes(key_of::<SelectNextWorkspace>());
     assert_eq!(on_screen(&shown, &mut cx), Some(id('3')));
     shown.keeper.expect(get_changes('3'), &mut cx);
 
-    cx.simulate_keystrokes("cmd-alt-up");
+    cx.simulate_keystrokes(key_of::<SelectPreviousWorkspace>());
     assert_eq!(on_screen(&shown, &mut cx), Some(id('2')));
     shown.keeper.expect(get_changes('2'), &mut cx);
 }
@@ -392,7 +396,7 @@ fn the_panes_lie_beside_the_sidebar_in_the_order_given_and_the_keys_of_the_frame
     assert_eq!(left.bottom(), WINDOW.height);
 
     // The focus is in a pane; the keys of the Frame work from there.
-    cx.simulate_keystrokes("cmd-b");
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
     assert_eq!(
         pane("left", &mut cx).left(),
@@ -402,30 +406,103 @@ fn the_panes_lie_beside_the_sidebar_in_the_order_given_and_the_keys_of_the_frame
     assert_eq!(pane("right", &mut cx).right(), WINDOW.width);
 }
 
-#[gpui_kit::test]
-fn the_first_pane_has_the_focus_when_the_window_opens(cx: &mut TestAppContext) {
-    // The builder keeps the handle it gave the Frame, as a pane does.
-    let kept = Rc::new(RefCell::new(Vec::new()));
-    let keeping = |name: &'static str| -> BuildPane {
-        let kept = kept.clone();
-        Box::new(move |models, window, cx| {
-            let pane = blank(name)(models, window, cx);
-            kept.borrow_mut().push(pane.focus.clone());
-            pane
-        })
-    };
-    let (_shown, mut cx) = showing(
-        &one_repository(),
-        vec![keeping("left"), keeping("right")],
-        cx,
-    );
-    let focused: Vec<bool> = cx.update(|window, _| {
+/// The handles the panes of a window gave the Frame, in the order of the panes.
+type Kept = Rc<RefCell<Vec<FocusHandle>>>;
+
+/// A blank pane whose builder keeps the handle it gave the Frame, as a pane does.
+fn keeping(name: &'static str, kept: &Kept) -> BuildPane {
+    let kept = kept.clone();
+    Box::new(move |models, window, cx| {
+        let pane = blank(name)(models, window, cx);
+        kept.borrow_mut().push(pane.focus.clone());
+        pane
+    })
+}
+
+/// For each pane, whether the focus is on the handle it gave the Frame.
+fn focused(kept: &Kept, cx: &mut VisualTestContext) -> Vec<bool> {
+    cx.update(|window, _| {
         kept.borrow()
             .iter()
             .map(|focus| focus.is_focused(window))
             .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn the_first_pane_has_the_focus_when_the_window_opens(cx: &mut TestAppContext) {
+    let kept = Kept::default();
+    let (_shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
+}
+
+#[gpui_kit::test]
+fn a_click_on_what_the_frame_draws_around_the_panes_leaves_the_focus_in_the_pane(
+    cx: &mut TestAppContext,
+) {
+    let kept = Kept::default();
+    let (mut shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+    let click = |selector: &str, cx: &mut VisualTestContext| {
+        let place = drawn(selector, cx).unwrap_or_else(|| panic!("{selector} is drawn"));
+        cx.simulate_click(place.center(), Modifiers::none());
+    };
+
+    // The user works in the second pane.
+    click("pane-right", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // A workspace picked in the sidebar: the click does its work, and the keys of the
+    // pane go on working without a click into the pane.
+    click(&format!("sidebar-workspace-{}", id('2')), &mut cx);
+    assert_eq!(on_screen(&shown, &mut cx), Some(id('2')));
+    shown.keeper.expect(get_changes('2'), &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // The same after the pin control,
+    click("sidebar-pin", &mut cx);
+    assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // after the line of a repository, which takes no click,
+    click("sidebar-pin", &mut cx);
+    assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Full));
+    let repository = &one_repository()[0];
+    click(&format!("sidebar-repository-{}", repository.id), &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // and after the notice.
+    cx.simulate_keystrokes(key_of::<OpenFolder>());
+    let folder = PathBuf::from("/tmp/plain folder");
+    cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
+    let asked = shown.keeper.expect(
+        Request::OpenFolder {
+            path: folder.clone(),
+        },
+        &mut cx,
+    );
+    shown
+        .keeper
+        .reply(asked, Err(Refusal::NotARepository { path: folder }));
+    wait_until(&mut cx, "the notice", |cx| {
+        shown
+            .frame
+            .read_with(cx, |frame, cx| frame.notice(cx))
+            .is_some()
     });
-    assert_eq!(focused, [true, false]);
+    click("frame-notice", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // A click into the other pane still moves the focus there.
+    click("pane-left", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
 }
 
 /// The view of a pane that draws the place of its focus only while `here` says so.
@@ -471,7 +548,7 @@ fn the_keys_of_the_frame_work_after_what_had_the_focus_left_the_window(cx: &mut 
     here.set(false);
     cx.update(|window, _| window.refresh());
 
-    cx.simulate_keystrokes("cmd-b");
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
 }
 
@@ -484,7 +561,7 @@ fn the_keys_of_the_frame_work_when_the_first_pane_never_draws_where_its_focus_is
         vec![leaving(&Rc::new(Cell::new(false)))],
         cx,
     );
-    cx.simulate_keystrokes("cmd-b");
+    cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
 }
 

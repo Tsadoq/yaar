@@ -28,12 +28,17 @@ pub(crate) struct Words<'a> {
     pub(crate) of_line: Vec<Range<usize>>,
 }
 
-/// The words of `lines`, each line given with the line feed that ends it, if it has one.
+/// The words of `lines`, each line given with the line feed that ends it, if it has one;
+/// or none when they are more than `most` words. The cutting stops at the line that goes
+/// over, so lines without end cost no more than the first of them.
 ///
 /// The line feed is a word of its own. It can never be marked, since it is not part of
 /// the line as it is shown, but it lets the end of a line on one side meet the end of a
 /// line on the other.
-pub(crate) fn of_lines<'a>(lines: impl Iterator<Item = &'a [u8]>) -> Words<'a> {
+pub(crate) fn of_lines<'a>(
+    lines: impl Iterator<Item = &'a [u8]>,
+    most: usize,
+) -> Option<Words<'a>> {
     let mut words = Words {
         all: Vec::new(),
         of_line: Vec::new(),
@@ -50,8 +55,11 @@ pub(crate) fn of_lines<'a>(lines: impl Iterator<Item = &'a [u8]>) -> Words<'a> {
             range,
         }));
         words.of_line.push(first..words.all.len());
+        if words.all.len() > most {
+            return None;
+        }
     }
-    words
+    Some(words)
 }
 
 /// The lines that were edited: for each, its place among the `old` lines and the place
@@ -209,7 +217,8 @@ mod tests {
 
     #[test]
     fn the_line_feed_is_a_word_of_its_line_that_is_never_marked() {
-        let words = of_lines([&b"a b\n"[..], &b"c d"[..]].into_iter());
+        let lines = [&b"a b\n"[..], &b"c d"[..]];
+        let words = of_lines(lines.into_iter(), usize::MAX).expect("words without limit");
         let bytes: Vec<&[u8]> = words.all.iter().map(|word| word.bytes).collect();
         assert_eq!(bytes, [&b"a"[..], b" ", b"b", b"\n", b"c", b" ", b"d"]);
         assert_eq!(words.of_line, [0..4, 4..7]);
@@ -222,6 +231,16 @@ mod tests {
         assert_eq!(marks(&words.all[4..7], all_but_the_space), [0..1, 2..3]);
     }
 
+    #[test]
+    fn lines_of_more_words_than_allowed_are_not_cut() {
+        // Four words and three, the line feed among them.
+        let lines = [&b"a b\n"[..], &b"c d"[..]];
+        assert!(of_lines(lines.into_iter(), 7).is_some());
+        assert!(of_lines(lines.into_iter(), 6).is_none());
+        // The first line alone is within the limit, and the two together are not.
+        assert!(of_lines(lines.into_iter(), 4).is_none());
+    }
+
     /// The lines that were edited, when the words at `removed` of the old lines and at
     /// `added` of the new ones stand for no word of the other side.
     fn edited_lines(
@@ -231,8 +250,8 @@ mod tests {
         added: &[u32],
     ) -> Vec<(usize, usize)> {
         edited(
-            &of_lines(old.iter().copied()),
-            &of_lines(new.iter().copied()),
+            &of_lines(old.iter().copied(), usize::MAX).expect("words without limit"),
+            &of_lines(new.iter().copied(), usize::MAX).expect("words without limit"),
             |word| removed.contains(&word),
             |word| added.contains(&word),
         )
