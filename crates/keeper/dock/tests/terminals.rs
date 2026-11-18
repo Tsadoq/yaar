@@ -736,11 +736,11 @@ fn what_is_typed_in_many_writes_and_one_big_one_reaches_the_program_whole_and_in
 }
 
 // The reader goes on to the end of the terminal when the program has been collected, and
-// does not stop at the hang-up the master reports. No test can fail on that here: on macOS
-// a program that exits waits, in closing its terminal, until the master has read what it
-// wrote, so nothing is left to read once it is collected (a consumer that held the reader
-// up kept the program from exiting at all). This test shows only that a burst of output is
-// read whole and told before the end; the guard itself is shown on Linux or not at all.
+// does not stop at the hang-up the master reports. On macOS no test can fail on that: a
+// program that exits waits, in closing its terminal, until the master has read what it
+// wrote, and what is still unread when it gives up is thrown away, so nothing is left to
+// read once it is collected. This test shows only that a burst of output is read whole and
+// told before the end; the next one shows the guard on a system that keeps the output.
 #[test]
 fn output_written_just_before_the_program_exits_is_not_lost() {
     let scratch = Scratch::new();
@@ -755,6 +755,82 @@ fn output_written_just_before_the_program_exits_is_not_lost() {
     let expected: Vec<String> = (1..=3000).map(|n| format!("line {n}")).collect();
     assert_eq!(lines(&events), expected);
     assert_eq!(events.last(), Some(&Event::Ended(Ending::Exited(0))));
+}
+
+// Where a terminal keeps what its program wrote after the program has gone (Linux), the
+// last words of a program are still on the master when the program is collected. The
+// consumer of the events is held in the first event until the program has been collected,
+// so the reader cannot have read the rest before. It must still tell the rest, and before
+// the end. A reader that stopped when told the program was collected, or at the hang-up
+// the master reports, would lose it. On macOS the terminal throws the rest away, so only
+// the end is shown there.
+#[test]
+fn what_a_program_wrote_after_the_reader_was_held_up_is_told_when_the_program_is_collected() {
+    let scratch = Scratch::new();
+    let marker = scratch.path().join("go");
+    let script = scratch.script(
+        "last-words",
+        &format!(
+            "echo \"pid $$\"\nwhile [ ! -e '{}' ]; do sleep 0.05; done\necho last\n",
+            marker.display()
+        ),
+    );
+    let (watch, mut told) = Watch::new();
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let events: Events = {
+        let release = Arc::clone(&release);
+        let mut held = false;
+        Box::new(move |event| {
+            let is_output = matches!(event, Event::Output(_));
+            told(event);
+            if is_output && !std::mem::replace(&mut held, true) {
+                let (open, opened) = &*release;
+                let mut open = open.lock().expect("the gate");
+                let deadline = Instant::now() + DEADLINE;
+                while !*open {
+                    let left = deadline.saturating_duration_since(Instant::now());
+                    if left.is_zero() {
+                        return;
+                    }
+                    open = opened.wait_timeout(open, left).expect("the gate").0;
+                }
+            }
+        })
+    };
+    let dock = Dock::new();
+    let id = TerminalId::random().expect("an id");
+    dock.open(id, scratch.start(script), events)
+        .expect("open a terminal");
+
+    let seen = watch.wait_until("the program's id", |events| {
+        lines(events).iter().any(|line| line.starts_with("pid "))
+    });
+    let pid = number_after(&seen, "pid ");
+    // The reader is held in that event. The program goes on, ends, and is collected.
+    std::fs::write(&marker, "").expect("let the program go on");
+    // macOS does not let a program end while its terminal's reader is held up, so there
+    // the reader is let go at once.
+    if cfg!(target_os = "linux") {
+        let deadline = Instant::now() + DEADLINE;
+        while !is_gone(pid) {
+            assert!(Instant::now() < deadline, "the program did not end");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+    {
+        let (open, opened) = &*release;
+        *open.lock().expect("the gate") = true;
+        opened.notify_all();
+    }
+
+    let events = watch.wait_for_end();
+    assert_eq!(events.last(), Some(&Event::Ended(Ending::Exited(0))));
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            lines(&events),
+            vec![format!("pid {pid}"), "last".to_owned()]
+        );
+    }
 }
 
 #[test]

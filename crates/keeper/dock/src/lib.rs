@@ -282,8 +282,9 @@ pub enum DockError {
         /// What the system said.
         reason: io::Error,
     },
-    /// The Dock holds no terminal by this id: it never opened one, or its program has
-    /// ended.
+    /// The Dock holds no terminal by this id: it never opened one, its program has
+    /// ended, or [`Dock::stop_all`] is under way and the terminal no longer takes what is
+    /// typed to it, although its program may still be there.
     UnknownTerminal(TerminalId),
     /// The Dock holds a terminal by this id already, running or ended: an id names one
     /// terminal only.
@@ -311,8 +312,9 @@ pub(crate) struct Inner {
     told: Condvar,
     /// The sessions of terminals whose end was told while a process of theirs was still
     /// there. Kept apart from `state` because finding who is left takes a look at every
-    /// process of the system.
-    left_behind: Mutex<Vec<libc::pid_t>>,
+    /// process of the system. Only sessions that are not empty are kept: see
+    /// [`Inner::left_behind_sessions`].
+    left_behind: Mutex<Vec<session::Remembered>>,
 }
 
 #[derive(Default)]
@@ -355,10 +357,29 @@ impl Inner {
             .left_behind
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        left.push(session);
         // Sessions that have emptied since are let go, so the list stays as long as what
         // is really left behind.
-        *left = session::occupied(&left);
+        *left = left
+            .iter()
+            .filter_map(session::Remembered::renewed)
+            .collect();
+        left.extend(session::Remembered::of(session));
+    }
+
+    /// The sessions with a process left behind by a terminal that has ended, as they are
+    /// now. A session whose last process is gone is let go here, and it is let go
+    /// before the system can give its id to a process that starts a session of its own,
+    /// which a stop would then signal as if it were ours.
+    fn left_behind_sessions(&self) -> Vec<libc::pid_t> {
+        let mut left = self
+            .left_behind
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *left = left
+            .iter()
+            .filter_map(session::Remembered::renewed)
+            .collect();
+        left.iter().map(session::Remembered::session).collect()
     }
 
     fn live(&self, id: &TerminalId) -> Result<Arc<Terminal>, DockError> {
@@ -585,7 +606,8 @@ impl Dock {
     /// Hands `bytes` to the program of `terminal`, after everything handed to it before,
     /// and returns at once: the bytes wait until the program reads them. While
     /// [`MAX_WAITING_INPUT`] bytes wait, what more is handed is dropped, and nothing
-    /// reports it: the call still returns `Ok`.
+    /// reports it: the call still returns `Ok`. A terminal whose program has ended, or that
+    /// [`Dock::stop_all`] is stopping, takes nothing: [`DockError::UnknownTerminal`].
     pub fn write(&self, terminal: &TerminalId, bytes: &[u8]) -> Result<(), DockError> {
         if self.inner.live(terminal)?.type_in(bytes) {
             Ok(())
@@ -637,14 +659,18 @@ impl Dock {
                 std::thread::sleep(Duration::from_millis(20));
             }
         }
-        let mut state = self.inner.state();
-        while state.untold > 0 {
-            state = self
-                .inner
-                .told
-                .wait(state)
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        {
+            let mut state = self.inner.state();
+            while state.untold > 0 {
+                state = self
+                    .inner
+                    .told
+                    .wait(state)
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+            }
         }
+        // What the stop has emptied is let go now, not at the next stop.
+        self.inner.left_behind_sessions();
     }
 
     /// Refuses further terminals, waits for those being made, stops what is typed to the
@@ -670,13 +696,7 @@ impl Dock {
             terminals.iter().map(|terminal| terminal.pid()).collect();
         // Read after the live ones: a terminal is put here before it is forgotten, so one
         // that ended between the two reads is in this list.
-        sessions.extend(
-            self.inner
-                .left_behind
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .iter(),
-        );
+        sessions.extend(self.inner.left_behind_sessions());
         sessions.sort_unstable();
         sessions.dedup();
         sessions
@@ -736,6 +756,65 @@ mod tests {
             std::env::temp_dir().join(format!("yaar-dock-unit-{}-{name}", std::process::id()));
         std::fs::create_dir_all(&folder).expect("make a folder");
         folder
+    }
+
+    /// A session leader that is killed and collected when the test ends, however it ends.
+    struct Leader(std::process::Child);
+
+    impl Drop for Leader {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    /// A process that leads a session of its own, as a program of a terminal does.
+    fn session_leader() -> Leader {
+        let mut command = Command::new("sleep");
+        command.arg("300");
+        // SAFETY: `setsid` is safe between fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Leader(command.spawn().expect("start a session leader"))
+    }
+
+    #[test]
+    fn a_session_that_a_stop_has_emptied_is_no_longer_kept_to_be_signalled() {
+        let dock = Dock::new();
+        let mut leader = session_leader();
+        let session = leader.0.id() as libc::pid_t;
+        dock.inner.leave_behind(session);
+        assert_eq!(dock.inner.left_behind_sessions(), vec![session]);
+
+        dock.stop_all();
+        leader.0.wait().expect("collect the leader");
+        // Its id is free for any process to take as a session of its own: a later stop
+        // would signal that one's processes if the Dock still named it.
+        // Read as the stop left it: asking for the sessions would let it go by itself.
+        assert!(
+            dock.inner.left_behind.lock().expect("the list").is_empty(),
+            "the emptied session is still kept"
+        );
+    }
+
+    #[test]
+    fn a_session_that_is_not_empty_stays_kept_through_a_stop_that_does_not_reach_it() {
+        let dock = Dock::new();
+        let mut leader = session_leader();
+        let session = leader.0.id() as libc::pid_t;
+        dock.inner.leave_behind(session);
+        // Looking at the list, as every stop does, does not let go of what is there.
+        assert_eq!(dock.inner.left_behind_sessions(), vec![session]);
+        assert_eq!(dock.inner.left_behind_sessions(), vec![session]);
+        leader.0.kill().expect("kill the leader");
+        leader.0.wait().expect("collect the leader");
+        assert!(dock.inner.left_behind_sessions().is_empty());
     }
 
     #[test]
