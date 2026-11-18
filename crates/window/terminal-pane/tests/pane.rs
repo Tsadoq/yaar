@@ -8,8 +8,8 @@ mod common;
 use std::time::Duration;
 
 use gpui_kit::{
-    ClipboardItem, Modifiers, MouseButton, ScrollDelta, ScrollEvent, TestAppContext,
-    VisualTestContext, point, px, size,
+    ClipboardItem, KeyDownEvent, KeyUpEvent, Keystroke, Modifiers, MouseButton, ScrollDelta,
+    ScrollEvent, TestAppContext, VisualTestContext, point, px, size,
 };
 use yaar_link::{Ending, Fact, Reply, Request, TerminalId};
 use yaar_terminal_pane::{
@@ -502,6 +502,37 @@ fn a_key_reaches_the_program_once_in_the_form_the_encoder_gives(cx: &mut TestApp
     cx.simulate_input("z");
     assert_eq!(panes.keeper.input(&mut cx).1, b"z");
     assert!(panes.keeper.no_input_waits());
+}
+
+#[gpui_kit::test]
+fn a_held_letter_repeats_as_text_and_is_not_left_to_the_systems_accent_popup(
+    cx: &mut TestAppContext,
+) {
+    let (panes, mut cx, one) = one_terminal(cx);
+    // The first press of a letter is typed text, which the platform hands to the input
+    // handler: the key listener sends nothing for it. Each repeat of the held key is
+    // sent as its text.
+    let press = |held: bool| KeyDownEvent {
+        keystroke: Keystroke {
+            key: "e".to_owned(),
+            key_char: Some("e".to_owned()),
+            modifiers: Modifiers::none(),
+        },
+        is_held: held,
+        prefer_character_input: false,
+    };
+    // The keystroke is the one the system gives: with its text.
+    cx.simulate_event(press(false));
+    cx.simulate_event(press(true));
+    cx.simulate_event(press(true));
+    cx.simulate_event(KeyUpEvent {
+        keystroke: press(false).keystroke,
+    });
+    assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"e".to_vec()));
+    assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"e".to_vec()));
+    // Nothing more: the first press and the release sent nothing.
+    cx.simulate_input("z");
+    assert_eq!(panes.keeper.input(&mut cx), (one, b"z".to_vec()));
 }
 
 #[gpui_kit::test]

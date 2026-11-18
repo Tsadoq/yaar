@@ -231,9 +231,18 @@ impl TerminalView {
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let modes = self.emulator.modes();
         let option = Self::option_key(cx);
+        let keystroke = &event.keystroke;
+        let modifiers = &keystroke.modifiers;
         // A key that types text has no bytes here: it is left alone, and the platform
-        // hands its text to the input handler.
-        if let Some(bytes) = encode_key(&event.keystroke, &modes, option, event.is_held) {
+        // hands its text to the input handler. Its repeats are the exception: macOS
+        // would offer the accents of the letter instead of repeating it, and no terminal
+        // wants that, so a held key's text is sent here, as the key repeats.
+        let bytes = encode_key(keystroke, &modes, option, event.is_held).or_else(|| {
+            let text = keystroke.key_char.as_ref()?;
+            let plain = !modifiers.alt && !modifiers.control && !modifiers.platform;
+            (event.is_held && plain).then(|| text.as_bytes().to_vec())
+        });
+        if let Some(bytes) = bytes {
             self.back_to_the_prompt();
             self.send(bytes, cx);
             cx.notify();
