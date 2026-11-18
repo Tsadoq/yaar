@@ -15,6 +15,13 @@ yaar-frame.workspace = true
 yaar-link.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
+yaar-review-pane.workspace = true
+
+[dev-dependencies]
+# GPUI's test platform, for tests only: the programs users get are built without it.
+gpui-kit = { workspace = true, features = ["test-support"] }
+# The world of a test and its real Keeper, for the tests of the composed Window.
+yaar-system-tests.workspace = true
 
 [lints]
 workspace = true

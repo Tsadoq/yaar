@@ -1,0 +1,2 @@
+# Copies of other projects' files and what was recorded from them: git changes no line end.
+crates/shared/diff/corpus/** -text

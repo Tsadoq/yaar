@@ -1,9 +1,19 @@
 //! System tests (`B-BUILD`): the whole app through what a user or an agent touches.
 //!
 //! The tests in `tests/` start the built programs. This library holds what they share:
-//! where the programs are, a place for a socket, and a scripted client that speaks the
-//! Link in place of the Window. The stand-in agent CLI joins it when the Switchboard
-//! exists.
+//! - [`World`], the folders, repositories and Keeper of one test, with [`Repo`] to drive
+//!   git in it and [`Tap`] to read the requests a real Window sends;
+//! - [`Client`], the scripted client that speaks the Link in place of the Window;
+//! - [`descriptors_of`] and [`descendants_of`], which read from outside what a process
+//!   holds open and what it started;
+//! - [`program`], [`is_alive`] and [`wait_until`], and the bare [`attach`] and [`Place`]
+//!   of the tests that need no world.
+//!
+//! The stand-in agent CLI joins it when the Switchboard exists.
+
+mod client;
+mod processes;
+mod world;
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -14,10 +24,19 @@ use std::time::{Duration, Instant};
 
 use yaar_link::{Hello, handshake};
 
-/// The path of a built program of the workspace, building both programs first if one is
-/// missing. Cargo puts them in the profile folder, `target/debug` or the like; a test
-/// program runs from `build/` or `deps/` somewhere beneath it, depending on the Cargo
-/// version.
+pub use client::{Client, DEADLINE};
+pub use processes::{Descriptor, descendants_of, descriptors_of};
+pub use world::{Repo, Tap, World};
+
+/// The path of a built program of the workspace, building both programs first. Cargo
+/// puts them in the profile folder, `target/debug` or the like; a test program runs from
+/// `build/` or `deps/` somewhere beneath it, depending on the Cargo version.
+///
+/// They are built every time, once in each process that asks, and not only when one is
+/// missing: a run of the tests builds a program only for the tests of its own package,
+/// so one left in the folder by an earlier build can be older than the sources, and a
+/// test would then meet a Window or a Keeper that is no longer the one in the tree.
+/// Where both are up to date, the build does nothing.
 pub fn program(name: &str) -> PathBuf {
     let test_exe = std::env::current_exe().expect("the test's own path");
     let profile_dir = test_exe
@@ -33,12 +52,6 @@ pub fn program(name: &str) -> PathBuf {
     let path = profile_dir.join(name);
     static BUILD: Once = Once::new();
     BUILD.call_once(|| {
-        if ["yaar-review", "yaar-keeper"]
-            .iter()
-            .all(|program| profile_dir.join(program).is_file())
-        {
-            return;
-        }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut build = Command::new(cargo);
         build.args([
@@ -70,13 +83,33 @@ impl Place {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!("/tmp/yaar-st-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&path).expect("create the test's folder");
+        for folder in ["home", "run"] {
+            std::fs::create_dir_all(path.join(folder)).expect("create the test's folder");
+        }
         Self(path)
     }
 
     /// Where the Keeper of this test listens.
     pub fn socket(&self) -> PathBuf {
         self.0.join("k.sock")
+    }
+
+    /// A command that runs `program` as a user of this folder alone: with the environment
+    /// of this process cleared but for the search path, and the home, data and runtime
+    /// folders of the user inside the folder. A program that keeps files in the user's
+    /// folders, as the Keeper does with its database, then keeps them here, and no test
+    /// touches the folders of whoever runs it.
+    pub fn command(&self, program: &Path) -> Command {
+        let mut command = Command::new(program);
+        command.env_clear();
+        if let Some(search) = std::env::var_os("PATH") {
+            command.env("PATH", search);
+        }
+        command
+            .env("HOME", self.0.join("home"))
+            .env("XDG_DATA_HOME", self.0.join("data"))
+            .env("XDG_RUNTIME_DIR", self.0.join("run"));
+        command
     }
 }
 

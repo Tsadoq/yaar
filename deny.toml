@@ -27,7 +27,10 @@ ignore = [
 [licenses]
 version = 2
 confidence-threshold = 0.8
-# The permissive licences, and MPL-2.0. A dependency under anything else fails.
+# Without this the check leaves out the crates only tests and examples need.
+include-dev = true
+# The permissive licences, and MPL-2.0. A dependency of any of the three kinds cargo has,
+# normal, build and dev, under anything else fails.
 allow = [
     "MIT",
     "Apache-2.0",
@@ -48,6 +51,66 @@ multiple-versions = "warn"
 wildcards = "deny"
 # The crates of this workspace name each other by path.
 allow-wildcard-paths = true
+# The app draws its own interface and runs no JavaScript: no program it ships, and no
+# Companion, may link a web view or a JavaScript engine, however deep in its dependencies.
+# A ban is an exact name, so this list is as wide as the check is. The crates ending in
+# -sys or _sys are the ones that link the engine itself: they catch a wrapper that is not
+# named here.
+deny = [
+    { crate = "wry", reason = "a web view" },
+    { crate = "tao", reason = "the window library of the Tauri web view" },
+    { crate = "tauri", reason = "a web view" },
+    { crate = "web-view", reason = "a web view" },
+    { crate = "webview-sys", reason = "a web view" },
+    { crate = "webview2-com", reason = "a web view" },
+    { crate = "webview2-com-sys", reason = "a web view" },
+    { crate = "webkit2gtk", reason = "a web view" },
+    { crate = "webkit2gtk-sys", reason = "a web view" },
+    { crate = "webkit6", reason = "a web view" },
+    { crate = "webkit6-sys", reason = "a web view" },
+    { crate = "objc2-web-kit", reason = "a web view" },
+    { crate = "cef", reason = "a web view" },
+    { crate = "cef-dll-sys", reason = "a web view" },
+    { crate = "deno_core", reason = "a JavaScript runtime" },
+    { crate = "v8", reason = "a JavaScript runtime" },
+    { crate = "rusty_v8", reason = "a JavaScript runtime" },
+    { crate = "boa_engine", reason = "a JavaScript runtime" },
+    { crate = "rquickjs", reason = "a JavaScript runtime" },
+    { crate = "rquickjs-sys", reason = "a JavaScript runtime" },
+    { crate = "quick-js", reason = "a JavaScript runtime" },
+    { crate = "libquickjs-sys", reason = "a JavaScript runtime" },
+    { crate = "mozjs", reason = "a JavaScript runtime" },
+    { crate = "mozjs_sys", reason = "a JavaScript runtime" },
+    { crate = "rusty_jsc", reason = "a JavaScript runtime" },
+    { crate = "rusty_jsc_sys", reason = "a JavaScript runtime" },
+    { crate = "javascriptcore-rs", reason = "a JavaScript runtime" },
+    { crate = "javascriptcore-rs-sys", reason = "a JavaScript runtime" },
+    { crate = "objc2-java-script-core", reason = "a JavaScript runtime" },
+    # The app is no fork of the Zed editor, and Zed publishes crates of its own on the
+    # registry, where no rule on sources stops them. The interface toolkit is another
+    # project's fork under other names (gpui-kit, gpui-pre and their parts): no line here
+    # names it.
+    { crate = "gpui", reason = "a crate of the Zed editor" },
+    { crate = "gpui-macros", reason = "a crate of the Zed editor" },
+    { crate = "zed_extension_api", reason = "a crate of the Zed editor" },
+    { crate = "zed-collections", reason = "a crate of the Zed editor" },
+    { crate = "zed-derive-refineable", reason = "a crate of the Zed editor" },
+    { crate = "zed-http-client", reason = "a crate of the Zed editor" },
+    { crate = "zed-media", reason = "a crate of the Zed editor" },
+    { crate = "zed-perf", reason = "a crate of the Zed editor" },
+    { crate = "zed-refineable", reason = "a crate of the Zed editor" },
+    { crate = "zed-reqwest", reason = "a crate of the Zed editor" },
+    { crate = "zed-semantic-version", reason = "a crate of the Zed editor" },
+    { crate = "zed-sum-tree", reason = "a crate of the Zed editor" },
+    { crate = "zed-util", reason = "a crate of the Zed editor" },
+    { crate = "zed-util-macros", reason = "a crate of the Zed editor" },
+    # Libraries Zed forked and publishes. The toolkit links the first two, and only the
+    # crates of the toolkit named here may: anything else that asks for one is refused.
+    # The third it links only to capture the screen, which the app does not do.
+    { crate = "zed-font-kit", wrappers = ["gpui-pre-apple", "gpui-pre-wgpu"], reason = "a crate Zed publishes, let in beneath the interface toolkit only" },
+    { crate = "zed-xim", wrappers = ["gpui-pre-linux"], reason = "a crate Zed publishes, let in beneath the interface toolkit only" },
+    { crate = "zed-scap", reason = "a crate Zed publishes, which the interface toolkit does not link as the app builds it" },
+]
 
 [sources]
 unknown-registry = "deny"

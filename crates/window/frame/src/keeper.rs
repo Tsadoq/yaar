@@ -38,6 +38,10 @@ pub enum KeeperError {
     NoAnswer(PathBuf),
     /// A Keeper answered with something that is not the Link.
     Link(LinkError),
+    /// What is at the socket is not the user's own: the folder of a short socket path
+    /// belongs to somebody else or is open to others, or the process that listens runs
+    /// as another user. Nothing was sent to it.
+    NotOurs(PathBuf),
 }
 
 impl fmt::Display for KeeperError {
@@ -47,13 +51,25 @@ impl fmt::Display for KeeperError {
             Self::Start(path, e) => write!(f, "could not start {}: {e}", path.display()),
             Self::NoAnswer(path) => write!(f, "{} started but did not answer", path.display()),
             Self::Link(e) => write!(f, "the Keeper answered wrongly: {e}"),
+            Self::NotOurs(path) => write!(
+                f,
+                "what listens at {} does not belong to this user",
+                path.display()
+            ),
         }
     }
 }
 
 impl std::error::Error for KeeperError {}
 
-/// Connects to the Keeper on `socket`, starting it first when none answers.
+/// Connects to the Keeper asked to listen at `socket`, starting it first when none
+/// answers.
+///
+/// The socket is reached through [`yaar_link::connect`], and so at
+/// [`yaar_link::socket_address`] of `socket`: a path too long for the system leads to
+/// the same short one the Keeper binds. A Keeper that is started is handed `socket` as
+/// it was given, and applies the same rule. When `connect` refuses what is there as not
+/// the user's own, no Keeper is started and the answer is [`KeeperError::NotOurs`].
 pub fn attach(socket: &Path, app_version: &str) -> Result<Attached, KeeperError> {
     let mine = Hello::for_this_process(app_version);
     if let Some(attached) = try_attach(socket, &mine, false) {
@@ -79,7 +95,15 @@ pub fn attach(socket: &Path, app_version: &str) -> Result<Attached, KeeperError>
 
 /// `None` when nothing listens, or when what listens goes away before it has answered.
 fn try_attach(socket: &Path, mine: &Hello, started: bool) -> Option<Result<Attached, KeeperError>> {
-    let mut stream = UnixStream::connect(socket).ok()?;
+    let mut stream = match yaar_link::connect(socket) {
+        Ok(stream) => stream,
+        // Somebody else's: starting a Keeper would not make it ours, and the Keeper
+        // would refuse the same place.
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            return Some(Err(KeeperError::NotOurs(yaar_link::socket_address(socket))));
+        }
+        Err(_) => return None,
+    };
     match handshake(&mut stream, mine) {
         Ok(keeper) => Some(Ok(Attached {
             stream,

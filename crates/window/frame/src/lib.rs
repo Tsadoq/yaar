@@ -6,18 +6,41 @@
 //! pane.
 //!
 //! Surface:
-//! - [`Frame`], the root view of the window, and [`open`], which opens it;
-//! - [`KeeperLink`], the model that says how the Window stands with the Keeper;
+//! - [`Frame`], the root view of the window, and [`open`], which opens it with the panes
+//!   it is given: a [`BuildPane`] for each, which makes a [`Pane`]. A pane's crate hands
+//!   the Window program one [`PaneEntry`], which holds the builder and the keys;
+//! - [`KeeperLink`], the model that says how the Window stands with the Keeper, through
+//!   which the Window asks the Keeper and hears its facts;
+//! - [`Models`], the shared models a pane observes: [`WorkspaceList`], the repositories
+//!   with their worktrees and the workspace on screen, and [`WorkspaceChanges`], the
+//!   changes of that workspace;
+//! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
+//! - [`controls`], the table of actions with their keys, and the actions of the Frame.
+//!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
+//!   context the Frame sets around everything it draws;
 //! - [`keeper`], which finds or starts the Keeper. It uses no interface code;
 //! - [`trace`], the marks by which a start is timed from outside.
 //!
-//! In this first form the Frame holds no pane: it draws an empty window that names the
-//! Keeper it is linked to.
+//! How the parts of the Window talk. What the Keeper tells arrives at the [`KeeperLink`]
+//! and changes a shared model; a pane observes the models it shows. A pane that needs
+//! more asks the Keeper through the models. What the user wants travels as an action,
+//! which the Frame or the pane with the focus handles. No pane holds another pane.
 
+mod controls;
 pub mod keeper;
 mod link_model;
+mod models;
+mod sidebar;
 pub mod trace;
 mod view;
 
-pub use link_model::{KeeperLink, LinkStatus};
-pub use view::{Frame, open};
+pub use controls::{
+    Asks, Control, KEY_CONTEXT, OpenFolder, Place, SelectNextWorkspace, SelectPreviousWorkspace,
+    Sends, SetBase, ToggleSidebar, UnpinSidebar, bind, controls,
+};
+pub use link_model::{AskError, KeeperLink, LinkStatus};
+pub use models::{Models, WorkspaceChanges, WorkspaceList};
+pub use sidebar::{
+    FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
+};
+pub use view::{BuildPane, Frame, Opened, Pane, PaneEntry, open};
