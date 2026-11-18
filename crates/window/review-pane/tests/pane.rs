@@ -6,6 +6,7 @@
 mod common;
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::rc::Rc;
 
@@ -19,7 +20,9 @@ use yaar_link::{
     Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Refusal, Reply,
     Request, RequestKind,
 };
-use yaar_review_pane::{Layout, PaneRow, Position, ReviewPane, Unshown, controls};
+use yaar_review_pane::{
+    FILES_ON_THEIR_WAY, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
+};
 
 use common::{
     Stage, WINDOW, bounds_of_row, commit, default_base, drawn, file, id, link_up, open,
@@ -1502,4 +1505,78 @@ fn a_file_that_arrives_above_the_rows_in_view_leaves_them_where_they_are(cx: &mu
             line: 0
         }
     );
+}
+
+#[gpui_kit::test]
+fn of_many_changed_files_only_a_few_are_on_their_way_at_a_time_from_the_top_of_the_list(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    // Three times as many files as the pane asks for at once, and one more.
+    let count = 3 * FILES_ON_THEIR_WAY + 1;
+    let changes = since_main(
+        Vec::new(),
+        (0..count)
+            .map(|number| file(&format!("file-{number:02}.txt"), FileStatus::Added))
+            .collect(),
+    );
+    let version = |number: usize| texts("", &format!("line of file {number}\n")).map(Reply::File);
+    let changed = Fact::ChangesChanged { workspace: id('1') };
+    let for_the_changes = Request::GetChanges { workspace: id('1') };
+    let asked = stage.keeper.expect(for_the_changes.clone(), &mut cx);
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Changes(changes.clone())));
+
+    // The pane asks for the first files of the list, as many as it has on their way at
+    // once.
+    let mut on_their_way = VecDeque::new();
+    for file in &changes.files[..FILES_ON_THEIR_WAY] {
+        let asked = stage.keeper.expect(read_file(&changes, file), &mut cx);
+        on_their_way.push_back(asked);
+    }
+    // And for no more, though the Keeper has answered none. A question is written to
+    // the socket before the pane goes on, so one for a further file would lie before
+    // whatever the Window asks next. The Keeper makes it ask, by telling that the
+    // changes changed: the next thing it hears is the question that follows.
+    stage.keeper.tell(changed.clone());
+    let again = stage.keeper.expect(for_the_changes.clone(), &mut cx);
+
+    // The Keeper takes its time with that one and answers for the files meanwhile.
+    // Each answer makes room for one question, and it is for the next file of the
+    // list.
+    for number in 0..count {
+        let answered = on_their_way
+            .pop_front()
+            .expect("a question for each file of the list");
+        stage.keeper.reply(answered, version(number));
+        if let Some(next) = changes.files.get(number + FILES_ON_THEIR_WAY) {
+            let asked = stage.keeper.expect(read_file(&changes, next), &mut cx);
+            on_their_way.push_back(asked);
+        }
+    }
+    assert_eq!(on_their_way.len(), 0);
+    // Every file was read in its turn, and the pane shows them all.
+    wait_for_files(&stage.pane, &mut cx);
+    let all: Vec<String> = (0..count)
+        .flat_map(|number| {
+            [
+                format!("# file-{number:02}.txt"),
+                format!("+line of file {number}"),
+            ]
+        })
+        .collect();
+    assert_eq!(reading(&stage.pane, &mut cx), all);
+
+    // The changes read again are read the same way, as each time the window comes back
+    // to the front: a few files from the top of the list, and no more until one of
+    // them is here.
+    stage
+        .keeper
+        .reply(again, Ok(Reply::Changes(changes.clone())));
+    for file in &changes.files[..FILES_ON_THEIR_WAY] {
+        stage.keeper.expect(read_file(&changes, file), &mut cx);
+    }
+    stage.keeper.tell(changed);
+    stage.keeper.expect(for_the_changes, &mut cx);
 }

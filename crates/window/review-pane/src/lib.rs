@@ -12,8 +12,8 @@
 //!
 //! The pane shows the changes of the workspace on screen: it observes
 //! `yaar_frame::WorkspaceChanges`, asks through it for the two versions of each changed
-//! file, and diffs them with `yaar-diff` off the thread that draws. It reads and shows;
-//! nothing in it changes a file, and it offers no way to.
+//! file, a few files at a time, and diffs them with `yaar-diff` off the thread that
+//! draws. It reads and shows; nothing in it changes a file, and it offers no way to.
 //!
 //! It depends on the Frame and on no other pane.
 
@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
-use yaar_frame::{Asks, BuildPane, Control, Models, Pane, PaneEntry};
+use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry};
 use yaar_link::{ChangedFile, Changes, Comparison, Content, FileSides, FileStatus};
 
 pub use yaar_diff::Layout;
@@ -52,6 +52,17 @@ pub const FIRST_LAYOUT: Layout = Layout::Unified;
 
 /// The name of the pane in the Frame.
 pub const NAME: &str = "review";
+
+/// How many files of the changes the pane has asked the Keeper for and not yet got, at
+/// the most. The other files wait their turn, in the order of the list.
+///
+/// A question is written to the Keeper's socket by the thread that draws, and a socket
+/// takes only so much before a write has to wait for the Keeper to read: 8,192 bytes by
+/// default on macOS, which is less than the questions for the files of a large change.
+/// Asked for all at once, those files would hold the window still while the Keeper
+/// worked through them. A few at a time keep the Keeper as busy, and let the files
+/// after a large one arrive while that one is still being read and diffed.
+pub const FILES_ON_THEIR_WAY: usize = 4;
 
 /// The pane as the Window program registers it: its name, its keys and its builder.
 pub fn entry() -> PaneEntry {
@@ -188,6 +199,14 @@ enum FileContent {
     Diff(Box<ShownDiff>),
 }
 
+/// A question for the two versions of one file that is on its way to the Keeper or back.
+struct Asked {
+    /// The place of the file in the files of the pane.
+    index: usize,
+    /// The answer, when it comes.
+    sides: Task<Result<FileSides, AskError>>,
+}
+
 /// The diff of one file, with what was worked out of it for drawing.
 struct ShownDiff {
     diff: FileDiff,
@@ -199,10 +218,15 @@ struct ShownDiff {
 
 /// The Review pane: a view, and the model of what it shows.
 ///
-/// The reviewer is always on one line once a diff is shown: at first the first changed
-/// line of the first file. [`LineDown`] and [`LineUp`] move to the next and the previous
-/// line of the diff, across files, and a click on a line moves there. The pane scrolls so
-/// that the line stays in view; the wheel scrolls without moving the reviewer.
+/// The reviewer is on one line while a diff is shown: at first the first changed line of
+/// the first file. [`LineDown`] and [`LineUp`] move to the next and the previous line of
+/// the diff, across files, and a click on a line moves there. The pane scrolls so that
+/// the line stays in view; the wheel scrolls without moving the reviewer.
+///
+/// The files arrive one after the other, and not always in the order of the list. While
+/// a file above the first diff that is shown is still on its way, that file may yet hold
+/// the first changed line: until it is here the reviewer is on no line, and the two
+/// actions do nothing, unless a click has put the reviewer on a line.
 ///
 /// The lines of a diff have one order, whatever the layout: the order of the unified
 /// view, where the removed lines of a change come before the lines added in their place.
@@ -239,9 +263,13 @@ pub struct ReviewPane {
     files: Vec<ShownFile>,
     /// Where each file is in `files`.
     by_path: HashMap<PathBuf, usize>,
-    /// The questions for the files of `changes` that are still on their way. New
-    /// changes take their place, which drops the answers to the old ones.
+    /// The reading of the files of `changes`: at most [`FILES_ON_THEIR_WAY`] tasks,
+    /// each with one question on its way, which it follows with the question for the
+    /// next file in `unread` when the answer is here. New changes take their place,
+    /// which drops the answers to the old questions.
     reading: Vec<Task<()>>,
+    /// The files of `changes` that were not asked for yet, by their place in `files`.
+    unread: Range<usize>,
     scroll: UniformListScrollHandle,
     /// The rows the list last laid out, as the list itself told it.
     in_view: Rc<RefCell<Range<usize>>>,
@@ -264,6 +292,7 @@ impl ReviewPane {
             files: Vec::new(),
             by_path: HashMap::new(),
             reading: Vec::new(),
+            unread: 0..0,
             scroll: UniformListScrollHandle::new(),
             in_view: Rc::new(RefCell::new(0..0)),
         };
@@ -292,7 +321,8 @@ impl ReviewPane {
             .then(|| shown.text(position.side, position.line).into_owned())
     }
 
-    /// The line the reviewer is on; none while no diff is shown.
+    /// The line the reviewer is on. None while no diff is shown, and while a file above
+    /// the first diff that is shown is still on its way and no click has chosen a line.
     pub fn position(&self) -> Option<&Position> {
         self.position.as_ref()
     }
@@ -317,6 +347,7 @@ impl ReviewPane {
             self.files.clear();
             self.by_path.clear();
             self.reading.clear();
+            self.unread = 0..0;
             self.position = None;
             self.rebuild(cx);
             return;
@@ -333,7 +364,8 @@ impl ReviewPane {
         self.show(changes, cx);
     }
 
-    /// Shows an answer of the Keeper, and asks for the two versions of each file of it.
+    /// Shows an answer of the Keeper, and starts to ask for the two versions of each
+    /// file of it.
     ///
     /// An answer for the workspace that is shown already is the same changes read
     /// again, as when the window comes back to the front: each file keeps what is shown
@@ -371,42 +403,63 @@ impl ReviewPane {
             .enumerate()
             .map(|(index, file)| (file.path.clone(), index))
             .collect();
-        // In the order of the list, so the files arrive top to bottom.
-        self.reading = changes
-            .files
-            .iter()
-            .enumerate()
-            .map(|(index, file)| self.read(index, file, cx))
-            .collect();
         self.changes = Some(changes);
         self.rebuild(cx);
+        // The files are asked for from the top of the list, and only a few at a time:
+        // the rest as the answers come.
+        self.unread = 0..self.files.len();
+        self.reading.clear();
+        self.reading = (0..FILES_ON_THEIR_WAY)
+            .map_while(|_| self.read(cx))
+            .collect();
     }
 
-    /// Asks for the two versions of the file at `index` and diffs them.
-    fn read(&self, index: usize, file: &ChangedFile, cx: &mut Context<Self>) -> Task<()> {
-        let asked = self
+    /// Asks for the first file that was not asked for yet. Each time the answer is
+    /// here, the task it gives diffs that file, puts it in its place and asks for the
+    /// next one, so it has one question on its way at a time. None when every file was
+    /// asked for.
+    fn read(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        let mut asked = self.ask(cx)?;
+        Some(cx.spawn(async move |pane, cx| {
+            loop {
+                let content = match asked.sides.await.map(versions) {
+                    Ok(Ok((old, new))) => {
+                        // The diff of a large file takes long enough to be seen: it is
+                        // made off the thread that draws.
+                        let diff = cx
+                            .background_spawn(async move { FileDiff::new(&old, &new) })
+                            .await;
+                        FileContent::Diff(Box::new(ShownDiff {
+                            diff,
+                            emphasis: RefCell::default(),
+                        }))
+                    }
+                    Ok(Err(why)) => FileContent::Unshown(why),
+                    Err(_) => FileContent::Unshown(Unshown::Refused),
+                };
+                let next = pane.update(cx, |pane, cx| {
+                    pane.loaded(asked.index, content, cx);
+                    pane.ask(cx)
+                });
+                match next {
+                    Ok(Some(next)) => asked = next,
+                    // Every file was asked for, or the pane is gone.
+                    Ok(None) | Err(_) => break,
+                }
+            }
+        }))
+    }
+
+    /// Asks the Keeper for the two versions of the first file that was not asked for
+    /// yet, if there is one.
+    fn ask(&mut self, cx: &mut Context<Self>) -> Option<Asked> {
+        let index = self.unread.next()?;
+        let file = &self.files[index].file;
+        let sides = self
             .models
             .changes
             .update(cx, |changes, cx| changes.file(file, cx));
-        cx.spawn(async move |pane, cx| {
-            let content = match asked.await.map(versions) {
-                Ok(Ok((old, new))) => {
-                    // The diff of a large file takes long enough to be seen: it is made
-                    // off the thread that draws.
-                    let diff = cx
-                        .background_spawn(async move { FileDiff::new(&old, &new) })
-                        .await;
-                    FileContent::Diff(Box::new(ShownDiff {
-                        diff,
-                        emphasis: RefCell::default(),
-                    }))
-                }
-                Ok(Err(why)) => FileContent::Unshown(why),
-                Err(_) => FileContent::Unshown(Unshown::Refused),
-            };
-            pane.update(cx, |pane, cx| pane.loaded(index, content, cx))
-                .ok();
-        })
+        Some(Asked { index, sides })
     }
 
     /// Puts what came for the file at `index` in the place of what was shown of it.
