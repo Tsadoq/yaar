@@ -96,6 +96,19 @@ fn assert_lines_drawn_as_read(pane: &Entity<ReviewPane>, cx: &mut VisualTestCont
             continue;
         };
         let whole = bounds_of_row(index, cx);
+        if layout == Layout::Split {
+            // The old version is on the left and the new one on the right, for a row
+            // that has a line on only one side as well.
+            let half = |name: &str, cx: &mut VisualTestContext| {
+                drawn(&format!("review-row-{index}-{name}"), cx)
+                    .unwrap_or_else(|| panic!("row {index} has no {name} half"))
+            };
+            let (old, new) = (half("old", cx), half("new", cx));
+            assert!(
+                old.right() <= new.left(),
+                "row {index}: the old half {old:?} is not left of the new half {new:?}"
+            );
+        }
         for (side, name) in [(Side::Old, "old"), (Side::New, "new")] {
             // The unified view shows an unchanged line once, as the new version has it.
             let once = layout == Layout::Unified && matches!(row, Row::Context { .. });
