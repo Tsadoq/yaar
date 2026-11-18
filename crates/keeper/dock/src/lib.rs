@@ -22,11 +22,26 @@
 //!
 //! No interface code belongs here.
 
+mod pty;
+mod queue;
+mod session;
+mod terminal;
+
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use terminal::Terminal;
 
 /// How long each step of [`Dock::stop_all`] waits for the programs before the next,
 /// harder one: hang-up, then terminate, then kill.
@@ -34,6 +49,22 @@ pub const STOP_STEP: Duration = Duration::from_secs(1);
 
 /// The signals of [`Dock::stop_all`], in the order they are sent.
 const STOP_SIGNALS: [libc::c_int; 3] = [libc::SIGHUP, libc::SIGTERM, libc::SIGKILL];
+
+/// The signals a program starts with their default action, whatever the Keeper made of
+/// them.
+const RESET_SIGNALS: [libc::c_int; 11] = [
+    libc::SIGHUP,
+    libc::SIGINT,
+    libc::SIGQUIT,
+    libc::SIGTERM,
+    libc::SIGPIPE,
+    libc::SIGCHLD,
+    libc::SIGCONT,
+    libc::SIGTSTP,
+    libc::SIGTTIN,
+    libc::SIGTTOU,
+    libc::SIGWINCH,
+];
 
 /// The variables every program of a terminal finds set, whatever the Keeper's own
 /// environment holds: what kind of terminal it runs in. `TERM` names a description every
@@ -96,7 +127,12 @@ impl TerminalId {
     /// A new id: 16 bytes of `/dev/urandom` as 32 lowercase hexadecimal digits. Fails
     /// only when `/dev/urandom` cannot be read.
     pub fn random() -> io::Result<TerminalId> {
-        todo!()
+        use std::io::Read;
+        let mut bytes = [0u8; 16];
+        std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        Ok(TerminalId(
+            bytes.iter().map(|byte| format!("{byte:02x}")).collect(),
+        ))
     }
 
     /// The text of the id.
@@ -165,8 +201,7 @@ impl Start {
     /// The user's shell, [`user_shell`], as a login shell, its one argument `-l`, in
     /// `folder`.
     pub fn shell(folder: PathBuf, size: Size) -> Start {
-        let _ = (folder, size);
-        todo!()
+        Start::program(user_shell(), vec![OsString::from("-l")], folder, size)
     }
 
     /// Any program, with these arguments, in `folder`.
@@ -185,7 +220,54 @@ impl Start {
 /// path, a file that can be run; else the shell of the user's entry in the system's list
 /// of users; else `/bin/sh`.
 pub fn user_shell() -> PathBuf {
-    todo!()
+    shell_from(std::env::var_os("SHELL"))
+}
+
+/// The choice of [`user_shell`], with the value of `SHELL` handed in.
+fn shell_from(variable: Option<OsString>) -> PathBuf {
+    variable
+        .map(PathBuf::from)
+        .filter(|shell| can_run(shell))
+        .or_else(|| passwd_shell().filter(|shell| can_run(shell)))
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+}
+
+/// An absolute path to a file with an execute bit.
+fn can_run(path: &Path) -> bool {
+    path.is_absolute()
+        && std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// The shell in the entry of the user the Keeper runs as, in the system's list of users.
+fn passwd_shell() -> Option<PathBuf> {
+    // SAFETY: `getpwuid_r` fills the entry and the buffer it is given, and the entry's
+    // strings point into that buffer, which outlives their use below.
+    unsafe {
+        let size = libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX);
+        let mut buffer = vec![0 as libc::c_char; if size > 0 { size as usize } else { 1024 }];
+        loop {
+            let mut entry: libc::passwd = std::mem::zeroed();
+            let mut found: *mut libc::passwd = std::ptr::null_mut();
+            let rc = libc::getpwuid_r(
+                libc::geteuid(),
+                &mut entry,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut found,
+            );
+            if rc == libc::ERANGE && buffer.len() < 1 << 20 {
+                buffer.resize(buffer.len() * 2, 0);
+                continue;
+            }
+            if rc != 0 || found.is_null() || entry.pw_shell.is_null() {
+                return None;
+            }
+            let shell = std::ffi::CStr::from_ptr(entry.pw_shell).to_bytes();
+            return (!shell.is_empty())
+                .then(|| PathBuf::from(OsString::from(std::ffi::OsStr::from_bytes(shell))));
+        }
+    }
 }
 
 /// Why the Dock did not do what it was asked.
@@ -221,6 +303,52 @@ impl fmt::Display for DockError {
 
 impl std::error::Error for DockError {}
 
+/// What the Dock and the threads of its terminals share.
+pub(crate) struct Inner {
+    state: Mutex<State>,
+    /// Told when a terminal's events are over.
+    told: Condvar,
+}
+
+#[derive(Default)]
+struct State {
+    /// Every id given to `open` that made a terminal, and an `open` that is making one.
+    taken: HashSet<TerminalId>,
+    /// The terminals whose end has not been told.
+    live: HashMap<TerminalId, Arc<Terminal>>,
+    /// Terminals whose thread of events has not finished.
+    untold: usize,
+}
+
+impl Inner {
+    fn state(&self) -> MutexGuard<'_, State> {
+        self.state
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The terminal no longer runs a program.
+    pub(crate) fn forget(&self, id: &TerminalId) {
+        self.state().live.remove(id);
+    }
+
+    /// A terminal's events are over.
+    pub(crate) fn told(&self) {
+        let mut state = self.state();
+        state.untold -= 1;
+        drop(state);
+        self.told.notify_all();
+    }
+
+    fn live(&self, id: &TerminalId) -> Result<Arc<Terminal>, DockError> {
+        self.state()
+            .live
+            .get(id)
+            .cloned()
+            .ok_or_else(|| DockError::UnknownTerminal(id.clone()))
+    }
+}
+
 /// The terminals of the Keeper and the programs in them.
 ///
 /// Each terminal is a pseudo-terminal whose program runs in a session of its own, with
@@ -231,15 +359,23 @@ impl std::error::Error for DockError {}
 /// Shared by the Keeper's threads: every call takes `&self`. Dropping it stops every
 /// program, as [`Dock::stop_all`] does.
 pub struct Dock {
-    // What the Dock holds; its builder gives it its shape.
-    _held: (),
+    inner: Arc<Inner>,
+    /// Three threads for each terminal opened: one reads the program's output, one writes
+    /// what is typed to it, one collects it.
+    threads: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Dock {
     /// A Dock that holds no terminal.
     #[allow(clippy::new_without_default)]
     pub fn new() -> Dock {
-        todo!()
+        Dock {
+            inner: Arc::new(Inner {
+                state: Mutex::new(State::default()),
+                told: Condvar::new(),
+            }),
+            threads: Mutex::new(Vec::new()),
+        }
     }
 
     /// Opens a terminal of `start.size` under the name `id`, which the caller made with
@@ -252,8 +388,112 @@ impl Dock {
     /// socket, no pipe, no other terminal. An `id` the Dock holds already is refused with
     /// [`DockError::TakenId`], and nothing is started.
     pub fn open(&self, id: TerminalId, start: Start, events: Events) -> Result<(), DockError> {
-        let _ = (id, start, events);
-        todo!()
+        // The id is claimed before anything is made, so that two calls with one id cannot
+        // both start a program.
+        if !self.inner.state().taken.insert(id.clone()) {
+            return Err(DockError::TakenId(id));
+        }
+        match self.start(&id, &start, events) {
+            Ok(()) => Ok(()),
+            Err(reason) => {
+                self.inner.state().taken.remove(&id);
+                Err(DockError::Start {
+                    program: start.program,
+                    reason,
+                })
+            }
+        }
+    }
+
+    fn start(&self, id: &TerminalId, start: &Start, events: Events) -> io::Result<()> {
+        let (master, slave) = pty::open_pair(start.size)?;
+        pty::set_nonblocking(master.as_raw_fd())?;
+        let wake = pty::pipe()?;
+
+        let mut command = Command::new(&start.program);
+        command.args(&start.args).current_dir(&start.folder);
+        for name in LEFT_OUT_VARIABLES {
+            command.env_remove(name);
+        }
+        command.envs(TERMINAL_VARIABLES);
+        command.envs(start.env.iter().map(|(name, value)| (name, value)));
+        command
+            .stdin(Stdio::from(slave.try_clone()?))
+            .stdout(Stdio::from(slave.try_clone()?))
+            .stderr(Stdio::from(slave.try_clone()?));
+        #[cfg(target_os = "macos")]
+        let descriptors = pty::descriptor_limit();
+        // SAFETY: the closure runs between fork and exec and calls only what is safe
+        // there: `setsid`, `ioctl` and `fcntl`, with no allocation and no lock. An error
+        // is made from the error number alone.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::setsid() < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                if libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // A Keeper started as a daemon may ignore some signals, and a program
+                // inherits that: it would not take the hang-up of a closing terminal.
+                for signal in RESET_SIGNALS {
+                    libc::signal(signal, libc::SIG_DFL);
+                }
+                // The standard library on macOS makes some descriptors and only then
+                // marks them close-on-exec, so one made by another thread at that moment
+                // reaches here open. Marked, not closed: the library reports a failed
+                // `exec` through a pipe of its own.
+                #[cfg(target_os = "macos")]
+                for descriptor in 3..descriptors {
+                    libc::fcntl(descriptor, libc::F_SETFD, libc::FD_CLOEXEC);
+                }
+                Ok(())
+            });
+        }
+        let spawned = command.spawn();
+        // The command holds the slave. While it or ours is open here, the end of the
+        // program would not show on the master.
+        drop(command);
+        drop(slave);
+        let child = spawned?;
+
+        let terminal = Arc::new(Terminal::new(master, child.id() as libc::pid_t, wake));
+        {
+            let mut state = self.inner.state();
+            state.live.insert(id.clone(), Arc::clone(&terminal));
+            state.untold += 1;
+        }
+        let spawn = |name: &str, work: Box<dyn FnOnce() + Send>| {
+            std::thread::Builder::new()
+                .name(format!("dock-{name}"))
+                .spawn(work)
+                // A Keeper that cannot start a thread cannot serve terminals either.
+                .expect("start a thread of the Dock")
+        };
+        let reading = {
+            let (terminal, inner, id) =
+                (Arc::clone(&terminal), Arc::clone(&self.inner), id.clone());
+            spawn(
+                "reader",
+                Box::new(move || terminal.tell_events(&inner, &id, events)),
+            )
+        };
+        let writing = {
+            let terminal = Arc::clone(&terminal);
+            spawn("writer", Box::new(move || terminal.write_input()))
+        };
+        let waiting = spawn("waiter", Box::new(move || terminal.wait_for_program(child)));
+
+        let mut threads = self.threads();
+        threads.retain(|thread| !thread.is_finished());
+        threads.extend([reading, writing, waiting]);
+        Ok(())
+    }
+
+    fn threads(&self) -> MutexGuard<'_, Vec<JoinHandle<()>>> {
+        self.threads
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// Hands `bytes` to the program of `terminal`, after everything handed to it before,
@@ -261,21 +501,25 @@ impl Dock {
     /// [`MAX_WAITING_INPUT`] bytes wait, what more is handed is dropped, and nothing
     /// reports it: the call still returns `Ok`.
     pub fn write(&self, terminal: &TerminalId, bytes: &[u8]) -> Result<(), DockError> {
-        let _ = (terminal, bytes);
-        todo!()
+        if self.inner.live(terminal)?.type_in(bytes) {
+            Ok(())
+        } else {
+            Err(DockError::UnknownTerminal(terminal.clone()))
+        }
     }
 
     /// Gives `terminal` a new size. The system tells its program with the signal for a
     /// changed window size.
     pub fn resize(&self, terminal: &TerminalId, size: Size) -> Result<(), DockError> {
-        let _ = (terminal, size);
-        todo!()
+        pty::set_size(self.inner.live(terminal)?.master(), size)
+            // The system refuses only when the terminal has been closed under the Dock.
+            .map_err(|_| DockError::UnknownTerminal(terminal.clone()))
     }
 
     /// How many terminals hold a program that has not ended. The Keeper stays while this
     /// is not 0.
     pub fn running(&self) -> usize {
-        todo!()
+        self.inner.state().live.len()
     }
 
     /// Stops every program and what it started, and returns when none is left: the
@@ -283,17 +527,126 @@ impl Dock {
     /// there after [`STOP_STEP`] the terminate signal, and after one more step the kill
     /// signal. A terminal's session is the one its program leads: the program, its
     /// children, and the jobs a shell put in process groups of their own. A process that
-    /// left the session, as a daemon does, is not reached. Each terminal's [`Events`] is
+    /// left the session, as a daemon does, is not reached, nor is one that outlived its
+    /// program after the end of that terminal was told. Each terminal's [`Events`] is
     /// told its end, as when a program ends by itself.
     pub fn stop_all(&self) {
-        let _ = STOP_SIGNALS;
-        todo!()
+        // The programs' ids are the sessions'. The lock is not held while waiting.
+        let sessions: Vec<libc::pid_t> = self
+            .inner
+            .state()
+            .live
+            .values()
+            .map(|terminal| terminal.pid())
+            .collect();
+        for signal in STOP_SIGNALS {
+            let members = session::members(&sessions);
+            if members.is_empty() {
+                break;
+            }
+            for pid in members {
+                // SAFETY: `kill` only sends; a process that went since the listing
+                // answers `ESRCH`, which is what is wanted of it.
+                unsafe { libc::kill(pid, signal) };
+            }
+            let deadline = Instant::now() + STOP_STEP;
+            while !session::members(&sessions).is_empty() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        }
+        let mut state = self.inner.state();
+        while state.untold > 0 {
+            state = self
+                .inner
+                .told
+                .wait(state)
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+        }
     }
 }
 
 impl Drop for Dock {
     fn drop(&mut self) {
         // Nothing the Dock started outlives it.
-        todo!()
+        self.stop_all();
+        for thread in std::mem::take(&mut *self.threads()) {
+            let _ = thread.join();
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_id_is_32_lowercase_hexadecimal_digits_and_two_are_not_the_same() {
+        let (one, other) = (
+            TerminalId::random().expect("an id"),
+            TerminalId::random().expect("an id"),
+        );
+        for id in [&one, &other] {
+            assert_eq!(id.as_str().len(), 32, "{id}");
+            assert!(
+                id.as_str()
+                    .bytes()
+                    .all(|digit| digit.is_ascii_digit() || (b'a'..=b'f').contains(&digit)),
+                "{id}"
+            );
+        }
+        assert_ne!(one, other);
+        assert_eq!(one.to_string(), one.as_str());
+    }
+
+    fn executable(path: &Path, mode: u32) {
+        std::fs::write(path, "#!/bin/sh\n").expect("write a file");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("set its mode");
+    }
+
+    fn folder(name: &str) -> PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("yaar-dock-unit-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("make a folder");
+        folder
+    }
+
+    #[test]
+    fn shell_names_a_program_by_an_absolute_path_that_can_be_run() {
+        let folder = folder("shell");
+        let runnable = folder.join("runnable");
+        let not_runnable = folder.join("not-runnable");
+        executable(&runnable, 0o755);
+        executable(&not_runnable, 0o644);
+
+        assert_eq!(shell_from(Some(runnable.clone().into())), runnable);
+        for other in [
+            Some(not_runnable.into()),
+            Some(folder.clone().into()),
+            Some(folder.join("missing").into()),
+            Some("sh".into()),
+            Some("".into()),
+            None,
+        ] {
+            let chosen = shell_from(other.clone());
+            assert_ne!(chosen, runnable, "{other:?}");
+            assert!(can_run(&chosen), "{other:?} gave {}", chosen.display());
+        }
+        std::fs::remove_dir_all(folder).expect("remove the folder");
+    }
+
+    #[test]
+    fn the_user_shell_is_a_login_shell_with_the_one_argument() {
+        let start = Start::shell(
+            PathBuf::from("/"),
+            Size {
+                columns: 80,
+                rows: 24,
+            },
+        );
+        assert_eq!(start.program, user_shell());
+        assert_eq!(start.args, vec![OsString::from("-l")]);
+        assert_eq!(start.folder, PathBuf::from("/"));
+        assert!(start.env.is_empty());
     }
 }
