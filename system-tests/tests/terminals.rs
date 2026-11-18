@@ -98,17 +98,32 @@ fn the_key_recorder_writes_down_every_byte_a_program_receives_as_it_was_typed() 
 }
 
 #[test]
-#[should_panic(expected = "was not what was wanted within")]
 fn waiting_for_output_that_does_not_come_fails_with_what_did_come() {
     let mut world = World::new();
-    world.start_keeper();
+    let keeper = world.start_keeper();
     let repo = world.repository("app");
     let mut client = world.client();
     let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
     let terminal = client
         .open_terminal(&workspace, SIZE)
         .expect("open a terminal");
-    client.wait_for_output(&terminal, Duration::from_millis(500), |bytes| {
-        String::from_utf8_lossy(bytes).contains("never printed")
-    });
+    let started = descendants_of(keeper);
+
+    let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        client.wait_for_output(&terminal, Duration::from_millis(500), |bytes| {
+            String::from_utf8_lossy(bytes).contains("never printed")
+        });
+    }))
+    .expect_err("the wait accepted output that never came");
+    let said = failed
+        .downcast_ref::<String>()
+        .map(String::as_str)
+        .or_else(|| failed.downcast_ref::<&str>().copied())
+        .expect("the wait failed with a message");
+    assert!(said.contains("was not what was wanted within"), "{said}");
+
+    // The terminal's program is the world's to end, and this test waits until it is.
+    drop(client);
+    drop(world);
+    wait_until_gone(&started);
 }

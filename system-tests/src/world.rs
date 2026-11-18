@@ -30,6 +30,7 @@ const LINGER_MS: &str = "3600000";
 pub struct World {
     root: PathBuf,
     keeper: Option<Child>,
+    shell: PathBuf,
 }
 
 impl World {
@@ -47,7 +48,11 @@ impl World {
         for folder in ["home", "run", "repos"] {
             fs::create_dir_all(root.join(folder)).expect("make the folders of the world");
         }
-        World { root, keeper: None }
+        World {
+            root,
+            keeper: None,
+            shell: PathBuf::from("/bin/sh"),
+        }
     }
 
     /// The home folder of the world's user.
@@ -79,7 +84,8 @@ impl World {
     /// A command that runs `program` as the world's user: with the environment of this
     /// process cleared but for the search path, and the world's own in its place. That
     /// names the home, data and runtime folders, the socket and the Keeper program, the
-    /// shell of a terminal (`/bin/sh`), and tells git to read neither the machine's
+    /// shell of a terminal (`/bin/sh` unless [`World::keep_descriptors_in_terminals`]
+    /// chose another), and tells git to read neither the machine's
     /// configuration nor the user's.
     pub fn command(&self, program: &Path) -> Command {
         let mut command = Command::new(program);
@@ -89,7 +95,7 @@ impl World {
         }
         // The shell of a terminal is the same on every machine, and not the user's own.
         command
-            .env("SHELL", "/bin/sh")
+            .env("SHELL", &self.shell)
             .env("HOME", self.home())
             .env("XDG_DATA_HOME", self.data_home())
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
@@ -98,6 +104,22 @@ impl World {
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1");
         command
+    }
+
+    /// Makes the terminals of the Keeper this world starts next run a shell that keeps
+    /// every descriptor its parent hands it, which a login `/bin/sh` does not on every
+    /// system: macOS's closes what it inherits, so a test that looks for a descriptor
+    /// that leaked from the Keeper into a terminal's programs would never see it there.
+    ///
+    /// The terminal starts its shell as a login shell, with `-l`. What runs is a script
+    /// of the world that ignores that and becomes an interactive `/bin/sh`, which keeps
+    /// what it inherits and hands it on to what it starts.
+    pub fn keep_descriptors_in_terminals(&mut self) {
+        let script = self.root.join("keeping-shell");
+        fs::write(&script, "#!/bin/sh\nexec /bin/sh -i\n").expect("write the script of the shell");
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+            .expect("make the shell runnable");
+        self.shell = script;
     }
 
     /// Starts the built Keeper program on the socket of this world and returns its

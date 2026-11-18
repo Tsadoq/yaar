@@ -203,6 +203,11 @@ fn is_gone(pid: u32) -> bool {
 #[test]
 fn the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only() {
     let mut world = World::new();
+    // A login `/bin/sh` on macOS closes the descriptors it inherits, so a socket that
+    // leaked from the Keeper into a terminal's programs would never reach `cat` or
+    // `sleep` and the listing below could not see it. The terminals of this world run a
+    // shell that hands them on.
+    world.keep_descriptors_in_terminals();
     let keeper = world.start_keeper();
     let branch = a_branch_with_changes(&world);
     let mut client = world.client();
