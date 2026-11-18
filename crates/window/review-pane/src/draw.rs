@@ -30,12 +30,6 @@ const SIGN_WIDTH: Pixels = px(20.);
 /// megabyte would be shaped for nothing, in every frame.
 const DRAWN_BYTES: usize = 1024;
 
-/// The largest change, in lines of both sides together, whose changed words are marked.
-/// The words of a change are compared when it first comes into view, on the thread that
-/// draws; beyond this size that would be felt, and a change that large is rarely an edit
-/// of words.
-const MARKED_LINES: usize = 1000;
-
 impl ShownDiff {
     /// The text of one line, as the pane shows it and as [`ReviewPane::text`] gives it.
     pub(crate) fn text(&self, side: Side, line: u32) -> Cow<'_, str> {
@@ -51,12 +45,13 @@ impl ShownDiff {
         };
         let hunks = self.diff.hunks();
         let index = hunks.partition_point(|hunk| lines(hunk).end <= line);
-        let Some(hunk) = hunks.get(index).filter(|hunk| lines(hunk).contains(&line)) else {
-            return Vec::new();
-        };
-        if hunk.old.len() + hunk.new.len() > MARKED_LINES {
+        let in_a_change = |hunk: &Hunk| lines(hunk).contains(&line);
+        if !hunks.get(index).is_some_and(in_a_change) {
             return Vec::new();
         }
+        // The words of a change are compared when it first comes into view, on the
+        // thread that draws. The diff bounds what one change costs there: it compares
+        // no words where there are too many.
         let emphasis = self
             .emphasis
             .borrow_mut()
