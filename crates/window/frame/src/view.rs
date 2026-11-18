@@ -6,9 +6,11 @@ use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 
+use yaar_link::{Age, Hello};
+
 use crate::controls::{
-    Control, KEY_CONTEXT, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, SetBase,
-    ToggleSidebar, UnpinSidebar,
+    Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
+    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ToggleSidebar, UnpinSidebar,
 };
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
@@ -128,6 +130,8 @@ struct Composed {
     focus: FocusHandle,
     /// The field for the base, while it is open.
     base_field: Option<BaseField>,
+    /// Where the panes after the first lie.
+    beside: Beside,
     /// Why the dialog for a folder could not be shown, the last time it was asked for.
     no_dialog: Option<String>,
 }
@@ -226,6 +230,7 @@ impl Frame {
                 panes,
                 focus,
                 base_field: None,
+                beside: Beside::default(),
                 no_dialog: None,
             }),
         }
@@ -240,7 +245,10 @@ impl Frame {
     /// them; the choice lasts as long as the window. The Frame lays the panes out from
     /// this value.
     pub fn beside(&self) -> Beside {
-        todo!()
+        self.composed
+            .as_ref()
+            .map(|composed| composed.beside)
+            .unwrap_or_default()
     }
 
     /// What the window says about a Keeper of an older version than its own, as the
@@ -254,8 +262,25 @@ impl Frame {
     /// app's one version, and the Window program tells the Keeper the same in its hello,
     /// so the two cannot differ.
     pub fn keeper_note(&self, cx: &App) -> Option<String> {
-        let _ = cx;
-        todo!()
+        let mine = Hello::for_this_process(env!("CARGO_PKG_VERSION"));
+        let (keeper, can_ask) = match self.link.read(cx).status() {
+            LinkStatus::Connected(keeper) => (keeper, true),
+            LinkStatus::OtherVersion(keeper) => (keeper, false),
+            LinkStatus::Starting | LinkStatus::Failed(_) | LinkStatus::Lost(_) => return None,
+        };
+        if keeper.age_against(&mine) != Age::Older {
+            return None;
+        }
+        let version = &keeper.app_version;
+        let outcome = if can_ask {
+            "this window works with it as it is"
+        } else {
+            "this window can ask it nothing"
+        };
+        Some(format!(
+            "The Keeper that is running is of version {version}, older than this window. \
+             It and what runs in it go on under version {version}, and {outcome}."
+        ))
     }
 
     /// The names of the panes, in the order they are laid out.
@@ -468,6 +493,111 @@ impl Frame {
         }
     }
 
+    /// Moves the focus to the pane after the one that holds it, round from the last to
+    /// the first; with the focus in no pane, to the first.
+    fn focus_next_pane(&mut self, _: &FocusNextPane, window: &mut Window, cx: &mut Context<Self>) {
+        self.move_focus_between_panes(true, window, cx);
+    }
+
+    /// Moves the focus to the pane before the one that holds it, round from the first to
+    /// the last; with the focus in no pane, to the last.
+    fn focus_previous_pane(
+        &mut self,
+        _: &FocusPreviousPane,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.move_focus_between_panes(false, window, cx);
+    }
+
+    fn move_focus_between_panes(&mut self, forward: bool, window: &mut Window, cx: &mut App) {
+        let Some(composed) = &self.composed else {
+            return;
+        };
+        let count = composed.panes.len();
+        if count == 0 {
+            return;
+        }
+        let holding = composed
+            .panes
+            .iter()
+            .position(|pane| pane.focus.contains_focused(window, cx));
+        let to = match (holding, forward) {
+            (Some(at), true) => (at + 1) % count,
+            (Some(at), false) => (at + count - 1) % count,
+            (None, true) => 0,
+            (None, false) => count - 1,
+        };
+        composed.panes[to].focus.focus(window, cx);
+    }
+
+    fn move_panes(&mut self, _: &MovePanes, _: &mut Window, cx: &mut Context<Self>) {
+        if let Some(composed) = &mut self.composed {
+            composed.beside = composed.beside.next();
+            cx.notify();
+        }
+    }
+
+    /// The note about an older Keeper, as the element that shows it.
+    fn keeper_note_line(&self, cx: &App) -> Option<Div> {
+        let note = self.keeper_note(cx)?;
+        let theme = cx.theme();
+        Some(
+            div()
+                .debug_selector(|| "frame-keeper-note".to_owned())
+                .flex_none()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .text_color(theme.muted_foreground)
+                .border_b_1()
+                .border_color(theme.border)
+                .child(note),
+        )
+    }
+
+    /// The panes as the Frame lays them out: the first takes half of the room, and the
+    /// others share the other half, stacked where they lie to the right or the left of
+    /// the first and side by side where they lie below it.
+    fn laid_out(&self, composed: &Composed) -> Div {
+        let selector = |pane: &Pane| {
+            let name = pane.name;
+            move || format!("frame-pane-{name}")
+        };
+        let slot = |pane: &Pane| {
+            div()
+                .debug_selector(selector(pane))
+                .size_full()
+                .flex_1()
+                .min_w_0()
+                .min_h_0()
+                .child(pane.view.clone())
+        };
+        let (first, others) = composed.panes.split_first().expect("a pane to lay out");
+        let first = slot(first);
+        if others.is_empty() {
+            return div().flex_1().min_h_0().flex().child(first);
+        }
+        let below = composed.beside == Beside::Below;
+        let rest = if below {
+            div().flex_row()
+        } else {
+            div().flex_col()
+        }
+        .flex()
+        .size_full()
+        .flex_1()
+        .min_w_0()
+        .min_h_0()
+        .children(others.iter().map(slot));
+        let area = div().flex_1().min_h_0().flex();
+        match composed.beside {
+            Beside::Right => area.flex_row().child(first).child(rest),
+            Beside::Left => area.flex_row().child(rest).child(first),
+            Beside::Below => area.flex_col().child(first).child(rest),
+        }
+    }
+
     /// The name of the app and the line about the Keeper, in the middle of the room
     /// they are given: what a window shows that has nothing else to show.
     fn empty(&self, cx: &App) -> Div {
@@ -485,6 +615,7 @@ impl Frame {
                     .text_color(cx.theme().muted_foreground)
                     .child(self.status_line(cx)),
             )
+            .children(self.keeper_note_line(cx))
     }
 }
 
@@ -546,13 +677,7 @@ impl Render for Frame {
         let panes = if composed.panes.is_empty() {
             self.empty(cx).flex_1().min_h_0()
         } else {
-            // Each pane gets the same share of the room; a pane draws its own edges.
-            div().flex_1().min_h_0().flex().flex_row().children(
-                composed
-                    .panes
-                    .iter()
-                    .map(|pane| div().flex_1().min_w_0().h_full().child(pane.view.clone())),
-            )
+            self.laid_out(composed)
         };
         // With panes in the window, how it stands with the Keeper is worth a line only
         // while the panes can show nothing for want of one.
@@ -585,6 +710,9 @@ impl Render for Frame {
             .on_action(cx.listener(Self::unpin_sidebar))
             .on_action(cx.listener(Self::select_next_workspace))
             .on_action(cx.listener(Self::select_previous_workspace))
+            .on_action(cx.listener(Self::focus_next_pane))
+            .on_action(cx.listener(Self::focus_previous_pane))
+            .on_action(cx.listener(Self::move_panes))
             .child(composed.sidebar.clone())
             .child(
                 div()
@@ -594,6 +722,7 @@ impl Render for Frame {
                     .flex()
                     .flex_col()
                     .children(notice)
+                    .children(self.keeper_note_line(cx))
                     .children(base_field)
                     .child(panes)
                     .children(status),

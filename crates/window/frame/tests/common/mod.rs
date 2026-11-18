@@ -85,6 +85,24 @@ impl KeeperEnd {
         link: &Entity<KeeperLink>,
         cx: &mut TestAppContext,
     ) -> Self {
+        Self::attach_saying(
+            Hello {
+                protocol,
+                pid: 1,
+                app_version: "9.9.9".to_owned(),
+            },
+            link,
+            cx,
+        )
+    }
+
+    /// Links `link` to a Keeper that says this hello: the protocol it speaks and the
+    /// version of the app it belongs to.
+    pub fn attach_saying(
+        keeper: Hello,
+        link: &Entity<KeeperLink>,
+        cx: &mut TestAppContext,
+    ) -> Self {
         // The connection is read by a real thread, which the test executor cannot see.
         cx.executor().allow_parking();
         let (ours, theirs) = UnixStream::pair().expect("a socket pair");
@@ -97,11 +115,6 @@ impl KeeperEnd {
                 }
             }
         });
-        let keeper = Hello {
-            protocol,
-            pid: 1,
-            app_version: "9.9.9".to_owned(),
-        };
         link.update(cx, |link, cx| {
             link.attached(
                 Ok(Attached {
@@ -314,6 +327,21 @@ pub fn open_frame(
     panes: Vec<BuildPane>,
     cx: &mut TestAppContext,
 ) -> (Shown, VisualTestContext) {
+    let keeper = Hello {
+        protocol: PROTOCOL_VERSION,
+        pid: 1,
+        app_version: "9.9.9".to_owned(),
+    };
+    open_frame_with_keeper(keeper, window_size, panes, cx)
+}
+
+/// [`open_frame`], with a Keeper that says this hello.
+pub fn open_frame_with_keeper(
+    keeper: Hello,
+    window_size: Size<Pixels>,
+    panes: Vec<BuildPane>,
+    cx: &mut TestAppContext,
+) -> (Shown, VisualTestContext) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         bind(&controls(), cx);
@@ -345,7 +373,7 @@ pub fn open_frame(
             .expect("a Frame with panes has a sidebar")
             .clone()
     });
-    let keeper = KeeperEnd::attach(&link, &mut cx);
+    let keeper = KeeperEnd::attach_saying(keeper, &link, &mut cx);
     (
         Shown {
             frame,
