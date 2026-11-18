@@ -320,7 +320,10 @@ impl Composed {
             .expect("a control of the Window sends SetBase");
         self.press(&control, cx);
         self.give(&control, &Answer::Text(base.to_owned()), cx);
-        let sets_it = |request: &Request| matches!(request, Request::SetBase { base: set, .. } if set == base);
+        let sets_it = |request: &Request| match request {
+            Request::SetBase { base: set, .. } => set == base,
+            _ => false,
+        };
         self.tap.wait_for_request(DEADLINE, sets_it);
         self.tap
             .requests()
