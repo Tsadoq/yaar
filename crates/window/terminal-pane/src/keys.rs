@@ -7,6 +7,12 @@
 //! protocol's own form, and 2, the repeat and the release of a key; see
 //! [`crate::IMPLEMENTED_FLAGS`].
 //!
+//! Under those flags Ctrl or Option with a symbol typed with Shift is sent as the key that
+//! types the symbol without Shift, with Shift among the modifiers, as the protocol asks
+//! (Ctrl-Shift-0 is `CSI 48 ; 6 u`). GPUI gives such a key as the symbol, so the encoder
+//! maps the shifted symbols of the U.S. layout back to their key. That mapping is the U.S.
+//! layout's: the shifted symbols of another layout are sent as they come.
+//!
 //! A key that types text goes to the program through the view's input handler, which
 //! also composes dead keys and the text of an input method: [`encode_key`] gives none for
 //! it. A Cmd key never reaches a program: it gives none either.
@@ -91,6 +97,39 @@ fn control_bytes(character: char) -> Vec<u8> {
         other => return other.to_string().into_bytes(),
     };
     vec![byte]
+}
+
+/// The key that types `symbol` without Shift, for the symbols a U.S. keyboard types with
+/// it. The table is that layout's: a symbol of any other layout has no entry and goes as
+/// it comes, because the key that types it is not known here.
+fn unshifted(symbol: char) -> Option<char> {
+    const US_SHIFTED: [(char, char); 21] = [
+        (')', '0'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        ('~', '`'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
+    US_SHIFTED
+        .iter()
+        .find(|&&(shifted, _)| shifted == symbol)
+        .map(|&(_, base)| base)
 }
 
 /// What the keystroke is to the encoder, or none when it is no business of the
@@ -215,7 +254,17 @@ fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<K
                 return None;
             }
             if kitty {
-                let code = character.to_lowercase().next().unwrap_or(character);
+                // The protocol names the key without Shift, and Shift a modifier. GPUI
+                // gives a symbol typed with Shift as the symbol, so it is taken back to
+                // its key.
+                let (code, modifiers) = match unshifted(character) {
+                    Some(base) if !m.shift => (base, modifiers + 1),
+                    Some(base) => (base, modifiers),
+                    None => (
+                        character.to_lowercase().next().unwrap_or(character),
+                        modifiers,
+                    ),
+                };
                 return Some(Key::Code {
                     code: code as u32,
                     modifiers,
@@ -745,9 +794,103 @@ mod tests {
                 ("alt-.", Some("E[46;3u")),
             ],
         );
-        // Of a symbol typed with Shift the keystroke has the symbol only.
-        let got = sent(&shifted("ctrl-@"), &KITTY).map(|bytes| show(&bytes));
-        assert_eq!(got.as_deref(), Some("E[64;6u"));
+    }
+
+    /// The symbols a U.S. keyboard types with Shift, each with the key that types it
+    /// without, written out here on its own: the test does not read the encoder's table.
+    const US_SHIFTED: [(char, char); 21] = [
+        (')', '0'),
+        ('!', '1'),
+        ('@', '2'),
+        ('#', '3'),
+        ('$', '4'),
+        ('%', '5'),
+        ('^', '6'),
+        ('&', '7'),
+        ('*', '8'),
+        ('(', '9'),
+        ('~', '`'),
+        ('_', '-'),
+        ('+', '='),
+        ('{', '['),
+        ('}', ']'),
+        ('|', '\\'),
+        (':', ';'),
+        ('"', '\''),
+        ('<', ','),
+        ('>', '.'),
+        ('?', '/'),
+    ];
+
+    /// A keystroke of `symbol` with the modifiers named, in the two forms GPUI can give
+    /// it: Shift folded into the symbol, and Shift still set beside it.
+    fn symbol_keys(modifiers: &str, symbol: char) -> [Keystroke; 2] {
+        let mut folded = key("a");
+        folded.key = symbol.to_string();
+        folded.modifiers.control = modifiers.contains("ctrl");
+        folded.modifiers.alt = modifiers.contains("alt");
+        let mut set = folded.clone();
+        set.modifiers.shift = true;
+        [folded, set]
+    }
+
+    #[test]
+    fn under_flag_1_a_symbol_typed_with_shift_is_its_key_and_shift_among_the_modifiers() {
+        // The protocol names the key without Shift and says that Shift is a modifier;
+        // GPUI gives the symbol, so the encoder takes the symbol back to its key.
+        for (symbol, base) in US_SHIFTED {
+            for (modifiers, parameter) in [("ctrl", 6), ("alt", 4), ("ctrl-alt", 8)] {
+                for keystroke in symbol_keys(modifiers, symbol) {
+                    assert_eq!(
+                        sent(&keystroke, &KITTY).map(|bytes| show(&bytes)),
+                        Some(format!("E[{};{parameter}u", base as u32)),
+                        "{keystroke:?} under flag 1"
+                    );
+                }
+            }
+        }
+        // The release says the same key, and so does the second flag's repeat.
+        for keystroke in symbol_keys("ctrl", ')') {
+            assert_eq!(
+                encode_release(&keystroke, &KITTY_EVENTS, OptionKey::Meta).map(|b| show(&b)),
+                Some("E[48;6:3u".to_string())
+            );
+            assert_eq!(
+                encode_key(&keystroke, &KITTY_EVENTS, OptionKey::Meta, true).map(|b| show(&b)),
+                Some("E[48;6:2u".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn under_flag_1_a_symbol_with_no_shift_in_it_stays_as_it_is() {
+        assert_sends(
+            &KITTY,
+            &[
+                ("ctrl-0", Some("E[48;5u")),
+                ("ctrl--", Some("E[45;5u")),
+                ("ctrl-=", Some("E[61;5u")),
+                ("alt-/", Some("E[47;3u")),
+                ("ctrl-shift-0", Some("E[48;6u")),
+                ("ctrl-shift-a", Some("E[97;6u")),
+                // A symbol of another layout is not on the table: it goes as it comes.
+                ("ctrl-£", Some("E[163;5u")),
+                ("ctrl-§", Some("E[167;5u")),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_symbol_typed_with_shift_is_unchanged_where_the_protocol_is_not_in_force() {
+        for (symbol, _) in US_SHIFTED {
+            for keystroke in symbol_keys("ctrl", symbol) {
+                assert_eq!(
+                    sent(&keystroke, &LEGACY).map(|bytes| show(&bytes)),
+                    Some(show(&control_bytes(symbol))),
+                    "{keystroke:?} in the legacy state"
+                );
+            }
+        }
     }
 
     #[test]
