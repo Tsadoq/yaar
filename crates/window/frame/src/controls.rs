@@ -98,9 +98,35 @@ impl Place {
             Place::In(context) => Some(context),
             Place::Kept => Some(KEY_CONTEXT),
             Place::Anywhere if secondary_is_cmd => None,
-            Place::Anywhere => Some(KEY_CONTEXT),
+            // The Frame's context holds in a program too, so the key is also asked not to
+            // be inside one: GPUI's `!` looks at every context from the root to the focus.
+            Place::Anywhere => Some("Frame && !Program"),
         }
     }
+}
+
+/// Writes `secondary` out in each keystroke of `key`, as `cmd` when `secondary_is_cmd` and
+/// as `ctrl` when not. Only a modifier, which comes before the last part of a keystroke,
+/// is read: the last part is the key itself.
+fn write_key(key: &str, secondary_is_cmd: bool) -> String {
+    let modifier = if secondary_is_cmd { "cmd" } else { "ctrl" };
+    key.split(' ')
+        .map(|keystroke| {
+            let mut written = String::new();
+            let mut rest = keystroke;
+            // A `-` that ends the keystroke is the key, as in `secondary--`.
+            while let Some((part, tail)) = rest.split_once('-')
+                && !tail.is_empty()
+            {
+                written.push_str(if part == "secondary" { modifier } else { part });
+                written.push('-');
+                rest = tail;
+            }
+            written.push_str(rest);
+            written
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// What the Window asks the user for after an action, before it has anything to send.
@@ -148,8 +174,8 @@ pub struct Control {
 impl Control {
     /// The GPUI key context the key is bound with on the system the app is built for;
     /// none means that it is bound for the whole app. On macOS a key that works
-    /// [`Place::Anywhere`] has none. On every other system it has [`KEY_CONTEXT`], and
-    /// no key is without a context.
+    /// [`Place::Anywhere`] has none. On every other system it has [`KEY_CONTEXT`] and not
+    /// [`PROGRAM_CONTEXT`], written `Frame && !Program`, and no key is without a context.
     pub fn context(&self) -> Option<&'static str> {
         self.place.context(SECONDARY_IS_CMD)
     }
@@ -159,7 +185,7 @@ impl Control {
     /// elsewhere; every other key as the table writes it. `secondary-alt-p` is
     /// `cmd-alt-p` on macOS and `ctrl-alt-p` on Linux.
     pub fn key(&self) -> String {
-        todo!()
+        write_key(self.keystroke, SECONDARY_IS_CMD)
     }
 }
 
@@ -240,11 +266,35 @@ pub fn controls() -> Vec<Control> {
             sends: None,
             asks: Asks::Nothing,
         },
+        Control {
+            title: "Next Pane",
+            action: || Box::new(FocusNextPane),
+            keystroke: "ctrl-tab",
+            place: Place::Kept,
+            sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Previous Pane",
+            action: || Box::new(FocusPreviousPane),
+            keystroke: "ctrl-shift-tab",
+            place: Place::Kept,
+            sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Move Panes",
+            action: || Box::new(MovePanes),
+            keystroke: "secondary-alt-p",
+            place: Place::Anywhere,
+            sends: None,
+            asks: Asks::Nothing,
+        },
     ]
 }
 
-/// Binds the key of each control to its action, in the context that
-/// [`Control::context`] gives: for the whole app where that is none.
+/// Binds the key of each control, as [`Control::key`] writes it, to its action, in the
+/// context that [`Control::context`] gives: for the whole app where that is none.
 ///
 /// The tables are written by hand and never change while the app runs, so a key, an
 /// empty one included, or a context that cannot be read is a mistake in the code: it
@@ -270,20 +320,13 @@ pub fn bind(controls: &[Control], cx: &mut App) {
                 control.keystroke,
                 control.title
             );
-            KeyBinding::load(
-                control.keystroke,
-                (control.action)(),
-                context,
-                false,
-                None,
-                cx,
-            )
-            .unwrap_or_else(|error| {
-                panic!(
-                    "the key {:?} of {:?} is not a key: {error}",
-                    control.keystroke, control.title
-                )
-            })
+            KeyBinding::load(&control.key(), (control.action)(), context, false, None, cx)
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "the key {:?} of {:?} is not a key: {error}",
+                        control.keystroke, control.title
+                    )
+                })
         })
         .collect();
     cx.bind_keys(bindings);
@@ -291,12 +334,23 @@ pub fn bind(controls: &[Control], cx: &mut App) {
 
 #[cfg(test)]
 mod tests {
-    use super::{KEY_CONTEXT, Place};
+    use super::{KEY_CONTEXT, PROGRAM_CONTEXT, Place, write_key};
 
     #[test]
-    fn a_key_that_works_anywhere_has_no_context_where_it_is_a_cmd_key_and_the_frames_elsewhere() {
+    fn a_key_that_works_anywhere_has_no_context_where_it_is_a_cmd_key_and_the_frames_outside_a_program_elsewhere()
+     {
         assert_eq!(Place::Anywhere.context(true), None);
-        assert_eq!(Place::Anywhere.context(false), Some(KEY_CONTEXT));
+        assert_eq!(
+            Place::Anywhere.context(false),
+            Some(format!("{KEY_CONTEXT} && !{PROGRAM_CONTEXT}").as_str())
+        );
+    }
+
+    #[test]
+    fn a_kept_key_has_the_context_of_the_frame_on_every_system() {
+        for secondary_is_cmd in [true, false] {
+            assert_eq!(Place::Kept.context(secondary_is_cmd), Some(KEY_CONTEXT));
+        }
     }
 
     #[test]
@@ -304,5 +358,42 @@ mod tests {
         for secondary_is_cmd in [true, false] {
             assert_eq!(Place::In("Pane").context(secondary_is_cmd), Some("Pane"));
         }
+    }
+
+    #[test]
+    fn secondary_is_written_out_as_cmd_or_as_ctrl() {
+        assert_eq!(write_key("secondary-alt-p", true), "cmd-alt-p");
+        assert_eq!(write_key("secondary-alt-p", false), "ctrl-alt-p");
+        assert_eq!(write_key("secondary-o", true), "cmd-o");
+        assert_eq!(write_key("secondary-shift-b", false), "ctrl-shift-b");
+    }
+
+    #[test]
+    fn a_key_with_no_secondary_stays_as_written() {
+        for secondary_is_cmd in [true, false] {
+            assert_eq!(write_key("ctrl-tab", secondary_is_cmd), "ctrl-tab");
+            assert_eq!(
+                write_key("ctrl-shift-tab", secondary_is_cmd),
+                "ctrl-shift-tab"
+            );
+            assert_eq!(write_key("a", secondary_is_cmd), "a");
+        }
+    }
+
+    #[test]
+    fn every_keystroke_of_a_key_with_several_is_written_out() {
+        assert_eq!(
+            write_key("secondary-k secondary-shift-c", false),
+            "ctrl-k ctrl-shift-c"
+        );
+        assert_eq!(write_key("secondary-k c", true), "cmd-k c");
+    }
+
+    #[test]
+    fn the_word_secondary_is_taken_for_the_modifier_only_where_it_is_one() {
+        // A key part is the last of its keystroke: it is never a modifier.
+        assert_eq!(write_key("secondary--", true), "cmd--");
+        assert_eq!(write_key("secondary", true), "secondary");
+        assert_eq!(write_key("ctrl-secondary", false), "ctrl-secondary");
     }
 }

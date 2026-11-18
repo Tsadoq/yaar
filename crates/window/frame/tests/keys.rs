@@ -5,13 +5,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, OperatingSystem,
-    ParentElement, PlatformInfo, PlatformTarget, Render, Styled, TestAppContext, VisualTestContext,
-    Window, actions, div,
+    Action, App, Context, Entity, FocusHandle, InteractiveElement, IntoElement, ParentElement,
+    Render, Styled, TestAppContext, VisualTestContext, Window, actions, div,
 };
 use yaar_frame::{
-    Asks, Control, KEY_CONTEXT, OpenFolder, Place, SelectNextWorkspace, SelectPreviousWorkspace,
-    SetBase, ToggleSidebar, UnpinSidebar, bind, controls,
+    Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder, Place,
+    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ToggleSidebar, UnpinSidebar, bind,
+    controls,
 };
 
 actions!(
@@ -79,6 +79,9 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
         note::<UnpinSidebar>(&ran, cx);
         note::<SelectNextWorkspace>(&ran, cx);
         note::<SelectPreviousWorkspace>(&ran, cx);
+        note::<FocusNextPane>(&ran, cx);
+        note::<FocusPreviousPane>(&ran, cx);
+        note::<MovePanes>(&ran, cx);
     });
     ran
 }
@@ -87,7 +90,7 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
 /// every other test presses what the table has, so a key changed in the table by mistake
 /// would pass them all. Each action has the key of a Mac and the key of every other
 /// system, where the keyboard has no Cmd key.
-fn chosen() -> [(&'static str, &'static str, &'static str); 6] {
+fn chosen() -> [(&'static str, &'static str, &'static str); 9] {
     [
         ("cmd-o", "ctrl-o", OpenFolder.name()),
         ("cmd-shift-b", "ctrl-shift-b", SetBase.name()),
@@ -95,35 +98,11 @@ fn chosen() -> [(&'static str, &'static str, &'static str); 6] {
         ("cmd-alt-b", "ctrl-alt-b", UnpinSidebar.name()),
         ("cmd-alt-down", "ctrl-alt-down", SelectNextWorkspace.name()),
         ("cmd-alt-up", "ctrl-alt-up", SelectPreviousWorkspace.name()),
+        // The two keys that move the focus between the panes are Ctrl keys on both.
+        ("ctrl-tab", "ctrl-tab", FocusNextPane.name()),
+        ("ctrl-shift-tab", "ctrl-shift-tab", FocusPreviousPane.name()),
+        ("cmd-alt-p", "ctrl-alt-p", MovePanes.name()),
     ]
-}
-
-/// Presses the keys of [`chosen`] in an app that runs on `os`, which the test platform
-/// lets a test say: the keys of that system run their actions, and the keys of the other
-/// one run nothing. The focus is inside the context of the Frame, where the keys of the
-/// table work on every system.
-fn press_the_keys_chosen_for(os: OperatingSystem, cx: &mut TestAppContext) {
-    // Before the keys are bound: the toolkit reads `secondary` for the system the app
-    // runs on, when a key is bound and when a test presses one.
-    cx.set_platform_info(PlatformInfo {
-        os,
-        target: PlatformTarget::Native,
-    });
-    let ran = bind_the_table(cx);
-    let (_probe, cx) = open_probe(KEY_CONTEXT, cx);
-
-    for (on_a_mac, elsewhere, action) in chosen() {
-        let (of_this_system, of_the_other) = match os {
-            OperatingSystem::Mac => (on_a_mac, elsewhere),
-            _ => (elsewhere, on_a_mac),
-        };
-        cx.simulate_keystrokes(of_this_system);
-        assert_eq!(ran.take(), [action], "the key {of_this_system}");
-        cx.simulate_keystrokes(of_the_other);
-        assert_eq!(ran.take(), Vec::<&str>::new(), "the key {of_the_other}");
-    }
-    // A control added to the table has to get its keys written above.
-    assert_eq!(controls().len(), chosen().len());
 }
 
 #[gpui_kit::test]
@@ -132,36 +111,61 @@ fn every_key_of_the_table_runs_its_action_and_no_other(cx: &mut TestAppContext) 
     let (_probe, cx) = open_probe(KEY_CONTEXT, cx);
 
     for control in controls() {
-        cx.simulate_keystrokes(control.keystroke);
+        cx.simulate_keystrokes(&control.key());
         assert_eq!(
             ran.take(),
             [(control.action)().name()],
             "the key {} of {}",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
 }
 
 #[gpui_kit::test]
-fn on_a_mac_each_action_of_the_frame_runs_on_the_cmd_key_chosen_for_it(cx: &mut TestAppContext) {
-    press_the_keys_chosen_for(OperatingSystem::Mac, cx);
-}
+fn each_action_of_the_frame_runs_on_the_key_chosen_for_it_on_the_system_the_app_is_built_for(
+    cx: &mut TestAppContext,
+) {
+    // The app writes `secondary` out for the system it is built for, so a Mac build binds
+    // the Cmd keys and any other the Ctrl keys, and the keys of the other system run
+    // nothing. The focus is inside the context of the Frame, where the keys of the table
+    // work on every system.
+    let ran = bind_the_table(cx);
+    let (_probe, cx) = open_probe(KEY_CONTEXT, cx);
 
-#[gpui_kit::test]
-fn on_linux_each_action_of_the_frame_runs_on_the_ctrl_key_chosen_for_it(cx: &mut TestAppContext) {
-    press_the_keys_chosen_for(OperatingSystem::Linux, cx);
+    for (on_a_mac, elsewhere, action) in chosen() {
+        let (of_this_system, of_the_other) = if cfg!(target_os = "macos") {
+            (on_a_mac, elsewhere)
+        } else {
+            (elsewhere, on_a_mac)
+        };
+        cx.simulate_keystrokes(of_this_system);
+        assert_eq!(ran.take(), [action], "the key {of_this_system}");
+        if of_the_other != of_this_system {
+            cx.simulate_keystrokes(of_the_other);
+            assert_eq!(ran.take(), Vec::<&str>::new(), "the key {of_the_other}");
+        }
+    }
+    // A control added to the table has to get its keys written above.
+    assert_eq!(controls().len(), chosen().len());
 }
 
 #[test]
-fn every_key_of_the_frame_works_anywhere() {
+fn every_key_of_the_frame_works_anywhere_but_the_two_that_move_the_focus_between_panes() {
     // Where a key works is written in its row, and the context it is bound with follows
     // from that by system. A key of the Frame placed in the Frame's own context would
     // work as now on every system but macOS, where it would be a Cmd key that does
     // nothing while the focus is where the context is not. Off macOS no pressed key can
-    // tell the two rows apart, so the rows are read here.
+    // tell the two rows apart, so the rows are read here. The two keys of the focus are
+    // kept: they never reach a program.
+    let kept = [FocusNextPane.name(), FocusPreviousPane.name()];
     for control in controls() {
-        assert_eq!(control.place, Place::Anywhere, "{}", control.title);
+        let expected = if kept.contains(&(control.action)().name()) {
+            Place::Kept
+        } else {
+            Place::Anywhere
+        };
+        assert_eq!(control.place, expected, "{}", control.title);
     }
 }
 
@@ -173,14 +177,16 @@ fn outside_the_context_of_the_frame_the_keys_of_the_table_work_on_macos_and_on_n
     let (probe, cx) = open_probe(KEY_CONTEXT, cx);
     probe.update_in(cx, |probe, window, cx| probe.outside.focus(window, cx));
 
-    // On macOS the keys are Cmd keys and work wherever the focus is. On every other
-    // system they are Ctrl keys, which a program in a terminal waits for, so they do
-    // nothing where the context of the Frame is not. What is expected is written here by
-    // system and not asked of the table, which would then be held to its own answer.
+    // On macOS the keys of `Anywhere` are Cmd keys and work wherever the focus is. On
+    // every other system they are Ctrl keys, which a program in a terminal waits for, so
+    // they do nothing where the context of the Frame is not. A kept key is a Ctrl key on
+    // both and is bound in the context of the Frame, so it works there only. What is
+    // expected is written here by system and not asked of the table, which would then be
+    // held to its own answer.
     let work_here = cfg!(target_os = "macos");
     for control in controls() {
-        cx.simulate_keystrokes(control.keystroke);
-        let expected = if work_here {
+        cx.simulate_keystrokes(&control.key());
+        let expected = if work_here && control.place == Place::Anywhere {
             vec![(control.action)().name()]
         } else {
             Vec::new()
@@ -189,7 +195,7 @@ fn outside_the_context_of_the_frame_the_keys_of_the_table_work_on_macos_and_on_n
             ran.take(),
             expected,
             "the key {} of {}",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
