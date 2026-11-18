@@ -19,19 +19,19 @@ runs no terminal and no agent yet, and takes no comments.
 - **Lets you set another base**, a branch or a commit, and keeps it.
 - **Reads only.** Nothing in the app edits a file, and it runs git only to read.
 
-| Key | Does | Works |
-| --- | --- | --- |
-| Cmd-O | Opens a folder | anywhere |
-| Cmd-Shift-B | Asks for a branch or a commit and makes it the base | anywhere |
-| Cmd-B | Pins the sidebar as a rail, or as the full list | anywhere |
-| Cmd-Alt-B | Lets the width of the window choose the form of the sidebar again | anywhere |
-| Cmd-Alt-Down, Cmd-Alt-Up | Next and previous worktree | anywhere |
-| Cmd-Q | Quits | anywhere |
-| `j` or Down, `k` or Up | One line down, one line up | in the diff |
-| `s` | Switches between the unified and the split diff, on the same line | in the diff |
+| On macOS | On Linux | Does | Works |
+| --- | --- | --- | --- |
+| Cmd-O | Ctrl-O | Opens a folder | anywhere |
+| Cmd-Shift-B | Ctrl-Shift-B | Asks for a branch or a commit and makes it the base | anywhere |
+| Cmd-B | Ctrl-B | Pins the sidebar as a rail, or as the full list | anywhere |
+| Cmd-Alt-B | Ctrl-Alt-B | Lets the width of the window choose the form of the sidebar again | anywhere |
+| Cmd-Alt-Down, Cmd-Alt-Up | Ctrl-Alt-Down, Ctrl-Alt-Up | Next and previous worktree | anywhere |
+| Cmd-Q | Ctrl-Q | Quits | anywhere |
+| `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
+| `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
 
-On Linux the Super key stands for Cmd. With nothing pinned, the sidebar is a rail in a
-window narrower than 1000 px.
+On Linux the keys of the app are those of the Mac with Ctrl in place of Cmd. With nothing
+pinned, the sidebar is a rail in a window narrower than 1000 px.
 
 The app does not watch the files yet. What changed outside it, a file, a branch or a new
 worktree, shows when the window comes to the front again.
