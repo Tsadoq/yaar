@@ -182,7 +182,10 @@ pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     let wrapper = scratch.join("bin/git-listed");
     program(
         &wrapper,
-        &format!("echo \"$$ $*\" >> '{}'\nexec git \"$@\"", list.display()),
+        &format!(
+            "printf '%s\\n' \"$$ $*\" >> '{}'\nexec git \"$@\"",
+            list.display()
+        ),
     );
     (wrapper, list)
 }

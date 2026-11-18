@@ -272,8 +272,8 @@ impl From<StoreError> for WorkspaceError {
 /// repositories, with the same ids and the same bases. It may be used from several
 /// threads at once.
 ///
-/// It keeps the worktree of each workspace it has read, and with it the one git process
-/// that worktree keeps for file contents; a worktree that moved is opened again.
+/// It keeps the worktree of each workspace it was asked about, and with it the one git
+/// process that worktree keeps for file contents; a worktree that moved is opened again.
 #[derive(Debug)]
 pub struct Workspaces {
     git: Git,
