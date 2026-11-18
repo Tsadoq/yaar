@@ -71,7 +71,6 @@ fn reading(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
     })
 }
 
-// RP-01, first sentence.
 #[gpui_kit::test]
 fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
@@ -195,7 +194,6 @@ fn change(stage: &mut Stage, changes: &Changes, cx: &mut VisualTestContext) {
     wait_for_files(&stage.pane, cx);
 }
 
-// RP-01, second sentence.
 #[gpui_kit::test]
 fn above_the_changes_the_pane_shows_the_comparison_and_its_commits_and_offers_a_base_where_there_is_none(
     cx: &mut TestAppContext,
@@ -384,7 +382,6 @@ fn walk_down_to(wanted: &Position, pane: &Entity<ReviewPane>, cx: &mut VisualTes
     panic!("j never came to {wanted:?}");
 }
 
-// RP-17.
 #[gpui_kit::test]
 fn switching_between_the_unified_and_the_split_view_keeps_the_line_the_reviewer_was_on(
     cx: &mut TestAppContext,
@@ -490,8 +487,6 @@ fn lines(version: &str) -> Vec<String> {
     version.lines().map(str::to_owned).collect()
 }
 
-// RP-23.
-//
 // This shows an absence, and is as strong as its list of keys and no stronger: a key
 // that is not pressed here could still do what the test says no key does. The list is
 // every key and every action of the pane's own table, and the keys an editor would
