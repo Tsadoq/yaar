@@ -716,8 +716,9 @@ mod tests {
         assert_eq!((as_git, otherwise), (564, 5));
     }
 
-    /// A small file before and after four changes: a line edited in one word, three
-    /// lines rewritten as two, a line added and a line removed.
+    /// A small file before and after five changes: a line added at the top, so that from
+    /// there on a line has another number in the new version than in the old; then a line
+    /// edited in one word, three lines rewritten as two, a line added and a line removed.
     const BEFORE: &str = r#"fn price(order: &Order) -> u32 {
     let count = order.count;
     let unit = order.unit;
@@ -736,7 +737,8 @@ fn main() {
     println!("{}", price(&order));
 }
 "#;
-    const AFTER: &str = r#"fn price(order: &Order) -> u32 {
+    const AFTER: &str = r#"// Prices are in cents.
+fn price(order: &Order) -> u32 {
     let count = order.quantity;
     let unit = order.unit;
     count * unit
@@ -832,10 +834,11 @@ fn main() {
     fn unified_and_split_lay_out_the_same_hunks_and_emphasis_marks_only_the_changed_words() {
         let diff = FileDiff::new(BEFORE.as_bytes(), AFTER.as_bytes());
         let hunks = [
-            hunk(1..2, 1..2),
-            hunk(7..10, 7..9),
-            hunk(14..14, 13..14),
-            hunk(15..16, 15..15),
+            hunk(0..0, 0..1),
+            hunk(1..2, 2..3),
+            hunk(7..10, 8..10),
+            hunk(14..14, 14..15),
+            hunk(15..16, 16..16),
         ];
         assert_eq!(diff.hunks(), hunks);
 
@@ -878,14 +881,15 @@ fn main() {
         assert_eq!(
             changed(&diff.rows(Layout::Unified, CONTEXT_LINES)),
             [
+                Row::Added { new: 0 },
                 Row::Removed { old: 1 },
-                Row::Added { new: 1 },
+                Row::Added { new: 2 },
                 Row::Removed { old: 7 },
                 Row::Removed { old: 8 },
                 Row::Removed { old: 9 },
-                Row::Added { new: 7 },
                 Row::Added { new: 8 },
-                Row::Added { new: 13 },
+                Row::Added { new: 9 },
+                Row::Added { new: 14 },
                 Row::Removed { old: 15 },
             ]
         );
@@ -893,43 +897,53 @@ fn main() {
         assert_eq!(
             changed(&diff.rows(Layout::Split, CONTEXT_LINES)),
             [
-                beside(Some(1), Some(1)),
-                beside(Some(7), Some(7)),
-                beside(Some(8), Some(8)),
+                beside(None, Some(0)),
+                beside(Some(1), Some(2)),
+                beside(Some(7), Some(8)),
+                beside(Some(8), Some(9)),
                 beside(Some(9), None),
-                beside(None, Some(13)),
+                beside(None, Some(14)),
                 beside(Some(15), None),
             ]
         );
 
         // The line edited in one word: that word is marked on each side, where it
         // stands, and the `count` earlier in the line, which did not change, is not.
-        let edited = diff.emphasis(0);
+        // The line is line 1 of the old version and line 2 of the new one, and each side
+        // answers to its own number only.
+        let edited = diff.emphasis(1);
         let at = "    let count = order.".len();
         assert_eq!(edited.of(Side::Old, 1), one(at..at + "count".len()));
-        assert_eq!(edited.of(Side::New, 1), one(at..at + "quantity".len()));
+        assert_eq!(edited.of(Side::New, 2), one(at..at + "quantity".len()));
         assert_eq!(marked(&diff, &edited, Side::Old, 1), ["count"]);
-        assert_eq!(marked(&diff, &edited, Side::New, 1), ["quantity"]);
+        assert_eq!(marked(&diff, &edited, Side::New, 2), ["quantity"]);
+        assert_eq!(edited.of(Side::Old, 2), []);
+        assert_eq!(edited.of(Side::New, 1), []);
         // Its marks are for its own lines only.
         assert_eq!(edited.of(Side::Old, 7), []);
-        assert_eq!(edited.of(Side::New, 7), []);
+        assert_eq!(edited.of(Side::New, 8), []);
 
         // Three lines rewritten as two. With the marked words taken out both sides read
         // the same, so every word that changed is marked. And only those are: of the new
         // lines, all but one word stands in the old ones, in the same order.
-        let rewritten = diff.emphasis(1);
+        let rewritten = diff.emphasis(2);
         assert_eq!(
             unmarked(&diff, &rewritten, Side::Old, 7..10),
-            unmarked(&diff, &rewritten, Side::New, 7..9)
+            unmarked(&diff, &rewritten, Side::New, 8..10)
         );
-        assert_eq!(marked(&diff, &rewritten, Side::New, 7), ["to_uppercase"]);
-        assert_eq!(rewritten.of(Side::New, 8), []);
+        assert_eq!(marked(&diff, &rewritten, Side::New, 8), ["to_uppercase"]);
+        assert_eq!(rewritten.of(Side::New, 9), []);
         assert!(marked(&diff, &rewritten, Side::Old, 7).contains(&"trim"));
+        // Here too each side answers to its own numbers: line 7 is marked in the old
+        // version and is no line of the hunk in the new one, and line 10 the other way.
+        assert_eq!(rewritten.of(Side::New, 7), []);
+        assert_eq!(rewritten.of(Side::Old, 10), []);
 
         // A line that is only added, or only removed, is the change as a whole: nothing
         // in it is marked.
-        assert_eq!(diff.emphasis(2).of(Side::New, 13), []);
-        assert_eq!(diff.emphasis(3).of(Side::Old, 15), []);
+        assert_eq!(diff.emphasis(0).of(Side::New, 0), []);
+        assert_eq!(diff.emphasis(3).of(Side::New, 14), []);
+        assert_eq!(diff.emphasis(4).of(Side::Old, 15), []);
     }
 
     #[test]
