@@ -1,9 +1,16 @@
 //! System tests (`B-BUILD`): the whole app through what a user or an agent touches.
 //!
 //! The tests in `tests/` start the built programs. This library holds what they share:
-//! where the programs are, a place for a socket, and a scripted client that speaks the
-//! Link in place of the Window. The stand-in agent CLI joins it when the Switchboard
-//! exists.
+//! - [`World`], the folders, repositories and Keeper of one test, with [`Repo`] to drive
+//!   git in it and [`Tap`] to read the requests a real Window sends;
+//! - [`Client`], the scripted client that speaks the Link in place of the Window;
+//! - [`program`], [`is_alive`] and [`wait_until`], and the bare [`attach`] and [`Place`]
+//!   of the tests that need no world.
+//!
+//! The stand-in agent CLI joins it when the Switchboard exists.
+
+mod client;
+mod world;
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -13,6 +20,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use yaar_link::{Hello, handshake};
+
+pub use client::{Client, DEADLINE};
+pub use world::{Repo, Tap, World};
 
 /// The path of a built program of the workspace, building both programs first if one is
 /// missing. Cargo puts them in the profile folder, `target/debug` or the like; a test

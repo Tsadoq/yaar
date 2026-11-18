@@ -1,5 +1,4 @@
-//! `yaar-review`: the Window program. It opens the Frame and registers the panes in it;
-//! there are none yet.
+//! `yaar-review`: the Window program behind a command line.
 //!
 //! ```text
 //! yaar-review                   open the window
@@ -10,18 +9,7 @@
 
 use std::process::ExitCode;
 
-use gpui_kit::component::theme::Theme;
-use gpui_kit::*;
-
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-actions!(
-    yaar,
-    [
-        /// Quits the Window. The Keeper and what it holds stay.
-        Quit
-    ]
-);
+use yaar_window::VERSION;
 
 fn main() -> ExitCode {
     yaar_frame::trace::mark("main");
@@ -45,20 +33,8 @@ fn main() -> ExitCode {
 
 fn open_window() {
     gpui_kit::application().run(|cx| {
-        gpui_kit::init(cx);
-        Theme::sync_system_appearance(None, cx);
-        cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-        cx.on_action(|_: &Quit, cx| cx.quit());
-        cx.on_window_closed(|cx, _| {
-            if cx.windows().is_empty() {
-                cx.quit();
-            }
-        })
-        .detach();
-
-        // The system brings an app it launches to the front. The Window does not push
-        // itself there: a window started in the background stays in the background.
-        yaar_frame::open(yaar_link::socket_path(), VERSION, cx).expect("open the window");
+        yaar_window::init(cx);
+        yaar_window::open(yaar_link::socket_path(), cx).expect("open the window");
     });
 }
 

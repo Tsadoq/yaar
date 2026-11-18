@@ -1,0 +1,433 @@
+//! What a Window asks of the Keeper, what the Keeper answers, and what it tells unasked.
+//!
+//! A request carries an id the Window chose; the Keeper answers each request with one
+//! reply that carries the same id, either what was asked for or the reason it was refused.
+//! A fact is sent to every attached Window when something changed, whoever caused it.
+
+use std::fmt;
+use std::path::PathBuf;
+
+use crate::LinkError;
+use crate::wire::{In, Out};
+use crate::workspace::{
+    Changes, FileSides, Repository, RepositoryId, WorkspaceId, read_changes, read_repository,
+    read_sides, write_changes, write_repository, write_sides,
+};
+
+/// Pairs a reply with its request. The Window chooses it; within one connection no two
+/// requests that still wait for their reply share one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RequestId(pub u32);
+
+/// Who starts a request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Origin {
+    /// The user, by a control of the Window. The Window has an action with a key for every
+    /// such request.
+    User,
+    /// The Window itself, to have something to show.
+    Window,
+}
+
+/// Declares every kind of request in one table: its name, the number it travels by, who
+/// starts it, and the sentence that says what it is. [`RequestKind::ALL`] is built from
+/// the same table, so a kind cannot exist without its origin and cannot be missing from
+/// the list.
+macro_rules! request_kinds {
+    ($( $(#[$doc:meta])* $name:ident = $code:literal, $origin:ident; )+) => {
+        /// The kinds of request, without their content. Every [`Request`] has one.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub enum RequestKind {
+            $( $(#[$doc])* $name, )+
+        }
+
+        impl RequestKind {
+            /// Every kind of request there is.
+            pub const ALL: &'static [RequestKind] = &[ $( RequestKind::$name, )+ ];
+
+            /// Who starts a request of this kind.
+            pub const fn origin(self) -> Origin {
+                match self {
+                    $( RequestKind::$name => Origin::$origin, )+
+                }
+            }
+
+            /// The number this kind travels by.
+            pub const fn code(self) -> u16 {
+                match self {
+                    $( RequestKind::$name => $code, )+
+                }
+            }
+
+            /// The kind that travels by this number.
+            pub const fn from_code(code: u16) -> Option<RequestKind> {
+                match code {
+                    $( $code => Some(RequestKind::$name), )+
+                    _ => None,
+                }
+            }
+
+            /// The name of the kind, as written in the code.
+            pub const fn name(self) -> &'static str {
+                match self {
+                    $( RequestKind::$name => stringify!($name), )+
+                }
+            }
+        }
+    };
+}
+
+request_kinds! {
+    /// See [`Request::ListWorkspaces`].
+    ListWorkspaces = 1, Window;
+    /// See [`Request::OpenFolder`].
+    OpenFolder = 2, User;
+    /// See [`Request::SetBase`].
+    SetBase = 3, User;
+    /// See [`Request::GetChanges`].
+    GetChanges = 4, Window;
+    /// See [`Request::ReadFile`].
+    ReadFile = 5, Window;
+}
+
+impl RequestKind {
+    /// The kinds of request a user starts, in the order of [`RequestKind::ALL`].
+    pub fn started_by_user() -> impl Iterator<Item = RequestKind> {
+        Self::ALL
+            .iter()
+            .copied()
+            .filter(|kind| kind.origin() == Origin::User)
+    }
+}
+
+/// Something a Window asks of the Keeper.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    /// Every repository the user opened, with its worktrees. Answered by
+    /// [`Reply::Workspaces`].
+    ListWorkspaces,
+    /// Add the repository that holds this folder, and with it the workspace of the
+    /// worktree the folder lies in. Answered by [`Reply::Opened`], or refused when the
+    /// folder holds no repository and no worktree.
+    OpenFolder {
+        /// The folder the user chose.
+        path: PathBuf,
+    },
+    /// Count the changes of a workspace from this branch or commit from now on. Answered
+    /// by [`Reply::Done`], or refused when git knows no such branch or commit.
+    SetBase {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// A branch or a commit, as the user wrote it.
+        base: String,
+    },
+    /// The changes of a workspace as they are now. Answered by [`Reply::Changes`].
+    GetChanges {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
+    /// The two versions of one file of a workspace: at the point the workspace is compared
+    /// with, and in the worktree. Answered by [`Reply::File`].
+    ReadFile {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The path of the file, relative to the folder of the worktree.
+        path: PathBuf,
+    },
+}
+
+impl Request {
+    /// The kind of this request.
+    pub fn kind(&self) -> RequestKind {
+        match self {
+            Self::ListWorkspaces => RequestKind::ListWorkspaces,
+            Self::OpenFolder { .. } => RequestKind::OpenFolder,
+            Self::SetBase { .. } => RequestKind::SetBase,
+            Self::GetChanges { .. } => RequestKind::GetChanges,
+            Self::ReadFile { .. } => RequestKind::ReadFile,
+        }
+    }
+}
+
+/// What the Keeper answers to a request it could fulfil.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Reply {
+    /// It is done, and there is nothing to send back.
+    Done,
+    /// Every repository the user opened, in the order they were opened.
+    Workspaces(Vec<Repository>),
+    /// The folder is now a workspace.
+    Opened {
+        /// The repository that holds it.
+        repository: RepositoryId,
+        /// The workspace of the worktree the folder lies in.
+        workspace: WorkspaceId,
+    },
+    /// The changes of the workspace asked about.
+    Changes(Changes),
+    /// The two versions of the file asked about.
+    File(FileSides),
+}
+
+/// Why the Keeper did not do what a request asked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    /// There is no folder at this path, or it cannot be read.
+    NoSuchFolder {
+        /// The path that was given.
+        path: PathBuf,
+    },
+    /// The folder holds no git repository and no worktree.
+    NotARepository {
+        /// The folder that was given.
+        path: PathBuf,
+    },
+    /// The folder is a repository with no files checked out: one of its worktrees has to
+    /// be opened instead.
+    BareRepository {
+        /// The folder that was given.
+        path: PathBuf,
+    },
+    /// The Keeper knows no workspace by this id.
+    UnknownWorkspace {
+        /// The id that was given.
+        workspace: WorkspaceId,
+    },
+    /// git knows no branch and no commit by this name in the repository.
+    UnknownRevision {
+        /// The name that was given.
+        revision: String,
+    },
+    /// The path leads out of the worktree.
+    OutsideWorkspace {
+        /// The path that was given.
+        path: PathBuf,
+    },
+    /// Something the user cannot mend from here went wrong: git is missing or failed, or
+    /// the database could not be written.
+    Failed {
+        /// What went wrong, as a sentence.
+        reason: String,
+    },
+}
+
+impl fmt::Display for Refusal {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoSuchFolder { path } => {
+                write!(f, "there is no folder at {}", path.display())
+            }
+            Self::NotARepository { path } => write!(
+                f,
+                "{} holds no git repository and no worktree",
+                path.display()
+            ),
+            Self::BareRepository { path } => write!(
+                f,
+                "{} is a repository with no files checked out; open one of its worktrees",
+                path.display()
+            ),
+            Self::UnknownWorkspace { workspace } => {
+                write!(f, "there is no workspace {workspace}")
+            }
+            Self::UnknownRevision { revision } => {
+                write!(f, "git knows no branch and no commit named {revision}")
+            }
+            Self::OutsideWorkspace { path } => {
+                write!(f, "{} is outside the worktree", path.display())
+            }
+            Self::Failed { reason } => f.write_str(reason),
+        }
+    }
+}
+
+impl std::error::Error for Refusal {}
+
+/// Something the Keeper tells every attached Window, unasked.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Fact {
+    /// The list of repositories and workspaces is now this: a folder was opened, a
+    /// worktree appeared or went, or a branch was switched.
+    Workspaces(Vec<Repository>),
+    /// The changes of this workspace are no longer what the Keeper last answered: its
+    /// base was set, or its files or commits changed. A Window that shows them asks again.
+    ChangesChanged {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
+}
+
+pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
+    out.u32(id.0);
+    out.u16(request.kind().code());
+    match request {
+        Request::ListWorkspaces => {}
+        Request::OpenFolder { path } => out.path(path),
+        Request::SetBase { workspace, base } => {
+            out.text(workspace.as_str());
+            out.text(base);
+        }
+        Request::GetChanges { workspace } => out.text(workspace.as_str()),
+        Request::ReadFile { workspace, path } => {
+            out.text(workspace.as_str());
+            out.path(path);
+        }
+    }
+}
+
+pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), LinkError> {
+    let id = RequestId(input.u32()?);
+    let kind = RequestKind::from_code(input.u16()?)
+        .ok_or(LinkError::Malformed("unknown kind of request"))?;
+    let request = match kind {
+        RequestKind::ListWorkspaces => Request::ListWorkspaces,
+        RequestKind::OpenFolder => Request::OpenFolder {
+            path: input.path()?,
+        },
+        RequestKind::SetBase => Request::SetBase {
+            workspace: WorkspaceId::new(input.text()?),
+            base: input.text()?,
+        },
+        RequestKind::GetChanges => Request::GetChanges {
+            workspace: WorkspaceId::new(input.text()?),
+        },
+        RequestKind::ReadFile => Request::ReadFile {
+            workspace: WorkspaceId::new(input.text()?),
+            path: input.path()?,
+        },
+    };
+    Ok((id, request))
+}
+
+pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Refusal>) {
+    out.u32(to.0);
+    match reply {
+        Ok(reply) => {
+            out.u8(0);
+            match reply {
+                Reply::Done => out.u16(0),
+                Reply::Workspaces(repositories) => {
+                    out.u16(1);
+                    out.list(repositories, write_repository);
+                }
+                Reply::Opened {
+                    repository,
+                    workspace,
+                } => {
+                    out.u16(2);
+                    out.text(repository.as_str());
+                    out.text(workspace.as_str());
+                }
+                Reply::Changes(changes) => {
+                    out.u16(3);
+                    write_changes(out, changes);
+                }
+                Reply::File(sides) => {
+                    out.u16(4);
+                    write_sides(out, sides);
+                }
+            }
+        }
+        Err(refusal) => {
+            out.u8(1);
+            match refusal {
+                Refusal::NoSuchFolder { path } => {
+                    out.u16(1);
+                    out.path(path);
+                }
+                Refusal::NotARepository { path } => {
+                    out.u16(2);
+                    out.path(path);
+                }
+                Refusal::BareRepository { path } => {
+                    out.u16(3);
+                    out.path(path);
+                }
+                Refusal::UnknownWorkspace { workspace } => {
+                    out.u16(4);
+                    out.text(workspace.as_str());
+                }
+                Refusal::UnknownRevision { revision } => {
+                    out.u16(5);
+                    out.text(revision);
+                }
+                Refusal::OutsideWorkspace { path } => {
+                    out.u16(6);
+                    out.path(path);
+                }
+                Refusal::Failed { reason } => {
+                    out.u16(7);
+                    out.text(reason);
+                }
+            }
+        }
+    }
+}
+
+type Answer = (RequestId, Result<Reply, Refusal>);
+
+pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
+    let to = RequestId(input.u32()?);
+    let reply = match input.u8()? {
+        0 => Ok(match input.u16()? {
+            0 => Reply::Done,
+            1 => Reply::Workspaces(input.list(read_repository)?),
+            2 => Reply::Opened {
+                repository: RepositoryId::new(input.text()?),
+                workspace: WorkspaceId::new(input.text()?),
+            },
+            3 => Reply::Changes(read_changes(input)?),
+            4 => Reply::File(read_sides(input)?),
+            _ => return Err(LinkError::Malformed("unknown kind of reply")),
+        }),
+        1 => Err(match input.u16()? {
+            1 => Refusal::NoSuchFolder {
+                path: input.path()?,
+            },
+            2 => Refusal::NotARepository {
+                path: input.path()?,
+            },
+            3 => Refusal::BareRepository {
+                path: input.path()?,
+            },
+            4 => Refusal::UnknownWorkspace {
+                workspace: WorkspaceId::new(input.text()?),
+            },
+            5 => Refusal::UnknownRevision {
+                revision: input.text()?,
+            },
+            6 => Refusal::OutsideWorkspace {
+                path: input.path()?,
+            },
+            7 => Refusal::Failed {
+                reason: input.text()?,
+            },
+            _ => return Err(LinkError::Malformed("unknown kind of refusal")),
+        }),
+        _ => return Err(LinkError::Malformed("a reply is neither done nor refused")),
+    };
+    Ok((to, reply))
+}
+
+pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
+    match fact {
+        Fact::Workspaces(repositories) => {
+            out.u16(1);
+            out.list(repositories, write_repository);
+        }
+        Fact::ChangesChanged { workspace } => {
+            out.u16(2);
+            out.text(workspace.as_str());
+        }
+    }
+}
+
+pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
+    Ok(match input.u16()? {
+        1 => Fact::Workspaces(input.list(read_repository)?),
+        2 => Fact::ChangesChanged {
+            workspace: WorkspaceId::new(input.text()?),
+        },
+        _ => return Err(LinkError::Malformed("unknown kind of fact")),
+    })
+}

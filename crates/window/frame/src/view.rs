@@ -7,22 +7,88 @@ use gpui_kit::*;
 
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
+use crate::models::Models;
+use crate::sidebar::Sidebar;
 use crate::trace;
 
-/// The root view of the window. It holds no pane yet.
+/// A pane, as the Frame holds it. The Frame knows nothing else of a pane: it lays the
+/// view out, moves the focus to it, and routes to it the actions it handles.
+pub struct Pane {
+    /// The name of the pane, for the Frame's own use and for whoever lists the panes.
+    pub name: &'static str,
+    /// What the pane draws.
+    pub view: AnyView,
+    /// Where the keys go when the pane has the focus.
+    pub focus: FocusHandle,
+}
+
+/// Builds one pane for a window, from the shared models. This is all a pane's crate
+/// gives the Window program, and all the Frame asks of a pane.
+pub type BuildPane = Box<dyn FnOnce(&Models, &mut Window, &mut App) -> Pane>;
+
+/// The root view of the window: the sidebar, the panes, and a line that says how the
+/// Window stands with the Keeper while there is nothing else to show.
+///
+/// The Frame handles the actions of [`crate::controls`]:
+/// - [`crate::OpenFolder`] asks for a folder in the system's dialog and hands it to
+///   [`crate::WorkspaceList::open_folder`];
+/// - [`crate::SetBase`] opens a one-line field; Enter hands its text to
+///   [`crate::WorkspaceList::set_base`], Escape closes it;
+/// - [`crate::ToggleSidebar`] and [`crate::UnpinSidebar`] pin and unpin the sidebar;
+/// - [`crate::SelectNextWorkspace`] and [`crate::SelectPreviousWorkspace`] change the
+///   workspace on screen.
+///
+/// It shows the reason when the Keeper refuses what the user asked, and asks for the
+/// changes again whenever the window comes to the front.
 pub struct Frame {
     link: Entity<KeeperLink>,
     first_frame_marked: bool,
+    // None in a Frame made by `new`, which shows the link alone.
+    composed: Option<Composed>,
+}
+
+struct Composed {
+    models: Models,
+    sidebar: Entity<Sidebar>,
+    panes: Vec<Pane>,
 }
 
 impl Frame {
-    /// A Frame that shows `link` and redraws when it changes.
+    /// A Frame that shows `link` and redraws when it changes. It has no sidebar and no
+    /// pane.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         cx.observe(&link, |_, _, cx| cx.notify()).detach();
         Self {
             link,
             first_frame_marked: false,
+            composed: None,
         }
+    }
+
+    /// A Frame with its sidebar and with the panes that `panes` build, in that order.
+    pub fn with_panes(
+        models: Models,
+        panes: Vec<BuildPane>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        todo!()
+    }
+
+    /// The sidebar; none in a Frame made by [`Frame::new`].
+    pub fn sidebar(&self) -> Option<&Entity<Sidebar>> {
+        todo!()
+    }
+
+    /// The names of the panes, in the order they are laid out.
+    pub fn panes(&self) -> Vec<&'static str> {
+        todo!()
+    }
+
+    /// Why the Keeper refused the last thing the user asked for, as the sentence the
+    /// Frame shows; none when nothing is shown.
+    pub fn notice(&self, cx: &App) -> Option<String> {
+        todo!()
     }
 
     /// The line the empty window shows about the Keeper.
@@ -68,14 +134,26 @@ impl Render for Frame {
     }
 }
 
-/// Opens the app's window and links it to the Keeper on `socket`, starting the Keeper
-/// when none answers. Returns the window and the model of the link.
+/// What [`open`] gives back.
+pub struct Opened {
+    /// The window.
+    pub window: AnyWindowHandle,
+    /// Its root view.
+    pub frame: Entity<Frame>,
+    /// The shared models of the window.
+    pub models: Models,
+}
+
+/// Opens the app's window with these panes and links it to the Keeper on `socket`,
+/// starting the Keeper when none answers.
 pub fn open(
     socket: PathBuf,
     app_version: &'static str,
+    panes: Vec<BuildPane>,
     cx: &mut App,
-) -> Result<(AnyWindowHandle, Entity<KeeperLink>)> {
+) -> Result<Opened> {
     let link = cx.new(|_| KeeperLink::new());
+    let models = Models::new(link.clone(), cx);
     let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -87,9 +165,9 @@ pub fn open(
         }),
         ..Default::default()
     };
-    let (window, _frame) = gpui_kit::open_window(options, cx, {
-        let link = link.clone();
-        move |_, cx| cx.new(|cx| Frame::new(link, cx))
+    let (window, frame) = gpui_kit::open_window(options, cx, {
+        let models = models.clone();
+        move |window, cx| cx.new(|cx| Frame::with_panes(models, panes, window, cx))
     })?;
 
     // Reaching the Keeper may mean starting a process: off the thread that draws.
@@ -104,5 +182,9 @@ pub fn open(
     })
     .detach();
 
-    Ok((window, link))
+    Ok(Opened {
+        window,
+        frame,
+        models,
+    })
 }

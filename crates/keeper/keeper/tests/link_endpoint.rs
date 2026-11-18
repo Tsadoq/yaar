@@ -37,6 +37,7 @@ fn start(place: &Place, linger: Duration) -> JoinHandle<std::io::Result<Exit>> {
         socket: place.socket(),
         linger,
         app_version: "test-keeper".to_owned(),
+        data_dir: place.0.join("data"),
     };
     std::thread::spawn(move || run(options))
 }

@@ -1,13 +1,17 @@
 //! The Keeper program: the background process that owns what must survive a closed window.
 //!
-//! It starts the Keeper's components and connects them. In this first form it has none
-//! yet: it listens on its socket, tells each Window who it is, and leaves when it is asked
-//! to or when nothing needs it any more.
+//! It starts the Keeper's components and connects them: it listens on its socket, tells
+//! each Window who it is, hands each request of a Window to the part that answers it,
+//! tells every attached Window what changed, and leaves when it is asked to or when
+//! nothing needs it any more.
 //!
 //! Surface: [`run`] with its [`Options`], and the [`Exit`] it returns. The program
-//! `yaar-keeper` is this function behind a command line.
+//! `yaar-keeper` is this function behind a command line. Everything else a Window can
+//! reach, it reaches over the Link.
 //!
 //! No interface code belongs here or in any crate beside this one.
+
+mod wiring;
 
 use std::fs;
 use std::io;
@@ -32,16 +36,19 @@ pub struct Options {
     pub linger: Duration,
     /// The version to tell each Window.
     pub app_version: String,
+    /// The app's folder, where the database is kept. Made when it is not there.
+    pub data_dir: PathBuf,
 }
 
 impl Options {
-    /// The options of the program as installed: the socket of [`yaar_link::socket_path`]
-    /// and a linger of five seconds.
+    /// The options of the program as installed: the socket of [`yaar_link::socket_path`],
+    /// a linger of five seconds and the folder of [`yaar_link::data_dir`].
     pub fn new(app_version: &str) -> Self {
         Self {
             socket: yaar_link::socket_path(),
             linger: Duration::from_secs(5),
             app_version: app_version.to_owned(),
+            data_dir: yaar_link::data_dir(),
         }
     }
 }
@@ -78,6 +85,9 @@ impl Shared {
 }
 
 /// Serves Windows on the socket until asked to stop or until nothing needs the Keeper.
+///
+/// The socket is bound at [`yaar_link::socket_address`] of `options.socket`, so that a
+/// path too long for the system still leads Windows to this Keeper.
 ///
 /// Returns at once with [`Exit::AlreadyRunning`] when another Keeper holds the socket.
 pub fn run(options: Options) -> io::Result<Exit> {
@@ -203,6 +213,16 @@ fn serve_window(mut stream: UnixStream, shared: &Shared, version: &str) -> Resul
                 break Ok(());
             }
             Ok(Message::Hello(_)) => {}
+            Ok(Message::Request { id, request }) => {
+                // Answered through `wiring::Parts`, with the facts told to every Window.
+                todo!("answer request {} of kind {}", id.0, request.kind().name())
+            }
+            // Only the Keeper answers and tells.
+            Ok(Message::Reply { .. } | Message::Fact(_)) => {
+                break Err(LinkError::Malformed(
+                    "a Window sent what only the Keeper sends",
+                ));
+            }
             Err(LinkError::Closed) => break Ok(()),
             Err(e) => break Err(e),
         }

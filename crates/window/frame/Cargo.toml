@@ -10,6 +10,7 @@ publish.workspace = true
 yaar-link.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
+async-channel.workspace = true
 
 [dev-dependencies]
 # GPUI's test platform, for tests only: the programs users get are built without it.
