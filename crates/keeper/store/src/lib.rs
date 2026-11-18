@@ -16,9 +16,10 @@
 //! returned is still there after the Keeper is killed. A call that saves without waiting
 //! for the drive says so in its own words.
 //!
-//! The tables carry a version. A database of an older version is brought forward change
-//! by change when it is opened, after the file was copied beside itself; one of a newer
-//! version is refused, and left as it is.
+//! The tables carry a version, and have had one so far: there is no older database to
+//! bring forward yet. The first change of the tables brings one, and with it the copy of
+//! the file beside itself that is made before an older database is touched. A database of
+//! a newer version is refused, and left as it is.
 //!
 //! What goes wrong is told in words of this crate: no caller sees the database library.
 
@@ -199,8 +200,8 @@ impl Drop for Closing {
 
 impl Store {
     /// Opens the database at `file`, making the file and its folder when they are not
-    /// there, and bringing older tables forward. Before the first change to an older
-    /// database the file is copied beside itself, under its name and the version it had.
+    /// there. A database of a newer version than this build knows is refused and left
+    /// as it is; there is no older version yet, so nothing is brought forward.
     ///
     /// One process opens a database at a time; that is the Keeper's to see to.
     pub fn open(file: &Path) -> Result<Store, StoreError> {
