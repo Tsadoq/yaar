@@ -1,9 +1,11 @@
 # The checks that run on every change.
 #
-#   checks-linux    formatting, lints, tests, licences, unused dependencies, layout rules
+#   checks-linux    formatting, lints, tests, licences, unused dependencies, layout rules,
+#                   test plan
 #   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
 #   install-linux   the install script, piped as a user would, on five releases
-#   macos           lints, tests, layout rules, release build for both processors, the app
+#   macos           lints, tests, layout rules, test plan, release build for both
+#                   processors, the app
 #
 # Linux runs on x86-64 and on arm64. No job needs a display.
 name: ci
@@ -99,6 +101,9 @@ jobs:
 
       - name: Layout rules
         run: cargo xtask layout
+
+      - name: Test plan
+        run: cargo xtask coverage
 
   package-linux:
     name: package linux ${{ matrix.arch }}
@@ -299,6 +304,9 @@ jobs:
 
       - name: Layout rules
         run: cargo xtask layout
+
+      - name: Test plan
+        run: cargo xtask coverage
 
       - name: Release build, both processors
         run: .github/scripts/release-build.sh --target aarch64-apple-darwin --target x86_64-apple-darwin

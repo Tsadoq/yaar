@@ -28,6 +28,7 @@ cargo fmt --all --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 cargo test --locked --workspace           # no window opens
 cargo xtask layout                        # the rules between the crates
+cargo xtask coverage                      # every requirement has a test in the plan
 ```
 
 CI also runs `cargo nextest`, `cargo deny check` and `cargo machete`;
@@ -45,7 +46,8 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 | `crates/window` | The Window program and its parts. No database, no git |
 | `companions` | The pieces the agent CLIs load |
 | `system-tests` | Tests that start the built programs |
-| `xtask` | `cargo xtask layout`, which checks the rules between the crates |
+| `test-plan` | The requirements, one sentence each, and the test that proves each one |
+| `xtask` | `cargo xtask layout`, which checks the rules between the crates, and `cargo xtask coverage`, which checks that every requirement has a test in the plan |
 | `patches`, `vendor` | The one patched file of GPUI and the script that reapplies the patch |
 | `packaging` | The Mac app, the `.deb`, the archive, the apt repository, the install script |
 
