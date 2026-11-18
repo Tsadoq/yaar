@@ -268,6 +268,72 @@ fn a_worktree_made_or_removed_outside_the_app_shows_at_the_next_listing() {
 }
 
 #[test]
+fn a_repository_that_cannot_be_read_is_listed_with_no_worktree_and_the_others_whole() {
+    let scratch = Scratch::new();
+    let a_repository = |name: &str| {
+        let folder = scratch.join(name);
+        init(&folder);
+        write(&folder, "a.txt", "a\n");
+        commit_all(&folder, "first");
+        folder
+    };
+    let unreadable = a_repository("unreadable");
+    let (repo, _, _) = a_repository_with_two_worktrees(&scratch);
+    let unnamed = a_repository("unnamed");
+    let workspaces = workspaces(&scratch);
+    for folder in [&unreadable, &repo, &unnamed] {
+        workspaces.open_folder(folder).expect("open the folder");
+    }
+    let whole = workspaces.repositories().expect("repositories");
+    let worktrees: Vec<usize> = whole.iter().map(|r| r.workspaces.len()).collect();
+    assert_eq!(worktrees, [1, 2, 1]);
+
+    // In the first, git fails on a configuration it cannot read. In the last, the id of
+    // the worktree can be neither read nor written: a folder lies where the file was.
+    let config = unreadable.join(".git/config");
+    let sound = std::fs::read(&config).expect("read the configuration");
+    std::fs::write(&config, "[core\n").expect("break the configuration");
+    let id_file = unnamed.join(".git").join(ID_FILE);
+    std::fs::remove_file(&id_file).expect("remove the id file");
+    std::fs::create_dir(&id_file).expect("a folder in its place");
+
+    // Each of the two is still listed, with no worktree; the one between them is listed
+    // as it was.
+    let without = |repository: &Repository| Repository {
+        workspaces: vec![],
+        ..repository.clone()
+    };
+    assert_eq!(
+        workspaces.repositories().expect("repositories"),
+        [without(&whole[0]), whole[1].clone(), without(&whole[2])]
+    );
+    // Asked for by itself, a workspace of such a repository says what is wrong.
+    let failure = workspaces
+        .changes(&whole[0].workspaces[0].id)
+        .expect_err("git fails there");
+    assert!(
+        matches!(&failure, WorkspaceError::Git(_)) && failure.to_string().contains("config"),
+        "{failure}"
+    );
+
+    // Mended, the repository is listed as it was before.
+    std::fs::write(&config, sound).expect("mend the configuration");
+    assert_eq!(
+        workspaces.repositories().expect("repositories")[..2],
+        whole[..2]
+    );
+
+    // That git cannot be run at all is the failure of no repository: it is told.
+    drop(workspaces);
+    let no_git = yaar_recorder::Git::at(scratch.join("nowhere/git"));
+    let workspaces = support::workspaces_through(&scratch, no_git);
+    assert!(matches!(
+        workspaces.repositories(),
+        Err(WorkspaceError::Git(yaar_recorder::GitError::NotFound))
+    ));
+}
+
+#[test]
 fn a_repository_that_was_moved_is_the_same_repository_with_the_same_workspaces_and_bases() {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");

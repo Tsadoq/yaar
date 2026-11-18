@@ -379,6 +379,10 @@ impl Workspaces {
     /// git lists for it now. Every worktree is a workspace: one seen for the first time
     /// gets its id here. A repository whose folder is gone is listed with no worktree.
     ///
+    /// So is a repository that cannot be read now, because git fails in it or the id of
+    /// one of its worktrees can be neither read nor written: the others are listed all
+    /// the same. What is wrong there, a call that names one of its workspaces says.
+    ///
     /// A worktree that was opened after its folder was moved without git's knowing is
     /// listed too, after the others, for as long as git has not caught up.
     pub fn repositories(&self) -> Result<Vec<Repository>, WorkspaceError> {
@@ -386,37 +390,12 @@ impl Workspaces {
         let kept = self.store.workspaces()?;
         let mut repositories = Vec::new();
         for record in self.store.repositories()? {
-            let mut workspaces = Vec::new();
-            for listed in Worktree::list_of(&self.git, &record.git_dir)? {
-                let id = match identity::read(&listed.git_dir)? {
-                    Some(id) => id,
-                    None => identity::give(&listed.git_dir)?,
-                };
-                self.store.put_workspace(&id, &record.id, &listed.path)?;
-                workspaces.push(Workspace {
-                    id,
-                    path: listed.path,
-                    head: listed.head,
-                });
-            }
-            // What the Store holds for this repository and git did not list: gone, as a
-            // rule, and then passed over; or moved by hand and opened since.
-            for known in kept.iter().filter(|known| known.repository == record.id) {
-                if workspaces.iter().any(|listed| listed.id == known.id) {
-                    continue;
-                }
-                match self.worktree_of(known) {
-                    Ok(worktree) if worktree.common_dir() == record.git_dir => {
-                        workspaces.push(Workspace {
-                            id: known.id.clone(),
-                            path: known.path.clone(),
-                            head: worktree.head()?,
-                        });
-                    }
-                    Ok(_) | Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => {}
-                    Err(e) => return Err(e),
-                }
-            }
+            let workspaces = match self.worktrees_of(&record, &kept) {
+                Ok(workspaces) => workspaces,
+                // `Repository` has no place yet to say what failed.
+                Err(e) if of_one_repository(&e) => Vec::new(),
+                Err(e) => return Err(e),
+            };
             repositories.push(Repository {
                 id: record.id,
                 name: name_of(&record.git_dir),
@@ -425,6 +404,47 @@ impl Workspaces {
             });
         }
         Ok(repositories)
+    }
+
+    /// The worktrees of one kept repository as they are now, each kept as a workspace;
+    /// `kept` is what the Store held of all repositories before.
+    fn worktrees_of(
+        &self,
+        record: &RepositoryRecord,
+        kept: &[WorkspaceRecord],
+    ) -> Result<Vec<Workspace>, WorkspaceError> {
+        let mut workspaces = Vec::new();
+        for listed in Worktree::list_of(&self.git, &record.git_dir)? {
+            let id = match identity::read(&listed.git_dir)? {
+                Some(id) => id,
+                None => identity::give(&listed.git_dir)?,
+            };
+            self.store.put_workspace(&id, &record.id, &listed.path)?;
+            workspaces.push(Workspace {
+                id,
+                path: listed.path,
+                head: listed.head,
+            });
+        }
+        // What the Store holds for this repository and git did not list: gone, as a
+        // rule, and then passed over; or moved by hand and opened since.
+        for known in kept.iter().filter(|known| known.repository == record.id) {
+            if workspaces.iter().any(|listed| listed.id == known.id) {
+                continue;
+            }
+            match self.worktree_of(known) {
+                Ok(worktree) if worktree.common_dir() == record.git_dir => {
+                    workspaces.push(Workspace {
+                        id: known.id.clone(),
+                        path: known.path.clone(),
+                        head: worktree.head()?,
+                    });
+                }
+                Ok(_) | Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(workspaces)
     }
 
     /// What the changes of a workspace are counted from: the base the user set, else the
@@ -635,6 +655,18 @@ impl Workspaces {
                     .is_ok_and(|id| id.as_ref() == Some(&record.id))
         })
     }
+}
+
+/// Whether a failure is that of one repository and leaves the others as readable as they
+/// were: git ran there and failed, or said what is not understood, or the id of a
+/// worktree could not be read or written. That git cannot be run at all, or that the
+/// Store fails, is the failure of no repository in particular.
+fn of_one_repository(error: &WorkspaceError) -> bool {
+    matches!(
+        error,
+        WorkspaceError::Git(GitError::Failed { .. } | GitError::Unreadable { .. })
+            | WorkspaceError::Id(..)
+    )
 }
 
 /// The base of a workspace: what the user set, else what the rule finds.
