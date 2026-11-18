@@ -136,13 +136,37 @@ pub struct ChangedPath {
     pub change: Change,
 }
 
+/// Names one branch as a branch, by its short name as [`Refs`] lists it.
+///
+/// git reads a short name as a tag before it reads it as a branch. Asked through this,
+/// it is asked for the branch and for nothing else: a tag that happens to have the name
+/// is not looked at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Branch<'a> {
+    /// A local branch: `main`.
+    Local(&'a str),
+    /// A branch of a remote, the remote first: `origin/main`.
+    Remote(&'a str),
+}
+
+impl Branch<'_> {
+    /// The name git has for the branch in full. A name given in full is taken as it is,
+    /// before any shorter reading of it.
+    fn full_name(self) -> String {
+        match self {
+            Branch::Local(name) => format!("refs/heads/{name}"),
+            Branch::Remote(name) => format!("refs/remotes/{name}"),
+        }
+    }
+}
+
 /// Which commits to list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Commits<'a> {
     /// Those reachable from what is checked out and not from this commit.
     Since(&'a CommitId),
     /// Those reachable from what is checked out and not from this branch.
-    NotOn(&'a str),
+    NotOn(Branch<'a>),
     /// Those reachable from what is checked out and from no branch of any remote, as the
     /// repository last saw the remotes.
     OnNoRemoteBranch,
@@ -434,8 +458,15 @@ impl Worktree {
         Ok(refs)
     }
 
+    /// The commit a branch points at; none when there is no such branch.
+    pub fn commit_of(&self, branch: Branch<'_>) -> Result<Option<CommitId>, GitError> {
+        self.resolve(&branch.full_name())
+    }
+
     /// The commit a branch, a tag or a commit id names, as the user would write it to
-    /// git; none when git knows nothing by that name.
+    /// git; none when git knows nothing by that name. Where a tag and a branch have the
+    /// name, that is the tag, as it is for the user: [`Worktree::commit_of`] asks for a
+    /// branch.
     pub fn resolve(&self, revision: &str) -> Result<Option<CommitId>, GitError> {
         // No argument of a program can hold a zero byte, and no name git knows does.
         if revision.contains('\0') {
@@ -468,7 +499,7 @@ impl Worktree {
         // whatever the name is.
         let leave_out = match which {
             Commits::Since(commit) => format!("^{commit}"),
-            Commits::NotOn(branch) => format!("^{branch}"),
+            Commits::NotOn(branch) => format!("^{}", branch.full_name()),
             Commits::OnNoRemoteBranch => "--remotes".to_owned(),
         };
         let mut args = vec![

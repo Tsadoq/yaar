@@ -8,8 +8,8 @@
 //!   other worktrees of its repository, the branches around it, the commits and the
 //!   changed files between a commit and the files on disk, and the content of a file on
 //!   either side;
-//! - what those return: [`Head`], [`CommitId`], [`Commit`], [`Refs`], [`ChangedPath`],
-//!   [`Listed`].
+//! - what those take and return: [`Head`], [`CommitId`], [`Commit`], [`Refs`], [`Branch`],
+//!   [`ChangedPath`], [`Listed`].
 //!
 //! The writing side, which records a state of the worktree, is not built yet: nothing
 //! here writes so far.
@@ -39,6 +39,6 @@ mod worktree;
 
 pub use git::{Git, GitError};
 pub use worktree::{
-    Change, ChangedPath, Commit, CommitId, Commits, Head, Listed, LocalBranch, OpenError, Refs,
-    RemoteBranch, Worktree,
+    Branch, Change, ChangedPath, Commit, CommitId, Commits, Head, Listed, LocalBranch, OpenError,
+    Refs, RemoteBranch, Worktree,
 };

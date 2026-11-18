@@ -184,7 +184,7 @@ fn restarted(scratch: &Scratch, folder: &Path, workspace: &WorkspaceId) -> Works
         .flat_map(|repository| repository.workspaces)
         .map(|listed| listed.id)
         .collect();
-    assert_eq!(listed, [workspace.clone()]);
+    assert_eq!(listed, std::slice::from_ref(workspace));
     assert_eq!(&open(&keeper, folder), workspace);
     keeper
 }
@@ -351,7 +351,7 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
     );
     assert_eq!(
         rev_list(&clone, &["HEAD", "--not", "--remotes"]),
-        [fourth.clone()],
+        std::slice::from_ref(&fourth),
         "{third} is on origin/topic"
     );
 
@@ -560,6 +560,143 @@ fn a_set_base_that_git_no_longer_knows_is_still_the_base_and_leaves_nothing_to_c
             counted_from: Some(CommitId::new(&second)),
             commits: vec![],
             files: vec![changed("b.txt", Change::Added)],
+        }
+    );
+}
+
+// git reads a short name as a tag before it reads it as a branch. A base and an upstream
+// are branches: a tag that happens to have their name must never be counted from.
+#[test]
+fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    let first = commit_all(&repo, "first");
+    git(&repo, &["branch", "release"]);
+    write(&repo, "a.txt", "two\n");
+    let second = commit_all(&repo, "second");
+    git(&repo, &["switch", "--quiet", "-c", "feat"]);
+    write(&repo, "b.txt", "new\n");
+    let third = commit_all(&repo, "third, on the branch");
+    // Each tag points somewhere else than the branch of its name.
+    git(&repo, &["tag", "main", &first]);
+    git(&repo, &["tag", "release", &second]);
+    assert_eq!(git(&repo, &["rev-parse", "main^{commit}"]), first);
+    assert_eq!(git(&repo, &["rev-parse", "refs/heads/main"]), second);
+
+    let workspaces = workspaces(&scratch);
+    let workspace = open(&workspaces, &repo);
+    let since =
+        |base: Base, counted_from: &str, commits: Vec<Commit>, files: Vec<ChangedPath>| Changes {
+            comparison: Comparison::SinceBase { base },
+            counted_from: Some(CommitId::new(counted_from)),
+            commits,
+            files,
+        };
+
+    // The default base: the branch `main`, which is at the second commit.
+    assert_eq!(
+        workspaces.changes(&workspace).expect("changes"),
+        since(
+            default_base("main"),
+            &second,
+            vec![commit(&third, "third, on the branch")],
+            vec![changed("b.txt", Change::Added)],
+        )
+    );
+
+    // A base the user set by the name of a branch: the branch `release`, which is at
+    // the first commit.
+    assert_eq!(
+        workspaces
+            .set_base(&workspace, "release")
+            .expect("set base"),
+        set_by_the_user("release")
+    );
+    assert_eq!(
+        workspaces.changes(&workspace).expect("changes"),
+        since(
+            set_by_the_user("release"),
+            &first,
+            vec![
+                commit(&third, "third, on the branch"),
+                commit(&second, "second"),
+            ],
+            vec![
+                changed("a.txt", Change::Modified),
+                changed("b.txt", Change::Added),
+            ],
+        )
+    );
+
+    // The branch goes and the tag stays: the base is gone, not moved to the tag.
+    git(&repo, &["branch", "--quiet", "-D", "release"]);
+    assert_eq!(
+        workspaces.changes(&workspace).expect("changes"),
+        Changes {
+            comparison: Comparison::NothingToCompare {
+                base: Some(set_by_the_user("release")),
+                why: NoComparison::BaseGone,
+            },
+            counted_from: Some(CommitId::new(&third)),
+            commits: vec![],
+            files: vec![],
+        }
+    );
+}
+
+#[test]
+fn a_tag_with_the_name_of_the_upstream_is_not_taken_for_the_upstream() {
+    let scratch = Scratch::new();
+    let clone = a_clone(&scratch);
+    let second = git(&clone, &["rev-parse", "HEAD"]);
+    let first = git(&clone, &["rev-parse", "HEAD~1"]);
+    write(&clone, "a.txt", "three\n");
+    let third = commit_all(&clone, "third, not pushed");
+    git(&clone, &["tag", "origin/main", &first]);
+    git(&clone, &["tag", "main", &first]);
+    assert_eq!(git(&clone, &["rev-parse", "origin/main^{commit}"]), first);
+    assert_eq!(
+        git(&clone, &["rev-parse", "refs/remotes/origin/main"]),
+        second
+    );
+
+    let workspaces = workspaces(&scratch);
+    let workspace = open(&workspaces, &clone);
+    // On the base branch: the second commit is on the upstream, whatever the tag says.
+    assert_eq!(
+        workspaces.changes(&workspace).expect("changes"),
+        Changes {
+            comparison: Comparison::NotOnUpstream {
+                base: default_base("origin/main"),
+                upstream: "origin/main".to_owned(),
+            },
+            counted_from: Some(CommitId::new(&third)),
+            commits: vec![commit(&third, "third, not pushed")],
+            files: vec![],
+        }
+    );
+
+    // On a branch off it: counted from where it left the branch of the remote.
+    git(&clone, &["switch", "--quiet", "--no-track", "-c", "feat"]);
+    write(&clone, "b.txt", "new\n");
+    let fourth = commit_all(&clone, "fourth, on the branch");
+    assert_eq!(
+        workspaces.changes(&workspace).expect("changes"),
+        Changes {
+            comparison: Comparison::SinceBase {
+                base: default_base("origin/main"),
+            },
+            counted_from: Some(CommitId::new(&second)),
+            commits: vec![
+                commit(&fourth, "fourth, on the branch"),
+                commit(&third, "third, not pushed"),
+            ],
+            files: vec![
+                changed("a.txt", Change::Modified),
+                changed("b.txt", Change::Added),
+            ],
         }
     );
 }

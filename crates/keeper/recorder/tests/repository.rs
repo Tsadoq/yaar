@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use support::{Scratch, commit_all, git, init, program, write};
 use yaar_recorder::{
-    Commit, CommitId, Commits, Git, GitError, Head, Listed, LocalBranch, OpenError, Refs,
+    Branch, Commit, CommitId, Commits, Git, GitError, Head, Listed, LocalBranch, OpenError, Refs,
     RemoteBranch, Worktree,
 };
 
@@ -434,7 +434,9 @@ fn the_commits_of_a_branch_are_listed_newest_first_with_the_first_line_of_their_
         of_the_branch
     );
     assert_eq!(
-        worktree.commits(Commits::NotOn("main")).expect("commits"),
+        worktree
+            .commits(Commits::NotOn(Branch::Local("main")))
+            .expect("commits"),
         of_the_branch
     );
     // With no remote, no commit is on a branch of one.
@@ -448,9 +450,67 @@ fn the_commits_of_a_branch_are_listed_newest_first_with_the_first_line_of_their_
     );
     // A branch git does not know is a failure, not an empty list.
     assert!(matches!(
-        worktree.commits(Commits::NotOn("no-such-branch")),
+        worktree.commits(Commits::NotOn(Branch::Local("no-such-branch"))),
         Err(GitError::Failed { .. })
     ));
+}
+
+#[test]
+fn a_branch_is_read_as_the_branch_where_a_tag_has_its_name() {
+    let scratch = Scratch::new();
+    let clone = a_clone(&scratch);
+    let second = git(&clone, &["rev-parse", "HEAD"]);
+    let first = git(&clone, &["rev-parse", "HEAD~1"]);
+    write(&clone, "a.txt", "three\n");
+    let third = commit_all(&clone, "third, not pushed");
+    // Three tags on the first commit: two named like a branch, one like nothing else.
+    for tag in ["main", "origin/main", "v1"] {
+        git(&clone, &["tag", tag, &first]);
+    }
+    let worktree = open(&clone);
+    let commit = |id: &str| Some(CommitId::new(id));
+
+    // Written as the user writes it, each name is the tag: that is how git reads it.
+    assert_eq!(worktree.resolve("main").expect("resolve"), commit(&first));
+    assert_eq!(
+        worktree.resolve("origin/main").expect("resolve"),
+        commit(&first)
+    );
+    // Asked for as a branch, it is the branch.
+    let commit_of = |branch| worktree.commit_of(branch).expect("the commit of a branch");
+    assert_eq!(commit_of(Branch::Local("main")), commit(&third));
+    assert_eq!(commit_of(Branch::Remote("origin/main")), commit(&second));
+    assert_eq!(commit_of(Branch::Remote("origin/topic")), commit(&second));
+    // What is no branch of that kind is none, whatever else has the name.
+    for none in [
+        Branch::Local("origin/main"),
+        Branch::Remote("main"),
+        Branch::Local("v1"),
+        Branch::Remote("v1"),
+        Branch::Local("no-such-branch"),
+        Branch::Local(""),
+    ] {
+        assert_eq!(commit_of(none), None, "{none:?}");
+    }
+
+    // The same when a branch is what the commits are not to be on.
+    let ids = |which| -> Vec<String> {
+        let commits = worktree.commits(which).expect("commits");
+        commits.iter().map(|commit| commit.id.to_string()).collect()
+    };
+    assert_eq!(
+        ids(Commits::NotOn(Branch::Remote("origin/main"))),
+        std::slice::from_ref(&third)
+    );
+    assert_eq!(
+        ids(Commits::NotOn(Branch::Local("main"))),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        ids(Commits::Since(&CommitId::new(&first))),
+        [third, second],
+        "what the tag would have left in"
+    );
 }
 
 #[test]

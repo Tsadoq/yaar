@@ -30,7 +30,7 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use yaar_recorder::{Commits, Git, GitError, OpenError, Worktree};
+use yaar_recorder::{Branch, Commits, Git, GitError, OpenError, Worktree};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
 
 pub use base::{default_base, on_base_branch};
@@ -131,7 +131,7 @@ pub enum NoComparison {
     NoRemote,
     /// [`default_base`] found no base and the user set none.
     NoBase,
-    /// The base the user set names nothing git knows any more.
+    /// The base the user set names no branch and no commit any more.
     BaseGone,
     /// The branch and its base share no commit, or nothing is committed on the branch
     /// yet.
@@ -467,14 +467,17 @@ impl Workspaces {
     /// each case. The comparison is the first of these that applies:
     ///
     /// 1. there is no base: `NothingToCompare`, [`NoComparison::NoBase`];
-    /// 2. the base, which then is one the user set, names nothing git knows:
-    ///    `NothingToCompare`, [`NoComparison::BaseGone`];
+    /// 2. the base, which then is one the user set, is a branch that is gone or a commit
+    ///    git does not know: `NothingToCompare`, [`NoComparison::BaseGone`];
     /// 3. the workspace is on its base branch, by [`on_base_branch`]: `NotOnUpstream`
     ///    when the branch checked out follows a branch that exists, else
     ///    `OnNoRemoteBranch` when the repository has a remote, else `NothingToCompare`,
     ///    [`NoComparison::NoRemote`];
     /// 4. what is checked out shares a commit with the base: `SinceBase`;
     /// 5. otherwise `NothingToCompare`, [`NoComparison::NoSharedCommit`].
+    ///
+    /// The base and the upstream are read as the branches they are. A tag with the name
+    /// of either, which git would take first, counts for nothing here.
     pub fn changes(&self, workspace: &WorkspaceId) -> Result<Changes, WorkspaceError> {
         let (record, worktree) = self.workspace(workspace)?;
         let head = worktree.head()?;
@@ -500,7 +503,7 @@ impl Workspaces {
         let Some(base) = base_of(&record, &head, &refs) else {
             return nothing(None, NoComparison::NoBase);
         };
-        let Some(base_commit) = worktree.resolve(&base.name)? else {
+        let Some(base_commit) = commit_of_base(&worktree, &base.name, &refs)? else {
             return nothing(Some(base), NoComparison::BaseGone);
         };
         if on_base_branch(&head, &base.name, &refs) {
@@ -514,7 +517,7 @@ impl Workspaces {
             };
             return match upstream {
                 Some(upstream) => {
-                    let commits = worktree.commits(Commits::NotOn(&upstream))?;
+                    let commits = worktree.commits(Commits::NotOn(followed(&upstream, &refs)))?;
                     uncommitted(Comparison::NotOnUpstream { base, upstream }, commits)
                 }
                 None if !refs.remotes.is_empty() => {
@@ -645,6 +648,44 @@ fn base_of(record: &WorkspaceRecord, head: &Head, refs: &Refs) -> Option<Base> {
             name,
             source: BaseSource::Default,
         }),
+    }
+}
+
+/// The commit a base names now; none when it names none any more. A base is the short
+/// name of a branch or the full id of a commit, and is read as nothing else: where the
+/// branch is gone, a tag of its name is not the base.
+fn commit_of_base(
+    worktree: &Worktree,
+    base: &str,
+    refs: &Refs,
+) -> Result<Option<CommitId>, GitError> {
+    // A local branch before one of a remote with the same short name: the order in
+    // which git itself reads a short name, and that of `branch_named`.
+    let local = refs.local.iter().any(|branch| branch.name == base);
+    let remote = refs.remote.iter().any(|branch| branch.name == base);
+    if local {
+        worktree.commit_of(Branch::Local(base))
+    } else if remote {
+        worktree.commit_of(Branch::Remote(base))
+    } else {
+        // git reads a full id as that commit and as nothing else. Whatever else it finds
+        // under this text is another commit than the text says.
+        let named = worktree.resolve(base)?;
+        Ok(named.filter(|commit| commit.as_str() == base))
+    }
+}
+
+/// The branch that the branch checked out follows, from its short name in `refs`, which
+/// lists it only while it exists. It is a branch of a remote unless the only branch of
+/// that name is a local one; the default a remote recorded, which can be followed too,
+/// is among the names of the remote.
+fn followed<'a>(upstream: &'a str, refs: &Refs) -> Branch<'a> {
+    let local = refs.local.iter().any(|branch| branch.name == upstream);
+    let remote = refs.remote.iter().any(|branch| branch.name == upstream);
+    if local && !remote {
+        Branch::Local(upstream)
+    } else {
+        Branch::Remote(upstream)
     }
 }
 
