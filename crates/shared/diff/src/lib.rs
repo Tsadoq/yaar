@@ -40,6 +40,16 @@ const WORD_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Myers;
 /// 3,780 hunks of the recorded changes that have lines on both sides, two hold more.
 const MOST_WORDS: usize = 4096;
 
+/// The most bytes, of both sides together and the line feeds among them, that a hunk may
+/// hold and still have its words compared. The words of a line cannot be counted without
+/// reading the line, and a line has no largest length: one of 4 MiB took 20 ms to cut
+/// into words each time its marks were asked for, whether its words were then too many or
+/// not. With this many bytes the reading took 0.3 ms at most where it was measured. It is
+/// 16 bytes for each of the [`MOST_WORDS`]; of the 3,780 hunks of the recorded changes
+/// that have lines on both sides none holds more, and the largest that is compared holds
+/// 9,016.
+const MOST_BYTES: usize = 65_536;
+
 /// The unchanged lines shown around each change unless the caller asks otherwise; git's
 /// own default.
 pub const CONTEXT_LINES: u32 = 3;
@@ -157,15 +167,24 @@ impl Text {
         }
     }
 
+    /// Where the line starts in `bytes`, or where the bytes end for the line after the
+    /// last.
+    fn start(&self, line: u32) -> usize {
+        self.starts
+            .get(line as usize)
+            .copied()
+            .unwrap_or(self.bytes.len())
+    }
+
     /// The line with the line feed that ends it, if it has one.
     fn token(&self, line: u32) -> &[u8] {
-        let line = line as usize;
-        let end = self
-            .starts
-            .get(line + 1)
-            .copied()
-            .unwrap_or(self.bytes.len());
-        &self.bytes[self.starts[line]..end]
+        &self.bytes[self.starts[line as usize]..self.start(line + 1)]
+    }
+
+    /// How many bytes `lines` hold, their line feeds among them. Looked up, not counted:
+    /// it costs the same for lines of any length.
+    fn len(&self, lines: &Range<u32>) -> usize {
+        self.start(lines.end) - self.start(lines.start)
     }
 }
 
@@ -266,9 +285,9 @@ impl FileDiff {
     /// The changed words of the hunk at `index` of [`FileDiff::hunks`].
     ///
     /// Computed when asked, hunk by hunk, so that a caller pays only for the hunks it
-    /// shows. What one hunk costs is bounded: a hunk of more than 4,096 words, both sides
-    /// together, is not compared and has nothing marked. Panics when there is no such
-    /// hunk.
+    /// shows. What one hunk costs is bounded: a hunk of more than 4,096 words or of more
+    /// than 65,536 bytes, both sides together, is not compared and has nothing marked. A
+    /// hunk of too many bytes is not read at all. Panics when there is no such hunk.
     pub fn emphasis(&self, index: usize) -> Emphasis {
         let hunk = &self.hunks[index];
         let mut emphasis = Emphasis {
@@ -276,6 +295,11 @@ impl FileDiff {
             ..Emphasis::default()
         };
         if hunk.old.is_empty() || hunk.new.is_empty() {
+            return emphasis;
+        }
+        // Asked before a byte of the hunk is read: reading is what a hunk of long lines
+        // costs, even to learn that its words are too many.
+        if self.old.len(&hunk.old) + self.new.len(&hunk.new) > MOST_BYTES {
             return emphasis;
         }
 
@@ -363,9 +387,10 @@ fn unchanged(rows: &mut Vec<Row>, old: Range<u32>, new: u32, head: u32, tail: u3
 /// and so has every line of a hunk that only removes or only adds: the whole line is the
 /// change, and its colour already says so.
 ///
-/// A hunk of more than 4,096 words, both sides together, has nothing marked either. Its
-/// words are not compared, since that could take longer than a reader would wait, and a
-/// change of that size is read line by line anyway.
+/// A hunk of more than 4,096 words, both sides together, has nothing marked either, and
+/// nor has one of more than 65,536 bytes, the line feeds among them. Its words are not
+/// compared, since that could take longer than a reader would wait, and a change of that
+/// size is read line by line anyway.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Emphasis {
     /// The first line of the hunk in the old version and in the new one.
@@ -1327,6 +1352,36 @@ fn main() {
         }
     }
 
+    #[test]
+    fn a_hunk_of_more_than_65536_bytes_has_nothing_marked() {
+        // One line: `key = `, a letter `count` times, `end` and the line feed.
+        let line = |letter: &str, count: usize, end: &str| {
+            format!("key = {}{end}\n", letter.repeat(count))
+        };
+        // With 30,000 letters on the old side and 35,522 on the new one that is 30,007
+        // and 35,529 bytes, the line feeds among them, 65,536 together: the most that
+        // are compared. The words are twelve, so it is not their number that decides.
+        let (old, new) = (line("a", 30_000, ""), line("b", 35_522, ""));
+        assert_eq!(old.len() + new.len(), 65_536);
+        let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+        assert_eq!(diff.hunks(), [hunk(0..1, 0..1)]);
+        let emphasis = diff.emphasis(0);
+        assert_eq!(emphasis.of(Side::Old, 0), one(6..30_006));
+        assert_eq!(emphasis.of(Side::New, 0), one(6..35_528));
+
+        // One byte more, on either side, and the hunk is not compared.
+        for (old, new) in [
+            (line("a", 30_000, ";"), new.clone()),
+            (old, line("b", 35_522, ";")),
+        ] {
+            let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+            assert_eq!(diff.hunks(), [hunk(0..1, 0..1)]);
+            let emphasis = diff.emphasis(0);
+            assert_eq!(emphasis.of(Side::Old, 0), []);
+            assert_eq!(emphasis.of(Side::New, 0), []);
+        }
+    }
+
     /// `count` lines on each side, every old line the same and every new line the same:
     /// 11 and 16 words, the line feeds among them, of which the two sides share few, and
     /// those many times over. Comparing such words is what costs the most.
@@ -1355,6 +1410,10 @@ fn main() {
             // 4,050 words in 300 lines, and 4,002 words in two: under the limit.
             (few_old, few_new, true),
             (long_line(1000, 3), long_line(1000, 5), true),
+            // 65,402 bytes, most of them one line of 64,001 words: few enough bytes to
+            // be read, and about as many words as are ever cut before a hunk is left
+            // alone.
+            (long_line(32_000, 3), long_line(700, 5), false),
             // A whole file rewritten, 540,000 words; and two lines of 200,001 each.
             (many_old, many_new, false),
             (long_line(100_000, 3), long_line(100_000, 5), false),
@@ -1375,6 +1434,52 @@ fn main() {
             assert!(
                 best < Duration::from_millis(50),
                 "the best of 5 runs took {best:?} for a hunk of {lines} lines on each side"
+            );
+        }
+    }
+
+    #[test]
+    fn a_hunk_of_one_line_of_4_mib_is_left_unmarked_in_under_1_ms() {
+        // 4 MiB is the largest version of a file the app shows, so the longest line a
+        // hunk can hold there.
+        let size = 4 << 20;
+        let statement = "var a1=fn(b2,c3);";
+        let minified = |name: &str| {
+            format!(
+                "var {name}=fn(b2,c3);{}\n",
+                statement.repeat(size / statement.len())
+            )
+        };
+        let hunks = [
+            // A line as a minified script has it: 2.7 million words, one of them changed.
+            (minified("a0"), minified("a9")),
+            // A line as data has it: one word from end to end, its last character changed.
+            // Within the limit of words, and no cheaper to read for that.
+            (
+                format!("key = {}0;\n", "a".repeat(size)),
+                format!("key = {}1;\n", "a".repeat(size)),
+            ),
+        ];
+        for (old, new) in hunks {
+            let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+            assert_eq!(diff.hunks(), [hunk(0..1, 0..1)]);
+
+            let mut best = Duration::MAX;
+            for _ in 0..5 {
+                let start = Instant::now();
+                let emphasis = diff.emphasis(0);
+                best = best.min(start.elapsed());
+                assert_eq!(emphasis.of(Side::Old, 0), []);
+                assert_eq!(emphasis.of(Side::New, 0), []);
+            }
+            // Reading the two lines once, to cut them into words, took about 20 ms where
+            // it was measured, and whoever shows the hunk asks again whenever it comes
+            // into view. So the limit is far below what reading costs: such a hunk has
+            // to be left alone before a byte of it is looked at.
+            assert!(
+                best < Duration::from_millis(1),
+                "the best of 5 runs took {best:?} for a line starting {:?}",
+                &old[..24]
             );
         }
     }

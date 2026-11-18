@@ -30,7 +30,8 @@ pub(crate) struct Words<'a> {
 
 /// The words of `lines`, each line given with the line feed that ends it, if it has one;
 /// or none when they are more than `most` words. The cutting stops at the line that goes
-/// over, so lines without end cost no more than the first of them.
+/// over, so lines without end cost no more than the first of them. That line is cut
+/// whole, however long it is: whoever calls keeps the lines short enough.
 ///
 /// The line feed is a word of its own. It can never be marked, since it is not part of
 /// the line as it is shown, but it lets the end of a line on one side meet the end of a
