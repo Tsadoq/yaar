@@ -240,6 +240,46 @@ fn safe_push(push: &[u8]) -> Vec<u8> {
     bytes
 }
 
+/// What a set of keyboard flags, `CSI = flags ; way u`, goes to the core as: the flags cut
+/// to those the encoder implements and the way as it was.
+///
+/// Nothing a test can reach shows this. The core answers the query for the flags from its
+/// stack of pushes, which a set does not touch, and the emulator reports the flags in force
+/// cut to the implemented ones whatever the core holds. It is here so that the core never
+/// stores a flag the encoder does not have, whatever else comes to read it.
+///
+/// `set` is a whole `CSI = ... u`. The core reads the first two numbers, each before its
+/// first `:` and 16 bits wide, and keeps the low byte of the first; a form with anything
+/// but digits, `;` and `:`, or with more parameters than the core reads, goes on as it is.
+fn safe_set(set: &[u8]) -> Vec<u8> {
+    // The most parameters the core's parser keeps; it ignores a sequence with more.
+    const MOST_PARAMS: usize = 32;
+    let params = &set[3..set.len() - 1];
+    if !params
+        .iter()
+        .all(|b| matches!(b, b'0'..=b'9' | b';' | b':'))
+        || params.iter().filter(|b| matches!(b, b';' | b':')).count() >= MOST_PARAMS
+    {
+        return set.to_vec();
+    }
+    // The number of a parameter, as the parser of the core reads it: its first part,
+    // 16 bits, saturating. A parameter that is not there is none.
+    let number = |field: &[u8]| {
+        let first = field.split(|&b| b == b':').next().unwrap_or(&[]);
+        first.iter().fold(0u16, |n, digit| {
+            n.saturating_mul(10).saturating_add(u16::from(digit - b'0'))
+        })
+    };
+    let mut fields = params.split(|&b| b == b';');
+    let flags = fields.next().map_or(0, number);
+    let mut bytes = format!("\x1b[={}", flags & u16::from(IMPLEMENTED_FLAGS.0)).into_bytes();
+    if let Some(way) = fields.next() {
+        bytes.extend_from_slice(format!(";{}", number(way)).as_bytes());
+    }
+    bytes.push(b'u');
+    bytes
+}
+
 impl Scanner {
     fn scan(&mut self, bytes: &[u8], cell: (u16, u16)) -> Vec<Piece> {
         let mut pieces = Vec::new();
@@ -342,6 +382,10 @@ fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
     // Every push, in whatever form the core reads as one.
     if marker == Some(b'>') && last == b'u' {
         return Act::Pass(safe_push(sequence));
+    }
+    // Every set, cut to the flags the encoder implements before the core stores them.
+    if marker == Some(b'=') && last == b'u' {
+        return Act::Pass(safe_set(sequence));
     }
     // Every query for the flags in force, in whatever form the core reads as one: it
     // reads the question whatever follows the question mark.
