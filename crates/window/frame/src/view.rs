@@ -344,6 +344,17 @@ impl Frame {
         cx.notify();
     }
 
+    /// Takes the focus when it is nowhere in what the Frame drew last. A pane that was
+    /// given the focus and drew no place for it would otherwise leave the keys of the
+    /// Frame dead until the first click.
+    fn keep_the_focus_in_what_is_drawn(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(composed) = &self.composed
+            && !composed.focus.contains_focused(window, cx)
+        {
+            composed.focus.focus(window, cx);
+        }
+    }
+
     fn toggle_sidebar(&mut self, _: &ToggleSidebar, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(composed) = &self.composed {
             composed
@@ -413,6 +424,9 @@ impl Render for Frame {
         if !self.first_frame_marked {
             self.first_frame_marked = true;
             window.on_next_frame(|_, _| trace::mark("first_frame"));
+            // Once this frame is drawn it shows whether the pane that was given the
+            // focus has drawn a place for it.
+            cx.defer_in(window, Self::keep_the_focus_in_what_is_drawn);
         }
         let theme = cx.theme();
         let (background, foreground, muted, border, danger) = (

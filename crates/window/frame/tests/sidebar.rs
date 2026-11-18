@@ -6,12 +6,12 @@
 mod common;
 
 use gpui_kit::{
-    Action, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size, TestAppContext,
+    Action, AppContext, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, Size, TestAppContext,
     VisualTestContext, point, px, size,
 };
 use yaar_frame::{
-    FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, ToggleSidebar,
-    UnpinSidebar, controls,
+    FULL_WIDTH, KeeperLink, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow,
+    ToggleSidebar, UnpinSidebar, WorkspaceList, controls,
 };
 use yaar_link::{Fact, Head, Repository, Request, Workspace, WorkspaceId};
 
@@ -369,4 +369,21 @@ fn a_click_on_the_pin_control_pins_the_form_the_sidebar_does_not_have(cx: &mut T
     assert_eq!(pinned(sidebar, &mut cx), Some(SidebarForm::Full));
     assert_eq!(form(sidebar, &mut cx), SidebarForm::Full);
     assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
+}
+
+#[gpui_kit::test]
+fn a_sidebar_in_no_frame_is_the_full_list_until_a_form_is_pinned(cx: &mut TestAppContext) {
+    let link = cx.new(|_| KeeperLink::new());
+    let list = cx.new(|cx| WorkspaceList::new(link, cx));
+    let sidebar = cx.new(|cx| Sidebar::new(list, cx));
+    let state = |cx: &mut TestAppContext| {
+        sidebar.read_with(cx, |sidebar, _| (sidebar.pinned(), sidebar.form()))
+    };
+    // It knows no window, so no width has a say.
+    assert_eq!(state(cx), (None, SidebarForm::Full));
+
+    sidebar.update(cx, |sidebar, cx| sidebar.pin(Some(SidebarForm::Rail), cx));
+    assert_eq!(state(cx), (Some(SidebarForm::Rail), SidebarForm::Rail));
+    sidebar.update(cx, |sidebar, cx| sidebar.pin(None, cx));
+    assert_eq!(state(cx), (None, SidebarForm::Full));
 }

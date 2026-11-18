@@ -428,7 +428,7 @@ fn the_first_pane_has_the_focus_when_the_window_opens(cx: &mut TestAppContext) {
     assert_eq!(focused, [true, false]);
 }
 
-/// A pane that draws the place of its focus only while `here` says so.
+/// The view of a pane that draws the place of its focus only while `here` says so.
 struct Leaving {
     focus: FocusHandle,
     here: Rc<Cell<bool>>,
@@ -445,30 +445,45 @@ impl Render for Leaving {
     }
 }
 
+/// A pane that draws the place of its focus only while `here` says so.
+fn leaving(here: &Rc<Cell<bool>>) -> BuildPane {
+    let here = here.clone();
+    Box::new(move |_, _, cx| {
+        let focus = cx.focus_handle();
+        let view = cx.new(|_| Leaving {
+            focus: focus.clone(),
+            here,
+        });
+        Pane {
+            name: "leaving",
+            view: view.into(),
+            focus,
+        }
+    })
+}
+
 #[gpui_kit::test]
 fn the_keys_of_the_frame_work_after_what_had_the_focus_left_the_window(cx: &mut TestAppContext) {
     let here = Rc::new(Cell::new(true));
-    let leaving: BuildPane = Box::new({
-        let here = here.clone();
-        move |_, _, cx| {
-            let focus = cx.focus_handle();
-            let view = cx.new(|_| Leaving {
-                focus: focus.clone(),
-                here,
-            });
-            Pane {
-                name: "leaving",
-                view: view.into(),
-                focus,
-            }
-        }
-    });
-    let (shown, mut cx) = showing(&one_repository(), vec![leaving], cx);
+    let (shown, mut cx) = showing(&one_repository(), vec![leaving(&here)], cx);
 
     // What has the focus is drawn no more, as a row of a pane that went away.
     here.set(false);
     cx.update(|window, _| window.refresh());
 
+    cx.simulate_keystrokes("cmd-b");
+    assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
+}
+
+#[gpui_kit::test]
+fn the_keys_of_the_frame_work_when_the_first_pane_never_draws_where_its_focus_is(
+    cx: &mut TestAppContext,
+) {
+    let (shown, mut cx) = showing(
+        &one_repository(),
+        vec![leaving(&Rc::new(Cell::new(false)))],
+        cx,
+    );
     cx.simulate_keystrokes("cmd-b");
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
 }
