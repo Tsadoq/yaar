@@ -1380,6 +1380,48 @@ fn main() {
             assert_eq!(emphasis.of(Side::Old, 0), []);
             assert_eq!(emphasis.of(Side::New, 0), []);
         }
+
+        // The same for a hunk of several lines: four on each side, `key_N = `, a letter
+        // `count` times, `end` and the line feed. The lines pair by the name they share,
+        // and each holds one long word.
+        let lines = |letter: &str, count: usize, end: &str, which: usize| {
+            (0..4)
+                .map(|line| {
+                    let end = if line == which { end } else { "" };
+                    format!("key_{line} = {}{end}\n", letter.repeat(count))
+                })
+                .collect::<String>()
+        };
+        // With 8,000 letters on the old side and 8,366 on the new one that is 8,009 and
+        // 8,375 bytes a line, 65,536 for the eight lines together: the most that are
+        // compared. No line, and no side alone, comes near the limit, so that only the
+        // sum over all the lines of both sides decides.
+        let (old, new) = (lines("a", 8_000, "", 4), lines("b", 8_366, "", 4));
+        assert_eq!(old.len() + new.len(), 65_536);
+        let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+        assert_eq!(diff.hunks(), [hunk(0..4, 0..4)]);
+        let emphasis = diff.emphasis(0);
+        for line in 0..4 {
+            assert_eq!(emphasis.of(Side::Old, line), one(8..8_008), "line {line}");
+            assert_eq!(emphasis.of(Side::New, line), one(8..8_374), "line {line}");
+        }
+
+        // One byte more in a line in the middle, on either side, and the hunk is not
+        // compared.
+        for line in [1, 2] {
+            for (old, new) in [
+                (lines("a", 8_000, ";", line), new.clone()),
+                (old.clone(), lines("b", 8_366, ";", line)),
+            ] {
+                let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+                assert_eq!(diff.hunks(), [hunk(0..4, 0..4)]);
+                let emphasis = diff.emphasis(0);
+                for mark in 0..4 {
+                    assert_eq!(emphasis.of(Side::Old, mark), [], "line {mark}");
+                    assert_eq!(emphasis.of(Side::New, mark), [], "line {mark}");
+                }
+            }
+        }
     }
 
     /// `count` lines on each side, every old line the same and every new line the same:
