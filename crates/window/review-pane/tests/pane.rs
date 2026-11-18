@@ -530,6 +530,41 @@ fn switching_between_the_unified_and_the_split_view_keeps_the_line_the_reviewer_
             assert_lines_drawn_as_read(pane, &mut cx);
         }
     }
+
+    // The wheel moves the view and leaves the reviewer on their line. When it has moved
+    // that line out of view, a switch still keeps it: the reviewer is on the same
+    // line, and the view comes back to it, from either layout.
+    let line = position(pane, &mut cx);
+    for layout in [Layout::Split, Layout::Unified] {
+        let row_before = pane
+            .read_with(&cx, |pane, _| pane.position_row())
+            .expect("the line of the reviewer has a row");
+        // Up to the first rows, far from the line.
+        let over_the_rows = bounds_of_row(row_before, &mut cx).center();
+        cx.simulate_event(ScrollEvent {
+            position: over_the_rows,
+            delta: ScrollDelta::Pixels(point(px(0.), px(4000.))),
+            ..ScrollEvent::default()
+        });
+        cx.run_until_parked();
+        let in_view_before = pane.read_with(&cx, |pane, _| pane.rows_in_view());
+        assert_eq!(in_view_before.start, 0);
+        assert!(!in_view_before.contains(&row_before));
+        assert_eq!(drawn(&format!("review-row-{row_before}"), &mut cx), None);
+        assert_eq!(position(pane, &mut cx), line);
+
+        cx.simulate_keystrokes("s");
+
+        assert_eq!(pane.read_with(&cx, |pane, _| pane.layout()), layout);
+        assert_eq!(position(pane, &mut cx), line);
+        let (row, in_view) =
+            pane.read_with(&cx, |pane, _| (pane.position_row(), pane.rows_in_view()));
+        let row = row.expect("the line of the reviewer has a row");
+        assert_ne!(row, row_before);
+        assert!(in_view.contains(&row), "row {row} is not in {in_view:?}");
+        let drawn = bounds_of_row(row, &mut cx);
+        assert!(drawn.top() >= px(0.) && drawn.bottom() <= WINDOW.height);
+    }
 }
 
 /// The text of every line of both versions of a file, read through the pane.
