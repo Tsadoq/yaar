@@ -28,10 +28,15 @@ pub use client::{Client, DEADLINE};
 pub use processes::{Descriptor, descendants_of, descriptors_of};
 pub use world::{Repo, Tap, World};
 
-/// The path of a built program of the workspace, building both programs first if one is
-/// missing. Cargo puts them in the profile folder, `target/debug` or the like; a test
-/// program runs from `build/` or `deps/` somewhere beneath it, depending on the Cargo
-/// version.
+/// The path of a built program of the workspace, building both programs first. Cargo
+/// puts them in the profile folder, `target/debug` or the like; a test program runs from
+/// `build/` or `deps/` somewhere beneath it, depending on the Cargo version.
+///
+/// They are built every time, once in each process that asks, and not only when one is
+/// missing: a run of the tests builds a program only for the tests of its own package,
+/// so one left in the folder by an earlier build can be older than the sources, and a
+/// test would then meet a Window or a Keeper that is no longer the one in the tree.
+/// Where both are up to date, the build does nothing.
 pub fn program(name: &str) -> PathBuf {
     let test_exe = std::env::current_exe().expect("the test's own path");
     let profile_dir = test_exe
@@ -47,12 +52,6 @@ pub fn program(name: &str) -> PathBuf {
     let path = profile_dir.join(name);
     static BUILD: Once = Once::new();
     BUILD.call_once(|| {
-        if ["yaar-review", "yaar-keeper"]
-            .iter()
-            .all(|program| profile_dir.join(program).is_file())
-        {
-            return;
-        }
         let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
         let mut build = Command::new(cargo);
         build.args([
