@@ -27,7 +27,8 @@ fn both_programs_say_their_version() {
 #[test]
 fn the_keeper_answers_a_scripted_window_and_stops_when_asked() {
     let place = Place::new();
-    let mut keeper = Command::new(program("yaar-keeper"))
+    let mut keeper = place
+        .command(&program("yaar-keeper"))
         .arg("--socket")
         .arg(place.socket())
         .stdin(Stdio::null())
@@ -55,7 +56,8 @@ fn the_keeper_answers_a_scripted_window_and_stops_when_asked() {
 fn the_window_program_starts_a_keeper_that_outlives_it() {
     let place = Place::new();
     // The Window program, told to find or start the Keeper as the window would and leave.
-    let out = Command::new(program("yaar-review"))
+    let out = place
+        .command(&program("yaar-review"))
         .arg("--keeper-status")
         .env("YAAR_SOCKET", place.socket())
         .env("YAAR_KEEPER", program("yaar-keeper"))
@@ -90,7 +92,8 @@ fn the_window_program_starts_a_keeper_that_outlives_it() {
     assert_ne!(my_session as u32, pid);
 
     // A second Window finds the same Keeper and starts none.
-    let again = Command::new(program("yaar-review"))
+    let again = place
+        .command(&program("yaar-review"))
         .arg("--keeper-status")
         .env("YAAR_SOCKET", place.socket())
         .env("YAAR_KEEPER", program("yaar-keeper"))
