@@ -48,6 +48,42 @@ multiple-versions = "warn"
 wildcards = "deny"
 # The crates of this workspace name each other by path.
 allow-wildcard-paths = true
+# The app draws its own interface and runs no JavaScript: no program it ships, and no
+# Companion, may link a web view or a JavaScript engine, however deep in its dependencies.
+# A ban is an exact name, so this list is as wide as the check is. The crates ending in
+# -sys or _sys are the ones that link the engine itself: they catch a wrapper that is not
+# named here.
+deny = [
+    { crate = "wry", reason = "a web view" },
+    { crate = "tao", reason = "the window library of the Tauri web view" },
+    { crate = "tauri", reason = "a web view" },
+    { crate = "web-view", reason = "a web view" },
+    { crate = "webview-sys", reason = "a web view" },
+    { crate = "webview2-com", reason = "a web view" },
+    { crate = "webview2-com-sys", reason = "a web view" },
+    { crate = "webkit2gtk", reason = "a web view" },
+    { crate = "webkit2gtk-sys", reason = "a web view" },
+    { crate = "webkit6", reason = "a web view" },
+    { crate = "webkit6-sys", reason = "a web view" },
+    { crate = "objc2-web-kit", reason = "a web view" },
+    { crate = "cef", reason = "a web view" },
+    { crate = "cef-dll-sys", reason = "a web view" },
+    { crate = "deno_core", reason = "a JavaScript runtime" },
+    { crate = "v8", reason = "a JavaScript runtime" },
+    { crate = "rusty_v8", reason = "a JavaScript runtime" },
+    { crate = "boa_engine", reason = "a JavaScript runtime" },
+    { crate = "rquickjs", reason = "a JavaScript runtime" },
+    { crate = "rquickjs-sys", reason = "a JavaScript runtime" },
+    { crate = "quick-js", reason = "a JavaScript runtime" },
+    { crate = "libquickjs-sys", reason = "a JavaScript runtime" },
+    { crate = "mozjs", reason = "a JavaScript runtime" },
+    { crate = "mozjs_sys", reason = "a JavaScript runtime" },
+    { crate = "rusty_jsc", reason = "a JavaScript runtime" },
+    { crate = "rusty_jsc_sys", reason = "a JavaScript runtime" },
+    { crate = "javascriptcore-rs", reason = "a JavaScript runtime" },
+    { crate = "javascriptcore-rs-sys", reason = "a JavaScript runtime" },
+    { crate = "objc2-java-script-core", reason = "a JavaScript runtime" },
+]
 
 [sources]
 unknown-registry = "deny"
