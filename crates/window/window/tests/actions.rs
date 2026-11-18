@@ -227,6 +227,25 @@ impl Composed {
         );
     }
 
+    /// Fails when the Window is asking the user for something after the key of `control`,
+    /// which says it asks for nothing. Read where a user meets it: the dialog for a
+    /// folder is the platform's, and the field for a line of text is drawn by the Frame
+    /// under the selector its docs name.
+    fn assert_asks_nothing(&self, control: &Control, cx: &mut VisualTestContext) {
+        assert!(
+            !cx.did_prompt_for_paths(),
+            "the key {} of {} says it asks for nothing and opened the dialog for a folder",
+            control.keystroke,
+            control.title
+        );
+        assert!(
+            cx.debug_bounds("frame-base-field").is_none(),
+            "the key {} of {} says it asks for nothing and opened the field for a line of text",
+            control.keystroke,
+            control.title
+        );
+    }
+
     /// Gives what `control` asks the user for after its key.
     fn give(&mut self, control: &Control, answer: &Answer, cx: &mut VisualTestContext) {
         match (control.asks, answer) {
@@ -391,6 +410,11 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     // request the walk starts itself, a base named for the step, and whatever the key
     // had the Window send lies before that request on the one connection. What a key
     // would set off only after an answer of the Keeper to something later is not seen.
+    //
+    // It sees what a key sends with no further input, and both requests a user starts
+    // so far go out only after the user gave something: a folder in the dialog, a line
+    // in the field. So each key must also leave both closed. A key that asked in a way
+    // the walk does not know of, and sent after an answer there, would pass.
     for control in silent {
         assert_eq!(
             control.asks,
@@ -400,6 +424,9 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         );
         let before = window.tap.requests().len();
         window.press(&control, &mut cx);
+        // Checked before the step is closed: the closing types into the field for the
+        // base, and would hand a field this key had opened its line all the same.
+        window.assert_asks_nothing(&control, &mut cx);
         // No such branch exists. The Keeper refuses it, which is all the same here: the
         // request has passed the tap.
         let closed = window.set_base(&format!("after-{}", control.keystroke), &mut cx);
