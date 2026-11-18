@@ -100,3 +100,37 @@ fn cut(line: &[u8]) -> Vec<Range<usize>> {
     }
     words
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_line_is_cut_into_names_runs_of_white_space_and_single_other_characters() {
+        let line = "let x_1 =  f(a2, \"é\")\t ;";
+        let words: Vec<&str> = cut(line.as_bytes())
+            .into_iter()
+            .map(|range| &line[range])
+            .collect();
+        assert_eq!(
+            words,
+            [
+                "let", " ", "x_1", " ", "=", "  ", "f", "(", "a2", ",", " ", "\"", "é", "\"", ")",
+                "\t ", ";"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_line_feed_is_a_word_of_its_line_that_is_never_marked() {
+        let words = of_lines([&b"a b\n"[..], &b"c d"[..]].into_iter());
+        let bytes: Vec<&[u8]> = words.iter().map(|word| word.bytes).collect();
+        assert_eq!(bytes, [&b"a"[..], b" ", b"b", b"\n", b"c", b" ", b"d"]);
+
+        // Every word but the two spaces is called changed, the line feed among them: the
+        // last mark of the first line still ends where the shown line ends, and the
+        // marks of the second line count from its own start.
+        let marked = marks(&words, 2, |word| word != 1 && word != 5);
+        assert_eq!(marked, [[0..1, 2..3], [0..1, 2..3]]);
+    }
+}

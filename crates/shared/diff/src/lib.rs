@@ -8,9 +8,10 @@
 //! - [`Emphasis`], the changed words inside the changed lines of one hunk.
 //!
 //! It takes two versions of a file as bytes and knows nothing of git, of files on disk, of
-//! threads or of drawing. The line diff is git's histogram diff with the step that moves a
-//! hunk to where a reader expects it, so the hunks are the ones `git diff --histogram`
-//! prints.
+//! threads or of drawing. The line diff is the histogram diff with the step that moves a
+//! hunk to where a reader expects it, as git has both: on the recorded changes of real
+//! files that the tests hold it to, the hunks are those of `git diff --histogram` in 564
+//! of 569, and in the other five the same change is placed a few lines otherwise.
 //!
 //! Lines are counted from 0 here. Whoever shows a line number adds one.
 
@@ -22,8 +23,8 @@ use std::ops::Range;
 const ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Histogram;
 
 /// The algorithm that compares the words of one hunk. Not the one of the lines: on a hunk
-/// of thousands of lines that share few words, the histogram diff takes seconds where
-/// this one stays in the tens of milliseconds.
+/// of many thousand lines that share few words the histogram diff is slower by an order
+/// of magnitude, seconds against a third of one at twenty thousand lines.
 const WORD_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Myers;
 
 /// The unchanged lines shown around each change unless the caller asks otherwise; git's
@@ -160,7 +161,8 @@ impl FileDiff {
     /// old side of a new file, is given as no bytes.
     ///
     /// A line ends at a line feed; a last line with none is a line too. The bytes need
-    /// not be UTF-8.
+    /// not be UTF-8. Panics on a version of more lines than an `i32` counts, which the
+    /// diff library does not take.
     pub fn new(old: &[u8], new: &[u8]) -> Self {
         // A line is compared with its line feed, as git compares it: a last line that
         // gained or lost its line feed is a changed line.
@@ -198,7 +200,7 @@ impl FileDiff {
 
     /// How many lines the version on `side` has.
     pub fn line_count(&self, side: Side) -> u32 {
-        // The diff refuses a version of more lines than a `u32` counts.
+        // `new` took no version of more lines than an `i32` counts.
         self.text(side).starts.len() as u32
     }
 
@@ -323,8 +325,9 @@ pub struct Emphasis {
 
 impl Emphasis {
     /// The ranges of bytes to mark in one line of the hunk, in order and not touching.
-    /// They count from the start of the line, as [`FileDiff::line`] returns it. Empty for
-    /// a line outside the hunk.
+    /// They count from the start of the line, as [`FileDiff::line`] returns it, and where
+    /// the line is UTF-8 none starts or ends inside a character. Empty for a line outside
+    /// the hunk.
     pub fn of(&self, side: Side, line: u32) -> &[Range<usize>] {
         let (first, lines) = match side {
             Side::Old => (self.first.0, &self.old),
@@ -345,7 +348,8 @@ impl Emphasis {
 /// - `hunks.tsv`, the hunks `git diff --diff-algorithm=histogram` gave for each change,
 ///   one line for each, under a first line that names the git that was run;
 /// - `pins.tsv`, where each change comes from: the project, the two commits, the paths;
-/// - `NOTICE.md` and the licence texts of the projects the changes are copied from;
+/// - `NOTICE.md` and, under `licences`, the licence texts of the projects the changes
+///   are copied from;
 /// - `record.sh`, which writes `hunks.tsv` again from the archive.
 #[cfg(test)]
 mod corpus {
@@ -791,6 +795,11 @@ fn main() {
         rows.iter().filter(|row| !unchanged(row)).cloned().collect()
     }
 
+    /// The marks of a line that has one.
+    fn one(range: Range<usize>) -> Vec<Range<usize>> {
+        vec![range]
+    }
+
     fn text(diff: &FileDiff, side: Side, line: u32) -> &str {
         std::str::from_utf8(diff.line(side, line)).expect("a line of the test in UTF-8")
     }
@@ -900,8 +909,8 @@ fn main() {
         // stands, and the `count` earlier in the line, which did not change, is not.
         let edited = diff.emphasis(0);
         let at = "    let count = order.".len();
-        assert_eq!(edited.of(Side::Old, 1), [at..at + "count".len()]);
-        assert_eq!(edited.of(Side::New, 1), [at..at + "quantity".len()]);
+        assert_eq!(edited.of(Side::Old, 1), one(at..at + "count".len()));
+        assert_eq!(edited.of(Side::New, 1), one(at..at + "quantity".len()));
         assert_eq!(marked(&diff, &edited, Side::Old, 1), ["count"]);
         assert_eq!(marked(&diff, &edited, Side::New, 1), ["quantity"]);
         // Its marks are for its own lines only.
@@ -924,5 +933,303 @@ fn main() {
         // in it is marked.
         assert_eq!(diff.emphasis(2).of(Side::New, 13), []);
         assert_eq!(diff.emphasis(3).of(Side::Old, 15), []);
+    }
+
+    #[test]
+    fn a_last_line_with_no_line_feed_is_a_line_and_gaining_the_feed_is_a_change() {
+        let diff = FileDiff::new(b"one\ntwo", b"one\ntwo\n");
+        assert_eq!(diff.line_count(Side::Old), 2);
+        assert_eq!(diff.line_count(Side::New), 2);
+        assert_eq!(diff.line(Side::Old, 1), b"two");
+        assert_eq!(diff.line(Side::New, 1), b"two");
+        assert_eq!(diff.hunks(), [hunk(1..2, 1..2)]);
+
+        // Nothing of what is shown of the line changed, so nothing in it is marked.
+        let emphasis = diff.emphasis(0);
+        assert_eq!(emphasis.of(Side::Old, 1), []);
+        assert_eq!(emphasis.of(Side::New, 1), []);
+    }
+
+    #[test]
+    fn a_new_file_is_one_hunk_of_added_lines_with_nothing_beside_them() {
+        let diff = FileDiff::new(b"", b"one\ntwo\n");
+        assert_eq!(diff.line_count(Side::Old), 0);
+        assert_eq!(diff.hunks(), [hunk(0..0, 0..2)]);
+        assert_eq!(
+            diff.rows(Layout::Unified, CONTEXT_LINES),
+            [Row::Added { new: 0 }, Row::Added { new: 1 }]
+        );
+        let alone = |new| Row::Changed {
+            old: None,
+            new: Some(new),
+        };
+        assert_eq!(
+            diff.rows(Layout::Split, CONTEXT_LINES),
+            [alone(0), alone(1)]
+        );
+    }
+
+    /// `count` lines, each with its number.
+    fn numbered(count: u32) -> String {
+        (0..count)
+            .map(|number| format!("line {number}\n"))
+            .collect()
+    }
+
+    /// Unchanged lines in rows, for the old lines `old`; `shift` is how much higher
+    /// their numbers are in the new version.
+    fn context(old: Range<u32>, shift: u32) -> impl Iterator<Item = Row> {
+        old.map(move |old| Row::Context {
+            old,
+            new: old + shift,
+        })
+    }
+
+    #[test]
+    fn unchanged_lines_farther_from_any_change_than_the_context_are_one_skipped_row() {
+        // Twenty lines. Line 5 becomes two lines and line 15 is rewritten, so nine
+        // unchanged lines lie between the changes, and from there on the new numbers are
+        // one higher than the old.
+        let old = numbered(20);
+        let new = old
+            .replace("line 5\n", "line five\nand a half\n")
+            .replace("line 15\n", "line fifteen\n");
+        let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+        assert_eq!(diff.hunks(), [hunk(5..6, 5..7), hunk(15..16, 16..17)]);
+        let first = [
+            Row::Removed { old: 5 },
+            Row::Added { new: 5 },
+            Row::Added { new: 6 },
+        ];
+        let second = [Row::Removed { old: 15 }, Row::Added { new: 16 }];
+        let skipped = |old: Range<u32>, shift| Row::Skipped {
+            new: old.start + shift..old.end + shift,
+            old,
+        };
+
+        // Three lines each way: the start of the file, the middle of the nine and the
+        // end of the file are left out.
+        let mut expected = vec![skipped(0..2, 0)];
+        expected.extend(context(2..5, 0));
+        expected.extend(first.clone());
+        expected.extend(context(6..9, 1));
+        expected.push(skipped(9..12, 1));
+        expected.extend(context(12..15, 1));
+        expected.extend(second.clone());
+        expected.extend(context(16..19, 1));
+        expected.push(skipped(19..20, 1));
+        assert_eq!(diff.rows(Layout::Unified, 3), expected);
+
+        // Four lines each way: eight of the nine are shown, and the one left is still a
+        // skipped row. The four lines after the last change are the end of the file.
+        let mut expected = vec![skipped(0..1, 0)];
+        expected.extend(context(1..5, 0));
+        expected.extend(first.clone());
+        expected.extend(context(6..10, 1));
+        expected.push(skipped(10..11, 1));
+        expected.extend(context(11..15, 1));
+        expected.extend(second.clone());
+        expected.extend(context(16..20, 1));
+        assert_eq!(diff.rows(Layout::Unified, 4), expected);
+
+        // Five lines each way would be ten of the nine: where the lines after one change
+        // meet the lines before the next, each line is shown once.
+        let mut expected: Vec<Row> = context(0..5, 0).collect();
+        expected.extend(first);
+        expected.extend(context(6..15, 1));
+        expected.extend(second);
+        expected.extend(context(16..20, 1));
+        assert_eq!(diff.rows(Layout::Unified, 5), expected);
+    }
+
+    #[test]
+    fn the_largest_context_shows_the_whole_file() {
+        // Changes on the first and on the last line: the context reaches past both ends.
+        let old = numbered(40);
+        let new = old
+            .replace("line 0\n", "line zero\n")
+            .replace("line 39\n", "line thirty-nine\n");
+        let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+        let mut expected = vec![Row::Removed { old: 0 }, Row::Added { new: 0 }];
+        expected.extend(context(1..39, 0));
+        expected.extend([Row::Removed { old: 39 }, Row::Added { new: 39 }]);
+        assert_eq!(diff.rows(Layout::Unified, u32::MAX), expected);
+
+        // A file with no change has no line near a change, and is still shown whole.
+        let same = FileDiff::new(old.as_bytes(), old.as_bytes());
+        assert_eq!(same.hunks(), []);
+        let all: Vec<Row> = context(0..40, 0).collect();
+        assert_eq!(same.rows(Layout::Split, u32::MAX), all);
+        assert_eq!(
+            same.rows(Layout::Split, CONTEXT_LINES),
+            [Row::Skipped {
+                old: 0..40,
+                new: 0..40
+            }]
+        );
+
+        let empty = FileDiff::new(b"", b"");
+        assert_eq!(empty.rows(Layout::Unified, u32::MAX), []);
+        assert_eq!(empty.rows(Layout::Unified, CONTEXT_LINES), []);
+    }
+
+    /// Fails unless `rows` hold every line of both versions once and in order, each
+    /// unchanged or skipped row holds a line that is the same in both, and no two
+    /// skipped rows follow one another.
+    fn assert_every_line_once(diff: &FileDiff, rows: &[Row], what: &str) {
+        let (mut old, mut new) = (0, 0);
+        let mut after_skipped = false;
+        for row in rows {
+            let same = |old, new| diff.line(Side::Old, old) == diff.line(Side::New, new);
+            if let Row::Skipped {
+                old: skipped_old,
+                new: skipped_new,
+            } = row
+            {
+                assert!(!after_skipped, "{what}: two skipped rows in a row");
+                assert!(!skipped_old.is_empty(), "{what}: {row:?} skips nothing");
+                assert_eq!(
+                    (skipped_old.start, skipped_new.start),
+                    (old, new),
+                    "{what}: {row:?}"
+                );
+                assert_eq!(skipped_old.len(), skipped_new.len(), "{what}: {row:?}");
+                assert_eq!((row.line(Side::Old), row.line(Side::New)), (None, None));
+                assert!(
+                    skipped_old
+                        .clone()
+                        .zip(skipped_new.clone())
+                        .all(|(old, new)| same(old, new)),
+                    "{what}: {row:?} skips a changed line"
+                );
+                (old, new) = (skipped_old.end, skipped_new.end);
+                after_skipped = true;
+                continue;
+            }
+            after_skipped = false;
+            let lines = (row.line(Side::Old), row.line(Side::New));
+            assert_ne!(lines, (None, None), "{what}: {row:?} shows no line");
+            if let Some(line) = lines.0 {
+                assert_eq!(line, old, "{what}: {row:?}");
+                old += 1;
+            }
+            if let Some(line) = lines.1 {
+                assert_eq!(line, new, "{what}: {row:?}");
+                new += 1;
+            }
+            if let Row::Context { old, new } = row {
+                assert!(same(*old, *new), "{what}: {row:?} is a changed line");
+            }
+        }
+        let end = (diff.line_count(Side::Old), diff.line_count(Side::New));
+        assert_eq!((old, new), end, "{what}: lines after the last row");
+    }
+
+    #[test]
+    fn on_the_recorded_changes_the_rows_of_both_layouts_hold_every_line_once() {
+        for pair in corpus::pairs() {
+            let diff = FileDiff::new(&pair.old, &pair.new);
+            for touching in diff.hunks().windows(2) {
+                assert!(
+                    touching[0].old.end < touching[1].old.start
+                        && touching[0].new.end < touching[1].new.start,
+                    "{}: {touching:?} touch",
+                    pair.id
+                );
+            }
+            for layout in [Layout::Unified, Layout::Split] {
+                for context in [0, CONTEXT_LINES, u32::MAX] {
+                    let rows = diff.rows(layout, context);
+                    let what = format!("{} as {layout:?} with {context} lines around", pair.id);
+                    assert_every_line_once(&diff, &rows, &what);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn each_changed_word_is_marked_in_its_own_line_and_neighbours_as_one_range() {
+        let diff = FileDiff::new(
+            b"let width = 10;\nlet height = area(first, second);\n",
+            b"let width = 12;\nlet depth = area(other);\n",
+        );
+        assert_eq!(diff.hunks(), [hunk(0..2, 0..2)]);
+        let emphasis = diff.emphasis(0);
+        assert_eq!(marked(&diff, &emphasis, Side::Old, 0), ["10"]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 0), ["12"]);
+        // `first`, the comma, the space and `second` all went: one range, not four.
+        assert_eq!(
+            marked(&diff, &emphasis, Side::Old, 1),
+            ["height", "first, second"]
+        );
+        assert_eq!(emphasis.of(Side::Old, 1), [4..10, 18..31]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 1), ["depth", "other"]);
+    }
+
+    #[test]
+    fn marks_end_between_characters_where_the_line_is_utf8() {
+        // `marked` slices the text of the line, which panics inside a character.
+        let diff = FileDiff::new(
+            "total = café → thé\n".as_bytes(),
+            "total = caffè ⇒ thé\n".as_bytes(),
+        );
+        let emphasis = diff.emphasis(0);
+        assert_eq!(marked(&diff, &emphasis, Side::Old, 0), ["café", "→"]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 0), ["caffè", "⇒"]);
+    }
+
+    #[test]
+    fn bytes_that_are_no_utf8_are_compared_like_any_other() {
+        let diff = FileDiff::new(b"key = \xff\xfe;\n", b"key = \xff;\n");
+        assert_eq!(diff.line(Side::Old, 0), b"key = \xff\xfe;");
+        let emphasis = diff.emphasis(0);
+        assert_eq!(emphasis.of(Side::Old, 0), one(7..8));
+        assert_eq!(emphasis.of(Side::New, 0), []);
+    }
+
+    #[test]
+    fn on_the_recorded_changes_the_marks_are_in_order_inside_their_lines_and_leave_both_sides_equal()
+     {
+        for pair in corpus::pairs() {
+            let diff = FileDiff::new(&pair.old, &pair.new);
+            for (index, hunk) in diff.hunks().iter().enumerate() {
+                let what = format!("{} at {hunk:?}", pair.id);
+                let emphasis = diff.emphasis(index);
+                let mut marks = 0;
+                for (side, lines) in [(Side::Old, &hunk.old), (Side::New, &hunk.new)] {
+                    for line in lines.clone() {
+                        let text = text(&diff, side, line);
+                        let ranges = emphasis.of(side, line);
+                        marks += ranges.len();
+                        let mut from = 0;
+                        for range in ranges {
+                            // Not touching the one before: a range that starts where
+                            // the last ended would be the same mark cut in two.
+                            assert!(
+                                (from == 0 || range.start > from) && range.end > range.start,
+                                "{what}: {ranges:?} in line {line}"
+                            );
+                            assert!(
+                                text.is_char_boundary(range.start)
+                                    && text.is_char_boundary(range.end)
+                                    && range.end <= text.len(),
+                                "{what}: {range:?} in {text:?}"
+                            );
+                            from = range.end;
+                        }
+                    }
+                    assert_eq!(emphasis.of(side, lines.end), [], "{what}: after the hunk");
+                }
+                if hunk.old.is_empty() || hunk.new.is_empty() {
+                    assert_eq!(marks, 0, "{what}: only added or only removed");
+                } else {
+                    assert!(
+                        unmarked(&diff, &emphasis, Side::Old, hunk.old.clone())
+                            == unmarked(&diff, &emphasis, Side::New, hunk.new.clone()),
+                        "{what}: the sides differ in a word that is not marked"
+                    );
+                }
+            }
+        }
     }
 }
