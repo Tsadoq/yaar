@@ -124,7 +124,8 @@ fn showing(
 ) -> (Shown, VisualTestContext) {
     let (mut shown, mut cx) = open_frame(window_size, Vec::new(), cx);
     shown.keeper.list(listed, &mut cx);
-    let workspaces = listed
+    // One row for each repository and one for each of its worktrees.
+    let every_row = listed
         .iter()
         .map(|repository| 1 + repository.workspaces.len())
         .sum::<usize>();
@@ -133,12 +134,11 @@ fn showing(
             .sidebar
             .read_with(cx, |sidebar, cx| sidebar.rows(cx))
             .len()
-            == workspaces
+            == every_row
     });
     (shown, cx)
 }
 
-// FRAME-01
 #[gpui_kit::test]
 fn the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_its_branch(
     cx: &mut TestAppContext,
@@ -260,7 +260,6 @@ fn the_wheel_brings_a_worktree_far_down_the_list_within_reach_of_a_click(cx: &mu
     assert_eq!(marked(&shown.sidebar, &mut cx), Some(last));
 }
 
-// FRAME-03
 #[gpui_kit::test]
 fn narrower_than_the_set_width_with_nothing_pinned_the_sidebar_is_a_rail_and_wider_the_full_list(
     cx: &mut TestAppContext,
@@ -301,7 +300,6 @@ fn a_window_opened_narrow_shows_the_rail_at_once(cx: &mut TestAppContext) {
     assert_eq!(drawn_width(&mut cx), RAIL_WIDTH);
 }
 
-// FRAME-04
 #[gpui_kit::test]
 fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width(
     cx: &mut TestAppContext,
