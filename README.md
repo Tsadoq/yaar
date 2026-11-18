@@ -25,10 +25,14 @@ runs no terminal and no agent yet, and takes no comments.
 | Cmd-Shift-B | Ctrl-Shift-B | Asks for a branch or a commit and makes it the base | anywhere |
 | Cmd-B | Ctrl-B | Pins the sidebar as a rail, or as the full list | anywhere |
 | Cmd-Alt-B | Ctrl-Alt-B | Lets the width of the window choose the form of the sidebar again | anywhere |
-| Cmd-Alt-Down, Cmd-Alt-Up | Ctrl-Alt-Down, Ctrl-Alt-Up | Next and previous worktree | anywhere |
+| Cmd-Alt-Down, Cmd-Alt-Up | Ctrl-Alt-Down, Ctrl-Alt-Up | Next and previous worktree | anywhere, but on macOS not in the field for the base |
 | Cmd-Q | Ctrl-Q | Quits | anywhere |
 | `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
 | `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
+
+On macOS the field where you type a base takes Cmd-Alt-Down and Cmd-Alt-Up for itself while
+it has the focus, so those two keys do not change the worktree there; they do again once
+the focus is elsewhere.
 
 On Linux the keys of the app are those of the Mac with Ctrl in place of Cmd. With nothing
 pinned, the sidebar is a rail in a window narrower than 1000 px.
