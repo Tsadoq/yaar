@@ -9,16 +9,20 @@
 use std::cell::RefCell;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
 
-use gpui_kit::{Entity, Task, TestAppContext};
-use yaar_frame::KeeperLink;
+use gpui_kit::{
+    AppContext, Bounds, Entity, Pixels, Point, Size, Task, TestAppContext, VisualTestContext,
+    WindowBounds, WindowOptions,
+};
 use yaar_frame::keeper::Attached;
+use yaar_frame::{BuildPane, Frame, KeeperLink, Models, Sidebar, bind, controls};
 use yaar_link::{
-    Fact, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Request, RequestId, read_message,
-    write_message,
+    Fact, Head, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId,
+    Request, RequestId, Workspace, WorkspaceId, read_message, write_message,
 };
 
 /// How long a test waits for something that has to happen. Reaching it fails the test.
@@ -26,6 +30,29 @@ pub const DEADLINE: Duration = Duration::from_secs(10);
 
 /// How long a wait rests between two looks.
 const PAUSE: Duration = Duration::from_millis(1);
+
+/// The id of a workspace, made of one digit.
+pub fn id(digit: char) -> WorkspaceId {
+    WorkspaceId::new(digit.to_string().repeat(32))
+}
+
+/// A worktree with this branch checked out.
+pub fn workspace(digit: char, branch: &str) -> Workspace {
+    Workspace {
+        id: id(digit),
+        path: PathBuf::from(format!("/gits/{branch}")),
+        head: Head::Branch(branch.to_owned()),
+    }
+}
+
+/// A repository with these worktrees, named `repository-<letter>`.
+pub fn repository(letter: char, workspaces: Vec<Workspace>) -> Repository {
+    Repository {
+        id: RepositoryId::new(letter.to_string().repeat(32)),
+        name: format!("repository-{letter}"),
+        workspaces,
+    }
+}
 
 /// The Keeper, played by the test.
 pub struct KeeperEnd {
@@ -105,6 +132,13 @@ impl KeeperEnd {
         id
     }
 
+    /// Answers the question for the list of workspaces, which has to be the next request,
+    /// with these repositories.
+    pub fn list(&mut self, listed: &[Repository], cx: &mut TestAppContext) {
+        let asked = self.expect(Request::ListWorkspaces, cx);
+        self.reply(asked, Ok(Reply::Workspaces(listed.to_vec())));
+    }
+
     /// Answers a request.
     pub fn reply(&mut self, to: RequestId, reply: Result<Reply, Refusal>) {
         write_message(&mut self.stream, &Message::Reply { to, reply }).expect("write a reply");
@@ -179,4 +213,74 @@ pub fn answer<T: 'static>(task: Task<T>, cx: &mut TestAppContext) -> T {
         .detach();
     wait_until(cx, "an answer", |_| slot.borrow().is_some());
     slot.take().expect("the answer")
+}
+
+/// A window of the app on the test platform, with the Keeper the test plays.
+pub struct Shown {
+    /// The root view of the window.
+    pub frame: Entity<Frame>,
+    /// Its sidebar.
+    pub sidebar: Entity<Sidebar>,
+    /// The shared models of the window.
+    pub models: Models,
+    /// The other end of the window's connection.
+    pub keeper: KeeperEnd,
+}
+
+/// Opens a window of this size the way the Window program does, short of reaching a real
+/// Keeper: the toolkit prepared, the keys of the Frame bound from its table, the Frame
+/// with its sidebar and these panes as the root view. Then links it to a Keeper the test
+/// plays, which is asked for the list of workspaces first.
+pub fn open_frame(
+    window_size: Size<Pixels>,
+    panes: Vec<BuildPane>,
+    cx: &mut TestAppContext,
+) -> (Shown, VisualTestContext) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        bind(&controls(), cx);
+    });
+    let link = cx.new(|_| KeeperLink::new());
+    let models = cx.update(|cx| Models::new(link.clone(), cx));
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: Point::default(),
+            size: window_size,
+        })),
+        ..Default::default()
+    };
+    let (window, frame) = cx
+        .update(|cx| {
+            gpui_kit::open_window(options, cx, {
+                let models = models.clone();
+                move |window, cx| cx.new(|cx| Frame::with_panes(models, panes, window, cx))
+            })
+        })
+        .expect("open a test window");
+    let mut cx = VisualTestContext::from_window(window, cx);
+    // Whatever opening the window sets off is done before a Keeper is there to hear it,
+    // so the first thing the Keeper hears is the question for the list.
+    cx.run_until_parked();
+    let sidebar = frame.read_with(&cx, |frame, _| {
+        frame
+            .sidebar()
+            .expect("a Frame with panes has a sidebar")
+            .clone()
+    });
+    let keeper = KeeperEnd::attach(&link, &mut cx);
+    (
+        Shown {
+            frame,
+            sidebar,
+            models,
+            keeper,
+        },
+        cx,
+    )
+}
+
+/// Where the element with this selector was drawn in the last frame, if it was.
+pub fn drawn(selector: &str, cx: &mut VisualTestContext) -> Option<Bounds<Pixels>> {
+    // The test context takes a text that lives as long as the program.
+    cx.debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
 }

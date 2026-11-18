@@ -11,34 +11,14 @@ use std::rc::Rc;
 use gpui_kit::{AppContext, Entity, Subscription, TestAppContext};
 use yaar_frame::{AskError, KeeperLink, Models, WorkspaceChanges, WorkspaceList};
 use yaar_link::{
-    Base, BaseSource, ChangedFile, Changes, Comparison, Content, Fact, FileSides, FileStatus, Head,
-    Refusal, Reply, Repository, RepositoryId, Request, Workspace, WorkspaceId,
+    Base, BaseSource, ChangedFile, Changes, Comparison, Content, Fact, FileSides, FileStatus,
+    Refusal, Reply, Repository, Request, WorkspaceId,
 };
 
-use common::{KeeperEnd, answer, wait_until};
+use common::{KeeperEnd, answer, id, repository, wait_until, workspace};
 
 /// The full id of a commit, as the Link carries it.
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
-
-fn id(digit: char) -> WorkspaceId {
-    WorkspaceId::new(digit.to_string().repeat(32))
-}
-
-fn workspace(digit: char, branch: &str) -> Workspace {
-    Workspace {
-        id: id(digit),
-        path: PathBuf::from(format!("/gits/{branch}")),
-        head: Head::Branch(branch.to_owned()),
-    }
-}
-
-fn repository(letter: char, workspaces: Vec<Workspace>) -> Repository {
-    Repository {
-        id: RepositoryId::new(letter.to_string().repeat(32)),
-        name: format!("repository-{letter}"),
-        workspaces,
-    }
-}
 
 fn file(path: &str, status: FileStatus) -> ChangedFile {
     ChangedFile {

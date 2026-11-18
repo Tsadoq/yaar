@@ -22,9 +22,15 @@ use std::ops::Range;
 /// The one algorithm of the line diff.
 const ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Histogram;
 
-/// The algorithm that compares the words of one hunk. Not the one of the lines: on a hunk
-/// of many thousand lines that share few words the histogram diff is slower by an order
-/// of magnitude, seconds against a third of one at twenty thousand lines.
+/// The algorithm that finds, among the changed lines of one hunk, the lines that were
+/// edited. The one of the lines, for what it does first: it looks for the words that are
+/// rare on both sides, and a line is told from its neighbours by its rare words.
+const PAIRING_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Histogram;
+
+/// The algorithm that compares the words of an edited line with those of the line it
+/// became. Not the one of the lines: the words of a line are few and many of them come
+/// again and again, which is where the histogram diff gives a longer change than need
+/// be, and the shortest change is what a reader expects to see marked.
 const WORD_ALGORITHM: imara_diff::Algorithm = imara_diff::Algorithm::Myers;
 
 /// The unchanged lines shown around each change unless the caller asks otherwise; git's
@@ -269,18 +275,39 @@ impl FileDiff {
         let mut input = imara_diff::InternedInput {
             before: Vec::new(),
             after: Vec::new(),
-            interner: imara_diff::Interner::new(old.len() + new.len()),
+            interner: imara_diff::Interner::new(old.all.len() + new.all.len()),
         };
-        input.update_before(old.iter().map(|word| word.bytes));
-        input.update_after(new.iter().map(|word| word.bytes));
-        let mut diff = imara_diff::Diff::compute(WORD_ALGORITHM, &input);
-        // Where the same words could be marked a little earlier or later, this takes the
-        // later place and joins marks that can be joined, as git does for lines: in
-        // `f(a, a)` after `f(a)` the marked words are `, a` and not `a, `.
-        diff.postprocess_no_heuristic(&input);
+        input.update_before(old.all.iter().map(|word| word.bytes));
+        input.update_after(new.all.iter().map(|word| word.bytes));
+        let distinct = input.interner.num_tokens();
 
-        emphasis.old = words::marks(&old, hunk.old.len(), |word| diff.is_removed(word));
-        emphasis.new = words::marks(&new, hunk.new.len(), |word| diff.is_added(word));
+        // First all the removed lines against all the added ones, to learn which line
+        // became which. Then each edited line against the line it became, and nothing
+        // else: marks taken from the first comparison would run from the end of one
+        // line into the next wherever two lines end in the same words.
+        let whole = imara_diff::Diff::compute(PAIRING_ALGORITHM, &input);
+        let edited = words::edited(
+            &old,
+            &new,
+            |word| whole.is_removed(word),
+            |word| whole.is_added(word),
+        );
+        emphasis.old = vec![Vec::new(); hunk.old.len()];
+        emphasis.new = vec![Vec::new(); hunk.new.len()];
+        let mut diff = imara_diff::Diff::default();
+        for (old_line, new_line) in edited {
+            let (before, after) = (&old.of_line[old_line], &new.of_line[new_line]);
+            let (was, is) = (&input.before[before.clone()], &input.after[after.clone()]);
+            diff.compute_with(WORD_ALGORITHM, was, is, distinct);
+            // Where the same words could be marked a little earlier or later, this takes
+            // the later place and joins marks that can be joined, as git does for lines:
+            // in `f(a, a)` after `f(a)` the marked words are `, a` and not `a, `.
+            diff.postprocess_with(was, is, imara_diff::NoSliderHeuristic);
+            let removed = |word| diff.is_removed(word);
+            let added = |word| diff.is_added(word);
+            emphasis.old[old_line] = words::marks(&old.all[before.clone()], removed);
+            emphasis.new[new_line] = words::marks(&new.all[after.clone()], added);
+        }
         emphasis
     }
 }
@@ -309,10 +336,16 @@ fn unchanged(rows: &mut Vec<Row>, old: Range<u32>, new: u32, head: u32, tail: u3
 /// The words that changed inside the changed lines of one hunk: what a reader's eye should
 /// land on when a line was edited and not replaced.
 ///
-/// The removed lines of the hunk are compared with its added lines word by word, where a
-/// word is a run of letters, digits and underscores, a run of white space, or one other
-/// character. A word the two sides share is not marked. A hunk that only removes or only
-/// adds has nothing marked: the whole line is the change, and its colour already says so.
+/// A word is a run of letters, digits and underscores, a run of white space, or one other
+/// character. The removed lines of the hunk are compared with its added lines word by
+/// word, to learn which removed line became which added line: the one it shares the most
+/// with, white space aside, if that line shares the most with it too. Such a line was
+/// edited. Its words are compared with those of the line it became, and a word the two
+/// share is not marked.
+///
+/// Every other line of the hunk was removed or added as a whole and has nothing marked,
+/// and so has every line of a hunk that only removes or only adds: the whole line is the
+/// change, and its colour already says so.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Emphasis {
     /// The first line of the hunk in the old version and in the new one.
@@ -716,8 +749,10 @@ mod tests {
         assert_eq!((as_git, otherwise), (564, 5));
     }
 
-    /// A small file before and after four changes: a line edited in one word, three
-    /// lines rewritten as two, a line added and a line removed.
+    /// A small file before and after five changes: a line added at the top, so that from
+    /// there on a line has another number in the new version than in the old; then a line
+    /// edited in one word, three lines rewritten as two (the first gains a call, the
+    /// second goes, the third loses its end), a line added and a line removed.
     const BEFORE: &str = r#"fn price(order: &Order) -> u32 {
     let count = order.count;
     let unit = order.unit;
@@ -736,14 +771,15 @@ fn main() {
     println!("{}", price(&order));
 }
 "#;
-    const AFTER: &str = r#"fn price(order: &Order) -> u32 {
+    const AFTER: &str = r#"// Prices are in cents.
+fn price(order: &Order) -> u32 {
     let count = order.quantity;
     let unit = order.unit;
     count * unit
 }
 
 fn label(order: &Order) -> String {
-    let name = order.name.to_uppercase();
+    let name = order.name.trim().to_uppercase();
     format!("{name}")
 }
 
@@ -832,10 +868,11 @@ fn main() {
     fn unified_and_split_lay_out_the_same_hunks_and_emphasis_marks_only_the_changed_words() {
         let diff = FileDiff::new(BEFORE.as_bytes(), AFTER.as_bytes());
         let hunks = [
-            hunk(1..2, 1..2),
-            hunk(7..10, 7..9),
-            hunk(14..14, 13..14),
-            hunk(15..16, 15..15),
+            hunk(0..0, 0..1),
+            hunk(1..2, 2..3),
+            hunk(7..10, 8..10),
+            hunk(14..14, 14..15),
+            hunk(15..16, 16..16),
         ];
         assert_eq!(diff.hunks(), hunks);
 
@@ -878,14 +915,15 @@ fn main() {
         assert_eq!(
             changed(&diff.rows(Layout::Unified, CONTEXT_LINES)),
             [
+                Row::Added { new: 0 },
                 Row::Removed { old: 1 },
-                Row::Added { new: 1 },
+                Row::Added { new: 2 },
                 Row::Removed { old: 7 },
                 Row::Removed { old: 8 },
                 Row::Removed { old: 9 },
-                Row::Added { new: 7 },
                 Row::Added { new: 8 },
-                Row::Added { new: 13 },
+                Row::Added { new: 9 },
+                Row::Added { new: 14 },
                 Row::Removed { old: 15 },
             ]
         );
@@ -893,43 +931,81 @@ fn main() {
         assert_eq!(
             changed(&diff.rows(Layout::Split, CONTEXT_LINES)),
             [
-                beside(Some(1), Some(1)),
-                beside(Some(7), Some(7)),
-                beside(Some(8), Some(8)),
+                beside(None, Some(0)),
+                beside(Some(1), Some(2)),
+                beside(Some(7), Some(8)),
+                beside(Some(8), Some(9)),
                 beside(Some(9), None),
-                beside(None, Some(13)),
+                beside(None, Some(14)),
                 beside(Some(15), None),
             ]
         );
 
         // The line edited in one word: that word is marked on each side, where it
         // stands, and the `count` earlier in the line, which did not change, is not.
-        let edited = diff.emphasis(0);
+        // The line is line 1 of the old version and line 2 of the new one, and each side
+        // answers to its own number only.
+        let edited = diff.emphasis(1);
         let at = "    let count = order.".len();
         assert_eq!(edited.of(Side::Old, 1), one(at..at + "count".len()));
-        assert_eq!(edited.of(Side::New, 1), one(at..at + "quantity".len()));
+        assert_eq!(edited.of(Side::New, 2), one(at..at + "quantity".len()));
         assert_eq!(marked(&diff, &edited, Side::Old, 1), ["count"]);
-        assert_eq!(marked(&diff, &edited, Side::New, 1), ["quantity"]);
+        assert_eq!(marked(&diff, &edited, Side::New, 2), ["quantity"]);
+        assert_eq!(edited.of(Side::Old, 2), []);
+        assert_eq!(edited.of(Side::New, 1), []);
         // Its marks are for its own lines only.
         assert_eq!(edited.of(Side::Old, 7), []);
-        assert_eq!(edited.of(Side::New, 7), []);
+        assert_eq!(edited.of(Side::New, 8), []);
 
-        // Three lines rewritten as two. With the marked words taken out both sides read
-        // the same, so every word that changed is marked. And only those are: of the new
-        // lines, all but one word stands in the old ones, in the same order.
-        let rewritten = diff.emphasis(1);
-        assert_eq!(
-            unmarked(&diff, &rewritten, Side::Old, 7..10),
-            unmarked(&diff, &rewritten, Side::New, 7..9)
-        );
-        assert_eq!(marked(&diff, &rewritten, Side::New, 7), ["to_uppercase"]);
-        assert_eq!(rewritten.of(Side::New, 8), []);
-        assert!(marked(&diff, &rewritten, Side::Old, 7).contains(&"trim"));
+        // Three lines rewritten as two. The first gained a call: what it gained is marked
+        // in the new line, and in the old line, which lost nothing, nothing is. The third
+        // lost its end, and only that is marked. The second became no line of the new
+        // version: it is removed as a whole, and has nothing marked, though some of its
+        // words stand in the lines around it.
+        let rewritten = diff.emphasis(2);
+        assert_eq!(rewritten.of(Side::Old, 7), []);
+        assert_eq!(marked(&diff, &rewritten, Side::New, 8), [".to_uppercase()"]);
+        assert_eq!(rewritten.of(Side::Old, 8), []);
+        assert_eq!(marked(&diff, &rewritten, Side::Old, 9), [" ({code})"]);
+        assert_eq!(rewritten.of(Side::New, 9), []);
+        // Here too each side answers to its own numbers: line 9 is marked in the old
+        // version and not in the new one, and line 8 the other way.
+        assert_eq!(rewritten.of(Side::Old, 10), []);
+        assert_eq!(rewritten.of(Side::New, 7), []);
 
         // A line that is only added, or only removed, is the change as a whole: nothing
         // in it is marked.
-        assert_eq!(diff.emphasis(2).of(Side::New, 13), []);
-        assert_eq!(diff.emphasis(3).of(Side::Old, 15), []);
+        assert_eq!(diff.emphasis(0).of(Side::New, 0), []);
+        assert_eq!(diff.emphasis(3).of(Side::New, 14), []);
+        assert_eq!(diff.emphasis(4).of(Side::Old, 15), []);
+
+        // The same holds inside a hunk that also edits a line. Here a line is edited in
+        // one word and a line is added under it. The added line ends in the words the
+        // edited line ends in, and still the one changed word is all that is marked.
+        let diff = FileDiff::new(
+            b"    return compute(x);\n",
+            b"    return compute(y);\n    log(y);\n",
+        );
+        assert_eq!(diff.hunks(), [hunk(0..1, 0..2)]);
+        let emphasis = diff.emphasis(0);
+        assert_eq!(marked(&diff, &emphasis, Side::Old, 0), ["x"]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 0), ["y"]);
+        assert_eq!(emphasis.of(Side::New, 1), []);
+
+        // And here a line is removed between two edited lines. Each edited line is
+        // marked against the line it became, not against the line that stands beside it
+        // in the split layout, and the removed line has nothing marked.
+        let diff = FileDiff::new(
+            b"let a = 1;\nlet b = 2;\nlet c = 3;\n",
+            b"let a = 10;\nlet c = 30;\n",
+        );
+        assert_eq!(diff.hunks(), [hunk(0..3, 0..2)]);
+        let emphasis = diff.emphasis(0);
+        assert_eq!(marked(&diff, &emphasis, Side::Old, 0), ["1"]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 0), ["10"]);
+        assert_eq!(emphasis.of(Side::Old, 1), []);
+        assert_eq!(marked(&diff, &emphasis, Side::Old, 2), ["3"]);
+        assert_eq!(marked(&diff, &emphasis, Side::New, 1), ["30"]);
     }
 
     #[test]
@@ -1185,8 +1261,9 @@ fn main() {
     }
 
     #[test]
-    fn on_the_recorded_changes_the_marks_are_in_order_inside_their_lines_and_leave_both_sides_equal()
+    fn on_the_recorded_changes_the_marks_are_in_order_inside_their_lines_and_a_marked_line_is_a_line_of_the_other_side_but_for_the_marks()
      {
+        let (mut marked_lines, mut marked_bytes) = (0, 0);
         for pair in corpus::pairs() {
             let diff = FileDiff::new(&pair.old, &pair.new);
             for (index, hunk) in diff.hunks().iter().enumerate() {
@@ -1198,6 +1275,7 @@ fn main() {
                         let text = text(&diff, side, line);
                         let ranges = emphasis.of(side, line);
                         marks += ranges.len();
+                        marked_lines += usize::from(!ranges.is_empty());
                         let mut from = 0;
                         for range in ranges {
                             // Not touching the one before: a range that starts where
@@ -1213,20 +1291,47 @@ fn main() {
                                 "{what}: {range:?} in {text:?}"
                             );
                             from = range.end;
+                            marked_bytes += range.len();
                         }
                     }
                     assert_eq!(emphasis.of(side, lines.end), [], "{what}: after the hunk");
                 }
                 if hunk.old.is_empty() || hunk.new.is_empty() {
                     assert_eq!(marks, 0, "{what}: only added or only removed");
-                } else {
-                    assert!(
-                        unmarked(&diff, &emphasis, Side::Old, hunk.old.clone())
-                            == unmarked(&diff, &emphasis, Side::New, hunk.new.clone()),
-                        "{what}: the sides differ in a word that is not marked"
-                    );
+                }
+
+                // A marked line was edited: it became a line of the other side, and with
+                // the marks of both taken out the two read the same, so every word that
+                // changed between them is marked. The lines that marked lines became
+                // come in the order of the marked lines.
+                for (side, lines, other, others) in [
+                    (Side::Old, &hunk.old, Side::New, &hunk.new),
+                    (Side::New, &hunk.new, Side::Old, &hunk.old),
+                ] {
+                    let mut from = others.start;
+                    for line in lines.clone() {
+                        if emphasis.of(side, line).is_empty() {
+                            continue;
+                        }
+                        let left = unmarked(&diff, &emphasis, side, line..line + 1);
+                        let became = (from..others.end).find(|became| {
+                            unmarked(&diff, &emphasis, other, *became..*became + 1) == left
+                        });
+                        let Some(became) = became else {
+                            panic!(
+                                "{what}: line {line} of the {side:?} side is marked, and \
+                                 with the marks taken out it is no line of the other side"
+                            );
+                        };
+                        from = became + 1;
+                    }
                 }
             }
         }
+
+        // The invariants above hold as well when a line that was edited has nothing
+        // marked. So the sum of what is marked on the whole corpus is written down: a
+        // change to which words are marked shows here and has to be looked at.
+        assert_eq!((marked_lines, marked_bytes), (10_030, 164_114));
     }
 }
