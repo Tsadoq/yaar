@@ -5,3 +5,7 @@ This product includes software developed by Zed Industries, Inc. (GPUI),
 licensed under the Apache License, Version 2.0. The file
 vendor/gpui-pre-apple-*/src/display_link.rs is changed from the original;
 the change is described in patches/README.md.
+
+The folder crates/shared/diff/corpus holds test data copied unchanged from four
+other projects, each under its own licence; crates/shared/diff/corpus/NOTICE.md
+names the projects and their licences.
