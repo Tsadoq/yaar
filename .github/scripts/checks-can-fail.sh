@@ -6,7 +6,10 @@
 # Each case takes a fresh copy of the tree, switches off the one thing a check guards,
 # runs that check from the copy, and passes only if the check fails and says why in the
 # words expected here. A case whose change did not take leaves the check passing, so the
-# case fails: none can pass idly.
+# case fails: none can pass idly. Two cases break the run in another way instead, to show
+# that a planted check does not take any failure for a refusal.
+#
+# Needs what the two scripts need: cargo-deny, jq, git.
 set -eu
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TMP=$(mktemp -d)
@@ -20,7 +23,7 @@ cases=0
 copy() {
   rm -rf "$COPY"
   mkdir "$COPY"
-  tar -C "$COPY" -xf "$TMP/tree.tar"
+  tar -C "$COPY" --no-same-owner -xf "$TMP/tree.tar"
 }
 
 # Rewrites one file of the copy through a sed program.

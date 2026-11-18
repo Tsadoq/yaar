@@ -76,9 +76,11 @@ refusals() {
     | length' "$LOG"
 }
 
+# The copy, without what a build leaves. It belongs to whoever runs this: in a container
+# that is root, and the checkout there was made by another user.
 mkdir "$TREE" "$TMP/plant"
 tar -C "$ROOT" --exclude=./target --exclude=./.git --exclude=./dist -cf "$TMP/tree.tar" .
-tar -C "$TREE" -xf "$TMP/tree.tar"
+tar -C "$TREE" --no-same-owner -xf "$TMP/tree.tar"
 rm "$TMP/tree.tar"
 for manifest in $MANIFESTS; do
   [ -f "$TREE/$manifest" ] || fail "$manifest is not in the tree"
