@@ -218,6 +218,10 @@ struct ShownDiff {
 /// [`ReviewPane::rows`]. In the split view the two halves of a row of a diff carry
 /// `review-row-<index>-old` and `review-row-<index>-new` as well. The control that
 /// offers to set a base carries `review-offer-base`.
+///
+/// When the Keeper refuses to read the changes again, the pane keeps the rows it has
+/// and says above them, in a line that carries `review-refused`, that they could not be
+/// read again and why. The line goes with the next answer.
 pub struct ReviewPane {
     models: Models,
     focus: FocusHandle,
@@ -315,7 +319,9 @@ impl ReviewPane {
             return;
         };
         // The model keeps the last answer while it asks again, and after a refusal:
-        // either way nothing new came, and what is shown stays.
+        // either way nothing new came, and what is shown stays. A refusal is said above
+        // the rows when they are drawn, and they are drawn again because the model,
+        // which was read to draw them, changed.
         let nothing_new = model.is_loading() || model.refusal().is_some();
         if nothing_new && self.changes.as_ref() == Some(changes) {
             return;

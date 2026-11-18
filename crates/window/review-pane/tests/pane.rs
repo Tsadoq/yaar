@@ -1106,6 +1106,81 @@ fn changes_read_again_stay_as_they_are_shown_until_the_new_versions_are_here(
 }
 
 #[gpui_kit::test]
+fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_says_so(
+    cx: &mut TestAppContext,
+) {
+    // A diff longer than the window, so that the rows have to make room for what the
+    // pane says above them.
+    let lines = |count: usize| {
+        (0..count)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>()
+    };
+    let (mut stage, _, mut cx) = open_on_one_file("", &lines(100), cx);
+    let changes = since_main(Vec::new(), vec![file("src/long.txt", FileStatus::Modified)]);
+    let shown = rows(&stage.pane, &mut cx);
+    assert_eq!(shown.len(), 102);
+    let on = position(&stage.pane, &mut cx);
+    let in_view =
+        |cx: &mut VisualTestContext| stage.pane.read_with(cx, |pane, _| pane.rows_in_view());
+    assert_eq!(in_view(&mut cx), 0..21);
+    assert_eq!(drawn("review-refused", &mut cx), None);
+
+    // The Keeper tells of a change, is asked for the changes again, and cannot read
+    // them.
+    let ask_again = |keeper: &mut common::KeeperEnd, cx: &mut VisualTestContext| {
+        keeper.tell(Fact::ChangesChanged { workspace: id('1') });
+        keeper.expect(Request::GetChanges { workspace: id('1') }, cx)
+    };
+    let refused = |cx: &mut TestAppContext| {
+        stage
+            .models
+            .changes
+            .read_with(cx, |changes, _| changes.refusal().is_some())
+    };
+    let asked = ask_again(&mut stage.keeper, &mut cx);
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "git did not answer".to_owned(),
+        }),
+    );
+    wait_until(&mut cx, "the refusal", refused);
+
+    // The pane shows what it showed, with the reviewer where they were, and says
+    // above the rows that they could not be read again.
+    assert_eq!(rows(&stage.pane, &mut cx), shown);
+    assert_eq!(position(&stage.pane, &mut cx), on);
+    let said = drawn("review-refused", &mut cx).expect("the pane tells of the refusal");
+    assert!(said.top() >= px(0.) && said.bottom() <= bounds_of_row(0, &mut cx).top());
+    // The rows took the room that is left: one row fewer is laid out, and the last of
+    // them ends inside the window.
+    assert_eq!(in_view(&mut cx), 0..20);
+    assert!(bounds_of_row(19, &mut cx).bottom() <= WINDOW.height);
+
+    // The pane asked for no file meanwhile: there are no new changes to read the
+    // files of. The next thing it asks is the changes, when it is told again that
+    // they changed.
+    let asked = ask_again(&mut stage.keeper, &mut cx);
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Changes(changes.clone())));
+    let asked = stage
+        .keeper
+        .expect(read_file(&changes, &changes.files[0]), &mut cx);
+    stage
+        .keeper
+        .reply(asked, texts("", &lines(101)).map(Reply::File));
+    wait_until(&mut cx, "the file as it is now", |cx| {
+        rows(&stage.pane, cx).len() == 103
+    });
+    // With the answer, the line about the refusal is gone and the rows have its room.
+    assert!(!refused(&mut cx));
+    assert_eq!(drawn("review-refused", &mut cx), None);
+    assert_eq!(in_view(&mut cx), 0..21);
+}
+
+#[gpui_kit::test]
 fn another_workspace_on_screen_takes_the_place_of_the_one_before(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = open(vec![workspace('1', "feature"), workspace('2', "other")], cx);
     let long = |word: &str| {

@@ -110,7 +110,22 @@ impl Render for ReviewPane {
                     .child(self.idle_line(cx)),
             );
         }
-        pane.child(
+        // The rows stay while the Keeper refuses to read the changes again, and may
+        // then be out of date: the reviewer is told.
+        let refused = self.models.changes.read(cx).refusal().map(|refusal| {
+            div()
+                .debug_selector(|| "review-refused".to_owned())
+                .flex_none()
+                .h(ROW_HEIGHT)
+                .px_2()
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_color(theme.danger)
+                .child(format!("The changes could not be read again: {refusal}"))
+        });
+        pane.children(refused).child(
             uniform_list(
                 "review-rows",
                 self.rows.len(),
