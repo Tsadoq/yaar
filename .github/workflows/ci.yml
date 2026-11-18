@@ -1,7 +1,7 @@
 # The checks that run on every change.
 #
-#   checks-linux    formatting, lints, tests, licences, unused dependencies, layout rules,
-#                   test plan
+#   checks-linux    formatting, lints, tests, licences, dependencies planted to see them
+#                   refused, unused dependencies, layout rules, test plan
 #   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
 #   install-linux   the install script, piped as a user would, on five releases
 #   macos           lints, tests, layout rules, test plan, release build for both
@@ -54,7 +54,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git gcc libc6-dev pkg-config libfontconfig-dev \
-            libxkbcommon-x11-dev fonts-dejavu-core
+            libxkbcommon-x11-dev fonts-dejavu-core jq
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -95,6 +95,41 @@ jobs:
 
       - name: Licences, advisories, bans, sources
         run: cargo deny check
+
+      - name: The app's own licence
+        run: .github/scripts/own-licence.sh
+
+      # A check that has never refused anything proves little. Each of the next six
+      # steps plants one dependency in a copy of the tree, under each program the
+      # packages ship and under the Companion, and passes only if the part of
+      # `cargo deny check` that guards against it refuses it by name. Each asks that
+      # part alone, so each also fails unless the step `Licences, advisories, bans,
+      # sources` above is still the whole check and nothing else, in a job that may
+      # neither fail without failing the run nor be left out of it: a real dependency
+      # fails the run there. A new key of this job has to be made known to plant.sh.
+      # The seventh switches off what the others guard, one thing at a time, and
+      # passes only if they then fail.
+      - name: A dependency under a licence outside the list is refused
+        run: .github/scripts/plant.sh licence
+
+      - name: A planted web view is refused
+        run: .github/scripts/plant.sh ban wry
+
+      - name: A planted JavaScript runtime is refused
+        run: .github/scripts/plant.sh ban deno_core
+
+      - name: A crate from a git repository is refused, as one of the Zed editor would be
+        run: .github/scripts/plant.sh git
+
+      - name: A planted crate of the Zed editor is refused
+        run: .github/scripts/plant.sh ban gpui
+
+      # The toolkit links this one, and the tree passes with it there.
+      - name: A crate Zed publishes is refused anywhere but beneath the interface toolkit
+        run: .github/scripts/plant.sh ban zed-font-kit
+
+      - name: The licence check and the planted checks can fail
+        run: .github/scripts/checks-can-fail.sh
 
       - name: Unused dependencies
         run: cargo machete
