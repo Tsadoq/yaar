@@ -1,0 +1,52 @@
+legacy	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+legacy	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+legacy	alt-shift-space	macos	the text macOS gives Option-Shift-Space is not recorded (Ghostty sent ESC SP on ABC and a no-break space on U.S.)
+legacy	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+legacy	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+legacy	alt-e	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+legacy	alt-i	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+legacy	alt-n	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+legacy	alt-u	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+legacy	alt-`	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+legacy	alt--	macos	GPUI's keystroke parser cannot write the key - together with its text
+legacy	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+legacy	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+appcursor	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+appcursor	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+appcursor	alt-shift-space	macos	the text macOS gives Option-Shift-Space is not recorded (Ghostty sent ESC SP on ABC and a no-break space on U.S.)
+appcursor	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+appcursor	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+appcursor	alt-e	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+appcursor	alt-i	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+appcursor	alt-n	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+appcursor	alt-u	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+appcursor	alt-`	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+appcursor	alt--	macos	GPUI's keystroke parser cannot write the key - together with its text
+appcursor	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+appcursor	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+kitty1	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+kitty1	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+kitty1	alt-shift-space	macos	the text macOS gives Option-Shift-Space is not recorded (Ghostty sent ESC SP on ABC and a no-break space on U.S.)
+kitty1	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+kitty1	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+kitty1	alt-e	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty1	alt-i	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty1	alt-n	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty1	alt-u	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty1	alt-`	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty1	alt--	macos	GPUI's keystroke parser cannot write the key - together with its text
+kitty1	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+kitty1	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+kitty3	ctrl-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+kitty3	ctrl-shift-tab		kept key: Ctrl-Tab and Ctrl-Shift-Tab move the focus between the panes, and never reach a program
+kitty3	alt-shift-space	macos	the text macOS gives Option-Shift-Space is not recorded (Ghostty sent ESC SP on ABC and a no-break space on U.S.)
+kitty3	shift-pageup		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+kitty3	shift-pagedown		kept key: scrolls the terminal's history in the app, and never reaches a program (Ghostty sends CSI 5;2~ and CSI 6;2~)
+kitty3	alt-e	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty3	alt-i	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty3	alt-n	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty3	alt-u	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty3	alt-`	macos	dead key: macOS composes the accent with the next key, which the input method does and the test platform has none of (TERM-03 shows it)
+kitty3	alt--	macos	GPUI's keystroke parser cannot write the key - together with its text
+kitty3	ctrl-shift-c	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
+kitty3	ctrl-shift-v	linux	kept key on Linux: copy or paste of the terminal pane, and never reaches a program
