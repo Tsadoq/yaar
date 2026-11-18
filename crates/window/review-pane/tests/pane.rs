@@ -723,6 +723,93 @@ fn j_and_k_walk_every_line_of_the_diff_in_one_order_whatever_the_layout(cx: &mut
 }
 
 #[gpui_kit::test]
+fn unchanged_lines_far_from_any_change_are_one_row_that_the_reviewer_steps_over(
+    cx: &mut TestAppContext,
+) {
+    // Thirty lines, of which the eleventh and the twenty-first changed.
+    let version = |word: &str| {
+        (0..30)
+            .map(|line| match line {
+                10 | 20 => format!("{word} {line}\n"),
+                _ => format!("line {line}\n"),
+            })
+            .collect::<String>()
+    };
+    let (stage, path, mut cx) = open_on_one_file(&version("old"), &version("new"), cx);
+    let pane = &stage.pane;
+    // Three unchanged lines are shown on each side of a change, and the rest of them
+    // as one row that says how many they are.
+    assert_eq!(
+        reading(pane, &mut cx),
+        [
+            "# src/long.txt",
+            "… 7",
+            " line 7",
+            " line 8",
+            " line 9",
+            "-old 10",
+            "+new 10",
+            " line 11",
+            " line 12",
+            " line 13",
+            "… 3",
+            " line 17",
+            " line 18",
+            " line 19",
+            "-old 20",
+            "+new 20",
+            " line 21",
+            " line 22",
+            " line 23",
+            "… 6",
+        ]
+    );
+    let at = |line| Position {
+        path: path.clone(),
+        side: Side::New,
+        line,
+    };
+    let click = |row: usize, cx: &mut VisualTestContext| {
+        let middle = bounds_of_row(row, cx).center();
+        cx.simulate_click(middle, Modifiers::none());
+    };
+    // The rows: the comparison, the heading, the seven lines left out, then line 7.
+    // Opening the pane clicked on the row of the lines left out, which is no line to
+    // be on: the reviewer is where they were put at first, on the first changed line.
+    assert_eq!(
+        position(pane, &mut cx),
+        Position {
+            path: path.clone(),
+            side: Side::Old,
+            line: 10
+        }
+    );
+    // Above the first line that is shown there is none to go to.
+    click(3, &mut cx);
+    assert_eq!(position(pane, &mut cx), at(7));
+    cx.simulate_keystrokes("k");
+    assert_eq!(position(pane, &mut cx), at(7));
+    // From the last line shown after the first change, the next line is the first
+    // shown before the second, and back.
+    click(10, &mut cx);
+    assert_eq!(position(pane, &mut cx), at(13));
+    click(11, &mut cx);
+    assert_eq!(position(pane, &mut cx), at(13));
+    cx.simulate_keystrokes("j");
+    assert_eq!(position(pane, &mut cx), at(17));
+    cx.simulate_keystrokes("k");
+    assert_eq!(position(pane, &mut cx), at(13));
+    // The same in the split view, where the row of the lines left out is the same row.
+    cx.simulate_keystrokes("s j");
+    assert_eq!(position(pane, &mut cx), at(17));
+    // A line that is left out is still a line of the file the pane holds.
+    assert_eq!(
+        pane.read_with(&cx, |pane, _| pane.text(&at(15))).as_deref(),
+        Some("line 15")
+    );
+}
+
+#[gpui_kit::test]
 fn a_click_on_a_line_puts_the_reviewer_on_it(cx: &mut TestAppContext) {
     let (stage, path, mut cx) = open_on_one_file("keep\nold\nend\n", "keep\nnew\nend\n", cx);
     let pane = &stage.pane;
