@@ -804,6 +804,37 @@ mod tests {
     }
 
     #[test]
+    fn a_stop_renews_the_sessions_left_behind_before_it_signals_them() {
+        let dock = Dock::new();
+        let leader = session_leader();
+        let session = leader.0.id() as libc::pid_t;
+        // The list names a session by this id that is not the leader's: the one that was
+        // noted emptied, and the id went to a process that began a session of its own.
+        let forged = session::Remembered::of(session)
+            .expect("the leader is in its session")
+            .begun_at_another_time();
+        dock.inner
+            .left_behind
+            .lock()
+            .expect("the list")
+            .push(forged);
+
+        let stopping = Instant::now();
+        dock.stop_all();
+        // The stop must not have signalled that process: it is not the Dock's.
+        let mut leader = leader;
+        assert!(
+            leader.0.try_wait().expect("ask the leader").is_none(),
+            "the stop signalled a session that was not the one left behind"
+        );
+        assert!(
+            stopping.elapsed() < STOP_STEP,
+            "took {:?}",
+            stopping.elapsed()
+        );
+    }
+
+    #[test]
     fn a_session_that_is_not_empty_stays_kept_through_a_stop_that_does_not_reach_it() {
         let dock = Dock::new();
         let mut leader = session_leader();

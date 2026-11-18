@@ -27,6 +27,17 @@ impl Remembered {
         (!members.is_empty()).then_some(Remembered { session, members })
     }
 
+    /// What the system would show of this session after it emptied and its id went to a
+    /// process that began a session of its own: the id is the same and so are the
+    /// members' ids, but those processes started at another time.
+    #[cfg(test)]
+    pub(crate) fn begun_at_another_time(mut self) -> Remembered {
+        for (_, started) in &mut self.members {
+            started.0 += 1;
+        }
+        self
+    }
+
     /// The session's id.
     pub(crate) fn session(&self) -> pid_t {
         self.session
@@ -199,13 +210,9 @@ mod tests {
     fn a_session_by_the_same_id_that_began_later_is_not_the_one_that_was_noted() {
         let mut child = leader();
         let session = child.0.id() as pid_t;
-        // What the system would show after the noted session emptied and its id went to
-        // another process that began a session: the id is the same and so is the member's
-        // id, but the process started at another time.
-        let mut noted = Remembered::of(session).expect("the leader is in its session");
-        for (_, started) in &mut noted.members {
-            started.0 += 1;
-        }
+        let noted = Remembered::of(session)
+            .expect("the leader is in its session")
+            .begun_at_another_time();
         assert!(noted.renewed().is_none());
         child.0.kill().expect("kill the leader");
         child.0.wait().expect("collect the leader");
