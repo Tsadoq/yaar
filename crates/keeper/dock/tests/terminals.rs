@@ -200,6 +200,14 @@ fn is_gone(pid: libc::pid_t) -> bool {
     state.is_empty() || state.starts_with('Z')
 }
 
+/// Whether the process has been collected by its parent: no process of that number is
+/// there at all, not even one that has ended and waits to be collected.
+fn is_collected(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only asks whether the process is there.
+    let answer = unsafe { libc::kill(pid, 0) };
+    answer != 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
+}
+
 /// Kills the process when the test ends, whatever way it ends.
 struct Reap(libc::pid_t);
 
@@ -809,10 +817,12 @@ fn what_a_program_wrote_after_the_reader_was_held_up_is_told_when_the_program_is
     // The reader is held in that event. The program goes on, ends, and is collected.
     std::fs::write(&marker, "").expect("let the program go on");
     // macOS does not let a program end while its terminal's reader is held up, so there
-    // the reader is let go at once.
+    // the reader is let go at once. On Linux the reader is let go once the Dock has
+    // collected the program, not when it only waits to be collected: the Dock tells the
+    // reader that the program was collected right after it collected it.
     if cfg!(target_os = "linux") {
         let deadline = Instant::now() + DEADLINE;
-        while !is_gone(pid) {
+        while !is_collected(pid) {
             assert!(Instant::now() < deadline, "the program did not end");
             std::thread::sleep(Duration::from_millis(20));
         }
