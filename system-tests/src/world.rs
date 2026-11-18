@@ -329,8 +329,9 @@ impl Tap {
         self.socket.clone()
     }
 
-    /// Every request that passed towards the Keeper so far, in order, whatever the
-    /// waits have read.
+    /// Every request the tap has taken from a Window so far, in order, whatever the
+    /// waits have read. A request is in the list before it is handed to the Keeper, so
+    /// one that the Keeper has answered is never missing from it.
     pub fn requests(&self) -> Vec<Request> {
         self.seen.requests().clone()
     }
@@ -403,8 +404,9 @@ fn join(window: UnixStream, keeper: UnixStream, seen: &Arc<Seen>) -> io::Result<
 }
 
 /// Passes on what a Window sends, frame by frame, as the bytes it sent, and keeps a
-/// copy of each frame that is a request. A frame that cannot be read as a message is
-/// passed on all the same: what the Keeper makes of it is the Keeper's to say.
+/// copy of each frame that is a request before the frame goes on. A frame that cannot
+/// be read as a message is passed on all the same: what the Keeper makes of it is the
+/// Keeper's to say.
 fn pass_requests(from: &mut UnixStream, to: &mut UnixStream, seen: &Seen) -> io::Result<()> {
     loop {
         let mut frame = vec![0u8; 4];
@@ -421,10 +423,12 @@ fn pass_requests(from: &mut UnixStream, to: &mut UnixStream, seen: &Seen) -> io:
         }
         frame.resize(4 + length as usize, 0);
         from.read_exact(&mut frame[4..])?;
-        to.write_all(&frame)?;
+        // Kept before it is handed on: whatever the Keeper has answered is then in the
+        // list already, for a test that reads the list once the reply is there.
         if let Ok(Message::Request { request, .. }) = read_message(&mut frame.as_slice()) {
             seen.requests().push(request);
             seen.more.notify_all();
         }
+        to.write_all(&frame)?;
     }
 }

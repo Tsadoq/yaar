@@ -5,8 +5,11 @@ use std::io::Write;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
-use yaar_link::{Hello, LinkError, Request, RequestKind, handshake, read_message};
-use yaar_system_tests::{Client, DEADLINE, World};
+use yaar_link::{
+    Hello, LinkError, Message, Request, RequestId, RequestKind, handshake, read_message,
+    write_message,
+};
+use yaar_system_tests::{Client, DEADLINE, World, attach};
 
 #[test]
 fn the_same_steps_in_two_worlds_give_the_same_commits_on_main() {
@@ -148,4 +151,67 @@ fn a_tap_passes_on_a_frame_it_cannot_read_and_serves_the_next_window() {
     let mut client = Client::attach(&tap.socket());
     assert_eq!(client.workspaces(), vec![]);
     assert_eq!(tap.requests(), vec![Request::ListWorkspaces]);
+}
+
+/// A process of the test held still: it runs no further until this is dropped.
+struct Held(libc::pid_t);
+
+impl Held {
+    /// Stops a process this test started, and returns once the system says it stands
+    /// still.
+    fn stop(child: u32) -> Held {
+        let pid = child as libc::pid_t;
+        let mut status = 0;
+        // SAFETY: a signal to a child of this process, and a wait for that child that
+        // collects nothing: with `WUNTRACED` it returns when the child has stopped.
+        let stopped = unsafe {
+            libc::kill(pid, libc::SIGSTOP) == 0
+                && libc::waitpid(pid, &mut status, libc::WUNTRACED) == pid
+                && libc::WIFSTOPPED(status)
+        };
+        assert!(stopped, "the process {child} was not stopped");
+        Held(pid)
+    }
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        // SAFETY: a signal to a child of this process.
+        unsafe { libc::kill(self.0, libc::SIGCONT) };
+    }
+}
+
+#[test]
+fn a_tap_lists_a_request_before_it_hands_it_to_the_keeper() {
+    let mut world = World::new();
+    let keeper = world.start_keeper();
+    let mut tap = world.tap();
+    let (mut window, who) = attach(&tap.socket());
+    assert_eq!(who.pid, keeper);
+
+    // The Keeper stands still and takes nothing, and the request is larger than what
+    // a socket holds for it: it cannot have reached the Keeper, let alone be answered.
+    // The tap has taken it from the Window, and that is when it is in the list. So a
+    // test that reads the list after a reply never finds the list one request short.
+    let held = Held::stop(keeper);
+    let large = opens(&format!("/nowhere/{}", "x".repeat(8 * 1024 * 1024)));
+    let id = RequestId(7);
+    let asked = Message::Request {
+        id,
+        request: large.clone(),
+    };
+    write_message(&mut window, &asked).expect("send the request");
+    assert_eq!(tap.wait_for_request(DEADLINE, |_| true), large);
+    assert_eq!(tap.requests(), vec![large.clone()]);
+
+    // Let go, the Keeper gets the request as it was sent and answers it.
+    drop(held);
+    window
+        .set_read_timeout(Some(DEADLINE))
+        .expect("set the deadline of the read");
+    match read_message(&mut window) {
+        Ok(Message::Reply { to, reply: Err(_) }) => assert_eq!(to, id),
+        other => panic!("the Keeper did not refuse the folder: {other:?}"),
+    }
+    assert_eq!(tap.requests(), vec![large]);
 }
