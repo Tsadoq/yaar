@@ -17,7 +17,7 @@ use yaar_link::{
     Request, RequestId, TerminalId, WorkspaceId,
 };
 
-use common::{KeeperEnd, answer, wait_until};
+use common::{KeeperEnd, answer, wait_until, wait_until_within};
 
 fn repositories() -> Vec<Repository> {
     vec![Repository {
@@ -237,10 +237,7 @@ fn a_keeper_that_stops_speaking_the_link_is_let_go(cx: &mut TestAppContext) {
 
     assert_eq!(answer(waiting, cx), Err(AskError::NotLinked));
     assert_eq!(keeper.rest(cx), Vec::<Message>::new());
-    assert_eq!(
-        status(&link, cx),
-        LinkStatus::Lost("unknown kind of frame: 99".to_owned())
-    );
+    assert_eq!(lost(&link, cx), "unknown kind of frame: 99");
 }
 
 #[gpui_kit::test]
@@ -472,6 +469,14 @@ fn a_keeper_that_reads_nothing_is_let_go_after_the_timeout_and_nothing_waits_for
         "a Keeper is not let go before the timeout"
     );
 
+    // The Keeper is let go after 5 seconds; the rest of the time is for a machine that
+    // runs a great deal else.
+    wait_until_within(
+        Duration::from_secs(60),
+        cx,
+        "the Keeper to be let go",
+        |cx| matches!(status(&link, cx), LinkStatus::Lost(_)),
+    );
     let why = lost(&link, cx);
     assert!(why.contains("took nothing"), "{why}");
     // The request that waited behind the input is told it will not be answered.

@@ -253,9 +253,20 @@ impl KeeperEnd {
 pub fn wait_until(
     cx: &mut TestAppContext,
     what: &str,
+    holds: impl FnMut(&mut TestAppContext) -> bool,
+) {
+    wait_until_within(DEADLINE, cx, what, holds);
+}
+
+/// Keeps the app running until `holds` says yes, for at most `within`. Fails at the
+/// deadline, naming `what`. For what the Window itself waits for before it acts.
+pub fn wait_until_within(
+    within: Duration,
+    cx: &mut TestAppContext,
+    what: &str,
     mut holds: impl FnMut(&mut TestAppContext) -> bool,
 ) {
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = Instant::now() + within;
     loop {
         cx.run_until_parked();
         if holds(cx) {
