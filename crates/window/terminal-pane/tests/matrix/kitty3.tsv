@@ -1,0 +1,916 @@
+kitty3	a	61	ghostty m-ghostty-kitty7 plain+a
+kitty3	shift-a	41	ghostty m-ghostty-kitty7 s+a
+kitty3	ctrl-a	1b5b39373b3575	ghostty m-ghostty-kitty7 c+a
+kitty3	alt-a->å	c3a5	ghostty m-ghostty-legacy a+a	macos
+kitty3	ctrl-shift-a	1b5b39373b3675	ghostty m-ghostty-kitty7 cs+a (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-a->Å	c385	ghostty m-ghostty-legacy as+a	macos
+kitty3	b	62	ghostty m-ghostty-kitty7 plain+b
+kitty3	shift-b	42	ghostty m-ghostty-kitty7 s+b
+kitty3	ctrl-b	1b5b39383b3575	ghostty m-ghostty-kitty7 c+b
+kitty3	alt-b->∫	e288ab	ghostty m-ghostty-legacy a+b	macos
+kitty3	ctrl-shift-b	1b5b39383b3675	ghostty m-ghostty-kitty7 cs+b (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-b->ı	c4b1	ghostty m-ghostty-legacy as+b	macos
+kitty3	c	63	ghostty m-ghostty-kitty7 plain+c
+kitty3	shift-c	43	ghostty m-ghostty-kitty7 s+c
+kitty3	ctrl-c	1b5b39393b3575	ghostty m-ghostty-kitty7 c+c
+kitty3	alt-c->ç	c3a7	ghostty m-ghostty-legacy a+c	macos
+kitty3	ctrl-shift-c	1b5b39393b3675	ghostty m-ghostty-kitty7 cs+c (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	macos
+kitty3	alt-shift-c->Ç	c387	ghostty m-ghostty-legacy as+c	macos
+kitty3	d	64	ghostty m-ghostty-kitty7 plain+d
+kitty3	shift-d	44	ghostty m-ghostty-kitty7 s+d
+kitty3	ctrl-d	1b5b3130303b3575	ghostty m-ghostty-kitty7 c+d
+kitty3	alt-d->∂	e28882	ghostty m-ghostty-legacy a+d	macos
+kitty3	ctrl-shift-d	1b5b3130303b3675	ghostty m-ghostty-kitty7 cs+d (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-d->Î	c38e	ghostty m-ghostty-legacy as+d	macos
+kitty3	e	65	ghostty m-ghostty-kitty7 plain+e
+kitty3	shift-e	45	ghostty m-ghostty-kitty7 s+e
+kitty3	ctrl-e	1b5b3130313b3575	ghostty m-ghostty-kitty7 c+e
+kitty3	ctrl-shift-e	1b5b3130313b3675	ghostty m-ghostty-kitty7 cs+e (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-e->´	c2b4	ghostty m-ghostty-legacy as+e	macos
+kitty3	f	66	ghostty m-ghostty-kitty7 plain+f
+kitty3	shift-f	46	ghostty m-ghostty-kitty7 s+f
+kitty3	ctrl-f	1b5b3130323b3575	ghostty m-ghostty-kitty7 c+f
+kitty3	alt-f->ƒ	c692	ghostty m-ghostty-legacy a+f, cleaned of the accent of the dead key before it (Ghostty: c2b4c692)	macos
+kitty3	ctrl-shift-f	1b5b3130323b3675	ghostty m-ghostty-kitty7 cs+f (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-f->Ï	c38f	ghostty m-ghostty-legacy as+f	macos
+kitty3	g	67	ghostty m-ghostty-kitty7 plain+g
+kitty3	shift-g	47	ghostty m-ghostty-kitty7 s+g
+kitty3	ctrl-g	1b5b3130333b3575	ghostty m-ghostty-kitty7 c+g
+kitty3	alt-g->©	c2a9	ghostty m-ghostty-legacy a+g	macos
+kitty3	ctrl-shift-g	1b5b3130333b3675	ghostty m-ghostty-kitty7 cs+g (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-g->˝	cb9d	ghostty m-ghostty-legacy as+g	macos
+kitty3	h	68	ghostty m-ghostty-kitty7 plain+h
+kitty3	shift-h	48	ghostty m-ghostty-kitty7 s+h
+kitty3	ctrl-h	1b5b3130343b3575	ghostty m-ghostty-kitty7 c+h
+kitty3	alt-h->˙	cb99	ghostty m-ghostty-legacy a+h	macos
+kitty3	ctrl-shift-h	1b5b3130343b3675	ghostty m-ghostty-kitty7 cs+h (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-h->Ó	c393	ghostty m-ghostty-legacy as+h	macos
+kitty3	i	69	ghostty m-ghostty-kitty7 plain+i
+kitty3	shift-i	49	ghostty m-ghostty-kitty7 s+i
+kitty3	ctrl-i	1b5b3130353b3575	ghostty m-ghostty-kitty7 c+i
+kitty3	ctrl-shift-i	1b5b3130353b3675	ghostty m-ghostty-kitty7 cs+i (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-i->ˆ	cb86	ghostty m-ghostty-legacy as+i	macos
+kitty3	j	6a	ghostty m-ghostty-kitty7 plain+j
+kitty3	shift-j	4a	ghostty m-ghostty-kitty7 s+j
+kitty3	ctrl-j	1b5b3130363b3575	ghostty m-ghostty-kitty7 c+j
+kitty3	alt-j->∆	e28886	ghostty m-ghostty-legacy a+j, cleaned of the accent of the dead key before it (Ghostty: cb86e28886)	macos
+kitty3	ctrl-shift-j	1b5b3130363b3675	ghostty m-ghostty-kitty7 cs+j (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-j->Ô	c394	ghostty m-ghostty-legacy as+j	macos
+kitty3	k	6b	ghostty m-ghostty-kitty7 plain+k
+kitty3	shift-k	4b	ghostty m-ghostty-kitty7 s+k
+kitty3	ctrl-k	1b5b3130373b3575	ghostty m-ghostty-kitty7 c+k
+kitty3	alt-k->˚	cb9a	ghostty m-ghostty-legacy a+k	macos
+kitty3	ctrl-shift-k	1b5b3130373b3675	ghostty m-ghostty-kitty7 cs+k (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-k->	efa3bf	ghostty m-ghostty-legacy as+k	macos
+kitty3	l	6c	ghostty m-ghostty-kitty7 plain+l
+kitty3	shift-l	4c	ghostty m-ghostty-kitty7 s+l
+kitty3	ctrl-l	1b5b3130383b3575	ghostty m-ghostty-kitty7 c+l
+kitty3	alt-l->¬	c2ac	ghostty m-ghostty-legacy a+l	macos
+kitty3	ctrl-shift-l	1b5b3130383b3675	ghostty m-ghostty-kitty7 cs+l (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-l->Ò	c392	ghostty m-ghostty-legacy as+l	macos
+kitty3	m	6d	ghostty m-ghostty-kitty7 plain+m
+kitty3	shift-m	4d	ghostty m-ghostty-kitty7 s+m
+kitty3	ctrl-m	1b5b3130393b3575	ghostty m-ghostty-kitty7 c+m
+kitty3	alt-m->µ	c2b5	ghostty m-ghostty-legacy a+m	macos
+kitty3	ctrl-shift-m	1b5b3130393b3675	ghostty m-ghostty-kitty7 cs+m (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-m->Â	c382	ghostty m-ghostty-legacy as+m	macos
+kitty3	n	6e	ghostty m-ghostty-kitty7 plain+n
+kitty3	shift-n	4e	ghostty m-ghostty-kitty7 s+n
+kitty3	ctrl-n	1b5b3131303b3575	ghostty m-ghostty-kitty7 c+n
+kitty3	ctrl-shift-n	1b5b3131303b3675	ghostty m-ghostty-kitty7 cs+n (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-n->˜	cb9c	ghostty m-ghostty-legacy as+n	macos
+kitty3	o	6f	ghostty m-ghostty-kitty7 plain+o
+kitty3	shift-o	4f	ghostty m-ghostty-kitty7 s+o
+kitty3	ctrl-o	1b5b3131313b3575	ghostty m-ghostty-kitty7 c+o
+kitty3	alt-o->ø	c3b8	ghostty m-ghostty-legacy a+o, cleaned of the accent of the dead key before it (Ghostty: cb9cc3b8)	macos
+kitty3	ctrl-shift-o	1b5b3131313b3675	ghostty m-ghostty-kitty7 cs+o (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-o->Ø	c398	ghostty m-ghostty-legacy as+o	macos
+kitty3	p	70	ghostty m-ghostty-kitty7 plain+p
+kitty3	shift-p	50	ghostty m-ghostty-kitty7 s+p
+kitty3	ctrl-p	1b5b3131323b3575	ghostty m-ghostty-kitty7 c+p
+kitty3	alt-p->π	cf80	ghostty m-ghostty-legacy a+p	macos
+kitty3	ctrl-shift-p	1b5b3131323b3675	ghostty m-ghostty-kitty7 cs+p (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-p->∏	e2888f	ghostty m-ghostty-legacy as+p	macos
+kitty3	q	71	ghostty m-ghostty-kitty7 plain+q
+kitty3	shift-q	51	ghostty m-ghostty-kitty7 s+q
+kitty3	ctrl-q	1b5b3131333b3575	ghostty m-ghostty-kitty7 c+q
+kitty3	alt-q->œ	c593	ghostty m-ghostty-legacy a+q	macos
+kitty3	ctrl-shift-q	1b5b3131333b3675	ghostty m-ghostty-kitty7 cs+q (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-q->Œ	c592	ghostty m-ghostty-legacy as+q	macos
+kitty3	r	72	ghostty m-ghostty-kitty7 plain+r
+kitty3	shift-r	52	ghostty m-ghostty-kitty7 s+r
+kitty3	ctrl-r	1b5b3131343b3575	ghostty m-ghostty-kitty7 c+r
+kitty3	alt-r->®	c2ae	ghostty m-ghostty-legacy a+r	macos
+kitty3	ctrl-shift-r	1b5b3131343b3675	ghostty m-ghostty-kitty7 cs+r (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-r->‰	e280b0	ghostty m-ghostty-legacy as+r	macos
+kitty3	s	73	ghostty m-ghostty-kitty7 plain+s
+kitty3	shift-s	53	ghostty m-ghostty-kitty7 s+s
+kitty3	ctrl-s	1b5b3131353b3575	ghostty m-ghostty-kitty7 c+s
+kitty3	alt-s->ß	c39f	ghostty m-ghostty-legacy a+s	macos
+kitty3	ctrl-shift-s	1b5b3131353b3675	ghostty m-ghostty-kitty7 cs+s (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-s->Í	c38d	ghostty m-ghostty-legacy as+s	macos
+kitty3	t	74	ghostty m-ghostty-kitty7 plain+t
+kitty3	shift-t	54	ghostty m-ghostty-kitty7 s+t
+kitty3	ctrl-t	1b5b3131363b3575	ghostty m-ghostty-kitty7 c+t
+kitty3	alt-t->†	e280a0	ghostty m-ghostty-legacy a+t	macos
+kitty3	ctrl-shift-t	1b5b3131363b3675	ghostty m-ghostty-kitty7 cs+t (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-t->ˇ	cb87	ghostty m-ghostty-legacy as+t	macos
+kitty3	u	75	ghostty m-ghostty-kitty7 plain+u
+kitty3	shift-u	55	ghostty m-ghostty-kitty7 s+u
+kitty3	ctrl-u	1b5b3131373b3575	ghostty m-ghostty-kitty7 c+u
+kitty3	ctrl-shift-u	1b5b3131373b3675	ghostty m-ghostty-kitty7 cs+u (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-u->¨	c2a8	ghostty m-ghostty-legacy as+u	macos
+kitty3	v	76	ghostty m-ghostty-kitty7 plain+v
+kitty3	shift-v	56	ghostty m-ghostty-kitty7 s+v
+kitty3	ctrl-v	1b5b3131383b3575	ghostty m-ghostty-kitty7 c+v
+kitty3	alt-v->√	e2889a	ghostty m-ghostty-legacy a+v, cleaned of the accent of the dead key before it (Ghostty: c2a8e2889a)	macos
+kitty3	ctrl-shift-v	1b5b3131383b3675	ghostty m-ghostty-kitty7 cs+v (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	macos
+kitty3	alt-shift-v->◊	e2978a	ghostty m-ghostty-legacy as+v	macos
+kitty3	w	77	ghostty m-ghostty-kitty7 plain+w
+kitty3	shift-w	57	ghostty m-ghostty-kitty7 s+w
+kitty3	ctrl-w	1b5b3131393b3575	ghostty m-ghostty-kitty7 c+w
+kitty3	alt-w->∑	e28891	ghostty m-ghostty-legacy a+w	macos
+kitty3	ctrl-shift-w	1b5b3131393b3675	ghostty m-ghostty-kitty7 cs+w (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-w->„	e2809e	ghostty m-ghostty-legacy as+w	macos
+kitty3	x	78	ghostty m-ghostty-kitty7 plain+x
+kitty3	shift-x	58	ghostty m-ghostty-kitty7 s+x
+kitty3	ctrl-x	1b5b3132303b3575	ghostty m-ghostty-kitty7 c+x
+kitty3	alt-x->≈	e28988	ghostty m-ghostty-legacy a+x	macos
+kitty3	ctrl-shift-x	1b5b3132303b3675	ghostty m-ghostty-kitty7 cs+x (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-x->˛	cb9b	ghostty m-ghostty-legacy as+x	macos
+kitty3	y	79	ghostty m-ghostty-kitty7 plain+y
+kitty3	shift-y	59	ghostty m-ghostty-kitty7 s+y
+kitty3	ctrl-y	1b5b3132313b3575	ghostty m-ghostty-kitty7 c+y
+kitty3	alt-y->¥	c2a5	ghostty m-ghostty-legacy a+y	macos
+kitty3	ctrl-shift-y	1b5b3132313b3675	ghostty m-ghostty-kitty7 cs+y (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-y->Á	c381	ghostty m-ghostty-legacy as+y	macos
+kitty3	z	7a	ghostty m-ghostty-kitty7 plain+z
+kitty3	shift-z	5a	ghostty m-ghostty-kitty7 s+z
+kitty3	ctrl-z	1b5b3132323b3575	ghostty m-ghostty-kitty7 c+z
+kitty3	alt-z->Ω	cea9	ghostty m-ghostty-legacy a+z	macos
+kitty3	ctrl-shift-z	1b5b3132323b3675	ghostty m-ghostty-kitty7 cs+z (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-shift-z->¸	c2b8	ghostty m-ghostty-legacy as+z	macos
+kitty3	0	30	ghostty m-ghostty-kitty7 plain+0
+kitty3	)	29	ghostty m-ghostty-kitty7 s+0
+kitty3	ctrl-0	1b5b34383b3575	ghostty m-ghostty-kitty7 c+0
+kitty3	alt-0->º	c2ba	ghostty m-ghostty-legacy a+0	macos
+kitty3	ctrl-)	1b5b34313b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34383b3675, m-ghostty-kitty7 cs+0)
+kitty3	alt-)->‚	e2809a	ghostty m-ghostty-legacy as+0	macos
+kitty3	1	31	ghostty m-ghostty-kitty7 plain+1
+kitty3	!	21	ghostty m-ghostty-kitty7 s+1
+kitty3	ctrl-1	1b5b34393b3575	ghostty m-ghostty-kitty7 c+1
+kitty3	alt-1->¡	c2a1	ghostty m-ghostty-legacy a+1	macos
+kitty3	ctrl-!	1b5b33333b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34393b3675, m-ghostty-kitty7 cs+1)
+kitty3	alt-!->⁄	e28184	ghostty m-ghostty-legacy as+1	macos
+kitty3	2	32	ghostty m-ghostty-kitty7 plain+2
+kitty3	@	40	ghostty m-ghostty-kitty7 s+2
+kitty3	ctrl-2	1b5b35303b3575	ghostty m-ghostty-kitty7 c+2
+kitty3	alt-2->™	e284a2	ghostty m-ghostty-legacy a+2	macos
+kitty3	ctrl-@	1b5b36343b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35303b3675, m-ghostty-kitty7 cs+2)
+kitty3	alt-@->€	e282ac	ghostty m-ghostty-legacy as+2	macos
+kitty3	3	33	ghostty m-ghostty-kitty7 plain+3
+kitty3	#	23	ghostty m-ghostty-kitty7 s+3
+kitty3	ctrl-3	1b5b35313b3575	ghostty m-ghostty-kitty7 c+3
+kitty3	alt-3->£	c2a3	ghostty m-ghostty-legacy a+3	macos
+kitty3	ctrl-#	1b5b33353b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35313b3675, m-ghostty-kitty7 cs+3)
+kitty3	alt-#->‹	e280b9	ghostty m-ghostty-legacy as+3	macos
+kitty3	4	34	ghostty m-ghostty-kitty7 plain+4
+kitty3	$	24	ghostty m-ghostty-kitty7 s+4
+kitty3	ctrl-4	1b5b35323b3575	ghostty m-ghostty-kitty7 c+4
+kitty3	alt-4->¢	c2a2	ghostty m-ghostty-legacy a+4	macos
+kitty3	ctrl-$	1b5b33363b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35323b3675, m-ghostty-kitty7 cs+4)
+kitty3	alt-$->›	e280ba	ghostty m-ghostty-legacy as+4	macos
+kitty3	5	35	ghostty m-ghostty-kitty7 plain+5
+kitty3	%	25	ghostty m-ghostty-kitty7 s+5
+kitty3	ctrl-5	1b5b35333b3575	ghostty m-ghostty-kitty7 c+5
+kitty3	alt-5->∞	e2889e	ghostty m-ghostty-legacy a+5	macos
+kitty3	ctrl-%	1b5b33373b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35333b3675, m-ghostty-kitty7 cs+5)
+kitty3	alt-%->ﬁ	efac81	ghostty m-ghostty-legacy as+5	macos
+kitty3	6	36	ghostty m-ghostty-kitty7 plain+6
+kitty3	^	5e	ghostty m-ghostty-kitty7 s+6
+kitty3	ctrl-6	1b5b35343b3575	ghostty m-ghostty-kitty7 c+6
+kitty3	alt-6->§	c2a7	ghostty m-ghostty-legacy a+6	macos
+kitty3	ctrl-^	1b5b39343b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35343b3675, m-ghostty-kitty7 cs+6)
+kitty3	alt-^->ﬂ	efac82	ghostty m-ghostty-legacy as+6	macos
+kitty3	7	37	ghostty m-ghostty-kitty7 plain+7
+kitty3	&	26	ghostty m-ghostty-kitty7 s+7
+kitty3	ctrl-7	1b5b35353b3575	ghostty m-ghostty-kitty7 c+7
+kitty3	alt-7->¶	c2b6	ghostty m-ghostty-legacy a+7	macos
+kitty3	ctrl-&	1b5b33383b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35353b3675, m-ghostty-kitty7 cs+7)
+kitty3	alt-&->‡	e280a1	ghostty m-ghostty-legacy as+7	macos
+kitty3	8	38	ghostty m-ghostty-kitty7 plain+8
+kitty3	*	2a	ghostty m-ghostty-kitty7 s+8
+kitty3	ctrl-8	1b5b35363b3575	ghostty m-ghostty-kitty7 c+8
+kitty3	alt-8->•	e280a2	ghostty m-ghostty-legacy a+8	macos
+kitty3	ctrl-*	1b5b34323b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35363b3675, m-ghostty-kitty7 cs+8)
+kitty3	alt-*->°	c2b0	ghostty m-ghostty-legacy as+8	macos
+kitty3	9	39	ghostty m-ghostty-kitty7 plain+9
+kitty3	(	28	ghostty m-ghostty-kitty7 s+9
+kitty3	ctrl-9	1b5b35373b3575	ghostty m-ghostty-kitty7 c+9
+kitty3	alt-9->ª	c2aa	ghostty m-ghostty-legacy a+9	macos
+kitty3	ctrl-(	1b5b34303b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35373b3675, m-ghostty-kitty7 cs+9)
+kitty3	alt-(->·	c2b7	ghostty m-ghostty-legacy as+9	macos
+kitty3	`	60	ghostty m-ghostty-kitty7 plain+grave
+kitty3	~	7e	ghostty m-ghostty-kitty7 s+grave
+kitty3	ctrl-`	1b5b39363b3575	ghostty m-ghostty-kitty7 c+grave
+kitty3	ctrl-~	1b5b3132363b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39363b3675, m-ghostty-kitty7 cs+grave)
+kitty3	alt-~->`	60	ghostty m-ghostty-legacy as+grave	macos
+kitty3	-	2d	ghostty m-ghostty-kitty7 plain+minus
+kitty3	_	5f	ghostty m-ghostty-kitty7 s+minus
+kitty3	ctrl--	1b5b34353b3575	ghostty m-ghostty-kitty7 c+minus
+kitty3	ctrl-_	1b5b39353b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34353b3675, m-ghostty-kitty7 cs+minus)
+kitty3	alt-_->—	e28094	ghostty m-ghostty-legacy as+minus	macos
+kitty3	alt-minus->–	e28093	ghostty m-ghostty-legacy a+minus, cleaned of the accent the dead key before it left (Ghostty: 60e28093)	macos
+kitty3	=	3d	ghostty m-ghostty-kitty7 plain+equal
+kitty3	+	2b	ghostty m-ghostty-kitty7 s+equal
+kitty3	ctrl-=	1b5b36313b3575	ghostty m-ghostty-kitty7 c+equal
+kitty3	alt-=->≠	e289a0	ghostty m-ghostty-legacy a+equal	macos
+kitty3	ctrl-+	1b5b34333b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b36313b3675, m-ghostty-kitty7 cs+equal)
+kitty3	alt-+->±	c2b1	ghostty m-ghostty-legacy as+equal	macos
+kitty3	[	5b	ghostty m-ghostty-kitty7 plain+lbracket
+kitty3	{	7b	ghostty m-ghostty-kitty7 s+lbracket
+kitty3	ctrl-[	1b5b39313b3575	ghostty m-ghostty-kitty7 c+lbracket
+kitty3	alt-[->“	e2809c	ghostty m-ghostty-legacy a+lbracket	macos
+kitty3	ctrl-{	1b5b3132333b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39313b3675, m-ghostty-kitty7 cs+lbracket)
+kitty3	alt-{->”	e2809d	ghostty m-ghostty-legacy as+lbracket	macos
+kitty3	]	5d	ghostty m-ghostty-kitty7 plain+rbracket
+kitty3	}	7d	ghostty m-ghostty-kitty7 s+rbracket
+kitty3	ctrl-]	1b5b39333b3575	ghostty m-ghostty-kitty7 c+rbracket
+kitty3	alt-]->‘	e28098	ghostty m-ghostty-legacy a+rbracket	macos
+kitty3	ctrl-}	1b5b3132353b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39333b3675, m-ghostty-kitty7 cs+rbracket)
+kitty3	alt-}->’	e28099	ghostty m-ghostty-legacy as+rbracket	macos
+kitty3	\	5c	ghostty m-ghostty-kitty7 plain+backslash
+kitty3	|	7c	ghostty m-ghostty-kitty7 s+backslash
+kitty3	ctrl-\	1b5b39323b3575	ghostty m-ghostty-kitty7 c+backslash
+kitty3	alt-\->«	c2ab	ghostty m-ghostty-legacy a+backslash	macos
+kitty3	ctrl-|	1b5b3132343b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39323b3675, m-ghostty-kitty7 cs+backslash)
+kitty3	alt-|->»	c2bb	ghostty m-ghostty-legacy as+backslash	macos
+kitty3	;	3b	ghostty m-ghostty-kitty7 plain+semicolon
+kitty3	:	3a	ghostty m-ghostty-kitty7 s+semicolon
+kitty3	ctrl-;	1b5b35393b3575	ghostty m-ghostty-kitty7 c+semicolon
+kitty3	alt-;->…	e280a6	ghostty m-ghostty-legacy a+semicolon	macos
+kitty3	ctrl-:	1b5b35383b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35393b3675, m-ghostty-kitty7 cs+semicolon)
+kitty3	alt-:->Ú	c39a	ghostty m-ghostty-legacy as+semicolon	macos
+kitty3	'	27	ghostty m-ghostty-kitty7 plain+quote
+kitty3	"	22	ghostty m-ghostty-kitty7 s+quote
+kitty3	ctrl-'	1b5b33393b3575	ghostty m-ghostty-kitty7 c+quote
+kitty3	alt-'->æ	c3a6	ghostty m-ghostty-legacy a+quote	macos
+kitty3	ctrl-"	1b5b33343b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b33393b3675, m-ghostty-kitty7 cs+quote)
+kitty3	alt-"->Æ	c386	ghostty m-ghostty-legacy as+quote	macos
+kitty3	,	2c	ghostty m-ghostty-kitty7 plain+comma
+kitty3	<	3c	ghostty m-ghostty-kitty7 s+comma
+kitty3	ctrl-,	1b5b34343b3575	ghostty m-ghostty-kitty7 c+comma
+kitty3	alt-,->≤	e289a4	ghostty m-ghostty-legacy a+comma	macos
+kitty3	ctrl-<	1b5b36303b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34343b3675, m-ghostty-kitty7 cs+comma)
+kitty3	alt-<->¯	c2af	ghostty m-ghostty-legacy as+comma	macos
+kitty3	.	2e	ghostty m-ghostty-kitty7 plain+period
+kitty3	>	3e	ghostty m-ghostty-kitty7 s+period
+kitty3	ctrl-.	1b5b34363b3575	ghostty m-ghostty-kitty7 c+period
+kitty3	alt-.->≥	e289a5	ghostty m-ghostty-legacy a+period	macos
+kitty3	ctrl->	1b5b36323b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34363b3675, m-ghostty-kitty7 cs+period)
+kitty3	alt->->˘	cb98	ghostty m-ghostty-legacy as+period	macos
+kitty3	/	2f	ghostty m-ghostty-kitty7 plain+slash
+kitty3	?	3f	ghostty m-ghostty-kitty7 s+slash
+kitty3	ctrl-/	1b5b34373b3575	ghostty m-ghostty-kitty7 c+slash
+kitty3	alt-/->÷	c3b7	ghostty m-ghostty-legacy a+slash	macos
+kitty3	ctrl-?	1b5b36333b3575	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34373b3675, m-ghostty-kitty7 cs+slash)
+kitty3	alt-?->¿	c2bf	ghostty m-ghostty-legacy as+slash	macos
+kitty3	enter	0d	ghostty m-ghostty-kitty7 plain+return
+kitty3	tab	09	ghostty m-ghostty-kitty7 plain+tab
+kitty3	backspace	7f	ghostty m-ghostty-kitty7 plain+backspace
+kitty3	escape	1b5b323775	ghostty m-ghostty-kitty7 plain+escape
+kitty3	delete	1b5b337e	ghostty m-ghostty-kitty7 plain+fwddelete
+kitty3	space	20	ghostty m-ghostty-kitty7 plain+space
+kitty3	shift-enter	1b5b31333b3275	ghostty m-ghostty-kitty7 s+return
+kitty3	shift-tab	1b5b393b3275	ghostty m-ghostty-kitty7 s+tab
+kitty3	shift-backspace	1b5b3132373b3275	ghostty m-ghostty-kitty7 s+backspace
+kitty3	shift-escape	1b5b32373b3275	ghostty m-ghostty-kitty7 s+escape
+kitty3	shift-delete	1b5b333b327e	ghostty m-ghostty-kitty7 s+fwddelete
+kitty3	shift-space	20	ghostty m-ghostty-kitty7 s+space
+kitty3	ctrl-enter	1b5b31333b3575	ghostty m-ghostty-kitty7 c+return
+kitty3	ctrl-backspace	1b5b3132373b3575	ghostty m-ghostty-kitty7 c+backspace
+kitty3	ctrl-escape	1b5b32373b3575	ghostty m-ghostty-kitty7 c+escape
+kitty3	ctrl-delete	1b5b333b357e	ghostty m-ghostty-kitty7 c+fwddelete
+kitty3	ctrl-space	1b5b33323b3575	not compared: macOS took Ctrl-Space and Ctrl-Shift-Space: Ghostty never saw them
+kitty3	alt-enter	1b5b31333b3375	ghostty m-ghostty-kitty7 a+return
+kitty3	alt-tab	1b5b393b3375	ghostty m-ghostty-kitty7 a+tab
+kitty3	alt-backspace	1b5b3132373b3375	ghostty m-ghostty-kitty7 a+backspace
+kitty3	alt-escape	1b5b32373b3375	ghostty m-ghostty-kitty7 a+escape
+kitty3	alt-delete	1b5b333b337e	ghostty m-ghostty-kitty7 a+fwddelete
+kitty3	alt-space-> 	c2a0	ghostty m-ghostty-legacy a+space	macos
+kitty3	alt-shift-space-> 	20	departure: Ghostty sent ESC SP (1b20, m-ghostty-legacy as+space), which it does when the text of the key is the key itself, so Option-Shift-Space types a plain space on the ABC layout; Option is characters here, and the pane sends the text	macos
+kitty3	ctrl-shift-enter	1b5b31333b3675	ghostty m-ghostty-kitty7 cs+return
+kitty3	ctrl-shift-backspace	1b5b3132373b3675	ghostty m-ghostty-kitty7 cs+backspace
+kitty3	ctrl-shift-escape	1b5b32373b3675	ghostty m-ghostty-kitty7 cs+escape
+kitty3	ctrl-shift-delete	1b5b333b367e	ghostty m-ghostty-kitty7 cs+fwddelete
+kitty3	ctrl-shift-space	1b5b33323b3675	not compared: macOS took Ctrl-Space and Ctrl-Shift-Space: Ghostty never saw them
+kitty3	alt-shift-enter	1b5b31333b3475	ghostty m-ghostty-kitty7 as+return
+kitty3	alt-shift-tab	1b5b393b3475	ghostty m-ghostty-kitty7 as+tab
+kitty3	alt-shift-backspace	1b5b3132373b3475	ghostty m-ghostty-kitty7 as+backspace
+kitty3	alt-shift-escape	1b5b32373b3475	ghostty m-ghostty-kitty7 as+escape
+kitty3	alt-shift-delete	1b5b333b347e	ghostty m-ghostty-kitty7 as+fwddelete
+kitty3	up	1b5b41	ghostty m-ghostty-kitty7 plain+up (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-up	1b5b313b3241	ghostty m-ghostty-kitty7 s+up (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-up	1b5b313b3341	ghostty m-ghostty-kitty7 a+up (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3	cmd-up		ghostty m-ghostty-kitty7 m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	down	1b5b42	ghostty m-ghostty-kitty7 plain+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-down	1b5b313b3242	ghostty m-ghostty-kitty7 s+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-down	1b5b313b3342	ghostty m-ghostty-kitty7 a+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3	cmd-down		ghostty m-ghostty-kitty7 m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	left	1b5b44	ghostty m-ghostty-kitty7 plain+left (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-left	1b5b313b3244	ghostty m-ghostty-kitty7 s+left (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-left	1b62	ghostty m-ghostty-kitty7 a+left
+kitty3	ctrl-left	1b5b313b3544	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3	cmd-left	01	ghostty m-ghostty-kitty7 m+left	macos
+kitty3	right	1b5b43	ghostty m-ghostty-kitty7 plain+right (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-right	1b5b313b3243	ghostty m-ghostty-kitty7 s+right (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-right	1b66	ghostty m-ghostty-kitty7 a+right
+kitty3	ctrl-right	1b5b313b3543	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3	cmd-right	05	ghostty m-ghostty-kitty7 m+right	macos
+kitty3	home	1b5b48	ghostty m-ghostty-kitty7 plain+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-home	1b5b313b3248	ghostty m-ghostty-kitty7 s+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-home	1b5b313b3348	ghostty m-ghostty-kitty7 a+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	ctrl-home	1b5b313b3548	ghostty m-ghostty-kitty7 c+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	cmd-home		ghostty m-ghostty-kitty7 m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	end	1b5b46	ghostty m-ghostty-kitty7 plain+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	shift-end	1b5b313b3246	ghostty m-ghostty-kitty7 s+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	alt-end	1b5b313b3346	ghostty m-ghostty-kitty7 a+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	ctrl-end	1b5b313b3546	ghostty m-ghostty-kitty7 c+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	cmd-end		ghostty m-ghostty-kitty7 m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	pageup	1b5b357e	ghostty m-ghostty-kitty7 plain+pageup
+kitty3	alt-pageup	1b5b353b337e	ghostty m-ghostty-kitty7 a+pageup
+kitty3	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-kitty7 c+pageup
+kitty3	cmd-pageup		ghostty m-ghostty-kitty7 m+pageup (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	pagedown	1b5b367e	ghostty m-ghostty-kitty7 plain+pagedown
+kitty3	alt-pagedown	1b5b363b337e	ghostty m-ghostty-kitty7 a+pagedown
+kitty3	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-kitty7 c+pagedown
+kitty3	cmd-pagedown		ghostty m-ghostty-kitty7 m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+kitty3	f1	1b5b50	ghostty m-ghostty-kitty7 plain+f1 (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	f2	1b5b51	ghostty m-ghostty-kitty7 plain+f2 (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	f3	1b5b31337e	ghostty m-ghostty-kitty7 plain+f3
+kitty3	f4	1b5b53	ghostty m-ghostty-kitty7 plain+f4 (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
+kitty3	f5	1b5b31357e	ghostty m-ghostty-kitty7 plain+f5
+kitty3	f6	1b5b31377e	ghostty m-ghostty-kitty7 plain+f6
+kitty3	f7	1b5b31387e	ghostty m-ghostty-kitty7 plain+f7
+kitty3	f8	1b5b31397e	ghostty m-ghostty-kitty7 plain+f8
+kitty3	f9	1b5b32307e	ghostty m-ghostty-kitty7 plain+f9
+kitty3	f10	1b5b32317e	ghostty m-ghostty-kitty7 plain+f10
+kitty3	f11	1b5b32337e	not compared: macOS keeps F11 (Show Desktop): Ghostty never saw it
+kitty3	f12	1b5b32347e	ghostty m-ghostty-kitty7 plain+f12
+kitty3	alt-a	1b5b39373b3375	ghostty m-ghostty-kitty7 a+a	linux
+kitty3	alt-shift-a	1b5b39373b3475	ghostty m-ghostty-kitty7 as+a (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-b	1b5b39383b3375	ghostty m-ghostty-kitty7 a+b	linux
+kitty3	alt-shift-b	1b5b39383b3475	ghostty m-ghostty-kitty7 as+b (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-c	1b5b39393b3375	ghostty m-ghostty-kitty7 a+c	linux
+kitty3	alt-shift-c	1b5b39393b3475	ghostty m-ghostty-kitty7 as+c (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-d	1b5b3130303b3375	ghostty m-ghostty-kitty7 a+d	linux
+kitty3	alt-shift-d	1b5b3130303b3475	ghostty m-ghostty-kitty7 as+d (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-e	1b5b3130313b3375	ghostty m-ghostty-kitty7 a+e	linux
+kitty3	alt-shift-e	1b5b3130313b3475	ghostty m-ghostty-kitty7 as+e (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-f	1b5b3130323b3375	ghostty m-ghostty-kitty7 a+f	linux
+kitty3	alt-shift-f	1b5b3130323b3475	ghostty m-ghostty-kitty7 as+f (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-g	1b5b3130333b3375	ghostty m-ghostty-kitty7 a+g	linux
+kitty3	alt-shift-g	1b5b3130333b3475	ghostty m-ghostty-kitty7 as+g (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-h	1b5b3130343b3375	ghostty m-ghostty-kitty7 a+h	linux
+kitty3	alt-shift-h	1b5b3130343b3475	ghostty m-ghostty-kitty7 as+h (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-i	1b5b3130353b3375	ghostty m-ghostty-kitty7 a+i	linux
+kitty3	alt-shift-i	1b5b3130353b3475	ghostty m-ghostty-kitty7 as+i (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-j	1b5b3130363b3375	ghostty m-ghostty-kitty7 a+j	linux
+kitty3	alt-shift-j	1b5b3130363b3475	ghostty m-ghostty-kitty7 as+j (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-k	1b5b3130373b3375	ghostty m-ghostty-kitty7 a+k	linux
+kitty3	alt-shift-k	1b5b3130373b3475	ghostty m-ghostty-kitty7 as+k (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-l	1b5b3130383b3375	ghostty m-ghostty-kitty7 a+l	linux
+kitty3	alt-shift-l	1b5b3130383b3475	ghostty m-ghostty-kitty7 as+l (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-m	1b5b3130393b3375	ghostty m-ghostty-kitty7 a+m	linux
+kitty3	alt-shift-m	1b5b3130393b3475	ghostty m-ghostty-kitty7 as+m (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-n	1b5b3131303b3375	ghostty m-ghostty-kitty7 a+n	linux
+kitty3	alt-shift-n	1b5b3131303b3475	ghostty m-ghostty-kitty7 as+n (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-o	1b5b3131313b3375	ghostty m-ghostty-kitty7 a+o	linux
+kitty3	alt-shift-o	1b5b3131313b3475	ghostty m-ghostty-kitty7 as+o (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-p	1b5b3131323b3375	ghostty m-ghostty-kitty7 a+p	linux
+kitty3	alt-shift-p	1b5b3131323b3475	ghostty m-ghostty-kitty7 as+p (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-q	1b5b3131333b3375	ghostty m-ghostty-kitty7 a+q	linux
+kitty3	alt-shift-q	1b5b3131333b3475	ghostty m-ghostty-kitty7 as+q (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-r	1b5b3131343b3375	ghostty m-ghostty-kitty7 a+r	linux
+kitty3	alt-shift-r	1b5b3131343b3475	ghostty m-ghostty-kitty7 as+r (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-s	1b5b3131353b3375	ghostty m-ghostty-kitty7 a+s	linux
+kitty3	alt-shift-s	1b5b3131353b3475	ghostty m-ghostty-kitty7 as+s (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-t	1b5b3131363b3375	ghostty m-ghostty-kitty7 a+t	linux
+kitty3	alt-shift-t	1b5b3131363b3475	ghostty m-ghostty-kitty7 as+t (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-u	1b5b3131373b3375	ghostty m-ghostty-kitty7 a+u	linux
+kitty3	alt-shift-u	1b5b3131373b3475	ghostty m-ghostty-kitty7 as+u (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-v	1b5b3131383b3375	ghostty m-ghostty-kitty7 a+v	linux
+kitty3	alt-shift-v	1b5b3131383b3475	ghostty m-ghostty-kitty7 as+v (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-w	1b5b3131393b3375	ghostty m-ghostty-kitty7 a+w	linux
+kitty3	alt-shift-w	1b5b3131393b3475	ghostty m-ghostty-kitty7 as+w (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-x	1b5b3132303b3375	ghostty m-ghostty-kitty7 a+x	linux
+kitty3	alt-shift-x	1b5b3132303b3475	ghostty m-ghostty-kitty7 as+x (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-y	1b5b3132313b3375	ghostty m-ghostty-kitty7 a+y	linux
+kitty3	alt-shift-y	1b5b3132313b3475	ghostty m-ghostty-kitty7 as+y (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-z	1b5b3132323b3375	ghostty m-ghostty-kitty7 a+z	linux
+kitty3	alt-shift-z	1b5b3132323b3475	ghostty m-ghostty-kitty7 as+z (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)	linux
+kitty3	alt-0	1b5b34383b3375	ghostty m-ghostty-kitty7 a+0	linux
+kitty3	alt-)	1b5b34313b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34383b3475, m-ghostty-kitty7 as+0)	linux
+kitty3	alt-1	1b5b34393b3375	ghostty m-ghostty-kitty7 a+1	linux
+kitty3	alt-!	1b5b33333b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34393b3475, m-ghostty-kitty7 as+1)	linux
+kitty3	alt-2	1b5b35303b3375	ghostty m-ghostty-kitty7 a+2	linux
+kitty3	alt-@	1b5b36343b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35303b3475, m-ghostty-kitty7 as+2)	linux
+kitty3	alt-3	1b5b35313b3375	ghostty m-ghostty-kitty7 a+3	linux
+kitty3	alt-#	1b5b33353b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35313b3475, m-ghostty-kitty7 as+3)	linux
+kitty3	alt-4	1b5b35323b3375	ghostty m-ghostty-kitty7 a+4	linux
+kitty3	alt-$	1b5b33363b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35323b3475, m-ghostty-kitty7 as+4)	linux
+kitty3	alt-5	1b5b35333b3375	ghostty m-ghostty-kitty7 a+5	linux
+kitty3	alt-%	1b5b33373b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35333b3475, m-ghostty-kitty7 as+5)	linux
+kitty3	alt-6	1b5b35343b3375	ghostty m-ghostty-kitty7 a+6	linux
+kitty3	alt-^	1b5b39343b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35343b3475, m-ghostty-kitty7 as+6)	linux
+kitty3	alt-7	1b5b35353b3375	ghostty m-ghostty-kitty7 a+7	linux
+kitty3	alt-&	1b5b33383b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35353b3475, m-ghostty-kitty7 as+7)	linux
+kitty3	alt-8	1b5b35363b3375	ghostty m-ghostty-kitty7 a+8	linux
+kitty3	alt-*	1b5b34323b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35363b3475, m-ghostty-kitty7 as+8)	linux
+kitty3	alt-9	1b5b35373b3375	ghostty m-ghostty-kitty7 a+9	linux
+kitty3	alt-(	1b5b34303b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35373b3475, m-ghostty-kitty7 as+9)	linux
+kitty3	alt-`	1b5b39363b3375	ghostty m-ghostty-kitty7 a+grave	linux
+kitty3	alt-~	1b5b3132363b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39363b3475, m-ghostty-kitty7 as+grave)	linux
+kitty3	alt--	1b5b34353b3375	ghostty m-ghostty-kitty7 a+minus	linux
+kitty3	alt-_	1b5b39353b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34353b3475, m-ghostty-kitty7 as+minus)	linux
+kitty3	alt-=	1b5b36313b3375	ghostty m-ghostty-kitty7 a+equal	linux
+kitty3	alt-+	1b5b34333b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b36313b3475, m-ghostty-kitty7 as+equal)	linux
+kitty3	alt-[	1b5b39313b3375	ghostty m-ghostty-kitty7 a+lbracket	linux
+kitty3	alt-{	1b5b3132333b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39313b3475, m-ghostty-kitty7 as+lbracket)	linux
+kitty3	alt-]	1b5b39333b3375	ghostty m-ghostty-kitty7 a+rbracket	linux
+kitty3	alt-}	1b5b3132353b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39333b3475, m-ghostty-kitty7 as+rbracket)	linux
+kitty3	alt-\	1b5b39323b3375	ghostty m-ghostty-kitty7 a+backslash	linux
+kitty3	alt-|	1b5b3132343b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b39323b3475, m-ghostty-kitty7 as+backslash)	linux
+kitty3	alt-;	1b5b35393b3375	ghostty m-ghostty-kitty7 a+semicolon	linux
+kitty3	alt-:	1b5b35383b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b35393b3475, m-ghostty-kitty7 as+semicolon)	linux
+kitty3	alt-'	1b5b33393b3375	ghostty m-ghostty-kitty7 a+quote	linux
+kitty3	alt-"	1b5b33343b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b33393b3475, m-ghostty-kitty7 as+quote)	linux
+kitty3	alt-,	1b5b34343b3375	ghostty m-ghostty-kitty7 a+comma	linux
+kitty3	alt-<	1b5b36303b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34343b3475, m-ghostty-kitty7 as+comma)	linux
+kitty3	alt-.	1b5b34363b3375	ghostty m-ghostty-kitty7 a+period	linux
+kitty3	alt->	1b5b36323b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34363b3475, m-ghostty-kitty7 as+period)	linux
+kitty3	alt-/	1b5b34373b3375	ghostty m-ghostty-kitty7 a+slash	linux
+kitty3	alt-?	1b5b36333b3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty, cleaned of its alternate key and :1 marker: 1b5b34373b3475, m-ghostty-kitty7 as+slash)	linux
+kitty3	alt-space	1b5b33323b3375	ghostty m-ghostty-kitty7 a+space	linux
+kitty3	alt-shift-space	1b5b33323b3475	departure: Ghostty's Option-Shift-Space types a no-break space on the U.S. layout of macOS; as Meta it is the key with its modifiers (Ghostty: c2a0, m-ghostty-kitty7 as+space)	linux
+kitty3-release	a		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39373b313a3375, m-ghostty-kitty7 plain+a)
+kitty3-release	shift-a		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39373b323a3375, m-ghostty-kitty7 s+a)
+kitty3-release	ctrl-a	1b5b39373b353a3375	ghostty m-ghostty-kitty7 c+a
+kitty3-release	alt-a->å		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-a	1b5b39373b363a3375	ghostty m-ghostty-kitty7 cs+a
+kitty3-release	alt-shift-a->Å		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	b		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39383b313a3375, m-ghostty-kitty7 plain+b)
+kitty3-release	shift-b		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39383b323a3375, m-ghostty-kitty7 s+b)
+kitty3-release	ctrl-b	1b5b39383b353a3375	ghostty m-ghostty-kitty7 c+b
+kitty3-release	alt-b->∫		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-b	1b5b39383b363a3375	ghostty m-ghostty-kitty7 cs+b
+kitty3-release	alt-shift-b->ı		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	c		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39393b313a3375, m-ghostty-kitty7 plain+c)
+kitty3-release	shift-c		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39393b323a3375, m-ghostty-kitty7 s+c)
+kitty3-release	ctrl-c	1b5b39393b353a3375	ghostty m-ghostty-kitty7 c+c
+kitty3-release	alt-c->ç		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-c	1b5b39393b363a3375	ghostty m-ghostty-kitty7 cs+c	macos
+kitty3-release	alt-shift-c->Ç		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	d		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130303b313a3375, m-ghostty-kitty7 plain+d)
+kitty3-release	shift-d		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130303b323a3375, m-ghostty-kitty7 s+d)
+kitty3-release	ctrl-d	1b5b3130303b353a3375	ghostty m-ghostty-kitty7 c+d
+kitty3-release	alt-d->∂		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-d	1b5b3130303b363a3375	ghostty m-ghostty-kitty7 cs+d
+kitty3-release	alt-shift-d->Î		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	e		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130313b313a3375, m-ghostty-kitty7 plain+e)
+kitty3-release	shift-e		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130313b323a3375, m-ghostty-kitty7 s+e)
+kitty3-release	ctrl-e	1b5b3130313b353a3375	ghostty m-ghostty-kitty7 c+e
+kitty3-release	ctrl-shift-e	1b5b3130313b363a3375	ghostty m-ghostty-kitty7 cs+e
+kitty3-release	alt-shift-e->´		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	f		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130323b313a3375, m-ghostty-kitty7 plain+f)
+kitty3-release	shift-f		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130323b323a3375, m-ghostty-kitty7 s+f)
+kitty3-release	ctrl-f	1b5b3130323b353a3375	ghostty m-ghostty-kitty7 c+f
+kitty3-release	alt-f->ƒ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-f	1b5b3130323b363a3375	ghostty m-ghostty-kitty7 cs+f
+kitty3-release	alt-shift-f->Ï		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	g		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130333b313a3375, m-ghostty-kitty7 plain+g)
+kitty3-release	shift-g		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130333b323a3375, m-ghostty-kitty7 s+g)
+kitty3-release	ctrl-g	1b5b3130333b353a3375	ghostty m-ghostty-kitty7 c+g
+kitty3-release	alt-g->©		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-g	1b5b3130333b363a3375	ghostty m-ghostty-kitty7 cs+g
+kitty3-release	alt-shift-g->˝		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	h		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130343b313a3375, m-ghostty-kitty7 plain+h)
+kitty3-release	shift-h		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130343b323a3375, m-ghostty-kitty7 s+h)
+kitty3-release	ctrl-h	1b5b3130343b353a3375	ghostty m-ghostty-kitty7 c+h
+kitty3-release	alt-h->˙		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-h	1b5b3130343b363a3375	ghostty m-ghostty-kitty7 cs+h
+kitty3-release	alt-shift-h->Ó		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	i		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130353b313a3375, m-ghostty-kitty7 plain+i)
+kitty3-release	shift-i		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130353b323a3375, m-ghostty-kitty7 s+i)
+kitty3-release	ctrl-i	1b5b3130353b353a3375	ghostty m-ghostty-kitty7 c+i
+kitty3-release	ctrl-shift-i	1b5b3130353b363a3375	ghostty m-ghostty-kitty7 cs+i
+kitty3-release	alt-shift-i->ˆ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	j		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130363b313a3375, m-ghostty-kitty7 plain+j)
+kitty3-release	shift-j		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130363b323a3375, m-ghostty-kitty7 s+j)
+kitty3-release	ctrl-j	1b5b3130363b353a3375	ghostty m-ghostty-kitty7 c+j
+kitty3-release	alt-j->∆		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-j	1b5b3130363b363a3375	ghostty m-ghostty-kitty7 cs+j
+kitty3-release	alt-shift-j->Ô		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	k		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130373b313a3375, m-ghostty-kitty7 plain+k)
+kitty3-release	shift-k		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130373b323a3375, m-ghostty-kitty7 s+k)
+kitty3-release	ctrl-k	1b5b3130373b353a3375	ghostty m-ghostty-kitty7 c+k
+kitty3-release	alt-k->˚		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-k	1b5b3130373b363a3375	ghostty m-ghostty-kitty7 cs+k
+kitty3-release	alt-shift-k->		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	l		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130383b313a3375, m-ghostty-kitty7 plain+l)
+kitty3-release	shift-l		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130383b323a3375, m-ghostty-kitty7 s+l)
+kitty3-release	ctrl-l	1b5b3130383b353a3375	ghostty m-ghostty-kitty7 c+l
+kitty3-release	alt-l->¬		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-l	1b5b3130383b363a3375	ghostty m-ghostty-kitty7 cs+l
+kitty3-release	alt-shift-l->Ò		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	m		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130393b313a3375, m-ghostty-kitty7 plain+m)
+kitty3-release	shift-m		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3130393b323a3375, m-ghostty-kitty7 s+m)
+kitty3-release	ctrl-m	1b5b3130393b353a3375	ghostty m-ghostty-kitty7 c+m
+kitty3-release	alt-m->µ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-m	1b5b3130393b363a3375	ghostty m-ghostty-kitty7 cs+m
+kitty3-release	alt-shift-m->Â		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	n		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131303b313a3375, m-ghostty-kitty7 plain+n)
+kitty3-release	shift-n		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131303b323a3375, m-ghostty-kitty7 s+n)
+kitty3-release	ctrl-n	1b5b3131303b353a3375	ghostty m-ghostty-kitty7 c+n
+kitty3-release	ctrl-shift-n	1b5b3131303b363a3375	ghostty m-ghostty-kitty7 cs+n
+kitty3-release	alt-shift-n->˜		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	o		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131313b313a3375, m-ghostty-kitty7 plain+o)
+kitty3-release	shift-o		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131313b323a3375, m-ghostty-kitty7 s+o)
+kitty3-release	ctrl-o	1b5b3131313b353a3375	ghostty m-ghostty-kitty7 c+o
+kitty3-release	alt-o->ø		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-o	1b5b3131313b363a3375	ghostty m-ghostty-kitty7 cs+o
+kitty3-release	alt-shift-o->Ø		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	p		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131323b313a3375, m-ghostty-kitty7 plain+p)
+kitty3-release	shift-p		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131323b323a3375, m-ghostty-kitty7 s+p)
+kitty3-release	ctrl-p	1b5b3131323b353a3375	ghostty m-ghostty-kitty7 c+p
+kitty3-release	alt-p->π		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-p	1b5b3131323b363a3375	ghostty m-ghostty-kitty7 cs+p
+kitty3-release	alt-shift-p->∏		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	q		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131333b313a3375, m-ghostty-kitty7 plain+q)
+kitty3-release	shift-q		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131333b323a3375, m-ghostty-kitty7 s+q)
+kitty3-release	ctrl-q	1b5b3131333b353a3375	ghostty m-ghostty-kitty7 c+q
+kitty3-release	alt-q->œ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-q	1b5b3131333b363a3375	ghostty m-ghostty-kitty7 cs+q
+kitty3-release	alt-shift-q->Œ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	r		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131343b313a3375, m-ghostty-kitty7 plain+r)
+kitty3-release	shift-r		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131343b323a3375, m-ghostty-kitty7 s+r)
+kitty3-release	ctrl-r	1b5b3131343b353a3375	ghostty m-ghostty-kitty7 c+r
+kitty3-release	alt-r->®		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-r	1b5b3131343b363a3375	ghostty m-ghostty-kitty7 cs+r
+kitty3-release	alt-shift-r->‰		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	s		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131353b313a3375, m-ghostty-kitty7 plain+s)
+kitty3-release	shift-s		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131353b323a3375, m-ghostty-kitty7 s+s)
+kitty3-release	ctrl-s	1b5b3131353b353a3375	ghostty m-ghostty-kitty7 c+s
+kitty3-release	alt-s->ß		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-s	1b5b3131353b363a3375	ghostty m-ghostty-kitty7 cs+s
+kitty3-release	alt-shift-s->Í		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	t		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131363b313a3375, m-ghostty-kitty7 plain+t)
+kitty3-release	shift-t		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131363b323a3375, m-ghostty-kitty7 s+t)
+kitty3-release	ctrl-t	1b5b3131363b353a3375	ghostty m-ghostty-kitty7 c+t
+kitty3-release	alt-t->†		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-t	1b5b3131363b363a3375	ghostty m-ghostty-kitty7 cs+t
+kitty3-release	alt-shift-t->ˇ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	u		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131373b313a3375, m-ghostty-kitty7 plain+u)
+kitty3-release	shift-u		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131373b323a3375, m-ghostty-kitty7 s+u)
+kitty3-release	ctrl-u	1b5b3131373b353a3375	ghostty m-ghostty-kitty7 c+u
+kitty3-release	ctrl-shift-u	1b5b3131373b363a3375	ghostty m-ghostty-kitty7 cs+u
+kitty3-release	alt-shift-u->¨		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	v		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131383b313a3375, m-ghostty-kitty7 plain+v)
+kitty3-release	shift-v		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131383b323a3375, m-ghostty-kitty7 s+v)
+kitty3-release	ctrl-v	1b5b3131383b353a3375	ghostty m-ghostty-kitty7 c+v
+kitty3-release	alt-v->√		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-v	1b5b3131383b363a3375	ghostty m-ghostty-kitty7 cs+v	macos
+kitty3-release	alt-shift-v->◊		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	w		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131393b313a3375, m-ghostty-kitty7 plain+w)
+kitty3-release	shift-w		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3131393b323a3375, m-ghostty-kitty7 s+w)
+kitty3-release	ctrl-w	1b5b3131393b353a3375	ghostty m-ghostty-kitty7 c+w
+kitty3-release	alt-w->∑		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-w	1b5b3131393b363a3375	ghostty m-ghostty-kitty7 cs+w
+kitty3-release	alt-shift-w->„		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	x		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132303b313a3375, m-ghostty-kitty7 plain+x)
+kitty3-release	shift-x		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132303b323a3375, m-ghostty-kitty7 s+x)
+kitty3-release	ctrl-x	1b5b3132303b353a3375	ghostty m-ghostty-kitty7 c+x
+kitty3-release	alt-x->≈		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-x	1b5b3132303b363a3375	ghostty m-ghostty-kitty7 cs+x
+kitty3-release	alt-shift-x->˛		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	y		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132313b313a3375, m-ghostty-kitty7 plain+y)
+kitty3-release	shift-y		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132313b323a3375, m-ghostty-kitty7 s+y)
+kitty3-release	ctrl-y	1b5b3132313b353a3375	ghostty m-ghostty-kitty7 c+y
+kitty3-release	alt-y->¥		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-y	1b5b3132313b363a3375	ghostty m-ghostty-kitty7 cs+y
+kitty3-release	alt-shift-y->Á		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	z		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132323b313a3375, m-ghostty-kitty7 plain+z)
+kitty3-release	shift-z		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b3132323b323a3375, m-ghostty-kitty7 s+z)
+kitty3-release	ctrl-z	1b5b3132323b353a3375	ghostty m-ghostty-kitty7 c+z
+kitty3-release	alt-z->Ω		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-z	1b5b3132323b363a3375	ghostty m-ghostty-kitty7 cs+z
+kitty3-release	alt-shift-z->¸		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	0		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34383b313a3375, m-ghostty-kitty7 plain+0)
+kitty3-release	)		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34383b323a3375, m-ghostty-kitty7 s+0)
+kitty3-release	ctrl-0	1b5b34383b353a3375	ghostty m-ghostty-kitty7 c+0
+kitty3-release	alt-0->º		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-)	1b5b34313b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34383b363a3375, m-ghostty-kitty7 cs+0)
+kitty3-release	alt-)->‚		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	1		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34393b313a3375, m-ghostty-kitty7 plain+1)
+kitty3-release	!		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34393b323a3375, m-ghostty-kitty7 s+1)
+kitty3-release	ctrl-1	1b5b34393b353a3375	ghostty m-ghostty-kitty7 c+1
+kitty3-release	alt-1->¡		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-!	1b5b33333b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34393b363a3375, m-ghostty-kitty7 cs+1)
+kitty3-release	alt-!->⁄		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	2		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35303b313a3375, m-ghostty-kitty7 plain+2)
+kitty3-release	@		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35303b323a3375, m-ghostty-kitty7 s+2)
+kitty3-release	ctrl-2	1b5b35303b353a3375	ghostty m-ghostty-kitty7 c+2
+kitty3-release	alt-2->™		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-@	1b5b36343b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35303b363a3375, m-ghostty-kitty7 cs+2)
+kitty3-release	alt-@->€		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	3		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35313b313a3375, m-ghostty-kitty7 plain+3)
+kitty3-release	#		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35313b323a3375, m-ghostty-kitty7 s+3)
+kitty3-release	ctrl-3	1b5b35313b353a3375	ghostty m-ghostty-kitty7 c+3
+kitty3-release	alt-3->£		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-#	1b5b33353b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35313b363a3375, m-ghostty-kitty7 cs+3)
+kitty3-release	alt-#->‹		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	4		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35323b313a3375, m-ghostty-kitty7 plain+4)
+kitty3-release	$		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35323b323a3375, m-ghostty-kitty7 s+4)
+kitty3-release	ctrl-4	1b5b35323b353a3375	ghostty m-ghostty-kitty7 c+4
+kitty3-release	alt-4->¢		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-$	1b5b33363b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35323b363a3375, m-ghostty-kitty7 cs+4)
+kitty3-release	alt-$->›		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	5		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35333b313a3375, m-ghostty-kitty7 plain+5)
+kitty3-release	%		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35333b323a3375, m-ghostty-kitty7 s+5)
+kitty3-release	ctrl-5	1b5b35333b353a3375	ghostty m-ghostty-kitty7 c+5
+kitty3-release	alt-5->∞		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-%	1b5b33373b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35333b363a3375, m-ghostty-kitty7 cs+5)
+kitty3-release	alt-%->ﬁ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	6		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35343b313a3375, m-ghostty-kitty7 plain+6)
+kitty3-release	^		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35343b323a3375, m-ghostty-kitty7 s+6)
+kitty3-release	ctrl-6	1b5b35343b353a3375	ghostty m-ghostty-kitty7 c+6
+kitty3-release	alt-6->§		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-^	1b5b39343b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35343b363a3375, m-ghostty-kitty7 cs+6)
+kitty3-release	alt-^->ﬂ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	7		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35353b313a3375, m-ghostty-kitty7 plain+7)
+kitty3-release	&		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35353b323a3375, m-ghostty-kitty7 s+7)
+kitty3-release	ctrl-7	1b5b35353b353a3375	ghostty m-ghostty-kitty7 c+7
+kitty3-release	alt-7->¶		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-&	1b5b33383b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35353b363a3375, m-ghostty-kitty7 cs+7)
+kitty3-release	alt-&->‡		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	8		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35363b313a3375, m-ghostty-kitty7 plain+8)
+kitty3-release	*		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35363b323a3375, m-ghostty-kitty7 s+8)
+kitty3-release	ctrl-8	1b5b35363b353a3375	ghostty m-ghostty-kitty7 c+8
+kitty3-release	alt-8->•		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-*	1b5b34323b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35363b363a3375, m-ghostty-kitty7 cs+8)
+kitty3-release	alt-*->°		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	9		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35373b313a3375, m-ghostty-kitty7 plain+9)
+kitty3-release	(		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35373b323a3375, m-ghostty-kitty7 s+9)
+kitty3-release	ctrl-9	1b5b35373b353a3375	ghostty m-ghostty-kitty7 c+9
+kitty3-release	alt-9->ª		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-(	1b5b34303b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35373b363a3375, m-ghostty-kitty7 cs+9)
+kitty3-release	alt-(->·		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	`		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39363b313a3375, m-ghostty-kitty7 plain+grave)
+kitty3-release	~		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39363b323a3375, m-ghostty-kitty7 s+grave)
+kitty3-release	ctrl-`	1b5b39363b353a3375	ghostty m-ghostty-kitty7 c+grave
+kitty3-release	ctrl-~	1b5b3132363b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39363b363a3375, m-ghostty-kitty7 cs+grave)
+kitty3-release	alt-~->`		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	-		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34353b313a3375, m-ghostty-kitty7 plain+minus)
+kitty3-release	_		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34353b323a3375, m-ghostty-kitty7 s+minus)
+kitty3-release	ctrl--	1b5b34353b353a3375	ghostty m-ghostty-kitty7 c+minus
+kitty3-release	ctrl-_	1b5b39353b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34353b363a3375, m-ghostty-kitty7 cs+minus)
+kitty3-release	alt-_->—		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	alt-minus->–		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	=		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b36313b313a3375, m-ghostty-kitty7 plain+equal)
+kitty3-release	+		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b36313b323a3375, m-ghostty-kitty7 s+equal)
+kitty3-release	ctrl-=	1b5b36313b353a3375	ghostty m-ghostty-kitty7 c+equal
+kitty3-release	alt-=->≠		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-+	1b5b34333b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b36313b363a3375, m-ghostty-kitty7 cs+equal)
+kitty3-release	alt-+->±		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	[		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39313b313a3375, m-ghostty-kitty7 plain+lbracket)
+kitty3-release	{		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39313b323a3375, m-ghostty-kitty7 s+lbracket)
+kitty3-release	ctrl-[	1b5b39313b353a3375	ghostty m-ghostty-kitty7 c+lbracket
+kitty3-release	alt-[->“		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-{	1b5b3132333b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39313b363a3375, m-ghostty-kitty7 cs+lbracket)
+kitty3-release	alt-{->”		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	]		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39333b313a3375, m-ghostty-kitty7 plain+rbracket)
+kitty3-release	}		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39333b323a3375, m-ghostty-kitty7 s+rbracket)
+kitty3-release	ctrl-]	1b5b39333b353a3375	ghostty m-ghostty-kitty7 c+rbracket
+kitty3-release	alt-]->‘		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-}	1b5b3132353b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39333b363a3375, m-ghostty-kitty7 cs+rbracket)
+kitty3-release	alt-}->’		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	\		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39323b313a3375, m-ghostty-kitty7 plain+backslash)
+kitty3-release	|		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b39323b323a3375, m-ghostty-kitty7 s+backslash)
+kitty3-release	ctrl-\	1b5b39323b353a3375	ghostty m-ghostty-kitty7 c+backslash
+kitty3-release	alt-\->«		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-|	1b5b3132343b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39323b363a3375, m-ghostty-kitty7 cs+backslash)
+kitty3-release	alt-|->»		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	;		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35393b313a3375, m-ghostty-kitty7 plain+semicolon)
+kitty3-release	:		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b35393b323a3375, m-ghostty-kitty7 s+semicolon)
+kitty3-release	ctrl-;	1b5b35393b353a3375	ghostty m-ghostty-kitty7 c+semicolon
+kitty3-release	alt-;->…		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-:	1b5b35383b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35393b363a3375, m-ghostty-kitty7 cs+semicolon)
+kitty3-release	alt-:->Ú		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	'		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b33393b313a3375, m-ghostty-kitty7 plain+quote)
+kitty3-release	"		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b33393b323a3375, m-ghostty-kitty7 s+quote)
+kitty3-release	ctrl-'	1b5b33393b353a3375	ghostty m-ghostty-kitty7 c+quote
+kitty3-release	alt-'->æ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-"	1b5b33343b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b33393b363a3375, m-ghostty-kitty7 cs+quote)
+kitty3-release	alt-"->Æ		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	,		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34343b313a3375, m-ghostty-kitty7 plain+comma)
+kitty3-release	<		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34343b323a3375, m-ghostty-kitty7 s+comma)
+kitty3-release	ctrl-,	1b5b34343b353a3375	ghostty m-ghostty-kitty7 c+comma
+kitty3-release	alt-,->≤		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-<	1b5b36303b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34343b363a3375, m-ghostty-kitty7 cs+comma)
+kitty3-release	alt-<->¯		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	.		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34363b313a3375, m-ghostty-kitty7 plain+period)
+kitty3-release	>		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34363b323a3375, m-ghostty-kitty7 s+period)
+kitty3-release	ctrl-.	1b5b34363b353a3375	ghostty m-ghostty-kitty7 c+period
+kitty3-release	alt-.->≥		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl->	1b5b36323b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34363b363a3375, m-ghostty-kitty7 cs+period)
+kitty3-release	alt->->˘		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	/		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34373b313a3375, m-ghostty-kitty7 plain+slash)
+kitty3-release	?		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b34373b323a3375, m-ghostty-kitty7 s+slash)
+kitty3-release	ctrl-/	1b5b34373b353a3375	ghostty m-ghostty-kitty7 c+slash
+kitty3-release	alt-/->÷		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-?	1b5b36333b353a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34373b363a3375, m-ghostty-kitty7 cs+slash)
+kitty3-release	alt-?->¿		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	enter		ghostty m-ghostty-kitty7 plain+return
+kitty3-release	tab		ghostty m-ghostty-kitty7 plain+tab
+kitty3-release	backspace		ghostty m-ghostty-kitty7 plain+backspace
+kitty3-release	escape	1b5b32373b313a3375	ghostty m-ghostty-kitty7 plain+escape
+kitty3-release	delete	1b5b333b313a337e	ghostty m-ghostty-kitty7 plain+fwddelete
+kitty3-release	space		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b33323b313a3375, m-ghostty-kitty7 plain+space)
+kitty3-release	shift-enter		ghostty m-ghostty-kitty7 s+return
+kitty3-release	shift-tab		ghostty m-ghostty-kitty7 s+tab
+kitty3-release	shift-backspace		ghostty m-ghostty-kitty7 s+backspace
+kitty3-release	shift-escape	1b5b32373b323a3375	ghostty m-ghostty-kitty7 s+escape
+kitty3-release	shift-delete	1b5b333b323a337e	ghostty m-ghostty-kitty7 s+fwddelete
+kitty3-release	shift-space		departure: a text key is no escape code, and the app reports the release of escape codes only (flag 8 would report the rest) (Ghostty: 1b5b33323b323a3375, m-ghostty-kitty7 s+space)
+kitty3-release	ctrl-enter		ghostty m-ghostty-kitty7 c+return
+kitty3-release	ctrl-backspace		ghostty m-ghostty-kitty7 c+backspace
+kitty3-release	ctrl-escape	1b5b32373b353a3375	ghostty m-ghostty-kitty7 c+escape
+kitty3-release	ctrl-delete	1b5b333b353a337e	ghostty m-ghostty-kitty7 c+fwddelete
+kitty3-release	ctrl-space	1b5b33323b353a3375	not compared: macOS took Ctrl-Space and Ctrl-Shift-Space: Ghostty never saw them
+kitty3-release	alt-enter		ghostty m-ghostty-kitty7 a+return
+kitty3-release	alt-tab		ghostty m-ghostty-kitty7 a+tab
+kitty3-release	alt-backspace		ghostty m-ghostty-kitty7 a+backspace
+kitty3-release	alt-escape	1b5b32373b333a3375	ghostty m-ghostty-kitty7 a+escape
+kitty3-release	alt-delete	1b5b333b333a337e	ghostty m-ghostty-kitty7 a+fwddelete
+kitty3-release	alt-space-> 		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	alt-shift-space-> 		not compared: Ghostty's record of this state ran with Option as Alt, where this key is no text	macos
+kitty3-release	ctrl-shift-enter		ghostty m-ghostty-kitty7 cs+return
+kitty3-release	ctrl-shift-backspace		ghostty m-ghostty-kitty7 cs+backspace
+kitty3-release	ctrl-shift-escape	1b5b32373b363a3375	ghostty m-ghostty-kitty7 cs+escape
+kitty3-release	ctrl-shift-delete	1b5b333b363a337e	ghostty m-ghostty-kitty7 cs+fwddelete
+kitty3-release	ctrl-shift-space	1b5b33323b363a3375	not compared: macOS took Ctrl-Space and Ctrl-Shift-Space: Ghostty never saw them
+kitty3-release	alt-shift-enter		ghostty m-ghostty-kitty7 as+return
+kitty3-release	alt-shift-tab		ghostty m-ghostty-kitty7 as+tab
+kitty3-release	alt-shift-backspace		ghostty m-ghostty-kitty7 as+backspace
+kitty3-release	alt-shift-escape	1b5b32373b343a3375	ghostty m-ghostty-kitty7 as+escape
+kitty3-release	alt-shift-delete	1b5b333b343a337e	ghostty m-ghostty-kitty7 as+fwddelete
+kitty3-release	up	1b5b313b313a3341	ghostty m-ghostty-kitty7 plain+up
+kitty3-release	shift-up	1b5b313b323a3341	ghostty m-ghostty-kitty7 s+up
+kitty3-release	alt-up	1b5b313b333a3341	ghostty m-ghostty-kitty7 a+up
+kitty3-release	ctrl-up	1b5b313b353a3341	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3-release	cmd-up		ghostty m-ghostty-kitty7 m+up	macos
+kitty3-release	down	1b5b313b313a3342	ghostty m-ghostty-kitty7 plain+down
+kitty3-release	shift-down	1b5b313b323a3342	ghostty m-ghostty-kitty7 s+down
+kitty3-release	alt-down	1b5b313b333a3342	ghostty m-ghostty-kitty7 a+down
+kitty3-release	ctrl-down	1b5b313b353a3342	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3-release	cmd-down		ghostty m-ghostty-kitty7 m+down	macos
+kitty3-release	left	1b5b313b313a3344	ghostty m-ghostty-kitty7 plain+left
+kitty3-release	shift-left	1b5b313b323a3344	ghostty m-ghostty-kitty7 s+left
+kitty3-release	alt-left		ghostty m-ghostty-kitty7 a+left
+kitty3-release	ctrl-left	1b5b313b353a3344	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3-release	cmd-left		ghostty m-ghostty-kitty7 m+left	macos
+kitty3-release	right	1b5b313b313a3343	ghostty m-ghostty-kitty7 plain+right
+kitty3-release	shift-right	1b5b313b323a3343	ghostty m-ghostty-kitty7 s+right
+kitty3-release	alt-right		ghostty m-ghostty-kitty7 a+right
+kitty3-release	ctrl-right	1b5b313b353a3343	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
+kitty3-release	cmd-right		ghostty m-ghostty-kitty7 m+right	macos
+kitty3-release	home	1b5b313b313a3348	ghostty m-ghostty-kitty7 plain+home
+kitty3-release	shift-home	1b5b313b323a3348	ghostty m-ghostty-kitty7 s+home
+kitty3-release	alt-home	1b5b313b333a3348	ghostty m-ghostty-kitty7 a+home
+kitty3-release	ctrl-home	1b5b313b353a3348	ghostty m-ghostty-kitty7 c+home
+kitty3-release	cmd-home		ghostty m-ghostty-kitty7 m+home	macos
+kitty3-release	end	1b5b313b313a3346	ghostty m-ghostty-kitty7 plain+end
+kitty3-release	shift-end	1b5b313b323a3346	ghostty m-ghostty-kitty7 s+end
+kitty3-release	alt-end	1b5b313b333a3346	ghostty m-ghostty-kitty7 a+end
+kitty3-release	ctrl-end	1b5b313b353a3346	ghostty m-ghostty-kitty7 c+end
+kitty3-release	cmd-end		ghostty m-ghostty-kitty7 m+end	macos
+kitty3-release	pageup	1b5b353b313a337e	ghostty m-ghostty-kitty7 plain+pageup
+kitty3-release	alt-pageup	1b5b353b333a337e	ghostty m-ghostty-kitty7 a+pageup
+kitty3-release	ctrl-pageup	1b5b353b353a337e	ghostty m-ghostty-kitty7 c+pageup
+kitty3-release	cmd-pageup		ghostty m-ghostty-kitty7 m+pageup	macos
+kitty3-release	pagedown	1b5b363b313a337e	ghostty m-ghostty-kitty7 plain+pagedown
+kitty3-release	alt-pagedown	1b5b363b333a337e	ghostty m-ghostty-kitty7 a+pagedown
+kitty3-release	ctrl-pagedown	1b5b363b353a337e	ghostty m-ghostty-kitty7 c+pagedown
+kitty3-release	cmd-pagedown		ghostty m-ghostty-kitty7 m+pagedown	macos
+kitty3-release	cmd-backspace		not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+kitty3-release	f1	1b5b313b313a3350	ghostty m-ghostty-kitty7 plain+f1
+kitty3-release	f2	1b5b313b313a3351	ghostty m-ghostty-kitty7 plain+f2
+kitty3-release	f3	1b5b31333b313a337e	ghostty m-ghostty-kitty7 plain+f3
+kitty3-release	f4	1b5b313b313a3353	ghostty m-ghostty-kitty7 plain+f4
+kitty3-release	f5	1b5b31353b313a337e	ghostty m-ghostty-kitty7 plain+f5
+kitty3-release	f6	1b5b31373b313a337e	ghostty m-ghostty-kitty7 plain+f6
+kitty3-release	f7	1b5b31383b313a337e	ghostty m-ghostty-kitty7 plain+f7
+kitty3-release	f8	1b5b31393b313a337e	ghostty m-ghostty-kitty7 plain+f8
+kitty3-release	f9	1b5b32303b313a337e	ghostty m-ghostty-kitty7 plain+f9
+kitty3-release	f10	1b5b32313b313a337e	ghostty m-ghostty-kitty7 plain+f10
+kitty3-release	f11	1b5b32333b313a337e	not compared: macOS keeps F11 (Show Desktop): Ghostty never saw it
+kitty3-release	f12	1b5b32343b313a337e	ghostty m-ghostty-kitty7 plain+f12
+kitty3-release	alt-a	1b5b39373b333a3375	ghostty m-ghostty-kitty7 a+a	linux
+kitty3-release	alt-shift-a	1b5b39373b343a3375	ghostty m-ghostty-kitty7 as+a	linux
+kitty3-release	alt-b	1b5b39383b333a3375	ghostty m-ghostty-kitty7 a+b	linux
+kitty3-release	alt-shift-b	1b5b39383b343a3375	ghostty m-ghostty-kitty7 as+b	linux
+kitty3-release	alt-c	1b5b39393b333a3375	ghostty m-ghostty-kitty7 a+c	linux
+kitty3-release	alt-shift-c	1b5b39393b343a3375	ghostty m-ghostty-kitty7 as+c	linux
+kitty3-release	alt-d	1b5b3130303b333a3375	ghostty m-ghostty-kitty7 a+d	linux
+kitty3-release	alt-shift-d	1b5b3130303b343a3375	ghostty m-ghostty-kitty7 as+d	linux
+kitty3-release	alt-e	1b5b3130313b333a3375	ghostty m-ghostty-kitty7 a+e	linux
+kitty3-release	alt-shift-e	1b5b3130313b343a3375	ghostty m-ghostty-kitty7 as+e	linux
+kitty3-release	alt-f	1b5b3130323b333a3375	ghostty m-ghostty-kitty7 a+f	linux
+kitty3-release	alt-shift-f	1b5b3130323b343a3375	ghostty m-ghostty-kitty7 as+f	linux
+kitty3-release	alt-g	1b5b3130333b333a3375	ghostty m-ghostty-kitty7 a+g	linux
+kitty3-release	alt-shift-g	1b5b3130333b343a3375	ghostty m-ghostty-kitty7 as+g	linux
+kitty3-release	alt-h	1b5b3130343b333a3375	ghostty m-ghostty-kitty7 a+h	linux
+kitty3-release	alt-shift-h	1b5b3130343b343a3375	ghostty m-ghostty-kitty7 as+h	linux
+kitty3-release	alt-i	1b5b3130353b333a3375	ghostty m-ghostty-kitty7 a+i	linux
+kitty3-release	alt-shift-i	1b5b3130353b343a3375	ghostty m-ghostty-kitty7 as+i	linux
+kitty3-release	alt-j	1b5b3130363b333a3375	ghostty m-ghostty-kitty7 a+j	linux
+kitty3-release	alt-shift-j	1b5b3130363b343a3375	ghostty m-ghostty-kitty7 as+j	linux
+kitty3-release	alt-k	1b5b3130373b333a3375	ghostty m-ghostty-kitty7 a+k	linux
+kitty3-release	alt-shift-k	1b5b3130373b343a3375	ghostty m-ghostty-kitty7 as+k	linux
+kitty3-release	alt-l	1b5b3130383b333a3375	ghostty m-ghostty-kitty7 a+l	linux
+kitty3-release	alt-shift-l	1b5b3130383b343a3375	ghostty m-ghostty-kitty7 as+l	linux
+kitty3-release	alt-m	1b5b3130393b333a3375	ghostty m-ghostty-kitty7 a+m	linux
+kitty3-release	alt-shift-m	1b5b3130393b343a3375	ghostty m-ghostty-kitty7 as+m	linux
+kitty3-release	alt-n	1b5b3131303b333a3375	ghostty m-ghostty-kitty7 a+n	linux
+kitty3-release	alt-shift-n	1b5b3131303b343a3375	ghostty m-ghostty-kitty7 as+n	linux
+kitty3-release	alt-o	1b5b3131313b333a3375	ghostty m-ghostty-kitty7 a+o	linux
+kitty3-release	alt-shift-o	1b5b3131313b343a3375	ghostty m-ghostty-kitty7 as+o	linux
+kitty3-release	alt-p	1b5b3131323b333a3375	ghostty m-ghostty-kitty7 a+p	linux
+kitty3-release	alt-shift-p	1b5b3131323b343a3375	ghostty m-ghostty-kitty7 as+p	linux
+kitty3-release	alt-q	1b5b3131333b333a3375	ghostty m-ghostty-kitty7 a+q	linux
+kitty3-release	alt-shift-q	1b5b3131333b343a3375	ghostty m-ghostty-kitty7 as+q	linux
+kitty3-release	alt-r	1b5b3131343b333a3375	ghostty m-ghostty-kitty7 a+r	linux
+kitty3-release	alt-shift-r	1b5b3131343b343a3375	ghostty m-ghostty-kitty7 as+r	linux
+kitty3-release	alt-s	1b5b3131353b333a3375	ghostty m-ghostty-kitty7 a+s	linux
+kitty3-release	alt-shift-s	1b5b3131353b343a3375	ghostty m-ghostty-kitty7 as+s	linux
+kitty3-release	alt-t	1b5b3131363b333a3375	ghostty m-ghostty-kitty7 a+t	linux
+kitty3-release	alt-shift-t	1b5b3131363b343a3375	ghostty m-ghostty-kitty7 as+t	linux
+kitty3-release	alt-u	1b5b3131373b333a3375	ghostty m-ghostty-kitty7 a+u	linux
+kitty3-release	alt-shift-u	1b5b3131373b343a3375	ghostty m-ghostty-kitty7 as+u	linux
+kitty3-release	alt-v	1b5b3131383b333a3375	ghostty m-ghostty-kitty7 a+v	linux
+kitty3-release	alt-shift-v	1b5b3131383b343a3375	ghostty m-ghostty-kitty7 as+v	linux
+kitty3-release	alt-w	1b5b3131393b333a3375	ghostty m-ghostty-kitty7 a+w	linux
+kitty3-release	alt-shift-w	1b5b3131393b343a3375	ghostty m-ghostty-kitty7 as+w	linux
+kitty3-release	alt-x	1b5b3132303b333a3375	ghostty m-ghostty-kitty7 a+x	linux
+kitty3-release	alt-shift-x	1b5b3132303b343a3375	ghostty m-ghostty-kitty7 as+x	linux
+kitty3-release	alt-y	1b5b3132313b333a3375	ghostty m-ghostty-kitty7 a+y	linux
+kitty3-release	alt-shift-y	1b5b3132313b343a3375	ghostty m-ghostty-kitty7 as+y	linux
+kitty3-release	alt-z	1b5b3132323b333a3375	ghostty m-ghostty-kitty7 a+z	linux
+kitty3-release	alt-shift-z	1b5b3132323b343a3375	ghostty m-ghostty-kitty7 as+z	linux
+kitty3-release	alt-0	1b5b34383b333a3375	ghostty m-ghostty-kitty7 a+0	linux
+kitty3-release	alt-)	1b5b34313b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34383b343a3375, m-ghostty-kitty7 as+0)	linux
+kitty3-release	alt-1	1b5b34393b333a3375	ghostty m-ghostty-kitty7 a+1	linux
+kitty3-release	alt-!	1b5b33333b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34393b343a3375, m-ghostty-kitty7 as+1)	linux
+kitty3-release	alt-2	1b5b35303b333a3375	ghostty m-ghostty-kitty7 a+2	linux
+kitty3-release	alt-@	1b5b36343b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35303b343a3375, m-ghostty-kitty7 as+2)	linux
+kitty3-release	alt-3	1b5b35313b333a3375	ghostty m-ghostty-kitty7 a+3	linux
+kitty3-release	alt-#	1b5b33353b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35313b343a3375, m-ghostty-kitty7 as+3)	linux
+kitty3-release	alt-4	1b5b35323b333a3375	ghostty m-ghostty-kitty7 a+4	linux
+kitty3-release	alt-$	1b5b33363b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35323b343a3375, m-ghostty-kitty7 as+4)	linux
+kitty3-release	alt-5	1b5b35333b333a3375	ghostty m-ghostty-kitty7 a+5	linux
+kitty3-release	alt-%	1b5b33373b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35333b343a3375, m-ghostty-kitty7 as+5)	linux
+kitty3-release	alt-6	1b5b35343b333a3375	ghostty m-ghostty-kitty7 a+6	linux
+kitty3-release	alt-^	1b5b39343b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35343b343a3375, m-ghostty-kitty7 as+6)	linux
+kitty3-release	alt-7	1b5b35353b333a3375	ghostty m-ghostty-kitty7 a+7	linux
+kitty3-release	alt-&	1b5b33383b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35353b343a3375, m-ghostty-kitty7 as+7)	linux
+kitty3-release	alt-8	1b5b35363b333a3375	ghostty m-ghostty-kitty7 a+8	linux
+kitty3-release	alt-*	1b5b34323b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35363b343a3375, m-ghostty-kitty7 as+8)	linux
+kitty3-release	alt-9	1b5b35373b333a3375	ghostty m-ghostty-kitty7 a+9	linux
+kitty3-release	alt-(	1b5b34303b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35373b343a3375, m-ghostty-kitty7 as+9)	linux
+kitty3-release	alt-`	1b5b39363b333a3375	ghostty m-ghostty-kitty7 a+grave	linux
+kitty3-release	alt-~	1b5b3132363b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39363b343a3375, m-ghostty-kitty7 as+grave)	linux
+kitty3-release	alt--	1b5b34353b333a3375	ghostty m-ghostty-kitty7 a+minus	linux
+kitty3-release	alt-_	1b5b39353b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34353b343a3375, m-ghostty-kitty7 as+minus)	linux
+kitty3-release	alt-=	1b5b36313b333a3375	ghostty m-ghostty-kitty7 a+equal	linux
+kitty3-release	alt-+	1b5b34333b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b36313b343a3375, m-ghostty-kitty7 as+equal)	linux
+kitty3-release	alt-[	1b5b39313b333a3375	ghostty m-ghostty-kitty7 a+lbracket	linux
+kitty3-release	alt-{	1b5b3132333b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39313b343a3375, m-ghostty-kitty7 as+lbracket)	linux
+kitty3-release	alt-]	1b5b39333b333a3375	ghostty m-ghostty-kitty7 a+rbracket	linux
+kitty3-release	alt-}	1b5b3132353b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39333b343a3375, m-ghostty-kitty7 as+rbracket)	linux
+kitty3-release	alt-\	1b5b39323b333a3375	ghostty m-ghostty-kitty7 a+backslash	linux
+kitty3-release	alt-|	1b5b3132343b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b39323b343a3375, m-ghostty-kitty7 as+backslash)	linux
+kitty3-release	alt-;	1b5b35393b333a3375	ghostty m-ghostty-kitty7 a+semicolon	linux
+kitty3-release	alt-:	1b5b35383b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b35393b343a3375, m-ghostty-kitty7 as+semicolon)	linux
+kitty3-release	alt-'	1b5b33393b333a3375	ghostty m-ghostty-kitty7 a+quote	linux
+kitty3-release	alt-"	1b5b33343b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b33393b343a3375, m-ghostty-kitty7 as+quote)	linux
+kitty3-release	alt-,	1b5b34343b333a3375	ghostty m-ghostty-kitty7 a+comma	linux
+kitty3-release	alt-<	1b5b36303b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34343b343a3375, m-ghostty-kitty7 as+comma)	linux
+kitty3-release	alt-.	1b5b34363b333a3375	ghostty m-ghostty-kitty7 a+period	linux
+kitty3-release	alt->	1b5b36323b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34363b343a3375, m-ghostty-kitty7 as+period)	linux
+kitty3-release	alt-/	1b5b34373b333a3375	ghostty m-ghostty-kitty7 a+slash	linux
+kitty3-release	alt-?	1b5b36333b333a3375	departure: flag 4 is not granted: no alternate key, and GPUI folds Shift into the key of a symbol, so the key is the symbol and Shift is no modifier (Ghostty: 1b5b34373b343a3375, m-ghostty-kitty7 as+slash)	linux
+kitty3-release	alt-space	1b5b33323b333a3375	ghostty m-ghostty-kitty7 a+space	linux
+kitty3-release	alt-shift-space	1b5b33323b343a3375	ghostty m-ghostty-kitty7 as+space	linux
