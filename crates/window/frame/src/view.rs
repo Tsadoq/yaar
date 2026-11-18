@@ -62,6 +62,8 @@ pub struct PaneEntry {
 /// by [`crate::WorkspaceList::refresh`] and [`crate::WorkspaceChanges::refresh`].
 ///
 /// When the window opens, the first pane has the focus, so that its keys work at once.
+/// A click on what the Frame draws around the panes, as on the sidebar or on the notice,
+/// leaves the focus where it was.
 ///
 /// For tests, which cannot read what is drawn, two elements carry a selector that
 /// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, and the field
@@ -495,6 +497,13 @@ impl Render for Frame {
         root.flex()
             .flex_row()
             .track_focus(&composed.focus)
+            // An element that tracks a focus takes it at any press inside it that
+            // nothing further in took. Here that would take the focus from a pane at
+            // every click in the sidebar or on the notice, and the keys of the pane
+            // would be dead until a click into it. The Frame's own place for the focus
+            // is only for when there is no other, so a press never moves the focus
+            // there: it stays where it was.
+            .on_any_mouse_down(|_, window, _| window.prevent_default())
             .on_action(cx.listener(Self::open_folder))
             .on_action(cx.listener(Self::set_base))
             .on_action(cx.listener(Self::toggle_sidebar))

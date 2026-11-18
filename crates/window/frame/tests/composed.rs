@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{
-    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Pixels, Render, Size,
-    Styled, TestAppContext, VisualTestContext, Window, div, px,
+    AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers, Pixels, Render,
+    Size, Styled, TestAppContext, VisualTestContext, Window, div, px,
 };
 use yaar_frame::{BuildPane, FULL_WIDTH, Frame, KeeperLink, Pane, RAIL_WIDTH, SidebarForm};
 use yaar_link::{Refusal, Reply, Repository, Request, WorkspaceId};
@@ -402,30 +402,103 @@ fn the_panes_lie_beside_the_sidebar_in_the_order_given_and_the_keys_of_the_frame
     assert_eq!(pane("right", &mut cx).right(), WINDOW.width);
 }
 
-#[gpui_kit::test]
-fn the_first_pane_has_the_focus_when_the_window_opens(cx: &mut TestAppContext) {
-    // The builder keeps the handle it gave the Frame, as a pane does.
-    let kept = Rc::new(RefCell::new(Vec::new()));
-    let keeping = |name: &'static str| -> BuildPane {
-        let kept = kept.clone();
-        Box::new(move |models, window, cx| {
-            let pane = blank(name)(models, window, cx);
-            kept.borrow_mut().push(pane.focus.clone());
-            pane
-        })
-    };
-    let (_shown, mut cx) = showing(
-        &one_repository(),
-        vec![keeping("left"), keeping("right")],
-        cx,
-    );
-    let focused: Vec<bool> = cx.update(|window, _| {
+/// The handles the panes of a window gave the Frame, in the order of the panes.
+type Kept = Rc<RefCell<Vec<FocusHandle>>>;
+
+/// A blank pane whose builder keeps the handle it gave the Frame, as a pane does.
+fn keeping(name: &'static str, kept: &Kept) -> BuildPane {
+    let kept = kept.clone();
+    Box::new(move |models, window, cx| {
+        let pane = blank(name)(models, window, cx);
+        kept.borrow_mut().push(pane.focus.clone());
+        pane
+    })
+}
+
+/// For each pane, whether the focus is on the handle it gave the Frame.
+fn focused(kept: &Kept, cx: &mut VisualTestContext) -> Vec<bool> {
+    cx.update(|window, _| {
         kept.borrow()
             .iter()
             .map(|focus| focus.is_focused(window))
             .collect()
+    })
+}
+
+#[gpui_kit::test]
+fn the_first_pane_has_the_focus_when_the_window_opens(cx: &mut TestAppContext) {
+    let kept = Kept::default();
+    let (_shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
+}
+
+#[gpui_kit::test]
+fn a_click_on_what_the_frame_draws_around_the_panes_leaves_the_focus_in_the_pane(
+    cx: &mut TestAppContext,
+) {
+    let kept = Kept::default();
+    let (mut shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+    let click = |selector: &str, cx: &mut VisualTestContext| {
+        let place = drawn(selector, cx).unwrap_or_else(|| panic!("{selector} is drawn"));
+        cx.simulate_click(place.center(), Modifiers::none());
+    };
+
+    // The user works in the second pane.
+    click("pane-right", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // A workspace picked in the sidebar: the click does its work, and the keys of the
+    // pane go on working without a click into the pane.
+    click(&format!("sidebar-workspace-{}", id('2')), &mut cx);
+    assert_eq!(on_screen(&shown, &mut cx), Some(id('2')));
+    shown.keeper.expect(get_changes('2'), &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // The same after the pin control,
+    click("sidebar-pin", &mut cx);
+    assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // after the line of a repository, which takes no click,
+    click("sidebar-pin", &mut cx);
+    assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Full));
+    let repository = &one_repository()[0];
+    click(&format!("sidebar-repository-{}", repository.id), &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // and after the notice.
+    cx.simulate_keystrokes("cmd-o");
+    let folder = PathBuf::from("/tmp/plain folder");
+    cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
+    let asked = shown.keeper.expect(
+        Request::OpenFolder {
+            path: folder.clone(),
+        },
+        &mut cx,
+    );
+    shown
+        .keeper
+        .reply(asked, Err(Refusal::NotARepository { path: folder }));
+    wait_until(&mut cx, "the notice", |cx| {
+        shown
+            .frame
+            .read_with(cx, |frame, cx| frame.notice(cx))
+            .is_some()
     });
-    assert_eq!(focused, [true, false]);
+    click("frame-notice", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+
+    // A click into the other pane still moves the focus there.
+    click("pane-left", &mut cx);
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
 }
 
 /// The view of a pane that draws the place of its focus only while `here` says so.
