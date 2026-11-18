@@ -82,6 +82,40 @@ fn every_key_of_the_table_runs_its_action_and_no_other(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn each_action_of_the_frame_runs_on_the_key_chosen_for_it(cx: &mut TestAppContext) {
+    // The keys a user presses, written out here and nowhere else in the tests of the
+    // Frame: every other test presses what the table has, so a key changed in the table
+    // by mistake would pass them all.
+    let chosen = [
+        ("cmd-o", OpenFolder.name()),
+        ("cmd-shift-b", SetBase.name()),
+        ("cmd-b", ToggleSidebar.name()),
+        ("cmd-alt-b", UnpinSidebar.name()),
+        ("cmd-alt-down", SelectNextWorkspace.name()),
+        ("cmd-alt-up", SelectPreviousWorkspace.name()),
+    ];
+
+    let ran = Rc::new(RefCell::new(Vec::new()));
+    cx.update(|cx| {
+        bind(&controls(), cx);
+        note::<OpenFolder>(&ran, cx);
+        note::<SetBase>(&ran, cx);
+        note::<ToggleSidebar>(&ran, cx);
+        note::<UnpinSidebar>(&ran, cx);
+        note::<SelectNextWorkspace>(&ran, cx);
+        note::<SelectPreviousWorkspace>(&ran, cx);
+    });
+    let (_probe, cx) = open_probe(cx);
+
+    for (key, action) in chosen {
+        cx.simulate_keystrokes(key);
+        assert_eq!(ran.take(), [action], "the key {key}");
+    }
+    // A control added to the table has to get its key written above.
+    assert_eq!(controls().len(), chosen.len());
+}
+
+#[gpui_kit::test]
 fn a_key_bound_in_a_context_works_only_where_the_context_is(cx: &mut TestAppContext) {
     let ran = Rc::new(RefCell::new(Vec::new()));
     cx.update(|cx| {
