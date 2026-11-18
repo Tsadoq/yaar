@@ -6,9 +6,10 @@
 #   plant.sh ban <crate>    a crate with a banned name         cargo deny check bans
 #   plant.sh git            a crate from a git repository      cargo deny check sources
 #
-# The last one stands for a crate of the Zed editor, which would arrive from Zed's git
+# The last one stands for a crate of the Zed editor that arrives from Zed's git
 # repository: the build takes crates from the registry alone. That run also holds
-# deny.toml to it: no git source may be let in at all.
+# deny.toml to it: the registry is the one source it may name. A crate Zed publishes on
+# the registry is a ban like any other, by its name.
 #
 # Everything happens in a copy of the tree under a temporary folder: the plant never
 # reaches the repository or its lock file. The plant goes under each program the packages
@@ -16,9 +17,14 @@
 #
 # "cargo deny failed" would prove nothing: it also fails for a stale lock, a broken
 # manifest or a missing database. So each run is judged twice. Without the plant the check
-# must pass, which also shows that the interface toolkit, which is in the tree, is let
-# in. With the plant it must fail, and among its errors must be the diagnostic of that
-# check for the planted crate.
+# must pass, with the interface toolkit among the crates it judged: that shows the
+# toolkit is let in. With the plant it must fail, and among its errors must be the
+# diagnostic of that check for the planted crate. A run whose diagnostics cannot be read
+# fails too.
+#
+# Each part of the check is asked alone here, while a real dependency meets the whole
+# check in a step of the workflow. So every run also holds the workflow to that step:
+# what is refused here fails the run only through it.
 #
 # Needs cargo-deny, jq and, for the last one, git. Asks nothing of the network: the crates
 # are those of the lock file, already fetched, and the git repository is made here.
@@ -39,6 +45,12 @@ esac
 
 # The programs the packages ship, and the Companion.
 MANIFESTS="crates/window/window/Cargo.toml crates/keeper/keeper/Cargo.toml companions/claude/Cargo.toml"
+# The interface toolkit, by the crate the app names in its manifests.
+TOOLKIT=gpui-kit
+# The step of the run that meets a real dependency, and the whole of what it may be.
+WORKFLOW=.github/workflows/ci.yml
+RUN_STEP="Licences, advisories, bans, sources"
+RUN_COMMAND="cargo deny check"
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 TMP=$(mktemp -d)
@@ -85,6 +97,23 @@ rm "$TMP/tree.tar"
 for manifest in $MANIFESTS; do
   [ -f "$TREE/$manifest" ] || fail "$manifest is not in the tree"
 done
+
+# A plant is refused here by one part of the check, asked alone. That says something of
+# the run only while the run asks the whole check of the real tree, and fails when it
+# fails: the workflow must hold that step once, and the step must be its command and
+# nothing else, with no word that would let the run go on after it.
+steps=$(grep -c -x -F -e "      - name: $RUN_STEP" "$TREE/$WORKFLOW") || true
+[ "$steps" = 1 ] || fail "$WORKFLOW must hold the step '$RUN_STEP' once"
+echo "        run: $RUN_COMMAND" > "$TMP/step.wanted"
+# The lines of the step: those after its name that are indented deeper than a step is.
+awk -v name="      - name: $RUN_STEP" '
+  $0 == name { inside = 1; next }
+  /^[ \t]*$/ { next }
+  inside && !/^        / { inside = 0 }
+  inside { print }' "$TREE/$WORKFLOW" > "$TMP/step.found"
+if ! diff "$TMP/step.wanted" "$TMP/step.found" >&2; then
+  fail "the step '$RUN_STEP' of $WORKFLOW must be 'run: $RUN_COMMAND' and nothing else"
+fi
 
 # The planted crate: an empty library that carries the one thing the check looks at.
 PLANT=$TMP/plant/$CRATE
@@ -141,7 +170,14 @@ if ! deny; then
   show
   fail "cargo deny check $CHECK fails before anything is planted"
 fi
-echo "control: cargo deny check $CHECK passes on the tree as it is"
+# And the toolkit is in what was judged, or the control would say nothing of it. The
+# list is cargo deny's own, one line with each crate as "name version source".
+# shellcheck disable=SC2086
+(cd "$TREE" && cargo deny $OFFLINE list --format json --layout crate) > "$TMP/judged.json" 2> /dev/null \
+  || fail "cargo deny cannot list the crates it judges"
+grep -q -F -e "\"$TOOLKIT " "$TMP/judged.json" \
+  || fail "$TOOLKIT is not among the crates the check judges: the control shows nothing of the toolkit"
+echo "control: cargo deny check $CHECK passes on the tree as it is, $TOOLKIT in it"
 
 # Kept under names cargo does not read: a Cargo.toml above the plant would be taken for
 # the root of its workspace.
@@ -154,7 +190,9 @@ for manifest in $MANIFESTS; do
   if deny "$@"; then
     fail "$CRATE planted in $manifest, and cargo deny check $CHECK passes"
   fi
-  if [ "$(refusals)" -lt 1 ]; then
+  # Anything but a count of one or more fails: a run that could not be read is no refusal.
+  count=$(refusals) || fail "$CRATE planted in $manifest: jq could not read the diagnostics of the check"
+  if ! [ "$count" -ge 1 ]; then
     show "$@"
     fail "$CRATE planted in $manifest: the check fails, but not with '$CODE' for $CRATE"
   fi
@@ -165,14 +203,26 @@ for manifest in $MANIFESTS; do
 done
 
 if [ "$KIND" = git ]; then
-  # The plant shows that a git repository nobody allowed is refused, not that Zed's is.
-  # So no git source may be allowed at all, by its address or as an organisation's.
-  grep -v '^[[:space:]]*#' "$TREE/deny.toml" > "$TMP/settings"
-  if [ "$(grep -c 'allow-git' "$TMP/settings")" != 1 ] || ! grep -q '^allow-git = \[\]$' "$TMP/settings"; then
-    fail "deny.toml must say 'allow-git = []', once"
+  # The plant shows that a git repository nobody allowed is refused, not that Zed's is:
+  # a repository on this machine is refused whatever the lists of allowed ones say. So
+  # the settings themselves are held: the registry is the one source, and no key lets a
+  # git repository in, by its address, as an organisation's or as a private one. With
+  # comments and empty lines left out, the section must be these lines.
+  cat > "$TMP/sources.wanted" <<'EOF'
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
+EOF
+  # Every table whose name starts with sources, the tables under it included, however
+  # the name is spaced or quoted.
+  awk '
+    /^[ \t]*(#|$)/ { next }
+    /^[ \t]*\[/ { name = $0; gsub(/[^a-z.\[]/, "", name); inside = (name ~ /^\[+sources/) }
+    inside { print }' "$TREE/deny.toml" > "$TMP/sources.found"
+  if ! diff "$TMP/sources.wanted" "$TMP/sources.found" >&2; then
+    fail "deny.toml: [sources] must let in the registry and nothing else"
   fi
-  if grep -q 'allow-org' "$TMP/settings"; then
-    fail "deny.toml allows the repositories of an organisation"
-  fi
-  echo "deny.toml allows no git source"
+  echo "deny.toml lets in the registry and no git source"
 fi

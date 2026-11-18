@@ -99,11 +99,14 @@ jobs:
       - name: The app's own licence
         run: .github/scripts/own-licence.sh
 
-      # A check that has never refused anything proves little. Each of the next four
+      # A check that has never refused anything proves little. Each of the next six
       # steps plants one dependency in a copy of the tree, under each program the
-      # packages ship and under the Companion, and passes only if the check above
-      # refuses it by name. The fifth switches off what the others guard, one thing at
-      # a time, and passes only if they then fail.
+      # packages ship and under the Companion, and passes only if the part of
+      # `cargo deny check` that guards against it refuses it by name. Each asks that
+      # part alone, so each also fails unless the step `Licences, advisories, bans,
+      # sources` above is still the whole check and nothing else: a real dependency
+      # fails the run there. The seventh switches off what the others guard, one thing
+      # at a time, and passes only if they then fail.
       - name: A dependency under a licence outside the list is refused
         run: .github/scripts/plant.sh licence
 
@@ -115,6 +118,13 @@ jobs:
 
       - name: A crate from a git repository is refused, as one of the Zed editor would be
         run: .github/scripts/plant.sh git
+
+      - name: A planted crate of the Zed editor is refused
+        run: .github/scripts/plant.sh ban gpui
+
+      # The toolkit links this one, and the tree passes with it there.
+      - name: A crate Zed publishes is refused anywhere but beneath the interface toolkit
+        run: .github/scripts/plant.sh ban zed-font-kit
 
       - name: The licence check and the planted checks can fail
         run: .github/scripts/checks-can-fail.sh

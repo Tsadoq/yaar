@@ -6,8 +6,8 @@
 # Each case takes a fresh copy of the tree, switches off the one thing a check guards,
 # runs that check from the copy, and passes only if the check fails and says why in the
 # words expected here. A case whose change did not take leaves the check passing, so the
-# case fails: none can pass idly. Two cases break the run in another way instead, to show
-# that a planted check does not take any failure for a refusal.
+# case fails: none can pass idly. Three cases break the run in another way instead, to
+# show that a planted check does not take any failure for a refusal.
 #
 # Needs what the two scripts need: cargo-deny, jq, git.
 set -eu
@@ -61,6 +61,21 @@ copy
 change deny.toml '/^    { crate = /d'
 fails_with "and cargo deny check bans passes" plant.sh ban wry
 fails_with "and cargo deny check bans passes" plant.sh ban deno_core
+fails_with "and cargo deny check bans passes" plant.sh ban gpui
+fails_with "and cargo deny check bans passes" plant.sh ban zed-font-kit
+
+# Nothing says any more who may link a library Zed publishes. The toolkit links it, so
+# the tree as it is fails: the library is in the tree, and only the toolkit lets it in.
+copy
+change deny.toml 's/^    { crate = "zed-font-kit", wrappers = [^]]*\], /    { crate = "zed-font-kit", /'
+fails_with "cargo deny check bans fails before anything is planted" plant.sh ban zed-font-kit
+
+# The toolkit is taken out of what the check judges: a control that passes then says
+# nothing of it.
+copy
+change deny.toml '/^\[graph\]$/a\
+exclude = ["gpui-kit"]'
+fails_with "gpui-kit is not among the crates the check judges" plant.sh ban wry
 
 # The check fails with nothing planted: a failure alone is not taken for a refusal.
 copy
@@ -71,6 +86,34 @@ fails_with "cargo deny check licenses fails before anything is planted" plant.sh
 copy
 fails_with "the check fails, but not with 'banned'" plant.sh ban "not a crate name"
 
+# The diagnostics cannot be read: nor is a run nobody could judge. This jq fails as one
+# does that is not installed, or that meets diagnostics of another shape.
+copy
+mkdir "$TMP/broken"
+printf '#!/bin/sh\nexit 5\n' > "$TMP/broken/jq"
+chmod +x "$TMP/broken/jq"
+kept_path=$PATH
+PATH=$TMP/broken:$PATH
+fails_with "jq could not read the diagnostics" plant.sh ban wry
+PATH=$kept_path
+
+# The step of the run no longer checks licences. A dependency under a licence outside the
+# list would then pass the run, whatever a plant shows.
+copy
+change .github/workflows/ci.yml 's/^        run: cargo deny check$/        run: cargo deny check advisories bans sources/'
+fails_with ">         run: cargo deny check advisories bans sources" plant.sh licence
+
+# The step of the run may fail without failing the run.
+copy
+change .github/workflows/ci.yml '/^        run: cargo deny check$/a\
+        continue-on-error: true'
+fails_with ">         continue-on-error: true" plant.sh ban wry
+
+# The step of the run is gone.
+copy
+change .github/workflows/ci.yml 's/^      - name: Licences, advisories, bans, sources$/      - name: Advisories/'
+fails_with "must hold the step 'Licences, advisories, bans, sources' once" plant.sh git
+
 # Git sources are no longer refused.
 copy
 change deny.toml 's/^unknown-git = "deny"$/unknown-git = "allow"/'
@@ -79,12 +122,18 @@ fails_with "and cargo deny check sources passes" plant.sh git
 # Zed's repository is let in by its address. The planted repository is still refused.
 copy
 change deny.toml 's|^allow-git = \[\]$|allow-git = ["https://github.com/zed-industries/zed"]|'
-fails_with "deny.toml must say 'allow-git = []'" plant.sh git
+fails_with '> allow-git = ["https://github.com/zed-industries/zed"]' plant.sh git
 
 # Zed's repositories are let in as an organisation.
 copy
 printf '\n[sources.allow-org]\ngithub = ["zed-industries"]\n' >> "$COPY/deny.toml"
-fails_with "deny.toml allows the repositories of an organisation" plant.sh git
+fails_with '> github = ["zed-industries"]' plant.sh git
+
+# Zed's repositories are let in as private ones, by the start of their address.
+copy
+change deny.toml '/^allow-git = \[\]$/a\
+private = ["https://github.com/zed-industries"]'
+fails_with '> private = ["https://github.com/zed-industries"]' plant.sh git
 
 # One crate of the workspace is put under another licence.
 copy
