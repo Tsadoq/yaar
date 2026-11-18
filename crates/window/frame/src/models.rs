@@ -3,13 +3,21 @@
 //!
 //! A pane is handed the [`Models`] when it is built. It observes the models it shows,
 //! and asks the Keeper through them; it holds no other pane and no connection of its own.
+//!
+//! An answer of the Keeper and a fact it tells are heard in no fixed order, and neither
+//! are two answers. Each model therefore keeps one rule: of what it asked, only the
+//! answer to its last question counts; and a fact that makes an answer on its way
+//! doubtful has the question asked again.
 
 use std::path::PathBuf;
 
 use gpui_kit::*;
-use yaar_link::{ChangedFile, Changes, FileSides, Refusal, Repository, Workspace, WorkspaceId};
+use yaar_link::{
+    ChangedFile, Changes, Fact, FileSides, FileStatus, Refusal, Reply, Repository, Request,
+    Workspace, WorkspaceId,
+};
 
-use crate::link_model::{AskError, KeeperLink};
+use crate::link_model::{AskError, KeeperLink, LinkStatus};
 
 /// The shared models, as one handle. Cheap to clone.
 #[derive(Clone)]
@@ -25,7 +33,24 @@ pub struct Models {
 impl Models {
     /// The models of one window, fed by `link`.
     pub fn new(link: Entity<KeeperLink>, cx: &mut App) -> Models {
-        todo!()
+        let workspaces = cx.new(|cx| WorkspaceList::new(link.clone(), cx));
+        let changes = cx.new(|cx| WorkspaceChanges::new(link.clone(), workspaces.clone(), cx));
+        Models {
+            link,
+            workspaces,
+            changes,
+        }
+    }
+}
+
+/// What the user is shown when something asked of the Keeper brought no answer: the
+/// Keeper's own refusal, or the reason there was none, as a failure.
+fn as_refusal(error: AskError) -> Refusal {
+    match error {
+        AskError::Refused(refusal) => refusal,
+        other => Refusal::Failed {
+            reason: other.to_string(),
+        },
     }
 }
 
@@ -41,51 +66,120 @@ pub struct WorkspaceList {
     repositories: Vec<Repository>,
     selected: Option<WorkspaceId>,
     refusal: Option<Refusal>,
+    /// A workspace the user opened that no list has held yet: it comes on screen with
+    /// the list that does.
+    wanted: Option<WorkspaceId>,
+    /// The last question for the list. A new one takes its place, which drops the
+    /// answer to the old one.
+    listing: Option<Task<()>>,
+    /// Whether the answer to that question is still awaited.
+    awaits_list: bool,
+    /// Counts what the user asked here, so that a refusal can tell whether it still
+    /// answers the last of it.
+    asked_by_user: u64,
 }
 
 impl WorkspaceList {
     /// An empty list, fed by `link`.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
-        todo!()
+        // The link tells of a change only when the outcome of reaching a Keeper is
+        // recorded, so being connected then means a connection that was not asked yet.
+        cx.observe(&link, |list, link, cx| {
+            if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
+                list.refresh(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&link, |list, _, fact: &Fact, cx| {
+            if let Fact::Workspaces(repositories) = fact {
+                list.take(repositories.clone(), cx);
+                // An answer still on its way may have been made before this list was.
+                // It is not waited for; the question is asked again, and what answers
+                // it is no older than this list.
+                if list.awaits_list {
+                    list.refresh(cx);
+                }
+            }
+        })
+        .detach();
+
+        let connected = matches!(link.read(cx).status(), LinkStatus::Connected(_));
+        let mut list = Self {
+            link,
+            repositories: Vec::new(),
+            selected: None,
+            refusal: None,
+            wanted: None,
+            listing: None,
+            awaits_list: false,
+            asked_by_user: 0,
+        };
+        if connected {
+            list.refresh(cx);
+        }
+        list
     }
 
     /// The repositories, each with its worktrees, as the Keeper last told them.
     pub fn repositories(&self) -> &[Repository] {
-        todo!()
+        &self.repositories
     }
 
     /// The workspace with this id, if the list holds it.
     pub fn workspace(&self, id: &WorkspaceId) -> Option<&Workspace> {
-        todo!()
+        workspaces(&self.repositories).find(|workspace| workspace.id == *id)
     }
 
     /// The workspace on screen.
     pub fn selected(&self) -> Option<&WorkspaceId> {
-        todo!()
+        self.selected.as_ref()
     }
 
     /// Puts a workspace of the list on screen. Does nothing for an id the list does not
     /// hold.
     pub fn select(&mut self, workspace: &WorkspaceId, cx: &mut Context<Self>) {
-        todo!()
+        if self.workspace(workspace).is_none() {
+            return;
+        }
+        // What the user selects now outranks a folder opened before.
+        self.wanted = None;
+        if self.selected.as_ref() != Some(workspace) {
+            self.selected = Some(workspace.clone());
+            cx.notify();
+        }
     }
 
     /// Puts the next workspace of the list on screen, in the order the sidebar shows
     /// them; after the last comes the first.
     pub fn select_next(&mut self, cx: &mut Context<Self>) {
-        todo!()
+        self.step(1, cx);
     }
 
     /// Puts the previous workspace of the list on screen; before the first comes the
     /// last.
     pub fn select_previous(&mut self, cx: &mut Context<Self>) {
-        todo!()
+        self.step(-1, cx);
     }
 
     /// Asks the Keeper again for the list. The Frame calls it when the window comes to
     /// the front: a worktree made or a branch switched outside the app is in no fact.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        todo!()
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+        self.awaits_list = true;
+        self.listing = Some(cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                list.awaits_list = false;
+                // A refusal has no place to show here: the list stays as it was, and
+                // what the user asks next is refused with the same reason.
+                if let Ok(Reply::Workspaces(repositories)) = answer {
+                    list.take(repositories, cx);
+                }
+            })
+            .ok();
+        }));
     }
 
     /// Asks the Keeper to open a folder. When it is opened, its workspace is put on
@@ -94,21 +188,139 @@ impl WorkspaceList {
     /// The Keeper answers with the id of the workspace before it tells the list that
     /// holds it. The workspace comes on screen when both are here, whichever is first.
     pub fn open_folder(&mut self, folder: PathBuf, cx: &mut Context<Self>) {
-        todo!()
+        self.ask_for_user(
+            Request::OpenFolder { path: folder },
+            |list, reply, cx| match reply {
+                Reply::Opened { workspace, .. } => {
+                    if list.workspace(&workspace).is_some() {
+                        list.select(&workspace, cx);
+                    } else {
+                        list.wanted = Some(workspace);
+                    }
+                    true
+                }
+                _ => false,
+            },
+            cx,
+        );
     }
 
     /// Asks the Keeper to count the changes of the workspace on screen from this branch
     /// or commit. When it is refused, [`WorkspaceList::refusal`] says why. Does nothing
     /// while no workspace is on screen.
     pub fn set_base(&mut self, base: String, cx: &mut Context<Self>) {
-        todo!()
+        let Some(workspace) = self.selected.clone() else {
+            return;
+        };
+        // The Keeper tells every Window that the changes changed; nothing is left to
+        // do here when it is done.
+        self.ask_for_user(
+            Request::SetBase { workspace, base },
+            |_, reply, _| matches!(reply, Reply::Done),
+            cx,
+        );
     }
 
     /// Why the Keeper refused the last thing the user asked of it here; none once the
     /// user asks again.
+    ///
+    /// Something that was asked and brought no answer at all, because the Keeper is not
+    /// reached or answered with something else, is told the same way: as
+    /// [`Refusal::Failed`] with the reason.
     pub fn refusal(&self) -> Option<&Refusal> {
-        todo!()
+        self.refusal.as_ref()
     }
+
+    /// Takes a list of the Keeper, asked for or told, and settles which workspace is on
+    /// screen with it.
+    fn take(&mut self, repositories: Vec<Repository>, cx: &mut Context<Self>) {
+        let held = |id: &&WorkspaceId| workspaces(&repositories).any(|held| held.id == **id);
+        let selected = self
+            .wanted
+            .as_ref()
+            .filter(held)
+            .or(self.selected.as_ref().filter(held))
+            .cloned()
+            .or_else(|| {
+                workspaces(&repositories)
+                    .next()
+                    .map(|first| first.id.clone())
+            });
+        if self.wanted.is_some() && self.wanted == selected {
+            self.wanted = None;
+        }
+        if repositories != self.repositories || selected != self.selected {
+            self.repositories = repositories;
+            self.selected = selected;
+            cx.notify();
+        }
+    }
+
+    /// Moves the workspace on screen by `by` places in the order of the list, around
+    /// its ends.
+    fn step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let ids: Vec<&WorkspaceId> = workspaces(&self.repositories)
+            .map(|workspace| &workspace.id)
+            .collect();
+        let Some(count) = isize::try_from(ids.len()).ok().filter(|count| *count > 0) else {
+            return;
+        };
+        let now = ids
+            .iter()
+            .position(|id| Some(*id) == self.selected.as_ref());
+        let next = match now {
+            Some(now) => (now as isize + by).rem_euclid(count) as usize,
+            None => 0,
+        };
+        let next = ids[next].clone();
+        self.select(&next, cx);
+    }
+
+    /// Asks the Keeper for something the user asked for. `done` takes the reply, and
+    /// says whether it was of the kind the request has.
+    fn ask_for_user(
+        &mut self,
+        request: Request,
+        done: impl FnOnce(&mut Self, Reply, &mut Context<Self>) -> bool + 'static,
+        cx: &mut Context<Self>,
+    ) {
+        if self.refusal.take().is_some() {
+            cx.notify();
+        }
+        self.asked_by_user += 1;
+        let number = self.asked_by_user;
+        let asked = self.link.update(cx, |link, cx| link.ask(request, cx));
+        // Not kept: the user may ask for the next thing before this one is answered,
+        // and both answers count.
+        cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                let error = match answer {
+                    Ok(reply) => {
+                        if done(list, reply, cx) {
+                            return;
+                        }
+                        AskError::Unexpected
+                    }
+                    Err(error) => error,
+                };
+                // A refusal of something the user has asked past is no longer news.
+                if list.asked_by_user == number {
+                    list.refusal = Some(as_refusal(error));
+                    cx.notify();
+                }
+            })
+            .ok();
+        })
+        .detach();
+    }
+}
+
+/// The workspaces of a list, in the order the sidebar shows them.
+fn workspaces(repositories: &[Repository]) -> impl Iterator<Item = &Workspace> {
+    repositories
+        .iter()
+        .flat_map(|repository| &repository.workspaces)
 }
 
 /// The changes of the workspace on screen.
@@ -124,6 +336,9 @@ pub struct WorkspaceChanges {
     changes: Option<Changes>,
     loading: bool,
     refusal: Option<Refusal>,
+    /// The last question for the changes. A new one takes its place, which drops the
+    /// answer to the old one: of two answers, only the one asked for last is shown.
+    asking: Option<Task<()>>,
 }
 
 impl WorkspaceChanges {
@@ -133,34 +348,90 @@ impl WorkspaceChanges {
         workspaces: Entity<WorkspaceList>,
         cx: &mut Context<Self>,
     ) -> Self {
-        todo!()
+        cx.observe(&workspaces, |changes, _, cx| changes.follow(cx))
+            .detach();
+        cx.subscribe(&link, |changes, _, fact: &Fact, cx| {
+            if let Fact::ChangesChanged { workspace } = fact
+                && changes.workspace.as_ref() == Some(workspace)
+            {
+                changes.refresh(cx);
+            }
+        })
+        .detach();
+
+        let mut changes = Self {
+            link,
+            workspaces,
+            workspace: None,
+            changes: None,
+            loading: false,
+            refusal: None,
+            asking: None,
+        };
+        changes.follow(cx);
+        changes
     }
 
     /// The workspace these are the changes of: the one on screen.
     pub fn workspace(&self) -> Option<&WorkspaceId> {
-        todo!()
+        self.workspace.as_ref()
     }
 
     /// The changes, as the Keeper last answered for this workspace; none before the
     /// first answer.
     pub fn changes(&self) -> Option<&Changes> {
-        todo!()
+        self.changes.as_ref()
     }
 
     /// Whether an answer of the Keeper is still awaited.
     pub fn is_loading(&self) -> bool {
-        todo!()
+        self.loading
     }
 
     /// Why the Keeper refused the last time it was asked; none once it answers.
+    ///
+    /// A question that brought no answer at all, because the connection ended or the
+    /// Keeper answered with something else, is told the same way: as
+    /// [`Refusal::Failed`] with the reason.
     pub fn refusal(&self) -> Option<&Refusal> {
-        todo!()
+        self.refusal.as_ref()
     }
 
     /// Asks the Keeper again for the changes of the workspace on screen. The Frame calls
     /// it when the window comes to the front, since files change while nobody looks.
     pub fn refresh(&mut self, cx: &mut Context<Self>) {
-        todo!()
+        let Some(workspace) = self.workspace.clone() else {
+            return;
+        };
+        let asked = self.link.update(cx, |link, cx| {
+            link.ask(
+                Request::GetChanges {
+                    workspace: workspace.clone(),
+                },
+                cx,
+            )
+        });
+        if !self.loading {
+            self.loading = true;
+            cx.notify();
+        }
+        self.asking = Some(cx.spawn(async move |changes, cx| {
+            let answer = asked.await;
+            changes
+                .update(cx, |changes, cx| {
+                    changes.loading = false;
+                    match answer {
+                        Ok(Reply::Changes(answered)) if answered.workspace == workspace => {
+                            changes.changes = Some(answered);
+                            changes.refusal = None;
+                        }
+                        Ok(_) => changes.refusal = Some(as_refusal(AskError::Unexpected)),
+                        Err(error) => changes.refusal = Some(as_refusal(error)),
+                    }
+                    cx.notify();
+                })
+                .ok();
+        }));
     }
 
     /// Asks the Keeper for the two versions of one changed file of the workspace on
@@ -170,11 +441,54 @@ impl WorkspaceChanges {
     /// The old version is asked for in the commit those changes are counted from, at the
     /// path the file had there, so the two versions belong to the list the pane holds.
     /// A new file has no old version, and none is asked for.
+    ///
+    /// While there are no changes there is no file of them: nothing is asked, and the
+    /// task resolves to a refusal that says so.
     pub fn file(
         &self,
         file: &ChangedFile,
         cx: &mut Context<Self>,
     ) -> Task<Result<FileSides, AskError>> {
-        todo!()
+        let (Some(workspace), Some(changes)) = (&self.workspace, &self.changes) else {
+            return Task::ready(Err(AskError::Refused(Refusal::Failed {
+                reason: "no changes are shown that the file could be one of".to_owned(),
+            })));
+        };
+        let (since, old_path) = match &file.status {
+            FileStatus::Added => (None, file.path.clone()),
+            FileStatus::Renamed { from } => (changes.counted_from.clone(), from.clone()),
+            FileStatus::Modified | FileStatus::Deleted => {
+                (changes.counted_from.clone(), file.path.clone())
+            }
+        };
+        let request = Request::ReadFile {
+            workspace: workspace.clone(),
+            since,
+            old_path,
+            path: file.path.clone(),
+        };
+        let asked = self.link.update(cx, |link, cx| link.ask(request, cx));
+        cx.spawn(async move |_, _| match asked.await {
+            Ok(Reply::File(sides)) => Ok(sides),
+            Ok(_) => Err(AskError::Unexpected),
+            Err(error) => Err(error),
+        })
+    }
+
+    /// Takes up the workspace on screen, when it is another than before.
+    fn follow(&mut self, cx: &mut Context<Self>) {
+        let on_screen = self.workspaces.read(cx).selected().cloned();
+        if on_screen == self.workspace {
+            return;
+        }
+        // Nothing of the workspace that left the screen is shown under the one that
+        // came, and no answer about it is waited for.
+        self.workspace = on_screen;
+        self.changes = None;
+        self.refusal = None;
+        self.asking = None;
+        self.loading = false;
+        self.refresh(cx);
+        cx.notify();
     }
 }

@@ -133,6 +133,38 @@ pub fn controls() -> Vec<Control> {
 }
 
 /// Binds the key of each control to its action, for the whole app.
+///
+/// The tables are written by hand and never change while the app runs, so a key or a
+/// context that cannot be read is a mistake in the code: it panics, naming the control.
 pub fn bind(controls: &[Control], cx: &mut App) {
-    todo!()
+    let bindings: Vec<KeyBinding> = controls
+        .iter()
+        .map(|control| {
+            let context = control.context.map(|context| {
+                KeyBindingContextPredicate::parse(context)
+                    .unwrap_or_else(|error| {
+                        panic!(
+                            "the context {context:?} of {:?} is not a key context: {error}",
+                            control.title
+                        )
+                    })
+                    .into()
+            });
+            KeyBinding::load(
+                control.keystroke,
+                (control.action)(),
+                context,
+                false,
+                None,
+                cx,
+            )
+            .unwrap_or_else(|error| {
+                panic!(
+                    "the key {:?} of {:?} is not a key: {error}",
+                    control.keystroke, control.title
+                )
+            })
+        })
+        .collect();
+    cx.bind_keys(bindings);
 }
