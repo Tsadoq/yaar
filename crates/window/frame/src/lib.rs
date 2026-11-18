@@ -15,7 +15,9 @@
 //!   with their worktrees and the workspace on screen, and [`WorkspaceChanges`], the
 //!   changes of that workspace;
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
-//! - [`controls`], the table of actions with their keys, and the actions of the Frame;
+//! - [`controls`], the table of actions with their keys, and the actions of the Frame.
+//!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
+//!   context the Frame sets around everything it draws;
 //! - [`keeper`], which finds or starts the Keeper. It uses no interface code;
 //! - [`trace`], the marks by which a start is timed from outside.
 //!
@@ -33,8 +35,8 @@ pub mod trace;
 mod view;
 
 pub use controls::{
-    Asks, Control, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, Sends, SetBase,
-    ToggleSidebar, UnpinSidebar, bind, controls,
+    Asks, Control, KEY_CONTEXT, OpenFolder, Place, SelectNextWorkspace, SelectPreviousWorkspace,
+    Sends, SetBase, ToggleSidebar, UnpinSidebar, bind, controls,
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};

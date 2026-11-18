@@ -7,8 +7,8 @@ use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 
 use crate::controls::{
-    Control, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ToggleSidebar,
-    UnpinSidebar,
+    Control, KEY_CONTEXT, OpenFolder, SelectNextWorkspace, SelectPreviousWorkspace, SetBase,
+    ToggleSidebar, UnpinSidebar,
 };
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
@@ -64,6 +64,10 @@ pub struct PaneEntry {
 /// When the window opens, the first pane has the focus, so that its keys work at once.
 /// A click on what the Frame draws around the panes, as on the sidebar or on the notice,
 /// leaves the focus where it was.
+///
+/// Its root element sets the key context [`crate::KEY_CONTEXT`]. A key bound in that
+/// context works wherever the focus is in the window, in a pane and in the field for the
+/// base too, unless what has the focus binds the same key for itself.
 ///
 /// For tests, which cannot read what is drawn, two elements carry a selector that
 /// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, and the field
@@ -438,7 +442,14 @@ impl Render for Frame {
             theme.border,
             theme.danger,
         );
-        let root = div().size_full().bg(background).text_color(foreground);
+        let root = div()
+            .size_full()
+            // A key of the app that is no Cmd key is bound in this context. It has to
+            // hold wherever the focus can be in the window, so the outermost element
+            // sets it.
+            .key_context(KEY_CONTEXT)
+            .bg(background)
+            .text_color(foreground);
         let Some(composed) = &self.composed else {
             return root.child(self.empty(cx));
         };

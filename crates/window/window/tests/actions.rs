@@ -19,7 +19,7 @@ use gpui_kit::{
     Action, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
     point, px,
 };
-use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, Sends};
+use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, Place, Sends};
 use yaar_link::{Origin, Request, RequestKind, Workspace};
 use yaar_system_tests::{DEADLINE, Repo, Tap, World};
 
@@ -181,12 +181,12 @@ impl Composed {
         (on_screen, branch)
     }
 
-    /// Puts the focus where the key of `control` works. A key with no context works
-    /// wherever the focus is, and is pressed where the focus happens to be.
+    /// Puts the focus where the key of `control` works. A key that works anywhere is
+    /// pressed where the focus happens to be.
     fn focus_where_the_key_works(&mut self, control: &Control, cx: &mut VisualTestContext) {
-        match control.context {
-            None => {}
-            Some(yaar_review_pane::KEY_CONTEXT) => {
+        match control.place {
+            Place::Anywhere => {}
+            Place::In(yaar_review_pane::KEY_CONTEXT) => {
                 // The first row of the Review pane, at its left end: an offer to set a
                 // base, where the row holds one, lies further right.
                 let mut row = None;
@@ -200,7 +200,7 @@ impl Composed {
                     Modifiers::none(),
                 );
             }
-            Some(other) => panic!(
+            Place::In(other) => panic!(
                 "{} works in the context {other:?}, and the walk does not know where that is",
                 control.title
             ),

@@ -7,10 +7,15 @@
 //! Every message of the Link that a user starts has a row here or in the table of a pane:
 //! [`Control::sends`] names it. A row that names none sends none.
 //!
-//! The keys of the Frame and of the Window program are Cmd keys, written `cmd-`: Cmd on
-//! macOS, the Super key elsewhere. A Cmd key works wherever the focus is, a terminal
-//! included, and needs no context. Any other key is bound with a context, so that it
-//! cannot fire where a program expects it.
+//! The keys of the Frame and of the Window program are written `secondary-`, GPUI's name
+//! for the modifier that is Cmd on macOS and Ctrl on every other system, and work
+//! [`Place::Anywhere`]. A Cmd key is bound with no context: it works wherever the focus
+//! is, a terminal included. Any other key is bound with a context, so that it cannot fire
+//! where a program expects it: a Ctrl key of the Frame or of the Window program with
+//! [`KEY_CONTEXT`], which the root element of the Frame sets, and a key of a pane with
+//! the context of that pane. A row of a table says where its key works, and
+//! [`Control::context`] alone says which context that is on the system the app is built
+//! for.
 
 use gpui_kit::*;
 use yaar_link::RequestKind;
@@ -34,6 +39,36 @@ actions!(
         SelectPreviousWorkspace,
     ]
 );
+
+/// The key context of the Frame. Its root element sets it, so it holds wherever the focus
+/// is in what the Frame draws, a pane included.
+pub const KEY_CONTEXT: &str = "Frame";
+
+/// Whether `secondary`, the modifier of the app's own keys, is the Cmd key on the system
+/// the app is built for. It is on macOS, and it is Ctrl on every other system.
+const SECONDARY_IS_CMD: bool = cfg!(target_os = "macos");
+
+/// Where the key of a control works.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Place {
+    /// Wherever the focus is in the window: a key of the Frame or of the Window program.
+    Anywhere,
+    /// Where this GPUI key context is, and nowhere else: a key of a pane.
+    In(&'static str),
+}
+
+impl Place {
+    /// The context a key that works here is bound with, on a system where `secondary`
+    /// is the Cmd key and on one where it is not. Only a Cmd key may be bound with none.
+    /// This is the one place where the system decides anything about a key of the app.
+    fn context(self, secondary_is_cmd: bool) -> Option<&'static str> {
+        match self {
+            Place::In(context) => Some(context),
+            Place::Anywhere if secondary_is_cmd => None,
+            Place::Anywhere => Some(KEY_CONTEXT),
+        }
+    }
+}
 
 /// What the Window asks the user for after an action, before it has anything to send.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,12 +99,11 @@ pub struct Control {
     pub title: &'static str,
     /// Makes the action.
     pub action: fn() -> Box<dyn Action>,
-    /// The key that runs it, as GPUI writes keys. `cmd` is Cmd on macOS and the Super
-    /// key elsewhere.
+    /// The key that runs it, as GPUI writes keys. `secondary` is Cmd on macOS and Ctrl
+    /// on every other system.
     pub keystroke: &'static str,
-    /// Where the key works, as a GPUI key context; none means anywhere in the window,
-    /// and only a Cmd key may have none.
-    pub context: Option<&'static str>,
+    /// Where the key works. A key that works anywhere is written with `secondary`.
+    pub place: Place,
     /// The message of the Link that the action ends in. None for an action that sends
     /// nothing a user starts; what the Window then asks by itself, to have something to
     /// show, is not the user's.
@@ -78,54 +112,64 @@ pub struct Control {
     pub asks: Asks,
 }
 
+impl Control {
+    /// The GPUI key context the key is bound with on the system the app is built for;
+    /// none means that it is bound for the whole app. On macOS a key that works
+    /// [`Place::Anywhere`] has none. On every other system it has [`KEY_CONTEXT`], and
+    /// no key is without a context.
+    pub fn context(&self) -> Option<&'static str> {
+        self.place.context(SECONDARY_IS_CMD)
+    }
+}
+
 /// The actions of the Frame itself.
 pub fn controls() -> Vec<Control> {
     vec![
         Control {
             title: "Open Folder…",
             action: || Box::new(OpenFolder),
-            keystroke: "cmd-o",
-            context: None,
+            keystroke: "secondary-o",
+            place: Place::Anywhere,
             sends: Some(Sends::Request(RequestKind::OpenFolder)),
             asks: Asks::Folder,
         },
         Control {
             title: "Set Base…",
             action: || Box::new(SetBase),
-            keystroke: "cmd-shift-b",
-            context: None,
+            keystroke: "secondary-shift-b",
+            place: Place::Anywhere,
             sends: Some(Sends::Request(RequestKind::SetBase)),
             asks: Asks::Text,
         },
         Control {
             title: "Toggle Sidebar",
             action: || Box::new(ToggleSidebar),
-            keystroke: "cmd-b",
-            context: None,
+            keystroke: "secondary-b",
+            place: Place::Anywhere,
             sends: None,
             asks: Asks::Nothing,
         },
         Control {
             title: "Sidebar by Window Width",
             action: || Box::new(UnpinSidebar),
-            keystroke: "cmd-alt-b",
-            context: None,
+            keystroke: "secondary-alt-b",
+            place: Place::Anywhere,
             sends: None,
             asks: Asks::Nothing,
         },
         Control {
             title: "Next Workspace",
             action: || Box::new(SelectNextWorkspace),
-            keystroke: "cmd-alt-down",
-            context: None,
+            keystroke: "secondary-alt-down",
+            place: Place::Anywhere,
             sends: None,
             asks: Asks::Nothing,
         },
         Control {
             title: "Previous Workspace",
             action: || Box::new(SelectPreviousWorkspace),
-            keystroke: "cmd-alt-up",
-            context: None,
+            keystroke: "secondary-alt-up",
+            place: Place::Anywhere,
             sends: None,
             asks: Asks::Nothing,
         },
@@ -140,7 +184,7 @@ pub fn bind(controls: &[Control], cx: &mut App) {
     let bindings: Vec<KeyBinding> = controls
         .iter()
         .map(|control| {
-            let context = control.context.map(|context| {
+            let context = control.context().map(|context| {
                 KeyBindingContextPredicate::parse(context)
                     .unwrap_or_else(|error| {
                         panic!(
@@ -167,4 +211,22 @@ pub fn bind(controls: &[Control], cx: &mut App) {
         })
         .collect();
     cx.bind_keys(bindings);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{KEY_CONTEXT, Place};
+
+    #[test]
+    fn a_key_that_works_anywhere_has_no_context_where_it_is_a_cmd_key_and_the_frames_elsewhere() {
+        assert_eq!(Place::Anywhere.context(true), None);
+        assert_eq!(Place::Anywhere.context(false), Some(KEY_CONTEXT));
+    }
+
+    #[test]
+    fn a_key_of_a_pane_has_the_context_of_the_pane_on_every_system() {
+        for secondary_is_cmd in [true, false] {
+            assert_eq!(Place::In("Pane").context(secondary_is_cmd), Some("Pane"));
+        }
+    }
 }

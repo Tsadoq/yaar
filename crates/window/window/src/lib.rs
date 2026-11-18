@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
-use yaar_frame::{Asks, Control, Opened, PaneEntry};
+use yaar_frame::{Asks, Control, Opened, PaneEntry, Place};
 
 /// The version of the app, as shown to the user and told to the Keeper.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -43,8 +43,8 @@ pub fn controls() -> Vec<Control> {
     controls.push(Control {
         title: "Quit",
         action: || Box::new(Quit),
-        keystroke: "cmd-q",
-        context: None,
+        keystroke: "secondary-q",
+        place: Place::Anywhere,
         sends: None,
         asks: Asks::Nothing,
     });
@@ -79,28 +79,24 @@ pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Action;
-    use yaar_frame::{Asks, Control};
+    use yaar_frame::{Asks, Control, Place};
 
     use super::{Quit, controls, panes};
 
     /// What tells one row of the table from another.
-    fn row(control: &Control) -> (&'static str, &'static str, Option<&'static str>) {
-        (
-            control.keystroke,
-            (control.action)().name(),
-            control.context,
-        )
+    fn row(control: &Control) -> (&'static str, &'static str, Place) {
+        (control.keystroke, (control.action)().name(), control.place)
     }
 
     #[test]
-    fn the_table_holds_the_keys_of_the_frame_then_of_each_pane_and_quit_on_cmd_q() {
+    fn the_table_holds_the_keys_of_the_frame_then_of_each_pane_and_quit_on_secondary_q() {
         let mut expected: Vec<_> = yaar_frame::controls().iter().map(row).collect();
         for pane in panes() {
             expected.extend((pane.controls)().iter().map(row));
         }
         // The one key of the Window program's own, written out here so that a change of
         // it in the table is a change in two places.
-        expected.push(("cmd-q", Quit.name(), None));
+        expected.push(("secondary-q", Quit.name(), Place::Anywhere));
 
         let table = controls();
         assert_eq!(table.iter().map(row).collect::<Vec<_>>(), expected);
@@ -110,19 +106,40 @@ mod tests {
         assert_eq!(quit.asks, Asks::Nothing);
     }
 
+    // The next two tests are one rule on two kinds of system: only a Cmd key is bound with
+    // no context. Any other key bound so would be taken from the program in a terminal,
+    // and from every field a user types into.
+
+    #[cfg(target_os = "macos")]
     #[test]
-    fn a_key_that_works_anywhere_is_a_cmd_key() {
-        // Any other key bound with no context would be taken from the program in a
-        // terminal, and from every field a user types into.
-        for control in controls() {
-            if control.context.is_none() {
+    fn on_macos_a_control_with_no_context_has_a_secondary_key_which_is_a_cmd_key_there() {
+        let table = controls();
+        for control in &table {
+            if control.context().is_none() {
                 assert!(
-                    control.keystroke.starts_with("cmd-"),
-                    "{} works anywhere on the key {:?}",
+                    control.keystroke.starts_with("secondary-"),
+                    "{} works with no context on the key {:?}",
                     control.title,
                     control.keystroke
                 );
             }
+        }
+        // The rule is about the keys of the Frame and of the Window program, and they
+        // are there to be held to it.
+        assert!(table.iter().any(|control| control.context().is_none()));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_no_control_is_without_a_context() {
+        // The keyboard has no Cmd key, and `secondary` is Ctrl.
+        for control in controls() {
+            assert!(
+                control.context().is_some(),
+                "{} works with no context on the key {:?}",
+                control.title,
+                control.keystroke
+            );
         }
     }
 
@@ -130,14 +147,14 @@ mod tests {
     fn no_key_belongs_to_two_controls_in_one_place() {
         // The parts of the table come from crates that do not know each other. Of two
         // rows with one key that both apply somewhere, one wins there and nothing says
-        // so. Both apply where their contexts are the same, and wherever one of them
-        // has none.
+        // so. Both apply where their places are the same, and wherever one of them
+        // works anywhere: that one applies inside every pane too.
         let table = controls();
         for (at, control) in table.iter().enumerate() {
             for other in &table[at + 1..] {
-                let in_one_place = control.context == other.context
-                    || control.context.is_none()
-                    || other.context.is_none();
+                let in_one_place = control.place == other.place
+                    || control.place == Place::Anywhere
+                    || other.place == Place::Anywhere;
                 assert!(
                     control.keystroke != other.keystroke || !in_one_place,
                     "the key {:?} belongs to {} and to {}",

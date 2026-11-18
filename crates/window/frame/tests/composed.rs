@@ -11,11 +11,12 @@ use std::rc::Rc;
 
 use gpui_kit::{
     AppContext, Context, FocusHandle, InteractiveElement, IntoElement, Modifiers, Pixels, Render,
-    Size, Styled, TestAppContext, VisualTestContext, Window, div, px,
+    Size, Styled, TestAppContext, VisualTestContext, Window, actions, div, px,
 };
 use yaar_frame::{
-    BuildPane, FULL_WIDTH, Frame, KeeperLink, OpenFolder, Pane, RAIL_WIDTH, SelectNextWorkspace,
-    SelectPreviousWorkspace, SetBase, SidebarForm, ToggleSidebar,
+    Asks, BuildPane, Control, FULL_WIDTH, Frame, KEY_CONTEXT, KeeperLink, OpenFolder, Pane, Place,
+    RAIL_WIDTH, SelectNextWorkspace, SelectPreviousWorkspace, SetBase, SidebarForm, ToggleSidebar,
+    bind,
 };
 use yaar_link::{Refusal, Reply, Repository, Request, WorkspaceId};
 
@@ -563,6 +564,76 @@ fn the_keys_of_the_frame_work_when_the_first_pane_never_draws_where_its_focus_is
     );
     cx.simulate_keystrokes(key_of::<ToggleSidebar>());
     assert_eq!(pinned(&shown, &mut cx), Some(SidebarForm::Rail));
+}
+
+actions!(
+    composed_test,
+    [
+        /// An action of the test's own, bound in the context of the Frame.
+        Mark
+    ]
+);
+
+/// The key of [`Mark`]: a Ctrl key, and one that the field for the base does not take.
+const MARK_KEY: &str = "ctrl-shift-m";
+
+/// Binds [`MARK_KEY`] in the context of the Frame, as every key of the Frame's table is
+/// bound on a system whose keyboard has no Cmd key, and counts how often its action ran.
+fn bind_a_key_in_the_context_of_the_frame(cx: &mut TestAppContext) -> Rc<Cell<u32>> {
+    let ran = Rc::new(Cell::new(0));
+    cx.update(|cx| {
+        bind(
+            &[Control {
+                title: "Mark",
+                action: || Box::new(Mark),
+                keystroke: MARK_KEY,
+                place: Place::In(KEY_CONTEXT),
+                sends: None,
+                asks: Asks::Nothing,
+            }],
+            cx,
+        );
+        let ran = ran.clone();
+        cx.on_action(move |_: &Mark, _| ran.set(ran.get() + 1));
+    });
+    ran
+}
+
+#[gpui_kit::test]
+fn a_key_bound_in_the_context_of_the_frame_works_in_every_pane_and_in_the_field_for_the_base(
+    cx: &mut TestAppContext,
+) {
+    let ran = bind_a_key_in_the_context_of_the_frame(cx);
+    let kept = Kept::default();
+    let (_shown, mut cx) = showing(
+        &one_repository(),
+        vec![keeping("left", &kept), keeping("right", &kept)],
+        cx,
+    );
+
+    assert_eq!(focused(&kept, &mut cx), [true, false]);
+    cx.simulate_keystrokes(MARK_KEY);
+    assert_eq!(ran.take(), 1, "with the focus in the first pane");
+
+    let right = drawn("pane-right", &mut cx).expect("the pane is drawn");
+    cx.simulate_click(right.center(), Modifiers::none());
+    assert_eq!(focused(&kept, &mut cx), [false, true]);
+    cx.simulate_keystrokes(MARK_KEY);
+    assert_eq!(ran.take(), 1, "with the focus in the second pane");
+
+    cx.simulate_keystrokes(key_of::<SetBase>());
+    assert!(field_is_open(&mut cx));
+    assert_eq!(focused(&kept, &mut cx), [false, false]);
+    cx.simulate_keystrokes(MARK_KEY);
+    assert_eq!(ran.take(), 1, "with the focus in the field for the base");
+}
+
+#[gpui_kit::test]
+fn a_key_bound_in_the_context_of_the_frame_works_in_a_window_with_no_pane(cx: &mut TestAppContext) {
+    let ran = bind_a_key_in_the_context_of_the_frame(cx);
+    let (_shown, mut cx) = showing(&one_repository(), Vec::new(), cx);
+    cx.simulate_keystrokes(MARK_KEY);
+    assert_eq!(ran.take(), 1);
 }
 
 #[gpui_kit::test]

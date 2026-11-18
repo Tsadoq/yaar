@@ -27,7 +27,7 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
-use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry};
+use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place};
 use yaar_link::{ChangedFile, Changes, Comparison, Content, FileSides, FileStatus};
 
 pub use yaar_diff::Layout;
@@ -99,7 +99,7 @@ pub fn controls() -> Vec<Control> {
             title,
             action,
             keystroke,
-            context: Some(KEY_CONTEXT),
+            place: Place::In(KEY_CONTEXT),
             sends: None,
             asks: Asks::Nothing,
         }
@@ -754,7 +754,7 @@ fn stops(rows: &[PaneRow]) -> Vec<(usize, Side)> {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Action;
-    use yaar_frame::Asks;
+    use yaar_frame::{Asks, Place};
 
     use super::{KEY_CONTEXT, LineDown, LineUp, ToggleLayout, controls};
 
@@ -763,9 +763,10 @@ mod tests {
         let table: Vec<(&str, &str)> = controls()
             .iter()
             .map(|control| {
-                // A key that is no Cmd key would be taken from a program in a terminal
-                // if it worked anywhere.
-                assert_eq!(control.context, Some(KEY_CONTEXT), "{}", control.title);
+                // A plain key that worked anywhere would be taken from a program in a
+                // terminal, and from every field a user types into.
+                assert_eq!(control.place, Place::In(KEY_CONTEXT), "{}", control.title);
+                assert_eq!(control.context(), Some(KEY_CONTEXT), "{}", control.title);
                 assert_eq!(control.sends, None, "{}", control.title);
                 assert_eq!(control.asks, Asks::Nothing, "{}", control.title);
                 (control.keystroke, (control.action)().name())
