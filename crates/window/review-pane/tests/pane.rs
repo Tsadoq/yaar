@@ -16,13 +16,14 @@ use gpui_kit::{
 use yaar_diff::{Row, Side};
 use yaar_frame::SetBase;
 use yaar_link::{
-    Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Request, RequestKind,
+    Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Refusal, Reply,
+    Request, RequestKind,
 };
-use yaar_review_pane::{Layout, PaneRow, Position, ReviewPane, controls};
+use yaar_review_pane::{Layout, PaneRow, Position, ReviewPane, Unshown, controls};
 
 use common::{
-    Stage, WINDOW, bounds_of_row, commit, default_base, drawn, file, id, open, rows, since_main,
-    texts, wait_for_files, wait_until, workspace,
+    Stage, WINDOW, bounds_of_row, commit, default_base, drawn, file, id, link_up, open,
+    open_window, read_file, rows, since_main, texts, wait_for_files, wait_until, workspace,
 };
 
 /// The rows of the pane as a reader of a unified diff would write them down: a heading
@@ -834,4 +835,434 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
     assert!(in_view(&mut cx).contains(&row));
     let drawn = bounds_of_row(row, &mut cx);
     assert!(drawn.top() >= px(0.) && drawn.bottom() <= WINDOW.height);
+}
+
+#[gpui_kit::test]
+fn a_file_with_no_lines_to_show_says_why_and_a_file_with_one_version_is_all_removed_or_all_added(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = link_up(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![
+            file("art.png", FileStatus::Modified),
+            file("dump.sql", FileStatus::Modified),
+            file("gone.txt", FileStatus::Deleted),
+            file(
+                "moved.txt",
+                FileStatus::Renamed {
+                    from: PathBuf::from("was.txt"),
+                },
+            ),
+            file("secret.txt", FileStatus::Modified),
+        ],
+    );
+    // This pane is built when the changes are here already: it takes what the model
+    // holds, and asks for the files then.
+    let asked = keeper.expect(Request::GetChanges { workspace: id('1') }, cx);
+    keeper.reply(asked, Ok(Reply::Changes(changes.clone())));
+    wait_until(cx, "the changes in the shared model", |cx| {
+        models
+            .changes
+            .read_with(cx, |model, _| model.changes().is_some())
+    });
+    let (mut stage, mut cx) = open_window(models, keeper, cx);
+    for file in &changes.files {
+        // The old version of a renamed file is asked for at the path it had.
+        let asked = stage.keeper.expect(read_file(&changes, file), &mut cx);
+        let answer = match file.path.to_str().expect("a path of the test") {
+            "art.png" => Ok(FileSides {
+                old: Content::Binary { size: 2048 },
+                new: Content::Binary { size: 4096 },
+            }),
+            "dump.sql" => Ok(FileSides {
+                old: Content::Text(b"small\n".to_vec()),
+                new: Content::TooLarge { size: 5 << 20 },
+            }),
+            "gone.txt" => Ok(FileSides {
+                old: Content::Text(b"first\nsecond\n".to_vec()),
+                new: Content::Absent,
+            }),
+            "moved.txt" => texts("same\nold\n", "same\nnew\n"),
+            _ => Err(Refusal::Failed {
+                reason: "the file cannot be read".to_owned(),
+            }),
+        };
+        stage.keeper.reply(asked, answer.map(Reply::File));
+    }
+    wait_for_files(&stage.pane, &mut cx);
+
+    let heading = |path: &str, status: FileStatus| PaneRow::File {
+        path: PathBuf::from(path),
+        status,
+    };
+    let unshown = |path: &str, why| PaneRow::Unshown {
+        path: PathBuf::from(path),
+        why,
+    };
+    let diff = |path: &str, row| PaneRow::Diff {
+        path: PathBuf::from(path),
+        row,
+    };
+    assert_eq!(
+        rows(&stage.pane, &mut cx)[1..],
+        [
+            heading("art.png", FileStatus::Modified),
+            unshown("art.png", Unshown::Binary),
+            heading("dump.sql", FileStatus::Modified),
+            unshown("dump.sql", Unshown::TooLarge),
+            heading("gone.txt", FileStatus::Deleted),
+            diff("gone.txt", Row::Removed { old: 0 }),
+            diff("gone.txt", Row::Removed { old: 1 }),
+            heading(
+                "moved.txt",
+                FileStatus::Renamed {
+                    from: PathBuf::from("was.txt")
+                }
+            ),
+            diff("moved.txt", Row::Context { old: 0, new: 0 }),
+            diff("moved.txt", Row::Removed { old: 1 }),
+            diff("moved.txt", Row::Added { new: 1 }),
+            heading("secret.txt", FileStatus::Modified),
+            unshown("secret.txt", Unshown::Refused),
+        ]
+    );
+    assert_eq!(
+        reading(&stage.pane, &mut cx),
+        [
+            "# art.png",
+            "# dump.sql",
+            "# gone.txt",
+            "-first",
+            "-second",
+            "# moved.txt",
+            " same",
+            "-old",
+            "+new",
+            "# secret.txt",
+        ]
+    );
+    // The pane holds no line of a file it shows none of.
+    stage.pane.read_with(&cx, |pane, _| {
+        for path in ["art.png", "dump.sql", "secret.txt"] {
+            for side in [Side::Old, Side::New] {
+                let first = Position {
+                    path: PathBuf::from(path),
+                    side,
+                    line: 0,
+                };
+                assert_eq!(pane.text(&first), None, "{path}");
+            }
+        }
+    });
+    // The reviewer starts on the first changed line there is, past the files that
+    // show none.
+    assert_eq!(
+        position(&stage.pane, &mut cx),
+        Position {
+            path: PathBuf::from("gone.txt"),
+            side: Side::Old,
+            line: 0
+        }
+    );
+    // Every row is drawn, those that stand for a diff too.
+    for row in 0..14 {
+        bounds_of_row(row, &mut cx);
+    }
+}
+
+#[gpui_kit::test]
+fn a_line_is_held_as_the_file_has_it_whatever_its_bytes_and_however_long_it_is(
+    cx: &mut TestAppContext,
+) {
+    // One line far longer than a window is wide, which ends in a word that changed.
+    // The word is of characters of three bytes each and begins a few bytes before the
+    // place where the pane stops handing a line to the text system, so its mark has to
+    // end between two characters there.
+    let wide = |last_word: &str| format!("{} {last_word}", "x".repeat(1019));
+    let old = format!("naïve ✓ 日本\n{}\n", wide("日本語日本語"));
+    let new = format!("naïve ✗ 日本\n{}\n", wide("日本語日本"));
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![
+            file("latin.txt", FileStatus::Added),
+            file("words.txt", FileStatus::Modified),
+        ],
+    );
+    stage.keeper.show(
+        &changes,
+        |file| match file.path.to_str() {
+            // A byte that is no UTF-8, as a file in an older encoding has it.
+            Some("latin.txt") => Ok(FileSides {
+                old: Content::Absent,
+                new: Content::Text(b"caf\xe9\n".to_vec()),
+            }),
+            _ => texts(&old, &new),
+        },
+        &mut cx,
+    );
+    wait_for_files(&stage.pane, &mut cx);
+
+    assert_eq!(
+        reading(&stage.pane, &mut cx),
+        [
+            "# latin.txt",
+            // The byte that is no text reads as the replacement character.
+            "+caf\u{fffd}",
+            "# words.txt",
+            "-naïve ✓ 日本",
+            // The whole of the long line, however little of it a window shows.
+            format!("-{}", wide("日本語日本語")).as_str(),
+            "+naïve ✗ 日本",
+            format!("+{}", wide("日本語日本")).as_str(),
+        ]
+    );
+    // All of them were drawn, the changed words marked: a mark that fell inside a
+    // character would have stopped the frame.
+    for row in 0..7 {
+        bounds_of_row(row, &mut cx);
+    }
+}
+
+#[gpui_kit::test]
+fn changes_read_again_stay_as_they_are_shown_until_the_new_versions_are_here(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, path, mut cx) = open_on_one_file("keep\nold\nend\n", "keep\nnew\nend\n", cx);
+    let changes = since_main(Vec::new(), vec![file("src/long.txt", FileStatus::Modified)]);
+    let read = read_file(&changes, &changes.files[0]);
+    let removed = Position {
+        path: path.clone(),
+        side: Side::Old,
+        line: 1,
+    };
+    // The reviewer goes to the removed line: the comparison, the heading, keep, -old.
+    let on_the_removed_line = bounds_of_row(3, &mut cx).center();
+    cx.simulate_click(on_the_removed_line, Modifiers::none());
+    assert_eq!(position(&stage.pane, &mut cx), removed);
+    let shown = rows(&stage.pane, &mut cx);
+
+    // The window comes back to the front, or the Keeper tells of a change: the changes
+    // are asked for again, and then the file.
+    let read_again = |stage: &mut Stage, cx: &mut VisualTestContext| {
+        stage
+            .keeper
+            .tell(Fact::ChangesChanged { workspace: id('1') });
+        let asked = stage
+            .keeper
+            .expect(Request::GetChanges { workspace: id('1') }, cx);
+        stage
+            .keeper
+            .reply(asked, Ok(Reply::Changes(changes.clone())));
+        stage.keeper.expect(read.clone(), cx)
+    };
+    let asked = read_again(&mut stage, &mut cx);
+    // While the file is on its way, the pane shows what it showed: no row blinks,
+    // and the reviewer is where they were.
+    assert_eq!(rows(&stage.pane, &mut cx), shown);
+    assert_eq!(position(&stage.pane, &mut cx), removed);
+
+    // The file changed on disk meanwhile.
+    stage.keeper.reply(
+        asked,
+        texts("keep\nold\nend\n", "keep\nnewer\nmore\nend\n").map(Reply::File),
+    );
+    wait_until(&mut cx, "the new version of the file", |cx| {
+        reading(&stage.pane, cx) == ["# src/long.txt", " keep", "-old", "+newer", "+more", " end"]
+    });
+    // The line the reviewer is on is still there, and they are still on it.
+    assert_eq!(position(&stage.pane, &mut cx), removed);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.position_row()),
+        Some(3)
+    );
+
+    // Now the line is no longer removed: the edit was taken back and a line was added
+    // at the end. The reviewer cannot stay on a line the diff does not show, and is
+    // put on the first changed line.
+    let asked = read_again(&mut stage, &mut cx);
+    stage.keeper.reply(
+        asked,
+        texts("keep\nold\nend\n", "keep\nold\nend\nlast\n").map(Reply::File),
+    );
+    wait_until(&mut cx, "the newest version of the file", |cx| {
+        reading(&stage.pane, cx) == ["# src/long.txt", " keep", " old", " end", "+last"]
+    });
+    assert_eq!(
+        position(&stage.pane, &mut cx),
+        Position {
+            path,
+            side: Side::New,
+            line: 3
+        }
+    );
+}
+
+#[gpui_kit::test]
+fn another_workspace_on_screen_takes_the_place_of_the_one_before(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature"), workspace('2', "other")], cx);
+    let long = |word: &str| {
+        (0..200)
+            .map(|line| format!("{word} {line}\n"))
+            .collect::<String>()
+    };
+    let first = since_main(Vec::new(), vec![file("first.txt", FileStatus::Added)]);
+    let first_text = long("first");
+    stage
+        .keeper
+        .show(&first, |_| texts("", &first_text), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+
+    // The reviewer switches to the split view and reads down the first workspace.
+    let a_line = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(a_line, Modifiers::none());
+    cx.simulate_keystrokes("s");
+    for _ in 0..60 {
+        cx.simulate_keystrokes("j");
+    }
+    let in_view = stage.pane.read_with(&cx, |pane, _| pane.rows_in_view());
+    assert!(in_view.start > 30, "{in_view:?}");
+
+    // The other workspace comes on screen. Nothing of the first is shown under its
+    // name: the pane is empty until the Keeper has answered for it.
+    stage
+        .models
+        .workspaces
+        .update(&mut cx, |list, cx| list.select(&id('2'), cx));
+    cx.run_until_parked();
+    stage.pane.read_with(&cx, |pane, _| {
+        assert_eq!(pane.rows(), []);
+        assert_eq!(pane.position(), None);
+        assert_eq!(pane.position_row(), None);
+        assert_eq!(pane.rows_in_view(), 0..0);
+        let of_the_first = Position {
+            path: PathBuf::from("first.txt"),
+            side: Side::New,
+            line: 0,
+        };
+        assert_eq!(pane.text(&of_the_first), None);
+    });
+
+    // The other workspace has many files, so that its rows fill more than the window
+    // from the first answer on, before any file is here.
+    let second = Changes {
+        workspace: id('2'),
+        files: (0..40)
+            .map(|file_number| file(&format!("second-{file_number:02}.txt"), FileStatus::Added))
+            .collect(),
+        ..first.clone()
+    };
+    stage
+        .keeper
+        .show(&second, |_| texts("", "of the second\n"), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    stage.pane.read_with(&cx, |pane, _| {
+        assert_eq!(pane.rows().len(), 81);
+        assert_eq!(
+            pane.rows()[1],
+            PaneRow::File {
+                path: PathBuf::from("second-00.txt"),
+                status: FileStatus::Added
+            }
+        );
+        // Read from its start, and not from as far down as the first was read; the
+        // reviewer is on its first changed line.
+        assert_eq!(pane.rows_in_view().start, 0);
+        let start = Position {
+            path: PathBuf::from("second-00.txt"),
+            side: Side::New,
+            line: 0,
+        };
+        assert_eq!(pane.position(), Some(&start));
+        assert_eq!(pane.text(&start).as_deref(), Some("of the second"));
+        // The view the reviewer chose lasts as long as the window.
+        assert_eq!(pane.layout(), Layout::Split);
+    });
+}
+
+#[gpui_kit::test]
+fn a_file_that_arrives_above_the_rows_in_view_leaves_them_where_they_are(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![
+            file("above.txt", FileStatus::Added),
+            file("below.txt", FileStatus::Added),
+        ],
+    );
+    let asked = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Changes(changes.clone())));
+    // The Keeper is slow with the first file, and the second is here before it.
+    let above = stage
+        .keeper
+        .expect(read_file(&changes, &changes.files[0]), &mut cx);
+    let below = stage
+        .keeper
+        .expect(read_file(&changes, &changes.files[1]), &mut cx);
+    let lines = |word: &str, count: usize| {
+        (0..count)
+            .map(|line| format!("{word} {line}\n"))
+            .collect::<String>()
+    };
+    stage
+        .keeper
+        .reply(below, texts("", &lines("below", 100)).map(Reply::File));
+    wait_until(&mut cx, "the second file", |cx| {
+        rows(&stage.pane, cx).len() == 104
+    });
+    assert_eq!(
+        rows(&stage.pane, &mut cx)[2],
+        PaneRow::Unshown {
+            path: PathBuf::from("above.txt"),
+            why: Unshown::Loading
+        }
+    );
+    // The first file may yet have the first changed line: the reviewer is on none.
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.position().cloned()),
+        None
+    );
+
+    // The reviewer scrolls down into the second file and reads there.
+    let over_the_rows = bounds_of_row(5, &mut cx).center();
+    cx.simulate_event(ScrollEvent {
+        position: over_the_rows,
+        delta: ScrollDelta::Pixels(point(px(0.), px(-1000.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    let top = |cx: &mut VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| {
+            let first = pane.rows_in_view().start;
+            (first, pane.rows()[first].clone())
+        })
+    };
+    let read_there = PaneRow::Diff {
+        path: PathBuf::from("below.txt"),
+        row: Row::Added { new: 46 },
+    };
+    assert_eq!(top(&mut cx), (50, read_there.clone()));
+
+    // The first file arrives, thirty rows where one stood. The row at the top of the
+    // view is the row that was there.
+    stage
+        .keeper
+        .reply(above, texts("", &lines("above", 30)).map(Reply::File));
+    wait_for_files(&stage.pane, &mut cx);
+    assert_eq!(top(&mut cx), (79, read_there));
+    assert_eq!(
+        position(&stage.pane, &mut cx),
+        Position {
+            path: PathBuf::from("above.txt"),
+            side: Side::New,
+            line: 0
+        }
+    );
 }

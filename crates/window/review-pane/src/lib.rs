@@ -311,7 +311,6 @@ impl ReviewPane {
             self.by_path.clear();
             self.reading.clear();
             self.position = None;
-            self.to_top();
             self.rebuild(cx);
             return;
         };
@@ -319,7 +318,6 @@ impl ReviewPane {
         // either way nothing new came, and what is shown stays.
         let nothing_new = model.is_loading() || model.refusal().is_some();
         if nothing_new && self.changes.as_ref() == Some(changes) {
-            cx.notify();
             return;
         }
         let changes = changes.clone();
@@ -509,14 +507,17 @@ impl ReviewPane {
         None
     }
 
+    /// What [`LineDown`] does.
     pub(crate) fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) {
         self.step(1, cx);
     }
 
+    /// What [`LineUp`] does.
     pub(crate) fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) {
         self.step(-1, cx);
     }
 
+    /// What [`ToggleLayout`] does.
     pub(crate) fn toggle_layout(
         &mut self,
         _: &ToggleLayout,
@@ -684,4 +685,37 @@ fn stops(rows: &[PaneRow]) -> Vec<(usize, Side)> {
         index = run.end;
     }
     stops
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::Action;
+    use yaar_frame::Asks;
+
+    use super::{KEY_CONTEXT, LineDown, LineUp, ToggleLayout, controls};
+
+    #[test]
+    fn the_keys_of_the_pane_work_in_the_pane_only_and_send_nothing_a_user_starts() {
+        let table: Vec<(&str, &str)> = controls()
+            .iter()
+            .map(|control| {
+                // A key that is no Cmd key would be taken from a program in a terminal
+                // if it worked anywhere.
+                assert_eq!(control.context, Some(KEY_CONTEXT), "{}", control.title);
+                assert_eq!(control.sends, None, "{}", control.title);
+                assert_eq!(control.asks, Asks::Nothing, "{}", control.title);
+                (control.keystroke, (control.action)().name())
+            })
+            .collect();
+        assert_eq!(
+            table,
+            [
+                ("j", LineDown.name()),
+                ("down", LineDown.name()),
+                ("k", LineUp.name()),
+                ("up", LineUp.name()),
+                ("s", ToggleLayout.name()),
+            ]
+        );
+    }
 }

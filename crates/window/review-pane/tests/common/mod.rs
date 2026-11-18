@@ -262,15 +262,14 @@ pub struct Stage {
     pub keeper: KeeperEnd,
 }
 
-/// Opens a window with the pane alone, built and bound the way the Window program does
-/// it: the keys from the pane's own table, the view from the pane's own builder. The
-/// Keeper has listed `workspaces` of one repository, and the first of them is on
-/// screen; the request for its changes is the next the Keeper hears.
-pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
-    let entry = yaar_review_pane::entry();
+/// The shared models of a window, fed by a Keeper the test plays. The Keeper has listed
+/// `workspaces` of one repository, and the first of them is on screen; the request for
+/// its changes is the next the Keeper hears. The keys of the pane are bound from the
+/// pane's own table, the way the Window program binds them.
+pub fn link_up(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Models, KeeperEnd) {
     cx.update(|cx| {
         gpui_kit::init(cx);
-        bind(&(entry.controls)(), cx);
+        bind(&(yaar_review_pane::entry().controls)(), cx);
     });
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
@@ -282,7 +281,16 @@ pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, Visu
             .workspaces
             .read_with(cx, |list, _| list.selected().is_some())
     });
+    (models, keeper)
+}
 
+/// Opens a window that holds the pane alone, built by the pane's own builder the way
+/// the Window program builds it.
+pub fn open_window(
+    models: Models,
+    keeper: KeeperEnd,
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds {
             origin: Point::default(),
@@ -294,7 +302,7 @@ pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, Visu
     let (window, _host) = cx
         .update(|cx| {
             gpui_kit::open_window(options, cx, |window, cx| {
-                let pane = (entry.build)()(&models, window, cx);
+                let pane = (yaar_review_pane::entry().build)()(&models, window, cx);
                 assert_eq!(pane.name, yaar_review_pane::NAME);
                 let view = pane.view.clone();
                 built = Some(pane);
@@ -317,6 +325,13 @@ pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, Visu
         },
         cx,
     )
+}
+
+/// A window with the pane in it, linked as [`link_up`] links it: the pane is there
+/// before the Keeper has said anything about the changes.
+pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let (models, keeper) = link_up(workspaces, cx);
+    open_window(models, keeper, cx)
 }
 
 /// The rows of the pane, as they are now.
