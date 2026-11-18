@@ -54,7 +54,7 @@ pub fn descriptors_of(pid: u32) -> Vec<Descriptor> {
 
 /// Every process that descends from this one and still runs: its children, theirs, and
 /// so on. One that has ended and waits to be collected holds nothing open and is left
-/// out.
+/// out, and so is one that is on its way out.
 pub fn descendants_of(pid: u32) -> Vec<u32> {
     let running: Vec<(u32, u32)> = if cfg!(target_os = "linux") {
         std::fs::read_dir("/proc")
@@ -161,13 +161,19 @@ fn parent_in_stat(stat: &str) -> Option<u32> {
 }
 
 /// The process and its parent in one line of `ps -o pid=,ppid=,stat=`; none for a
-/// process that has ended.
+/// process that has ended or is ending.
+///
+/// The state is one letter for what the process does, `Z` when it has ended, and then
+/// letters that say more, `E` among them for one that is trying to exit. While a process
+/// is started, and for a moment after one has ended, macOS lists such a one under its
+/// parent: it runs nothing and is about to be gone.
 fn parent_in_ps(line: &str) -> Option<(u32, u32)> {
     let mut fields = line.split_whitespace();
     let pid = fields.next()?.parse().ok()?;
     let parent = fields.next()?.parse().ok()?;
     let state = fields.next()?;
-    (!state.starts_with('Z')).then_some((pid, parent))
+    let ending = state.starts_with('Z') || state.chars().skip(1).any(|more| more == 'E');
+    (!ending).then_some((pid, parent))
 }
 
 /// Those of `running`, given as pairs of a process and its parent, that descend from
@@ -270,6 +276,8 @@ Num       RefCount Protocol Flags    Type St Inode Path
         assert_eq!(parent_in_stat("812 (git) Z 800 812 800 0 -1"), None);
         assert_eq!(parent_in_ps("  812   800 S+  "), Some((812, 800)));
         assert_eq!(parent_in_ps("  812   800 Z"), None);
+        assert_eq!(parent_in_ps("  812   800 ?NE"), None);
+        assert_eq!(parent_in_ps("  812   800 SNs"), Some((812, 800)));
     }
 
     #[test]

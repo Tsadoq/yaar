@@ -607,12 +607,17 @@ fn a_window_of_another_version_is_told_no_fact_and_is_let_go_when_it_asks_for_mo
     window.stop(keeper);
 }
 
-/// The processes this test process has started and not yet collected.
-fn children() -> Vec<u32> {
+/// The git processes this test process has started and not yet collected.
+///
+/// Only those that run git by name are counted. While a process is started, and for a
+/// moment after one has ended, macOS lists a child under the name of its parent that is
+/// on its way out; such a one is no git process that runs.
+fn git_children() -> Vec<u32> {
     let me = std::process::id();
+    let is_git = |name: &str| name == "git" || name.ends_with("/git");
     if cfg!(target_os = "linux") {
-        // The parent is the second field after the name, and the name ends at the
-        // last `)`.
+        // The name stands between brackets, and the parent is the second field after
+        // the last `)`.
         std::fs::read_dir("/proc")
             .expect("read /proc")
             .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
@@ -620,40 +625,44 @@ fn children() -> Vec<u32> {
                 std::fs::read_to_string(format!("/proc/{pid}/stat"))
                     .ok()
                     .and_then(|stat| {
-                        let (_, rest) = stat.rsplit_once(')')?;
-                        rest.split_whitespace().nth(1)?.parse::<u32>().ok()
+                        let (before, rest) = stat.rsplit_once(')')?;
+                        let parent = rest.split_whitespace().nth(1)?.parse::<u32>().ok()?;
+                        Some(parent == me && is_git(before.split_once('(')?.1))
                     })
-                    == Some(me)
+                    == Some(true)
             })
             .collect()
     } else {
         let listing = Command::new("ps")
-            .args(["-axo", "pid=,ppid="])
+            .args(["-axo", "pid=,ppid=,comm="])
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .spawn()
+            .output()
             .expect("start ps");
-        // `ps` is a child of this process too, while it lists.
-        let ps = listing.id();
-        let output = listing.wait_with_output().expect("wait for ps");
-        assert!(output.status.success(), "ps failed");
-        String::from_utf8_lossy(&output.stdout)
+        assert!(listing.status.success(), "ps failed");
+        String::from_utf8_lossy(&listing.stdout)
             .lines()
             .filter_map(|line| {
                 let mut fields = line.split_whitespace();
                 let pid = fields.next()?.parse::<u32>().ok()?;
                 let parent = fields.next()?.parse::<u32>().ok()?;
-                (parent == me && pid != ps).then_some(pid)
+                (parent == me && is_git(fields.next()?)).then_some(pid)
             })
             .collect()
     }
+}
+
+/// Whether the system still knows a process by this id: one that runs, or one that has
+/// ended and that nobody has collected.
+fn is_known(pid: u32) -> bool {
+    // SAFETY: signal 0 sends nothing; it only asks whether the process is there.
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
 #[test]
 fn the_git_process_kept_for_file_contents_has_ended_when_the_keeper_returns() {
     let scratch = Scratch::new();
     let (repo, first) = scratch.repository("repo");
-    assert_eq!(children(), Vec::<u32>::new(), "nothing runs yet");
+    assert_eq!(git_children(), vec![], "no git runs yet");
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let workspace = window.open(&repo);
@@ -667,8 +676,14 @@ fn the_git_process_kept_for_file_contents_has_ended_when_the_keeper_returns() {
         path: PathBuf::from("a.txt"),
     });
     assert!(read.is_ok(), "{read:?}");
-    assert_eq!(children().len(), 1, "the one git process of the worktree");
+    let kept = git_children();
+    let [kept] = kept[..] else {
+        panic!("not the one git process of the worktree: {kept:?}");
+    };
+    assert!(is_known(kept));
 
+    // When the Keeper has returned, that process has ended and was collected: the
+    // system knows it no more.
     window.stop(keeper);
-    assert_eq!(children(), Vec::<u32>::new(), "the Keeper has returned");
+    assert!(!is_known(kept), "the git process outlived the Keeper");
 }
