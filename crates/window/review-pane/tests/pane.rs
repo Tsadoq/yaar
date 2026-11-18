@@ -153,7 +153,12 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
         &changes,
         |file| match file.path.to_str() {
             Some("src/numbers.txt") => {
-                texts("one\ntwo\nthree\nfour\n", "one\n2\nthree\nfour\nfive\n")
+                // A line is added above an unchanged one, so below it the numbers of
+                // the old and the new version are not the same.
+                texts(
+                    "one\ntwo\nthree\nfour\n",
+                    "zero\none\n2\nthree\nfour\nfive\n",
+                )
             }
             // A new file has no old version, and the Keeper sends none.
             _ => Ok(FileSides {
@@ -179,12 +184,13 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
                 path: numbers.clone(),
                 status: FileStatus::Modified
             },
-            diff(&numbers, Row::Context { old: 0, new: 0 }),
+            diff(&numbers, Row::Added { new: 0 }),
+            diff(&numbers, Row::Context { old: 0, new: 1 }),
             diff(&numbers, Row::Removed { old: 1 }),
-            diff(&numbers, Row::Added { new: 1 }),
-            diff(&numbers, Row::Context { old: 2, new: 2 }),
-            diff(&numbers, Row::Context { old: 3, new: 3 }),
-            diff(&numbers, Row::Added { new: 4 }),
+            diff(&numbers, Row::Added { new: 2 }),
+            diff(&numbers, Row::Context { old: 2, new: 3 }),
+            diff(&numbers, Row::Context { old: 3, new: 4 }),
+            diff(&numbers, Row::Added { new: 5 }),
             PaneRow::File {
                 path: notes.clone(),
                 status: FileStatus::Added
@@ -198,6 +204,7 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
         reading(&stage.pane, &mut cx),
         [
             "# src/numbers.txt",
+            "+zero",
             " one",
             "-two",
             "+2",
@@ -219,6 +226,10 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
         };
         // A line the diff does not show is still a line of the file the pane holds.
         assert_eq!(at(&numbers, Side::Old, 3).as_deref(), Some("four"));
+        // An unchanged line has another number in each version, and the text of each.
+        assert_eq!(at(&numbers, Side::Old, 2).as_deref(), Some("three"));
+        assert_eq!(at(&numbers, Side::New, 3).as_deref(), Some("three"));
+        assert_eq!(at(&numbers, Side::New, 2).as_deref(), Some("2"));
         // No text for a line the file does not have, on a side it does not have, or of
         // a file that is not among the changes.
         assert_eq!(at(&numbers, Side::Old, 4), None);
@@ -235,6 +246,44 @@ fn the_pane_shows_the_changes_of_the_workspace_line_by_line(cx: &mut TestAppCont
     assert!(tops.is_sorted_by(|above, below| above < below), "{tops:?}");
     // And each row of a diff draws the line it stands for: the text handed to the text
     // system in that row is the text of that line.
+    assert_lines_drawn_as_read(&stage.pane, &mut cx);
+
+    // The same in the split view, which pairs the removed line with the added one and
+    // draws an unchanged line in both halves.
+    let first_line = bounds_of_row(4, &mut cx).center();
+    cx.simulate_click(first_line, Modifiers::none());
+    cx.simulate_keystrokes("s");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.layout()),
+        Layout::Split
+    );
+    let split = rows(&stage.pane, &mut cx);
+    assert_eq!(
+        split[3..9],
+        [
+            PaneRow::File {
+                path: numbers.clone(),
+                status: FileStatus::Modified
+            },
+            diff(
+                &numbers,
+                Row::Changed {
+                    old: None,
+                    new: Some(0)
+                }
+            ),
+            diff(&numbers, Row::Context { old: 0, new: 1 }),
+            diff(
+                &numbers,
+                Row::Changed {
+                    old: Some(1),
+                    new: Some(2)
+                }
+            ),
+            diff(&numbers, Row::Context { old: 2, new: 3 }),
+            diff(&numbers, Row::Context { old: 3, new: 4 }),
+        ]
+    );
     assert_lines_drawn_as_read(&stage.pane, &mut cx);
 }
 
