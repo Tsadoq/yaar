@@ -179,8 +179,9 @@ pub fn controls() -> Vec<Control> {
 /// Binds the key of each control to its action, in the context that
 /// [`Control::context`] gives: for the whole app where that is none.
 ///
-/// The tables are written by hand and never change while the app runs, so a key or a
-/// context that cannot be read is a mistake in the code: it panics, naming the control.
+/// The tables are written by hand and never change while the app runs, so a key, an
+/// empty one included, or a context that cannot be read is a mistake in the code: it
+/// panics, naming the control.
 pub fn bind(controls: &[Control], cx: &mut App) {
     let bindings: Vec<KeyBinding> = controls
         .iter()
@@ -195,6 +196,13 @@ pub fn bind(controls: &[Control], cx: &mut App) {
                     })
                     .into()
             });
+            // The parser reads no keystroke at all as no binding, and binds nothing.
+            assert!(
+                !control.keystroke.trim().is_empty(),
+                "the key {:?} of {:?} is not a key: it is empty",
+                control.keystroke,
+                control.title
+            );
             KeyBinding::load(
                 control.keystroke,
                 (control.action)(),

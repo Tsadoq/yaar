@@ -222,3 +222,21 @@ fn a_key_bound_in_a_context_works_only_where_the_context_is(cx: &mut TestAppCont
     cx.simulate_keystrokes("j");
     assert_eq!(ran.take(), [Mark.name()], "inside the context");
 }
+
+#[gpui_kit::test]
+#[should_panic(expected = "the key \"\" of \"Mark\" is not a key")]
+fn a_control_with_an_empty_keystroke_is_refused_naming_the_control(cx: &mut TestAppContext) {
+    cx.update(|cx| {
+        bind(
+            &[Control {
+                title: "Mark",
+                action: || Box::new(Mark),
+                keystroke: "",
+                place: Place::Anywhere,
+                sends: None,
+                asks: Asks::Nothing,
+            }],
+            cx,
+        );
+    });
+}
