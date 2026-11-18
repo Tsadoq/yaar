@@ -178,6 +178,10 @@ driver = "client"
 runs = "ci"
 proves = []
 slice = 1
+built = [
+    "crates/keeper/keeper/tests/link_endpoint.rs::a_socket_path_longer_than_the_system_allows_is_served_at_the_short_one_both_sides_compute",
+    "system-tests/tests/socket.rs::the_window_program_and_a_scripted_client_meet_the_keeper_of_a_socket_path_too_long_to_bind",
+]
 note = "Found while the skeleton was built: a very long user name makes the address too long. Two tests, because the row names both programs: the Keeper's own, and the built Window program with a scripted client."
 
 [[test]]
@@ -223,6 +227,9 @@ driver = "workflow"
 runs = "ci"
 proves = []
 slice = 1
+built = [
+    ".github/workflows/ci.yml::A dependency under a licence outside the list is refused",
+]
 
 [[test]]
 id = "BUILD-04"
@@ -255,6 +262,13 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-015", "NFR-027"]
+built = [
+    ".github/workflows/ci.yml::A planted web view is refused",
+    ".github/workflows/ci.yml::A planted JavaScript runtime is refused",
+    ".github/workflows/ci.yml::A crate from a git repository is refused, as one of the Zed editor would be",
+    ".github/workflows/ci.yml::A planted crate of the Zed editor is refused",
+    ".github/workflows/ci.yml::A crate Zed publishes is refused anywhere but beneath the interface toolkit",
+]
 
 [[test]]
 id = "LIC-01"
@@ -267,6 +281,7 @@ runs = "ci"
 proves = ["NFR-025"]
 built = [
     ".github/workflows/ci.yml::Licences, advisories, bans, sources",
+    ".github/workflows/ci.yml::The app's own licence",
 ]
 
 [[test]]
@@ -427,6 +442,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-001"]
+built = [
+    "crates/keeper/recorder/tests/reading.rs::the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_uncommitted_and_untracked",
+]
 
 [[test]]
 id = "WS-02"
@@ -437,6 +455,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-002"]
+built = [
+    "crates/keeper/workspaces/tests/base.rs::with_nothing_set_the_base_is_the_default_branch_and_the_changes_count_from_where_the_branch_left_it",
+]
 
 [[test]]
 id = "WS-03"
@@ -447,6 +468,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-002"]
+built = [
+    "crates/keeper/workspaces/src/base.rs::the_rule_names_the_recorded_base_for_each_recorded_shape_of_repository",
+]
 
 [[test]]
 id = "WS-04"
@@ -457,6 +481,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-003"]
+built = [
+    "crates/keeper/workspaces/tests/base.rs::a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives_the_keeper",
+]
 
 [[test]]
 id = "WS-05"
@@ -477,6 +504,10 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-005"]
+built = [
+    "crates/keeper/workspaces/tests/base.rs::on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_upstream_and_what_is_uncommitted",
+    "crates/keeper/workspaces/tests/base.rs::a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branch_and_what_is_uncommitted",
+]
 
 [[test]]
 id = "BASE-01"
@@ -487,6 +518,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-005"]
+built = [
+    "crates/keeper/workspaces/tests/base.rs::on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remote_branch_are_listed",
+]
 
 [[test]]
 id = "BASE-02"
@@ -497,6 +531,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-005"]
+built = [
+    "crates/keeper/workspaces/tests/base.rs::with_no_remote_the_uncommitted_changes_are_listed_with_nothing_to_compare_and_a_base_can_be_set",
+]
 
 [[test]]
 id = "WS-07"
@@ -507,6 +544,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-006"]
+built = [
+    "crates/keeper/workspaces/tests/open.rs::two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch",
+]
 
 [[test]]
 id = "WS-08"
@@ -517,6 +557,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-013"]
+built = [
+    "crates/keeper/workspaces/tests/open.rs::a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_other_is_refused_with_the_reason",
+]
 
 [[test]]
 id = "LISTEN-04"
@@ -558,6 +601,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-006"]
+built = [
+    "crates/window/frame/tests/sidebar.rs::the_sidebar_lists_each_repository_with_its_worktrees_under_it_each_named_by_its_branch",
+]
 
 [[test]]
 id = "FRAME-02"
@@ -578,6 +624,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-009"]
+built = [
+    "crates/window/frame/tests/sidebar.rs::narrower_than_the_set_width_with_nothing_pinned_the_sidebar_is_a_rail_and_wider_the_full_list",
+    "crates/window/frame/tests/sidebar.rs::a_window_opened_narrow_shows_the_rail_at_once",
+    "crates/window/frame/tests/sidebar.rs::a_window_opened_wide_shows_the_full_list_at_once",
+]
 
 [[test]]
 id = "FRAME-04"
@@ -588,6 +639,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-010"]
+built = [
+    "crates/window/frame/tests/sidebar.rs::pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width",
+]
 
 [[test]]
 id = "FRAME-06"
@@ -1212,6 +1266,9 @@ driver = "call"
 runs = "ci"
 proves = []
 slice = 1
+built = [
+    "crates/shared/diff/src/lib.rs::a_file_of_21220_reindented_lines_diffs_in_under_50_ms",
+]
 
 [[test]]
 id = "DIFF-02"
@@ -1222,6 +1279,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-001"]
+built = [
+    "crates/shared/diff/src/lib.rs::on_the_569_recorded_changes_the_hunks_give_the_new_file_and_are_gits_on_all_but_five",
+]
 note = "The corpus and git's hunks are compiled into the test from the crate's folder, so no file is opened when it runs. The pinned diff library places five changes otherwise than git does, measured on all 569 pairs."
 
 [[test]]
@@ -1233,6 +1293,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-044"]
+built = [
+    "crates/shared/diff/src/lib.rs::unified_and_split_lay_out_the_same_hunks_and_emphasis_marks_only_the_changed_words",
+]
 
 [[test]]
 id = "REV-01"
@@ -1546,6 +1609,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-001", "FR-005"]
+built = [
+    "crates/window/review-pane/tests/pane.rs::the_pane_shows_the_changes_of_the_workspace_line_by_line",
+    "crates/window/review-pane/tests/pane.rs::above_the_changes_the_pane_shows_the_comparison_and_its_commits_and_offers_a_base_where_there_is_none",
+]
 
 [[test]]
 id = "RP-02"
@@ -1676,6 +1743,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-044"]
+built = [
+    "crates/window/review-pane/tests/pane.rs::switching_between_the_unified_and_the_split_view_keeps_the_line_the_reviewer_was_on",
+]
 
 [[test]]
 id = "RP-19"
@@ -1726,6 +1796,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-053"]
+built = [
+    "crates/window/review-pane/tests/pane.rs::no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows",
+]
 
 [[test]]
 id = "RP-24"
@@ -2117,6 +2190,9 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-001", "FR-013"]
+built = [
+    "system-tests/tests/workspaces.rs::a_scripted_client_opens_a_folder_and_receives_the_workspace_with_the_changes_of_its_branch",
+]
 
 [[test]]
 id = "CLIENT-02"
@@ -2137,6 +2213,9 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["NFR-007"]
+built = [
+    "system-tests/tests/workspaces.rs::the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only",
+]
 note = "Everything it starts is, so far, the git processes it keeps for file contents. Terminals and agents join the test as they are built."
 
 [[test]]
@@ -2726,6 +2805,10 @@ through = "keys in, with a real Keeper beneath; read back as the requests that r
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", "FR-101", "FR-107", "FR-109", "FR-120"]
+built = [
+    "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
+    "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
+]
 note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built."
 
 [[test]]
