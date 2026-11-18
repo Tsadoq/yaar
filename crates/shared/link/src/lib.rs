@@ -31,6 +31,9 @@ mod workspace;
 
 use std::fmt;
 use std::io::{self, Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
@@ -330,8 +333,25 @@ pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 1
 /// refuse it otherwise, by [`check_private_folder`]. Connect through [`connect`], which
 /// does this.
 pub fn socket_address(wanted: &Path) -> PathBuf {
-    let _ = wanted;
-    todo!()
+    short_place(wanted).unwrap_or_else(|| wanted.to_owned())
+}
+
+/// The short path that stands in for `wanted`; none when `wanted` can be bound itself.
+fn short_place(wanted: &Path) -> Option<PathBuf> {
+    let wanted = wanted.as_os_str().as_bytes();
+    if wanted.len() <= SOCKET_PATH_MAX {
+        return None;
+    }
+    // FNV-1a, 64 bits, written out: the hasher of the standard library may change from
+    // one compiler to the next, and this value may not.
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in wanted {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    Some(PathBuf::from(format!(
+        "/tmp/{APP_FOLDER}-{hash:016x}/keeper.sock"
+    )))
 }
 
 /// Connects to the socket wanted at `wanted`, where [`socket_address`] puts it, and makes
@@ -344,8 +364,22 @@ pub fn socket_address(wanted: &Path) -> PathBuf {
 ///
 /// Where nothing listens the error is the system's own, as from connecting directly.
 pub fn connect(wanted: &Path) -> io::Result<UnixStream> {
-    let _ = (wanted, this_user());
-    todo!()
+    let short = short_place(wanted);
+    if let Some(folder) = short.as_deref().and_then(Path::parent) {
+        check_private_folder(folder)?;
+    }
+    let address = short.as_deref().unwrap_or(wanted);
+    let stream = UnixStream::connect(address)?;
+    if user_at_the_other_end(&stream)? != this_user() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "the process that listens at {} runs as another user",
+                address.display()
+            ),
+        ));
+    }
+    Ok(stream)
 }
 
 /// Passes when `folder` is one that only the user of this process can use: a folder and
@@ -356,14 +390,71 @@ pub fn connect(wanted: &Path) -> io::Result<UnixStream> {
 /// The Keeper calls this on the folder of a short socket path after making it, and
 /// [`connect`] calls it before connecting there.
 pub fn check_private_folder(folder: &Path) -> io::Result<()> {
-    let _ = folder;
-    todo!()
+    // Not followed: a link is judged as a link, whatever it leads to.
+    let found = std::fs::symlink_metadata(folder)?;
+    let wrong = if found.file_type().is_symlink() {
+        "is a link"
+    } else if !found.is_dir() {
+        "is not a folder"
+    } else if found.uid() != this_user() {
+        "belongs to another user"
+    } else if found.mode() & 0o077 != 0 {
+        "is open to other users"
+    } else {
+        return Ok(());
+    };
+    Err(io::Error::new(
+        io::ErrorKind::PermissionDenied,
+        format!("{} {wrong}", folder.display()),
+    ))
 }
 
 /// The user this process runs as.
 fn this_user() -> u32 {
     // SAFETY: `geteuid` only reads and cannot fail.
     unsafe { libc::geteuid() }
+}
+
+/// The user of the process at the other end of a connected socket, as the system knows
+/// it. Nothing the other end sends can change the answer.
+#[cfg(target_os = "linux")]
+fn user_at_the_other_end(stream: &UnixStream) -> io::Result<u32> {
+    let mut found = libc::ucred {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: the descriptor is open for as long as `stream` is borrowed, and the two
+    // pointers lead to a value of the type this option fills and to its size.
+    let failed = unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::from_mut(&mut found).cast(),
+            &mut size,
+        )
+    } != 0;
+    if failed {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(found.uid)
+}
+
+/// The user of the process at the other end of a connected socket, as the system knows
+/// it. Nothing the other end sends can change the answer.
+#[cfg(not(target_os = "linux"))]
+fn user_at_the_other_end(stream: &UnixStream) -> io::Result<u32> {
+    let mut user: libc::uid_t = 0;
+    let mut group: libc::gid_t = 0;
+    // SAFETY: the descriptor is open for as long as `stream` is borrowed, and the two
+    // pointers lead to values of the types this call fills.
+    let failed = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut user, &mut group) } != 0;
+    if failed {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(user)
 }
 
 #[cfg(test)]
@@ -523,6 +614,48 @@ mod tests {
                 PathBuf::from("/data/yaar-review")
             );
         }
+    }
+
+    /// A path of 128 bytes, as a long user name makes it on macOS.
+    const LONG: &str = "/Users/a-user-whose-name-is-longer-than-most-and-longer-than-a-socket-allows/Library/Application Support/yaar-review/keeper.sock";
+
+    #[test]
+    fn a_path_the_system_can_bind_is_the_address_as_it_is() {
+        let fits = format!("/{}", "s".repeat(SOCKET_PATH_MAX - 1));
+        assert_eq!(fits.len(), SOCKET_PATH_MAX);
+        assert_eq!(socket_address(Path::new(&fits)), PathBuf::from(&fits));
+        assert_eq!(
+            socket_address(Path::new("/run/user/1000/yaar-review/keeper.sock")),
+            PathBuf::from("/run/user/1000/yaar-review/keeper.sock")
+        );
+
+        // One byte more cannot be bound, and so leads to the short place.
+        let too_long = format!("{fits}s");
+        let short = socket_address(Path::new(&too_long));
+        assert_ne!(short, PathBuf::from(&too_long));
+        assert!(short.as_os_str().len() <= SOCKET_PATH_MAX);
+    }
+
+    #[test]
+    fn the_address_of_a_path_too_long_keeps_its_value() {
+        // Like the bytes of the hello, this value is a promise to every other version: a
+        // Window that computes another address does not find the Keeper that is running.
+        // The digits are the 64-bit FNV-1a hash of the path, worked out apart from this
+        // crate.
+        assert!(LONG.len() > SOCKET_PATH_MAX);
+        assert_eq!(
+            socket_address(Path::new(LONG)),
+            PathBuf::from("/tmp/yaar-review-ad4c554483ec5ddb/keeper.sock")
+        );
+    }
+
+    #[test]
+    fn two_long_paths_lead_to_two_addresses() {
+        let other = LONG.replace("keeper.sock", "keeper2.sock");
+        assert_ne!(
+            socket_address(Path::new(LONG)),
+            socket_address(Path::new(&other))
+        );
     }
 
     fn two_repositories() -> Vec<Repository> {
