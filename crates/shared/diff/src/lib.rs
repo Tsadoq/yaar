@@ -316,7 +316,8 @@ impl FileDiff {
             diff.compute_with(WORD_ALGORITHM, was, is, distinct);
             // Where the same words could be marked a little earlier or later, this takes
             // the later place and joins marks that can be joined, as git does for lines:
-            // in `f(a, a)` after `f(a)` the marked words are `, a` and not `a, `.
+            // in `round(sum, digits),` after `sum,` the marked words after `sum` are
+            // ` digits),` and not `, digits)`.
             diff.postprocess_with(was, is, imara_diff::NoSliderHeuristic);
             let removed = |word| diff.is_removed(word);
             let added = |word| diff.is_added(word);
@@ -1259,6 +1260,19 @@ fn main() {
     }
 
     #[test]
+    fn a_mark_that_could_sit_in_two_places_sits_in_the_later_one() {
+        // After `sum` the new line holds a comma, a space, `digits`, a bracket and a
+        // comma, and the old line a comma. Either comma can be the old one.
+        let diff = FileDiff::new(b"total: sum,\n", b"total: round(sum, digits),\n");
+        let emphasis = diff.emphasis(0);
+        assert_eq!(emphasis.of(Side::Old, 0), []);
+        assert_eq!(
+            marked(&diff, &emphasis, Side::New, 0),
+            ["round(", " digits),"]
+        );
+    }
+
+    #[test]
     fn marks_end_between_characters_where_the_line_is_utf8() {
         // `marked` slices the text of the line, which panics inside a character.
         let diff = FileDiff::new(
@@ -1363,6 +1377,41 @@ fn main() {
                 "the best of 5 runs took {best:?} for a hunk of {lines} lines on each side"
             );
         }
+    }
+
+    #[test]
+    fn a_diff_does_not_pay_for_the_marks_of_its_hunks() {
+        // Ten hunks of 140 lines on each side, each just small enough to have its words
+        // compared, with one unchanged line between two of them.
+        let (hunk_old, hunk_new) = rewritten_lines(140);
+        let (mut old, mut new) = (String::new(), String::new());
+        for part in 0..10 {
+            let between = format!("// part {part}\n");
+            old.extend([hunk_old.as_str(), between.as_str()]);
+            new.extend([hunk_new.as_str(), between.as_str()]);
+        }
+
+        // The two costs are measured on the same machine in the same run, so the test
+        // needs no limit in milliseconds: a diff that marked its hunks before anyone
+        // asked would take at least as long as the marking does.
+        let (mut diffing, mut marking) = (Duration::MAX, Duration::MAX);
+        for _ in 0..5 {
+            let start = Instant::now();
+            let diff = FileDiff::new(old.as_bytes(), new.as_bytes());
+            diffing = diffing.min(start.elapsed());
+            assert_eq!(diff.hunks().len(), 10);
+
+            let start = Instant::now();
+            for (index, hunk) in diff.hunks().iter().enumerate() {
+                let emphasis = diff.emphasis(index);
+                assert!(!emphasis.of(Side::Old, hunk.old.start).is_empty());
+            }
+            marking = marking.min(start.elapsed());
+        }
+        assert!(
+            diffing * 4 < marking,
+            "the diff took {diffing:?} and marking its hunks {marking:?}, at best of 5 runs"
+        );
     }
 
     #[test]
