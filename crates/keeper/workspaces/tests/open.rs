@@ -113,10 +113,20 @@ fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch(
 fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_other_is_refused_with_the_reason()
  {
     let scratch = Scratch::new();
-    let (repo, linked, _) = a_repository_with_two_worktrees(&scratch);
+    let (repo, linked, first) = a_repository_with_two_worktrees(&scratch);
     let plain = scratch.join("plain/folder");
     std::fs::create_dir_all(&plain).expect("a plain folder");
     let workspaces = workspaces(&scratch);
+    // The opening alone has to make the workspace. Its changes are therefore asked for
+    // before anything lists the repository: a listing keeps every worktree it finds, and
+    // after one a folder that was never kept would answer all the same.
+    let counted_from = |opened: &Opened| {
+        workspaces
+            .changes(&opened.workspace)
+            .expect("changes")
+            .counted_from
+    };
+    let the_commit = Some(yaar_workspaces::CommitId::new(&first));
 
     // Refused, with the reason, and nothing comes of it.
     let refusal = refused(workspaces.open_folder(&plain));
@@ -132,8 +142,10 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
 
     // A folder that holds a repository.
     let of_the_repository = workspaces.open_folder(&repo).expect("open the folder");
+    assert_eq!(counted_from(&of_the_repository), the_commit);
     // A folder that holds a worktree of it.
     let of_the_worktree = workspaces.open_folder(&linked).expect("open the folder");
+    assert_eq!(counted_from(&of_the_worktree), the_commit);
     assert_eq!(of_the_worktree.repository, of_the_repository.repository);
     assert_ne!(of_the_worktree.workspace, of_the_repository.workspace);
     // A folder inside one is the worktree it lies in.
@@ -144,7 +156,7 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
         of_the_repository
     );
 
-    // Each is a workspace: listed at its folder, and its changes can be asked for.
+    // Each is listed at its folder, and answers after the listing as it did before.
     let listed = the_repository(&workspaces).workspaces;
     let at = |id| {
         let found: &Workspace = listed.iter().find(|w| &w.id == id).expect("listed");
@@ -153,7 +165,7 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
     assert_eq!(at(&of_the_repository.workspace), repo);
     assert_eq!(at(&of_the_worktree.workspace), linked);
     for opened in [&of_the_repository, &of_the_worktree] {
-        workspaces.changes(&opened.workspace).expect("changes");
+        assert_eq!(counted_from(opened), the_commit);
     }
 }
 
