@@ -22,6 +22,10 @@ pub enum Descriptor {
     /// cannot place counts as one, so that a kind nobody thought of fails a test and does
     /// not pass it.
     OtherSocket(String),
+    /// A socket of macOS's system domain, with the name `lsof` gives it: a line from the
+    /// process to its own kernel, as the system's libraries open for themselves in any
+    /// process. No other process and no network can connect to one.
+    KernelSocket(String),
     /// One end of a pipe.
     Pipe,
     /// A terminal device: the end of a pseudo-terminal the Keeper holds, or the terminal a
@@ -142,6 +146,7 @@ fn from_lsof(listing: &str) -> Vec<Descriptor> {
                         listens: None,
                     },
                     Some("PIPE" | "FIFO") => Descriptor::Pipe,
+                    Some("systm") => Descriptor::KernelSocket(name.to_owned()),
                     Some(file) if NO_SOCKET.contains(&file) => Descriptor::File,
                     Some(other) => Descriptor::OtherSocket(other.to_owned()),
                     None => Descriptor::OtherSocket("of no stated type".to_owned()),
@@ -229,7 +234,7 @@ mod tests {
                 unix(None, None),
                 Descriptor::OtherSocket("IPv4".to_owned()),
                 Descriptor::OtherSocket("IPv6".to_owned()),
-                Descriptor::OtherSocket("systm".to_owned()),
+                Descriptor::KernelSocket("[ctl com.apple.netsrc id 9 unit 34]".to_owned()),
                 Descriptor::Pipe,
                 Descriptor::File,
             ]

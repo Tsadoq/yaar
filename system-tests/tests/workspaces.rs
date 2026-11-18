@@ -135,11 +135,22 @@ fn a_scripted_client_opens_a_folder_and_receives_the_workspace_with_the_changes_
     );
 }
 
-/// The sockets among what a process holds open.
+/// The sockets among what a process holds open that something outside it could reach.
+///
+/// A socket of macOS's system domain is left out: it leads to the kernel of the same
+/// machine and nothing can connect to it. The system's libraries open such sockets on
+/// their own, not on every machine and not at every moment, so a count that held them
+/// would say nothing of the Keeper. A socket of any other kind stays in, a network port
+/// first of all.
 fn sockets_of(pid: u32) -> Vec<Descriptor> {
     descriptors_of(pid)
         .into_iter()
-        .filter(|held| !matches!(held, Descriptor::Pipe | Descriptor::File))
+        .filter(|held| {
+            !matches!(
+                held,
+                Descriptor::Pipe | Descriptor::File | Descriptor::KernelSocket(_)
+            )
+        })
         .collect()
 }
 
