@@ -589,7 +589,6 @@ mod tests {
         out
     }
 
-    // DIFF-01
     #[test]
     fn a_file_of_21220_reindented_lines_diffs_in_under_50_ms() {
         let old = nested_source();
@@ -669,7 +668,6 @@ mod tests {
         ),
     ];
 
-    // DIFF-02
     #[test]
     fn on_the_569_recorded_changes_the_hunks_give_the_new_file_and_are_gits_on_all_but_five() {
         let pairs = corpus::pairs();
@@ -830,7 +828,6 @@ fn main() {
         left
     }
 
-    // DIFF-03
     #[test]
     fn unified_and_split_lay_out_the_same_hunks_and_emphasis_marks_only_the_changed_words() {
         let diff = FileDiff::new(BEFORE.as_bytes(), AFTER.as_bytes());
