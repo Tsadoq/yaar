@@ -341,6 +341,15 @@ fn a_window_opened_narrow_shows_the_rail_at_once(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn a_window_opened_wide_shows_the_full_list_at_once(cx: &mut TestAppContext) {
+    // The size the app's window opens at, with no resize since.
+    let (shown, mut cx) = showing(&two_repositories(), WIDE, cx);
+    assert_eq!(pinned(&shown.sidebar, &mut cx), None);
+    assert_eq!(form(&shown.sidebar, &mut cx), SidebarForm::Full);
+    assert_eq!(drawn_width(&mut cx), FULL_WIDTH);
+}
+
+#[gpui_kit::test]
 fn pinned_as_a_rail_or_as_the_full_list_the_sidebar_keeps_that_form_at_any_width(
     cx: &mut TestAppContext,
 ) {
