@@ -14,11 +14,11 @@
 use std::collections::VecDeque;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use yaar_link::{
-    ChangedFile, Changes, Fact, FileSides, Hello, Refusal, Reply, Repository, RepositoryId,
-    Request, WorkspaceId,
+    ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Refusal, Reply, Repository,
+    RepositoryId, Request, RequestId, WorkspaceId, handshake, read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -40,51 +40,162 @@ impl Client {
     /// up to [`DEADLINE`] for a Keeper to listen. The socket is reached through
     /// `yaar_link::connect`, as a Window reaches it: where `yaar_link::socket_address`
     /// puts it, and only when what is there is the user's own.
+    ///
+    /// Panics at once when what is there is refused as not the user's own, and at the
+    /// deadline when no Keeper has answered.
     pub fn attach(socket: &Path) -> Client {
-        todo!()
+        let mine = Hello::for_this_process("scripted-window");
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let last = match yaar_link::connect(socket) {
+                Ok(mut stream) => match handshake(&mut stream, &mine) {
+                    Ok(keeper) => {
+                        return Client {
+                            stream,
+                            keeper,
+                            next_id: 0,
+                            facts: VecDeque::new(),
+                        };
+                    }
+                    // A Keeper that is just leaving may accept and then close.
+                    Err(e) => e.to_string(),
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    panic!("{} is not this user's own: {e}", socket.display())
+                }
+                Err(e) => e.to_string(),
+            };
+            assert!(
+                Instant::now() < deadline,
+                "no Keeper at {}: {last}",
+                socket.display()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Who the Keeper said it is.
     pub fn keeper(&self) -> &Hello {
-        todo!()
+        &self.keeper
     }
 
     /// Sends one request and waits for its reply.
     pub fn request(&mut self, request: Request) -> Result<Reply, Refusal> {
-        todo!()
+        let id = RequestId(self.next_id);
+        self.next_id += 1;
+        let kind = request.kind();
+        write_message(&mut self.stream, &Message::Request { id, request })
+            .unwrap_or_else(|e| panic!("the request {kind:?} could not be sent: {e}"));
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            match self.read(deadline) {
+                Ok(Message::Reply { to, reply }) if to == id => return reply,
+                Ok(Message::Fact(fact)) => self.facts.push_back(fact),
+                Ok(other) => panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}"),
+                Err(e) => panic!("no reply to {kind:?}: {e}; facts kept: {:?}", self.facts),
+            }
+        }
     }
 
     /// Asks for every repository with its worktrees.
     pub fn workspaces(&mut self) -> Vec<Repository> {
-        todo!()
+        match self.request(Request::ListWorkspaces) {
+            Ok(Reply::Workspaces(repositories)) => repositories,
+            other => panic!("asked for the workspaces, the Keeper answered {other:?}"),
+        }
     }
 
     /// Opens a folder as a workspace.
     pub fn open_folder(&mut self, folder: &Path) -> Result<(RepositoryId, WorkspaceId), Refusal> {
-        todo!()
+        match self.request(Request::OpenFolder {
+            path: folder.to_owned(),
+        })? {
+            Reply::Opened {
+                repository,
+                workspace,
+            } => Ok((repository, workspace)),
+            other => panic!("asked to open a folder, the Keeper answered {other:?}"),
+        }
     }
 
     /// Sets the base of a workspace to a branch or a commit.
     pub fn set_base(&mut self, workspace: &WorkspaceId, base: &str) -> Result<(), Refusal> {
-        todo!()
+        match self.request(Request::SetBase {
+            workspace: workspace.clone(),
+            base: base.to_owned(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to set a base, the Keeper answered {other:?}"),
+        }
     }
 
     /// Asks for the changes of a workspace. Panics when the Keeper refuses.
     pub fn changes(&mut self, workspace: &WorkspaceId) -> Changes {
-        todo!()
+        match self.request(Request::GetChanges {
+            workspace: workspace.clone(),
+        }) {
+            Ok(Reply::Changes(changes)) => changes,
+            other => panic!("asked for the changes, the Keeper answered {other:?}"),
+        }
     }
 
     /// Asks for the two versions of one file of `changes`, as a Window does: the old
     /// one in the commit the changes are counted from, at the path the file had there,
     /// and the new one in the worktree. For a new file no old version is asked for.
     pub fn file(&mut self, changes: &Changes, file: &ChangedFile) -> Result<FileSides, Refusal> {
-        todo!()
+        let (since, old_path) = match &file.status {
+            FileStatus::Added => (None, file.path.clone()),
+            FileStatus::Renamed { from } => (changes.counted_from.clone(), from.clone()),
+            FileStatus::Modified | FileStatus::Deleted => {
+                (changes.counted_from.clone(), file.path.clone())
+            }
+        };
+        match self.request(Request::ReadFile {
+            workspace: changes.workspace.clone(),
+            since,
+            old_path,
+            path: file.path.clone(),
+        })? {
+            Reply::File(sides) => Ok(sides),
+            other => panic!("asked for a file, the Keeper answered {other:?}"),
+        }
     }
 
     /// Waits for a fact that `wanted` accepts, among those kept and those still to
     /// come, and returns it. Facts before it are dropped. Panics, with the facts seen,
     /// when none comes within `limit`.
-    pub fn wait_for_fact(&mut self, limit: Duration, wanted: impl FnMut(&Fact) -> bool) -> Fact {
-        todo!()
+    pub fn wait_for_fact(
+        &mut self,
+        limit: Duration,
+        mut wanted: impl FnMut(&Fact) -> bool,
+    ) -> Fact {
+        let deadline = Instant::now() + limit;
+        let mut seen = Vec::new();
+        loop {
+            let fact = match self.facts.pop_front() {
+                Some(kept) => kept,
+                None => match self.read(deadline) {
+                    Ok(Message::Fact(fact)) => fact,
+                    Ok(other) => panic!("waiting for a fact, the Keeper sent {other:?}"),
+                    Err(e) => panic!("the fact did not come: {e}; facts seen: {seen:?}"),
+                },
+            };
+            if wanted(&fact) {
+                return fact;
+            }
+            seen.push(fact);
+        }
+    }
+
+    /// The next frame from the Keeper, or why none came before `deadline`.
+    fn read(&mut self, deadline: Instant) -> Result<Message, String> {
+        // A deadline that has passed still leaves the time to take what is there.
+        let left = deadline
+            .saturating_duration_since(Instant::now())
+            .max(Duration::from_millis(1));
+        self.stream
+            .set_read_timeout(Some(left))
+            .map_err(|e| e.to_string())?;
+        read_message(&mut self.stream).map_err(|e| e.to_string())
     }
 }

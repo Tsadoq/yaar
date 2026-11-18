@@ -95,7 +95,15 @@ pub fn attach(socket: &Path, app_version: &str) -> Result<Attached, KeeperError>
 
 /// `None` when nothing listens, or when what listens goes away before it has answered.
 fn try_attach(socket: &Path, mine: &Hello, started: bool) -> Option<Result<Attached, KeeperError>> {
-    let mut stream = UnixStream::connect(socket).ok()?;
+    let mut stream = match yaar_link::connect(socket) {
+        Ok(stream) => stream,
+        // Somebody else's: starting a Keeper would not make it ours, and the Keeper
+        // would refuse the same place.
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {
+            return Some(Err(KeeperError::NotOurs(yaar_link::socket_address(socket))));
+        }
+        Err(_) => return None,
+    };
     match handshake(&mut stream, mine) {
         Ok(keeper) => Some(Ok(Attached {
             stream,

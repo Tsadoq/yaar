@@ -4,12 +4,15 @@
 //! - [`World`], the folders, repositories and Keeper of one test, with [`Repo`] to drive
 //!   git in it and [`Tap`] to read the requests a real Window sends;
 //! - [`Client`], the scripted client that speaks the Link in place of the Window;
+//! - [`descriptors_of`] and [`descendants_of`], which read from outside what a process
+//!   holds open and what it started;
 //! - [`program`], [`is_alive`] and [`wait_until`], and the bare [`attach`] and [`Place`]
 //!   of the tests that need no world.
 //!
 //! The stand-in agent CLI joins it when the Switchboard exists.
 
 mod client;
+mod processes;
 mod world;
 
 use std::os::unix::net::UnixStream;
@@ -22,6 +25,7 @@ use std::time::{Duration, Instant};
 use yaar_link::{Hello, handshake};
 
 pub use client::{Client, DEADLINE};
+pub use processes::{Descriptor, descendants_of, descriptors_of};
 pub use world::{Repo, Tap, World};
 
 /// The path of a built program of the workspace, building both programs first if one is
