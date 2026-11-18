@@ -185,9 +185,10 @@ impl TerminalView {
         cx.notify();
     }
 
-    /// Sends the program bytes.
+    /// Sends the program bytes, unless it has ended: the Keeper no longer holds the
+    /// terminal.
     fn send(&self, bytes: Vec<u8>, cx: &mut Context<Self>) {
-        if bytes.is_empty() {
+        if bytes.is_empty() || self.ending.is_some() {
             return;
         }
         self.link

@@ -55,7 +55,8 @@ fn marked(view: &gpui_kit::Entity<TerminalView>, cx: &VisualTestContext) -> Opti
 /// system gives the same texts on both layouts, so one list shows both. The last three
 /// are the ways a dead key ends without the letter it waits for: a letter that does not
 /// combine commits the accent and the letter, Space the accent alone, and Backspace the
-/// accent too, where Ghostty drops the Backspace.
+/// accent too, as the input method commits it: the Backspace key that macOS may deliver
+/// after it is not typed here, and Ghostty drops it.
 const DEAD_KEYS: [(&str, &str, &str); 10] = [
     // Option-e, e
     ("\u{b4}", "e", "é"),

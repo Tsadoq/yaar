@@ -549,12 +549,6 @@ fn how_to_open() -> String {
 
 impl Render for TerminalPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Told no focus change while the window is not the active one, GPUI never calls
-        // the listener of the pane's handle: a pane given the focus then, as when the
-        // window opens, hands it on here at the next frame.
-        if self.focus.is_focused(window) {
-            self.focus_terminal(window, cx);
-        }
         self.sync_title(window, cx);
         // After a key the answer of the program is drawn in the first frame it arrives
         // in, not whenever something else asks for one.
@@ -580,13 +574,12 @@ impl Render for TerminalPane {
                     gpui_kit::MouseButton::Left,
                     cx.listener(move |pane, _, window, cx| pane.click_slot(n, window, cx)),
                 );
-            let slot = if n > 0 {
-                slot.border_l_1().border_color(border)
-            } else {
-                slot
-            };
-            Some(slot.child(view))
+            // The divider is a sibling of the slot, so the slot's bounds are exactly its
+            // view's.
+            let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
+            Some((divider, slot.child(view)))
         });
+        let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = self
             .shown
             .is_empty()

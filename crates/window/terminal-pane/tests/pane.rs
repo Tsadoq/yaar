@@ -161,6 +161,19 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
     cx.simulate_input("w");
     assert_eq!(panes.keeper.input(&mut cx), (two[0].clone(), b"w".to_vec()));
 
+    // A key with bytes of its own, which the view encodes, goes the same way.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        panes.keeper.input(&mut cx),
+        (two[0].clone(), b"\x1b".to_vec())
+    );
+    panes.click_slot(1, &mut cx);
+    cx.simulate_keystrokes("escape");
+    assert_eq!(
+        panes.keeper.input(&mut cx),
+        (two[1].clone(), b"\x1b".to_vec())
+    );
+
     // No other frame of input came between.
     cx.run_until_parked();
     assert!(panes.keeper.no_input_waits());
@@ -187,6 +200,23 @@ fn frames_keep_coming(steps: u32, from: u32, cx: &mut VisualTestContext) {
     }
 }
 
+/// The clock stands `from` ms after a key and the frames end 1 ms after `edge`: moves it
+/// to `edge`, where the frame drawn still asks for the next, then 2 ms on, past the end,
+/// where the frame drawn asks for none. A count is of the frames asked by the last draw,
+/// so the one pending is drawn first.
+fn frames_end_at(from: u64, edge: u64, cx: &mut VisualTestContext, what: &str) {
+    cx.executor()
+        .advance_clock(Duration::from_millis(edge - from));
+    frames_asked(cx);
+    assert!(
+        frames_asked(cx) >= 1,
+        "frames stopped before {what} was over"
+    );
+    cx.executor().advance_clock(Duration::from_millis(2));
+    frames_asked(cx);
+    assert_eq!(frames_asked(cx), 0, "frames go on after {what}");
+}
+
 #[gpui_kit::test]
 fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestAppContext) {
     assert_eq!(FRAMES_AFTER_A_KEY, Duration::from_secs(1));
@@ -194,17 +224,23 @@ fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestA
     let one = terminal('1');
     panes.open_terminal(&one, &mut cx);
     assert!(has_the_focus(&panes, &one, &mut cx));
-    // Settled: drawing again asks for nothing.
-    while frames_asked(&mut cx) > 0 {}
-    assert_eq!(frames_asked(&mut cx), 0);
+    // Settled: drawing again asks for nothing. The clock does not move, so a pane that
+    // asks for frames for ever is told here rather than waited for.
+    let mut drawn = 0;
+    while frames_asked(&mut cx) > 0 {
+        drawn += 1;
+        assert!(
+            drawn < 20,
+            "the window never settled: it still asks for frames"
+        );
+    }
 
     // A key typed in the terminal: a frame at every step up to 900 ms.
     cx.simulate_keystrokes("a");
     frames_keep_coming(9, 0, &mut cx);
-    // Past the second the next frame is drawn, and it asks for none.
-    cx.executor().advance_clock(Duration::from_millis(200));
-    frames_asked(&mut cx);
-    assert_eq!(frames_asked(&mut cx), 0, "frames go on after one second");
+    // The edge: still asked for a millisecond before the second is over, and not
+    // a millisecond after it.
+    frames_end_at(900, 999, &mut cx, "one second");
 
     // A key that runs an action never reaches a key listener, and counts all the same:
     // 500 ms after the first key it moves the end to 1,500 ms.
@@ -212,9 +248,7 @@ fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestA
     cx.executor().advance_clock(Duration::from_millis(500));
     cx.simulate_keystrokes(key_of::<ScrollPageUp>());
     frames_keep_coming(9, 5, &mut cx);
-    cx.executor().advance_clock(Duration::from_millis(200));
-    frames_asked(&mut cx);
-    assert_eq!(frames_asked(&mut cx), 0, "frames go on after 1,500 ms");
+    frames_end_at(1_400, 1_499, &mut cx, "1,500 ms");
 }
 
 /// Waits until the screen of a terminal has this text in its first line.
@@ -436,6 +470,12 @@ fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &m
     assert!(drawn("terminal-ended", &mut cx).is_some());
     assert_eq!(lines(&panes.pane, &one, &cx)[0], "bye");
     assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.terminals()), [one]);
+
+    // The Keeper no longer holds the terminal: what is typed in it is not sent.
+    cx.simulate_input("x");
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(panes.keeper.no_input_waits());
 }
 
 #[gpui_kit::test]
