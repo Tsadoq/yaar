@@ -196,21 +196,45 @@ struct Scanner {
 }
 
 /// The longest sequence the scanner waits for: the ones it acts on are far shorter, and
-/// a longer one is passed on to the core at once. A sequence that starts `CSI >` is held
-/// to this length too and its parameters past it are dropped: the core reads no more of a
-/// push than its first one, and it must be seen whole to be made safe.
+/// a longer one is passed on to the core at once. A sequence that starts `CSI >` or
+/// `CSI ?` is held to this length too and its parameters past it are dropped: the core
+/// reads no more of a push than its first parameter and of a query none, and each must be
+/// seen whole to be made safe. A first parameter that does not fit is read as far as it
+/// goes.
 const MAX_HELD: usize = 64;
 
-/// What a push of keyboard flags goes to the core as: with a title pushed before it and
-/// popped after it. Once a stack of flags holds 4096 entries the core drops its oldest by
-/// removing the bottom of the stack of titles instead, which fails when that is empty, and
-/// so does the thread of whoever fed it a file of pushes. With a title pushed first the
-/// stack is never empty there, and popping it afterwards leaves the titles a program
-/// pushed as they were (past 4096 pushes, as the core itself would have it, the oldest
-/// title goes).
+/// What a push of keyboard flags goes to the core as: the push cut to the flags the
+/// encoder implements, with a title pushed before it and popped after it. Once a stack
+/// of flags holds 4096 entries the core drops its oldest by removing the bottom of the
+/// stack of titles instead, which fails when that is empty, and so does the thread of
+/// whoever fed it a file of pushes. With a title pushed first the stack is never empty
+/// there, and popping it afterwards leaves the titles a program pushed as they were
+/// (past 4096 pushes, as the core itself would have it, the oldest title goes).
+///
+/// `push` is a whole `CSI > ... u`. The core reads the number before its first `;` or `:`
+/// and keeps what fits in a byte; a push in a form with anything but digits and those two
+/// characters is one the core does not read as a push, and goes on as it is.
 fn safe_push(push: &[u8]) -> Vec<u8> {
+    let params = &push[3..push.len() - 1];
     let mut bytes = b"\x1b[22t".to_vec();
-    bytes.extend_from_slice(push);
+    if params
+        .iter()
+        .all(|b| matches!(b, b'0'..=b'9' | b';' | b':'))
+    {
+        let first = params
+            .split(|b| matches!(b, b';' | b':'))
+            .next()
+            .unwrap_or(&[]);
+        // As the parser of the core reads it: 16 bits, saturating.
+        let flags = first.iter().fold(0u16, |n, digit| {
+            n.saturating_mul(10).saturating_add(u16::from(digit - b'0'))
+        });
+        bytes.extend_from_slice(
+            format!("\x1b[>{}u", flags & u16::from(IMPLEMENTED_FLAGS.0)).as_bytes(),
+        );
+    } else {
+        bytes.extend_from_slice(push);
+    }
     bytes.extend_from_slice(b"\x1b[23t");
     bytes
 }
@@ -228,16 +252,34 @@ impl Scanner {
         pieces
     }
 
+    // The scanner follows the parser of the core through an escape sequence, because a
+    // sequence is only safe when it is seen from its ESC to its end: what the parser does
+    // with a byte inside one decides where the sequence ends.
     fn step(&mut self, byte: u8, cell: (u16, u16), pass: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
-        match self.held.len() {
-            0 => {
-                if byte == 0x1b {
-                    self.held.push(byte);
-                } else {
-                    pass.push(byte);
-                }
+        if self.held.is_empty() {
+            if byte == 0x1b {
+                self.held.push(byte);
+            } else {
+                pass.push(byte);
             }
-            1 => {
+            return;
+        }
+        match byte {
+            // The parser ends the sequence at CAN and SUB, doing what they say.
+            0x18 | 0x1a => {
+                pass.append(&mut self.held);
+                pass.push(byte);
+            }
+            // And begins another at ESC.
+            0x1b => {
+                pass.append(&mut self.held);
+                self.held.push(byte);
+            }
+            // Any other control byte it runs at once, and goes on with the sequence.
+            0x00..=0x17 | 0x19 | 0x1c..=0x1f => pass.push(byte),
+            // It ignores a DEL and what is above ASCII there.
+            0x7f..=0xff => {}
+            _ if self.held.len() == 1 => {
                 if byte == b'[' {
                     self.held.push(byte);
                 } else {
@@ -246,42 +288,36 @@ impl Scanner {
                     self.step(byte, cell, pass, pieces);
                 }
             }
-            _ => match byte {
-                0x20..=0x3f => {
-                    if self.held.len() >= MAX_HELD && self.held[2] == b'>' {
-                        // More of the parameters of a push than the core would read.
-                    } else {
-                        self.held.push(byte);
-                        if self.held.len() > MAX_HELD {
-                            pass.append(&mut self.held);
-                        }
-                    }
-                }
-                0x40..=0x7e => {
+            0x20..=0x3f => {
+                let cut = matches!(self.held[2..].first(), Some(b'>' | b'?'));
+                if cut && self.held.len() >= MAX_HELD {
+                    // More of the parameters than the core would read.
+                } else {
                     self.held.push(byte);
-                    let sequence = std::mem::take(&mut self.held);
-                    match act_on(&sequence, cell) {
-                        Act::Pass(bytes) => pass.extend_from_slice(&bytes),
-                        Act::Answer(answer) => {
-                            if !pass.is_empty() {
-                                pieces.push(Piece::Pass(std::mem::take(pass)));
-                            }
-                            pieces.push(Piece::Answer(answer));
-                        }
-                        Act::FlagsQuery => {
-                            if !pass.is_empty() {
-                                pieces.push(Piece::Pass(std::mem::take(pass)));
-                            }
-                            pieces.push(Piece::FlagsQuery);
-                        }
+                    if self.held.len() > MAX_HELD {
+                        pass.append(&mut self.held);
                     }
                 }
-                _ => {
-                    // The sequence was cut short by a control byte or another ESC.
-                    pass.append(&mut self.held);
-                    self.step(byte, cell, pass, pieces);
+            }
+            0x40..=0x7e => {
+                self.held.push(byte);
+                let sequence = std::mem::take(&mut self.held);
+                match act_on(&sequence, cell) {
+                    Act::Pass(bytes) => pass.extend_from_slice(&bytes),
+                    Act::Answer(answer) => {
+                        if !pass.is_empty() {
+                            pieces.push(Piece::Pass(std::mem::take(pass)));
+                        }
+                        pieces.push(Piece::Answer(answer));
+                    }
+                    Act::FlagsQuery => {
+                        if !pass.is_empty() {
+                            pieces.push(Piece::Pass(std::mem::take(pass)));
+                        }
+                        pieces.push(Piece::FlagsQuery);
+                    }
                 }
-            },
+            }
         }
     }
 }
@@ -306,12 +342,20 @@ fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
     if marker == Some(b'>') && last == b'u' {
         return Act::Pass(safe_push(sequence));
     }
+    // Every query for the flags in force, in whatever form the core reads as one: it
+    // reads the question whatever follows the question mark.
+    if marker == Some(b'?')
+        && last == b'u'
+        && params
+            .iter()
+            .all(|b| matches!(b, b'0'..=b'9' | b';' | b':'))
+    {
+        return Act::FlagsQuery;
+    }
     let Some(params) = parse_params(params) else {
         return unchanged();
     };
     match (marker, last, params.as_slice()) {
-        // The query for the flags in force.
-        (Some(b'?'), b'u', []) => Act::FlagsQuery,
         // The terminal's name and version.
         (Some(b'>'), b'q', [] | [None | Some(0)]) => {
             Act::Answer(format!("\x1bP>|yaar {}\x1b\\", env!("CARGO_PKG_VERSION")).into_bytes())
@@ -779,6 +823,40 @@ mod tests {
                 "after a push of {n}"
             );
         }
+    }
+
+    // TERM-02
+    #[test]
+    fn the_query_for_keyboard_flags_is_answered_alike_in_every_form_the_core_reads_as_one() {
+        let long_zeros = format!("{ESC}[?{}u", "0".repeat(70));
+        let long_ones = format!("{ESC}[?{}1u", "0".repeat(70));
+        for n in 0..=31u32 {
+            let push = format!("{ESC}[>{n}u");
+            let want = format!("{ESC}[?{}u", n & 3);
+            for query in [
+                format!("{ESC}[?u"),
+                format!("{ESC}[?0u"),
+                format!("{ESC}[?1u"),
+                format!("{ESC}[?7u"),
+                format!("{ESC}[?0;0u"),
+                format!("{ESC}[?1:2u"),
+                format!("{ESC}[?;u"),
+                long_zeros.clone(),
+                long_ones.clone(),
+            ] {
+                let mut emulator = emulator();
+                emulator.advance(push.as_bytes());
+                assert_eq!(
+                    replies_to(&mut emulator, &query),
+                    want,
+                    "after a push of {n}, asked as {query:?}"
+                );
+            }
+        }
+        // The same after a set, and a query cut between two calls.
+        let mut emulator = emulator();
+        emulator.advance(format!("{ESC}[=5;1u{ESC}[?").as_bytes());
+        assert_eq!(replies_to(&mut emulator, "0u"), format!("{ESC}[?1u"));
     }
 
     // TERM-02
@@ -1398,6 +1476,64 @@ mod tests {
         // The oldest are dropped and the newest kept: pops bring back flags pushed last.
         emulator.advance(b"\x1b[?1049l\x1b[>2u\x1b[>3u\x1b[<u");
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?2u");
+    }
+
+    #[test]
+    fn a_push_the_core_reads_through_other_bytes_cannot_stop_the_terminal_either() {
+        // The core runs a control byte inside an escape sequence at once and carries on
+        // with the sequence, and it ignores a DEL and a byte of 0x80 and above there. So
+        // each of these is a push, however many times it is sent.
+        let between: [&[u8]; 8] = [
+            b"\x07",
+            b"\r",
+            b"\n",
+            b"\x00",
+            b"\x08",
+            b"\x1f",
+            b"\x7f\x7f",
+            b"\xff",
+        ];
+        for between in between {
+            let inside: Vec<u8> = [&b"\x1b[>1"[..], between, b"u"].concat();
+            let before: Vec<u8> = [&b"\x1b"[..], between, b"[>1u"].concat();
+            for (place, one) in [("inside", inside), ("before the bracket", before)] {
+                let mut emulator = emulator();
+                emulator.advance(&one.repeat(5000));
+                assert_eq!(
+                    replies_to(&mut emulator, "\x1b[?u"),
+                    "\x1b[?1u",
+                    "after pushes with {between:?} {place} them"
+                );
+            }
+        }
+        // The same with the bytes cut anywhere.
+        let mut emulator = emulator();
+        let all = b"\x1b[>1\x07u\x1b[>1\x7fu\x1b\x07[>1u\x1b[>1\xffu".repeat(2000);
+        for chunk in all.chunks(5) {
+            emulator.advance(chunk);
+        }
+        assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
+    }
+
+    #[test]
+    fn a_control_byte_inside_an_escape_sequence_acts_and_cancel_and_escape_end_the_sequence() {
+        // A backspace inside the sequence moves the cursor; the sequence still ends.
+        let mut emulator = emulator();
+        emulator.advance(b"ab\x1b[>1\x08u");
+        emulator.advance(b"X");
+        assert_eq!(emulator.lines()[0], "aX");
+        assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
+        // CAN and SUB end a sequence: what follows is text, and nothing was pushed.
+        for end in ["\x18", "\x1a"] {
+            let mut emulator = self::emulator();
+            emulator.advance(format!("{ESC}[>1{end}u").as_bytes());
+            assert_eq!(emulator.lines()[0], "u");
+            assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?0u");
+        }
+        // A new ESC begins afresh, and the push after it is read.
+        let mut emulator = self::emulator();
+        emulator.advance(b"\x1b[>3\x1b[>1u");
+        assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
     }
 
     #[test]
