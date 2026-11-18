@@ -36,14 +36,17 @@ sed "/$RULE/,\$d" "$TMP/window" > "$TMP/opening"
 sed -n "/$RULE/,\$p" "$TMP/window" > "$TMP/window.part"
 sed -n "/$RULE/,\$p" "$TMP/keeper" > "$TMP/keeper.part"
 
-# An empty or near-empty part means the template or the tool broke, not that nothing is
-# linked: the Window links hundreds of crates, and the Keeper's part holds at least the
-# text of the licence of its own crates.
-[ -s "$TMP/opening" ] || { echo "notices.sh: notices.hbs no longer opens with words and a rule of 80 dashes" >&2; exit 1; }
-[ "$(wc -c < "$TMP/window.part")" -gt 20000 ] || { echo "notices.sh: the part of yaar-review is suspiciously small" >&2; exit 1; }
-[ "$(wc -c < "$TMP/keeper.part")" -gt 10000 ] || { echo "notices.sh: the part of yaar-keeper is suspiciously small" >&2; exit 1; }
+# An empty or near-empty part means that the tool broke or that the template lost its
+# rule, not that nothing is linked: the Window links hundreds of crates, and the Keeper's
+# part holds at least the text of the licence of its own crates.
+small() {
+  echo "notices.sh: the part of $1 is suspiciously small" >&2
+  exit 1
+}
+[ "$(wc -c < "$TMP/window.part")" -gt 20000 ] || small yaar-review
+[ "$(wc -c < "$TMP/keeper.part")" -gt 10000 ] || small yaar-keeper
 
-DOUBLE=================================================================================
+DOUBLE="================================================================================"
 mkdir -p "$(dirname "$OUT")"
 {
   cat "$TMP/opening"

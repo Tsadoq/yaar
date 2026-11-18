@@ -165,11 +165,12 @@ done
 if [ "$KIND" = git ]; then
   # The plant shows that a git repository nobody allowed is refused, not that Zed's is.
   # So no git source may be allowed at all, by its address or as an organisation's.
-  settings=$(grep -v '^[[:space:]]*#' "$TREE/deny.toml")
-  [ "$(printf '%s\n' "$settings" | grep -c 'allow-git')" = 1 ] \
-    && printf '%s\n' "$settings" | grep -q '^allow-git = \[\]$' \
-    || fail "deny.toml must say 'allow-git = []', once"
-  ! printf '%s\n' "$settings" | grep -q 'allow-org' \
-    || fail "deny.toml allows the repositories of an organisation"
+  grep -v '^[[:space:]]*#' "$TREE/deny.toml" > "$TMP/settings"
+  if [ "$(grep -c 'allow-git' "$TMP/settings")" != 1 ] || ! grep -q '^allow-git = \[\]$' "$TMP/settings"; then
+    fail "deny.toml must say 'allow-git = []', once"
+  fi
+  if grep -q 'allow-org' "$TMP/settings"; then
+    fail "deny.toml allows the repositories of an organisation"
+  fi
   echo "deny.toml allows no git source"
 fi
