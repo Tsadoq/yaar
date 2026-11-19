@@ -495,7 +495,10 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
         vec![file("a.txt", FileStatus::Added)],
         &mut cx,
     );
-    read_versions_of(&mut stage, &s0(), None, ("a.txt", "", "new a\n"), &mut cx);
+    // A file long enough that the files read, after it, are out of view until Flow goes
+    // there, and its heading is out of view when Flow is down there.
+    let long: String = (0..60).map(|line| format!("line {line}\n")).collect();
+    read_versions_of(&mut stage, &s0(), None, ("a.txt", "", &long), &mut cx);
     wait_until(&mut cx, "the heading of a.txt", |cx| {
         let (rows, _) = live(&stage, cx);
         row_of(&rows, "a.txt").is_some()
@@ -526,6 +529,10 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
         })
     );
     assert_eq!(at_row, Some(z));
+    assert!(
+        z > 60,
+        "the row of z.txt is below the long diff of a.txt: {z}"
+    );
     assert_eq!(wait_for_its_row_in_view(&stage, &mut cx), z);
     assert!(drawn(&format!("flow-read-{z}"), &mut cx).is_some());
     assert_eq!(
@@ -535,9 +542,15 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
         None
     );
 
-    // Nothing was asked for the two reads: the next request is the list the write of
+    // A read of the file the turn changed takes Flow back up to its heading.
+    tell_the_step(&mut stage, &t, 4, read("a.txt"), &mut cx);
+    wait_for_at(&stage, &t, 4, &mut cx);
+    assert_eq!(wait_for_its_row_in_view(&stage, &mut cx), heading);
+    assert!(drawn(&format!("flow-read-{z}"), &mut cx).is_none());
+
+    // Nothing was asked for the three reads: the next request is the list the write of
     // b.txt asks for. That list holds both files, and z.txt is still the last row.
-    tell_the_step(&mut stage, &t, 4, write("b.txt"), &mut cx);
+    tell_the_step(&mut stage, &t, 5, write("b.txt"), &mut cx);
     compared(
         &mut stage,
         &s0(),
@@ -552,7 +565,7 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
     wait_until(&mut cx, "the heading of b.txt", |cx| {
         row_of(&live(&stage, cx).0, "b.txt").is_some()
     });
-    wait_for_at(&stage, &t, 4, &mut cx);
+    wait_for_at(&stage, &t, 5, &mut cx);
     let b = wait_for_its_row_in_view(&stage, &mut cx);
     let (rows, _) = live(&stage, &mut cx);
     assert_eq!(Some(b), row_of(&rows, "b.txt"));
@@ -564,8 +577,8 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
     );
 
     // A command has no row: the line above the files names it.
-    tell_the_step(&mut stage, &t, 5, command("make"), &mut cx);
-    wait_for_at(&stage, &t, 5, &mut cx);
+    tell_the_step(&mut stage, &t, 6, command("make"), &mut cx);
+    wait_for_at(&stage, &t, 6, &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.flow_at_row()),
         None
@@ -574,7 +587,7 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
         stage
             .pane
             .read_with(&cx, |pane, _| pane.activity().cloned()),
-        Some(at(&t, 5))
+        Some(at(&t, 6))
     );
     assert!(drawn("flow-activity", &mut cx).is_some());
 
@@ -584,10 +597,10 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
         stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
         FlowForm::Timeline
     );
-    tell_the_step(&mut stage, &t, 6, read("z.txt"), &mut cx);
-    wait_for_at(&stage, &t, 6, &mut cx);
+    tell_the_step(&mut stage, &t, 7, read("z.txt"), &mut cx);
+    wait_for_at(&stage, &t, 7, &mut cx);
     let row = wait_for_its_row_in_view(&stage, &mut cx);
-    assert_eq!(row, entry_of(&stage, &t, 6, &mut cx));
+    assert_eq!(row, entry_of(&stage, &t, 7, &mut cx));
 }
 
 #[gpui_kit::test]
@@ -649,6 +662,14 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
     assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 31, &mut cx);
     assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 1 });
+    assert!(
+        drawn(
+            "flow-follow-paused-text:Follow paused: 1 step since",
+            &mut cx
+        )
+        .is_some(),
+        "one step is no plural"
+    );
     press("shift-g", &mut cx);
     assert_eq!(following(&stage, &mut cx), Following::On);
     assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 31)));
@@ -932,7 +953,13 @@ fn a_workspace_that_comes_on_screen_with_a_turn_running_starts_nothing(cx: &mut 
         .update(&mut cx, |list, cx| list.select(&id('1'), cx));
     let first = since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)]);
     stage.keeper.show(&first, |_| texts("a\n", "b\n"), &mut cx);
-    // The turn is no message of the user: the barrier is a step told after the return.
+    // The turn is no message of the user, though the Keeper tells of its session after
+    // the return (here, waiting for a permission): the barrier is a step told after it.
+    let waiting = Session {
+        state: SessionState::WaitsForPermission,
+        ..session_a_on(&t)
+    };
+    stage.keeper.tell_agents(agents_of(vec![waiting]));
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, read("x.txt")));
