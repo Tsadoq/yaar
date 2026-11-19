@@ -15,13 +15,13 @@ use gpui_kit::{
     VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
-use yaar_frame::SetBase;
+use yaar_frame::{Place, SetBase};
 use yaar_link::{
     Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Refusal, Reply,
     Request, RequestKind,
 };
 use yaar_review_pane::{
-    FILES_ON_THEIR_WAY, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
+    FILES_ON_THEIR_WAY, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
 };
 
 use common::{
@@ -664,6 +664,9 @@ enum Effect {
     Moves,
     /// Says in the notice why there is nothing to do.
     Notice,
+    /// Sets whether a turn end keeps the selection: on after the key, off again after the
+    /// action.
+    Setting,
     /// Opens a comment box.
     Box,
     /// Opens the field for a commit message.
@@ -679,7 +682,10 @@ fn effect_of(keystroke: &str) -> Effect {
         "j" | "down" | "k" | "up" | "s" => Effect::Moves,
         "c" => Effect::Box,
         "shift-c" => Effect::Field,
-        "i" | "o" | "d d" | "m" | "shift-m" => Effect::Notice,
+        // The pane has no history here to take the focus to.
+        // And no turn offered anything, and no other session has a review.
+        "i" | "o" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
+        "shift-t" => Effect::Setting,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -698,6 +704,11 @@ impl Effect {
             Effect::Notice => assert!(
                 pane.read_with(cx, |pane, _| pane.notice().is_some()),
                 "{title} by {how} said nothing"
+            ),
+            Effect::Setting => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.keeps_selection()),
+                how == "its key",
+                "{title} by {how} did not set the pane"
             ),
             Effect::Box => assert!(
                 pane.read_with(cx, |pane, _| pane.comment_box().is_some()),
@@ -781,7 +792,14 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     };
     // After each of them every line of every file reads as it did: a key that changed
     // one would not pass because a later key changed it back.
-    for control in controls() {
+    // The keys of the tree of Changes work in the tree, beside the rows; with the focus in
+    // the rows they are the rows' keys or none, so tests/changes.rs presses them where they
+    // work. Every other place is walked: a control added in one fails here until the walk
+    // knows its effect.
+    for control in controls()
+        .into_iter()
+        .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
+    {
         let effect = effect_of(control.keystroke);
         let at_first = state(&mut cx);
         cx.simulate_keystrokes(control.keystroke);
@@ -800,7 +818,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         match effect {
             Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
             Effect::Notice => cx.simulate_keystrokes("s s"),
-            Effect::Moves | Effect::Sends(_) => {}
+            Effect::Moves | Effect::Setting | Effect::Sends(_) => {}
         }
         if matches!(effect, Effect::Notice | Effect::Box | Effect::Field) {
             assert!(

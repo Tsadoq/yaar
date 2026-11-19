@@ -9,6 +9,14 @@ publish.workspace = true
 [dependencies]
 yaar-recorder.workspace = true
 yaar-store.workspace = true
+# The watcher of the worktrees.
+notify.workspace = true
+
+[dev-dependencies]
+# The recorded events of two sessions in one folder, read as the app reads them.
+yaar-system-tests.workspace = true
+yaar-adapter-claude.workspace = true
+yaar-agent.workspace = true
 
 [lints]
 workspace = true

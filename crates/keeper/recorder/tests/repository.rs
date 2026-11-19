@@ -63,6 +63,10 @@ fn a_clone(scratch: &Scratch) -> PathBuf {
         scratch.path(),
         &["clone", "--quiet", remote.to_str().unwrap(), "clone"],
     );
+    // A clone does not take the identity of the repository it came from, and the tests
+    // commit in it.
+    git(&clone, &["config", "user.name", "A Test"]);
+    git(&clone, &["config", "user.email", "test@example.invalid"]);
     clone
 }
 

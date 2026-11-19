@@ -10,8 +10,8 @@ use gpui_kit::{
 };
 use yaar_frame::{
     Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder, Place,
-    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ToggleSidebar, UnpinSidebar, bind,
-    controls,
+    Quit, QuitAndStopAgents, SelectNextWorkspace, SelectPreviousWorkspace, SetBase,
+    ShowFinishedTurn, ToggleSidebar, UnpinSidebar, bind, controls,
 };
 
 actions!(
@@ -82,6 +82,9 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
         note::<FocusNextPane>(&ran, cx);
         note::<FocusPreviousPane>(&ran, cx);
         note::<MovePanes>(&ran, cx);
+        note::<ShowFinishedTurn>(&ran, cx);
+        note::<Quit>(&ran, cx);
+        note::<QuitAndStopAgents>(&ran, cx);
     });
     ran
 }
@@ -90,7 +93,7 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
 /// every other test presses what the table has, so a key changed in the table by mistake
 /// would pass them all. Each action has the key of a Mac and the key of every other
 /// system, where the keyboard has no Cmd key.
-fn chosen() -> [(&'static str, &'static str, &'static str); 9] {
+fn chosen() -> [(&'static str, &'static str, &'static str); 12] {
     [
         ("cmd-o", "ctrl-o", OpenFolder.name()),
         ("cmd-shift-b", "ctrl-shift-b", SetBase.name()),
@@ -102,6 +105,9 @@ fn chosen() -> [(&'static str, &'static str, &'static str); 9] {
         ("ctrl-tab", "ctrl-tab", FocusNextPane.name()),
         ("ctrl-shift-tab", "ctrl-shift-tab", FocusPreviousPane.name()),
         ("cmd-alt-p", "ctrl-alt-p", MovePanes.name()),
+        ("cmd-alt-n", "ctrl-alt-n", ShowFinishedTurn.name()),
+        ("cmd-q", "ctrl-q", Quit.name()),
+        ("cmd-alt-q", "ctrl-alt-q", QuitAndStopAgents.name()),
     ]
 }
 

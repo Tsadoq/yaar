@@ -11,7 +11,7 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::contents::{Contents, Read};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
-use crate::index::IndexCopy;
+use crate::index::{IndexBackup, IndexCopy};
 
 /// Names one commit: its full id, in lowercase hexadecimal digits.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -761,7 +761,9 @@ impl Worktree {
     ///
     /// Refused with [`CommitError::NothingToCommit`] when nothing is uncommitted, and
     /// with [`CommitError::Refused`] and git's own words when git ends with an error, as
-    /// when a hook rejects the commit or no identity is set.
+    /// when a hook rejects the commit or no identity is set. A refused commit leaves the
+    /// worktree's list of files as it was before the call, byte for byte, so that what the
+    /// user had staged is still staged and nothing else is.
     pub fn commit_all(&self, message: &str) -> Result<CommitId, CommitError> {
         // Asked as reading asks: on a copy of the list of files, so that the question
         // neither writes nor locks the user's own.
@@ -781,8 +783,17 @@ impl Worktree {
             return Err(CommitError::NothingToCommit);
         }
 
+        // `git add --all` rewrites the user's list of files, and a commit that is then
+        // refused would leave everything staged: the bytes are taken first.
+        let backup = IndexBackup::take(&self.git_dir.join("index")).map_err(GitError::from)?;
         let mut add = self.git.plain(&self.root);
-        add.args(["add", "--all"]);
+        // `--no-ignore-errors` because the user's `add.ignoreErrors` would make git stage
+        // what it can, write the list and only then exit in error.
+        add.args(["add", "--all", "--no-ignore-errors"]);
+        // A git that ends in error here has written nothing: it writes the list last,
+        // through the lock, and dies before it when a file cannot be added or the lock is
+        // held. Putting the bytes back would overwrite what another git wrote after that
+        // failure, so nothing is put back.
         let answer = finish(add)?;
         if answer.code != Some(0) {
             return Err(CommitError::refused_by(answer));
@@ -790,9 +801,15 @@ impl Worktree {
         // The message goes in on the standard input: it may hold any character.
         let mut commit = self.git.plain(&self.root);
         commit.args(["commit", "--file=-"]);
-        let answer = finish_with(commit, message.as_bytes())?;
+        let answer = match finish_with(commit, message.as_bytes()) {
+            Ok(answer) => answer,
+            Err(e) => {
+                let _ = backup.restore();
+                return Err(e.into());
+            }
+        };
         if answer.code != Some(0) {
-            return Err(CommitError::refused_by(answer));
+            return Err(refused_and_put_back(answer, backup));
         }
         match self.head_commit()? {
             Some(id) => Ok(id),
@@ -832,6 +849,19 @@ impl Drop for Worktree {
         if let Some(contents) = kept.take() {
             contents.stop();
         }
+    }
+}
+
+/// The refusal for a run of git that ended with an error, after the user's list of files
+/// is put back as it was before the control ran. A list that cannot be put back is said
+/// so in the words of the refusal, since the user's next step depends on it.
+fn refused_and_put_back(answer: Answer, backup: IndexBackup) -> CommitError {
+    let refusal = CommitError::refused_by(answer);
+    match (backup.restore(), refusal) {
+        (Err(e), CommitError::Refused { stderr }) => CommitError::Refused {
+            stderr: format!("{stderr}\nThe list of staged files could not be put back: {e}"),
+        },
+        (_, refusal) => refusal,
     }
 }
 

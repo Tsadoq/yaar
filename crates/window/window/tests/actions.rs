@@ -11,11 +11,12 @@
 //! it belongs there.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{CommentId, Origin, Program, Request, RequestKind, ReviewId, Workspace};
-use yaar_system_tests::{DEADLINE, Repo};
+use yaar_system_tests::{DEADLINE, Repo, descendants_of, is_alive};
 
 mod common;
 
@@ -52,6 +53,14 @@ fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
         listed
     );
     (window, cx)
+}
+
+/// The controls of the Window that say they send the stop-everything frame.
+fn controls_that_stop() -> Vec<Control> {
+    yaar_window::controls()
+        .into_iter()
+        .filter(|control| control.sends == Some(Sends::StopEverything))
+        .collect()
 }
 
 /// The controls of the Window that say they send a request of this kind.
@@ -157,9 +166,19 @@ impl Composed {
             | RequestKind::ReadFile
             | RequestKind::ResizeTerminal
             | RequestKind::GetReviews
-            | RequestKind::SaveDraft => {
+            | RequestKind::SaveDraft
+            | RequestKind::ListAgents
+            | RequestKind::GetHistory
+            | RequestKind::GetUncommitted
+            | RequestKind::CompareVersions
+            | RequestKind::ReadVersions
+            | RequestKind::GetTurn
+            | RequestKind::ShowWorkspace
+            | RequestKind::ListTerminals
+            | RequestKind::AttachTerminal => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
+            RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
         }
     }
 
@@ -233,6 +252,22 @@ impl Composed {
             // The first row of the Review pane, at its left end: an offer to set a base,
             // where the row holds one, lies further right.
             Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-row-0"),
+            // The tree of Changes: Tab from the rows moves the focus into it, as a user
+            // gets there by keys.
+            Place::In(yaar_review_pane::HISTORY_CONTEXT) => {
+                if !self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx) {
+                    // The Keeper answers for the history after the rows are drawn, and
+                    // Tab does nothing before the tree is there.
+                    wait_until(cx, "the tree of Changes", |cx| {
+                        cx.debug_bounds("review-history-uncommitted").is_some()
+                    });
+                    self.click_into(cx, "review-row-0");
+                    cx.simulate_keystrokes("tab");
+                    wait_until(cx, "the focus in the tree of Changes", |cx| {
+                        self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx)
+                    });
+                }
+            }
             // The view of the terminal on screen.
             Place::In(PROGRAM_CONTEXT) => self.click_into(cx, "terminal-slot-0"),
             Place::In(other) => panic!(
@@ -428,8 +463,20 @@ impl Composed {
                 | RequestKind::ReadFile
                 | RequestKind::ResizeTerminal
                 | RequestKind::GetReviews
-                | RequestKind::SaveDraft => {
+                | RequestKind::SaveDraft
+                | RequestKind::ListAgents
+                | RequestKind::GetHistory
+                | RequestKind::GetUncommitted
+                | RequestKind::CompareVersions
+                | RequestKind::ReadVersions
+                | RequestKind::GetTurn
+                | RequestKind::ShowWorkspace
+                | RequestKind::ListTerminals
+                | RequestKind::AttachTerminal => {
                     panic!("the Window starts {kind:?} by itself: no user does")
+                }
+                RequestKind::Report => {
+                    panic!("a piece of an agent CLI starts {kind:?}: no user does")
                 }
             };
 
@@ -450,6 +497,53 @@ impl Composed {
         }
     }
 
+    /// The last step of the walk: every control that says it sends the stop-everything
+    /// frame has its key pressed, where it works, and the frame has to pass the tap. The
+    /// frame ends the Keeper of the world, and a user has nothing left to do after it, so
+    /// this comes after every other step, and the step is over only when the Keeper is gone.
+    fn walk_the_stop(&mut self, cx: &mut VisualTestContext) {
+        let controls = controls_that_stop();
+        assert!(
+            !controls.is_empty(),
+            "no control of the Window sends the stop-everything frame: a user has no way to start it"
+        );
+        // The programs of the Keeper are listed while it runs: once it is gone they belong
+        // to the system, and nothing says whose they were.
+        let keeper = self.world.keeper_pid().expect("the world's Keeper runs");
+        let programs = descendants_of(keeper);
+        assert!(
+            !programs.is_empty(),
+            "the walk opened a terminal, and the Keeper holds its program"
+        );
+        for control in controls {
+            self.press(&control, cx);
+            self.give(&control, &Answer::Nothing, cx);
+            assert!(
+                self.tap.wait_for_stop(DEADLINE),
+                "the key {} of {} did not send the stop-everything frame",
+                control.key(),
+                control.title
+            );
+            let world = &mut self.world;
+            assert!(
+                yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none()),
+                "the Keeper still runs after the key {} of {}",
+                control.key(),
+                control.title
+            );
+        }
+        // The stop frame has the Keeper end what it holds, the shell the walk opened with
+        // New Terminal among it.
+        assert!(
+            yaar_system_tests::wait_until(DEADLINE, || programs.iter().all(|pid| !is_alive(*pid))),
+            "the programs of the Keeper still run after the stop: {:?}",
+            programs
+                .iter()
+                .filter(|pid| is_alive(**pid))
+                .collect::<Vec<_>>()
+        );
+    }
+
     fn wait_until_on_screen(&mut self, folder: &Path, cx: &mut VisualTestContext) {
         wait_until(cx, "the opened folder on screen", |cx| {
             self.on_screen(cx)
@@ -459,8 +553,9 @@ impl Composed {
 
     /// Sets the base of the workspace on screen to `base` as a user does, by the control
     /// that sends that request, and waits until the request has passed the tap. Returns
-    /// its place among the requests the tap lists.
-    fn set_base(&mut self, base: &str, cx: &mut VisualTestContext) -> usize {
+    /// its place among the requests the tap lists, or none when the stop-everything frame
+    /// passes the tap first: it ends the Keeper, and the request would never pass.
+    fn set_base(&mut self, base: &str, cx: &mut VisualTestContext) -> Option<usize> {
         let control = controls_that_send(RequestKind::SetBase)
             .into_iter()
             .next()
@@ -474,12 +569,28 @@ impl Composed {
             Request::SetBase { base: set, .. } => set == base,
             _ => false,
         };
+        let tap = &self.tap;
+        let came = yaar_system_tests::wait_until(DEADLINE, || {
+            tap.requests()[from..].iter().any(sets_it) || tap.wait_for_stop(Duration::ZERO)
+        });
+        // The stop frame is latched, so it is read after the wait whichever event ended
+        // it: a Keeper on its way out may still let the request through the tap, and
+        // only the key of this step can have sent the frame.
+        if self.tap.wait_for_stop(Duration::ZERO) {
+            return None;
+        }
+        assert!(
+            came,
+            "neither the request that sets the base {base} nor the stop-everything frame \
+             passed the tap; the requests listed are {:?}",
+            &self.tap.requests()[from..]
+        );
         self.tap.wait_for_request(DEADLINE, sets_it);
         let found = self.tap.requests()[from..]
             .iter()
             .position(sets_it)
             .expect("the tap lists the request it waited for");
-        from + found
+        Some(from + found)
     }
 }
 
@@ -494,6 +605,9 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
     for kind in RequestKind::started_by_user() {
         window.walk(kind, &mut cx);
     }
+
+    // The stop frame is no request. It ends the Keeper, so it is pressed last.
+    window.walk_the_stop(&mut cx);
 }
 
 #[gpui_kit::test]
@@ -507,13 +621,9 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
                 "{} says it sends {kind:?}",
                 control.title
             ),
-            // No control sends the stop-everything frame yet. It joins the walk when
-            // its control is built, and the tap, which keeps requests, has to keep
-            // that frame too by then.
-            Some(Sends::StopEverything) => panic!(
-                "{} sends the stop-everything frame, which the walk does not follow yet",
-                control.title
-            ),
+            // The stop-everything frame is no request, and has no origin to check. Its
+            // control is pressed by the forward walk, last, where the tap sees the frame.
+            Some(Sends::StopEverything) => {}
             None => {}
         }
     }
@@ -581,8 +691,16 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         }
         // No such branch exists. The Keeper refuses it, which is all the same here: the
         // request has passed the tap.
-        let closed = window.set_base(&format!("after-{}", control.key()), &mut cx);
-
+        // The stop frame is no request, so the loop below does not see it. A key that
+        // sent it would end the Keeper, and the request that closes the step would never
+        // pass: the step is closed on that frame as well, and it is told apart here.
+        let Some(closed) = window.set_base(&format!("after-{}", control.key()), &mut cx) else {
+            panic!(
+                "the key {} of {} names no message and sent the stop-everything frame",
+                control.key(),
+                control.title
+            );
+        };
         let passed = window.tap.requests();
         for request in &passed[before..closed] {
             assert_ne!(

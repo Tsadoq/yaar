@@ -9,7 +9,7 @@ use yaar_link::{
     Hello, LinkError, Message, Refusal, Request, RequestId, RequestKind, handshake, read_message,
     write_message,
 };
-use yaar_system_tests::{Client, DEADLINE, Place, World, attach};
+use yaar_system_tests::{Client, DEADLINE, Place, World, attach, without_agent_clis};
 
 #[test]
 fn the_same_steps_in_two_worlds_give_the_same_commits_on_main() {
@@ -57,7 +57,12 @@ fn a_program_of_the_world_sees_the_worlds_environment_and_nothing_of_this_proces
     assert_eq!(value("YAAR_SOCKET"), Some(world.socket()));
     assert_eq!(value("GIT_CONFIG_GLOBAL"), Some(PathBuf::from("/dev/null")));
     assert_eq!(value("GIT_CONFIG_NOSYSTEM"), Some(PathBuf::from("1")));
-    assert_eq!(value("PATH"), std::env::var_os("PATH").map(PathBuf::from));
+    // The machine's own search path, less the folders that hold an agent CLI of the user's.
+    let machine = std::env::var_os("PATH").expect("the machine has a search path");
+    assert_eq!(
+        value("PATH"),
+        Some(PathBuf::from(without_agent_clis(&machine)))
+    );
     // Cargo sets this for every test program; the world does not pass it on.
     assert!(std::env::var_os("CARGO_MANIFEST_DIR").is_some());
     assert_eq!(value("CARGO_MANIFEST_DIR"), None);

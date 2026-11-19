@@ -10,8 +10,14 @@
 //! `yaar-keeper` is this function behind a command line. Everything else a Window can
 //! reach, it reaches over the Link.
 //!
+//! A piece of the app inside an agent CLI connects to the same socket: it says hello,
+//! sends one request of the origin `yaar_link::Origin::Agent`, and is let go once that is
+//! answered. It is never asked for anything.
+//!
 //! No interface code belongs here or in any crate beside this one.
 
+mod agents;
+mod watching;
 mod wiring;
 
 use std::collections::VecDeque;
@@ -27,7 +33,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    Fact, Hello, LinkError, MAX_FRAME, Message, Refusal, Request, RequestId, read_message,
+    Fact, Hello, LinkError, MAX_FRAME, Message, Origin, Refusal, Request, RequestId, read_message,
     write_message,
 };
 
@@ -56,6 +62,12 @@ pub struct Options {
     pub app_version: String,
     /// The app's folder, where the database is kept. Made when it is not there.
     pub data_dir: PathBuf,
+    /// The folder of the app's programs that pass a CLI's reports on, as the hook program
+    /// of Claude Code: where the pieces the Adapters write find them. None for the folder
+    /// of the Keeper's own program, where the build and the packages put them beside it;
+    /// a test that runs the Keeper in its own process names the folder of the built
+    /// programs.
+    pub companions: Option<PathBuf>,
 }
 
 impl Options {
@@ -67,6 +79,7 @@ impl Options {
             linger: Duration::from_secs(5),
             app_version: app_version.to_owned(),
             data_dir: yaar_link::data_dir(),
+            companions: None,
         }
     }
 }
@@ -517,6 +530,15 @@ fn serve_window(stream: UnixStream, shared: &Arc<Shared>, version: &str) -> Resu
         converse(&window, speaks, shared)
     };
     shared.forget(&window);
+    // It is shown no terminal and no workspace any more.
+    if let Some(parts) = shared
+        .parts
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        parts.window_gone(&window);
+    }
     // What is owed to the Window is still written, if it can take it.
     window.finish();
     {
@@ -550,6 +572,12 @@ fn converse(window: &Arc<Window>, speaks: bool, shared: &Arc<Shared>) -> Result<
                 ));
             }
             Ok(Message::Request { id, request }) => match wiring::answerer(request.kind()) {
+                // A piece of an agent CLI asks one thing and goes: what it was owed is
+                // written, and nothing more is read from it.
+                Answerer::Here if request.kind().origin() == Origin::Agent => {
+                    answer(shared, window, id, request);
+                    return Ok(());
+                }
                 Answerer::Here => {
                     if !answer(shared, window, id, request) {
                         return Ok(());

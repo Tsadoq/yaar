@@ -569,8 +569,11 @@ part = "workspaces"
 through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
-proves = []
+proves = ["FR-111"]
 slice = 4
+built = [
+    "crates/keeper/workspaces/tests/credit.rs::two_sessions_in_one_worktree_editing_different_files_have_each_write_credited_to_its_session",
+]
 
 [[test]]
 id = "LISTEN-05"
@@ -581,6 +584,9 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-049"]
+built = [
+    "crates/keeper/workspaces/tests/credit.rs::two_sessions_running_overlapping_shell_commands_leave_the_files_written_as_changes_no_agent_made",
+]
 
 [[test]]
 id = "LISTEN-06"
@@ -591,6 +597,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-049", "FR-025"]
+built = [
+    "crates/keeper/workspaces/tests/credit.rs::a_file_changed_by_an_editor_outside_the_app_shows_as_a_change_no_agent_made",
+]
 
 [[test]]
 id = "FRAME-01"
@@ -614,6 +623,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-007", "FR-027"]
+built = [
+    "crates/window/frame/tests/agent_states.rs::the_sidebar_shows_for_each_workspace_whether_its_agent_works_waits_for_permission_has_finished_a_turn_not_yet_reviewed_or_is_not_running",
+]
 
 [[test]]
 id = "FRAME-03"
@@ -652,6 +664,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-012"]
+built = [
+    "crates/window/frame/tests/agent_states.rs::a_turn_that_ends_in_a_workspace_not_on_screen_changes_its_state_in_the_sidebar_and_shows_a_notice_whose_control_switches_to_it",
+]
 
 [[test]]
 id = "FRAME-08"
@@ -678,6 +693,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-116", "FR-118"]
+built = [
+    "crates/window/frame/tests/agent_states.rs::there_are_two_ways_to_quit_the_plain_one_is_what_the_usual_key_runs_and_asks_the_keeper_to_stop_nothing",
+]
+note = "The menu comes with slice 9; the row reads the table of controls the menu will be built from, and the key."
 
 [[test]]
 id = "FRAME-11"
@@ -788,6 +807,9 @@ through = "its calls, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-018", "FR-040"]
+built = [
+    "crates/keeper/dock/tests/terminals.rs::the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the_app_adds",
+]
 
 [[test]]
 id = "DOCK-04"
@@ -831,6 +853,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007"]
+built = [
+    "system-tests/tests/agents.rs::esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "TP-01"
@@ -877,6 +903,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-027"]
+built = [
+    "crates/window/terminal-pane/tests/agents.rs::the_terminal_of_an_agent_that_waits_at_a_permission_prompt_carries_the_waiting_mark",
+]
 
 [[test]]
 id = "TP-05"
@@ -986,6 +1015,26 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-007"]
+built = [
+    "crates/keeper/switchboard/src/lib.rs::the_state_follows_a_turn_from_its_start_to_the_mark_of_reviewed",
+    "crates/keeper/switchboard/src/lib.rs::a_session_first_heard_is_started_with_its_folder_and_is_idle",
+    "crates/keeper/switchboard/src/lib.rs::a_permission_answered_with_a_report_of_its_own_ends_the_wait",
+    "crates/keeper/switchboard/src/lib.rs::a_turn_ended_by_an_interrupt_also_leaves_the_session_unreviewed",
+    "crates/keeper/switchboard/src/lib.rs::an_interrupt_at_a_permission_prompt_ends_the_wait_before_the_turn",
+    "crates/keeper/switchboard/src/lib.rs::a_session_that_ends_is_not_running",
+    "crates/keeper/switchboard/src/lib.rs::a_process_that_is_gone_leaves_its_sessions_not_running_and_no_other",
+    "crates/keeper/switchboard/src/lib.rs::a_command_left_open_ends_before_the_interrupt_that_ends_its_turn",
+    "crates/keeper/switchboard/src/lib.rs::a_command_left_open_ends_before_the_end_of_the_session",
+    "crates/keeper/switchboard/src/lib.rs::a_command_left_open_ends_before_the_end_of_a_process",
+    "crates/keeper/switchboard/src/lib.rs::a_turn_started_while_one_is_open_ends_the_open_one_as_interrupted",
+    "crates/keeper/switchboard/src/lib.rs::a_turn_started_while_the_session_waits_with_no_turn_open_works",
+    "crates/keeper/switchboard/src/lib.rs::a_turn_ended_with_no_turn_open_gives_nothing",
+    "crates/keeper/switchboard/src/lib.rs::a_session_that_ended_at_a_permission_prompt_does_not_wait_when_it_resumes",
+    "crates/keeper/switchboard/src/lib.rs::a_session_resumed_after_an_unreviewed_turn_is_unreviewed_until_it_is_marked_reviewed",
+    "crates/keeper/switchboard/src/lib.rs::a_session_resumed_with_nothing_unreviewed_is_idle",
+    "crates/keeper/switchboard/src/lib.rs::a_step_heard_with_no_turn_open_ends_the_wait_it_answers",
+    "crates/keeper/switchboard/src/lib.rs::a_turn_ended_with_no_turn_open_changes_nothing_not_even_a_wait",
+]
 
 [[test]]
 id = "SWB-02"
@@ -996,6 +1045,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-008"]
+built = [
+    "crates/keeper/switchboard/src/lib.rs::the_state_shown_for_every_pair_and_triple_is_the_first_of_the_order",
+    "crates/keeper/switchboard/src/lib.rs::the_order_is_waits_then_unreviewed_then_works_then_not_running",
+    "crates/keeper/switchboard/src/lib.rs::idle_is_shown_only_when_every_session_is_idle",
+    "crates/keeper/switchboard/src/lib.rs::no_session_shows_no_state",
+]
 
 [[test]]
 id = "SWB-04"
@@ -1047,6 +1102,15 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-027"]
+built = [
+    "crates/keeper/adapter-claude/tests/permission.rs::a_permission_dialog_turns_waiting_for_permission_on",
+    "crates/keeper/adapter-claude/tests/permission.rs::the_notification_that_follows_the_dialog_by_seconds_says_nothing",
+    "crates/keeper/adapter-claude/tests/permission.rs::the_answer_yes_turns_waiting_off_and_then_tells_the_write",
+    "crates/keeper/adapter-claude/tests/permission.rs::the_lines_before_the_denied_dialog_start_the_turn_and_begin_the_command",
+    "crates/keeper/adapter-claude/tests/permission.rs::the_answer_no_turns_waiting_off_by_the_mark_and_ends_the_turn",
+    "crates/keeper/adapter-claude/tests/permission.rs::the_mark_after_a_finished_turn_means_nothing",
+    "crates/keeper/adapter-claude/src/report.rs::a_tool_that_begins_while_a_dialog_is_open_leaves_waiting_on",
+]
 
 [[test]]
 id = "ADP-03"
@@ -1119,6 +1183,12 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-028"]
+built = [
+    "companions/claude/tests/hook.rs::the_hook_program_answers_a_permission_request_with_no_decision_of_its_own",
+    "companions/claude/tests/hook.rs::with_no_keeper_listening_the_program_says_nothing_and_does_not_wait",
+    "companions/claude/tests/hook.rs::a_keeper_that_never_answers_holds_the_program_for_the_deadline_and_no_longer",
+]
+note = "The test plays the Keeper's end of the socket only to read what the hook sent and printed, as the pane tests' test-Keeper does."
 
 [[test]]
 id = "REPLY-02"
@@ -1165,6 +1235,10 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+built = [
+    "crates/keeper/recorder/tests/states.rs::the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_every_filter",
+]
+note = "The large-file pointer is made by a clean filter of the test standing in for Git LFS, which the CI machine does not have."
 
 [[test]]
 id = "STATE-03"
@@ -1175,6 +1249,10 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+built = [
+    "crates/keeper/recorder/tests/states.rs::with_a_failing_hook_in_the_repository_behind_a_global_path_and_in_configuration_a_state_is_taken_and_none_runs",
+]
+note = "git 2.43 and Apple's git ignore hooks in configuration; the test checks, in a copy, which hook places the installed git runs, and the clause on configuration holds where git runs them."
 
 [[test]]
 id = "STATE-05"
@@ -1199,6 +1277,13 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+built = [
+    "crates/keeper/recorder/tests/states.rs::forty_states_taken_beside_a_loop_that_creates_and_deletes_files_all_succeed",
+    "crates/keeper/recorder/tests/states.rs::a_path_that_is_gone_when_it_fails_to_be_staged_is_left_out_and_the_state_is_taken",
+    "crates/keeper/recorder/tests/states.rs::a_path_whose_folder_became_a_file_when_it_fails_to_be_staged_is_left_out_too",
+    "crates/keeper/recorder/tests/states.rs::a_path_that_is_gone_when_it_fails_to_be_staged_among_many_leaves_the_others_in_the_state",
+    "crates/keeper/recorder/tests/states.rs::a_path_that_cannot_be_staged_fails_the_recording_after_a_few_runs_of_git_and_not_one_for_each_path",
+]
 
 [[test]]
 id = "STATE-08"
@@ -1209,6 +1294,11 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+built = [
+    "crates/keeper/recorder/tests/states.rs::an_untracked_repository_with_no_commit_is_left_out_of_the_state_and_reported",
+    "crates/keeper/recorder/tests/states.rs::a_repository_inside_the_worktree_with_no_commit_is_left_out_of_the_state",
+    "crates/keeper/recorder/tests/states.rs::a_repository_left_out_joins_the_state_when_it_gets_its_first_commit",
+]
 
 [[test]]
 id = "STATE-09"
@@ -1229,6 +1319,14 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-042"]
+built = [
+    "crates/keeper/recorder/tests/history.rs::the_history_lists_the_commits_and_the_states_in_the_order_they_happened",
+    "crates/keeper/recorder/tests/history.rs::with_no_since_the_history_starts_at_the_first_commit",
+    "crates/keeper/recorder/tests/history.rs::the_states_taken_on_since_itself_come_first",
+    "crates/keeper/recorder/tests/history.rs::a_worktree_with_no_commit_has_the_states_taken_before_any_alone",
+    "crates/keeper/recorder/tests/history.rs::the_history_follows_first_parents_and_leaves_out_what_lies_before_since",
+    "crates/keeper/recorder/tests/history.rs::a_since_that_is_no_commit_is_an_error_and_not_an_empty_history",
+]
 
 [[test]]
 id = "REC-02"
@@ -1239,6 +1337,10 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-043", "FR-103"]
+built = [
+    "crates/keeper/recorder/tests/versions.rs::the_diff_between_any_two_of_commits_and_states_equals_gits_diff_of_the_two_trees",
+    "crates/keeper/recorder/tests/versions.rs::the_diff_between_a_version_and_the_files_on_disk_equals_gits_diff_of_a_commit_of_everything",
+]
 
 [[test]]
 id = "REC-03"
@@ -1598,6 +1700,16 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-111", "FR-114", "FR-115"]
+built = [
+    "crates/keeper/review-engine/src/takeover.rs::the_first_session_takes_over_the_review_of_no_agent_and_a_second_that_runs_gets_its_own",
+    "crates/keeper/review-engine/src/takeover.rs::a_review_stays_open_when_its_session_ends_and_the_next_session_of_that_cli_takes_it_over",
+    "crates/keeper/review-engine/src/takeover.rs::a_session_of_another_cli_never_takes_over_the_review_of_an_ended_session",
+    "crates/keeper/review-engine/src/takeover.rs::of_two_ended_sessions_the_one_that_ended_last_gives_its_review",
+    "crates/keeper/review-engine/src/takeover.rs::a_session_started_in_the_terminal_of_an_ended_one_takes_that_terminals_review",
+    "crates/keeper/review-engine/src/takeover.rs::a_resumed_session_keeps_its_own_review_though_one_of_no_agent_waits",
+    "crates/keeper/review-engine/src/takeover.rs::a_review_whose_session_runs_is_not_taken_over_whatever_the_terminal",
+    "crates/keeper/review-engine/src/takeover.rs::the_review_of_no_agent_goes_before_that_of_an_ended_session_in_another_terminal",
+]
 
 [[test]]
 id = "REV-17A"
@@ -1635,6 +1747,11 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-047", "FR-048", "FR-038"]
+built = [
+    "crates/keeper/review-engine/tests/turn.rs::at_a_turn_end_what_changed_is_the_diff_from_the_state_last_marked_reviewed_to_the_new_state",
+    "crates/keeper/review-engine/tests/turn.rs::before_any_mark_what_changed_is_counted_from_the_start_given_and_from_nothing_without",
+    "crates/keeper/review-engine/tests/turn.rs::each_session_counts_from_the_state_its_own_review_was_marked_at",
+]
 
 [[test]]
 id = "REV-20"
@@ -1645,6 +1762,11 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-049", "FR-050"]
+built = [
+    "crates/keeper/review-engine/src/uncommitted.rs::a_change_no_agent_made_is_listed_in_every_review_beside_those_of_its_own_session",
+    "crates/keeper/review-engine/src/uncommitted.rs::a_change_is_listed_only_while_it_is_uncommitted",
+    "crates/keeper/review-engine/src/uncommitted.rs::a_comment_on_a_change_no_agent_made_belongs_to_the_review_it_was_written_in",
+]
 
 [[test]]
 id = "REV-23"
@@ -1655,6 +1777,18 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["NFR-004"]
+
+[[test]]
+id = "REV-24"
+what = "A recorded state keeps who is credited with each path; a path two sessions changed shows whole in both reviews, marked."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 6
+note = "Added in slice 4 for the rest of ADR-007 point 8: slice 4 lists the uncommitted changes per review and keeps credits in memory only. The contract of slice 6 moves the row if the mark is the pane's to draw."
 
 [[test]]
 id = "THREAD-01"
@@ -1860,6 +1994,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-042", "FR-049"]
+built = [
+    "crates/window/review-pane/tests/changes.rs::changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_those_no_agent_made_and_the_files_of_the_selected_change",
+]
 
 [[test]]
 id = "RP-16"
@@ -1870,6 +2007,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-043"]
+built = [
+    "crates/window/review-pane/tests/changes.rs::a_click_on_one_commit_shows_the_change_from_the_entry_above_it_to_that_commit",
+    "crates/window/review-pane/tests/changes.rs::tab_gives_the_tree_the_focus_with_the_cursor_on_the_first_entry_and_enter_shows_the_turn_under_it",
+    "crates/window/review-pane/tests/changes.rs::marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_click_extends_the_one_shown",
+]
 
 [[test]]
 id = "RP-17"
@@ -1893,6 +2035,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-047"]
+built = [
+    "crates/window/review-pane/tests/changes.rs::when_a_turn_ends_changes_selects_what_changed_since_the_last_review",
+    "crates/window/review-pane/tests/changes.rs::a_turn_that_ends_in_a_workspace_not_on_screen_selects_nothing",
+]
 
 [[test]]
 id = "RP-20"
@@ -1903,6 +2049,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-048"]
+built = [
+    "crates/window/review-pane/tests/changes.rs::set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_what_changed_since_the_last_review",
+    "crates/window/review-pane/tests/changes.rs::the_offer_is_not_made_for_a_turn_whose_state_was_not_recorded",
+]
+note = "The setting is the review pane's control (shift-t) until the settings of slice 9 keep it (FR-124)."
 
 [[test]]
 id = "RP-21"
@@ -2056,13 +2207,18 @@ proves = ["FR-105"]
 
 [[test]]
 id = "RP-41"
-what = "With one agent session in the worktree the pane names it; with several it lets the reviewer choose whose review to show."
+what = "With one agent session in the worktree the pane names it; with several it lets the reviewer choose whose review to show. A comment on a change no agent made goes to the review on screen."
 level = "component"
 part = "review-pane"
 through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
-proves = ["FR-112"]
+proves = ["FR-112", "FR-050"]
+built = [
+    "crates/window/review-pane/tests/reviews.rs::with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_chooses_whose_review_to_show",
+    "crates/window/review-pane/tests/reviews.rs::the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent",
+    "crates/window/review-pane/tests/reviews.rs::a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen",
+]
 
 [[test]]
 id = "RP-43"
@@ -2383,6 +2539,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-116", "FR-117"]
+built = [
+    "system-tests/tests/keeping.rs::a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "HOLD-02"
@@ -2393,6 +2553,10 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-117"]
+built = [
+    "system-tests/tests/holding.rs::the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_interrupted",
+]
+note = "The client is the test's own: it is killed by dropping its connection with no goodbye and nothing more read, which is what the Keeper sees of a killed Window."
 
 [[test]]
 id = "HOLD-03"
@@ -2403,6 +2567,9 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-118"]
+built = [
+    "system-tests/tests/holding.rs::the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_up",
+]
 note = "The stop reaches every process of each terminal's session, background jobs of a shell included; a process that left the session by setsid, as a daemon, is not reached."
 
 [[test]]
@@ -2414,6 +2581,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-116"]
+built = [
+    "system-tests/tests/keeping.rs::a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "UITEST-04"
@@ -2434,6 +2605,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007", "FR-030", "FR-046"]
+built = [
+    "system-tests/tests/agents.rs::a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-02"
@@ -2454,6 +2629,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-025", "FR-026", "FR-022"]
+built = [
+    "system-tests/tests/agents.rs::edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. The offer to attach exists from slice 6; its absence is checked from then on."
 
 [[test]]
 id = "AGENT-08"
@@ -2474,6 +2653,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-114", "FR-115", "FR-022"]
+built = [
+    "system-tests/tests/agents.rs::the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left",
+]
+note = "The clause on a session of the other agent is shown when the stand-in speaks pi (slice 7); slice 4 shows the rest with Claude Code. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-12"
@@ -2484,6 +2667,12 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-020", "NFR-023"]
+built = [
+    "system-tests/tests/files.rs::the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored",
+    "system-tests/tests/files.rs::a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_of_a_cli",
+    "system-tests/tests/files.rs::the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_else",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-13"
@@ -2494,6 +2683,16 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-023"]
+built = [
+    "system-tests/tests/files.rs::neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn",
+    "system-tests/tests/files.rs::the_programs_of_a_trace_are_read_from_the_execve_calls_that_succeeded",
+    "system-tests/tests/files.rs::a_trace_with_the_process_in_brackets_or_with_none_is_read_as_well",
+    "system-tests/tests/files.rs::an_empty_trace_holds_no_program",
+    "system-tests/tests/files.rs::a_call_that_was_unfinished_is_joined_with_the_line_that_resumed_it",
+    "system-tests/tests/files.rs::a_credential_file_is_named_by_its_path_or_by_the_path_of_the_descriptor_it_was_opened_beside",
+    "system-tests/tests/files.rs::a_file_that_is_no_credential_of_a_cli_is_named_by_no_line_of_a_trace",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. Built and run on Linux only; macOS has no tracer short of lifting the system's protection."
 
 [[test]]
 id = "AGENT-15"
@@ -2514,6 +2713,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-027", "FR-028"]
+built = [
+    "system-tests/tests/agents.rs::an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writes_nothing_to_its_terminal_and_the_keys_of_the_answer_turn_it_off",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-17"
@@ -2546,6 +2749,20 @@ runs = "ci"
 proves = ["NFR-026"]
 
 [[test]]
+id = "AGENT-20"
+what = "Two sessions of an agent CLI in one worktree, each started in a shell of the app, have a review each."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-111"]
+built = [
+    "system-tests/tests/agents.rs::two_sessions_in_one_worktree_each_have_a_review",
+]
+note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+
+[[test]]
 id = "DELIVER-04"
 what = "Two sessions in one worktree, a review attached to one: only that session receives it."
 level = "system"
@@ -2553,7 +2770,8 @@ part = "app"
 through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
-proves = ["FR-092", "FR-111"]
+proves = ["FR-092"]
+note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4."
 
 [[test]]
 id = "STORE-04"
@@ -2574,6 +2792,10 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007"]
+built = [
+    "system-tests/tests/agents.rs::an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives",
+]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "LOAD-01"
@@ -2988,6 +3210,9 @@ through = "started against a real Keeper that holds state; read back through the
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-117"]
+built = [
+    "crates/window/window/tests/attach.rs::a_window_started_against_a_keeper_that_holds_two_terminals_a_draft_and_a_turn_that_ended_shows_their_screens_the_draft_and_the_finished_state",
+]
 
 [[test]]
 id = "SEAM-03"

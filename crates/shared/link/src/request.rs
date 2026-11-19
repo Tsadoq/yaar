@@ -8,8 +8,14 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::LinkError;
+use crate::agent::{
+    AgentReport, CreditedFile, History, Step, TerminalInfo, Turn, WorkspaceAgents, read_credited,
+    read_history, read_report, read_step, read_terminal_info, read_turn, read_workspace_agents,
+    write_credited, write_history, write_report, write_step, write_terminal_info, write_turn,
+    write_workspace_agents,
+};
 use crate::review::{
-    CommentId, DraftOn, ReviewId, ThreadId, WorkspaceReviews, read_draft_on,
+    CommentId, DraftOn, ReviewId, SessionId, ThreadId, TurnId, WorkspaceReviews, read_draft_on,
     read_workspace_reviews, write_draft_on, write_workspace_reviews,
 };
 use crate::terminal::{
@@ -18,8 +24,9 @@ use crate::terminal::{
 };
 use crate::wire::{In, Out};
 use crate::workspace::{
-    Changes, FileSides, Repository, RepositoryId, WorkspaceId, read_changes, read_repository,
-    read_sides, write_changes, write_repository, write_sides,
+    ChangedFile, Changes, FileSides, Repository, RepositoryId, WorkspaceId, read_changed_file,
+    read_changes, read_repository, read_sides, write_changed_file, write_changes, write_repository,
+    write_sides,
 };
 
 /// Pairs a reply with its request. The Window chooses it; within one connection no two
@@ -35,6 +42,11 @@ pub enum Origin {
     User,
     /// The Window itself, to have something to show.
     Window,
+    /// A piece of the app inside an agent CLI, as the hook program of Claude Code, to
+    /// report what the CLI does. Such a piece says hello, sends one request and leaves.
+    /// It is no Window, and nothing is told for it; a fact told to every connection may
+    /// still reach it before its reply, and it reads past it.
+    Agent,
 }
 
 /// Declares every kind of request in one table: its name, the number it travels by, who
@@ -114,6 +126,26 @@ request_kinds! {
     SetViewed = 13, User;
     /// See [`Request::Commit`].
     Commit = 14, User;
+    /// See [`Request::Report`].
+    Report = 15, Agent;
+    /// See [`Request::ListAgents`].
+    ListAgents = 16, Window;
+    /// See [`Request::GetHistory`].
+    GetHistory = 17, Window;
+    /// See [`Request::CompareVersions`].
+    CompareVersions = 18, Window;
+    /// See [`Request::ReadVersions`].
+    ReadVersions = 19, Window;
+    /// See [`Request::GetTurn`].
+    GetTurn = 20, Window;
+    /// See [`Request::ShowWorkspace`].
+    ShowWorkspace = 21, Window;
+    /// See [`Request::ListTerminals`].
+    ListTerminals = 22, Window;
+    /// See [`Request::AttachTerminal`].
+    AttachTerminal = 23, Window;
+    /// See [`Request::GetUncommitted`].
+    GetUncommitted = 24, Window;
 }
 
 impl RequestKind {
@@ -290,6 +322,108 @@ pub enum Request {
         /// The message, as the user wrote it.
         message: String,
     },
+    /// What an agent CLI handed a piece of the app, passed on by that piece. Answered by
+    /// [`Reply::Done`] once the Keeper has queued it, in the order reports and the marks of
+    /// its terminals came, and before it reads it: the CLI waits for the piece, so nothing
+    /// the report leads to is waited for, a recording least of all. Refused with
+    /// [`Refusal::Failed`] only when the Keeper has no Adapter by the report's name. A
+    /// report the Adapter cannot read is answered all the same, and written down by the
+    /// Keeper.
+    ///
+    /// The Keeper answers it with no decision of its own on anything the CLI asks the
+    /// user, a permission above all: the piece then adds nothing to what the CLI shows.
+    /// What the report leads to is told to every Window as facts:
+    /// [`Fact::AgentsChanged`], [`Fact::Step`] and [`Fact::TurnEnded`].
+    Report {
+        /// What the CLI handed the piece.
+        report: AgentReport,
+    },
+    /// The agent sessions of every workspace, and the state each workspace shows. Answered
+    /// by [`Reply::Agents`], one entry for each workspace in which a session of a supported
+    /// agent CLI ever reported, in the order the workspaces were opened.
+    ListAgents,
+    /// The history of a workspace: its commits and the turns that ended in it. Answered by
+    /// [`Reply::History`], from what the Keeper keeps and the commits, without asking git
+    /// what changed on disk; refused with [`Refusal::UnknownWorkspace`], also for a
+    /// workspace whose worktree is gone.
+    GetHistory {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
+    /// The uncommitted changes of a workspace that a review lists, from the commit checked
+    /// out to the files on disk, each with who made it: every change no agent made, and
+    /// those credited to the review's session; for the review of no agent, or none named,
+    /// every change. Answered by [`Reply::Uncommitted`], ordered by path; refused with
+    /// [`Refusal::UnknownWorkspace`], and [`Refusal::UnknownReview`] for a review the
+    /// Keeper does not hold.
+    GetUncommitted {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The review whose list is asked for.
+        review: Option<ReviewId>,
+    },
+    /// The files that differ between two versions of a workspace: commits of the
+    /// repository or recorded states, named by their full ids, or the files on disk.
+    /// Answered by [`Reply::Compared`], the files ordered by path; refused with
+    /// [`Refusal::UnknownRevision`] for an id that is neither a commit nor a state of the
+    /// workspace.
+    CompareVersions {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The version the change is counted from.
+        from: String,
+        /// The version the change leads to; none for the files on disk.
+        to: Option<String>,
+    },
+    /// The two versions of one file of a change between two versions of a workspace, as
+    /// [`Request::CompareVersions`] names them. Answered by [`Reply::File`]; refused as
+    /// [`Request::ReadFile`] and [`Request::CompareVersions`] are.
+    ReadVersions {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The version the old side is read in; none reads no old side, and the reply
+        /// holds none.
+        old: Option<String>,
+        /// The path of the file in that version, relative to the folder of the worktree.
+        old_path: PathBuf,
+        /// The version the new side is read in; none for the file on disk.
+        new: Option<String>,
+        /// The path of the file in that version, relative to the folder of the worktree.
+        path: PathBuf,
+    },
+    /// One turn with its steps, as the Keeper kept them: also a turn that ended while no
+    /// Window was attached. Answered by [`Reply::Turn`]; refused with
+    /// [`Refusal::UnknownTurn`].
+    GetTurn {
+        /// The turn.
+        turn: TurnId,
+    },
+    /// The Window shows this workspace now, or none. The Window tells it by itself
+    /// whenever the workspace on screen changes; the Keeper watches the worktrees that
+    /// some Window shows or an agent works in, and tells what changes in them as
+    /// [`Fact::ChangesChanged`] and [`Fact::Workspaces`]. Answered by [`Reply::Done`];
+    /// refused with [`Refusal::UnknownWorkspace`].
+    ShowWorkspace {
+        /// The workspace on screen.
+        workspace: Option<WorkspaceId>,
+    },
+    /// Every terminal the Keeper holds, whoever opened it, in the order they were opened.
+    /// Answered by [`Reply::Terminals`].
+    ListTerminals,
+    /// Show a terminal the Keeper holds in this Window too, as one opened again after a
+    /// plain quit. Answered by [`Reply::Attached`]; refused with
+    /// [`Refusal::UnknownTerminal`].
+    ///
+    /// After the reply the Window is sent, as [`crate::Message::Output`] frames, the
+    /// newest output the Keeper kept of the terminal, up to its limit, and then what the
+    /// program writes from then on, with nothing lost or sent twice in between. The
+    /// program is told the size and asked to draw its screen again.
+    AttachTerminal {
+        /// The terminal.
+        terminal: TerminalId,
+        /// The size the Window shows it at.
+        size: TerminalSize,
+    },
 }
 
 impl Request {
@@ -310,6 +444,16 @@ impl Request {
             Self::MarkReviewed { .. } => RequestKind::MarkReviewed,
             Self::SetViewed { .. } => RequestKind::SetViewed,
             Self::Commit { .. } => RequestKind::Commit,
+            Self::Report { .. } => RequestKind::Report,
+            Self::ListAgents => RequestKind::ListAgents,
+            Self::GetHistory { .. } => RequestKind::GetHistory,
+            Self::CompareVersions { .. } => RequestKind::CompareVersions,
+            Self::ReadVersions { .. } => RequestKind::ReadVersions,
+            Self::GetTurn { .. } => RequestKind::GetTurn,
+            Self::ShowWorkspace { .. } => RequestKind::ShowWorkspace,
+            Self::ListTerminals => RequestKind::ListTerminals,
+            Self::AttachTerminal { .. } => RequestKind::AttachTerminal,
+            Self::GetUncommitted { .. } => RequestKind::GetUncommitted,
         }
     }
 }
@@ -351,6 +495,24 @@ pub enum Reply {
         /// Its full id.
         commit: String,
     },
+    /// The agent sessions of every workspace in which one reported.
+    Agents(Vec<WorkspaceAgents>),
+    /// The history of the workspace asked about.
+    History(History),
+    /// The files that differ between the two versions asked about, ordered by path.
+    Compared(Vec<ChangedFile>),
+    /// The turn asked about.
+    Turn(Turn),
+    /// Every terminal the Keeper holds.
+    Terminals(Vec<TerminalInfo>),
+    /// The terminal is shown in this Window too; its kept output follows.
+    Attached {
+        /// Whether the program wrote more than the Keeper keeps: what came before the
+        /// kept output is gone, and the Window says so where the kept output starts.
+        cut: bool,
+    },
+    /// The uncommitted changes a review lists, ordered by path, each with who made it.
+    Uncommitted(Vec<CreditedFile>),
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -437,6 +599,11 @@ pub enum Refusal {
         /// What went wrong, as a sentence.
         reason: String,
     },
+    /// The Keeper holds no turn by this id.
+    UnknownTurn {
+        /// The id that was given.
+        turn: TurnId,
+    },
 }
 
 impl fmt::Display for Refusal {
@@ -487,6 +654,7 @@ impl fmt::Display for Refusal {
                 write!(f, "the workspace {workspace} has nothing uncommitted")
             }
             Self::Failed { reason } => f.write_str(reason),
+            Self::UnknownTurn { turn } => write!(f, "there is no turn {turn}"),
         }
     }
 }
@@ -496,14 +664,17 @@ impl std::error::Error for Refusal {}
 /// Something the Keeper tells every attached Window, unasked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fact {
-    /// The list of repositories and workspaces is now this. Told when a folder was opened.
+    /// The list of repositories and workspaces is now this. Told when a folder was opened,
+    /// and when the watcher of a worktree saw what is checked out in it change.
     ///
-    /// The Keeper does not watch the repositories yet: a worktree made or removed, or a
-    /// branch switched, outside the app is in no fact. A Window asks for the list again
-    /// when it comes to the front.
+    /// Only the worktrees that a Window shows or an agent works in are watched: a worktree
+    /// made or removed outside the app, or a branch switched in a worktree nobody shows,
+    /// is in the list the next time it is read.
     Workspaces(Vec<Repository>),
     /// The changes of this workspace are no longer what the Keeper last answered: its
-    /// base was set, or its files or commits changed. A Window that shows them asks again.
+    /// base was set, its commits changed, or the watcher saw its files change. A Window
+    /// that shows them asks again. While files keep changing, as when an agent writes,
+    /// the fact is told at most a few times a second.
     ChangesChanged {
         /// The workspace.
         workspace: WorkspaceId,
@@ -524,6 +695,37 @@ pub enum Fact {
     ReviewsChanged {
         /// The workspace.
         workspace: WorkspaceId,
+    },
+    /// The agent sessions of this workspace, or the state it shows, are now these: a
+    /// session started, ended or was taken by a review, or its state changed.
+    AgentsChanged(WorkspaceAgents),
+    /// A turn of an agent ended, and the state of the worktree was recorded. Told after the
+    /// [`Fact::AgentsChanged`] that shows the session's new state.
+    TurnEnded {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The session.
+        session: SessionId,
+        /// The turn.
+        turn: TurnId,
+        /// The state recorded at its end, by its full id; none when the recording failed.
+        state: Option<String>,
+        /// The state the reviewer last marked reviewed in the session's review, by its
+        /// full id: what changed since the last review counts from it. None before the
+        /// first mark: it then counts from the start of the history.
+        since: Option<String>,
+    },
+    /// An agent took one more step in a turn. Steps are told in the order they happened,
+    /// each with its number in the turn.
+    Step {
+        /// The session.
+        session: SessionId,
+        /// The turn.
+        turn: TurnId,
+        /// The number of the step in the turn, from 1.
+        number: u32,
+        /// The step.
+        step: Step,
     },
 }
 
@@ -596,6 +798,45 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(workspace.as_str());
             out.text(message);
         }
+        Request::Report { report } => write_report(out, report),
+        Request::ListAgents | Request::ListTerminals => {}
+        Request::GetHistory { workspace } => out.text(workspace.as_str()),
+        Request::CompareVersions {
+            workspace,
+            from,
+            to,
+        } => {
+            out.text(workspace.as_str());
+            out.text(from);
+            out.optional(to.as_deref(), Out::text);
+        }
+        Request::ReadVersions {
+            workspace,
+            old,
+            old_path,
+            new,
+            path,
+        } => {
+            out.text(workspace.as_str());
+            out.optional(old.as_deref(), Out::text);
+            out.path(old_path);
+            out.optional(new.as_deref(), Out::text);
+            out.path(path);
+        }
+        Request::GetTurn { turn } => out.text(turn.as_str()),
+        Request::GetUncommitted { workspace, review } => {
+            out.text(workspace.as_str());
+            out.optional(review.as_ref(), |out, review| out.text(review.as_str()));
+        }
+        Request::ShowWorkspace { workspace } => {
+            out.optional(workspace.as_ref(), |out, workspace| {
+                out.text(workspace.as_str())
+            });
+        }
+        Request::AttachTerminal { terminal, size } => {
+            out.text(terminal.as_str());
+            write_size(out, *size);
+        }
     }
 }
 
@@ -663,6 +904,40 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
             workspace: WorkspaceId::new(input.text()?),
             message: input.text()?,
         },
+        RequestKind::Report => Request::Report {
+            report: read_report(input)?,
+        },
+        RequestKind::ListAgents => Request::ListAgents,
+        RequestKind::GetHistory => Request::GetHistory {
+            workspace: WorkspaceId::new(input.text()?),
+        },
+        RequestKind::CompareVersions => Request::CompareVersions {
+            workspace: WorkspaceId::new(input.text()?),
+            from: input.text()?,
+            to: input.optional(In::text)?,
+        },
+        RequestKind::ReadVersions => Request::ReadVersions {
+            workspace: WorkspaceId::new(input.text()?),
+            old: input.optional(In::text)?,
+            old_path: input.path()?,
+            new: input.optional(In::text)?,
+            path: input.path()?,
+        },
+        RequestKind::GetTurn => Request::GetTurn {
+            turn: TurnId::new(input.text()?),
+        },
+        RequestKind::ShowWorkspace => Request::ShowWorkspace {
+            workspace: input.optional(|input| Ok(WorkspaceId::new(input.text()?)))?,
+        },
+        RequestKind::ListTerminals => Request::ListTerminals,
+        RequestKind::GetUncommitted => Request::GetUncommitted {
+            workspace: WorkspaceId::new(input.text()?),
+            review: input.optional(|input| Ok(ReviewId::new(input.text()?)))?,
+        },
+        RequestKind::AttachTerminal => Request::AttachTerminal {
+            terminal: TerminalId::new(input.text()?),
+            size: read_size(input)?,
+        },
     };
     Ok((id, request))
 }
@@ -710,6 +985,34 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::Committed { commit } => {
                     out.u16(8);
                     out.text(commit);
+                }
+                Reply::Agents(agents) => {
+                    out.u16(9);
+                    out.list(agents, write_workspace_agents);
+                }
+                Reply::History(history) => {
+                    out.u16(10);
+                    write_history(out, history);
+                }
+                Reply::Compared(files) => {
+                    out.u16(11);
+                    out.list(files, write_changed_file);
+                }
+                Reply::Turn(turn) => {
+                    out.u16(12);
+                    write_turn(out, turn);
+                }
+                Reply::Terminals(terminals) => {
+                    out.u16(13);
+                    out.list(terminals, write_terminal_info);
+                }
+                Reply::Attached { cut } => {
+                    out.u16(14);
+                    out.u8(u8::from(*cut));
+                }
+                Reply::Uncommitted(files) => {
+                    out.u16(15);
+                    out.list(files, write_credited);
                 }
             }
         }
@@ -776,6 +1079,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                     out.u16(15);
                     out.text(workspace.as_str());
                 }
+                Refusal::UnknownTurn { turn } => {
+                    out.u16(16);
+                    out.text(turn.as_str());
+                }
             }
         }
     }
@@ -806,6 +1113,19 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             8 => Reply::Committed {
                 commit: input.text()?,
             },
+            9 => Reply::Agents(input.list(read_workspace_agents)?),
+            10 => Reply::History(read_history(input)?),
+            11 => Reply::Compared(input.list(read_changed_file)?),
+            12 => Reply::Turn(read_turn(input)?),
+            13 => Reply::Terminals(input.list(read_terminal_info)?),
+            14 => Reply::Attached {
+                cut: match input.u8()? {
+                    0 => false,
+                    1 => true,
+                    _ => return Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+                },
+            },
+            15 => Reply::Uncommitted(input.list(read_credited)?),
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {
@@ -854,6 +1174,9 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             15 => Refusal::NothingToCommit {
                 workspace: WorkspaceId::new(input.text()?),
             },
+            16 => Refusal::UnknownTurn {
+                turn: TurnId::new(input.text()?),
+            },
             _ => return Err(LinkError::Malformed("unknown kind of refusal")),
         }),
         _ => return Err(LinkError::Malformed("a reply is neither done nor refused")),
@@ -880,6 +1203,36 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.u16(4);
             out.text(workspace.as_str());
         }
+        Fact::AgentsChanged(agents) => {
+            out.u16(5);
+            write_workspace_agents(out, agents);
+        }
+        Fact::TurnEnded {
+            workspace,
+            session,
+            turn,
+            state,
+            since,
+        } => {
+            out.u16(6);
+            out.text(workspace.as_str());
+            out.text(session.as_str());
+            out.text(turn.as_str());
+            out.optional(state.as_deref(), Out::text);
+            out.optional(since.as_deref(), Out::text);
+        }
+        Fact::Step {
+            session,
+            turn,
+            number,
+            step,
+        } => {
+            out.u16(7);
+            out.text(session.as_str());
+            out.text(turn.as_str());
+            out.u32(*number);
+            write_step(out, step);
+        }
     }
 }
 
@@ -895,6 +1248,20 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
         },
         4 => Fact::ReviewsChanged {
             workspace: WorkspaceId::new(input.text()?),
+        },
+        5 => Fact::AgentsChanged(read_workspace_agents(input)?),
+        6 => Fact::TurnEnded {
+            workspace: WorkspaceId::new(input.text()?),
+            session: SessionId::new(input.text()?),
+            turn: TurnId::new(input.text()?),
+            state: input.optional(In::text)?,
+            since: input.optional(In::text)?,
+        },
+        7 => Fact::Step {
+            session: SessionId::new(input.text()?),
+            turn: TurnId::new(input.text()?),
+            number: input.u32()?,
+            step: read_step(input)?,
         },
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })

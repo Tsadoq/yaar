@@ -12,8 +12,9 @@
 //! - [`KeeperLink`], the model that says how the Window stands with the Keeper, through
 //!   which the Window asks the Keeper and hears its facts;
 //! - [`Models`], the shared models a pane observes: [`WorkspaceList`], the repositories
-//!   with their worktrees and the workspace on screen, and [`WorkspaceChanges`], the
-//!   changes of that workspace;
+//!   with their worktrees and the workspace on screen, [`WorkspaceChanges`], the changes
+//!   of that workspace, [`AgentList`], the agent sessions of every workspace, and
+//!   [`TerminalList`], the terminals the Keeper holds;
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
@@ -31,6 +32,7 @@
 //! which the Frame or the pane with the focus handles, or the pane that routed it through
 //! [`Routes`]. No pane holds another pane.
 
+mod agents;
 mod controls;
 pub mod keeper;
 mod link_model;
@@ -40,10 +42,12 @@ mod sidebar;
 pub mod trace;
 mod view;
 
+pub use agents::{AgentList, TerminalList};
 pub use controls::{
     Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
-    PROGRAM_CONTEXT, PROGRAM_KEYS, Place, SelectNextWorkspace, SelectPreviousWorkspace, Sends,
-    SetBase, ToggleSidebar, UnpinSidebar, bind, controls, release_program_keys,
+    PROGRAM_CONTEXT, PROGRAM_KEYS, Place, Quit, QuitAndStopAgents, SelectNextWorkspace,
+    SelectPreviousWorkspace, Sends, SetBase, ShowFinishedTurn, ToggleSidebar, UnpinSidebar, bind,
+    controls, release_program_keys,
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
@@ -51,4 +55,4 @@ pub use routes::Routes;
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
 };
-pub use view::{Beside, BuildPane, Frame, Opened, Pane, PaneEntry, open};
+pub use view::{Beside, BuildPane, Frame, Opened, Pane, PaneEntry, TurnNotice, open};

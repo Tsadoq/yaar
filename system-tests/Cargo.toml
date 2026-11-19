@@ -1,14 +1,23 @@
 [package]
 name = "yaar-system-tests"
-description = "System tests: the built programs, a scripted Window, and later a stand-in agent"
+description = "System tests: the built programs, a scripted Window, and the stand-in agent"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "standin-agent"
+path = "src/bin/standin-agent.rs"
+
 [dependencies]
 yaar-link.workspace = true
 libc.workspace = true
+# The recorded events of the agent CLIs, and the hook inputs the stand-in writes and the
+# plugin's hooks it reads.
+serde_json.workspace = true
+# The terminal core the client reads a terminal's screen through, as lines.
+alacritty_terminal.workspace = true
 
 [lints]
 workspace = true

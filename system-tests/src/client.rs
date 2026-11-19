@@ -4,7 +4,9 @@
 //!
 //! 1. It uses the public types of `yaar-link` and nothing else of the app. A test that
 //!    needs something the Link cannot say has found a missing message, not a reason for
-//!    a side door.
+//!    a side door. To read a terminal as lines it feeds the bytes that came to the
+//!    terminal core the terminal pane is built on, `alacritty_terminal`, itself: that
+//!    crate is not the app's, and nothing of the pane is used.
 //! 2. A test asserts on what came over the Link and on the world outside the app: git,
 //!    files, processes. Never on what the Keeper holds in memory.
 //! 3. Each test has its own [`crate::World`], and so its own Keeper on its own socket.
@@ -12,18 +14,47 @@
 //!    and panics with what it saw when the deadline passes.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use alacritty_terminal::event::VoidListener;
+use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::Config;
+use alacritty_terminal::term::Term;
+use alacritty_terminal::term::cell::Flags;
+use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use yaar_link::{
-    ChangedFile, Changes, CommentId, DraftOn, Fact, FileSides, FileStatus, Hello, Message, Program,
-    Refusal, Reply, Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId,
-    TerminalSize, ThreadId, WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
+    ChangedFile, Changes, CommentId, CreditedFile, DraftOn, Fact, FileSides, FileStatus, Hello,
+    History, Message, Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId,
+    ReviewId, TerminalId, TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents,
+    WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
 pub const DEADLINE: Duration = Duration::from_secs(10);
+
+/// The size of the screen the client feeds the terminal core.
+struct Screen {
+    rows: usize,
+    columns: usize,
+}
+
+impl Dimensions for Screen {
+    fn total_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn screen_lines(&self) -> usize {
+        self.rows
+    }
+
+    fn columns(&self) -> usize {
+        self.columns
+    }
+}
 
 /// A connection to a Keeper, speaking the Link as a Window speaks it.
 ///
@@ -385,6 +416,246 @@ impl Client {
             Reply::Committed { commit } => Ok(commit),
             other => panic!("asked to commit, the Keeper answered {other:?}"),
         }
+    }
+
+    /// Opens a terminal of a workspace with the launcher of the agent CLI `agent`, at
+    /// `size`, and gives its id.
+    pub fn open_launcher(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &str,
+        size: TerminalSize,
+    ) -> Result<TerminalId, Refusal> {
+        match self.request(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Agent {
+                agent: agent.to_owned(),
+            },
+            size,
+        })? {
+            Reply::TerminalOpened { terminal } => {
+                self.output.entry(terminal.clone()).or_default();
+                Ok(terminal)
+            }
+            other => panic!("asked to open a launcher, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for the agent sessions of every workspace. Panics when the Keeper refuses.
+    pub fn agents(&mut self) -> Vec<WorkspaceAgents> {
+        match self.request(Request::ListAgents) {
+            Ok(Reply::Agents(agents)) => agents,
+            other => panic!("asked for the agents, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Waits for a fact `AgentsChanged` of `workspace` that `wanted` accepts, among those
+    /// kept and those still to come, as [`Client::wait_for_fact`] does, and gives it.
+    pub fn wait_for_agents(
+        &mut self,
+        workspace: &WorkspaceId,
+        limit: Duration,
+        mut wanted: impl FnMut(&WorkspaceAgents) -> bool,
+    ) -> WorkspaceAgents {
+        let fact = self.wait_for_fact(limit, |fact| {
+            matches!(fact, Fact::AgentsChanged(agents)
+                if agents.workspace == *workspace && wanted(agents))
+        });
+        match fact {
+            Fact::AgentsChanged(agents) => agents,
+            other => unreachable!("the wait accepted {other:?}"),
+        }
+    }
+
+    /// Asks for the history of a workspace.
+    pub fn history(&mut self, workspace: &WorkspaceId) -> Result<History, Refusal> {
+        match self.request(Request::GetHistory {
+            workspace: workspace.clone(),
+        })? {
+            Reply::History(history) => Ok(history),
+            other => panic!("asked for the history, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for the uncommitted changes of a workspace that `review` lists, or every one
+    /// with none named, each with who made it.
+    pub fn uncommitted(
+        &mut self,
+        workspace: &WorkspaceId,
+        review: Option<&ReviewId>,
+    ) -> Result<Vec<CreditedFile>, Refusal> {
+        match self.request(Request::GetUncommitted {
+            workspace: workspace.clone(),
+            review: review.cloned(),
+        })? {
+            Reply::Uncommitted(files) => Ok(files),
+            other => panic!("asked for the uncommitted changes, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for the files that differ between two versions of a workspace.
+    pub fn compare(
+        &mut self,
+        workspace: &WorkspaceId,
+        from: &str,
+        to: Option<&str>,
+    ) -> Result<Vec<ChangedFile>, Refusal> {
+        match self.request(Request::CompareVersions {
+            workspace: workspace.clone(),
+            from: from.to_owned(),
+            to: to.map(str::to_owned),
+        })? {
+            Reply::Compared(files) => Ok(files),
+            other => panic!("asked to compare two versions, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for one turn with its steps.
+    pub fn turn(&mut self, turn: &TurnId) -> Result<Turn, Refusal> {
+        match self.request(Request::GetTurn { turn: turn.clone() })? {
+            Reply::Turn(turn) => Ok(turn),
+            other => panic!("asked for a turn, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Tells the Keeper which workspace this client shows, as a Window does.
+    pub fn show_workspace(&mut self, workspace: Option<&WorkspaceId>) -> Result<(), Refusal> {
+        match self.request(Request::ShowWorkspace {
+            workspace: workspace.cloned(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("told which workspace is shown, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for every terminal the Keeper holds.
+    pub fn terminals(&mut self) -> Vec<TerminalInfo> {
+        match self.request(Request::ListTerminals) {
+            Ok(Reply::Terminals(terminals)) => terminals,
+            other => panic!("asked for the terminals, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Attaches to a terminal the Keeper holds, at `size`: gives whether its kept output
+    /// was cut. The kept output, and what follows, is read as any terminal's output.
+    ///
+    /// What this client holds of the terminal's output is dropped at the reply, and so is
+    /// what came just before it: the Keeper sends the kept output from its start, so a
+    /// terminal this client opened itself would otherwise show its first bytes twice. A
+    /// refusal sends none, and what came before it is kept.
+    pub fn attach_terminal(
+        &mut self,
+        terminal: &TerminalId,
+        size: TerminalSize,
+    ) -> Result<bool, Refusal> {
+        let id = self.write(Request::AttachTerminal {
+            terminal: terminal.clone(),
+            size,
+        });
+        // What the terminal wrote before the reply: held apart until the reply says
+        // whether the Keeper sends the kept output, which holds it.
+        let mut early = Vec::new();
+        let reply = loop {
+            match self.read(Instant::now() + DEADLINE) {
+                Ok(Message::Reply { to, reply }) if to == id => break reply,
+                Ok(Message::Reply { to, reply }) if self.sent.remove(&to) => {
+                    self.aside.insert(to, reply);
+                }
+                Ok(Message::Fact(fact)) => self.facts.push_back(fact),
+                Ok(Message::Output {
+                    terminal: other,
+                    bytes,
+                }) if other == *terminal => early.extend(bytes),
+                Ok(Message::Output {
+                    terminal: other,
+                    bytes,
+                }) => self.keep(other, bytes),
+                Ok(other) => panic!("waiting for the reply to {id:?}, the Keeper sent {other:?}"),
+                Err(e) => panic!("no reply to {id:?}: {e}; facts kept: {:?}", self.facts),
+            }
+        };
+        match reply {
+            Ok(Reply::Attached { cut }) => {
+                // The kept output follows, from its start, and holds all of it.
+                self.output.insert(terminal.clone(), Vec::new());
+                Ok(cut)
+            }
+            // Nothing follows a refusal: what came is all there is.
+            Err(refusal) => {
+                self.keep(terminal.clone(), early);
+                Err(refusal)
+            }
+            Ok(other) => panic!("asked to attach to a terminal, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// The screen of a terminal as lines of text, top to bottom, as the output that came
+    /// so far draws it at `size` in the terminal core the terminal pane uses,
+    /// `alacritty_terminal`, the trailing blanks of each line dropped. The client feeds
+    /// that core itself; nothing of the pane is used.
+    pub fn screen(&mut self, terminal: &TerminalId, size: TerminalSize) -> Vec<String> {
+        let rows = usize::from(size.rows);
+        let columns = usize::from(size.columns);
+        let mut term = Term::new(Config::default(), &Screen { rows, columns }, VoidListener);
+        let mut parser = Processor::<StdSyncHandler>::default();
+        parser.advance(
+            &mut term,
+            self.output.get(terminal).map_or(&[][..], Vec::as_slice),
+        );
+        (0..rows)
+            .map(|row| {
+                let line = &term.grid()[Line(row as i32)];
+                let mut text = String::new();
+                for column in 0..columns {
+                    let cell = &line[Column(column)];
+                    // The second half of a wide character holds nothing of its own.
+                    if !cell
+                        .flags
+                        .intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER)
+                    {
+                        text.push(cell.c);
+                    }
+                }
+                text.trim_end().to_owned()
+            })
+            .collect()
+    }
+
+    /// Asks the Keeper to stop everything: sends the stop-everything frame, as the second
+    /// way to quit does, and gives no answer, since none comes.
+    pub fn stop_everything(&mut self) {
+        write_message(&mut self.stream, &Message::Shutdown)
+            .unwrap_or_else(|e| panic!("the stop-everything frame could not be sent: {e}"));
+    }
+
+    /// Goes away with no goodbye, as a killed Window does: the connection is shut both
+    /// ways and dropped, with whatever the Keeper had sent unread.
+    pub fn vanish(self) {
+        let _ = self.stream.shutdown(Shutdown::Both);
+    }
+
+    /// Types `text` and the Enter key into a terminal, as a user types a line.
+    pub fn type_line(&mut self, terminal: &TerminalId, text: &str) {
+        let mut line = text.as_bytes().to_vec();
+        line.push(b'\r');
+        self.type_into(terminal, &line);
+    }
+
+    /// Waits until what the terminal's program wrote after its byte number `after` holds
+    /// the stand-in's prompt, [`crate::standin::PROMPT`], and gives the number of the byte
+    /// just behind that prompt: the `after` of the wait for the next one. A first wait
+    /// starts at 0. A prompt before `after`, and the shell's own, are not the answer.
+    pub fn wait_for_prompt(&mut self, terminal: &TerminalId, after: usize) -> usize {
+        let prompt = crate::standin::PROMPT.as_bytes();
+        let found = |bytes: &[u8]| {
+            bytes.get(after..).and_then(|new| {
+                new.windows(prompt.len())
+                    .position(|window| window == prompt)
+                    .map(|at| after + at + prompt.len())
+            })
+        };
+        let run = self.wait_for_output(terminal, DEADLINE, |bytes| found(bytes).is_some());
+        found(&run).expect("the wait accepted a run that holds the prompt")
     }
 
     /// Writes one request and gives the id it went out under.

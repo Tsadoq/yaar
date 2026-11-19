@@ -1,7 +1,7 @@
 # The order in which the app is built. A slice closes the requirements it names: when
 # `closed` reaches its number, every test of the workflow that proves one of them must be built.
 
-closed = 3
+closed = 4
 
 [[slice]]
 n = 1

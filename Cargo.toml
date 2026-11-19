@@ -29,6 +29,9 @@ yaar-dock = { path = "crates/keeper/dock" }
 yaar-frame = { path = "crates/window/frame" }
 yaar-review-pane = { path = "crates/window/review-pane" }
 yaar-terminal-pane = { path = "crates/window/terminal-pane" }
+yaar-agent = { path = "crates/shared/agent" }
+yaar-switchboard = { path = "crates/keeper/switchboard" }
+yaar-adapter-claude = { path = "crates/keeper/adapter-claude" }
 yaar-system-tests = { path = "system-tests" }
 # GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
 # of patches/ and the speed check on the reference Mac.
@@ -52,6 +55,10 @@ async-channel = "2.5"
 # grid and encodes the keys itself, and the answers it gives programs rest on this
 # version's handling of the escape sequences. Without its optional serde support.
 alacritty_terminal = { version = "=0.26.0", default-features = false }
+# The watcher of the worktrees, at an exact version: the one the measures of the agents'
+# events were taken with. Through the system's own notices: FSEvents on macOS, inotify on
+# Linux. Without the alternative of kqueue on macOS, and without serde.
+notify = { version = "=8.2.2", default-features = false, features = ["macos_fsevent"] }
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"

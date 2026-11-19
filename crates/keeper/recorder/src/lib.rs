@@ -17,7 +17,14 @@
 //!   store gives back its [`RecordedState`]s, their files, their contents and the paths
 //!   that differ between two of them, with no need of the real repository;
 //! - [`Worktree::commit_all`], the commit control: an ordinary commit of every
-//!   uncommitted change, made as the user's own git makes it, with [`CommitError`].
+//!   uncommitted change, made as the user's own git makes it, with [`CommitError`]. A
+//!   commit git or a hook refuses leaves the user's list of files as it was before;
+//! - [`StateStore::record_reporting`], a recording that leaves out a repository inside
+//!   the worktree with no commit and says so, in a [`Recording`];
+//!   [`StateStore::compare`] and [`StateStore::content_in`], the paths that differ
+//!   between any two of commits, states and the files on disk, and a file in any of them;
+//! - [`history`], the commits and the states of a worktree in the order they happened,
+//!   as [`HistoryEntry`]s.
 //!
 //! No other crate starts git. Whatever the rest of the Keeper wants to know of a
 //! repository it asks here, in the words above; that a branch is a ref and a version of a
@@ -41,12 +48,14 @@
 
 mod contents;
 mod git;
+mod history;
 mod index;
 mod states;
 mod worktree;
 
 pub use git::{Git, GitError};
-pub use states::{RecordError, RecordedState, StateId, StateStore};
+pub use history::{Entry as HistoryEntry, history};
+pub use states::{RecordError, RecordedState, Recording, StateId, StateStore};
 pub use worktree::{
     Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head, Listed, LocalBranch,
     OpenError, Refs, RemoteBranch, Worktree,

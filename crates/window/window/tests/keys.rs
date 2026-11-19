@@ -62,6 +62,8 @@ fn documented() -> BTreeSet<String> {
             "cmd-alt-down",
             "cmd-alt-up",
             "cmd-alt-p",
+            "cmd-alt-n",
+            "cmd-alt-q",
             "cmd-t",
             "cmd-]",
             "cmd-[",
@@ -371,12 +373,18 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
 ) {
     let mut walk = set_up(cx);
     let quit = key_of("Quit");
+    // The quit that stops everything would stop the Keeper of this walk and every
+    // program in it: the walk of the actions presses it, last.
+    let stop = key_of("Quit and Stop Agents");
     let kept = yaar_window::kept_keys();
     let kept_keys: BTreeSet<String> = kept.iter().map(Control::key).collect();
 
     // ---- Leg 1: with a terminal focused, each kept key runs its app action.
     let mut checked = 0;
-    for control in kept.iter().filter(|control| control.key() != quit) {
+    for control in kept
+        .iter()
+        .filter(|control| control.key() != quit && control.key() != stop)
+    {
         walk.click_into_the_recorder();
         // A key that works anywhere would run its action wherever the focus is, so the
         // focus is checked before the press and not left to the sentinel that follows.
@@ -495,7 +503,7 @@ fn with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does
     let mut checked = 0;
     for key in every
         .iter()
-        .filter(|key| without_text(key) != quit)
+        .filter(|key| without_text(key) != quit && without_text(key) != stop)
         .filter(|key| seen.insert(without_text(key).to_owned()))
     {
         // A key of this leg may have opened a terminal or moved the pane's focus on to

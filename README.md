@@ -6,9 +6,11 @@ on lines, and send the comments back to the agent.
 
 **Pre-release.** Today the app opens a git repository, shows what a branch changed, lets
 you comment on any line of the diff and keeps those comments, copies the review as text to
-paste to an agent, and runs terminals beside the diff. It does not deliver comments to an
-agent by itself yet: Claude Code, pi or any other program runs in a terminal as any program
-does, and you hand it the copied review by hand.
+paste to an agent, and runs terminals beside the diff. It hears Claude Code, which you run in
+one of those terminals as always: the sidebar shows whether it works, waits for you or has
+finished a turn, and Changes shows what the turn changed. It does not deliver comments to the
+agent by itself yet: you hand it the copied review by hand. pi runs in a terminal as any
+program does, and the app does not hear it yet.
 
 ## What it does now
 
@@ -36,9 +38,42 @@ does, and you hand it the copied review by hand.
 - **Commits on request.** The commit control asks for a message and makes an ordinary git
   commit of every uncommitted change of the worktree, with your own git identity and
   hooks. It marks nothing reviewed. Nothing commits unless you press it.
-- **Keeps one review per worktree** for now, which belongs to no agent, and lists a
-  worktree that git removed, marked "worktree gone", for as long as its review holds a
-  comment.
+- **Keeps a review for each agent session.** Each worktree has one review that belongs to
+  no agent. The first Claude Code session started in the worktree takes it over. When the
+  session ends its review stays open, and the next Claude Code session in that worktree
+  takes it over. Two Claude Code sessions in one worktree have a review each; with several,
+  the line above Changes names them and Shift-A, or a click on a name, shows the other's.
+  The app lists a worktree that git removed, marked "worktree gone", for as long as its
+  review holds a comment.
+- **Hears Claude Code and shows what it is doing.** The sidebar marks each worktree whose
+  agent waits for your permission, has finished a turn you have not reviewed yet, works, or
+  is not running; with several sessions in a worktree it shows the first of these in that
+  order. An agent that waits at a permission prompt carries the same mark on its terminal.
+  The app never answers a prompt or any other dialog of the agent: you answer in the
+  terminal. A program that is not Claude Code, a CLI that was not started with the app's
+  pieces, and an agent the app does not support are not heard: their changes show as changes
+  no agent made.
+- **Tells you when a turn ends elsewhere.** When a turn ends in a worktree that is not on
+  screen, its mark changes in the sidebar and a notice offers to switch to it
+  (Cmd-Alt-N).
+- **Shows the history of the worktree in Changes.** Above the files, a tree lists the
+  commits of the branch and the agent turns that ended on them, in the order they
+  happened, and last the uncommitted changes. Click an entry, or Tab into the tree and use
+  `j`, `k`, Space and Enter as tuicr's commit selector does, to review one commit, one turn
+  or a range of them. The uncommitted changes listed are those of the review's own session
+  and those no agent made, which are marked.
+- **Selects what a turn changed.** When a turn ends, Changes selects what changed since you
+  last reviewed. Shift-T sets the app to keep the selection instead: Changes stays as it
+  is and offers what changed, which Shift-O, or a click, takes. The setting lasts until the
+  window closes.
+- **Records the worktree at the end of every turn** and at each send of a review, as a
+  state in the app's own folder, without a commit and without touching your index or
+  branch.
+- **Quits two ways.** Cmd-Q quits the window and the agents and terminals go on. Cmd-Alt-Q
+  quits and stops every agent and program the app holds. Plain quit is the default.
+- **Shows it all again when a window opens.** Start the app again, and every terminal the
+  Keeper still holds comes back with its screen, each review with its drafts, and the
+  turns that ended meanwhile in the tree.
 - **Runs terminals** in a pane to the right of the diff. Each terminal starts your login
   shell (`SHELL`, else the shell of your user, else `/bin/sh`) in the folder of the
   worktree on screen, and anything you start in it, an agent CLI included, runs as in any
@@ -51,16 +86,33 @@ does, and you hand it the copied review by hand.
 - **Writes to your repository only when you commit.** The diff, the comments and the
   states the app records are read from git or kept in the app's own folder. What you run
   in a terminal is your own doing.
+- **Adds its pieces to Claude Code only through its own extension points.** Every shell of
+  the app sets `CLAUDE_CODE_PLUGIN_DIRS`, after any value you have, to a plugin folder in
+  the app's own data folder, and sets `YAAR_SOCKET` and `YAAR_TERMINAL`. The plugin, named
+  `yaar-review`, runs the hook program `yaar-claude-hook`, which passes what Claude Code
+  reports to the Keeper and decides nothing: `/hooks` lists them as the plugin's. Nothing
+  is written into your Claude Code settings, your `~/.claude` or your worktree, the app
+  reads no credential of any CLI, and it does not use Claude Code's editor connection:
+  variables that name one are left out of the shell. A `claude` started outside the app
+  loads nothing of it.
 
 ### Not there yet
 
-- Delivering a review to an agent: the app knows no agent session, shows no turn of an
-  agent, and cannot send a comment by itself. Copy the review and paste it.
+- Delivering a review to an agent: the app cannot send a comment by itself, and no tool of
+  the agent hands it one. Copy the review and paste it.
+- pi: it runs in a terminal, and the app hears no session, turn or permission prompt of it
+  yet, nor does it give pi any piece of the app.
+- A control that starts an agent for you: type `claude` in a shell of the app.
+- The hook program is not packaged yet: the Mac app and the `.deb` hold the Window and the
+  Keeper only. Build the workspace, which puts `yaar-claude-hook` beside `yaar-keeper`.
+- The state of a session that waits for permission stays on until the tool ends: after you
+  approve a long command at its dialog, the mark stays until the command finishes.
+- A workspace with one idle session and one that ended shows "not running" while the
+  ended session still holds its review, and no mark once another session has taken that
+  review over, since the ended session is then no longer listed. A session that is idle,
+  with nothing to review, draws no mark.
 - Resolving a thread, and a list of the threads with their states.
 - Comments on a range of lines, and on a line reached through a definition.
-- Watching files: what changed outside the app shows when the window comes to the front.
-- What changed since the last review, as a view. The app records the state, and no screen
-  shows the difference yet.
 - Two worktrees that share one id at different paths: the app refuses the second.
 
 | On macOS | On Linux | Does | Works |
@@ -77,7 +129,9 @@ does, and you hand it the copied review by hand.
 | Ctrl-Tab, Ctrl-Shift-Tab | the same | Moves the focus to the next and the previous pane | anywhere, a terminal included |
 | Cmd-C, Cmd-V | Ctrl-Shift-C, Ctrl-Shift-V | Copies the selected text of a terminal, pastes into it | in a terminal |
 | Shift-PageUp, Shift-PageDown | the same | Scrolls the history of a terminal | in a terminal |
-| Cmd-Q | Ctrl-Q | Quits | anywhere |
+| Cmd-Q | Ctrl-Q | Quits; the agents and terminals go on | anywhere |
+| Cmd-Alt-Q | Ctrl-Alt-Q | Quits and stops every agent and program the app holds | anywhere |
+| Cmd-Alt-N | Ctrl-Alt-N | Shows the worktree where an agent just finished a turn | anywhere |
 | `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
 | `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
 
@@ -100,6 +154,18 @@ is the app's own choice.
 | `r` | Marks the file viewed, or takes the mark away | tuicr, toggle a file reviewed |
 | Shift-R | Marks the change reviewed | the app; tuicr's `R` marks a hunk |
 | Shift-C | Asks for a message and commits every uncommitted change | the app; tig and lazygit commit on `C` |
+| Shift-T | Keeps the selection at a turn end, and offers what changed, or goes back to selecting it | the app |
+| Shift-O | Takes the offer: shows what changed since the last review | the app |
+| Shift-A | Shows the review of the next agent session of the worktree | the app |
+| `tab` | Moves the focus from the diff to the tree of Changes, and back | tuicr cycles the focus with Tab |
+
+In the tree of Changes, as plain keys:
+
+| Key | Does | From |
+| --- | --- | --- |
+| `j`, `k`, Down, Up | Moves the cursor one entry down, one up | tuicr, commit selector |
+| Space | Marks the entry under the cursor | tuicr, commit selector |
+| Enter | Shows the change of the marked entries, first to last, or of the one under the cursor | tuicr, commit selector |
 
 In the comment box the keys type text. Enter closes the box, Shift-Enter starts a new line,
 and Escape closes it too: the draft stays either way, and `d d` deletes it.
@@ -122,7 +188,7 @@ as GPUI writes them.
 | `ctrl-tab`, `ctrl-shift-tab`: the next and the previous pane | the same |
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others
@@ -133,11 +199,17 @@ the program once it is composed.
 
 ### A Keeper left running
 
-Closing the window quits the Window and leaves the Keeper, which owns the terminals. The
-Keeper stays for as long as a program runs in one of them, however long that is. A window
-opened again does not show those terminals yet, so a shell left in one cannot be reached
-from the app until that comes. To end the Keeper and every program in it, end it by its
-process name:
+Cmd-Q quits the Window and leaves the Keeper, which owns the terminals and hears the agents.
+The Keeper stays for as long as a program runs in one of them, however long that is, and
+leaves five seconds after the last window closed when none does. Agents go on working while
+the window is closed: a turn that ends meanwhile is recorded, and the next window shows it
+with every terminal's screen and every review as it was.
+
+Cmd-Alt-Q is the other quit: it tells the Keeper to stop everything. Each terminal's programs
+get the hang-up, and what ignores it is killed within a few seconds, background jobs of a
+shell included; a process that left its session by `setsid`, as a daemon does, is not
+reached. The Keeper then ends. An older Keeper, left from before an update, offers the same
+choice in a note at the top of the window. To end the Keeper by hand:
 
 ```sh
 pkill -x yaar-keeper
@@ -149,12 +221,15 @@ system where `/bin/sh` is dash, as on Debian and Ubuntu, a job started with `&` 
 outlive its shell; `pgrep -l` and `pkill` find it by its own name. A Keeper that finds its
 socket left behind by one that ended this way starts afresh.
 
-The app does not watch the files yet. What changed outside it, a file, a branch or a new
-worktree, shows when the window comes to the front again.
+The Keeper watches the files of the worktree on screen, and of a worktree in which an agent
+runs, to tell you of a change and to tell a change an agent made from one made by you or by
+a program the app does not hear. Who made an uncommitted change is remembered until the
+Keeper ends; a change made before it started again shows as one no agent made.
 
 It keeps the opened repositories, the bases you set, and every review with its comments,
 drafts and rounds in one database, in `~/Library/Application Support/yaar-review/` on macOS
-and in `$XDG_DATA_HOME/yaar-review/` or `~/.local/share/yaar-review/` on Linux. The states of
+and in `$XDG_DATA_HOME/yaar-review/` or `~/.local/share/yaar-review/` on Linux, which also
+holds the plugin folder for Claude Code. The states of
 a worktree that the app records for its reviews are kept beside it, in a git repository of
 the app's own under `states/`, never in yours. In the git folder of every worktree of an
 opened repository it writes one small file, `ade-id`, by which it knows the worktree again
@@ -181,8 +256,9 @@ cargo build --locked --workspace
 cargo run --locked -p yaar-window         # opens the window
 ```
 
-The window starts the Keeper by itself and looks for that program beside its own, so build
-the workspace first: `cargo run` alone builds only the Window. The Keeper leaves five
+The window starts the Keeper by itself and looks for that program beside its own, and the
+Keeper looks for the hook program there too, so build the workspace first: `cargo run` alone
+builds only the Window. The Keeper leaves five
 seconds after the last window closed, unless a program still runs in one of its terminals
 (see "A Keeper left running"). Opened again, the app lists the same repositories.
 
@@ -224,10 +300,11 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 | `packaging` | The Mac app, the `.deb`, the archive, the apt repository, the install script |
 
 Built so far: the Link and the diff; in the Keeper, the reading of git, the recording of
-states and the commit, the database, the workspaces, the review engine and the terminals
-(the Dock); in the Window, the frame with its sidebar, the review pane and the terminal
-pane. Every other crate is still a shell that says in its `lib.rs` which part of the app it
-will hold.
+states and the commit, the database, the workspaces with their watcher, the review engine,
+the terminals (the Dock), the Switchboard that follows each agent session, and the adapter
+and the companion of Claude Code; in the Window, the frame with its sidebar, the review pane
+and the terminal pane. Every other crate is still a shell that says in its `lib.rs` which
+part of the app it will hold.
 
 Tests come at three levels. Unit tests sit in a crate's source. Component tests sit in its
 `tests/` folder and use only what other crates may use; those of the Window run on GPUI's

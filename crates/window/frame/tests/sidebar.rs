@@ -97,6 +97,7 @@ fn workspace_row(digit: char, name: &str, selected: bool) -> SidebarRow {
         name: name.to_owned(),
         selected,
         gone: false,
+        agent: None,
     }
 }
 
@@ -523,6 +524,7 @@ fn a_worktree_that_is_gone_is_named_by_its_folder_marked_as_gone_and_still_selec
                     name: "repository-a-removed".to_owned(),
                     selected: false,
                     gone: true,
+                    agent: None,
                 },
             ]
         );

@@ -96,6 +96,7 @@ impl Scratch {
             linger,
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
+            companions: None,
         };
         std::thread::spawn(move || run(options))
     }

@@ -141,10 +141,14 @@ pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
         .to_owned()
 }
 
-/// Makes a repository at `folder` whose first branch is `main`.
+/// Makes a repository at `folder` whose first branch is `main`, with an identity of its
+/// own in its configuration: git on Linux guesses none, and a commit made there must not
+/// depend on the variables of this process.
 pub fn init(folder: &Path) {
     std::fs::create_dir_all(folder).expect("make the folder");
     git(folder, &["init", "--quiet", "-b", "main"]);
+    git(folder, &["config", "user.name", "A Test"]);
+    git(folder, &["config", "user.email", "test@example.invalid"]);
 }
 
 /// Writes a file of the worktree, making the folders above it.

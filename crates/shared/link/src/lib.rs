@@ -13,7 +13,10 @@
 //!   parts; [`TerminalId`], [`TerminalSize`], [`Program`] and [`Ending`];
 //!   [`WorkspaceReviews`] with its [`Review`]s, [`Thread`]s, [`Comment`]s and [`Round`]s,
 //!   the [`Anchor`] a thread sits on, and [`DraftOn`], what a draft that is saved belongs
-//!   to;
+//!   to; [`AgentReport`], what a piece of the app inside an agent CLI reports;
+//!   [`WorkspaceAgents`] with its [`Session`]s and their [`SessionState`]; [`Turn`]s with
+//!   their [`Step`]s; [`History`] with its [`HistoryEntry`]s and [`CreditedFile`]s; and
+//!   [`TerminalInfo`], a terminal the Keeper holds;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -30,7 +33,13 @@
 //! A new kind of request is one line in the table of `request.rs` and one variant of
 //! [`Request`]. The table makes it say who starts it, and that puts it in
 //! [`RequestKind::ALL`]: a test that walks the requests a user starts cannot miss it.
+//!
+//! Two kinds of program connect to the Keeper's socket: a Window, which stays and is told
+//! every fact, and a piece of the app inside an agent CLI, which says hello, sends one
+//! request whose origin is [`Origin::Agent`], takes its reply and leaves. Both say the
+//! same hello.
 
+mod agent;
 mod request;
 mod review;
 mod terminal;
@@ -45,10 +54,14 @@ use std::os::unix::fs::MetadataExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
+pub use agent::{
+    AgentReport, CreditedFile, History, HistoryEntry, Session, SessionState, Step, TerminalInfo,
+    Turn, TurnEnd, WorkspaceAgents,
+};
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use review::{
     Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Review, ReviewId, Round,
-    SentBy, SessionId, Side, Thread, ThreadId, WorkspaceReviews,
+    SentBy, SessionId, Side, Thread, ThreadId, TurnId, WorkspaceReviews,
 };
 pub use terminal::{Ending, Program, TerminalId, TerminalSize};
 pub use workspace::{
@@ -64,14 +77,26 @@ use wire::{In, Out};
 /// that.
 ///
 /// 2: requests, replies and facts about workspaces. 3: terminals, and the two frames of
-/// their bytes. 4: reviews, and a workspace whose worktree is gone.
-pub const PROTOCOL_VERSION: u16 = 4;
+/// their bytes. 4: reviews, and a workspace whose worktree is gone. 5: agents, their
+/// sessions, turns and steps, the history of a worktree, a terminal's launcher of an agent,
+/// and attaching to a terminal that still runs.
+pub const PROTOCOL_VERSION: u16 = 5;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
 /// The folder name of the app in the user's data and runtime folders.
 pub const APP_FOLDER: &str = "yaar-review";
+
+/// The variable that names the Keeper's socket outright: see [`socket_path`]. Every shell
+/// of the app has it, so that a piece of the app inside an agent CLI finds the Keeper
+/// that started that shell.
+pub const SOCKET_VARIABLE: &str = "YAAR_SOCKET";
+
+/// The variable that names, in every shell of the app, the id of its terminal: a piece of
+/// the app inside an agent CLI passes it on, so that the Keeper knows which terminal the
+/// CLI runs in.
+pub const TERMINAL_VARIABLE: &str = "YAAR_TERMINAL";
 
 const MAGIC: [u8; 4] = *b"YAAR";
 const KIND_HELLO: u8 = 1;
@@ -318,7 +343,15 @@ pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> 
 /// Reads one frame and returns its message.
 pub fn read_message(input: &mut impl Read) -> Result<Message, LinkError> {
     let mut len = [0u8; 4];
-    match input.read(&mut len[..1])? {
+    // A read that a signal interrupts before it gives a byte is tried again, as
+    // `read_exact` does for the rest of the frame.
+    let first = loop {
+        match input.read(&mut len[..1]) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            read => break read?,
+        }
+    };
+    match first {
         0 => return Err(LinkError::Closed),
         _ => input.read_exact(&mut len[1..])?,
     }
@@ -412,7 +445,7 @@ pub fn socket_path() -> PathBuf {
 
 fn socket_path_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     let set = |name: &str| var(name).filter(|v| !v.as_os_str().is_empty());
-    if let Some(path) = set("YAAR_SOCKET") {
+    if let Some(path) = set(SOCKET_VARIABLE) {
         return path;
     }
     let folder = match set("XDG_RUNTIME_DIR") {
@@ -653,6 +686,45 @@ mod tests {
         let mut input = Cursor::new(bytes);
         assert_eq!(read_message(&mut input).expect("first"), Message::Shutdown);
         assert!(matches!(read_message(&mut input), Ok(Message::Hello(_))));
+        assert!(matches!(read_message(&mut input), Err(LinkError::Closed)));
+    }
+
+    /// A reader that fails once with `Interrupted`, as a read does when a signal reaches
+    /// the process, before it gives its bytes.
+    struct Interrupted<R> {
+        inner: R,
+        interrupted: bool,
+    }
+
+    impl<R> Interrupted<R> {
+        fn once_before(inner: R) -> Interrupted<R> {
+            Interrupted {
+                inner,
+                interrupted: false,
+            }
+        }
+    }
+
+    impl<R: Read> Read for Interrupted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    #[test]
+    fn a_read_interrupted_before_the_first_byte_of_a_frame_is_tried_again() {
+        let bytes = frame(&Message::Hello(Hello::for_this_process("1")));
+        let mut input = Interrupted::once_before(Cursor::new(bytes));
+        assert!(matches!(read_message(&mut input), Ok(Message::Hello(_))));
+    }
+
+    #[test]
+    fn a_read_interrupted_before_the_end_of_the_input_is_closed() {
+        let mut input = Interrupted::once_before(Cursor::new(Vec::new()));
         assert!(matches!(read_message(&mut input), Err(LinkError::Closed)));
     }
 
@@ -933,7 +1005,84 @@ mod tests {
                 workspace: workspace.clone(),
                 message: "Say what the change does\n\nAnd why.".to_owned(),
             },
+            Request::Report {
+                report: AgentReport {
+                    agent: "claude".to_owned(),
+                    terminal: Some(terminal()),
+                    pid: u32::MAX,
+                    payload: b"{\"hook_event_name\":\"Stop\"}\n\0\xff".to_vec(),
+                },
+            },
+            Request::ListAgents,
+            Request::GetHistory {
+                workspace: workspace.clone(),
+            },
+            Request::CompareVersions {
+                workspace: workspace.clone(),
+                from: COMMIT.to_owned(),
+                to: Some(STATE.to_owned()),
+            },
+            Request::ReadVersions {
+                workspace: workspace.clone(),
+                old: Some(COMMIT.to_owned()),
+                old_path: PathBuf::from("src/was here.rs"),
+                new: Some(STATE.to_owned()),
+                path: PathBuf::from("src/moved.rs"),
+            },
+            Request::GetTurn { turn: turn_id() },
+            Request::ShowWorkspace {
+                workspace: Some(workspace.clone()),
+            },
+            Request::ListTerminals,
+            Request::AttachTerminal {
+                terminal: terminal(),
+                size: TerminalSize {
+                    columns: 120,
+                    rows: 40,
+                },
+            },
+            Request::GetUncommitted {
+                workspace: workspace.clone(),
+                review: Some(review_id()),
+            },
         ];
+        // A launcher, a report from outside the app's terminals, the files on disk as the
+        // new side, no workspace on screen, and the uncommitted list of no review named.
+        let launcher = Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Agent {
+                agent: "claude".to_owned(),
+            },
+            size: TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        };
+        let from_outside = Request::Report {
+            report: AgentReport {
+                agent: "claude".to_owned(),
+                terminal: None,
+                pid: 1,
+                payload: Vec::new(),
+            },
+        };
+        let to_disk = Request::CompareVersions {
+            workspace: workspace.clone(),
+            from: STATE.to_owned(),
+            to: None,
+        };
+        let disk_side = Request::ReadVersions {
+            workspace: workspace.clone(),
+            old: None,
+            old_path: PathBuf::from("src/new.rs"),
+            new: None,
+            path: PathBuf::from("src/new.rs"),
+        };
+        let nothing_on_screen = Request::ShowWorkspace { workspace: None };
+        let every_change = Request::GetUncommitted {
+            workspace: workspace.clone(),
+            review: None,
+        };
         // A draft saved again, or a reply, names a thread that exists.
         let in_a_thread = Request::SaveDraft {
             review: review_id(),
@@ -1035,6 +1184,50 @@ mod tests {
             Reply::Committed {
                 commit: COMMIT.to_owned(),
             },
+            Reply::Agents(vec![agents(), {
+                let mut none = agents();
+                none.shown = None;
+                none.sessions.clear();
+                none
+            }]),
+            Reply::Agents(Vec::new()),
+            Reply::History(history()),
+            Reply::History(History {
+                workspace: workspace.clone(),
+                start: None,
+                entries: Vec::new(),
+            }),
+            Reply::Uncommitted(uncommitted()),
+            Reply::Uncommitted(Vec::new()),
+            Reply::Compared(
+                changes(
+                    Comparison::NothingToCompare {
+                        base: None,
+                        why: NoComparison::NoBase,
+                    },
+                    None,
+                )
+                .files,
+            ),
+            Reply::Turn(turn(Some(TurnEnd::Finished), Some(STATE))),
+            Reply::Turn(turn(Some(TurnEnd::Interrupted), None)),
+            Reply::Turn(turn(None, None)),
+            Reply::Terminals(vec![
+                TerminalInfo {
+                    id: terminal(),
+                    workspace: workspace.clone(),
+                    program: Program::Shell,
+                },
+                TerminalInfo {
+                    id: TerminalId::new("44444444444444444444444444444444"),
+                    workspace: workspace.clone(),
+                    program: Program::Agent {
+                        agent: "claude".to_owned(),
+                    },
+                },
+            ]),
+            Reply::Attached { cut: true },
+            Reply::Attached { cut: false },
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1082,13 +1275,39 @@ mod tests {
             Refusal::Failed {
                 reason: "git was not found".to_owned(),
             },
+            Refusal::UnknownTurn { turn: turn_id() },
         ];
         let facts = [
             Fact::Workspaces(two_repositories()),
             Fact::ChangesChanged {
                 workspace: workspace.clone(),
             },
-            Fact::ReviewsChanged { workspace },
+            Fact::ReviewsChanged {
+                workspace: workspace.clone(),
+            },
+            Fact::AgentsChanged(agents()),
+            Fact::TurnEnded {
+                workspace: workspace.clone(),
+                session: session_id(),
+                turn: turn_id(),
+                state: Some(STATE.to_owned()),
+                since: Some(COMMIT.to_owned()),
+            },
+            Fact::TurnEnded {
+                workspace,
+                session: session_id(),
+                turn: turn_id(),
+                state: None,
+                since: None,
+            },
+            Fact::Step {
+                session: session_id(),
+                turn: turn_id(),
+                number: u32::MAX,
+                step: Step::Command {
+                    command: "echo x > made.txt".to_owned(),
+                },
+            },
             Fact::TerminalEnded {
                 terminal: terminal(),
                 ending: Ending::Exited(0),
@@ -1117,6 +1336,19 @@ mod tests {
         for request in [in_a_thread, unviewed] {
             messages.push(Message::Request {
                 id: RequestId(u32::MAX - 1),
+                request,
+            });
+        }
+        for request in [
+            launcher,
+            from_outside,
+            to_disk,
+            disk_side,
+            nothing_on_screen,
+            every_change,
+        ] {
+            messages.push(Message::Request {
+                id: RequestId(u32::MAX - 2),
                 request,
             });
         }
@@ -1157,6 +1389,131 @@ mod tests {
 
     fn review_id() -> ReviewId {
         ReviewId::new("88888888888888888888888888888888")
+    }
+
+    /// The full id of a recorded state.
+    const STATE: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+
+    fn session_id() -> SessionId {
+        SessionId::new("cccccccccccccccccccccccccccccccc")
+    }
+
+    fn turn_id() -> TurnId {
+        TurnId::new("dddddddddddddddddddddddddddddddd")
+    }
+
+    /// The sessions of a workspace in every state, one with no terminal and no review.
+    fn agents() -> WorkspaceAgents {
+        let states = [
+            SessionState::WaitsForPermission,
+            SessionState::Unreviewed,
+            SessionState::Works,
+            SessionState::Idle,
+            SessionState::NotRunning,
+        ];
+        WorkspaceAgents {
+            workspace: WorkspaceId::new("11111111111111111111111111111111"),
+            shown: Some(SessionState::WaitsForPermission),
+            sessions: states
+                .iter()
+                .enumerate()
+                .map(|(n, state)| Session {
+                    id: SessionId::new(n.to_string().repeat(32)),
+                    agent: "claude".to_owned(),
+                    title: format!("Claude Code {}", n + 1),
+                    workspace: WorkspaceId::new("11111111111111111111111111111111"),
+                    terminal: (*state != SessionState::NotRunning).then(terminal),
+                    state: *state,
+                    turn: matches!(
+                        state,
+                        SessionState::Works | SessionState::WaitsForPermission
+                    )
+                    .then(turn_id),
+                    review: (n != 0).then(review_id),
+                })
+                .collect(),
+        }
+    }
+
+    /// A turn with a step of every kind.
+    fn turn(ended: Option<TurnEnd>, state: Option<&str>) -> Turn {
+        Turn {
+            id: turn_id(),
+            session: session_id(),
+            number: 3,
+            ended,
+            state: state.map(str::to_owned),
+            steps: vec![
+                Step::Read {
+                    path: PathBuf::from("notes.txt"),
+                },
+                Step::Edit {
+                    path: PathBuf::from("src/été.rs"),
+                    lines: Some(vec![3..=3, 10..=12, u32::MAX..=u32::MAX]),
+                },
+                Step::Edit {
+                    path: PathBuf::from("notes.txt"),
+                    lines: None,
+                },
+                Step::Edit {
+                    path: PathBuf::from("empty.txt"),
+                    lines: Some(Vec::new()),
+                },
+                Step::Write {
+                    path: PathBuf::from("/elsewhere/new.txt"),
+                },
+                Step::Command {
+                    command: "sed -i '' 's/a/b/' notes.txt".to_owned(),
+                },
+            ],
+        }
+    }
+
+    /// A history with a commit and a turn, and changes made by a session and by no
+    /// agent.
+    fn history() -> History {
+        History {
+            workspace: WorkspaceId::new("11111111111111111111111111111111"),
+            start: Some(COMMIT.to_owned()),
+            entries: vec![
+                HistoryEntry::Commit(Commit {
+                    id: COMMIT.to_owned(),
+                    summary: "Start".to_owned(),
+                }),
+                HistoryEntry::Turn {
+                    turn: turn_id(),
+                    session: session_id(),
+                    state: Some(STATE.to_owned()),
+                },
+                HistoryEntry::Turn {
+                    turn: turn_id(),
+                    session: session_id(),
+                    state: None,
+                },
+            ],
+        }
+    }
+
+    /// Uncommitted changes made by a session and by no agent.
+    fn uncommitted() -> Vec<CreditedFile> {
+        vec![
+            CreditedFile {
+                file: ChangedFile {
+                    path: PathBuf::from("by-the-agent.txt"),
+                    status: FileStatus::Added,
+                },
+                by: vec![session_id()],
+            },
+            CreditedFile {
+                file: ChangedFile {
+                    path: PathBuf::from("src/moved.rs"),
+                    status: FileStatus::Renamed {
+                        from: PathBuf::from("src/was here.rs"),
+                    },
+                },
+                by: Vec::new(),
+            },
+        ]
     }
 
     fn anchor(tree: Option<&str>, side: Side) -> Anchor {
@@ -1259,14 +1616,20 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; three kinds are tried a second time.
+        // One of each, in the order of the table; nine kinds are tried a second time.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
             [
                 RequestKind::ReadFile,
                 RequestKind::SaveDraft,
-                RequestKind::SetViewed
+                RequestKind::SetViewed,
+                RequestKind::OpenTerminal,
+                RequestKind::Report,
+                RequestKind::CompareVersions,
+                RequestKind::ReadVersions,
+                RequestKind::ShowWorkspace,
+                RequestKind::GetUncommitted,
             ]
         );
     }
@@ -1304,6 +1667,29 @@ mod tests {
         // The Window tells the size it shows a terminal at by itself, whenever its
         // layout changes.
         assert_eq!(RequestKind::ResizeTerminal.origin(), Origin::Window);
+        // The Window reads the agents, the history, the versions of a change and the
+        // terminals to have something to show, and tells by itself which workspace it
+        // shows; a user who selects a workspace starts nothing of the Keeper's.
+        for kind in [
+            RequestKind::ListAgents,
+            RequestKind::GetHistory,
+            RequestKind::CompareVersions,
+            RequestKind::ReadVersions,
+            RequestKind::GetTurn,
+            RequestKind::ShowWorkspace,
+            RequestKind::ListTerminals,
+            RequestKind::AttachTerminal,
+            RequestKind::GetUncommitted,
+        ] {
+            assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
+        }
+        // Only a piece of the app inside an agent CLI reports.
+        let by_agent: Vec<RequestKind> = RequestKind::ALL
+            .iter()
+            .copied()
+            .filter(|kind| kind.origin() == Origin::Agent)
+            .collect();
+        assert_eq!(by_agent, [RequestKind::Report]);
         assert_eq!(RequestKind::OpenFolder.name(), "OpenFolder");
     }
 

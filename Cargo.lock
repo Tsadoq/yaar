@@ -8917,6 +8917,11 @@ checksum = "7a5a4b21e1a62b67a2970e6831bc091d7b87e119e7f9791aef9702e3bef04448"
 [[package]]
 name = "yaar-adapter-claude"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "yaar-agent",
+ "yaar-system-tests",
+]
 
 [[package]]
 name = "yaar-adapter-pi"
@@ -8929,6 +8934,10 @@ version = "0.1.0"
 [[package]]
 name = "yaar-companion-claude"
 version = "0.1.0"
+dependencies = [
+ "yaar-link",
+ "yaar-system-tests",
+]
 
 [[package]]
 name = "yaar-diff"
@@ -8960,11 +8969,16 @@ name = "yaar-keeper"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde_json",
+ "yaar-adapter-claude",
+ "yaar-agent",
  "yaar-dock",
  "yaar-link",
  "yaar-recorder",
  "yaar-review-engine",
  "yaar-store",
+ "yaar-switchboard",
+ "yaar-system-tests",
  "yaar-workspaces",
 ]
 
@@ -9011,12 +9025,17 @@ dependencies = [
 [[package]]
 name = "yaar-switchboard"
 version = "0.1.0"
+dependencies = [
+ "yaar-agent",
+]
 
 [[package]]
 name = "yaar-system-tests"
 version = "0.1.0"
 dependencies = [
+ "alacritty_terminal",
  "libc",
+ "serde_json",
  "yaar-link",
 ]
 
@@ -9052,8 +9071,12 @@ dependencies = [
 name = "yaar-workspaces"
 version = "0.1.0"
 dependencies = [
+ "notify",
+ "yaar-adapter-claude",
+ "yaar-agent",
  "yaar-recorder",
  "yaar-store",
+ "yaar-system-tests",
 ]
 
 [[package]]

@@ -64,9 +64,18 @@ opaque_id! {
 }
 
 opaque_id! {
-    /// Names one session of an agent CLI, as the Keeper knows it. A review belongs to one
-    /// session, or to no agent.
+    /// Names one session of an agent CLI, as the Keeper knows it: 32 lowercase hexadecimal
+    /// digits the Keeper drew when the session first reported in. It is the app's name for
+    /// the session, not the CLI's own: a session the CLI resumes keeps it. A review belongs
+    /// to one session, or to no agent.
     SessionId
+}
+
+opaque_id! {
+    /// Names one turn of an agent session: 32 lowercase hexadecimal digits the Keeper drew
+    /// when the turn started. A turn runs from the user's message to the agent's last word
+    /// in answer to it.
+    TurnId
 }
 
 /// The side of a diff a line is on.

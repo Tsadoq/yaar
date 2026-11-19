@@ -895,24 +895,657 @@ fn a_repository_inside_the_worktree_is_recorded_as_the_commit_it_is_on() {
     );
 }
 
+/// A byte copy of `repo`, in which the user's own git can be asked what it would have
+/// done, without touching the real one.
+fn byte_copy(scratch: &Scratch, repo: &Path, name: &str) -> PathBuf {
+    let copy = scratch.join(name);
+    let status = std::process::Command::new("cp")
+        .arg("-R")
+        .arg(repo)
+        .arg(&copy)
+        .status()
+        .expect("copy");
+    assert!(status.success(), "cp -R failed");
+    copy
+}
+
+/// The pointer a clean filter standing in for Git LFS prints for a file of `size` bytes: a
+/// fixed hash, and the size it read, so that a change of the file is a change of the
+/// pointer.
+fn pointer(size: usize) -> String {
+    format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:\
+         0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize {size}\n"
+    )
+}
+
+// STATE-02. The tree of a state is the one `git add -A` writes in a byte copy of the
+// repository, with every kind of file whose blob git makes by more than copying the file.
 #[test]
-fn a_repository_inside_the_worktree_with_no_commit_fails_the_recording_with_gits_words() {
+fn the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_every_filter() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    // The stand-in for Git LFS: the CI machine has none. A POSIX shell script that reads
+    // its input to the end and prints the pointer, as the real clean filter does.
+    let lfs = scratch.join("bin/lfs-clean");
+    program(
+        &lfs,
+        // The size is counted by reading the input to its end; `wc` of some systems pads
+        // the number with spaces.
+        "size=$(wc -c | tr -d ' ')\nprintf 'version https://git-lfs.github.com/spec/v1\\n\
+         oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\n\
+         size %s\\n' \"$size\"",
+    );
+    let config = repo.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).expect("read the configuration");
+    // Written into the file, as a user's own settings are.
+    text.push_str(&format!(
+        "[core]\n\tautocrlf = true\n\
+         [filter \"upper\"]\n\tclean = tr a-z A-Z\n\
+         [filter \"lfs\"]\n\tclean = '{lfs}'\n\tsmudge = cat\n\trequired = true\n",
+        lfs = lfs.display()
+    ));
+    std::fs::write(&config, text).expect("write the configuration");
+    write(&repo, ".gitignore", "*.log\n");
+    write(
+        &repo,
+        ".gitattributes",
+        "*.txt filter=upper\n*.bin filter=lfs\n",
+    );
+    write(&repo, "notes.txt", "one\n");
+    write(&repo, "lines.md", "a\r\nb\r\n");
+    write(&repo, "kept.log", "first\n");
+    git(&repo, &["add", "-f", "kept.log"]);
+    write(&repo, "model.bin", "12345");
+    commit_all(&repo, "start");
+
+    // Each kind, changed after the commit.
+    write(&repo, "notes.txt", "two lines\nmore\n");
+    write(&repo, "lines.md", "a\r\nb\r\nc\r\n");
+    write(&repo, "kept.log", "second\n");
+    // The large file the pointer stands in for, which is longer now, and a text file that
+    // is new; and an ignored file that is force-added and staged, never committed.
+    write(&repo, "model.bin", "1234567");
+    write(&repo, "dir/new.txt", "new text\n");
+    write(&repo, "staged.log", "forced in\n");
+    git(&repo, &["add", "-f", "staged.log"]);
+    write(&repo, "ignored.log", "stays out\n");
+    let copy = byte_copy(&scratch, &repo, "copy");
+    git(&copy, &["add", "-A"]);
+    let wanted = git(&copy, &["write-tree"]);
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(state.tree, wanted);
+    // What git wrote for each file in the copy, and what each must be by the rule that
+    // makes it: the clean filter, the line ends, the forced file as it is now, the pointer.
+    let blob = |path: &str| git_bytes(&copy, &["cat-file", "blob", &format!("{wanted}:{path}")]);
+    for (path, content) in [
+        ("notes.txt", "TWO LINES\nMORE\n"),
+        ("dir/new.txt", "NEW TEXT\n"),
+        ("lines.md", "a\nb\nc\n"),
+        ("kept.log", "second\n"),
+        ("staged.log", "forced in\n"),
+        ("model.bin", &pointer(7)),
+    ] {
+        assert_eq!(blob(path), content.as_bytes(), "git's blob of {path}");
+        assert_eq!(
+            store
+                .content(state.id.as_str(), Path::new(path))
+                .expect("read"),
+            Some(content.as_bytes().to_vec()),
+            "the state's content of {path}"
+        );
+    }
+    // An ignored file that nothing forced in is in no commit of everything.
+    assert_eq!(
+        store
+            .content(state.id.as_str(), Path::new("ignored.log"))
+            .expect("read"),
+        None
+    );
+}
+
+// What `git add -A` does with a path that is a file where it was a folder, and a folder
+// where it was a file, which a build or a checkout of another branch does all the time.
+#[test]
+fn a_folder_that_became_a_file_and_a_file_that_became_a_folder_are_in_the_state_as_git_add_has_them()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "swap/inner.txt", "inside\n");
+    write(&repo, "flip.txt", "a file\n");
+    write(&repo, "same.txt", "same\n");
+    commit_all(&repo, "start");
+    std::fs::remove_dir_all(repo.join("swap")).expect("remove the folder");
+    write(&repo, "swap", "now a file\n");
+    std::fs::remove_file(repo.join("flip.txt")).expect("remove the file");
+    write(&repo, "flip.txt/in.txt", "now a folder\n");
+    let copy = byte_copy(&scratch, &repo, "copy");
+    git(&copy, &["add", "-A"]);
+    let wanted = git(&copy, &["write-tree"]);
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(state.tree, wanted);
+}
+
+/// Where each place a hook can be in, one repository for each so that only that place is
+/// the one git would read the hook from.
+#[derive(Clone, Copy, Debug)]
+enum HookPlace {
+    /// In the hooks folder of the repository.
+    Folder,
+    /// In a folder that a global configuration names as `core.hooksPath`.
+    Global,
+    /// In configuration, as `hook.<name>.command` with its event.
+    Configuration,
+}
+
+// STATE-03. Each place a hook can be in gets a repository of its own: a global hooks path
+// replaces the hooks folder, so one repository could not have both at work.
+#[test]
+fn with_a_failing_hook_in_the_repository_behind_a_global_path_and_in_configuration_a_state_is_taken_and_none_runs()
+ {
+    let scratch = Scratch::new();
+    let global = scratch.join("global-config");
+    std::fs::write(
+        &global,
+        format!(
+            "[core]\n\thooksPath = {}\n",
+            scratch.join("global-hooks").display()
+        ),
+    )
+    .expect("write the global configuration");
+    let note = |place: HookPlace, hook: &str| {
+        format!(
+            "echo {hook} >> '{}'\nexit 1",
+            scratch.join(&format!("ran-{place:?}")).display()
+        )
+    };
+
+    let mut supported = Vec::new();
+    for place in [
+        HookPlace::Folder,
+        HookPlace::Global,
+        HookPlace::Configuration,
+    ] {
+        // Only the global place reads the global file: a global hooks path would
+        // replace the hooks folder of every other repository of the test.
+        // SAFETY: changing the environment is sound only while no other thread reads it:
+        // this test starts none, and `cargo nextest` gives it a process of its own.
+        unsafe {
+            std::env::set_var(
+                "GIT_CONFIG_GLOBAL",
+                if matches!(place, HookPlace::Global) {
+                    global.as_path()
+                } else {
+                    Path::new("/dev/null")
+                },
+            );
+        }
+        let repo = scratch.join(&format!("repo-{place:?}"));
+        init(&repo);
+        write(&repo, "a.txt", "one\n");
+        commit_all(&repo, "start");
+        for hook in ["post-index-change", "pre-commit"] {
+            let script = note(place, hook);
+            match place {
+                HookPlace::Folder => program(&repo.join(".git/hooks").join(hook), &script),
+                HookPlace::Global => program(&scratch.join("global-hooks").join(hook), &script),
+                HookPlace::Configuration => {
+                    let script_file = scratch.join(&format!("config-{hook}"));
+                    program(&script_file, &script);
+                    let config = repo.join(".git/config");
+                    let mut text = std::fs::read_to_string(&config).expect("read");
+                    // Both keys: with no event a hook is none.
+                    text.push_str(&format!(
+                        "[hook \"yaar-{hook}\"]\n\tcommand = {}\n\tevent = {hook}\n",
+                        script_file.display()
+                    ));
+                    std::fs::write(&config, text).expect("write the configuration");
+                }
+            }
+        }
+        write(&repo, "a.txt", "changed\n");
+        write(&repo, "b.txt", "new\n");
+
+        // The premise, in a byte copy: the hook of this place refuses a commit, where this
+        // git runs hooks of that place at all. A git that does not is told so.
+        let copy = byte_copy(&scratch, &repo, &format!("copy-{place:?}"));
+        let refused = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&copy)
+            .args(["commit", "--quiet", "-am", "x"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("start git");
+        let ran = scratch.join(&format!("ran-{place:?}"));
+        if refused.status.success() {
+            assert!(
+                matches!(place, HookPlace::Configuration),
+                "git ran no hook of {place:?}, which every git does"
+            );
+            println!("hooks in configuration are not supported by this git: {place:?} skipped");
+            assert!(
+                !ran.exists(),
+                "a hook ran in the copy, and no commit was refused"
+            );
+            continue;
+        }
+        assert!(
+            ran.exists(),
+            "the commit was refused by something else than the hook of {place:?}"
+        );
+        println!("hooks of {place:?} are run by this git");
+        supported.push(place);
+        std::fs::remove_file(&ran).expect("clear what the copy's hooks wrote");
+
+        let store = StateStore::open(&found(), &scratch.join(&format!("store-{place:?}.git")))
+            .expect("open the store");
+        let state = store.record(&open(&repo)).expect("record");
+
+        let held = held_by(&store, &state);
+        assert_eq!(held.get("a.txt"), Some(&b"changed\n".to_vec()), "{place:?}");
+        assert_eq!(held.get("b.txt"), Some(&b"new\n".to_vec()), "{place:?}");
+        assert_eq!(
+            store.states().expect("states"),
+            vec![state],
+            "{place:?}: the state is held"
+        );
+        assert!(
+            !ran.exists(),
+            "{place:?}: a hook ran: {:?}",
+            std::fs::read_to_string(&ran)
+        );
+    }
+    assert!(
+        supported.len() >= 2,
+        "the hooks folder and the global hooks path are run by every git: {supported:?}"
+    );
+}
+
+// STATE-06. A program that creates and deletes files beside the recordings, and flips a
+// path between a file and a folder, as a build does.
+#[test]
+fn forty_states_taken_beside_a_loop_that_creates_and_deletes_files_all_succeed() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    write(&repo, "churn/kept.txt", "kept\n");
+    commit_all(&repo, "start");
+    let worktree = open(&repo);
+    let store = store(&scratch);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let churn = repo.join("churn");
+
+    // Tells the loop to end however the recordings end: a failed one panics, and the scope
+    // waits for the loop.
+    struct Stops<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for Stops<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    let made = std::thread::scope(|scope| {
+        let _stops = Stops(&stop);
+        let loop_of_files = scope.spawn(|| {
+            let mut made = 0_u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let n = made % 64;
+                let file = churn.join(format!("f{n}"));
+                std::fs::write(&file, format!("{made}\n")).expect("create");
+                // Deleted a few files behind, so that some are there when git looks and
+                // gone when it stages them.
+                let _ = std::fs::remove_file(churn.join(format!("f{}", (n + 60) % 64)));
+                if made.is_multiple_of(7) {
+                    // A path that is a file, then a folder with a file in it, then a file.
+                    let flip = churn.join("flip");
+                    let _ = std::fs::remove_dir_all(&flip);
+                    let _ = std::fs::write(&flip, "a file\n");
+                    let _ = std::fs::remove_file(&flip);
+                    let _ = std::fs::create_dir(&flip);
+                    let _ = std::fs::write(flip.join("inside"), "in a folder\n");
+                }
+                made += 1;
+            }
+            made
+        });
+        let mut states = Vec::new();
+        for n in 0..40 {
+            let state = store
+                .record(&worktree)
+                .unwrap_or_else(|e| panic!("recording {n} of 40 failed: {e}"));
+            // A tree git can read: its files list.
+            store
+                .paths(state.id.as_str())
+                .unwrap_or_else(|e| panic!("the state {n} does not read: {e}"));
+            states.push(state);
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "the loop made {} files",
+            loop_of_files.join().expect("the loop")
+        );
+        states
+    });
+
+    assert_eq!(made.len(), 40);
+    assert!(!store.states().expect("states").is_empty());
+}
+
+/// Configures the clean filter `name` of the repository as `program`, one that has to
+/// succeed for git to stage a file.
+fn required_filter(repo: &Path, name: &str, program: &Path) {
+    use std::io::Write;
+    let mut configuration = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .expect("open the configuration");
+    write!(
+        configuration,
+        "[filter \"{name}\"]\n\tclean = '{}'\n\trequired = true\n",
+        program.display()
+    )
+    .expect("configure the filter");
+}
+
+// A path git cannot stage for a reason of its own, as a clean filter that fails, fails the
+// recording with git's words. It is found by cutting the list in halves, not by staging
+// each path on its own in a run of git of its own, which for a worktree of tens of
+// thousands of files would be that many runs at every recording.
+#[test]
+fn a_path_that_cannot_be_staged_fails_the_recording_after_a_few_runs_of_git_and_not_one_for_each_path()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    let filter = scratch.join("bin/cannot-read");
+    program(&filter, "echo 'the filter cannot read it' >&2\nexit 1");
+    required_filter(&repo, "bad", &filter);
+    write(&repo, ".gitattributes", "*.bad filter=bad\n");
+    for n in 0..100 {
+        write(&repo, &format!("f{n:03}.txt"), &format!("{n}\n"));
+    }
+    // The last of the paths, in the order git lists them.
+    write(&repo, "zz.bad", "unreadable\n");
+    let (program, list) = support::git_that_keeps_a_list(&scratch);
+    let git = Git::at(program);
+    let worktree = Worktree::open(&git, &repo).expect("open");
+    let store = StateStore::open(&git, &scratch.join("app/states/one.git")).expect("open");
+
+    let error = store.record(&worktree).expect_err("no state");
+
+    assert!(
+        error.to_string().contains("the filter cannot read it"),
+        "git's words: {error}"
+    );
+    let staging_runs = std::fs::read_to_string(&list)
+        .expect("the list of starts")
+        .lines()
+        .filter(|start| start.contains("update-index --add"))
+        .count();
+    assert!(
+        (1..=20).contains(&staging_runs),
+        "{staging_runs} runs of git to stage 102 paths"
+    );
+    assert!(store.states().expect("states").is_empty());
+}
+
+/// A repository in which `path`, a file of `.race`, is not committed, and a clean filter
+/// for such files that runs `effect` on the worktree, as a program beside the recording
+/// would, and then fails: git has named the path, and by the time it fails to stage it
+/// the worktree is not as it was.
+fn with_a_file_that_changes_as_it_is_staged(
+    scratch: &Scratch,
+    path: &str,
+    effect: &str,
+) -> PathBuf {
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, ".gitattributes", "*.race filter=race\n");
+    write(&repo, "kept.txt", "kept\n");
+    commit_all(&repo, "start");
+    let filter = scratch.join("bin/disturb");
+    program(&filter, &format!("{effect}\nexit 1"));
+    required_filter(&repo, "race", &filter);
+    write(&repo, path, "here\n");
+    repo
+}
+
+// A path that is gone when git fails to stage it is no failure: it is what the worktree
+// looks like by then.
+#[test]
+fn a_path_that_is_gone_when_it_fails_to_be_staged_is_left_out_and_the_state_is_taken() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/gone.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "gone.race",
+        &format!("rm -f '{}'", file.display()),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
+// The same where the folder above the path is a file by then, which is not a missing path
+// to the system but is no path either.
+#[test]
+fn a_path_whose_folder_became_a_file_when_it_fails_to_be_staged_is_left_out_too() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("repo/folder");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "folder/inside.race",
+        &format!("rm -rf '{0}'\necho 'a file now' > '{0}'", folder.display()),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
+// The same where the path is there again by the time it is looked at: a file that was
+// deleted and made anew while git failed to stage it, which a look at the path afterwards
+// finds as it was.
+#[test]
+fn a_path_that_is_made_anew_while_it_fails_to_be_staged_is_left_out_too() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/again.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "again.race",
+        &format!(
+            "rm -f '{0}'\necho 'made anew, and longer than before' > '{0}'",
+            file.display()
+        ),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
+// Among many paths the one that changed is found without failing the others.
+#[test]
+fn a_path_that_is_gone_when_it_fails_to_be_staged_among_many_leaves_the_others_in_the_state() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/gone.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "gone.race",
+        &format!("rm -f '{}'", file.display()),
+    );
+    for n in 0..30 {
+        write(&repo, &format!("f{n:02}.txt"), &format!("{n}\n"));
+    }
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    let paths = store.paths(state.id.as_str()).expect("paths");
+    assert_eq!(paths.len(), 2 + 30, "{paths:?}");
+    assert!(!paths.contains(&PathBuf::from("gone.race")));
+}
+
+// STATE-08, as `record` shows it: the recording that used to fail with git's words now
+// succeeds.
+#[test]
+fn a_repository_inside_the_worktree_with_no_commit_is_left_out_of_the_state() {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");
     init(&repo);
     write(&repo, "a.txt", "one\n");
     commit_all(&repo, "start");
+    write(&repo, "a.txt", "changed\n");
     init(&repo.join("inner"));
     write(&repo.join("inner"), "i.txt", "inside\n");
     let store = store(&scratch);
 
-    let error = store
+    let state = store
         .record(&open(&repo))
-        .expect_err("a recording that fails");
+        .expect("a recording that succeeds");
 
-    assert!(matches!(error, RecordError::Git(_)), "{error:?}");
-    assert!(error.to_string().contains("git"), "{error}");
-    assert_eq!(store.states().expect("states"), vec![]);
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        vec![PathBuf::from("a.txt")]
+    );
+    assert_eq!(store.states().expect("states"), vec![state]);
+}
+
+// STATE-08. A repository with a commit is a link to that commit, one with none holds
+// nothing git could record: it is left out and named.
+#[test]
+fn an_untracked_repository_with_no_commit_is_left_out_of_the_state_and_reported() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    commit_all(&repo, "start");
+    write(&repo, "a.txt", "changed\n");
+    // Two with no commit, one of them far down and one whose git folder lies elsewhere,
+    // so that `.git` in it is a file; and one with a commit.
+    let nested = repo.join("nested");
+    init(&nested);
+    write(&nested, "n.txt", "inside\n");
+    write(&nested, "deeper/n.txt", "further inside\n");
+    let deep = repo.join("tools/vendor/deep");
+    init(&deep);
+    write(&deep, "d.txt", "down\n");
+    let apart = repo.join("apart");
+    git(
+        &repo,
+        &[
+            "init",
+            "--quiet",
+            "-b",
+            "main",
+            &format!("--separate-git-dir={}", scratch.join("apart.git").display()),
+            apart.to_str().unwrap(),
+        ],
+    );
+    write(&apart, "x.txt", "elsewhere\n");
+    assert!(apart.join(".git").is_file(), "the premise: .git is a file");
+    let inner = repo.join("inner");
+    init(&inner);
+    write(&inner, "i.txt", "inside\n");
+    let inner_head = commit_all(&inner, "inside");
+    let store = store(&scratch);
+
+    let recording = store
+        .record_reporting(&open(&repo))
+        .expect("a recording that succeeds");
+
+    // The changed file is in, the repository with a commit is its commit, and nothing
+    // lies under a repository with none.
+    assert_eq!(
+        store.paths(recording.state.id.as_str()).expect("paths"),
+        vec![PathBuf::from("a.txt"), PathBuf::from("inner")]
+    );
+    assert_eq!(
+        store
+            .content(recording.state.id.as_str(), Path::new("a.txt"))
+            .expect("read"),
+        Some(b"changed\n".to_vec())
+    );
+    assert_eq!(
+        git(store.folder(), &["ls-tree", &recording.state.tree, "inner"]),
+        format!("160000 commit {inner_head}\tinner")
+    );
+    // Named by their paths, ordered, without a slash at the end.
+    assert_eq!(
+        recording.left_out,
+        vec![
+            PathBuf::from("apart"),
+            PathBuf::from("nested"),
+            PathBuf::from("tools/vendor/deep")
+        ]
+    );
+    // Recording again with nothing changed is the same state, and says the same.
+    let again = store
+        .record_reporting(&open(&repo))
+        .expect("a second recording");
+    assert_eq!(again, recording);
+    assert_eq!(store.states().expect("states").len(), 1);
+    // A recording that leaves nothing out says so.
+    let plain = scratch.join("plain");
+    init(&plain);
+    write(&plain, "a.txt", "one\n");
+    let other = StateStore::open(&found(), &scratch.join("app/states/two.git")).expect("open");
+    assert_eq!(
+        other
+            .record_reporting(&open(&plain))
+            .expect("record")
+            .left_out,
+        Vec::<PathBuf>::new()
+    );
+}
+
+// What is left out joins the state as soon as it has a commit.
+#[test]
+fn a_repository_left_out_joins_the_state_when_it_gets_its_first_commit() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    commit_all(&repo, "start");
+    let nested = repo.join("nested");
+    init(&nested);
+    write(&nested, "n.txt", "inside\n");
+    let store = store(&scratch);
+    let worktree = open(&repo);
+    let first = store.record_reporting(&worktree).expect("record");
+    assert_eq!(first.left_out, vec![PathBuf::from("nested")]);
+
+    let nested_head = commit_all(&nested, "first");
+    let second = store.record_reporting(&worktree).expect("record again");
+
+    assert_eq!(second.left_out, Vec::<PathBuf>::new());
+    assert_ne!(second.state, first.state);
+    assert_eq!(
+        git(store.folder(), &["ls-tree", &second.state.tree, "nested"]),
+        format!("160000 commit {nested_head}\tnested")
+    );
 }
 
 #[test]

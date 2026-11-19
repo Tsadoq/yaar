@@ -95,7 +95,18 @@ pub fn open_composed(
     extra: Vec<BuildPane>,
 ) -> (Composed, VisualTestContext) {
     let mut world = World::new();
-    let keeper = world.start_keeper();
+    world.start_keeper();
+    open_composed_in(world, cx, extra)
+}
+
+/// [`open_composed`] in a world the test made and started a Keeper in, which holds what
+/// the test put there: a Window started against a Keeper that already holds state.
+pub fn open_composed_in(
+    mut world: World,
+    cx: &mut TestAppContext,
+    extra: Vec<BuildPane>,
+) -> (Composed, VisualTestContext) {
+    let keeper = world.keeper_pid().expect("the world's Keeper runs");
     let tap = world.tap();
 
     // A real socket and a real process: the connection is read by a thread, and answered
