@@ -31,6 +31,8 @@
 //! | `ShowWorkspace` | the watchers of the worktrees on screen | later `ChangesChanged`, `Workspaces` |
 //! | `ListTerminals` | the terminals the Dock holds, with their workspace and program | none |
 //! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
+//! | `GetSettings` | `settings::get`, from the Store | none |
+//! | `SetSetting` | `settings::set`, into the Store | `SettingChanged` with the setting |
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -216,6 +218,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         | RequestKind::GetUncommitted
         | RequestKind::CompareVersions
         | RequestKind::ReadVersions => Answerer::Apart,
+        // One read or one write of the Store, which a user's key waits for no longer than
+        // the drive takes.
+        RequestKind::GetSettings | RequestKind::SetSetting => Answerer::Here,
     }
 }
 
@@ -278,6 +283,10 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::ListTerminals => false,
         // They lead to no fact of their own.
         RequestKind::ShowWorkspace | RequestKind::AttachTerminal => false,
+        // A setting kept leads to `SettingChanged`, and the answer of `GetSettings` carries
+        // what that fact carries: read between two settings kept and sent after the fact
+        // of the second, it would be taken for the newer list.
+        RequestKind::GetSettings | RequestKind::SetSetting => true,
     }
 }
 
@@ -504,6 +513,8 @@ impl Parts {
                     reply
                 })
             }
+            Request::GetSettings => crate::settings::get(kept),
+            Request::SetSetting { setting } => crate::settings::set(kept, setting, &mut facts),
         };
         Answered::Now(Outcome { reply, facts, then })
     }

@@ -635,6 +635,9 @@ impl Core {
                         session: SessionId::new(session.0),
                         number,
                         ended: None,
+                        // The Keeper's package of slice 5 sets the newest state of the
+                        // worktree here, as `TurnRecord::start` says.
+                        start: None,
                         state: None,
                     }));
                 }
@@ -820,6 +823,7 @@ impl Core {
                 .command_began(workspace, &session.0, cause.at()),
         }
         told.steps.push(Fact::Step {
+            workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
             session: yaar_link::SessionId::new(session.0.clone()),
             turn: yaar_link::TurnId::new(turn.0.clone()),
             number,

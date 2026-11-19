@@ -109,6 +109,10 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
+        // In Flow the offer is that of a turn that ended while Flow was on screen.
+        if self.view == crate::View::Flow {
+            return self.take_flow_offer(window, cx);
+        }
         self.take(window, cx);
     }
 

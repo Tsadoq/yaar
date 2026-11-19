@@ -621,6 +621,13 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                     rows: 24,
                 },
             },
+            RequestKind::GetSettings => Request::GetSettings,
+            RequestKind::SetSetting => Request::SetSetting {
+                setting: yaar_link::Setting::FlowForm {
+                    workspace: WorkspaceId::new("0".repeat(32)),
+                    form: yaar_link::FlowForm::LiveDiff,
+                },
+            },
         };
         assert_eq!(
             window.ask(request),

@@ -114,7 +114,7 @@ fn before(history: &History, first: usize) -> Option<String> {
 
 /// The commit checked out: the newest commit of the history, or its start where it holds
 /// none. The uncommitted changes are counted from it.
-fn checked_out(history: &History) -> Option<String> {
+pub(crate) fn checked_out(history: &History) -> Option<String> {
     history
         .entries
         .iter()
@@ -256,6 +256,10 @@ impl ReviewPane {
             }
             ChangeShown::Since { .. } => {}
         }
+        // Flow reads the newest turn of the history, and what a turn's change counts from
+        // where the turn says nothing.
+        self.flow_history(cx);
+        self.live_history(cx);
         cx.notify();
     }
 

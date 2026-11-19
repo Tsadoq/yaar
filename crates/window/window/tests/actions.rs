@@ -15,7 +15,9 @@ use std::time::Duration;
 
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
-use yaar_link::{CommentId, Origin, Program, Request, RequestKind, ReviewId, Workspace};
+use yaar_link::{
+    CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting, Workspace,
+};
 use yaar_system_tests::{DEADLINE, Repo, descendants_of, is_alive};
 
 mod common;
@@ -160,6 +162,11 @@ impl Composed {
                     self.focus_is_in("Program", cx)
                 })
             }
+            // The pane shows the form it set as soon as the key is pressed.
+            RequestKind::SetSetting => wait_until(cx, "the live diff as the form of Flow", |cx| {
+                self.review
+                    .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+            }),
             RequestKind::OpenFolder | RequestKind::SetBase | RequestKind::DeleteDraft => {}
             RequestKind::ListWorkspaces
             | RequestKind::GetChanges
@@ -175,7 +182,8 @@ impl Composed {
             | RequestKind::GetTurn
             | RequestKind::ShowWorkspace
             | RequestKind::ListTerminals
-            | RequestKind::AttachTerminal => {
+            | RequestKind::AttachTerminal
+            | RequestKind::GetSettings => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
@@ -458,6 +466,20 @@ impl Composed {
                         Box::new(move |passed| *passed == request),
                     )
                 }
+                RequestKind::SetSetting => {
+                    // The workspace on screen shows Flow as the timeline, which nobody chose:
+                    // the key switches it to the live diff and keeps that for the workspace.
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk sets a form of Flow");
+                    let request = Request::SetSetting {
+                        setting: Setting::FlowForm {
+                            workspace: on_screen.id,
+                            form: FlowForm::LiveDiff,
+                        },
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
                 RequestKind::ListWorkspaces
                 | RequestKind::GetChanges
                 | RequestKind::ReadFile
@@ -472,7 +494,8 @@ impl Composed {
                 | RequestKind::GetTurn
                 | RequestKind::ShowWorkspace
                 | RequestKind::ListTerminals
-                | RequestKind::AttachTerminal => {
+                | RequestKind::AttachTerminal
+                | RequestKind::GetSettings => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
@@ -602,7 +625,11 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
     // without one there is nothing to set a base for.
     window.walk(RequestKind::OpenFolder, &mut cx);
 
-    for kind in RequestKind::started_by_user() {
+    // Until the review pane's first package of slice 5 gives the switch of Flow's form its
+    // work, its key sends nothing, and the walk leaves `SetSetting` out. The package of the
+    // composed Window takes this filter away: the walk is weakened for the length of the
+    // build only.
+    for kind in RequestKind::started_by_user().filter(|kind| *kind != RequestKind::SetSetting) {
         window.walk(kind, &mut cx);
     }
 

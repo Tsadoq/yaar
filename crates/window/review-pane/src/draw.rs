@@ -14,7 +14,7 @@ use yaar_diff::{Hunk, Row, Side};
 use yaar_frame::SetBase;
 use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
 
-use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
+use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown, View};
 use yaar_link::{CommentId, ThreadId};
 
 /// The height of every row. The list lays its rows out by the height of one of them, so
@@ -91,6 +91,10 @@ impl Render for ReviewPane {
         let tree = self.tree_view(window, cx);
         let sessions = self.session_bar(cx);
         let offer = self.offer_bar(cx);
+        // The bar names both views and is drawn in both; Flow, when it is on screen, takes
+        // the place of everything of Changes below it.
+        let bar = self.render_bar(window, cx);
+        let flow = (self.view == View::Flow).then(|| self.render_flow(window, cx));
         let theme = cx.theme();
         let pane = div()
             .size_full()
@@ -99,7 +103,14 @@ impl Render for ReviewPane {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.mono_font_family.clone())
-            .text_size(theme.mono_font_size);
+            .text_size(theme.mono_font_size)
+            // A mouse button, the wheel or a key anywhere in the pane is the reviewer at
+            // work in it, which pauses follow: heard before anything inside acts on it.
+            .capture_any_mouse_down(cx.listener(|pane, _: &MouseDownEvent, _, cx| {
+                pane.touched(cx);
+            }))
+            .capture_key_down(cx.listener(|pane, _: &KeyDownEvent, _, cx| pane.touched(cx)))
+            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| pane.touched(cx)));
         // Under the rows and outside the element that sets the pane's key context, so
         // that the letters typed in the box are text and not keys of the pane.
         let notice = self.notice.as_ref().map(|notice| {
@@ -139,6 +150,14 @@ impl Render for ReviewPane {
                 .on_action(cx.listener(Self::escape_commit))
                 .child(Input::new(&field.input))
         });
+        if let Some(flow) = flow {
+            return pane
+                .children(bar)
+                .child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                .children(notice)
+                .children(comment_box)
+                .children(commit_field);
+        }
         if self.rows.is_empty() {
             let idle = div()
                 .flex_1()
@@ -148,6 +167,7 @@ impl Render for ReviewPane {
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
             return pane
+                .children(bar)
                 .children(sessions)
                 .children(offer)
                 .children(tree)
@@ -182,7 +202,8 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(sessions)
+        pane.children(bar)
+            .children(sessions)
             .children(offer)
             .children(tree)
             .children(refused)
@@ -217,6 +238,10 @@ impl ReviewPane {
             .on_action(cx.listener(Self::toggle_keep_selection))
             .on_action(cx.listener(Self::take_offer))
             .on_action(cx.listener(Self::next_review))
+            .on_action(cx.listener(Self::toggle_view))
+            .on_action(cx.listener(Self::toggle_flow_form))
+            .on_action(cx.listener(Self::toggle_follow))
+            .on_action(cx.listener(Self::resume_follow))
     }
 
     /// What the pane says while it has no row to show.

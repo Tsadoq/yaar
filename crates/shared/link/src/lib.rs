@@ -15,8 +15,9 @@
 //!   the [`Anchor`] a thread sits on, and [`DraftOn`], what a draft that is saved belongs
 //!   to; [`AgentReport`], what a piece of the app inside an agent CLI reports;
 //!   [`WorkspaceAgents`] with its [`Session`]s and their [`SessionState`]; [`Turn`]s with
-//!   their [`Step`]s; [`History`] with its [`HistoryEntry`]s and [`CreditedFile`]s; and
-//!   [`TerminalInfo`], a terminal the Keeper holds;
+//!   their [`Step`]s; [`History`] with its [`HistoryEntry`]s and [`CreditedFile`]s;
+//!   [`TerminalInfo`], a terminal the Keeper holds; and [`Setting`], a setting the user
+//!   set, as the [`FlowForm`] of a workspace;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -42,6 +43,7 @@
 mod agent;
 mod request;
 mod review;
+mod setting;
 mod terminal;
 mod wire;
 mod workspace;
@@ -63,6 +65,7 @@ pub use review::{
     Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Review, ReviewId, Round,
     SentBy, SessionId, Side, Thread, ThreadId, TurnId, WorkspaceReviews,
 };
+pub use setting::{FlowForm, Setting};
 pub use terminal::{Ending, Program, TerminalId, TerminalSize};
 pub use workspace::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, FileSides, FileStatus,
@@ -79,8 +82,10 @@ use wire::{In, Out};
 /// 2: requests, replies and facts about workspaces. 3: terminals, and the two frames of
 /// their bytes. 4: reviews, and a workspace whose worktree is gone. 5: agents, their
 /// sessions, turns and steps, the history of a worktree, a terminal's launcher of an agent,
-/// and attaching to a terminal that still runs.
-pub const PROTOCOL_VERSION: u16 = 5;
+/// and attaching to a terminal that still runs. 6: the user's settings, the form of Flow of
+/// a workspace among them, the state a turn's change counts from, and the workspace of a
+/// step.
+pub const PROTOCOL_VERSION: u16 = 6;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -1045,6 +1050,13 @@ mod tests {
                 workspace: workspace.clone(),
                 review: Some(review_id()),
             },
+            Request::GetSettings,
+            Request::SetSetting {
+                setting: Setting::FlowForm {
+                    workspace: workspace.clone(),
+                    form: FlowForm::LiveDiff,
+                },
+            },
         ];
         // A launcher, a report from outside the app's terminals, the files on disk as the
         // new side, no workspace on screen, and the uncommitted list of no review named.
@@ -1228,6 +1240,17 @@ mod tests {
             ]),
             Reply::Attached { cut: true },
             Reply::Attached { cut: false },
+            Reply::Settings(vec![
+                Setting::FlowForm {
+                    workspace: workspace.clone(),
+                    form: FlowForm::Timeline,
+                },
+                Setting::FlowForm {
+                    workspace: WorkspaceId::new("22222222222222222222222222222222"),
+                    form: FlowForm::LiveDiff,
+                },
+            ]),
+            Reply::Settings(Vec::new()),
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1294,13 +1317,18 @@ mod tests {
                 since: Some(COMMIT.to_owned()),
             },
             Fact::TurnEnded {
-                workspace,
+                workspace: workspace.clone(),
                 session: session_id(),
                 turn: turn_id(),
                 state: None,
                 since: None,
             },
+            Fact::SettingChanged(Setting::FlowForm {
+                workspace: workspace.clone(),
+                form: FlowForm::LiveDiff,
+            }),
             Fact::Step {
+                workspace,
                 session: session_id(),
                 turn: turn_id(),
                 number: u32::MAX,
@@ -1435,13 +1463,14 @@ mod tests {
         }
     }
 
-    /// A turn with a step of every kind.
+    /// A turn with a step of every kind, counted from a state when it ended with one.
     fn turn(ended: Option<TurnEnd>, state: Option<&str>) -> Turn {
         Turn {
             id: turn_id(),
             session: session_id(),
             number: 3,
             ended,
+            start: state.map(|_| "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b".to_owned()),
             state: state.map(str::to_owned),
             steps: vec![
                 Step::Read {
@@ -1657,6 +1686,7 @@ mod tests {
                 RequestKind::MarkReviewed,
                 RequestKind::SetViewed,
                 RequestKind::Commit,
+                RequestKind::SetSetting,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
@@ -1667,9 +1697,10 @@ mod tests {
         // The Window tells the size it shows a terminal at by itself, whenever its
         // layout changes.
         assert_eq!(RequestKind::ResizeTerminal.origin(), Origin::Window);
-        // The Window reads the agents, the history, the versions of a change and the
-        // terminals to have something to show, and tells by itself which workspace it
-        // shows; a user who selects a workspace starts nothing of the Keeper's.
+        // The Window reads the agents, the history, the versions of a change, the
+        // terminals and the settings to have something to show, and tells by itself which
+        // workspace it shows; a user who selects a workspace starts nothing of the
+        // Keeper's. Keeping a setting is the user's: a control of the Window sends it.
         for kind in [
             RequestKind::ListAgents,
             RequestKind::GetHistory,
@@ -1680,6 +1711,7 @@ mod tests {
             RequestKind::ListTerminals,
             RequestKind::AttachTerminal,
             RequestKind::GetUncommitted,
+            RequestKind::GetSettings,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

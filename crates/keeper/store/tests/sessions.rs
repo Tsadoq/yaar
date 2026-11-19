@@ -53,6 +53,7 @@ fn turn(n: u128, session: u128, number: u32) -> TurnRecord {
         session: sid(session),
         number,
         ended: None,
+        start: None,
         state: None,
     }
 }

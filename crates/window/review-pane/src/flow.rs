@@ -1,0 +1,174 @@
+//! Flow, the view of what the agent does as it works: the switch between Flow and
+//! Changes, the switch between Flow's two forms, and the timeline of the agent's steps.
+//!
+//! Built by the review pane's first package of slice 5 (rows RP-02, RP-03, RP-06).
+//!
+//! What the timeline holds. The turns of the workspace on screen, each as its heading
+//! (with its session's title, from `yaar_frame::AgentList`), its steps in the order of
+//! their numbers, and its end once it ended, the turns in the order they started:
+//! - when a workspace comes on screen, the timeline is emptied; it then holds every turn
+//!   of the workspace that runs, as the agents model lists them (`Session::turn`), and
+//!   where none runs, the newest turn of the history (`yaar_link::HistoryEntry::Turn`, the
+//!   last of the entries), each read with `Request::GetTurn`, which gives the steps so far,
+//!   the end, and the state its change counts from;
+//! - each turn that starts later in the workspace, from the agents model, as its heading
+//!   and then a `Request::GetTurn` of its own;
+//! - each `Fact::Step` of the workspace on screen, added under its turn by its number. A
+//!   step already held is not added twice; a step whose number is more than one past the
+//!   last held step of its turn has the turn read again with `Request::GetTurn`, whose
+//!   answer fills what is missing, so that a step told while the answer was on its way
+//!   and one the Window never heard are both in order;
+//! - each `Fact::TurnEnded` of the workspace on screen, as the end of its turn.
+//!
+//! The form. When a workspace comes on screen, and whenever the settings model changes,
+//! `ReviewPane::form` is the form chosen last in that workspace
+//! (`yaar_frame::SettingList::flow_form`). [`crate::ToggleFlowForm`] switches it, in the
+//! middle of a turn too, and sets it with `SettingList::set`, which sends
+//! `Request::SetSetting` with `Setting::FlowForm` of the workspace on screen: the one
+//! request of Flow that a user starts.
+
+use std::ops::Range;
+
+use gpui_kit::*;
+use yaar_link::{Fact, Step};
+
+use crate::{FlowAt, ReviewPane, TimelineEntry, ToggleFlowForm, ToggleView, View};
+
+/// What Flow keeps of the turns of the workspace on screen, and the timeline made of
+/// them. The fields are the package's to choose.
+pub(crate) struct Timeline {}
+
+impl Timeline {
+    /// An empty timeline, for a pane that has no workspace on screen yet.
+    pub(crate) fn new(cx: &mut Context<ReviewPane>) -> Self {
+        let _ = cx;
+        Self {}
+    }
+
+    /// The entries, in the order drawn.
+    pub(crate) fn entries(&self) -> &[TimelineEntry] {
+        todo!("the first package of the review pane: the timeline")
+    }
+
+    /// The entry the reviewer is on.
+    pub(crate) fn cursor(&self) -> Option<usize> {
+        todo!("the first package of the review pane: the reviewer's entry")
+    }
+
+    /// The rows of the timeline in view, as last laid out.
+    pub(crate) fn in_view(&self) -> Range<usize> {
+        todo!("the first package of the review pane: the rows in view")
+    }
+
+    /// The index of the entry of the step `at`; none for a step the timeline does not
+    /// hold.
+    pub(crate) fn row_of(&self, at: &FlowAt) -> Option<usize> {
+        let _ = at;
+        todo!("the first package of the review pane: the entry of a step")
+    }
+
+    /// The step `at`, as the timeline holds it: what the live diff and follow read of a
+    /// step's kind and path.
+    pub(crate) fn step(&self, at: &FlowAt) -> Option<&Step> {
+        let _ = at;
+        todo!("the first package of the review pane: a step by its place")
+    }
+
+    /// The step that came last: of the steps told as facts, the last told; before any,
+    /// the last step of the newest turn read with `GetTurn`. What resuming follow jumps
+    /// to.
+    pub(crate) fn newest(&self) -> Option<FlowAt> {
+        todo!("the first package of the review pane: the newest step")
+    }
+}
+
+impl ReviewPane {
+    /// What [`ToggleView`] does: shows Flow when Changes is on screen, and Changes when
+    /// Flow is, as [`ReviewPane::show_view`] does.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn toggle_view(
+        &mut self,
+        _: &ToggleView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = (window, cx);
+    }
+
+    /// What [`ToggleFlowForm`] does: the other form, kept for the workspace on screen with
+    /// `yaar_frame::SettingList::set`.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn toggle_flow_form(
+        &mut self,
+        _: &ToggleFlowForm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = (window, cx);
+    }
+
+    /// Puts `view` on screen: Flow in the form of the workspace on screen, its list in view
+    /// at the step Flow is at; Changes as the reviewer left it, scrolled where it was. Used
+    /// by [`ToggleView`], the bar's two names, and follow (a message of the user to the
+    /// agent, a turn end's offer taken).
+    pub(crate) fn show_view(&mut self, view: View, cx: &mut Context<Self>) {
+        let _ = (view, cx);
+        todo!("the first package of the review pane: the switch of the view")
+    }
+
+    /// The workspace on screen may be another: when it is, the timeline is emptied and
+    /// filled for the new one, and the form is the one chosen there. Called whenever the
+    /// changes model changes.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn flow_workspace(&mut self, cx: &mut Context<Self>) {
+        let _ = cx;
+    }
+
+    /// The agents model changed: a turn of the workspace on screen that the timeline does
+    /// not hold yet is added, and read with `GetTurn`.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn flow_agents(&mut self, cx: &mut Context<Self>) {
+        let _ = cx;
+    }
+
+    /// The history of the workspace on screen was answered: with no turn running and none
+    /// in the timeline, its newest turn is read with `GetTurn`.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn flow_history(&mut self, cx: &mut Context<Self>) {
+        let _ = cx;
+    }
+
+    /// The settings model changed: the form is the one chosen in the workspace on screen.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn flow_settings(&mut self, cx: &mut Context<Self>) {
+        let _ = cx;
+    }
+
+    /// A fact of the Keeper, for the timeline: `Step` and `TurnEnded` of the workspace on
+    /// screen. Called for every fact, before the live diff and follow hear it, so that a
+    /// step is in the timeline when they look for it.
+    ///
+    /// Filled by the first package of the review pane; the contract's body does nothing.
+    pub(crate) fn flow_told(&mut self, fact: &Fact, cx: &mut Context<Self>) {
+        let _ = (fact, cx);
+    }
+
+    /// What [`crate::LineDown`] and [`crate::LineUp`] do in the timeline: the reviewer's
+    /// entry moves by `by`, and stays at the first and the last.
+    pub(crate) fn timeline_step(&mut self, by: isize, cx: &mut Context<Self>) {
+        let _ = (by, cx);
+        todo!("the first package of the review pane: moving through the timeline")
+    }
+
+    /// Scrolls the timeline so that entry `row` is in view, as follow wants it.
+    pub(crate) fn scroll_timeline_to(&mut self, row: usize) {
+        let _ = row;
+        todo!("the first package of the review pane: scrolling the timeline")
+    }
+}

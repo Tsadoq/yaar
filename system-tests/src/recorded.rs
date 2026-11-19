@@ -135,6 +135,40 @@ pub fn hand_made(name: &str) -> PathBuf {
     path
 }
 
+/// Every hook of the shape written by hand `name`, in [`HAND_MADE`], in the order of its
+/// lines: the first line, which says why the shape was written by hand, is no hook and is
+/// left out. Panics as [`hand_made`] does, when the first line does not say why, and on a
+/// later line that is not a hook's record, naming its number.
+pub fn hand_made_hook_events(name: &str) -> Vec<HookRecord> {
+    let path = hand_made(name);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let says_why = lines
+        .next()
+        .and_then(|first| serde_json::from_str::<serde_json::Value>(first).ok())
+        .is_some_and(|first| {
+            first["hand_made"]
+                .as_str()
+                .is_some_and(|why| !why.is_empty())
+        });
+    assert!(
+        says_why,
+        "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
+    );
+    lines
+        .enumerate()
+        .map(|(number, line)| {
+            hook_record(line).unwrap_or_else(|| {
+                panic!(
+                    "line {} of the hand-made shape {name} is not a hook's record",
+                    number + 1
+                )
+            })
+        })
+        .collect()
+}
+
 /// Every hook of the recording `name`, in the order of its lines, with the names of
 /// [`RENAMED`] mapped. Every test with recorded events of Claude Code's hooks reads them
 /// here. Panics as [`path`] does, and on a line that is not a hook's record, naming its
@@ -318,6 +352,30 @@ mod tests {
             None
         );
         assert_eq!(hook_record("not json"), None);
+    }
+
+    #[test]
+    fn a_shape_written_by_hand_says_so_first_and_then_holds_hooks() {
+        let records = hand_made_hook_events("claude-shell-read.jsonl");
+        let events: Vec<&str> = records.iter().map(|record| record.event.as_str()).collect();
+        assert_eq!(
+            events,
+            [
+                "SessionStart",
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+                "SessionEnd"
+            ]
+        );
+        assert!(
+            records
+                .iter()
+                .all(|record| record.session() == records[0].session())
+        );
+        assert_eq!(records[2].input["tool_name"], "Bash");
+        assert_eq!(records[2].input["cwd"], PROJECT);
     }
 
     #[test]

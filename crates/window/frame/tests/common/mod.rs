@@ -24,8 +24,8 @@ use yaar_frame::keeper::Attached;
 use yaar_frame::{BuildPane, Frame, KeeperLink, Models, Sidebar, bind, controls};
 use yaar_link::{
     CreditedFile, Fact, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply,
-    Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId, TerminalInfo, Workspace,
-    WorkspaceAgents, WorkspaceId, read_message, write_message,
+    Repository, RepositoryId, Request, RequestId, ReviewId, Setting, TerminalId, TerminalInfo,
+    Workspace, WorkspaceAgents, WorkspaceId, read_message, write_message,
 };
 
 /// How long a test waits for something that has to happen. Reaching it fails the test.
@@ -96,6 +96,11 @@ struct Inner {
     /// By workspace; a workspace with none set has a history with no entry.
     histories: HashMap<WorkspaceId, History>,
     uncommitted: Vec<CreditedFile>,
+    /// What every `GetSettings` is answered with; each `SetSetting` takes the place of the
+    /// setting it is the same thing as, or comes last, as the Keeper keeps them.
+    settings: Vec<Setting>,
+    /// What each `SetSetting` named, in the order they were heard.
+    settings_set: Vec<Setting>,
     /// What each `ShowWorkspace` named, in the order they were heard.
     shown: Vec<Option<WorkspaceId>>,
     /// The review the last `GetUncommitted` named.
@@ -118,6 +123,7 @@ struct Asked {
     terminals: usize,
     history: usize,
     uncommitted: usize,
+    settings: usize,
 }
 
 /// The answers to one kind of question that a test keeps back: a Keeper that is slow.
@@ -192,6 +198,22 @@ impl Standing {
                 inner.asked.uncommitted += 1;
                 inner.uncommitted_review = review.clone();
                 Heard::Answer(Ok(Reply::Uncommitted(inner.uncommitted.clone())))
+            }
+            Request::GetSettings => {
+                inner.asked.settings += 1;
+                Heard::Answer(Ok(Reply::Settings(inner.settings.clone())))
+            }
+            Request::SetSetting { setting } => {
+                inner.settings_set.push(setting.clone());
+                match inner
+                    .settings
+                    .iter_mut()
+                    .find(|held| held.same_thing_as(setting))
+                {
+                    Some(held) => *held = setting.clone(),
+                    None => inner.settings.push(setting.clone()),
+                }
+                Heard::Answer(Ok(Reply::Done))
             }
             _ => Heard::Elsewhere,
         }
@@ -469,6 +491,22 @@ impl KeeperEnd {
     /// the last named none.
     pub fn uncommitted_review(&self) -> Option<ReviewId> {
         self.standing.lock().uncommitted_review.clone()
+    }
+
+    /// Sets the settings every `GetSettings` is answered with from now on. It tells the
+    /// Window nothing: a test that wants it to hear one tells `Fact::SettingChanged`.
+    pub fn set_settings(&self, settings: Vec<Setting>) {
+        self.standing.lock().settings = settings;
+    }
+
+    /// What each `SetSetting` the Window sent named, in the order it sent them.
+    pub fn settings_set(&self) -> Vec<Setting> {
+        self.standing.lock().settings_set.clone()
+    }
+
+    /// How many times the Window asked for the settings so far.
+    pub fn settings_asked(&self) -> usize {
+        self.standing.lock().asked.settings
     }
 
     /// How many times the Window asked for the agents so far.

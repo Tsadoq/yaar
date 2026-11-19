@@ -15,7 +15,7 @@ use crate::threads::{link_side, pane_side, path_in};
 use crate::tree::Source;
 use crate::{
     Comment, CommentBox, DeleteDraft, EditDraft, NextThread, PaneRow, Position, PreviousThread,
-    ReviewPane,
+    ReviewPane, View,
 };
 
 /// How many lines of text a comment box grows to before it scrolls.
@@ -98,6 +98,11 @@ impl ReviewPane {
             }
             _ => {}
         }
+        // Flow hears every fact too: the timeline first, so that the live diff and follow
+        // find in it the step they are told of.
+        self.flow_told(fact, cx);
+        self.live_told(fact, cx);
+        self.follow_told(fact, cx);
     }
 
     /// Asks the Keeper for the reviews of `workspace`. Only the answer to the last
@@ -148,7 +153,8 @@ impl ReviewPane {
             apply(&mut shown, save);
         }
         self.reviews = Some(shown);
-        self.rebuild(cx);
+        // Read anew, the reviews may add or take rows above what the reviewer reads.
+        self.rebuild_steady(cx);
         self.review_shown(cx);
     }
 
@@ -256,6 +262,10 @@ impl ReviewPane {
     /// What [`Comment`] does: opens a comment box for a new thread on the reviewer's line.
     pub(crate) fn comment(&mut self, _: &Comment, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        // In Flow the reviewer's line is one of the live diff.
+        if self.view == View::Flow {
+            return self.comment_in_flow(window, cx);
+        }
         let Some(review) = self.review().map(|review| review.id.clone()) else {
             return self.say("The reviews are not here yet", cx);
         };
@@ -501,7 +511,12 @@ impl ReviewPane {
     }
 
     /// Opens a comment box, with the focus, in the place of the one that is open.
-    fn open_box(&mut self, view: CommentBox, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_box(
+        &mut self,
+        view: CommentBox,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let text = view.text.clone();
         let input = cx.new(|cx| {
             TextareaState::new(window, cx)

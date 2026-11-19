@@ -113,6 +113,12 @@ pub struct TurnRecord {
     pub number: u32,
     /// How it ended; none while it runs.
     pub ended: Option<TurnEndRecord>,
+    /// The full id of the newest state of the worktree recorded before the turn started:
+    /// what its change counts from. None where there was none.
+    ///
+    /// Kept from version 4 of the tables on. Until the Store's package of slice 5 brings
+    /// the tables to version 4, [`Store::put_turn`] drops it and [`Store::turn`] gives none.
+    pub start: Option<String>,
     /// The full id of the state recorded at its end.
     pub state: Option<String>,
 }
@@ -487,6 +493,8 @@ fn turn_of_row(row: &Row<'_>) -> rusqlite::Result<TurnRecord> {
         session: SessionId(row.get(1)?),
         number: row.get(2)?,
         ended: row.get::<_, Option<i64>>(3)?.map(turn_end_of),
+        // Version 4 keeps it: the Store's package of slice 5 reads it here.
+        start: None,
         state: row.get(4)?,
     })
 }

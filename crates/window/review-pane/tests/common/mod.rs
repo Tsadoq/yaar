@@ -25,8 +25,8 @@ use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, CreditedFile, Fact,
     FileSides, FileStatus, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply,
     Repository, RepositoryId, Request, RequestId, Review, ReviewId, Session, SessionId,
-    SessionState, TerminalId, TerminalInfo, Workspace, WorkspaceAgents, WorkspaceId,
-    WorkspaceReviews, read_message, write_message,
+    SessionState, Setting, Step, TerminalId, TerminalInfo, Turn, TurnId, Workspace,
+    WorkspaceAgents, WorkspaceId, WorkspaceReviews, read_message, write_message,
 };
 use yaar_review_pane::{PaneRow, ReviewPane, Unshown};
 
@@ -93,9 +93,9 @@ fn write(stream: &Mutex<UnixStream>, message: &Message) {
 
 /// What the Window asks at times a test does not choose, besides the reviews, and this end
 /// answers itself, so that the question never reaches the test as its next request: the
-/// agents and the terminals at each connect, the workspace on screen at each change of it,
-/// the history and the uncommitted changes of the pane. Each is answered from what a test
-/// set, and counted.
+/// agents, the terminals and the settings at each connect, the workspace on screen at each
+/// change of it, the history and the uncommitted changes of the pane, a setting the user
+/// set, and a turn with its steps. Each is answered from what a test set, and counted.
 #[derive(Default)]
 struct Standing {
     inner: Mutex<Inner>,
@@ -111,6 +111,16 @@ struct Inner {
     /// What the last `Changes` answered for each workspace is counted from.
     counted_from: HashMap<WorkspaceId, Option<String>>,
     uncommitted: Vec<CreditedFile>,
+    /// What every `GetSettings` is answered with; each `SetSetting` takes the place of the
+    /// setting it is the same thing as, or comes last, as the Keeper keeps them.
+    settings: Vec<Setting>,
+    /// What each `SetSetting` named, in the order they were heard.
+    settings_set: Vec<Setting>,
+    /// The turns `GetTurn` is answered with, by id; a turn with none set is refused as
+    /// unknown.
+    turns: HashMap<TurnId, Turn>,
+    /// What each `GetTurn` named, in the order they were heard.
+    turns_asked: Vec<TurnId>,
     /// What each `ShowWorkspace` named, in the order they were heard.
     shown: Vec<Option<WorkspaceId>>,
     /// The review the last `GetUncommitted` named.
@@ -133,6 +143,7 @@ struct Asked {
     terminals: usize,
     history: usize,
     uncommitted: usize,
+    settings: usize,
 }
 
 /// The answers to one kind of question that a test keeps back: a Keeper that is slow.
@@ -208,6 +219,29 @@ impl Standing {
                 inner.asked.uncommitted += 1;
                 inner.uncommitted_review = review.clone();
                 Heard::Answer(Ok(Reply::Uncommitted(inner.uncommitted.clone())))
+            }
+            Request::GetSettings => {
+                inner.asked.settings += 1;
+                Heard::Answer(Ok(Reply::Settings(inner.settings.clone())))
+            }
+            Request::SetSetting { setting } => {
+                inner.settings_set.push(setting.clone());
+                match inner
+                    .settings
+                    .iter_mut()
+                    .find(|held| held.same_thing_as(setting))
+                {
+                    Some(held) => *held = setting.clone(),
+                    None => inner.settings.push(setting.clone()),
+                }
+                Heard::Answer(Ok(Reply::Done))
+            }
+            Request::GetTurn { turn } => {
+                inner.turns_asked.push(turn.clone());
+                Heard::Answer(match inner.turns.get(turn) {
+                    Some(found) => Ok(Reply::Turn(found.clone())),
+                    None => Err(Refusal::UnknownTurn { turn: turn.clone() }),
+                })
             }
             _ => Heard::Elsewhere,
         }
@@ -419,6 +453,33 @@ impl KeeperEnd {
         self.standing.lock().uncommitted_review.clone()
     }
 
+    /// Sets the settings every `GetSettings` is answered with from now on. It tells the
+    /// Window nothing: a test that wants it to hear one tells `Fact::SettingChanged`.
+    pub fn set_settings(&self, settings: Vec<Setting>) {
+        self.standing.lock().settings = settings;
+    }
+
+    /// What each `SetSetting` the Window sent named, in the order it sent them.
+    pub fn settings_set(&self) -> Vec<Setting> {
+        self.standing.lock().settings_set.clone()
+    }
+
+    /// How many times the Window asked for the settings so far.
+    pub fn settings_asked(&self) -> usize {
+        self.standing.lock().asked.settings
+    }
+
+    /// Sets the turn every `GetTurn` of its id is answered with from now on, its steps so
+    /// far among it. A turn with none set is refused as unknown.
+    pub fn set_turn(&self, turn: Turn) {
+        self.standing.lock().turns.insert(turn.id.clone(), turn);
+    }
+
+    /// What each `GetTurn` the Window sent named, in the order it sent them.
+    pub fn turns_asked(&self) -> Vec<TurnId> {
+        self.standing.lock().turns_asked.clone()
+    }
+
     /// How many times the Window asked for the agents so far.
     pub fn agents_asked(&self) -> usize {
         self.standing.lock().asked.agents
@@ -619,6 +680,53 @@ pub fn session(digit: char, title: &str, state: SessionState, review: Option<Rev
         state,
         turn: None,
         review,
+    }
+}
+
+/// The id of a turn that is this digit thirty-two times.
+pub fn turn_id(digit: char) -> TurnId {
+    TurnId::new(digit.to_string().repeat(32))
+}
+
+/// The same session, working on `turn`, as the agents model shows a session whose turn
+/// runs.
+pub fn working_on(session: Session, turn: TurnId) -> Session {
+    Session {
+        state: SessionState::Works,
+        turn: Some(turn),
+        ..session
+    }
+}
+
+/// A turn of session `session` that runs, numbered `number` among its turns, counted from
+/// the state `start`, with these steps so far: what `GetTurn` answers.
+pub fn running_turn(
+    turn: TurnId,
+    session: SessionId,
+    number: u32,
+    start: Option<&str>,
+    steps: Vec<Step>,
+) -> Turn {
+    Turn {
+        id: turn,
+        session,
+        number,
+        ended: None,
+        start: start.map(str::to_owned),
+        state: None,
+        steps,
+    }
+}
+
+/// The fact of step `number` of `turn` of `session` in workspace `1`, as the Keeper tells
+/// it.
+pub fn step_fact(session: SessionId, turn: TurnId, number: u32, step: Step) -> Fact {
+    Fact::Step {
+        workspace: id('1'),
+        session,
+        turn,
+        number,
+        step,
     }
 }
 

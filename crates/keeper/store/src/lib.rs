@@ -7,9 +7,14 @@
 //!   ([`WorkspaceRecord`]), each with the base the user set for it, under the ids
 //!   [`RepositoryId`] and [`WorkspaceId`];
 //! - the agent sessions of each workspace ([`SessionRecord`]), the turns of each
-//!   ([`TurnRecord`]) with the state recorded at its end, and the steps of each turn
-//!   ([`StepRecord`]), under the ids [`SessionId`] and [`TurnId`]; see the module
-//!   `sessions.rs`;
+//!   ([`TurnRecord`]) with the state its change counts from and the state recorded at its
+//!   end, and the steps of each turn ([`StepRecord`]), under the ids [`SessionId`] and
+//!   [`TurnId`]; see the module `sessions.rs`;
+//! - the user's settings ([`Setting`]): what a turn end selects ([`TurnEndSelects`]), the
+//!   time before the language servers of a workspace off screen stop, the [`Theme`], the
+//!   place of the terminal pane ([`TerminalPlace`]), and for each workspace the form of
+//!   Flow chosen last there ([`FlowForm`]); the base of a workspace is kept with the
+//!   workspace. See the module `settings.rs`;
 //! - the reviews of each workspace ([`ReviewRecord`]) with their [`Thread`]s, each on an
 //!   [`Anchor`], their [`Comment`]s and [`Round`]s, under the ids [`ReviewId`],
 //!   [`ThreadId`] and [`CommentId`]; and the files marked viewed ([`ViewedRecord`]).
@@ -48,6 +53,7 @@ use rusqlite::Connection;
 
 mod reviews;
 mod sessions;
+mod settings;
 
 pub use reviews::{
     Anchor, Author, Comment, CommentId, FLUSH_AFTER, ReviewId, ReviewRecord, Round, SentBy, Side,
@@ -56,6 +62,7 @@ pub use reviews::{
 pub use sessions::{
     EndedBy, SessionId, SessionRecord, StepRecord, TurnEndRecord, TurnId, TurnRecord,
 };
+pub use settings::{FlowForm, Setting, TerminalPlace, Theme, TurnEndSelects};
 
 /// The name of the database file in the app's folder.
 pub const FILE_NAME: &str = "store.db";
@@ -179,6 +186,29 @@ const TABLES_3: &str = "
         PRIMARY KEY (turn, number)
     ) STRICT;
     PRAGMA user_version = 3;
+";
+
+/// What version 4 adds: the state each turn's change counts from, the settings the user
+/// set for the whole app, one row each, and the settings of each workspace, one row for
+/// each workspace and setting. A setting is kept by its name, as text, with its value as
+/// text: the names and the values are those the module `settings.rs` writes.
+///
+/// Written out for the Store's package of slice 5, which adds it to [`STEPS`] as the
+/// fourth step, with the copy `store.db.v3` before it, and raises [`VERSION`] to 4.
+#[expect(dead_code, reason = "the Store's package of slice 5 applies it")]
+const TABLES_4: &str = "
+    ALTER TABLE turn ADD COLUMN start TEXT;
+    CREATE TABLE setting (
+        name TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    ) STRICT;
+    CREATE TABLE workspace_setting (
+        workspace TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (workspace, name)
+    ) STRICT;
+    PRAGMA user_version = 4;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its

@@ -36,6 +36,7 @@ impl Agents {
             session: SessionId::new(record.session.as_str()),
             number: record.number,
             ended: record.ended.map(turn_end),
+            start: record.start,
             state: record.state,
             steps: steps.into_iter().map(step).collect(),
         }))

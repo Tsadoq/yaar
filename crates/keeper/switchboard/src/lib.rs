@@ -479,6 +479,11 @@ impl Switchboard {
     }
 }
 
+// The unit tests of the steps of a turn, row SWB-04: its own file, beside those of the
+// sessions below.
+#[cfg(test)]
+mod steps;
+
 #[cfg(test)]
 mod tests {
     use super::*;
