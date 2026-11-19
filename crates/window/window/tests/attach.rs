@@ -191,9 +191,11 @@ fn a_window_started_against_a_keeper_that_holds_two_terminals_a_draft_and_a_turn
         matches!(&shown[..], [one] if *one == held.shell || *one == held.agent),
         "the pane shows one of the two terminals: {shown:?}"
     );
+    // The shell's prompt may stand in front of the marker on its line, and the typed line
+    // holds `screen-%s`, never the marker.
     wait_until(&mut cx, "the screen of the shell", |cx| {
         screen_of(&window, &held.shell, cx)
-            .is_some_and(|lines| lines.iter().any(|line| line.trim() == FIRST_SCREEN))
+            .is_some_and(|lines| lines.iter().any(|line| line.contains(FIRST_SCREEN)))
     });
     // The agent's screen ends in the prompt it printed after the turn: its whole history
     // was kept, the turn's lines before it included.
