@@ -10,7 +10,9 @@ use std::process::{Command, Stdio};
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use yaar_recorder::{Git, Worktree};
-use yaar_review_engine::{CommentId, DraftOn, DraftSave, NewAnchor, Reviews, Side, ThreadId};
+use yaar_review_engine::{
+    CommentId, DraftOn, DraftSave, NewAnchor, Reviews, SessionId, SessionRecord, Side, ThreadId,
+};
 use yaar_store::{Store, WorkspaceId};
 
 /// The variables with which a process tells git which repository to use, whatever folder
@@ -211,4 +213,27 @@ pub fn new_thread(n: u128, path: &str, line: u32, code: &str, text: &str) -> Dra
         }),
         text: text.to_string(),
     }
+}
+
+/// A session `n` of the tests' workspace that runs in the terminal `t<n>`, kept in `store`
+/// as the Keeper keeps one before it tells the engine it started.
+pub fn session(store: &Store, n: u128) -> SessionRecord {
+    session_in(store, n, workspace())
+}
+
+/// The same, in another workspace.
+pub fn session_in(store: &Store, n: u128, workspace: WorkspaceId) -> SessionRecord {
+    let record = SessionRecord {
+        id: SessionId::new(id(n)),
+        workspace,
+        agent: "claude".to_owned(),
+        cli_session: format!("cli-{n}"),
+        terminal: Some(format!("t{n}")),
+        number: 1,
+        running: true,
+        ended: None,
+        ended_by: None,
+    };
+    store.put_session(&record).expect("keep the session");
+    record
 }

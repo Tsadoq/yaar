@@ -557,17 +557,17 @@ impl Store {
 }
 
 /// The refusal of a call, before any work is handed to the writer.
-fn refusal(sentence: String) -> StoreError {
+pub(crate) fn refusal(sentence: String) -> StoreError {
     StoreError::Database(sentence)
 }
 
 /// The refusal of a piece of work, in a sentence.
-fn refused<T>(sentence: String) -> Result<T, Failed> {
+pub(crate) fn refused<T>(sentence: String) -> Result<T, Failed> {
     Err(Failed::Refused(sentence))
 }
 
 /// Whether a query that takes one id finds a row.
-fn exists(connection: &Connection, query: &str, id: &str) -> rusqlite::Result<bool> {
+pub(crate) fn exists(connection: &Connection, query: &str, id: &str) -> rusqlite::Result<bool> {
     connection.prepare(query)?.exists([id])
 }
 
