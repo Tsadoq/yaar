@@ -485,3 +485,73 @@ fn a_sidebar_in_no_frame_is_the_full_list_until_a_form_is_pinned(cx: &mut TestAp
     sidebar.update(cx, |sidebar, cx| sidebar.pin(None, cx));
     assert_eq!(state(cx), (None, SidebarForm::Full));
 }
+
+/// A repository with a worktree on a branch and one whose folder is gone: it is listed with
+/// no head.
+fn with_a_worktree_that_is_gone() -> Vec<Repository> {
+    vec![repository(
+        'a',
+        vec![
+            workspace('1', "main"),
+            Workspace {
+                id: id('2'),
+                path: "/gits/repository-a-removed".into(),
+                head: None,
+            },
+        ],
+    )]
+}
+
+#[gpui_kit::test]
+fn a_worktree_that_is_gone_is_named_by_its_folder_marked_as_gone_and_still_selected_by_a_click(
+    cx: &mut TestAppContext,
+) {
+    let listed = with_a_worktree_that_is_gone();
+    for (width, form) in [
+        (WIDE, SidebarForm::Full),
+        (wide(RAIL_BELOW - px(1.)), SidebarForm::Rail),
+    ] {
+        let (mut shown, mut cx) = showing(&listed, width, cx);
+        assert_eq!(self::form(&shown.sidebar, &mut cx), form);
+        assert_eq!(
+            rows(&shown.sidebar, &mut cx),
+            [
+                repository_row(&listed[0]),
+                workspace_row('1', "main", true),
+                SidebarRow::Workspace {
+                    id: id('2'),
+                    name: "repository-a-removed".to_owned(),
+                    selected: false,
+                    gone: true,
+                },
+            ]
+        );
+        // The mark is drawn for the one that is gone, inside its row, and for no other.
+        let row = drawn(&format!("sidebar-workspace-{}", id('2')), &mut cx)
+            .expect("the row of the worktree that is gone is drawn");
+        let mark = drawn(&format!("sidebar-gone-{}", id('2')), &mut cx)
+            .expect("the mark of the worktree that is gone is drawn");
+        assert!(
+            row.left() <= mark.left()
+                && mark.right() <= row.right()
+                && row.top() <= mark.top()
+                && mark.bottom() <= row.bottom(),
+            "the mark is at {mark:?}, outside its row at {row:?}"
+        );
+        assert!(
+            drawn(&format!("sidebar-gone-{}", id('1')), &mut cx).is_none(),
+            "a worktree that is there carries no mark"
+        );
+        assert_drawn_as_listed(&shown.sidebar, &mut cx);
+
+        // It is clicked and selected as any row.
+        shown
+            .keeper
+            .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
+        click_workspace(&id('2'), &mut cx);
+        assert_eq!(marked(&shown.sidebar, &mut cx), Some(id('2')));
+        shown
+            .keeper
+            .expect(Request::GetChanges { workspace: id('2') }, &mut cx);
+    }
+}
