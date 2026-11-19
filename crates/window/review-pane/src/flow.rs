@@ -7,7 +7,8 @@
 //! (with its session's title, from `yaar_frame::AgentList`), its steps in the order of
 //! their numbers, and its end once it ended, the turns in the order they started:
 //! - when a workspace comes on screen, the timeline is emptied; it then holds every turn
-//!   of the workspace that runs, as the agents model lists them (`Session::turn`), and
+//!   of the workspace that runs, as the agents model lists them (`Session::turn`; two that
+//!   run at once come in that list's order, which the model does not tie to their start), and
 //!   where none runs, the newest turn of the history (`yaar_link::HistoryEntry::Turn`, the
 //!   last of the entries), each read with `Request::GetTurn`, which gives the steps so far,
 //!   the end, and the state its change counts from;
@@ -25,11 +26,13 @@
 //!   kept, which is before the `TurnEnded` of the turn before is told
 //!   (`Timeline::start_of`).
 //!
-//! The live diff reads the timeline: after each `GetTurn` answer (or refusal) is taken, a
-//! turn is added, or anything that may put the live diff on screen ([`ReviewPane::show_view`],
-//! a change of the form by the key, the bar or the settings model, a workspace that comes
-//! on screen), this file calls `ReviewPane::live_look` last, so that the live diff asks for
-//! what it shows only while it is on screen.
+//! The live diff reads the timeline: after each `GetTurn` answer (or refusal) is taken, the
+//! newest turn of the history is added, or anything that may put the live diff on screen
+//! ([`ReviewPane::show_view`], a change of the form by the key, the bar or the settings
+//! model, a workspace that comes on screen, the agents model), this file calls
+//! `ReviewPane::live_look` last, so that the live diff asks for what it shows only while
+//! it is on screen. A `Fact::Step` or `Fact::TurnEnded` makes no call of its own: the
+//! live diff hears the same fact right after the timeline took it.
 //!
 //! The four controls of this file and of follow, [`crate::ToggleView`] and
 //! [`crate::ToggleFlowForm`] among them, by key or by a click on the bar, call `steered`

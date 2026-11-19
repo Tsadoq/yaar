@@ -828,14 +828,20 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     assert!(drawn("flow-live", &mut cx).is_some());
     assert!(drawn("flow-entry-0", &mut cx).is_none());
+    // A step told while the live diff is on screen is taken then: it is in the timeline
+    // before the form goes back to it.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 3, write("new.txt")));
-    press("shift-l", &mut cx);
-    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
     let mut three = two.to_vec();
     three.push(step_entry(&t, 3, write("new.txt")));
     wait_for_timeline(&stage, &three, &mut cx);
+    assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
+    assert!(drawn("flow-live", &mut cx).is_some());
+    assert!(drawn("flow-entry-0", &mut cx).is_none());
+    press("shift-l", &mut cx);
+    assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
+    assert_eq!(timeline(&stage, &mut cx), three);
     assert!(drawn("flow-entry-0", &mut cx).is_some());
     let timeline_form = Setting::FlowForm {
         workspace: id('1'),
@@ -888,6 +894,15 @@ fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAp
             .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
     });
     assert!(drawn("flow-live", &mut cx).is_none());
-    // That is no choice of this window's: nothing was sent.
-    assert_eq!(stage.keeper.settings_set(), []);
+    // That is no choice of this window's: nothing was sent. The barrier is this window's own
+    // choice, which reaches the Keeper after anything the told form could have sent.
+    press("shift-l", &mut cx);
+    let own = Setting::FlowForm {
+        workspace: id('1'),
+        form: FlowForm::LiveDiff,
+    };
+    wait_until(&mut cx, "the form chosen here to reach the Keeper", |_| {
+        !stage.keeper.settings_set().is_empty()
+    });
+    assert_eq!(stage.keeper.settings_set(), [own]);
 }
