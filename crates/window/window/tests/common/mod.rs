@@ -189,6 +189,15 @@ pub fn open_composed(
     )
 }
 
+/// Gives the repository the identity of a user, in its own configuration. The Keeper commits
+/// with whatever identity git finds, and in a world git reads no global configuration: where
+/// git guesses one from the machine's names (macOS) a commit goes through, and where it does
+/// not (Linux) git refuses it.
+pub fn give_an_identity(repository: &Repo) {
+    repository.git(&["config", "user.name", "A Test"]);
+    repository.git(&["config", "user.email", "test@example.invalid"]);
+}
+
 /// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
 pub fn wait_until(
     cx: &mut VisualTestContext,
@@ -277,6 +286,7 @@ impl Composed {
     pub fn open_a_folder(&mut self, cx: &mut VisualTestContext) -> PathBuf {
         let name = format!("opened-{}", self.next());
         let repository = self.world.repository(&name);
+        give_an_identity(&repository);
         repository.git(&["checkout", "--quiet", "-b", "work"]);
         repository.write("notes.txt", "one\ntwo\nthree\n");
         repository.commit("Add the notes");

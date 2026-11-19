@@ -19,7 +19,7 @@ use yaar_system_tests::{DEADLINE, Repo};
 
 mod common;
 
-use common::{Composed, wait_until};
+use common::{Composed, give_an_identity, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -78,6 +78,7 @@ impl Composed {
     fn new_repository(&mut self) -> PathBuf {
         let name = format!("walked-{}", self.next());
         let repository = self.world.repository(&name);
+        give_an_identity(&repository);
         repository.git(&["checkout", "--quiet", "-b", "work"]);
         repository.write("notes.txt", "one\ntwo\nthree\n");
         repository.commit("Add the notes");
@@ -111,10 +112,10 @@ impl Composed {
 
     /// Waits until the Keeper has done what the request of `kind` asked, as a user sees it:
     /// the copy on the clipboard, the mark on the review, the file shown viewed, the commit
-    /// in the repository. The walk ends when the last request passes the tap, and the
-    /// world ends the Keeper with a kill: a Keeper still recording a state or running git
-    /// for its answer leaves the folder of its copy of git's list of files in the system's
-    /// temp folder, outside the world. The requests of the reviews are answered one after
+    /// in the repository, the focus in the terminal that was opened. The walk ends when the
+    /// last request passes the tap, and the world ends the Keeper with a kill: a Keeper
+    /// still recording a state or running git for its answer leaves the folder of its copy
+    /// of git's list of files in the system's temp folder, outside the world. The requests of the reviews are answered one after
     /// the other, so waiting for the last of them covers those before it.
     fn settle(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
         match kind {
@@ -141,10 +142,16 @@ impl Composed {
                     repository.git(&["log", "-1", "--format=%s"]) == COMMIT_MESSAGE
                 });
             }
-            RequestKind::OpenFolder
-            | RequestKind::SetBase
-            | RequestKind::OpenTerminal
-            | RequestKind::DeleteDraft => {}
+            // The pane takes the focus for a terminal when the Keeper's answer is taken, which
+            // is after the request has passed the tap. A step that clicks into another pane
+            // before that would have its click taken from it, and the keys after it typed
+            // into the terminal.
+            RequestKind::OpenTerminal => {
+                wait_until(cx, "the new terminal to take the focus", |cx| {
+                    self.focus_is_in("Program", cx)
+                })
+            }
+            RequestKind::OpenFolder | RequestKind::SetBase | RequestKind::DeleteDraft => {}
             RequestKind::ListWorkspaces
             | RequestKind::GetChanges
             | RequestKind::ReadFile
