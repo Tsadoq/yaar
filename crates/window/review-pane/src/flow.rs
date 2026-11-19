@@ -37,10 +37,12 @@
 //!
 //! The form. When a workspace comes on screen, and whenever the settings model changes,
 //! `ReviewPane::form` is the form chosen last in that workspace
-//! (`yaar_frame::SettingList::flow_form`). [`crate::ToggleFlowForm`] switches it, in the
-//! middle of a turn too, and sets it with `SettingList::set`, which sends
-//! `Request::SetSetting` with `Setting::FlowForm` of the workspace on screen: the one
-//! request of Flow that a user starts.
+//! (`yaar_frame::SettingList::flow_form`). [`crate::ToggleFlowForm`] switches it while
+//! Flow is on screen, in the middle of a turn too, and sets it with `SettingList::set`,
+//! which sends `Request::SetSetting` with `Setting::FlowForm` of the workspace on screen:
+//! the one request of Flow that a user starts. In Changes its key and its action do
+//! nothing: the pane's listener (`draw.rs`) calls [`ReviewPane::toggle_flow_form`] only
+//! while Flow is on screen.
 
 use std::ops::Range;
 
@@ -121,10 +123,11 @@ impl ReviewPane {
         let _ = (window, cx);
     }
 
-    /// What [`ToggleFlowForm`] does: calls `steered` first, never `acted`, then shows the
-    /// other form, kept for the workspace on screen with `yaar_frame::SettingList::set`,
-    /// and ends with `ReviewPane::live_look`. With Changes on screen it switches the form
-    /// all the same, for the next time Flow shows.
+    /// What [`ToggleFlowForm`] does while Flow is on screen: calls `steered` first, never
+    /// `acted`, then shows the other form, kept for the workspace on screen with
+    /// `yaar_frame::SettingList::set`, and ends with `ReviewPane::live_look`. Called only
+    /// while Flow is on screen, by the pane's listener of the action and by a click on a
+    /// form in the bar, which Flow alone draws: in Changes the key does nothing.
     ///
     /// Filled by the first package of the review pane; the contract's body does nothing.
     pub(crate) fn toggle_flow_form(

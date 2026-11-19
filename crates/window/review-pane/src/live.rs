@@ -38,10 +38,27 @@
 //! and every file of the list when a `ChangesChanged` came since; a file keeps what is
 //! shown of it until its new versions are here, so that nothing blinks.
 //!
+//! The files read. After the rows of the files the turn changed, and after every other
+//! row, the live diff lists each file the turn read and did not change, one row each,
+//! [`crate::PaneRow::Read`]: its path, marked as read, and nothing below it (no diff, no
+//! line the reviewer can be on, no comment). They are the paths of the turn's read steps
+//! as the timeline holds them (`Timeline::entries`, its `TimelineEntry::Step`s of the
+//! turn shown whose step is `Step::Read`), each once, in the order of its first read,
+//! less every path the live diff's list holds, as its path or as the path a renamed file
+//! had in the version counted from. So a file leaves the group, and shows as a changed
+//! file, once a list holds it that the turn changed it; before that list is here it stays
+//! a file read. The path is the step's own (a file outside the worktree keeps its
+//! absolute path). The Link's read step names no lines, so no lines read are drawn. The
+//! group is made again from the timeline whenever the rows are made, so a read the
+//! timeline filled in from a `GetTurn` answer finds its place; a read step heard as a
+//! fact makes the rows again in `ReviewPane::live_told`, asking nothing, before follow
+//! hears the step, so that follow finds the row.
+//!
 //! Following. When the rows are made again while follow is `On` and Flow is at a step
 //! (`ReviewPane::at`) whose file the live diff now holds, the list is scrolled so that the
-//! heading of that file is in view: a step that came before its file was in the list is
-//! followed once it is. While follow is paused or off the scroll stays where it is.
+//! heading of that file (or its row among the files read) is in view: a step that came
+//! before its file was in the list is followed once it is. While follow is paused or off
+//! the scroll stays where it is.
 //!
 //! Its rows are [`crate::PaneRow`]s, as Changes' are, in the pane's layout, with the
 //! threads of the review on screen on their lines (`crate::threads`), made again whenever
@@ -95,7 +112,8 @@ impl Live {
         todo!("the second package of the review pane: a file of the list")
     }
 
-    /// The step named in the line above the files, while it has no row.
+    /// The step named in the line above the files, while it has no row: a command, or an
+    /// edit or a write whose file the list does not hold yet. A read always has one.
     pub(crate) fn activity(&self) -> Option<&FlowAt> {
         todo!("the second package of the review pane: the step with no row")
     }
@@ -109,8 +127,10 @@ impl Live {
 impl ReviewPane {
     /// The live diff looks at what it shows and whether it is on screen, as the module
     /// says, and asks for the list when it is on screen and what it holds is stale, of
-    /// another turn, or counted from another version. Called by the timeline after each
-    /// change the live diff reads, and last by the live diff's own hooks.
+    /// another turn, or counted from another version; when the timeline's steps of the
+    /// turn shown changed, it makes its rows again for the files read, asking nothing for
+    /// them. Called by the timeline after each change the live diff reads, and last by
+    /// the live diff's own hooks.
     ///
     /// Filled by the second package of the review pane; the contract's body does nothing.
     pub(crate) fn live_look(&mut self, cx: &mut Context<Self>) {
@@ -141,7 +161,9 @@ impl ReviewPane {
     }
 
     /// A fact of the Keeper, for the live diff: `Step`, `ChangesChanged` and `TurnEnded`
-    /// of the workspace on screen. Called after the timeline heard it.
+    /// of the workspace on screen. Called after the timeline heard it, and before follow
+    /// does: a read step of the turn shown asks nothing, and its file, when the list does
+    /// not hold it, is a row among the files read before this returns.
     ///
     /// Filled by the second package of the review pane; the contract's body does nothing.
     pub(crate) fn live_told(&mut self, fact: &Fact, cx: &mut Context<Self>) {
@@ -149,7 +171,8 @@ impl ReviewPane {
     }
 
     /// Makes the rows of the live diff again from what it holds, in the pane's layout and
-    /// with the threads of the review on screen, keeping the reviewer's line.
+    /// with the threads of the review on screen, the files read last, keeping the
+    /// reviewer's line.
     ///
     /// Filled by the second package of the review pane; the contract's body does nothing.
     pub(crate) fn live_rebuild(&mut self, cx: &mut Context<Self>) {
@@ -163,8 +186,10 @@ impl ReviewPane {
         todo!("the second package of the review pane: moving through the live diff")
     }
 
-    /// The index in the live diff's rows of the heading of the file the step `at` names;
-    /// none for a command, or a file the live diff does not hold.
+    /// The index in the live diff's rows of the heading of the file the step `at` names,
+    /// or, for a read of a file the turn did not change, of that file's row among the
+    /// files read; none for a command, and for an edit or a write whose file the list
+    /// does not hold yet.
     pub(crate) fn live_row_of(&self, at: &FlowAt) -> Option<usize> {
         let _ = at;
         todo!("the second package of the review pane: the row of a step")

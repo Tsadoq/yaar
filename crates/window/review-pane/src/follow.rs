@@ -13,8 +13,10 @@
 //! live diff heard it, while follow is [`crate::Following::On`]: `ReviewPane::at` is that
 //! step, in Changes too, and the list of the form on screen is scrolled so that its row is
 //! in view (`ReviewPane::scroll_timeline_to`, `ReviewPane::scroll_live_to`). A read moves
-//! Flow as a write does: in the timeline to its entry, in the live diff to the heading of
-//! the file it names when the live diff holds that file.
+//! Flow as a write does: in the timeline to its entry; in the live diff to the heading of
+//! the file it names when the turn changed that file, else to the file's row among the
+//! files read (`crate::PaneRow::Read`), which the live diff made when it heard the step,
+//! before follow hears it. `ReviewPane::live_row_of` gives either.
 //!
 //! Pausing. [`ReviewPane::touched`] is the reviewer at work in the pane. It is called:
 //! - by `acted`, which every action of the reviewer calls first, so for every key of the
@@ -36,7 +38,9 @@
 //! from the first touch; from `Off` it does nothing; with no turn running it does nothing.
 //! Each `Fact::Step` of the workspace on screen while paused counts one more missed,
 //! whatever its kind, and leaves `ReviewPane::at` where it was. Resuming, by
-//! [`crate::ResumeFollow`] or a click on `flow-follow-resume`, puts Flow at the newest step
+//! [`crate::ResumeFollow`] (`shift-g`, which acts only while Flow is on screen: in Changes
+//! the pane's listener in `draw.rs` does not call [`ReviewPane::resume_follow`], so the key
+//! does nothing there) or a click on `flow-follow-resume`, puts Flow at the newest step
 //! (`Timeline::newest`), its row in view, and follow on; with follow on it says "Follow is
 //! not paused" in the notice, with follow off "Follow is off". [`crate::ToggleFollow`] and a
 //! click on `flow-follow` turn follow off from `On` or `Paused`, and on from `Off`. A click
@@ -110,7 +114,10 @@ impl ReviewPane {
         let _ = (window, cx);
     }
 
-    /// What [`ResumeFollow`] does: calls `steered` first, never `acted`.
+    /// What [`ResumeFollow`] does while Flow is on screen: calls `steered` first, never
+    /// `acted`. Called only while Flow is on screen, by the pane's listener of the action
+    /// and by a click on `flow-follow-resume`, which Flow alone draws: in Changes the key
+    /// does nothing, and says nothing.
     ///
     /// Filled by the fourth package of the review pane; the contract's body does nothing.
     pub(crate) fn resume_follow(

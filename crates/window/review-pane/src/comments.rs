@@ -177,7 +177,9 @@ impl ReviewPane {
     /// Called first by the four controls of the views and of follow, [`crate::ToggleView`],
     /// [`crate::ToggleFlowForm`], [`crate::ToggleFollow`] and [`crate::ResumeFollow`], by key
     /// or by a click on the bar: what was said is gone, and follow is not paused, since
-    /// they choose what Flow shows rather than read it.
+    /// they choose what Flow shows rather than read it. `ToggleFlowForm` and
+    /// `ResumeFollow` act only while Flow is on screen; in Changes they do not get this
+    /// far, and leave the notice as it is.
     pub(crate) fn steered(&mut self, cx: &mut Context<Self>) {
         if self.notice.take().is_some() {
             cx.notify();

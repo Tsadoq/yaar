@@ -249,9 +249,40 @@ impl ReviewPane {
             .on_action(cx.listener(Self::take_offer))
             .on_action(cx.listener(Self::next_review))
             .on_action(cx.listener(Self::toggle_view))
-            .on_action(cx.listener(Self::toggle_flow_form))
+            .on_action(cx.listener(Self::toggle_flow_form_in_flow))
             .on_action(cx.listener(Self::toggle_follow))
-            .on_action(cx.listener(Self::resume_follow))
+            .on_action(cx.listener(Self::resume_follow_in_flow))
+    }
+
+    /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
+    /// the form while Flow is on screen, and in Changes does nothing at all. It switches
+    /// no form out of the reviewer's sight and sends no `SetSetting`; and since the action
+    /// takes the key, the key does not reach the listeners below the bar, so it does not
+    /// pause follow either.
+    fn toggle_flow_form_in_flow(
+        &mut self,
+        action: &crate::ToggleFlowForm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == View::Flow {
+            self.toggle_flow_form(action, window, cx);
+        }
+    }
+
+    /// What [`crate::ResumeFollow`] does, by its key `shift-g` or as an action: resumes
+    /// follow while Flow is on screen, and in Changes does nothing at all, notice
+    /// included: no follow is resumed out of the reviewer's sight, and, as for `shift-l`,
+    /// the key pauses nothing.
+    fn resume_follow_in_flow(
+        &mut self,
+        action: &crate::ResumeFollow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == View::Flow {
+            self.resume_follow(action, window, cx);
+        }
     }
 
     /// What the pane says while it has no row to show.
@@ -379,6 +410,12 @@ impl ReviewPane {
                         .debug_selector(|| "review-threads-elsewhere".to_owned())
                         .child("Threads elsewhere: their lines are in no row shown"),
                 ),
+            // Only the live diff of Flow lists the files a turn read, and draws them itself.
+            // Changes builds no such row; were one here, it would read as its path.
+            PaneRow::Read { path } => row
+                .px_2()
+                .text_color(theme.muted_foreground)
+                .child(path.display().to_string()),
         }
     }
 

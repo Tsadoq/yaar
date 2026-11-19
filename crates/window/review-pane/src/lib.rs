@@ -150,11 +150,13 @@ actions!(
         /// Shows Flow when Changes is on screen, and Changes when Flow is.
         ToggleView,
         /// Switches Flow between its two forms, the timeline and the live diff, and keeps
-        /// the form chosen for the workspace on screen.
+        /// the form chosen for the workspace on screen. Only while Flow is on screen: in
+        /// Changes it does nothing and sends nothing.
         ToggleFlowForm,
         /// Turns follow off when it is on, paused or not, and on when it is off.
         ToggleFollow,
-        /// Resumes follow where it was paused: Flow moves to the newest step.
+        /// Resumes follow where it was paused: Flow moves to the newest step. Only while
+        /// Flow is on screen: in Changes it does nothing.
         ResumeFollow,
     ]
 );
@@ -357,12 +359,15 @@ pub fn pane() -> BuildPane {
 /// | [`NextReview`] | `shift-a` | neither | nothing; the uncommitted changes of the review come by `GetUncommitted` |
 /// | [`ToggleView`] | `f` | neither | nothing; Flow asks `GetTurn` for what it has not heard |
 /// | [`ToggleFollow`] | `shift-f` | neither | nothing |
-/// | [`ToggleFlowForm`] | `shift-l` | neither | `SetSetting`, the form of the workspace on screen |
+/// | [`ToggleFlowForm`] | `shift-l` | neither | `SetSetting`, the form of the workspace on screen, in Flow only |
 /// | [`ResumeFollow`] | `shift-g` | vim, `G` goes to the last line; tuicr, `G` to the last file | nothing |
 ///
 /// In Flow, `j`, `k` and the arrows move through the timeline's entries, or through the
 /// lines of the live diff; `c` writes a comment on the line of the live diff the reviewer
-/// is on; `shift-o` opens in Changes what a turn end offered.
+/// is on; `shift-o` opens in Changes what a turn end offered. `f` and `shift-f` work in
+/// both views. `shift-l` and `shift-g` work only while Flow is on screen: in Changes they,
+/// and their actions, do nothing at all, so that no form is switched and no follow resumed
+/// out of the reviewer's sight, and nothing is sent.
 ///
 /// In the comment box the keys type text; `enter` closes the box and `shift-enter` starts
 /// a new line, as in tuicr. `escape` closes it too and keeps the draft, where tuicr's
@@ -572,6 +577,15 @@ pub enum PaneRow {
     /// is never hidden. Drawn under the selector `review-threads-elsewhere`. The threads
     /// of a workspace whose worktree is gone are all there.
     ThreadsElsewhere,
+    /// A file the turn of Flow's live diff read and did not change: one row, its path
+    /// marked as read, with no diff below it and no line the reviewer can be on. Only the
+    /// live diff holds such rows, after every other row of it, one a file, in the order
+    /// of the file's first read in the turn. Changes holds none.
+    Read {
+        /// The path, as the read step names it: relative to the worktree's folder when
+        /// the file lies inside it, absolute otherwise.
+        path: PathBuf,
+    },
 }
 
 /// A changed file as the pane holds it.
@@ -970,9 +984,10 @@ impl ReviewPane {
 
     /// The index of the row of [`ReviewPane::flow_at`] in the rows of the form on screen:
     /// its entry in [`ReviewPane::timeline`], or in [`ReviewPane::live_rows`] the heading of
-    /// the file the step names; none when that form has no row for it, as the live diff
-    /// for a command, or for a file read that the turn did not change, which it names in
-    /// the line above its files, [`ReviewPane::activity`].
+    /// the file the step names, or, for a read of a file the turn did not change, that
+    /// file's [`PaneRow::Read`]; none when that form has no row for it, as the live diff
+    /// for a command, or for an edit or a write whose file its list does not hold yet,
+    /// which it names in the line above its files, [`ReviewPane::activity`].
     pub fn flow_at_row(&self) -> Option<usize> {
         let at = self.at.as_ref()?;
         match self.form {
@@ -1011,9 +1026,11 @@ impl ReviewPane {
     }
 
     /// The rows of the live diff, top to bottom, as [`ReviewPane::rows`] are for Changes:
-    /// each changed file's heading, then the rows of its diff and the threads on them.
-    /// Row `i` is drawn under `flow-row-<i>`, and the text of a line in it under
-    /// `flow-text-<i>-old:<text>` or `flow-text-<i>-new:<text>`.
+    /// each changed file's heading, then the rows of its diff and the threads on them;
+    /// last, each file the turn read and did not change, as a [`PaneRow::Read`], in the
+    /// order of its first read. Row `i` is drawn under `flow-row-<i>`, the text of a line
+    /// in it under `flow-text-<i>-old:<text>` or `flow-text-<i>-new:<text>`, and the mark
+    /// of a file read under `flow-read-<i>`.
     pub fn live_rows(&self) -> &[PaneRow] {
         self.live.rows()
     }
@@ -1031,7 +1048,8 @@ impl ReviewPane {
     }
 
     /// The step the live diff names in the line above its files, `flow-activity`, while it
-    /// has no row for it: a command, or a file read that the turn did not change.
+    /// has no row for it: a command, or an edit or a write whose file the live diff's list
+    /// does not hold yet. A read always has a row.
     pub fn activity(&self) -> Option<&FlowAt> {
         self.live.activity()
     }

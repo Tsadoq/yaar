@@ -72,7 +72,8 @@ fn reading(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
                 | PaneRow::Unshown { .. }
                 | PaneRow::Thread { .. }
                 | PaneRow::Comment { .. }
-                | PaneRow::ThreadsElsewhere => {}
+                | PaneRow::ThreadsElsewhere
+                | PaneRow::Read { .. } => {}
             }
         }
         read
