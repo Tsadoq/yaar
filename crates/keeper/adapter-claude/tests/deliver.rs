@@ -160,9 +160,35 @@ fn heard_the_session(place: &Place) -> (ClaudeCode, Asked) {
 /// What a fresh Adapter says line 3 of the recording waits for, with `changes` made on its
 /// input (each named by the caller).
 fn read_asks(place: &Place, changes: impl FnOnce(&mut HookRecord)) -> Option<Asked> {
+    read_asks_of(&mut ClaudeCode::new(), place, changes)
+}
+
+/// What `adapter` says line 3 of the recording waits for, with `changes` made on its input
+/// (each named by the caller): the Adapter may have heard the session's earlier lines.
+fn read_asks_of(
+    adapter: &mut ClaudeCode,
+    place: &Place,
+    changes: impl FnOnce(&mut HookRecord),
+) -> Option<Asked> {
     let mut record = place.record(READ_FILE, 3);
     changes(&mut record);
-    feed_asked(&mut ClaudeCode::new(), &place.folder, &record)
+    feed_asked(adapter, &place.folder, &record)
+}
+
+/// The file a pointer names and the line that asks to read it, from the answer's context:
+/// the path is the whole of the line it sits on, so a folder with a space in its name is
+/// one path.
+fn pointer_of(context: &str) -> (PathBuf, &str) {
+    let after = context
+        .strip_prefix(INSTRUCTION)
+        .expect("the pointer starts with the instruction");
+    let lines: Vec<&str> = after.lines().collect();
+    let at: Vec<usize> = (0..lines.len())
+        .filter(|&at| lines[at].starts_with('/'))
+        .collect();
+    assert_eq!(at.len(), 1, "one path in {after:?}");
+    let request = lines.get(at[0] + 1).expect("a request after the path");
+    (PathBuf::from(lines[at[0]]), request)
 }
 
 /// The record of the read of `path`, in a session of its own id.
@@ -234,32 +260,23 @@ fn assert_delivered_as_a_file(place: &Place, adapter: &ClaudeCode, asked: &Asked
         "the pointer is {} units",
         units(context)
     );
-    let after = context
-        .strip_prefix(INSTRUCTION)
-        .expect("the pointer starts with the instruction");
-    let paths: Vec<_> = after
-        .split_whitespace()
-        .filter(|word| word.starts_with('/'))
-        .collect();
-    assert_eq!(paths.len(), 1, "one path in {after:?}");
-    let path = Path::new(paths[0]);
+    let (path, request) = pointer_of(context);
     let own = place.reviews().join(&asked.session.0);
     assert!(path.starts_with(&own), "{path:?} lies under {own:?}");
     assert!(!path.starts_with(&place.project), "outside the repository");
-    let lower = after.to_lowercase();
     assert!(
-        lower.contains("read") && lower.contains("whole"),
-        "it asks to read the file whole: {after:?}"
+        request.starts_with("Read the whole file with your Read tool"),
+        "it asks to read the file whole: {request:?}"
     );
 
     assert_eq!(
-        std::fs::read(path).expect("the file is there"),
+        std::fs::read(&path).expect("the file is there"),
         text.as_bytes(),
         "the file holds the review, byte for byte"
     );
     assert_eq!(
         files_under(&place.reviews()),
-        [path.to_owned()],
+        [path],
         "the file and no temporary one"
     );
 }
@@ -319,25 +336,23 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
     let context = answer["hookSpecificOutput"]["additionalContext"]
         .as_str()
         .expect("a text");
-    let delivered = PathBuf::from(
-        context
-            .split_whitespace()
-            .find(|word| word.starts_with('/'))
-            .expect("the pointer names the file"),
-    );
+    let (delivered, _) = pointer_of(context);
     let session = asked.session.0.clone();
 
     // The one field of line 3 that changes is the file it reads (and, where named, the
-    // session).
-    let allowed = read_asks(&place, reading(&delivered, &session)).expect("the read is asked");
+    // session). The Adapter that heard lines 0 to 3 is asked it, as the Keeper does.
+    let mut heard = adapter;
+    let allowed =
+        read_asks_of(&mut heard, &place, reading(&delivered, &session)).expect("the read is asked");
     assert_eq!(allowed.asks, Asks::ReadOwnFile);
     assert_eq!(allowed.session, CliSession(session.clone()));
-    let allow = parsed(&adapter.answer(&allowed, &Answer::Allow));
+    let allow = parsed(&heard.answer(&allowed, &Answer::Allow));
     assert_eq!(shape(&allow), answer_shape("PreToolUse"));
     assert_eq!(allow["hookSpecificOutput"]["hookEventName"], "PreToolUse");
     assert_eq!(allow["hookSpecificOutput"]["permissionDecision"], "allow");
 
-    // The Keeper started again: the rule needs nothing the first Adapter heard.
+    // The Keeper started again (a second Adapter, which heard nothing): the rule needs
+    // nothing the first one heard.
     let after_restart = read_asks(&place, reading(&delivered, &session));
     assert_eq!(
         after_restart.map(|asked| asked.asks),
