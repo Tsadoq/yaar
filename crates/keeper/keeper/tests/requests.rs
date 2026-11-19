@@ -766,7 +766,6 @@ impl Window {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn save(
         &mut self,
         review: &ReviewId,

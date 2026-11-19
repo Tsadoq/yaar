@@ -110,7 +110,7 @@ fn anchor(tree: Option<&str>, path: &str, side: Side, line: u32, text: &str) -> 
     }
 }
 
-/// The text of the one comment of the second thread of `reviews`' first review.
+/// The text of the one comment of thread `thread` of `reviews`' first review.
 fn draft_text(reviews: &WorkspaceReviews, thread: usize) -> String {
     let comments = &reviews.reviews[0].threads[thread].comments;
     assert_eq!(comments.len(), 1, "{comments:?}");
@@ -169,11 +169,22 @@ fn a_keeper_killed_while_a_draft_is_typed_comes_back_with_every_review_as_it_was
     };
     other.type_out(&mut client, "other");
 
+    // The reviewer marks the change of each review reviewed and a file of A viewed, so
+    // that the reviewed states and the viewed marks the restart must keep are real ones.
+    client.mark_reviewed(&review_a).expect("mark A reviewed");
+    client.mark_reviewed(&review_b).expect("mark B reviewed");
+    client
+        .set_viewed(&a, Path::new("src/lib.rs"), true)
+        .expect("mark a file of A viewed");
+
     // What the Keeper holds before the kill. The first thread's comment is sent, the
     // reply and the second thread's comment are drafts.
     let before_a = client.reviews(&a);
     let before_b = client.reviews(&b);
     let review = &before_a.reviews[0];
+    assert!(review.reviewed.is_some(), "A's review is marked reviewed");
+    assert!(before_b.reviews[0].reviewed.is_some());
+    assert_eq!(before_a.viewed, vec![PathBuf::from("src/lib.rs")]);
     assert_eq!(review.threads.len(), 2);
     assert_eq!(review.rounds.len(), 1);
     assert_eq!(review.threads[0].comments.len(), 2);
@@ -239,11 +250,28 @@ fn a_keeper_killed_while_a_draft_is_typed_comes_back_with_every_review_as_it_was
     assert_eq!(client.reviews(&b), before_b);
     assert_eq!(draft_text(&client.reviews(&b), 0), "other");
 
-    // The Keeper of the world is the second one, and the first is gone; when the world
-    // goes the second goes too.
+    // Killed again with nothing on its way: a save whose reply has come is kept whole, so
+    // the draft after this restart is exactly that save's text. This shows a Keeper that
+    // answers a save before it keeps it, however fast it reads what follows a kill.
+    let last = "second, the last one";
+    second.save(&mut client, last);
+    let mut kept_a = client.reviews(&a);
+    assert_eq!(draft_text(&kept_a, 1), last);
+    world.kill_keeper();
+    assert!(!is_alive(second_keeper), "the killed Keeper is gone");
+    drop(client);
+    let third_keeper = world.start_keeper();
+    let mut client = world.client();
+    assert_eq!(client.reviews(&a), kept_a);
+    kept_a.reviews[0].threads[1].comments[0].text = draft_text(&before_a, 1);
+    assert_eq!(kept_a, before_a);
+    assert_eq!(client.reviews(&b), before_b);
+
+    // The Keeper of the world is the third one, and the others are gone; when the world
+    // goes the third goes too.
     drop(client);
     drop(world);
-    assert!(wait_until(DEADLINE, || !is_alive(second_keeper)));
+    assert!(wait_until(DEADLINE, || !is_alive(third_keeper)));
 }
 
 /// `n` letters, starting from `x` and going round the alphabet.
@@ -255,12 +283,14 @@ fn letters(n: u8) -> String {
 
 /// A named pipe the hook of a repository waits on, and the one write that lets it go.
 ///
-/// Held open for reading and writing by the test, so that the line written is kept for the
-/// hook, whenever it comes to read, and so that the write never waits for a reader. On
-/// every path the line is written once, when the test lets the hook go or when this is
-/// dropped, so that the hook never outlives the test.
+/// Held open for reading and writing by the test until it is dropped, so that the line
+/// written stays in the pipe for the hook, whenever it comes to read (a pipe forgets its
+/// data once no one holds it), and so that the write never waits for a reader. On every
+/// path the line is written once, when the test lets the hook go or when this is dropped,
+/// so that the hook never outlives the test.
 struct Gate {
-    fifo: Option<File>,
+    fifo: File,
+    released: bool,
     path: PathBuf,
 }
 
@@ -277,15 +307,17 @@ impl Gate {
             .open(path)
             .expect("open the pipe");
         Gate {
-            fifo: Some(fifo),
+            fifo,
+            released: false,
             path: path.to_owned(),
         }
     }
 
     /// Lets the hook go.
     fn open(&mut self) {
-        if let Some(mut fifo) = self.fifo.take() {
-            fifo.write_all(b"go\n").expect("write to the pipe");
+        if !self.released {
+            self.released = true;
+            self.fifo.write_all(b"go\n").expect("write to the pipe");
         }
     }
 }

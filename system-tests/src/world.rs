@@ -292,6 +292,9 @@ impl Drop for World {
         {
             std::thread::sleep(Duration::from_millis(20));
         }
+        if self.root.exists() {
+            eprintln!("the world's folder {} was left behind", self.root.display());
+        }
     }
 }
 
