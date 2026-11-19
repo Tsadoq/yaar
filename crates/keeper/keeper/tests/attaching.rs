@@ -316,11 +316,14 @@ fn count(bytes: &[u8], text: &str) -> usize {
 }
 
 /// The numbers `heard` holds, one on each line, but for the first line, which may be cut
-/// by where the kept output starts.
+/// by where the kept output starts, and the last, which may be cut by where the reading
+/// stopped: a line with no line end after it is not a number yet.
 fn numbers_in(heard: &[u8]) -> Vec<u32> {
-    String::from_utf8_lossy(heard)
-        .split('\n')
-        .skip(1)
+    let text = String::from_utf8_lossy(heard);
+    let mut lines: Vec<&str> = text.split('\n').skip(1).collect();
+    lines.pop();
+    lines
+        .into_iter()
         .filter_map(|line| line.trim_end_matches('\r').parse().ok())
         .collect()
 }
@@ -389,10 +392,12 @@ fn a_window_that_attaches_in_the_middle_of_a_flood_hears_one_unbroken_run_with_n
     let mut second = scratch.window();
 
     // About 2.6 MB, more than the Keeper keeps, in a loop that takes about a second, so
-    // that the second Window attaches long before the end.
+    // that the second Window attaches long before the end. The line is typed before the
+    // shell has written its prompt, so the prompt can land right where the run starts: the
+    // first thing the line writes is a line end, which leaves the 1 alone on its line.
     opener.type_into(
         &terminal,
-        b"i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
+        b"echo; i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
     );
     let mut heard_by_opener = Vec::new();
     opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
@@ -458,7 +463,7 @@ fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_r
     let terminal = opener.open_terminal(&workspace, SIZE);
     opener.type_into(
         &terminal,
-        b"i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
+        b"echo; i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
     );
     let mut heard_by_opener = Vec::new();
     opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
