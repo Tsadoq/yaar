@@ -17,11 +17,12 @@ use gpui_kit::{
 use yaar_diff::{Row, Side};
 use yaar_frame::{Place, SetBase};
 use yaar_link::{
-    Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Refusal, Reply,
-    Request, RequestKind,
+    Changes, Comparison, Content, Fact, FileSides, FileStatus, FlowForm, NoComparison, Refusal,
+    Reply, Request, RequestKind, Setting,
 };
 use yaar_review_pane::{
-    FILES_ON_THEIR_WAY, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
+    FILES_ON_THEIR_WAY, Following, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown,
+    View, controls,
 };
 
 use common::{
@@ -674,6 +675,16 @@ enum Effect {
     Field,
     /// Asks the Keeper for a request of this kind.
     Sends(RequestKind),
+    /// `f`: shows Flow after the key, and Changes again after the action.
+    Views,
+    /// `shift-f`: turns follow off after the key, and on again after the action.
+    Follow,
+    /// `shift-l`, which acts only while Flow is on screen: the live diff after the key, and
+    /// the timeline again after the action.
+    Form,
+    /// `shift-g`, which acts only while Flow is on screen: says in the notice that nothing
+    /// is paused.
+    Resume,
 }
 
 /// The effect of the key of a control. A control with no effect named here fails the
@@ -687,6 +698,10 @@ fn effect_of(keystroke: &str) -> Effect {
         // And no turn offered anything, and no other session has a review.
         "i" | "o" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
         "shift-t" => Effect::Setting,
+        "f" => Effect::Views,
+        "shift-f" => Effect::Follow,
+        "shift-l" => Effect::Form,
+        "shift-g" => Effect::Resume,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -710,6 +725,38 @@ impl Effect {
                 pane.read_with(cx, |pane, _| pane.keeps_selection()),
                 how == "its key",
                 "{title} by {how} did not set the pane"
+            ),
+            Effect::Views => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.view()),
+                if how == "its key" {
+                    View::Flow
+                } else {
+                    View::Changes
+                },
+                "{title} by {how} showed the wrong view"
+            ),
+            Effect::Follow => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.following()),
+                if how == "its key" {
+                    Following::Off
+                } else {
+                    Following::On
+                },
+                "{title} by {how} left follow wrong"
+            ),
+            Effect::Form => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.flow_form()),
+                if how == "its key" {
+                    FlowForm::LiveDiff
+                } else {
+                    FlowForm::Timeline
+                },
+                "{title} by {how} showed the wrong form"
+            ),
+            Effect::Resume => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.notice()).as_deref(),
+                Some("Follow is not paused"),
+                "{title} by {how} did not say that nothing is paused"
             ),
             Effect::Box => assert!(
                 pane.read_with(cx, |pane, _| pane.comment_box().is_some()),
@@ -797,16 +844,48 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // the rows they are the rows' keys or none, so tests/changes.rs presses them where they
     // work. Every other place is walked: a control added in one fails here until the walk
     // knows its effect.
-    // The keys of Flow and follow are left out until the packages of slice 5 that give
-    // them their work are in; the last of them names their effects here and takes this
-    // filter away: the walk is weakened for the length of the build only.
-    const OF_SLICE_5: [&str; 4] = ["f", "shift-f", "shift-l", "shift-g"];
+    // The keys of Flow and follow are walked here too. `shift-l` and `shift-g` act only
+    // while Flow is on screen: with Changes on screen the key and the action change nothing
+    // and send nothing, which the walk shows first, and then it shows Flow and their effect.
     for control in controls()
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
-        .filter(|control| !OF_SLICE_5.contains(&control.keystroke))
     {
         let effect = effect_of(control.keystroke);
+        let only_in_flow = matches!(effect, Effect::Form | Effect::Resume);
+        if only_in_flow {
+            // With Changes on screen: nothing is switched, resumed, said or sent. Whatever
+            // either did would show in what the reviewer sees, which is read here.
+            let seen = |cx: &mut VisualTestContext| {
+                the_pane.read_with(cx, |pane, _| {
+                    (
+                        pane.view(),
+                        pane.flow_form(),
+                        pane.following(),
+                        pane.notice(),
+                    )
+                })
+            };
+            let before = seen(&mut cx);
+            assert_eq!(before.0, View::Changes);
+            cx.simulate_keystrokes(control.keystroke);
+            assert_eq!(seen(&mut cx), before, "{} acted in Changes", control.title);
+            cx.update(|window, cx| window.dispatch_action((control.action)(), cx));
+            cx.run_until_parked();
+            assert_eq!(
+                seen(&mut cx),
+                before,
+                "{} acted in Changes as an action",
+                control.title
+            );
+            // A click on the name of Flow pauses nothing.
+            let to_flow = drawn("review-view-flow", &mut cx)
+                .expect("the bar is drawn")
+                .center();
+            cx.simulate_click(to_flow, Modifiers::none());
+            cx.run_until_parked();
+            assert_eq!(the_pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
+        }
         let at_first = state(&mut cx);
         cx.simulate_keystrokes(control.keystroke);
         let after_the_key = state(&mut cx);
@@ -823,10 +902,18 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         // are keys of the pane that say the notice is gone and leave all as it was.
         match effect {
             Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
-            Effect::Notice => cx.simulate_keystrokes("s s"),
-            Effect::Moves | Effect::Setting | Effect::Sends(_) => {}
+            Effect::Notice | Effect::Resume => cx.simulate_keystrokes("s s"),
+            Effect::Moves
+            | Effect::Setting
+            | Effect::Sends(_)
+            | Effect::Views
+            | Effect::Follow
+            | Effect::Form => {}
         }
-        if matches!(effect, Effect::Notice | Effect::Box | Effect::Field) {
+        if matches!(
+            effect,
+            Effect::Notice | Effect::Resume | Effect::Box | Effect::Field
+        ) {
             assert!(
                 stage.pane.read_with(&cx, |pane, _| pane.notice().is_none()
                     && pane.comment_box().is_none()
@@ -852,6 +939,29 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             );
         } else {
             effect.shown(&mut stage, control.title, "the action", &mut cx);
+        }
+        if matches!(effect, Effect::Form) {
+            // The key and the action sent the two settings, and Changes sent none: the
+            // Keeper holds exactly these, in this order, for the workspace on screen.
+            let form = |form| Setting::FlowForm {
+                workspace: id('1'),
+                form,
+            };
+            wait_until(&mut cx, "the two forms to reach the Keeper", |_| {
+                stage.keeper.settings_set() == [form(FlowForm::LiveDiff), form(FlowForm::Timeline)]
+            });
+        }
+        if only_in_flow {
+            // Changes again before the next key.
+            let to_changes = drawn("review-view-changes", &mut cx)
+                .expect("the bar is drawn")
+                .center();
+            cx.simulate_click(to_changes, Modifiers::none());
+            cx.run_until_parked();
+            assert_eq!(
+                the_pane.read_with(&cx, |pane, _| pane.view()),
+                View::Changes
+            );
         }
         // A comment box or the field for a commit message that a key opened takes the
         // keys that follow as its text.

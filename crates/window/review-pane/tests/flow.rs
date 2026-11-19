@@ -601,7 +601,13 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
     for _ in 0..40 {
         press("k", &mut cx);
     }
-    assert_eq!(in_view(&stage, &mut cx), at_first);
+    // The turn runs, so the first `j` paused follow, and the line that offers to resume
+    // takes one row of the list: the list is back at the top, one row shorter.
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.following()),
+        Following::Paused { missed: 0 }
+    );
+    assert_eq!(in_view(&stage, &mut cx), at_first.start..at_first.end - 1);
     assert!(drawn("flow-entry-0", &mut cx).is_some());
 }
 
