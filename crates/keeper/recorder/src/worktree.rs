@@ -787,7 +787,9 @@ impl Worktree {
         // refused would leave everything staged: the bytes are taken first.
         let backup = IndexBackup::take(&self.git_dir.join("index")).map_err(GitError::from)?;
         let mut add = self.git.plain(&self.root);
-        add.args(["add", "--all"]);
+        // `--no-ignore-errors` because the user's `add.ignoreErrors` would make git stage
+        // what it can, write the list and only then exit in error.
+        add.args(["add", "--all", "--no-ignore-errors"]);
         // A git that ends in error here has written nothing: it writes the list last,
         // through the lock, and dies before it when a file cannot be added or the lock is
         // held. Putting the bytes back would overwrite what another git wrote after that

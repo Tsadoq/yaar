@@ -400,6 +400,9 @@ fn a_commit_git_itself_refuses_puts_the_list_of_files_back_as_it_was() {
 fn a_commit_where_git_cannot_add_the_files_leaves_the_list_of_files_as_it_was() {
     let scratch = Scratch::new();
     let repo = with_a_partial_staging(&scratch);
+    // With this setting git stages what it can, writes the list and only then exits in
+    // error, unless the commit asks it not to.
+    git(&repo, &["config", "add.ignoreErrors", "true"]);
     init(&repo.join("inner"));
     write(&repo.join("inner"), "i.txt", "inside\n");
     let (list, status) = settled(&repo);
