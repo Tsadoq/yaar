@@ -869,7 +869,8 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
     ];
     // What the system's profile adds to the environment of a login shell is not the app's
     // either: on Ubuntu it adds XDG_DATA_DIRS. A login shell of the world, run with no
-    // app in between, shows which names those are.
+    // app in between, shows which names those are and what it gives them: a name the app
+    // set to another value than the profile does is still the app's.
     let profile = world
         .command(Path::new("/bin/sh"))
         .args(["-l", "-c", "env"])
@@ -880,7 +881,7 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         .keys()
         .filter(|name| {
             !users.contains_key(*name)
-                && !by_profile.contains_key(*name)
+                && by_profile.get(*name) != in_shell.get(*name)
                 && !allowed.contains(&name.as_str())
         })
         .collect();
