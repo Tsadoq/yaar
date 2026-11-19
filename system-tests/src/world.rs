@@ -174,7 +174,13 @@ impl World {
     /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
     /// database. Panics when no Keeper of this world runs.
     pub fn kill_keeper(&mut self) {
-        todo!()
+        let mut keeper = self
+            .keeper
+            .take()
+            .expect("no Keeper of this world runs to kill");
+        // It may have ended on its own already; the kill then finds nothing to do.
+        let _ = keeper.kill();
+        keeper.wait().expect("collect the killed Keeper");
     }
 
     /// The process id of the Keeper this world started, while it runs.
@@ -276,7 +282,19 @@ impl Drop for World {
             let _ = keeper.kill();
             let _ = keeper.wait();
         }
-        let _ = fs::remove_dir_all(&self.root);
+        // A process the Keeper started, as the user's git of a commit whose Keeper was
+        // killed, may still be finishing and writing into the folder: it is removed
+        // again until it is gone, which is within moments.
+        let deadline = Instant::now() + DEADLINE;
+        while fs::remove_dir_all(&self.root).is_err()
+            && self.root.exists()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.root.exists() {
+            eprintln!("the world's folder {} was left behind", self.root.display());
+        }
     }
 }
 

@@ -6,7 +6,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use yaar_link::{
-    Hello, LinkError, Message, Request, RequestId, RequestKind, handshake, read_message,
+    Hello, LinkError, Message, Refusal, Request, RequestId, RequestKind, handshake, read_message,
     write_message,
 };
 use yaar_system_tests::{Client, DEADLINE, World, attach};
@@ -216,4 +216,51 @@ fn a_tap_lists_a_request_before_it_hands_it_to_the_keeper() {
         other => panic!("the Keeper did not refuse the folder: {other:?}"),
     }
     assert_eq!(tap.requests(), vec![large]);
+}
+
+#[test]
+fn a_killed_keeper_is_gone_at_once_and_the_next_starts_on_the_same_folders_and_finds_what_was_kept()
+{
+    let mut world = World::new();
+    let first = world.start_keeper();
+    let repo = world.repository("app");
+    let mut client = world.client();
+    let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
+
+    world.kill_keeper();
+    assert!(!yaar_system_tests::is_alive(first));
+    assert_eq!(world.keeper_pid(), None);
+    drop(client);
+
+    let second = world.start_keeper();
+    assert_ne!(second, first);
+    let list = world.client().workspaces();
+    assert_eq!(list[0].workspaces[0].id, workspace);
+}
+
+#[test]
+#[should_panic(expected = "no Keeper of this world runs")]
+fn a_world_with_no_keeper_cannot_kill_one() {
+    World::new().kill_keeper();
+}
+
+#[test]
+fn a_reply_that_comes_while_another_is_waited_for_is_kept_for_the_request_that_sent_it() {
+    let mut world = World::new();
+    world.start_keeper();
+    let mut client = world.client();
+
+    // The Keeper answers in the order it was asked: the replies of the two sent requests
+    // are read, in turn, while the one that is waited for is not there yet.
+    let first = client.send(opens("/nowhere/first"));
+    let second = client.send(opens("/nowhere/second"));
+    assert_eq!(client.workspaces(), vec![]);
+    assert!(matches!(
+        client.wait_for_reply(second, DEADLINE),
+        Err(Refusal::NoSuchFolder { path }) if path.ends_with("second")
+    ));
+    assert!(matches!(
+        client.wait_for_reply(first, DEADLINE),
+        Err(Refusal::NoSuchFolder { path }) if path.ends_with("first")
+    ));
 }
