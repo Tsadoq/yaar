@@ -10,10 +10,11 @@
 
 use gpui_kit::*;
 use yaar_link::{
-    Session, SessionId, SessionState, TerminalId, TerminalInfo, WorkspaceAgents, WorkspaceId,
+    Fact, Reply, Request, Session, SessionId, SessionState, TerminalId, TerminalInfo,
+    WorkspaceAgents, WorkspaceId,
 };
 
-use crate::link_model::KeeperLink;
+use crate::link_model::{KeeperLink, LinkStatus};
 
 /// The agent sessions of every workspace in which one reported, as the Keeper told them.
 ///
@@ -24,16 +25,92 @@ use crate::link_model::KeeperLink;
 pub struct AgentList {
     link: Entity<KeeperLink>,
     agents: Vec<WorkspaceAgents>,
+    /// The last question for the list. A new one takes its place, which drops the answer
+    /// to the old one.
+    listing: Option<Task<()>>,
+    /// Whether the answer to that question is still awaited.
+    awaits_list: bool,
 }
 
 impl AgentList {
     /// The list of one window, fed by `link`: empty until the Keeper answers.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
-        let _ = cx;
-        Self {
+        // The link tells of a change only when the outcome of reaching a Keeper is
+        // recorded, so being connected then means a connection that was not asked yet.
+        cx.observe(&link, |list, link, cx| {
+            if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
+                list.refresh(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&link, |list, _, fact: &Fact, cx| {
+            if let Fact::AgentsChanged(agents) = fact {
+                list.take_one(agents.clone(), cx);
+                // An answer still on its way may have been made before this fact was.
+                // It is not waited for; the question is asked again, and what answers
+                // it is no older than this fact.
+                if list.awaits_list {
+                    list.refresh(cx);
+                }
+            }
+        })
+        .detach();
+
+        let connected = matches!(link.read(cx).status(), LinkStatus::Connected(_));
+        let mut list = Self {
             link,
             agents: Vec::new(),
+            listing: None,
+            awaits_list: false,
+        };
+        if connected {
+            list.refresh(cx);
         }
+        list
+    }
+
+    /// Asks the Keeper for every workspace's agents, and takes the answer unless a later
+    /// question took its place.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::ListAgents, cx));
+        self.awaits_list = true;
+        self.listing = Some(cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                list.awaits_list = false;
+                // A Keeper that refuses, as the one of the contract does, leaves the
+                // list as it was: no workspace shows an agent.
+                if let Ok(Reply::Agents(agents)) = answer {
+                    list.take_all(agents, cx);
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Takes the list as the Keeper answered it.
+    fn take_all(&mut self, agents: Vec<WorkspaceAgents>, cx: &mut Context<Self>) {
+        if agents != self.agents {
+            self.agents = agents;
+            cx.notify();
+        }
+    }
+
+    /// Takes what the Keeper told of one workspace: it replaces that workspace's entry,
+    /// or comes last.
+    fn take_one(&mut self, told: WorkspaceAgents, cx: &mut Context<Self>) {
+        match self
+            .agents
+            .iter_mut()
+            .find(|agents| agents.workspace == told.workspace)
+        {
+            Some(held) if *held == told => return,
+            Some(held) => *held = told,
+            None => self.agents.push(told),
+        }
+        cx.notify();
     }
 
     /// The link this list is fed by.
@@ -82,15 +159,74 @@ impl AgentList {
 pub struct TerminalList {
     link: Entity<KeeperLink>,
     terminals: Vec<TerminalInfo>,
+    /// The last question for the list. A new one takes its place, which drops the answer
+    /// to the old one.
+    listing: Option<Task<()>>,
+    /// Whether the answer to that question is still awaited.
+    awaits_list: bool,
 }
 
 impl TerminalList {
     /// The list of one window, fed by `link`: empty until the Keeper answers.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
-        let _ = cx;
-        Self {
+        cx.observe(&link, |list, link, cx| {
+            if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
+                list.refresh(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&link, |list, _, fact: &Fact, cx| {
+            if let Fact::TerminalEnded { terminal, .. } = fact {
+                list.terminals.retain(|held| held.id != *terminal);
+                cx.notify();
+                list.ask_again_if_awaited(cx);
+            }
+        })
+        .detach();
+
+        let connected = matches!(link.read(cx).status(), LinkStatus::Connected(_));
+        let mut list = Self {
             link,
             terminals: Vec::new(),
+            listing: None,
+            awaits_list: false,
+        };
+        if connected {
+            list.refresh(cx);
+        }
+        list
+    }
+
+    /// Asks the Keeper for its terminals, and takes the answer unless a later question
+    /// took its place.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::ListTerminals, cx));
+        self.awaits_list = true;
+        self.listing = Some(cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                list.awaits_list = false;
+                // A Keeper that refuses, as the one of the contract does, leaves the
+                // list as it was.
+                if let Ok(Reply::Terminals(terminals)) = answer
+                    && terminals != list.terminals
+                {
+                    list.terminals = terminals;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// A terminal ended or was opened, which an answer still on its way may not know:
+    /// it is not waited for. The question is asked again, and what answers it is no
+    /// older than the change.
+    fn ask_again_if_awaited(&mut self, cx: &mut Context<Self>) {
+        if self.awaits_list {
+            self.refresh(cx);
         }
     }
 
@@ -114,7 +250,10 @@ impl TerminalList {
 
     /// This Window opened a terminal: it joins the list, at the end, once.
     pub fn opened(&mut self, terminal: TerminalInfo, cx: &mut Context<Self>) {
-        let _ = (terminal, cx);
-        todo!("a terminal this Window opened joins the list")
+        if !self.terminals.iter().any(|held| held.id == terminal.id) {
+            self.terminals.push(terminal);
+            cx.notify();
+        }
+        self.ask_again_if_awaited(cx);
     }
 }

@@ -577,7 +577,30 @@ impl KeeperLink {
     /// once. It goes to a Keeper of any protocol version, an older one too: the frame never
     /// changes shape. With no connection, nothing is sent.
     pub fn stop_everything(&mut self) {
-        todo!("send the stop-everything frame")
+        let mut frame = Vec::new();
+        if write_message(&mut frame, &Message::Shutdown).is_err() {
+            return;
+        }
+        match &self.connection {
+            Some(Connection {
+                reading: Some(reading),
+                ..
+            }) => {
+                // The writing thread let the Keeper go when this fails: it is gone.
+                let _ = reading.writing.send(frame);
+            }
+            // A Keeper of another protocol is neither asked nor listened to, and nothing
+            // else was written to it, so these few bytes fit its buffer. The timeout is
+            // for a Keeper that does not read at all.
+            Some(Connection {
+                stream,
+                reading: None,
+            }) => {
+                let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+                let _ = (&*stream).write_all(&frame);
+            }
+            None => {}
+        }
     }
 
     /// Records the outcome of [`crate::keeper::attach`] and tells the observers. With a
