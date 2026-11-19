@@ -14,10 +14,11 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Base, BaseSource, ChangedFile, Changes, CommentId, Commit, Comparison, Content, DraftOn, Fact,
-    FileSides, FileStatus, Head, Hello, MAX_CONTENT, Message, PROTOCOL_VERSION, Program, Refusal,
-    Reply, Repository, Request, RequestId, RequestKind, ReviewId, TerminalId, TerminalSize,
-    ThreadId, Workspace, WorkspaceId, handshake, read_message, write_message,
+    Anchor, Base, BaseSource, ChangedFile, Changes, CommentId, Commit, Comparison, Content,
+    DraftOn, Fact, FileSides, FileStatus, Head, Hello, Lines, MAX_CONTENT, Message,
+    PROTOCOL_VERSION, Program, Refusal, Reply, Repository, Request, RequestId, RequestKind,
+    ReviewId, Side, TerminalId, TerminalSize, ThreadId, Workspace, WorkspaceId, WorkspaceReviews,
+    handshake, read_message, write_message,
 };
 
 /// What the one file of a new repository holds.
@@ -730,4 +731,393 @@ fn the_git_process_kept_for_file_contents_has_ended_when_the_keeper_returns() {
     // system knows it no more.
     window.stop(keeper);
     assert!(!is_known(kept), "the git process outlived the Keeper");
+}
+
+/// The ids of a thread and of its comment that the reviews tests draw: 32 digits each,
+/// and no two alike, since the Keeper takes an id once whatever it names.
+fn ids(n: u8) -> (ThreadId, CommentId) {
+    (
+        ThreadId::new(format!("{n:02x}").repeat(16)),
+        CommentId::new(format!("{:02x}", n + 0x80).repeat(16)),
+    )
+}
+
+/// Where a new thread sits: line 1 of `a.txt` in the files on disk.
+fn on_the_first_line() -> DraftOn {
+    DraftOn::NewThread {
+        anchor: Anchor {
+            tree: None,
+            path: PathBuf::from("a.txt"),
+            side: Side::New,
+            lines: Lines { first: 1, last: 1 },
+            text: "one".to_owned(),
+        },
+    }
+}
+
+impl Window {
+    /// The reviews of a workspace.
+    fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
+        match self.ask(Request::GetReviews {
+            workspace: workspace.clone(),
+        }) {
+            Ok(Reply::Reviews(reviews)) => reviews,
+            other => panic!("no reviews: {other:?}"),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn save(
+        &mut self,
+        review: &ReviewId,
+        thread: &ThreadId,
+        comment: &CommentId,
+        on: DraftOn,
+        text: &str,
+    ) -> Result<Reply, Refusal> {
+        self.ask(Request::SaveDraft {
+            review: review.clone(),
+            thread: thread.clone(),
+            comment: comment.clone(),
+            on,
+            text: text.to_owned(),
+        })
+    }
+}
+
+#[test]
+fn a_draft_is_made_edited_copied_and_deleted_and_every_window_is_told_of_what_changed() {
+    let scratch = Scratch::new();
+    let (repo, _) = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut typing = scratch.window();
+    let workspace = typing.open(&repo);
+    assert!(matches!(typing.fact(), Fact::Workspaces(_)));
+    let mut watching = scratch.window();
+
+    // A workspace has one review, of no agent, from the first time it is asked for, and it
+    // is the same one the next time.
+    let reviews = typing.reviews(&workspace);
+    assert_eq!(reviews.workspace, workspace);
+    assert_eq!(reviews.viewed, Vec::<PathBuf>::new());
+    let [review] = &reviews.reviews[..] else {
+        panic!("not one review: {:?}", reviews.reviews);
+    };
+    assert_eq!(review.agent, None);
+    let review = review.id.clone();
+    assert_eq!(typing.reviews(&workspace).reviews[0].id, review);
+
+    // The first save makes the thread and is told to both Windows; one that changes the
+    // text is told to nobody, so the next reply is the next frame.
+    let (thread, comment) = ids(1);
+    let changed = Fact::ReviewsChanged {
+        workspace: workspace.clone(),
+    };
+    assert_eq!(
+        typing.save(&review, &thread, &comment, on_the_first_line(), "o"),
+        Ok(Reply::Done)
+    );
+    assert_eq!(typing.fact(), changed);
+    assert_eq!(watching.fact(), changed);
+    assert_eq!(
+        typing.save(&review, &thread, &comment, DraftOn::Thread, "ok"),
+        Ok(Reply::Done)
+    );
+    let held = typing.reviews(&workspace);
+    let kept = &held.reviews[0].threads[0];
+    assert_eq!(kept.id, thread);
+    assert_eq!(kept.anchor.path, PathBuf::from("a.txt"));
+    assert_eq!(kept.comments[0].text, "ok");
+    assert_eq!(kept.comments[0].round, None);
+
+    // A reply in a thread with nothing sent, and a save in a thread the review lacks.
+    let (_, reply) = ids(2);
+    assert!(matches!(
+        typing.save(&review, &thread, &reply, DraftOn::Thread, "no"),
+        Err(Refusal::Failed { .. })
+    ));
+    let (nowhere, other) = ids(3);
+    assert_eq!(
+        typing.save(&review, &nowhere, &other, DraftOn::Thread, "no"),
+        Err(Refusal::UnknownThread { thread: nowhere })
+    );
+    let nobody = ReviewId::new("0".repeat(32));
+    assert_eq!(
+        typing.save(&nobody, &thread, &other, on_the_first_line(), "no"),
+        Err(Refusal::UnknownReview {
+            review: nobody.clone()
+        })
+    );
+
+    // A draft is deleted, and the thread goes with it; another is copied.
+    let (second_thread, second) = ids(4);
+    assert_eq!(
+        typing.save(&review, &second_thread, &second, on_the_first_line(), "x"),
+        Ok(Reply::Done)
+    );
+    assert_eq!(typing.fact(), changed);
+    assert_eq!(watching.fact(), changed);
+    assert_eq!(
+        typing.ask(Request::DeleteDraft {
+            review: review.clone(),
+            comment: second.clone(),
+        }),
+        Ok(Reply::Done)
+    );
+    assert_eq!(typing.fact(), changed);
+    assert_eq!(watching.fact(), changed);
+    assert_eq!(typing.reviews(&workspace).reviews[0].threads.len(), 1);
+    assert_eq!(
+        typing.ask(Request::DeleteDraft {
+            review: review.clone(),
+            comment: second.clone(),
+        }),
+        Err(Refusal::UnknownComment {
+            comment: second.clone()
+        })
+    );
+
+    let Ok(Reply::Copied { text, round }) = typing.ask(Request::CopyReview {
+        review: review.clone(),
+    }) else {
+        panic!("not copied");
+    };
+    assert_eq!(round, 1);
+    assert!(text.contains("ok") && text.contains("a.txt"), "{text}");
+    assert_eq!(typing.fact(), changed);
+    assert_eq!(watching.fact(), changed);
+
+    // What was sent is not a draft any more, and a second copy has nothing to send.
+    assert_eq!(
+        typing.save(&review, &thread, &comment, DraftOn::Thread, "ok!"),
+        Err(Refusal::NotADraft {
+            comment: comment.clone()
+        })
+    );
+    assert_eq!(
+        typing.ask(Request::DeleteDraft {
+            review: review.clone(),
+            comment: comment.clone(),
+        }),
+        Err(Refusal::NotADraft { comment })
+    );
+    assert_eq!(
+        typing.ask(Request::CopyReview {
+            review: review.clone()
+        }),
+        Err(Refusal::NothingToSend {
+            review: review.clone()
+        })
+    );
+    let sent = typing.reviews(&workspace);
+    assert_eq!(sent.reviews[0].rounds.len(), 1);
+    assert_eq!(sent.reviews[0].threads[0].comments[0].round, Some(1));
+
+    // What the Keeper does not hold.
+    for request in [
+        Request::CopyReview {
+            review: nobody.clone(),
+        },
+        Request::MarkReviewed {
+            review: nobody.clone(),
+        },
+        Request::DeleteDraft {
+            review: nobody.clone(),
+            comment: second,
+        },
+    ] {
+        assert_eq!(
+            typing.ask(request),
+            Err(Refusal::UnknownReview {
+                review: nobody.clone()
+            })
+        );
+    }
+    let unknown = WorkspaceId::new("0".repeat(32));
+    assert_eq!(
+        typing.ask(Request::GetReviews {
+            workspace: unknown.clone()
+        }),
+        Err(Refusal::UnknownWorkspace {
+            workspace: unknown.clone()
+        })
+    );
+    typing.stop(keeper);
+}
+
+#[test]
+fn a_mark_of_reviewed_a_viewed_file_and_a_commit_are_answered_and_told() {
+    let scratch = Scratch::new();
+    let (repo, _) = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    assert!(matches!(window.fact(), Fact::Workspaces(_)));
+    let review = window.reviews(&workspace).reviews[0].id.clone();
+    let changed = Fact::ReviewsChanged {
+        workspace: workspace.clone(),
+    };
+
+    // Marked reviewed: the review holds the state it was marked at.
+    assert_eq!(window.reviews(&workspace).reviews[0].reviewed, None);
+    assert_eq!(
+        window.ask(Request::MarkReviewed {
+            review: review.clone()
+        }),
+        Ok(Reply::Done)
+    );
+    assert_eq!(window.fact(), changed);
+    assert!(window.reviews(&workspace).reviews[0].reviewed.is_some());
+
+    // A file is marked viewed for its content, and loses the mark when it changes; a path
+    // that leads out of the worktree is refused.
+    let view = |window: &mut Window, path: &str, viewed| {
+        window.ask(Request::SetViewed {
+            workspace: workspace.clone(),
+            path: PathBuf::from(path),
+            viewed,
+        })
+    };
+    assert_eq!(view(&mut window, "a.txt", true), Ok(Reply::Done));
+    assert_eq!(window.fact(), changed);
+    assert_eq!(
+        window.reviews(&workspace).viewed,
+        vec![PathBuf::from("a.txt")]
+    );
+    assert_eq!(
+        view(&mut window, "../outside.txt", true),
+        Err(Refusal::OutsideWorkspace {
+            path: PathBuf::from("../outside.txt")
+        })
+    );
+    std::fs::write(repo.join("a.txt"), "changed\n").expect("change the file");
+    assert_eq!(window.reviews(&workspace).viewed, Vec::<PathBuf>::new());
+    assert_eq!(view(&mut window, "a.txt", true), Ok(Reply::Done));
+    assert_eq!(window.fact(), changed);
+    assert_eq!(view(&mut window, "a.txt", false), Ok(Reply::Done));
+    assert_eq!(window.fact(), changed);
+    assert_eq!(window.reviews(&workspace).viewed, Vec::<PathBuf>::new());
+
+    // The commit: the changes of the workspace changed, and the review is as it was.
+    let reviewed = window.reviews(&workspace).reviews[0].reviewed.clone();
+    let Ok(Reply::Committed { commit }) = window.ask(Request::Commit {
+        workspace: workspace.clone(),
+        message: "Change the file".to_owned(),
+    }) else {
+        panic!("not committed");
+    };
+    assert_eq!(commit, git(&repo, &["rev-parse", "HEAD"]));
+    assert_eq!(
+        window.fact(),
+        Fact::ChangesChanged {
+            workspace: workspace.clone()
+        }
+    );
+    assert_eq!(window.reviews(&workspace).reviews[0].reviewed, reviewed);
+    assert_eq!(
+        window.ask(Request::Commit {
+            workspace: workspace.clone(),
+            message: "Nothing".to_owned(),
+        }),
+        Err(Refusal::NothingToCommit {
+            workspace: workspace.clone()
+        })
+    );
+
+    // A hook that refuses the commit: git's words come back, nothing is committed.
+    std::fs::write(repo.join("a.txt"), "again\n").expect("change the file");
+    let hook = repo.join(".git/hooks/pre-commit");
+    std::fs::write(&hook, "#!/bin/sh\necho no-commits-today >&2\nexit 1\n").expect("hook");
+    std::fs::set_permissions(&hook, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("make the hook run");
+    let Err(Refusal::Failed { reason }) = window.ask(Request::Commit {
+        workspace: workspace.clone(),
+        message: "Again".to_owned(),
+    }) else {
+        panic!("not refused");
+    };
+    assert!(reason.contains("no-commits-today"), "{reason}");
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), commit);
+
+    let unknown = WorkspaceId::new("0".repeat(32));
+    assert_eq!(
+        window.ask(Request::Commit {
+            workspace: unknown.clone(),
+            message: "No".to_owned(),
+        }),
+        Err(Refusal::UnknownWorkspace { workspace: unknown })
+    );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_worktree_that_is_gone_keeps_its_reviews_and_the_text_of_its_drafts_and_refuses_what_needs_it()
+{
+    let scratch = Scratch::new();
+    let (repo, _) = scratch.repository("repo");
+    git(
+        &repo,
+        &["worktree", "add", "--quiet", "-b", "linked", "../linked"],
+    );
+    let linked = scratch.0.join("linked");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&linked);
+    assert!(matches!(window.fact(), Fact::Workspaces(_)));
+    let review = window.reviews(&workspace).reviews[0].id.clone();
+    let (thread, comment) = ids(1);
+    assert_eq!(
+        window.save(&review, &thread, &comment, on_the_first_line(), "k"),
+        Ok(Reply::Done)
+    );
+    assert!(matches!(window.fact(), Fact::ReviewsChanged { .. }));
+
+    // The worktree is removed with git.
+    git(&repo, &["worktree", "remove", "--force", "../linked"]);
+
+    // The text of a draft needs no worktree, and the reviews are read as they were.
+    assert_eq!(
+        window.save(&review, &thread, &comment, DraftOn::Thread, "kept"),
+        Ok(Reply::Done)
+    );
+    let held = window.reviews(&workspace);
+    assert_eq!(held.reviews[0].threads[0].comments[0].text, "kept");
+    assert_eq!(held.viewed, Vec::<PathBuf>::new());
+
+    // What needs the files is refused with the words of the engine.
+    let gone = Refusal::Failed {
+        reason: "the worktree is gone".to_owned(),
+    };
+    let (other_thread, other) = ids(2);
+    for request in [
+        Request::CopyReview {
+            review: review.clone(),
+        },
+        Request::MarkReviewed {
+            review: review.clone(),
+        },
+        Request::SetViewed {
+            workspace: workspace.clone(),
+            path: PathBuf::from("a.txt"),
+            viewed: true,
+        },
+        Request::Commit {
+            workspace: workspace.clone(),
+            message: "No".to_owned(),
+        },
+        Request::SaveDraft {
+            review: review.clone(),
+            thread: other_thread,
+            comment: other,
+            on: on_the_first_line(),
+            text: "no".to_owned(),
+        },
+    ] {
+        assert_eq!(
+            window.ask(request.clone()),
+            Err(gone.clone()),
+            "{request:?}"
+        );
+    }
+    window.stop(keeper);
 }
