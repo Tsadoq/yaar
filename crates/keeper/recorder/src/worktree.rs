@@ -7,9 +7,9 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::Mutex;
 
-use crate::contents::{Contents, Read};
+use crate::contents::{Contents, Read, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::{IndexBackup, IndexCopy};
 
@@ -685,28 +685,10 @@ impl Worktree {
         name.push(b':');
         name.extend_from_slice(path.as_os_str().as_bytes());
 
-        let mut kept = self.contents.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut second_try = false;
-        loop {
-            let contents = match kept.as_mut() {
-                Some(contents) => contents,
-                None => kept.insert(Contents::start(&self.git, &self.root, &self.hooks_off)?),
-            };
-            match contents.read(&name) {
-                Ok(Read::Blob(content)) => return Ok(Some(content)),
-                Ok(Read::NoBlob) => return Ok(None),
-                Err(e) => {
-                    // The process died, or what it said makes no sense any more: end it,
-                    // and ask a new one, once.
-                    if let Some(contents) = kept.take() {
-                        contents.stop();
-                    }
-                    if second_try {
-                        return Err(e);
-                    }
-                    second_try = true;
-                }
-            }
+        let start = || Contents::start(&self.git, &self.root, &self.hooks_off);
+        match read_kept(&self.contents, start, &name)? {
+            Read::Blob(content) => Ok(Some(content)),
+            Read::NoBlob => Ok(None),
         }
     }
 
@@ -842,13 +824,7 @@ impl Worktree {
 
 impl Drop for Worktree {
     fn drop(&mut self) {
-        let kept = self
-            .contents
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner);
-        if let Some(contents) = kept.take() {
-            contents.stop();
-        }
+        stop_kept(&mut self.contents);
     }
 }
 

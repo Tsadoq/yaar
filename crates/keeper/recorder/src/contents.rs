@@ -1,9 +1,11 @@
-//! The one process a worktree keeps to hand out the contents of files in commits.
+//! The one process a worktree or a state store keeps to hand out the contents of files in
+//! commits.
 
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::{Mutex, PoisonError};
 
 use crate::git::{Git, GitError, Place, could_not_start, shown};
 
@@ -14,6 +16,47 @@ pub(crate) enum Read {
     /// There is no file by that name: nothing at all, or a folder, or a repository of
     /// its own.
     NoBlob,
+}
+
+/// Asks the process in `kept` for the object `name`, starting it with `start` when none is
+/// running. A process that has died, or whose answer makes no sense any more, is ended and
+/// a new one asked, once: a second failure is the answer.
+///
+/// The lock on `kept` is held for the whole question, so one process answers one question
+/// at a time; it guards nothing else.
+pub(crate) fn read_kept(
+    kept: &Mutex<Option<Contents>>,
+    start: impl Fn() -> Result<Contents, GitError>,
+    name: &[u8],
+) -> Result<Read, GitError> {
+    let mut kept = kept.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut second_try = false;
+    loop {
+        let contents = match kept.as_mut() {
+            Some(contents) => contents,
+            None => kept.insert(start()?),
+        };
+        match contents.read(name) {
+            Ok(read) => return Ok(read),
+            Err(e) => {
+                if let Some(contents) = kept.take() {
+                    contents.stop();
+                }
+                if second_try {
+                    return Err(e);
+                }
+                second_try = true;
+            }
+        }
+    }
+}
+
+/// Ends the process in `kept`, if one runs, and waits for it.
+pub(crate) fn stop_kept(kept: &mut Mutex<Option<Contents>>) {
+    let kept = kept.get_mut().unwrap_or_else(PoisonError::into_inner);
+    if let Some(contents) = kept.take() {
+        contents.stop();
+    }
 }
 
 /// A running `git cat-file` that is asked name by name.
