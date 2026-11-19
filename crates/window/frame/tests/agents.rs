@@ -350,15 +350,15 @@ fn of_two_answers_for_the_terminals_only_the_one_to_the_last_question_counts_whe
     // The first answer still lists `one`, and the second lists none: neither is taken.
     keeper.release_terminals(2);
     settle('x', &models, &mut keeper, cx);
-    models
-        .terminals
-        .read_with(cx, |list, _| assert_eq!(list.terminals(), [two.clone()]));
+    models.terminals.read_with(cx, |list, _| {
+        assert_eq!(list.terminals(), std::slice::from_ref(&two))
+    });
 
     keeper.release_terminals(1);
     settle('y', &models, &mut keeper, cx);
-    models
-        .terminals
-        .read_with(cx, |list, _| assert_eq!(list.terminals(), [two.clone()]));
+    models.terminals.read_with(cx, |list, _| {
+        assert_eq!(list.terminals(), std::slice::from_ref(&two))
+    });
 }
 
 /// Clicks the row of a workspace in the sidebar where it was drawn.
@@ -407,7 +407,10 @@ fn told_after_settling(
     keeper: &mut KeeperEnd,
     cx: &mut TestAppContext,
 ) -> Vec<Option<WorkspaceId>> {
+    // Twice: the list the first carries may itself make the Window tell something, and
+    // the second barrier is after that.
     settle(mark, models, keeper, cx);
+    settle(mark.to_ascii_uppercase(), models, keeper, cx);
     keeper.shown_told()
 }
 
