@@ -568,7 +568,17 @@ mod tests {
                 42,
                 "fn a() {}\n\nfn b() {}",
             ),
+            // The same line written in Flow and written in Changes. The review pane builds
+            // both anchors one way: the path in the version of the line's side, the side,
+            // the line and its text, and for the new side the state the turn ended with.
+            // In Flow the line is one of the turn's live diff, read from the files on
+            // disk; the engine records them in state S2 before the anchor reaches the model.
+            // In Changes it is a line of the turn's change, to state S2.
+            anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
+            anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
         ];
+        // Neither view leaves a mark on the anchor: both are kept, field for field.
+        assert_eq!(given[3], given[4]);
         for (n, anchor) in given.iter().enumerate() {
             let n = n as u32 + 1;
             review
@@ -581,7 +591,7 @@ mod tests {
                 .expect("start the thread");
         }
 
-        assert_eq!(review.threads().len(), 3);
+        assert_eq!(review.threads().len(), given.len());
         for (n, wanted) in given.iter().enumerate() {
             let thread = &review.threads()[n];
             let kept = &thread.anchor;
@@ -603,15 +613,27 @@ mod tests {
             assert_eq!(first.round, None);
         }
 
+        // The two anchors of one line, written in either view, are kept the same.
+        let (in_flow, in_changes) = (&review.threads()[3].anchor, &review.threads()[4].anchor);
+        assert_eq!(in_flow, in_changes);
+        assert_eq!(
+            (&in_flow.tree, &in_flow.path, in_flow.side),
+            (&"S2".to_owned(), &"src/b.rs".into(), Side::New)
+        );
+        assert_eq!(
+            (in_flow.first, in_flow.last, in_flow.text.as_str()),
+            (5, 5, "let drafted = 3;")
+        );
+
         // Edit and delete work the same on each.
-        for n in 1..=3 {
+        for n in 1..=given.len() as u32 {
             review
                 .edit(&comment_id(n + 100), &format!("edited {n}"))
                 .expect("edit the draft");
             let (_, comment) = review.comment(&comment_id(n + 100)).expect("found");
             assert_eq!(comment.text, format!("edited {n}"));
         }
-        for n in 1..=3 {
+        for n in 1..=given.len() as u32 {
             review.delete(&comment_id(n + 100)).expect("delete");
             assert!(review.thread(&thread_id(n)).is_none());
         }
