@@ -290,7 +290,8 @@ impl Switchboard {
     /// after a permission it waited for is the answer; a turn that ends, by the CLI's word
     /// or by the mark of an interrupt, leaves it finished and not reviewed; the session's
     /// end, not running. An event of a session that has ended is taken as its CLI resuming
-    /// it. A step outside a turn opens none: it is told with no turn, as nothing.
+    /// it, unreviewed when its last turn was not reviewed and idle otherwise. A step
+    /// outside a turn opens none: it is told with no turn, as nothing.
     ///
     /// Ends that came unreported. A turn that starts while one is open ends the open one
     /// as interrupted first, as when the mark of an interrupt was missed. A turn's end with
@@ -323,12 +324,18 @@ impl Switchboard {
         let entry = &mut self.sessions[at];
 
         // A session that does not run and is heard of starts: for the first time when the
-        // Switchboard has not met it, as a resume when it has or the Store kept it, and idle
-        // either way.
+        // Switchboard has not met it, as a resume when it has or the Store kept it. It
+        // starts idle, and a resume keeps the mark of a turn nobody reviewed: it is
+        // unreviewed until the review is marked reviewed. What it waited for when it ended
+        // is gone.
         if !entry.running() {
             let resumed = !first_heard;
-            entry.known.state = State::Idle;
-            entry.unreviewed = false;
+            let state = if entry.unreviewed {
+                State::Unreviewed
+            } else {
+                State::Idle
+            };
+            entry.known.state = state;
             changes.push(Change::Started {
                 session: entry.known.id.clone(),
                 agent: entry.known.agent.clone(),
@@ -340,7 +347,7 @@ impl Switchboard {
             if resumed {
                 changes.push(Change::State {
                     session: entry.known.id.clone(),
-                    state: State::Idle,
+                    state,
                 });
             }
         }
@@ -1139,7 +1146,7 @@ mod tests {
         desk.hear("a", Event::SessionEnded);
         assert_eq!(desk.state("a"), State::NotRunning);
 
-        // The turn it left unreviewed does not come back with it: it is idle.
+        // The turn it left unreviewed comes back with it.
         let resumed = Reported {
             terminal: Some("terminal-new".to_string()),
             folder: Some(PathBuf::from("/work/other")),
@@ -1162,10 +1169,10 @@ mod tests {
                     folder: Some(PathBuf::from("/work/other")),
                     resumed: true,
                 },
-                now(&id, State::Idle)
+                now(&id, State::Unreviewed)
             ]
         );
-        assert_eq!(desk.state("a"), State::Idle);
+        assert_eq!(desk.state("a"), State::Unreviewed);
         assert_eq!(desk.known("a").pid, Some(200));
         assert_eq!(desk.known("a").terminal.as_deref(), Some("terminal-new"));
         assert_eq!(desk.board.pids(), [200]);
@@ -1187,7 +1194,8 @@ mod tests {
             assert_eq!(ending.last(), Some(&now(&id, State::NotRunning)));
             assert!(ending.contains(&ends(&id, &turn, TurnEnd::Interrupted)));
 
-            // The prompt died with the process: nothing asks for an answer now.
+            // The prompt died with the process: nothing asks for an answer now. The turn it
+            // interrupted is unreviewed, which is all it shows.
             assert_eq!(
                 desk.hear("a", started()),
                 [
@@ -1199,10 +1207,11 @@ mod tests {
                         folder: Some(PathBuf::from("/work/project")),
                         resumed: true,
                     },
-                    now(&id, State::Idle)
+                    now(&id, State::Unreviewed)
                 ]
             );
-            assert_eq!(desk.board.reviewed(&id), []);
+            assert_eq!(desk.state("a"), State::Unreviewed);
+            assert_eq!(desk.board.reviewed(&id), [now(&id, State::Idle)]);
             assert_eq!(desk.state("a"), State::Idle);
             // A turn that follows is an ordinary one, not one that waits.
             let again = desk.hear("a", Event::TurnStarted);
@@ -1213,22 +1222,63 @@ mod tests {
     }
 
     #[test]
-    fn a_session_resumed_after_an_unreviewed_turn_is_idle_and_stays_idle() {
+    fn a_session_resumed_after_an_unreviewed_turn_is_unreviewed_until_it_is_marked_reviewed() {
         let (mut desk, id, _) = in_a_turn("a");
         desk.hear("a", turn_ended(TurnEnd::Finished));
-        assert_eq!(desk.state("a"), State::Unreviewed);
         desk.hear("a", Event::SessionEnded);
-        desk.hear("a", started());
-        assert_eq!(desk.state("a"), State::Idle);
+        assert_eq!(
+            desk.hear("a", started()),
+            [
+                Change::Started {
+                    session: id.clone(),
+                    agent: "claude".to_string(),
+                    cli: CliSession("a".to_string()),
+                    terminal: Some("terminal-a".to_string()),
+                    folder: Some(PathBuf::from("/work/project")),
+                    resumed: true,
+                },
+                now(&id, State::Unreviewed)
+            ]
+        );
+        assert_eq!(desk.state("a"), State::Unreviewed);
 
-        // Nothing but a turn takes it out of idle: a prompt with no turn, asked and
-        // answered, leaves it idle and does not bring the old unreviewed mark back.
+        // A prompt with no turn, asked and answered, leaves it unreviewed.
         assert_eq!(
             desk.hear("a", permission(true)),
             [now(&id, State::WaitsForPermission)]
         );
-        assert_eq!(desk.hear("a", permission(false)), [now(&id, State::Idle)]);
-        assert_eq!(desk.board.reviewed(&id), []);
+        assert_eq!(
+            desk.hear("a", permission(false)),
+            [now(&id, State::Unreviewed)]
+        );
+        assert_eq!(desk.state("a"), State::Unreviewed);
+
+        // Only the mark of reviewed takes it out of there.
+        assert_eq!(desk.board.reviewed(&id), [now(&id, State::Idle)]);
+        assert_eq!(desk.state("a"), State::Idle);
+    }
+
+    #[test]
+    fn a_session_resumed_with_nothing_unreviewed_is_idle() {
+        let mut desk = Desk::new();
+        desk.hear("a", started());
+        let id = desk.id("a");
+        desk.hear("a", Event::SessionEnded);
+        assert_eq!(
+            desk.hear("a", started()).last(),
+            Some(&now(&id, State::Idle))
+        );
+        assert_eq!(desk.state("a"), State::Idle);
+
+        // One whose turn was reviewed before it ended is idle too.
+        desk.hear("a", Event::TurnStarted);
+        desk.hear("a", turn_ended(TurnEnd::Finished));
+        desk.board.reviewed(&id);
+        desk.hear("a", Event::SessionEnded);
+        assert_eq!(
+            desk.hear("a", started()).last(),
+            Some(&now(&id, State::Idle))
+        );
         assert_eq!(desk.state("a"), State::Idle);
     }
 
@@ -1247,7 +1297,7 @@ mod tests {
                     folder: Some(PathBuf::from("/work/project")),
                     resumed: true,
                 },
-                now(&id, State::Idle),
+                now(&id, State::Unreviewed),
                 Change::TurnStarted {
                     session: id.clone(),
                     turn: turn_drawn(3),

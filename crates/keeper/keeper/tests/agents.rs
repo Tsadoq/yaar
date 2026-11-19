@@ -1299,6 +1299,53 @@ fn a_session_its_cli_resumes_after_a_restart_keeps_its_id_and_its_review() {
 }
 
 #[test]
+fn a_session_that_ended_with_an_unreviewed_turn_is_shown_unreviewed_with_its_review_when_its_cli_resumes_it()
+ {
+    let mut setup = Setup::new();
+    let records = recorded::hook_events(TOOLS);
+    setup.hooks(&records, &[1, 2, 32]);
+    let finished = setup.agents_until("the turn is unreviewed", is_state(SessionState::Unreviewed));
+    let (session, review) = (
+        finished.sessions[0].id.clone(),
+        finished.sessions[0].review.clone().expect("a review"),
+    );
+    // The turn's state is recorded by now, so that nothing of the turn is still to come.
+    setup.window.until("the end of the turn", |fact| {
+        matches!(fact, Fact::TurnEnded { .. }).then_some(())
+    });
+    setup.hook(&records[35]);
+    let ended = setup.agents_until("the session ended", is_state(SessionState::NotRunning));
+    assert_eq!(ended.sessions[0].review, Some(review.clone()));
+
+    // Its CLI resumes it, and nobody has reviewed the turn it left.
+    setup.hook(&records[1]);
+    let resumed = setup.agents_until("the session runs again", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.state != SessionState::NotRunning)
+    });
+    assert_eq!(resumed.shown, Some(SessionState::Unreviewed));
+    assert_eq!(resumed.sessions.len(), 1);
+    assert_eq!(resumed.sessions[0].id, session);
+    assert_eq!(resumed.sessions[0].state, SessionState::Unreviewed);
+    assert_eq!(resumed.sessions[0].review, Some(review.clone()));
+    assert_eq!(
+        setup.window.agents()[0].shown,
+        Some(SessionState::Unreviewed)
+    );
+
+    // Marking the review reviewed is what makes it idle.
+    assert_eq!(
+        setup.window.ask(Request::MarkReviewed { review }),
+        Ok(Reply::Done)
+    );
+    let idle = setup.agents_until("the session is idle", is_state(SessionState::Idle));
+    assert_eq!(idle.shown, Some(SessionState::Idle));
+    let _ = setup.finish();
+}
+
+#[test]
 fn a_bash_command_denied_at_its_dialog_leaves_no_command_window_open() {
     let mut setup = Setup::new();
     let dialogs = recorded::hook_events(DIALOGS);
