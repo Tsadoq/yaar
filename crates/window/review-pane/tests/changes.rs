@@ -16,8 +16,8 @@ use yaar_link::{
 use yaar_review_pane::{ChangeShown, PaneRow, ReviewPane};
 
 use common::{
-    COMMIT, Stage, commit, drawn, file, id, link_up, no_agent_review, open_window, repository,
-    review_id, rows, since_main, texts, wait_for_files, wait_until, workspace,
+    COMMIT, Stage, commit, drawn, file, id, link_up, no_agent_review, open_window, read_file,
+    repository, review_id, rows, since_main, texts, wait_for_files, wait_until, workspace,
 };
 
 /// The id of a commit or a state that is this digit forty times.
@@ -475,5 +475,589 @@ fn marked_entries_are_shown_as_a_range_from_the_first_to_the_last_and_a_shift_cl
     assert_eq!(
         shown(&stage.pane, &mut cx),
         ChangeShown::Entries { first: 0, last: 2 }
+    );
+
+    // A click with Shift above the one shown reaches up to it, the other way round.
+    click_entry(Some(2), Modifiers::none(), &mut cx);
+    compared(&mut stage, s1(), Some(c2()), vec![], &mut cx);
+    wait_for_paths(&stage, &[], &mut cx);
+    click_entry(Some(1), Modifiers::shift(), &mut cx);
+    compared(&mut stage, c1(), Some(c2()), vec![], &mut cx);
+    wait_for_paths(&stage, &[], &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 2 }
+    );
+}
+
+/// Selects the turn of the history of the tests with a click, and answers what the pane
+/// asks for it: one file, `turn.txt`, from `before` to `after`.
+fn select_the_turn(stage: &mut Stage, before: &str, after: &str, cx: &mut VisualTestContext) {
+    click_entry(Some(1), Modifiers::none(), cx);
+    compared(
+        stage,
+        c1(),
+        Some(s1()),
+        vec![file("turn.txt", FileStatus::Modified)],
+        cx,
+    );
+    read_versions(
+        stage,
+        versions_of(Some(c1()), "turn.txt", Some(s1()), "turn.txt"),
+        before,
+        after,
+        cx,
+    );
+    wait_for_paths(stage, &["turn.txt"], cx);
+}
+
+#[gpui_kit::test]
+fn a_turn_with_no_state_is_drawn_and_cannot_be_selected_or_marked(cx: &mut TestAppContext) {
+    let history = History {
+        entries: vec![
+            HistoryEntry::Commit(commit('1', "First")),
+            turn('a', None),
+            HistoryEntry::Commit(commit('2', "Second")),
+        ],
+        ..history()
+    };
+    let (mut stage, mut cx) = open_with_history(history, uncommitted(), cx);
+    assert!(
+        entry_bounds(Some(1), &mut cx).is_some(),
+        "the turn is drawn"
+    );
+    // The click puts the cursor on the turn and the focus in the tree, where the keys that
+    // mark and show the entry under the cursor have nothing to mark or show.
+    click_entry(Some(1), Modifiers::none(), &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.history_cursor()),
+        Some(1)
+    );
+    cx.simulate_keystrokes("space enter");
+    let held = stage
+        .pane
+        .read_with(&cx, |pane, _| (pane.marked_changes(), pane.change_shown()));
+    assert_eq!(held, (Vec::new(), ChangeShown::Comparison));
+
+    // A change that is from the version above the turn, and not from the turn: C2 is
+    // counted from C1, since the turn has no state to count from. The request that
+    // follows is a barrier for the keys and the click above, which asked nothing.
+    click_entry(Some(2), Modifiers::none(), &mut cx);
+    compared(&mut stage, c1(), Some(c2()), vec![], &mut cx);
+    wait_for_paths(&stage, &[], &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 2, last: 2 }
+    );
+}
+
+#[gpui_kit::test]
+fn the_keys_of_the_tree_do_not_reach_the_rows_and_tab_gives_the_rows_the_focus_back(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("tab");
+    let layout = stage.pane.read_with(&cx, |pane, _| pane.layout());
+    // `s` switches the layout and `c` opens a comment box, where the rows have the focus.
+    cx.simulate_keystrokes("s c y m r");
+    let held = stage.pane.read_with(&cx, |pane, _| {
+        (pane.layout(), pane.comment_box(), pane.notice())
+    });
+    assert_eq!((held.0, held.1, held.2), (layout, None, None));
+    cx.simulate_keystrokes("tab");
+    cx.simulate_keystrokes("s");
+    assert_ne!(
+        stage.pane.read_with(&cx, |pane, _| pane.layout()),
+        layout,
+        "the keys of the rows work again"
+    );
+    cx.update(|window, _| assert!(stage.focus.is_focused(window)));
+    // And a key of the tree does nothing where the rows have the focus.
+    cx.simulate_keystrokes("space");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.marked_changes()),
+        Vec::<usize>::new()
+    );
+    let _ = &mut stage;
+}
+
+#[gpui_kit::test]
+fn the_cursor_stays_in_the_tree_and_the_wheel_scrolls_a_long_history_in_its_own_list(
+    cx: &mut TestAppContext,
+) {
+    let long = History {
+        entries: (0..12u8)
+            .map(|n| HistoryEntry::Commit(commit(char::from(b'a' + n), &format!("Commit {n}"))))
+            .collect(),
+        ..history()
+    };
+    let (stage, mut cx) = open_with_history(long, uncommitted(), cx);
+    assert!(entry_bounds(Some(7), &mut cx).is_some());
+    assert!(
+        entry_bounds(Some(8), &mut cx).is_none(),
+        "only 8 entries are in view"
+    );
+    let rows_in_view = stage.pane.read_with(&cx, |pane, _| pane.rows_in_view());
+    let over = entry_bounds(Some(3), &mut cx).expect("drawn").center();
+    cx.simulate_event(gpui_kit::ScrollEvent {
+        position: over,
+        delta: gpui_kit::ScrollDelta::Pixels(gpui_kit::point(
+            gpui_kit::px(0.),
+            gpui_kit::px(-400.),
+        )),
+        ..gpui_kit::ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert!(
+        entry_bounds(Some(0), &mut cx).is_none(),
+        "the tree scrolled"
+    );
+    assert!(
+        entry_bounds(None, &mut cx).is_some(),
+        "the uncommitted entry is reached"
+    );
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.rows_in_view()),
+        rows_in_view,
+        "the wheel over the tree moved the tree and not the files"
+    );
+
+    // The keys take the view along with the cursor.
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("tab");
+    for _ in 0..13 {
+        cx.simulate_keystrokes("j");
+    }
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.history_cursor()),
+        Some(12),
+        "the cursor stops at the uncommitted entry"
+    );
+    cx.simulate_keystrokes("k");
+    let cursor = stage.pane.read_with(&cx, |pane, _| pane.history_cursor());
+    assert_eq!(cursor, Some(11));
+    assert!(entry_bounds(Some(11), &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn a_selection_stays_when_the_comparison_is_read_again_and_the_uncommitted_changes_are_asked_for_again(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    select_the_turn(&mut stage, "before\n", "after\n", &mut cx);
+    let asked = stage.keeper.uncommitted_asked();
+    stage
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
+    wait_until(&mut cx, "the uncommitted changes asked for again", |_| {
+        stage.keeper.uncommitted_asked() > asked
+    });
+    // The comparison is read again, and the reviewer's selection stays where it is.
+    let changes = since_main(
+        vec![commit('b', "Edit the story")],
+        vec![file("story.txt", FileStatus::Modified)],
+    );
+    let again = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
+    stage.keeper.reply(again, Ok(Reply::Changes(changes)));
+    wait_until(&mut cx, "the comparison answered", |cx| {
+        stage
+            .models
+            .changes
+            .read_with(cx, |changes, _| !changes.is_loading())
+    });
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
+    assert_eq!(paths(&stage.pane, &mut cx), ["turn.txt"]);
+    // Nothing was asked for the files of the comparison: another workspace is the next
+    // thing the Window asks about.
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '2', "other",
+        )])]));
+    let next = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('2') }, &mut cx);
+    stage.keeper.reply(
+        next,
+        Ok(Reply::Changes(yaar_link::Changes {
+            workspace: id('2'),
+            ..since_main(Vec::new(), Vec::new())
+        })),
+    );
+}
+
+#[gpui_kit::test]
+fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_selection_is_kept_when_its_entries_are_as_they_were(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    select_the_turn(&mut stage, "before\n", "after\n", &mut cx);
+
+    // A commit joins the history: the turn is still entry 1 and what it leads to has not
+    // changed, so nothing is asked again for its files.
+    let grown = History {
+        entries: {
+            let mut entries = history().entries;
+            entries.push(HistoryEntry::Commit(commit('3', "Third")));
+            entries
+        },
+        ..history()
+    };
+    let asked = stage.keeper.history_asked();
+    stage.keeper.set_history(grown.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(&mut cx, "the longer history", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&grown))
+    });
+    assert!(stage.keeper.history_asked() > asked);
+    assert!(entry_bounds(Some(3), &mut cx).is_some());
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
+
+    // A turn that ended asks for the history and for the uncommitted changes.
+    let (history_asked, uncommitted_asked) = (
+        stage.keeper.history_asked(),
+        stage.keeper.uncommitted_asked(),
+    );
+    stage.keeper.tell(Fact::TurnEnded {
+        workspace: id('1'),
+        session: session(),
+        turn: TurnId::new("b".repeat(32)),
+        state: Some(version('6')),
+        since: None,
+    });
+    wait_until(
+        &mut cx,
+        "the history and the uncommitted changes asked for",
+        |_| {
+            stage.keeper.history_asked() > history_asked
+                && stage.keeper.uncommitted_asked() > uncommitted_asked
+        },
+    );
+
+    // The turn leaves the history: the selection of it is gone, and the comparison is
+    // back in its place.
+    let without = History {
+        entries: vec![HistoryEntry::Commit(commit('1', "First"))],
+        ..history()
+    };
+    stage.keeper.set_history(without.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(&mut cx, "the shorter history", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&without))
+    });
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    assert_eq!(paths(&stage.pane, &mut cx), ["story.txt"]);
+}
+
+#[gpui_kit::test]
+fn with_nothing_committed_the_uncommitted_files_are_read_from_nothing(cx: &mut TestAppContext) {
+    let nothing = History {
+        start: None,
+        entries: Vec::new(),
+        ..history()
+    };
+    let (mut stage, mut cx) = open_with_history(nothing, uncommitted(), cx);
+    assert!(
+        entry_bounds(None, &mut cx).is_some(),
+        "the uncommitted entry is drawn alone"
+    );
+    click_entry(None, Modifiers::none(), &mut cx);
+    read_versions(
+        &mut stage,
+        versions_of(None, "mine.txt", None, "mine.txt"),
+        "",
+        "one\n",
+        &mut cx,
+    );
+    read_versions(
+        &mut stage,
+        versions_of(None, "outside.txt", None, "outside.txt"),
+        "",
+        "two\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["mine.txt", "outside.txt"], &mut cx);
+}
+
+#[gpui_kit::test]
+fn a_change_with_nothing_before_it_says_so_and_asks_for_no_comparison(cx: &mut TestAppContext) {
+    let first_turn = History {
+        start: None,
+        entries: vec![turn('a', Some(s1()))],
+        ..history()
+    };
+    let (mut stage, mut cx) = open_with_history(first_turn, Vec::new(), cx);
+    click_entry(Some(0), Modifiers::none(), &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 0, last: 0 }
+    );
+    assert!(stage.pane.read_with(&cx, |pane, _| pane.notice()).is_some());
+    // Nothing was asked: what the Window asks next is the changes of another workspace.
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '2', "other",
+        )])]));
+    let next = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('2') }, &mut cx);
+    stage.keeper.reply(
+        next,
+        Ok(Reply::Changes(yaar_link::Changes {
+            workspace: id('2'),
+            ..since_main(Vec::new(), Vec::new())
+        })),
+    );
+}
+
+#[gpui_kit::test]
+fn the_answer_to_a_selection_that_another_one_has_replaced_is_not_shown(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    click_entry(Some(0), Modifiers::none(), &mut cx);
+    let first = stage.keeper.request(&mut cx);
+    click_entry(Some(2), Modifiers::none(), &mut cx);
+    let second = stage.keeper.request(&mut cx);
+    assert_eq!(
+        first.1,
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: start(),
+            to: Some(c1())
+        }
+    );
+    assert_eq!(
+        second.1,
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s1(),
+            to: Some(c2())
+        }
+    );
+    // The Keeper answers the second first, then the one that was replaced.
+    stage.keeper.reply(
+        second.0,
+        Ok(Reply::Compared(vec![file("second.txt", FileStatus::Added)])),
+    );
+    read_versions(
+        &mut stage,
+        versions_of(Some(s1()), "second.txt", Some(c2()), "second.txt"),
+        "",
+        "2\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["second.txt"], &mut cx);
+    stage.keeper.reply(
+        first.0,
+        Ok(Reply::Compared(vec![file("first.txt", FileStatus::Added)])),
+    );
+    cx.run_until_parked();
+    assert_eq!(paths(&stage.pane, &mut cx), ["second.txt"]);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 2, last: 2 }
+    );
+}
+
+#[gpui_kit::test]
+fn a_comment_on_the_files_of_a_selection_is_anchored_in_the_versions_the_change_is_between(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    select_the_turn(&mut stage, "before\n", "after\n", &mut cx);
+    // The rows are the heading, then the removed line and the added one.
+    let anchor_of = |stage: &Stage, cx: &mut VisualTestContext| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| {
+                pane.comment_box().and_then(|opened| opened.anchor)
+            })
+            .expect("a box with an anchor")
+    };
+    let removed = common::bounds_of_row(1, &mut cx).center();
+    cx.simulate_click(removed, Modifiers::none());
+    cx.simulate_keystrokes("c");
+    let old = anchor_of(&stage, &mut cx);
+    assert_eq!(
+        (old.side, old.tree.as_deref()),
+        (yaar_link::Side::Old, Some(c1().as_str()))
+    );
+    cx.simulate_keystrokes("escape");
+    let added = common::bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(added, Modifiers::none());
+    cx.simulate_keystrokes("c");
+    let new = anchor_of(&stage, &mut cx);
+    assert_eq!(
+        (new.side, new.tree.as_deref()),
+        (yaar_link::Side::New, Some(s1().as_str()))
+    );
+    assert_eq!(new.text, "after");
+    cx.simulate_keystrokes("escape");
+}
+
+#[gpui_kit::test]
+fn the_tree_is_not_drawn_where_there_is_nothing_in_it_to_select(cx: &mut TestAppContext) {
+    let (stage, mut cx) = open_with_history(
+        History {
+            entries: Vec::new(),
+            ..history()
+        },
+        Vec::new(),
+        cx,
+    );
+    assert_eq!(entry_bounds(None, &mut cx), None);
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+}
+
+/// A window that has the history of the tests from its first moment and no answer yet for
+/// its changes. The request for them is the first the Keeper hears; its id is given back,
+/// to be answered when the test wants the changes to come.
+fn open_before_the_changes(cx: &mut TestAppContext) -> (Stage, VisualTestContext, RequestId) {
+    let (models, keeper) = link_up(vec![workspace('1', "feature")], cx);
+    keeper.set_history(history());
+    keeper.set_uncommitted(uncommitted());
+    let (mut stage, mut cx) = open_window(models, keeper, cx);
+    let changes = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('1') }, &mut cx);
+    (stage, cx, changes)
+}
+
+/// Answers the question for the changes of the workspace, then for their one file.
+fn answer_the_changes(stage: &mut Stage, asked: RequestId) -> yaar_link::Changes {
+    let changes = since_main(
+        vec![commit('b', "Edit the story")],
+        vec![file("story.txt", FileStatus::Modified)],
+    );
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Changes(changes.clone())));
+    changes
+}
+
+#[gpui_kit::test]
+fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_comparison(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx, changes_asked) = open_before_the_changes(cx);
+    // Nothing of git has answered, and the last turn of the history is on screen, read
+    // from the states the Keeper keeps.
+    compared(
+        &mut stage,
+        c1(),
+        Some(s1()),
+        vec![file("turn.txt", FileStatus::Modified)],
+        &mut cx,
+    );
+    read_versions(
+        &mut stage,
+        versions_of(Some(c1()), "turn.txt", Some(s1()), "turn.txt"),
+        "before\n",
+        "after\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["turn.txt"], &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
+    assert!(matches!(
+        rows(&stage.pane, &mut cx).first(),
+        Some(PaneRow::File { .. })
+    ));
+
+    // The comparison answers, and takes the turn's place.
+    let changes = answer_the_changes(&mut stage, changes_asked);
+    read_versions(
+        &mut stage,
+        read_file(&changes, &changes.files[0]),
+        "a\nb\n",
+        "a\nc\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["story.txt"], &mut cx);
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    assert!(matches!(
+        rows(&stage.pane, &mut cx).first(),
+        Some(PaneRow::Comparison { .. })
+    ));
+}
+
+#[gpui_kit::test]
+fn what_the_reviewer_selects_before_the_changes_come_is_not_taken_by_them(cx: &mut TestAppContext) {
+    let (mut stage, mut cx, changes_asked) = open_before_the_changes(cx);
+    compared(&mut stage, c1(), Some(s1()), Vec::new(), &mut cx);
+    wait_until(&mut cx, "the last turn shown", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.change_shown() != ChangeShown::Comparison)
+    });
+    click_entry(Some(2), Modifiers::none(), &mut cx);
+    compared(
+        &mut stage,
+        s1(),
+        Some(c2()),
+        vec![file("second.txt", FileStatus::Added)],
+        &mut cx,
+    );
+    read_versions(
+        &mut stage,
+        versions_of(Some(s1()), "second.txt", Some(c2()), "second.txt"),
+        "",
+        "2\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["second.txt"], &mut cx);
+
+    answer_the_changes(&mut stage, changes_asked);
+    wait_until(&mut cx, "the changes answered", |cx| {
+        stage
+            .models
+            .changes
+            .read_with(cx, |changes, _| changes.changes().is_some())
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 2, last: 2 }
+    );
+    assert_eq!(paths(&stage.pane, &mut cx), ["second.txt"]);
+    // No file of the comparison was asked for: another workspace's changes are the next
+    // request the Window makes.
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '2', "other",
+        )])]));
+    let next = stage
+        .keeper
+        .expect(Request::GetChanges { workspace: id('2') }, &mut cx);
+    stage.keeper.reply(
+        next,
+        Ok(Reply::Changes(yaar_link::Changes {
+            workspace: id('2'),
+            ..since_main(Vec::new(), Vec::new())
+        })),
     );
 }

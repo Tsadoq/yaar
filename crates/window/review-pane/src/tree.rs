@@ -204,6 +204,11 @@ impl ReviewPane {
     /// Shows an answer for the history, and keeps what is selected in it when what was
     /// selected is still there.
     fn history_answered(&mut self, history: History, cx: &mut Context<Self>) {
+        // An answer that tells nothing new, as the second of two questions asked close
+        // together, leaves what is shown as it is.
+        if self.tree.history.as_ref() == Some(&history) {
+            return;
+        }
         let entries = history.entries.len();
         self.tree.history = Some(history);
         self.tree.marked.retain(|&index| index < entries);
@@ -219,7 +224,19 @@ impl ReviewPane {
                     self.back_to_comparison(cx);
                 }
             }
-            ChangeShown::Uncommitted => self.select_uncommitted(false, cx),
+            ChangeShown::Uncommitted => {
+                // The files are read again only when the commit they are counted from
+                // is another.
+                let base = self.tree.history.as_ref().and_then(checked_out);
+                if self.tree.wanted
+                    != (Source::Versions {
+                        old: base,
+                        new: None,
+                    })
+                {
+                    self.select_uncommitted(false, cx);
+                }
+            }
             ChangeShown::Comparison => {
                 // A window that has no changes yet shows the last turn that was recorded:
                 // the history is read from the Keeper's records, and the changes need git.
