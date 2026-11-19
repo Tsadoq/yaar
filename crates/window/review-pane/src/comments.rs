@@ -176,36 +176,51 @@ impl ReviewPane {
         })
     }
 
-    /// The first thread of the review that sits on the line the reviewer is on. An
-    /// unchanged line is one row with a line on each side, and a thread of either side
-    /// sits there: the reviewer stands on it by one side whichever the thread is on.
-    fn thread_on(&self, position: &Position) -> Option<&Thread> {
-        let file = &self.files[*self.by_path.get(&position.path)?].file;
+    /// The threads of the review that sit on the line the reviewer is on, those of the
+    /// reviewer's own side first. An unchanged line is one row with a line on each side,
+    /// and a thread of either side sits there: the reviewer stands on it by one side
+    /// whichever the thread is on.
+    fn threads_on(&self, position: &Position) -> Vec<&Thread> {
+        let Some(&index) = self.by_path.get(&position.path) else {
+            return Vec::new();
+        };
+        let file = &self.files[index].file;
         let on_both_sides = match self.position_row.and_then(|row| self.rows.get(row)) {
             Some(PaneRow::Diff { row, .. }) if matches!(row, yaar_diff::Row::Context { .. }) => {
                 Some(row)
             }
             _ => None,
         };
-        self.review()?.threads.iter().find(|thread| {
-            let side = pane_side(thread.anchor.side);
-            let line = match on_both_sides {
-                Some(row) => row.line(side),
-                None => (side == position.side).then_some(position.line),
-            };
-            path_in(file, side) == thread.anchor.path
-                && line.is_some_and(|line| thread.anchor.lines.last == line + 1)
-        })
+        let Some(review) = self.review() else {
+            return Vec::new();
+        };
+        let mut threads: Vec<&Thread> = review
+            .threads
+            .iter()
+            .filter(|thread| {
+                let side = pane_side(thread.anchor.side);
+                let line = match on_both_sides {
+                    Some(row) => row.line(side),
+                    None => (side == position.side).then_some(position.line),
+                };
+                path_in(file, side) == thread.anchor.path
+                    && line.is_some_and(|line| thread.anchor.lines.last == line + 1)
+            })
+            .collect();
+        // Stable: threads of one side keep the order the Keeper holds them in.
+        threads.sort_by_key(|thread| pane_side(thread.anchor.side) != position.side);
+        threads
     }
 
     /// The thread on the reviewer's line with the draft of the reviewer in it, if any.
     fn draft_on(&self, position: &Position) -> Option<(&Thread, CommentId)> {
-        let thread = self.thread_on(position)?;
-        let draft = thread
-            .comments
-            .iter()
-            .find(|comment| comment.round.is_none())?;
-        Some((thread, draft.id.clone()))
+        self.threads_on(position).into_iter().find_map(|thread| {
+            let draft = thread
+                .comments
+                .iter()
+                .find(|comment| comment.round.is_none())?;
+            Some((thread, draft.id.clone()))
+        })
     }
 
     /// What [`Comment`] does: opens a comment box for a new thread on the reviewer's line.
@@ -282,19 +297,28 @@ impl ReviewPane {
         let Some(position) = self.position.clone() else {
             return self.say("The reviewer is on no line", cx);
         };
-        let Some(thread) = self.thread_on(&position) else {
+        let threads = self.threads_on(&position);
+        if threads.is_empty() {
             return self.say("There is no thread on this line to reply in", cx);
+        }
+        let holds_draft = |thread: &Thread| {
+            thread
+                .comments
+                .iter()
+                .any(|comment| comment.round.is_none())
         };
-        if thread
-            .comments
+        // A thread that holds a draft takes no second one, and one with nothing sent
+        // has nothing to reply to: the reply goes to the first thread that can have it.
+        let Some(thread) = threads
             .iter()
-            .any(|comment| comment.round.is_none())
-        {
-            return self.say("This thread holds a draft already: edit it", cx);
-        }
-        if thread.comments.is_empty() {
-            return self.say("Nothing was sent in this thread yet", cx);
-        }
+            .find(|thread| !holds_draft(thread) && !thread.comments.is_empty())
+        else {
+            return if threads.iter().any(|thread| holds_draft(thread)) {
+                self.say("This thread holds a draft already: edit it", cx)
+            } else {
+                self.say("Nothing was sent in this thread yet", cx)
+            };
+        };
         let thread = thread.id.clone();
         let (Some(review), Ok(comment)) = (self.review().map(|r| r.id.clone()), new_id()) else {
             return self.say("An id for the comment could not be drawn", cx);

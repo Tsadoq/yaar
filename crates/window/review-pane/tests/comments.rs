@@ -974,6 +974,81 @@ fn a_thread_on_the_old_side_of_an_unchanged_line_is_the_thread_of_the_reviewer_w
 }
 
 #[gpui_kit::test]
+fn two_threads_on_an_unchanged_line_leave_the_draft_and_the_reply_to_the_thread_that_has_them(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // `keep_d` stands on one row. Its old side holds a thread with only sent comments,
+    // placed before the thread on its new side, which holds a draft of the reviewer.
+    let sent_thread = thread(
+        'a',
+        "src/lib.rs",
+        LinkSide::Old,
+        6,
+        vec![sent('1', "about the old line", 1)],
+    );
+    let draft_thread = thread(
+        'b',
+        "src/lib.rs",
+        LinkSide::New,
+        5,
+        vec![draft('2', "about the new line")],
+    );
+    give(
+        &mut stage,
+        &reviews_with(vec![sent_thread.clone(), draft_thread.clone()]),
+        &mut cx,
+    );
+    cx.simulate_keystrokes("m");
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::New,
+            line: 4,
+        }
+    );
+
+    // The draft is found in the second thread: it is edited and deleted, and the
+    // reply goes to the first.
+    cx.simulate_keystrokes("i");
+    let opened = comment_box(&pane, &mut cx).expect("the draft is open");
+    assert_eq!(opened.thread, thread_id('b'));
+    assert_eq!(opened.comment, comment_id('2'));
+    assert_eq!(opened.text, "about the new line");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("o");
+    assert_eq!(
+        comment_box(&pane, &mut cx).expect("a reply box").thread,
+        thread_id('a')
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('2'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+
+    // With the threads the other way round, the thread that holds the draft is first
+    // and takes no reply, and the reply still goes to the thread that can have one.
+    give(
+        &mut stage,
+        &reviews_with(vec![draft_thread, sent_thread]),
+        &mut cx,
+    );
+    cx.simulate_keystrokes("o");
+    assert_eq!(
+        comment_box(&pane, &mut cx).expect("a reply box").thread,
+        thread_id('a')
+    );
+}
+
+#[gpui_kit::test]
 fn m_with_no_thread_at_all_moves_nothing_and_says_so(cx: &mut TestAppContext) {
     let (stage, _changes, mut cx) = open_on_two_files(cx);
     let pane = &stage.pane;

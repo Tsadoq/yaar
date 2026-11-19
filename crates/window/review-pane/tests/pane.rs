@@ -793,6 +793,24 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             control.keystroke
         );
         effect.shown(&mut stage, control.title, "its key", &mut cx);
+        // What the key left, the notice or the open box or field, would show for the
+        // action as well. It is taken away, so that what shows after the action is the
+        // action's own: Escape closes a box and a field, and two switches of the layout
+        // are keys of the pane that say the notice is gone and leave all as it was.
+        match effect {
+            Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
+            Effect::Notice => cx.simulate_keystrokes("s s"),
+            Effect::Moves | Effect::Sends(_) => {}
+        }
+        if matches!(effect, Effect::Notice | Effect::Box | Effect::Field) {
+            assert!(
+                stage.pane.read_with(&cx, |pane, _| pane.notice().is_none()
+                    && pane.comment_box().is_none()
+                    && !pane.commit_field_open()),
+                "{} left something behind that the action would show",
+                control.title
+            );
+        }
         cx.update(|window, cx| window.dispatch_action((control.action)(), cx));
         cx.run_until_parked();
         let after_the_action = state(&mut cx);
