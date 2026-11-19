@@ -43,8 +43,9 @@
 //!   this process happens to have;
 //! - never asks at a terminal, and reads git's answers in git's own language.
 //!
-//! File contents of commits come from one git process per worktree that stays running
-//! between reads; every other answer is one run of git.
+//! File contents of commits come from one git process per worktree, and one per state
+//! store, that stays running between reads and ends with its owner; every other answer is
+//! one run of git.
 
 mod contents;
 mod git;
