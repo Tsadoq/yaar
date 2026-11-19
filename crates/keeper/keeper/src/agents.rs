@@ -71,6 +71,10 @@ struct Core {
     watching: Arc<Watching>,
     described: Vec<Described>,
     entries: Vec<yaar_dock::Entry>,
+    // The terminals the Keeper holds, each with the workspace it was opened in: put in by
+    // whoever opens a terminal before its program starts, taken out in queue order when its
+    // end is worked out. A report from any other terminal is followed no further.
+    terminals: Mutex<HashMap<String, WorkspaceId>>,
     // Called from the one thread that works the queue.
     adapters: Mutex<Vec<Box<dyn Adapter>>>,
     switchboard: Mutex<Switchboard>,
@@ -218,6 +222,7 @@ impl Agents {
             watching,
             described,
             entries,
+            terminals: Mutex::new(HashMap::new()),
             adapters: Mutex::new(adapters),
             switchboard: Mutex::new(switchboard),
             recorders: Mutex::new(HashMap::new()),
@@ -273,7 +278,8 @@ impl Agents {
     /// queue of this side's thread, and only then answers `Reply::Done`; refused only for
     /// an Adapter the Keeper does not have. Nothing else is done on the caller's thread: a
     /// report the Adapter cannot read is written down by that thread. A report from
-    /// outside the app's terminals is answered and followed no further.
+    /// outside the app's terminals, or from a terminal the Keeper does not hold, is
+    /// answered and followed no further.
     pub(crate) fn report(&self, kept: &Kept, report: AgentReport) -> Outcome {
         let _ = kept;
         if !self
@@ -305,6 +311,21 @@ impl Agents {
             mark,
             at: Instant::now(),
         });
+    }
+
+    /// The Keeper opens `terminal` in `workspace`. Called before the program of the terminal
+    /// starts, so that no report from it can come first: a report is followed only when its
+    /// terminal is one the Keeper holds, and a session whose folder no worktree holds belongs
+    /// to the workspace of its terminal.
+    pub(crate) fn terminal_opened(
+        &self,
+        terminal: &TerminalId,
+        workspace: &yaar_link::WorkspaceId,
+    ) {
+        lock(&self.core.terminals).insert(
+            terminal.as_str().to_owned(),
+            WorkspaceId::new(workspace.as_str()),
+        );
     }
 
     /// The program of `terminal` ended: a session that ran in it runs no more.
@@ -472,6 +493,8 @@ impl Core {
 
     /// The program of `terminal` ended: every session that runs in it is gone with it.
     fn terminal_gone(&self, kept: &Kept, terminal: &TerminalId, told: &mut Told) {
+        // Held no more: what its CLI still reports is followed no further.
+        lock(&self.terminals).remove(terminal.as_str());
         let mut pids = Vec::new();
         for known in lock(&self.switchboard).sessions() {
             if known.state != State::NotRunning
@@ -518,13 +541,17 @@ impl Core {
         told: &mut Told,
     ) {
         for reported in events {
-            // A CLI outside the app's terminals is followed no further in this version.
+            // A CLI outside the app's terminals, or in one the Keeper does not hold, is
+            // followed no further in this version.
             let Some(terminal) = reported.terminal.clone() else {
+                continue;
+            };
+            let Some(of_terminal) = lock(&self.terminals).get(&terminal).cloned() else {
                 continue;
             };
             let workspace = match kept.store.session_of_cli(agent, &reported.session.0) {
                 Ok(Some(record)) => Some(record.workspace),
-                Ok(None) => self.workspace_of(kept, reported.folder.as_deref(), &terminal),
+                Ok(None) => self.workspace_of(kept, reported.folder.as_deref(), of_terminal),
                 Err(e) => {
                     eprintln!("yaar-keeper: a session could not be read: {e}");
                     continue;
@@ -540,16 +567,16 @@ impl Core {
     }
 
     /// The workspace a session that is new belongs to: the one whose worktree holds the
-    /// folder its CLI works in, the deepest if several do; else the one a session of the
-    /// same terminal was last in.
+    /// folder its CLI works in, the deepest if several do; else `of_terminal`, the one its
+    /// terminal was opened in.
     fn workspace_of(
         &self,
         kept: &Kept,
         folder: Option<&Path>,
-        terminal: &str,
+        of_terminal: WorkspaceId,
     ) -> Option<WorkspaceId> {
-        let records = kept.store.workspaces().ok()?;
         if let Some(folder) = folder {
+            let records = kept.store.workspaces().ok()?;
             let folder = folder.canonicalize().unwrap_or_else(|_| folder.to_owned());
             let mut best: Option<(usize, WorkspaceId)> = None;
             for record in &records {
@@ -569,13 +596,7 @@ impl Core {
                 return Some(workspace);
             }
         }
-        records.iter().rev().find_map(|record| {
-            let sessions = kept.store.sessions_of(&record.id).ok()?;
-            sessions
-                .iter()
-                .any(|session| session.terminal.as_deref() == Some(terminal))
-                .then(|| record.id.clone())
-        })
+        Some(of_terminal)
     }
 
     /// Keeps each change in the Store, then gives it to Workspaces and the engine, and
@@ -738,8 +759,8 @@ impl Core {
             .agent_runs(kept, &yaar_link::WorkspaceId::new(workspace.as_str()), true);
     }
 
-    /// The agent took a step in a turn: it is kept, handed to Workspaces when it names a
-    /// write or begins a command, and told.
+    /// The agent took a step in a turn: it is kept, then handed to Workspaces when it names
+    /// a write or begins a command, and told.
     #[expect(clippy::too_many_arguments, reason = "what a Step change carries")]
     fn step_taken(
         &self,
@@ -762,32 +783,31 @@ impl Core {
             Some(root) => relative_to(root, path),
             None => path.to_owned(),
         };
-        let record = match event {
-            Event::FileRead { path } => StepRecord::Read(inside(path)),
+        // What Workspaces is told of, once the step is kept.
+        enum Feed<'a> {
+            Nothing,
+            Wrote(&'a Path),
+            Began,
+        }
+        let (record, feed) = match event {
+            Event::FileRead { path } => (StepRecord::Read(inside(path)), Feed::Nothing),
             Event::FileWritten {
                 path,
                 tool: WriteTool::Edit,
                 lines,
-            } => {
-                kept.workspaces.agent_wrote(workspace, &session.0, path);
-                StepRecord::Edit(inside(path), lines.clone())
-            }
+            } => (
+                StepRecord::Edit(inside(path), lines.clone()),
+                Feed::Wrote(path),
+            ),
             Event::FileWritten {
                 path,
                 tool: WriteTool::Write,
                 ..
-            } => {
-                kept.workspaces.agent_wrote(workspace, &session.0, path);
-                StepRecord::Write(inside(path))
-            }
+            } => (StepRecord::Write(inside(path)), Feed::Wrote(path)),
             Event::Command {
                 phase: Phase::Began,
                 command,
-            } => {
-                kept.workspaces
-                    .command_began(workspace, &session.0, cause.at());
-                StepRecord::Command(command.clone())
-            }
+            } => (StepRecord::Command(command.clone()), Feed::Began),
             // The Switchboard tells no other event as a step.
             _ => return,
         };
@@ -795,6 +815,13 @@ impl Core {
             kept.store
                 .put_step(&TurnId::new(turn.0.clone()), number, &record),
         );
+        match feed {
+            Feed::Nothing => {}
+            Feed::Wrote(path) => kept.workspaces.agent_wrote(workspace, &session.0, path),
+            Feed::Began => kept
+                .workspaces
+                .command_began(workspace, &session.0, cause.at()),
+        }
         told.steps.push(Fact::Step {
             session: yaar_link::SessionId::new(session.0.clone()),
             turn: yaar_link::TurnId::new(turn.0.clone()),
