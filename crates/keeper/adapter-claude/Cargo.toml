@@ -15,9 +15,5 @@ serde_json.workspace = true
 # The recorded events of Claude Code, which the tests of the mapping replay.
 yaar-system-tests.workspace = true
 
-# Used by the builder of the mapping; the contract has signatures only.
-[package.metadata.cargo-machete]
-ignored = ["serde_json"]
-
 [lints]
 workspace = true

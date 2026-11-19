@@ -18,9 +18,5 @@ yaar-system-tests.workspace = true
 yaar-adapter-claude.workspace = true
 yaar-agent.workspace = true
 
-# Used by the builder of the watcher; the contract has signatures only.
-[package.metadata.cargo-machete]
-ignored = ["notify"]
-
 [lints]
 workspace = true

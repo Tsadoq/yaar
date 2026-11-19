@@ -19,9 +19,5 @@ serde_json.workspace = true
 # The terminal core the client reads a terminal's screen through, as lines.
 alacritty_terminal.workspace = true
 
-# Used by the builders of the stand-in and of the client; the contract has signatures only.
-[package.metadata.cargo-machete]
-ignored = ["alacritty_terminal"]
-
 [lints]
 workspace = true

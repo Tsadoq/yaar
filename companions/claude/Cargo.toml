@@ -18,9 +18,5 @@ yaar-link.workspace = true
 # The recorded hook inputs the tests hand the program.
 yaar-system-tests.workspace = true
 
-# Used by the builders of slice 4; the contract has signatures only.
-[package.metadata.cargo-machete]
-ignored = ["yaar-link"]
-
 [lints]
 workspace = true

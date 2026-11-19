@@ -28,9 +28,5 @@ yaar-adapter-claude.workspace = true
 yaar-system-tests.workspace = true
 serde_json.workspace = true
 
-# Used by the builders of slice 4; the contract has signatures only.
-[package.metadata.cargo-machete]
-ignored = ["yaar-adapter-claude", "yaar-agent", "yaar-switchboard", "yaar-system-tests", "serde_json"]
-
 [lints]
 workspace = true
