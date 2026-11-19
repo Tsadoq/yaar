@@ -316,6 +316,11 @@ impl Parts {
         }
     }
 
+    /// What the Keeper keeps for its Windows, unless it has no git or no database.
+    pub(crate) fn kept(&self) -> Option<&Kept> {
+        self.kept.as_ref().ok()
+    }
+
     /// `window` has gone, whatever the way: it is no longer shown any terminal, and what
     /// it showed on screen is no longer needed on its account.
     pub(crate) fn window_gone(&self, window: &Arc<Window>) {
@@ -1138,7 +1143,7 @@ fn open_folder(
 }
 
 /// Every opened repository with its worktrees, in the words of the Link.
-fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> {
+pub(crate) fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> {
     let repositories = workspaces.repositories().map_err(refusal)?;
     Ok(repositories
         .into_iter()
