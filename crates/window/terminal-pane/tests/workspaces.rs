@@ -63,7 +63,7 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
     let (t1, t2) = (terminal('a'), terminal('b'));
 
     panes.open_terminal(&t1, &mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
 
     // The other workspace has none: the pane says how to open one, shows no terminal, and
     // keeps the one of the first alive in its list.
@@ -72,11 +72,11 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
     assert_eq!(focused(&panes, &mut cx), None);
     assert!(drawn("terminal-slot-0", &mut cx).is_none());
     assert!(drawn("terminal-how-to-open", &mut cx).is_some());
-    assert_eq!(terminals(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(terminals(&panes, &mut cx), std::slice::from_ref(&t1));
 
     // A terminal opened there is shown, and is of that workspace.
     panes.open_terminal(&t2, &mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     assert!(drawn("terminal-how-to-open", &mut cx).is_none());
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&t2)),
@@ -85,7 +85,7 @@ fn a_workspace_on_screen_shows_its_own_terminals_and_gets_them_back_when_it_retu
 
     // Back: the first terminal is shown again with the focus, and the second is not.
     select(&one, &panes, &mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     assert_eq!(focused(&panes, &mut cx), Some(t1.clone()));
     assert!(drawn("terminal-slot-1", &mut cx).is_none());
     // Every terminal the window opened is listed, in the order they were opened.
@@ -116,7 +116,7 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
     // The first workspace: split, with the second slot's terminal focused. The second
     // workspace is not split and has its first terminal on show.
     select(&one, &panes, &mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t3.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [t3.clone(), t1.clone()]);
     panes.click_slot(1, &mut cx);
@@ -124,9 +124,9 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
 
     select(&two, &panes, &mut cx);
     assert!(!split(&panes, &mut cx));
-    assert_eq!(shown(&panes, &mut cx), [t4.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t4));
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
 
     // Each comes back as it was left, and the other's terminals are in neither slot.
     select(&one, &panes, &mut cx);
@@ -137,7 +137,7 @@ fn each_workspace_keeps_which_terminal_had_the_focus_and_whether_it_was_split(
 
     select(&two, &panes, &mut cx);
     assert!(!split(&panes, &mut cx));
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     assert_eq!(focused(&panes, &mut cx), Some(t2));
     assert!(drawn("terminal-slot-1", &mut cx).is_none());
 }
@@ -163,29 +163,29 @@ fn next_previous_and_split_go_among_the_terminals_of_the_workspace_on_screen(
     );
 
     // From the last of this workspace round to its first, never to t2.
-    assert_eq!(shown(&panes, &mut cx), [t3.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
     panes.press_in_the_app::<NextTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     panes.press_in_the_app::<NextTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t3.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t3.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
 
     // The split shows two of this workspace's, not the one after in the list.
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [t3.clone(), t1.clone()]);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t3.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t3));
 
     // The other workspace has one: three terminals are open and there is nothing to split
     // or to step to.
     select(&two, &panes, &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     panes.press_in_the_app::<NextTerminal>(&mut cx);
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [t2]);
 }
@@ -256,14 +256,14 @@ fn a_terminal_whose_answer_comes_after_another_workspace_came_on_screen_is_not_s
 
     // The second workspace on screen shows what it showed, and the focus stays where it
     // is. The terminal belongs to the first, which shows it when it returns.
-    assert_eq!(shown(&panes, &mut cx), [t2.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t2));
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&late)),
         Some(one.clone())
     );
     assert!(!has_the_focus(&panes, &late, &mut cx));
     select(&one, &panes, &mut cx);
-    assert_eq!(shown(&panes, &mut cx), [late.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&late));
     assert_eq!(focused(&panes, &mut cx), Some(late));
 }
 
@@ -283,7 +283,7 @@ fn the_focus_follows_the_workspace_to_its_terminal_or_back_to_the_pane(cx: &mut 
 
     // Next Workspace, with the focus in a terminal: the other workspace's terminal has it.
     cx.simulate_keystrokes(key_of::<SelectNextWorkspace>());
-    assert_eq!(shown(&panes, &mut cx), [t1.clone()]);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     assert!(has_the_focus(&panes, &t1, &mut cx));
     assert!(!has_the_focus(&panes, &t2, &mut cx));
 }

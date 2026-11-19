@@ -110,7 +110,7 @@ fn assert_shows_only(
     });
 
     // The terminal pane: its terminals, and not the other's.
-    assert_eq!(shown(window, cx), [terminal.clone()]);
+    assert_eq!(shown(window, cx), std::slice::from_ref(terminal));
     assert_eq!(
         window
             .terminals
