@@ -91,7 +91,7 @@ use yaar_link::{
     TERMINAL_VARIABLE, TerminalSize,
 };
 use yaar_recorder::{CommitError, CommitId, Git, Worktree};
-use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved};
+use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved, StateWatch};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
@@ -291,17 +291,20 @@ impl Parts {
     /// the hello, so that a Window can say what is wrong; each request is then refused
     /// with the reason.
     pub(crate) fn start(options: &Options, shared: Weak<Shared>) -> Parts {
+        let watching = Arc::new(Watching::new(shared.clone()));
         let kept = Git::find().map_err(|e| e.to_string()).and_then(|git| {
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
-            let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"));
+            // The engine asks the watching whether files changed since its newest state,
+            // and tells it of every state it takes.
+            let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"))
+                .watching(Arc::clone(&watching) as Arc<dyn StateWatch>);
             Ok(Kept {
                 workspaces: Workspaces::new(git, store.clone()),
                 reviews,
                 store,
             })
         });
-        let watching = Arc::new(Watching::new(shared.clone()));
         let agents = Arc::new(Agents::start(
             options,
             kept.as_ref().ok(),

@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Fact, Hello, Message, Refusal, Reply, Request, RequestId, WorkspaceId, handshake, read_message,
-    write_message,
+    Anchor, CommentId, DraftOn, Fact, Hello, Lines, Message, Refusal, Reply, Request, RequestId,
+    ReviewId, Side, ThreadId, WorkspaceId, handshake, read_message, write_message,
 };
 
 /// How long a test waits for the Keeper before it fails.
@@ -271,6 +271,48 @@ impl Window {
         facts
     }
 
+    /// The review of no agent of `workspace`, and the state each of its threads sits on.
+    fn thread_states(&mut self, workspace: &WorkspaceId) -> (ReviewId, Vec<String>) {
+        let Ok(Reply::Reviews(held)) = self.ask(Request::GetReviews {
+            workspace: workspace.clone(),
+        }) else {
+            panic!("no reviews");
+        };
+        let review = held.reviews[0].clone();
+        let states = review
+            .threads
+            .iter()
+            .map(|thread| {
+                thread
+                    .anchor
+                    .tree
+                    .clone()
+                    .expect("a thread sits on a version")
+            })
+            .collect();
+        (review.id, states)
+    }
+
+    /// Starts a thread on the first line of `a.txt` in the files on disk, the `n`th of
+    /// the test.
+    fn new_thread(&mut self, review: &ReviewId, n: u8) {
+        let anchor = Anchor {
+            tree: None,
+            path: PathBuf::from("a.txt"),
+            side: Side::New,
+            lines: Lines { first: 1, last: 1 },
+            text: "one".to_owned(),
+        };
+        let saved = self.ask(Request::SaveDraft {
+            review: review.clone(),
+            thread: ThreadId::new(format!("{n:02x}").repeat(16)),
+            comment: CommentId::new(format!("{:02x}", n + 0x80).repeat(16)),
+            on: DraftOn::NewThread { anchor },
+            text: "a comment".to_owned(),
+        });
+        assert_eq!(saved, Ok(Reply::Done));
+    }
+
     fn stop(mut self, keeper: JoinHandle<std::io::Result<Exit>>) {
         write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
         assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
@@ -322,6 +364,63 @@ fn a_change_of_a_file_of_a_shown_worktree_is_told_to_every_window_and_the_first_
     assert_eq!(other.show(Some(&workspace)), Ok(Reply::Done));
     assert_eq!(scratch.states_of(&workspace), 1);
     shows.stop(keeper);
+}
+
+#[test]
+fn a_new_thread_on_the_files_on_disk_records_a_state_only_when_a_file_changed_since_the_newest() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    // A state is recorded through the repository's own filters, as `git add` makes it, and
+    // the file below is one git does not track, so that every recording runs the filter
+    // again: the lines it leaves tell whether a state was recorded.
+    let count = scratch.0.join("recordings");
+    git(
+        &repo,
+        &[
+            "config",
+            "filter.count.clean",
+            &format!("echo x >> '{}'; cat", count.display()),
+        ],
+    );
+    std::fs::write(repo.join(".gitattributes"), "counted.txt filter=count\n").expect("write it");
+    git(&repo, &["add", ".gitattributes"]);
+    git(&repo, &["commit", "--quiet", "-m", "attributes"]);
+    std::fs::write(repo.join("counted.txt"), "counted\n").expect("write a file");
+    let recordings = || {
+        std::fs::read_to_string(&count)
+            .map(|lines| lines.lines().count())
+            .unwrap_or(0)
+    };
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
+    // The first watching recorded a state, and the files have not changed since.
+    scratch.wait_until_watched(&workspace);
+    let first = recordings();
+    assert!(first > 0, "the first watching recorded a state");
+
+    // Two threads with no change between them sit on one state, the one already there.
+    let (review, _) = window.thread_states(&workspace);
+    window.new_thread(&review, 1);
+    window.new_thread(&review, 2);
+    let (_, sitting) = window.thread_states(&workspace);
+    assert_eq!(sitting.len(), 2);
+    assert_eq!(sitting[0], sitting[1], "one state for both threads");
+    assert_eq!(scratch.states_of(&workspace), 1);
+    assert_eq!(recordings(), first, "no state was recorded for them");
+
+    // A file changed since, told by the Keeper's own fact, gives the next thread a new one.
+    std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
+    window.wait_for(changes_of(&workspace));
+    window.new_thread(&review, 3);
+    let (_, sitting) = window.thread_states(&workspace);
+    assert_eq!(sitting.len(), 3);
+    assert_ne!(sitting[2], sitting[0], "a new state for the changed files");
+    assert_eq!(scratch.states_of(&workspace), 2);
+    assert!(recordings() > first, "a state was recorded for it");
+    window.stop(keeper);
 }
 
 #[test]

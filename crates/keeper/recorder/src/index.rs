@@ -34,11 +34,21 @@ impl IndexCopy {
                 Err(e) => return Err(e),
             }
         };
-        match fs::copy(index, copy.file()) {
-            Ok(_) => Ok(copy),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(copy),
-            Err(e) => Err(e),
-        }
+        // Read and written plainly, not with `fs::copy`: on macOS that one asks the system
+        // to copy the file, which touches the user's list, and a watcher of the worktree
+        // then sees a change of it at every read the app makes.
+        let mut from = match fs::File::open(index) {
+            Ok(from) => from,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(copy),
+            Err(e) => return Err(e),
+        };
+        let mut to = fs::File::create(copy.file())?;
+        io::copy(&mut from, &mut to)?;
+        // The list's own time, as `fs::copy` keeps it on macOS: git compares the time of a
+        // file with the list's to know which entries it cannot trust, and a list that
+        // looked newer than it is would make it trust a stale one.
+        to.set_modified(from.metadata()?.modified()?)?;
+        Ok(copy)
     }
 
     /// Where the copy is.
