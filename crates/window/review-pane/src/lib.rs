@@ -27,7 +27,11 @@
 //!
 //! It depends on the Frame and on no other pane.
 
+mod actions;
+mod comments;
 mod draw;
+mod saves;
+mod threads;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -37,11 +41,15 @@ use std::rc::Rc;
 
 use gpui_kit::*;
 use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
-use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place};
+use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
-    Anchor, ChangedFile, Changes, CommentId, Comparison, Content, FileSides, FileStatus, Review,
-    ReviewId, ThreadId, WorkspaceReviews,
+    Anchor, ChangedFile, Changes, CommentId, Comparison, Content, Fact, FileSides, FileStatus,
+    RequestKind, Review, ReviewId, ThreadId, WorkspaceId, WorkspaceReviews,
 };
+
+use crate::actions::CommitField;
+use crate::comments::OpenBox;
+use crate::saves::Save;
 
 pub use yaar_diff::Layout;
 
@@ -158,12 +166,46 @@ pub fn controls() -> Vec<Control> {
             asks: Asks::Nothing,
         }
     }
+    fn sends(control: Control, kind: RequestKind) -> Control {
+        Control {
+            sends: Some(Sends::Request(kind)),
+            ..control
+        }
+    }
     vec![
         control("Line Down", || Box::new(LineDown), "j"),
         control("Line Down", || Box::new(LineDown), "down"),
         control("Line Up", || Box::new(LineUp), "k"),
         control("Line Up", || Box::new(LineUp), "up"),
         control("Unified or Split Diff", || Box::new(ToggleLayout), "s"),
+        control("Comment", || Box::new(Comment), "c"),
+        control("Edit Draft", || Box::new(EditDraft), "i"),
+        control("Reply", || Box::new(Reply), "o"),
+        sends(
+            control("Delete Draft", || Box::new(DeleteDraft), "d d"),
+            RequestKind::DeleteDraft,
+        ),
+        control("Next Thread", || Box::new(NextThread), "m"),
+        control("Previous Thread", || Box::new(PreviousThread), "shift-m"),
+        sends(
+            control("Copy Review", || Box::new(CopyReview), "y"),
+            RequestKind::CopyReview,
+        ),
+        sends(
+            control("File Viewed", || Box::new(ToggleViewed), "r"),
+            RequestKind::SetViewed,
+        ),
+        sends(
+            control("Mark Reviewed", || Box::new(MarkReviewed), "shift-r"),
+            RequestKind::MarkReviewed,
+        ),
+        Control {
+            asks: Asks::Text,
+            ..sends(
+                control("Commit…", || Box::new(Commit), "shift-c"),
+                RequestKind::Commit,
+            )
+        },
     ]
 }
 
@@ -257,6 +299,27 @@ pub enum PaneRow {
         /// Why.
         why: Unshown,
     },
+    /// A thread of the review, after the row of its diff that shows its last line, or
+    /// among the threads elsewhere. The row of each of its comments follows. It is drawn
+    /// under the selector `review-thread-<thread id>`. Not a stop of [`LineDown`] and
+    /// [`LineUp`].
+    Thread {
+        /// The thread.
+        thread: ThreadId,
+    },
+    /// One comment of the thread above, in its order. Its text is drawn under the
+    /// selector `review-comment-<comment id>:draft` while it is a draft, and
+    /// `review-comment-<comment id>:round-<n>` once it was sent in round `n`.
+    Comment {
+        /// The thread it belongs to.
+        thread: ThreadId,
+        /// The comment.
+        comment: CommentId,
+    },
+    /// The heading of the threads whose line no row shows, after the last file: a thread
+    /// is never hidden. Drawn under the selector `review-threads-elsewhere`. The threads
+    /// of a workspace whose worktree is gone are all there.
+    ThreadsElsewhere,
 }
 
 /// A changed file as the pane holds it.
@@ -265,6 +328,8 @@ struct ShownFile {
     content: FileContent,
     /// Where its heading and the rows under it lie in the rows of the pane.
     rows: Range<usize>,
+    /// The threads of the review that the rows of this file show.
+    placed: Vec<ThreadId>,
 }
 
 /// What the pane holds of a changed file.
@@ -320,7 +385,9 @@ struct ShownDiff {
 /// drawn by an element inside its row that carries `review-text-<index>-old:<text>` or
 /// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
 /// system for that line: the line, or of a line of more than 1,024 bytes its start.
-/// The control that offers to set a base carries `review-offer-base`.
+/// The control that offers to set a base carries `review-offer-base`. The heading of a
+/// file marked viewed carries `review-viewed-<index>`, with the index of its row, and the
+/// comparison line carries `review-reviewed` while the review has a reviewed state.
 ///
 /// When the Keeper refuses to read the changes again, the pane keeps the rows it has
 /// and says above them, in a line that carries `review-refused`, that they could not be
@@ -349,13 +416,37 @@ pub struct ReviewPane {
     scroll: UniformListScrollHandle,
     /// The rows the list last laid out, as the list itself told it.
     in_view: Rc<RefCell<Range<usize>>>,
+    /// The workspace the reviews belong to: the one on screen.
+    reviews_of: Option<WorkspaceId>,
+    /// What the pane shows of them: the last answer of the Keeper with every save the
+    /// pane sent since that answer was asked for put into it again.
+    reviews: Option<WorkspaceReviews>,
+    /// The drafts the pane saved since the `GetReviews` whose answer it shows was
+    /// asked, one for each draft, in the order they were first saved.
+    saves: Vec<Save>,
+    /// How many saves the pane sent, ever.
+    saved: u64,
+    /// The last question for the reviews. A new one takes its place, which drops the
+    /// answer to the old one: of two answers, only the one asked last is shown.
+    reading_reviews: Option<Task<()>>,
+    /// The comment box, while one is open.
+    open_box: Option<OpenBox>,
+    /// The field for a commit message, while one is open.
+    commit_field: Option<CommitField>,
+    /// What is said under the rows, until the reviewer acts again.
+    notice: Option<String>,
 }
 
 impl ReviewPane {
     /// A pane that shows the changes of the workspace on screen of `models`, in
     /// [`FIRST_LAYOUT`].
-    pub fn new(models: &Models, _window: &mut Window, cx: &mut Context<Self>) -> Self {
-        cx.observe(&models.changes, |pane, _, cx| pane.follow(cx))
+    pub fn new(models: &Models, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        cx.observe_in(&models.changes, window, |pane, _, window, cx| {
+            pane.follow(cx);
+            pane.follow_reviews(window, cx);
+        })
+        .detach();
+        cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
             .detach();
         let mut pane = Self {
             models: models.clone(),
@@ -371,8 +462,17 @@ impl ReviewPane {
             unread: 0..0,
             scroll: UniformListScrollHandle::new(),
             in_view: Rc::new(RefCell::new(0..0)),
+            reviews_of: None,
+            reviews: None,
+            saves: Vec::new(),
+            saved: 0,
+            reading_reviews: None,
+            open_box: None,
+            commit_field: None,
+            notice: None,
         };
         pane.follow(cx);
+        pane.follow_reviews(window, cx);
         pane
     }
 
@@ -416,32 +516,38 @@ impl ReviewPane {
 
     /// The reviews of the workspace on screen, with its files marked viewed, as the Keeper
     /// last answered; none before its first answer and while no workspace is on screen.
+    ///
+    /// What the reviewer saved since that answer was asked for is in them: a save of a
+    /// draft is told to nobody, so the pane puts each text it saved into its copy, the
+    /// draft of a new thread included, and an answer of the Keeper is shown with the
+    /// saves sent after it was asked for put over it again. They hold every text typed,
+    /// also after the comment box was closed.
     pub fn reviews(&self) -> Option<&WorkspaceReviews> {
-        todo!()
+        self.reviews.as_ref()
     }
 
     /// The review the pane shows and acts on: the first of [`ReviewPane::reviews`]. In this
     /// slice a workspace has one review.
     pub fn review(&self) -> Option<&Review> {
-        todo!()
+        self.reviews.as_ref()?.reviews.first()
     }
 
     /// The comment box, while one is open.
     pub fn comment_box(&self) -> Option<CommentBox> {
-        todo!()
+        self.open_box.as_ref().map(|open| open.view.clone())
     }
 
     /// Whether the field for a commit message is open. It is drawn under the selector
     /// `review-commit-field`; `enter` commits with its line, `escape` closes it.
     pub fn commit_field_open(&self) -> bool {
-        todo!()
+        self.commit_field.is_some()
     }
 
     /// Why the last review action the reviewer took was not done, as the pane says it in
     /// the line under the selector `review-notice`: a refusal of the Keeper, as for a copy
     /// with nothing to send or a commit git refused. None once the reviewer acts again.
     pub fn notice(&self) -> Option<String> {
-        todo!()
+        self.notice.clone()
     }
 
     /// Takes up what the shared model holds, each time the model says it changed.
@@ -501,6 +607,7 @@ impl ReviewPane {
                     .unwrap_or(FileContent::Unshown(Unshown::Loading)),
                 file: file.clone(),
                 rows: 0..0,
+                placed: Vec::new(),
             })
             .collect();
         self.by_path = changes
@@ -570,9 +677,11 @@ impl ReviewPane {
 
     /// Puts what came for the file at `index` in the place of what was shown of it.
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
+        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
         let file = &mut self.files[index];
         file.content = content;
-        let rows = file_rows(file, self.layout);
+        let (rows, placed) = file_rows(file, self.layout, review);
+        file.placed = placed;
         let was = file.rows.clone();
         file.rows = was.start..was.start + rows.len();
         let now = file.rows.end;
@@ -580,6 +689,10 @@ impl ReviewPane {
         for below in &mut self.files[index + 1..] {
             below.rows = below.rows.start - was.end + now..below.rows.end - was.end + now;
         }
+        // The file may show a thread that was among the threads elsewhere until now.
+        self.rows
+            .truncate(self.files.last().map_or(0, |last| last.rows.end));
+        self.rows.extend(threads::elsewhere(&self.files, review));
         // What the reviewer reads stays where it is on screen when a file above it
         // arrives with more rows, or with fewer, than it had.
         if was.end <= self.in_view.borrow().start {
@@ -589,7 +702,8 @@ impl ReviewPane {
     }
 
     /// Makes the rows again from what the pane holds.
-    fn rebuild(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
+        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
         let mut rows = Vec::new();
         if let Some(changes) = &self.changes {
             rows.push(PaneRow::Comparison {
@@ -602,10 +716,13 @@ impl ReviewPane {
             }));
             for file in &mut self.files {
                 let start = rows.len();
-                rows.extend(file_rows(file, self.layout));
+                let (shown, placed) = file_rows(file, self.layout, review);
+                rows.extend(shown);
+                file.placed = placed;
                 file.rows = start..rows.len();
             }
         }
+        rows.extend(threads::elsewhere(&self.files, review));
         self.rows = rows;
         self.settle(cx);
     }
@@ -677,11 +794,13 @@ impl ReviewPane {
 
     /// What [`LineDown`] does.
     pub(crate) fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.acted(cx);
         self.step(1, cx);
     }
 
     /// What [`LineUp`] does.
     pub(crate) fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.acted(cx);
         self.step(-1, cx);
     }
 
@@ -692,6 +811,7 @@ impl ReviewPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.acted(cx);
         let was = self.position_row;
         self.layout = match self.layout {
             Layout::Unified => Layout::Split,
@@ -774,8 +894,13 @@ fn versions(sides: FileSides) -> Result<(Vec<u8>, Vec<u8>), Unshown> {
     Ok((bytes(sides.old)?, bytes(sides.new)?))
 }
 
-/// The heading of a file and the rows under it.
-fn file_rows(file: &ShownFile, layout: Layout) -> Vec<PaneRow> {
+/// The heading of a file and the rows under it, with the threads of the review that sit
+/// on them, and the threads it placed.
+fn file_rows(
+    file: &ShownFile,
+    layout: Layout,
+    review: Option<&Review>,
+) -> (Vec<PaneRow>, Vec<ThreadId>) {
     let path = &file.file.path;
     let mut rows = vec![PaneRow::File {
         path: path.clone(),
@@ -797,7 +922,7 @@ fn file_rows(file: &ShownFile, layout: Layout) -> Vec<PaneRow> {
                 }),
         ),
     }
-    rows
+    threads::with_threads(&file.file, rows, review)
 }
 
 /// The lines a row shows that the reviewer can be on, each as [`Position`] names it: an
@@ -835,24 +960,34 @@ fn stops(rows: &[PaneRow]) -> Vec<(usize, Side)> {
             }
         )
     };
+    // The rows of threads and comments are in no run and hold no line: a thread in the
+    // middle of a change does not split it in two.
+    let lines: Vec<usize> = (0..rows.len())
+        .filter(|&index| {
+            !matches!(
+                rows[index],
+                PaneRow::Thread { .. } | PaneRow::Comment { .. } | PaneRow::ThreadsElsewhere
+            )
+        })
+        .collect();
     let mut stops = Vec::new();
-    let mut index = 0;
-    while index < rows.len() {
+    let mut next = 0;
+    while next < lines.len() {
         // The rows of one change in the split view; one row in every other case.
-        let run = rows[index..]
+        let run = lines[next..]
             .iter()
-            .take_while(|row| changed(row))
+            .take_while(|&&index| changed(&rows[index]))
             .count()
             .max(1);
-        let run = index..index + run;
+        let run = &lines[next..next + run];
         for side in [Side::Old, Side::New] {
-            for index in run.clone() {
+            for &index in run {
                 if stops_of(&rows[index]).any(|(stop, _)| stop == side) {
                     stops.push((index, side));
                 }
             }
         }
-        index = run.end;
+        next += run.len();
     }
     stops
 }
@@ -860,33 +995,151 @@ fn stops(rows: &[PaneRow]) -> Vec<(usize, Side)> {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Action;
-    use yaar_frame::{Asks, Place};
+    use yaar_frame::{Asks, Place, Sends};
+    use yaar_link::RequestKind;
 
-    use super::{KEY_CONTEXT, LineDown, LineUp, ToggleLayout, controls};
+    use super::{
+        Comment, Commit, CopyReview, DeleteDraft, EditDraft, KEY_CONTEXT, LineDown, LineUp,
+        MarkReviewed, NextThread, PreviousThread, Reply, ToggleLayout, ToggleViewed, controls,
+    };
 
     #[test]
-    fn the_keys_of_the_pane_work_in_the_pane_only_and_send_nothing_a_user_starts() {
-        let table: Vec<(&str, &str)> = controls()
+    fn the_keys_of_the_pane_work_in_the_pane_only_and_the_review_actions_send_what_they_name() {
+        let table: Vec<(&str, &str, Option<Sends>, Asks)> = controls()
             .iter()
             .map(|control| {
                 // A plain key that worked anywhere would be taken from a program in a
                 // terminal, and from every field a user types into.
                 assert_eq!(control.place, Place::In(KEY_CONTEXT), "{}", control.title);
                 assert_eq!(control.context(), Some(KEY_CONTEXT), "{}", control.title);
-                assert_eq!(control.sends, None, "{}", control.title);
-                assert_eq!(control.asks, Asks::Nothing, "{}", control.title);
-                (control.keystroke, (control.action)().name())
+                (
+                    control.keystroke,
+                    (control.action)().name(),
+                    control.sends,
+                    control.asks,
+                )
             })
             .collect();
+        let request = |kind| Some(Sends::Request(kind));
         assert_eq!(
             table,
             [
-                ("j", LineDown.name()),
-                ("down", LineDown.name()),
-                ("k", LineUp.name()),
-                ("up", LineUp.name()),
-                ("s", ToggleLayout.name()),
+                ("j", LineDown.name(), None, Asks::Nothing),
+                ("down", LineDown.name(), None, Asks::Nothing),
+                ("k", LineUp.name(), None, Asks::Nothing),
+                ("up", LineUp.name(), None, Asks::Nothing),
+                ("s", ToggleLayout.name(), None, Asks::Nothing),
+                ("c", Comment.name(), None, Asks::Nothing),
+                ("i", EditDraft.name(), None, Asks::Nothing),
+                ("o", Reply.name(), None, Asks::Nothing),
+                (
+                    "d d",
+                    DeleteDraft.name(),
+                    request(RequestKind::DeleteDraft),
+                    Asks::Nothing
+                ),
+                ("m", NextThread.name(), None, Asks::Nothing),
+                ("shift-m", PreviousThread.name(), None, Asks::Nothing),
+                (
+                    "y",
+                    CopyReview.name(),
+                    request(RequestKind::CopyReview),
+                    Asks::Nothing
+                ),
+                (
+                    "r",
+                    ToggleViewed.name(),
+                    request(RequestKind::SetViewed),
+                    Asks::Nothing
+                ),
+                (
+                    "shift-r",
+                    MarkReviewed.name(),
+                    request(RequestKind::MarkReviewed),
+                    Asks::Nothing
+                ),
+                (
+                    "shift-c",
+                    Commit.name(),
+                    request(RequestKind::Commit),
+                    Asks::Text
+                ),
             ]
         );
+    }
+
+    /// The source of a key that tuicr binds.
+    const TUICR: &str = "tuicr 0.29.0 docs/KEYBINDINGS.md";
+
+    #[test]
+    fn for_each_action_that_vim_or_tuicr_has_a_key_for_the_default_key_is_that_key() {
+        // Every action of the pane that vim or tuicr has a key for, with that key and
+        // whose it is. An action may be here twice, once for each key it has.
+        let keys: Vec<(&str, &str, Vec<&str>)> = vec![
+            (LineDown.name(), "j", vec!["vim", TUICR]),
+            (LineDown.name(), "down", vec![TUICR]),
+            (LineUp.name(), "k", vec!["vim", TUICR]),
+            (LineUp.name(), "up", vec![TUICR]),
+            (Comment.name(), "c", vec![TUICR]),
+            (EditDraft.name(), "i", vec![TUICR]),
+            (DeleteDraft.name(), "d d", vec![TUICR, "vim"]),
+            (NextThread.name(), "m", vec![TUICR]),
+            (PreviousThread.name(), "shift-m", vec![TUICR]),
+            (CopyReview.name(), "y", vec![TUICR]),
+            (ToggleViewed.name(), "r", vec![TUICR]),
+        ];
+        // The actions that neither has a key for, and why.
+        let others: Vec<(&str, &str)> = vec![
+            (
+                ToggleLayout.name(),
+                "tuicr has the command `:diff`, vim no such thing",
+            ),
+            (
+                Reply.name(),
+                "neither has one; vim's `o` opens a line below",
+            ),
+            (
+                MarkReviewed.name(),
+                "tuicr's `R` marks a hunk reviewed, not the change",
+            ),
+            (
+                Commit.name(),
+                "neither has one; tuicr's `C` adds a file comment",
+            ),
+        ];
+        let held = controls();
+        for (action, key, source) in &keys {
+            assert!(!source.is_empty(), "{action} has a key of nobody's");
+            assert!(
+                held.iter().any(
+                    |control| (control.action)().name() == *action && control.keystroke == *key
+                ),
+                "{action} has no control with the key {key} that {source:?} give it"
+            );
+        }
+        // An action added later has to be in one of the two lists, or this fails.
+        for control in &held {
+            let name = (control.action)().name();
+            assert!(
+                keys.iter().any(|(action, ..)| *action == name)
+                    || others
+                        .iter()
+                        .any(|(action, why)| *action == name && !why.is_empty()),
+                "{name} is in neither list: say which key of vim or tuicr it takes, or why neither has one"
+            );
+        }
+        // A key listed here for an action that has no control, or a reason for one that
+        // has a key of vim's or tuicr's, would be a mistake in the lists.
+        for (action, ..) in &others {
+            assert!(
+                keys.iter().all(|(listed, ..)| listed != action),
+                "{action} is in both lists"
+            );
+            assert!(
+                held.iter()
+                    .any(|control| (control.action)().name() == *action),
+                "{action} has no control"
+            );
+        }
     }
 }
