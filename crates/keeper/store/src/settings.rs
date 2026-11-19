@@ -21,6 +21,9 @@
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.
 
+use rusqlite::params;
+
+use crate::reviews::{exists, refused};
 use crate::{Store, StoreError, WorkspaceId};
 
 /// What the app selects in Changes when a turn ends.
@@ -87,12 +90,144 @@ pub enum Setting {
     },
 }
 
+/// The name and value a setting of the whole app is kept as, or the workspace, name and
+/// value of one of a workspace.
+enum Row {
+    App(&'static str, String),
+    Workspace(String, &'static str, &'static str),
+}
+
+impl Setting {
+    /// The row that keeps this setting.
+    fn row(&self) -> Row {
+        match self {
+            Self::TurnEnd(selects) => Row::App(
+                "turn_end",
+                match selects {
+                    TurnEndSelects::WhatChanged => "what_changed",
+                    TurnEndSelects::KeepSelection => "keep_selection",
+                }
+                .to_owned(),
+            ),
+            Self::StopAfter { seconds } => Row::App("stop_after", seconds.to_string()),
+            Self::Theme(theme) => Row::App(
+                "theme",
+                match theme {
+                    Theme::System => "system",
+                    Theme::Light => "light",
+                    Theme::Dark => "dark",
+                }
+                .to_owned(),
+            ),
+            Self::TerminalPlace(place) => Row::App(
+                "terminal_place",
+                match place {
+                    TerminalPlace::Right => "right",
+                    TerminalPlace::Below => "below",
+                    TerminalPlace::Left => "left",
+                }
+                .to_owned(),
+            ),
+            Self::FlowForm { workspace, form } => Row::Workspace(
+                workspace.0.clone(),
+                "flow_form",
+                match form {
+                    FlowForm::Timeline => "timeline",
+                    FlowForm::LiveDiff => "live_diff",
+                },
+            ),
+        }
+    }
+
+    /// The setting a row of `setting` holds; none for a name or a value this build does
+    /// not know.
+    fn of_app_row(name: &str, value: &str) -> Option<Self> {
+        Some(match (name, value) {
+            ("turn_end", "what_changed") => Self::TurnEnd(TurnEndSelects::WhatChanged),
+            ("turn_end", "keep_selection") => Self::TurnEnd(TurnEndSelects::KeepSelection),
+            ("stop_after", seconds) => Self::StopAfter {
+                // Only the digits the Store wrote: no sign, no space.
+                seconds: seconds
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+                    .then(|| seconds.parse().ok())
+                    .flatten()?,
+            },
+            ("theme", "system") => Self::Theme(Theme::System),
+            ("theme", "light") => Self::Theme(Theme::Light),
+            ("theme", "dark") => Self::Theme(Theme::Dark),
+            ("terminal_place", "right") => Self::TerminalPlace(TerminalPlace::Right),
+            ("terminal_place", "below") => Self::TerminalPlace(TerminalPlace::Below),
+            ("terminal_place", "left") => Self::TerminalPlace(TerminalPlace::Left),
+            _ => return None,
+        })
+    }
+
+    /// The setting a row of `workspace_setting` holds; none for a name or a value this
+    /// build does not know.
+    fn of_workspace_row(workspace: String, name: &str, value: &str) -> Option<Self> {
+        let form = match (name, value) {
+            ("flow_form", "timeline") => FlowForm::Timeline,
+            ("flow_form", "live_diff") => FlowForm::LiveDiff,
+            _ => return None,
+        };
+        Some(Self::FlowForm {
+            workspace: WorkspaceId(workspace),
+            form,
+        })
+    }
+
+    /// Where a setting of the whole app comes among the others: the order its kind is
+    /// listed in.
+    fn rank(&self) -> u8 {
+        match self {
+            Self::TurnEnd(_) => 0,
+            Self::StopAfter { .. } => 1,
+            Self::Theme(_) => 2,
+            Self::TerminalPlace(_) => 3,
+            Self::FlowForm { .. } => 4,
+        }
+    }
+}
+
 impl Store {
     /// Every setting the user set: those of the whole app first, in the order
     /// [`Setting`] lists their kinds, then those of each workspace, in the order the
     /// workspaces were first kept. A setting never set is not listed.
     pub fn settings(&self) -> Result<Vec<Setting>, StoreError> {
-        todo!("the Store's package of slice 5: read `setting` and `workspace_setting`")
+        self.ask(|connection| {
+            let mut settings = connection
+                .prepare("SELECT name, value FROM setting")?
+                .query_map([], |row| {
+                    Ok(Setting::of_app_row(
+                        &row.get::<_, String>(0)?,
+                        &row.get::<_, String>(1)?,
+                    ))
+                })?
+                .filter_map(|row| row.transpose())
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            settings.sort_by_key(Setting::rank);
+            // A row of a workspace the Store does not hold is not listed either.
+            let of_workspaces = connection
+                .prepare(
+                    "SELECT workspace_setting.workspace, workspace_setting.name,
+                            workspace_setting.value
+                     FROM workspace_setting JOIN workspace
+                         ON workspace.id = workspace_setting.workspace
+                     ORDER BY workspace.seq, workspace_setting.name",
+                )?
+                .query_map([], |row| {
+                    Ok(Setting::of_workspace_row(
+                        row.get(0)?,
+                        &row.get::<_, String>(1)?,
+                        &row.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|row| row.transpose())
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            settings.extend(of_workspaces);
+            Ok(settings)
+        })
     }
 
     /// Keeps `setting`, in the place of the value the same setting had: one transaction
@@ -100,7 +235,36 @@ impl Store {
     /// call finds it. A setting of a workspace the Store does not hold is refused with a
     /// sentence that names it.
     pub fn set_setting(&self, setting: &Setting) -> Result<(), StoreError> {
-        let _ = setting;
-        todo!("the Store's package of slice 5: one row of `setting` or `workspace_setting`")
+        let row = setting.row();
+        self.try_ask(move |connection| {
+            let keeping = connection.transaction()?;
+            match row {
+                Row::App(name, value) => {
+                    keeping.execute(
+                        "INSERT INTO setting (name, value) VALUES (?1, ?2)
+                         ON CONFLICT (name) DO UPDATE SET value = excluded.value
+                         WHERE value IS NOT excluded.value",
+                        params![name, value],
+                    )?;
+                }
+                Row::Workspace(workspace, name, value) => {
+                    if !exists(
+                        &keeping,
+                        "SELECT 1 FROM workspace WHERE id = ?1",
+                        &workspace,
+                    )? {
+                        return refused(format!("workspace {workspace} is not kept"));
+                    }
+                    keeping.execute(
+                        "INSERT INTO workspace_setting (workspace, name, value)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT (workspace, name) DO UPDATE SET value = excluded.value
+                         WHERE value IS NOT excluded.value",
+                        params![workspace, name, value],
+                    )?;
+                }
+            }
+            Ok(keeping.commit()?)
+        })
     }
 }

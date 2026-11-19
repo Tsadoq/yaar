@@ -33,7 +33,8 @@
 //!
 //! The tables carry a version, SQLite's `user_version`. Version 1 holds the repositories
 //! and the workspaces; version 2 adds the reviews and the files marked viewed; version 3
-//! adds the agent sessions, the turns of each and the steps of each turn. A database
+//! adds the agent sessions, the turns of each and the steps of each turn; version 4 adds the
+//! state each turn's change counts from and the settings. A database
 //! of an older version is brought forward step by step when it is opened, and before the
 //! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
 //! step that goes wrong loses nothing. A database of a newer version is refused, and left
@@ -68,12 +69,12 @@ pub use settings::{FlowForm, Setting, TerminalPlace, Theme, TurnEndSelects};
 pub const FILE_NAME: &str = "store.db";
 
 /// The version of the tables this build makes and reads.
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 
 /// The steps that make the tables, in order: `STEPS[n]` brings a database from version
 /// `n` to version `n + 1`, and ends by setting `user_version` to that. A later version
 /// adds one step at the end.
-const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2, TABLES_3];
+const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2, TABLES_3, TABLES_4];
 
 /// The tables of version 1. `seq` is the order in which the rows were first kept. A
 /// path is kept as its bytes, since a path need not be text.
@@ -191,11 +192,8 @@ const TABLES_3: &str = "
 /// What version 4 adds: the state each turn's change counts from, the settings the user
 /// set for the whole app, one row each, and the settings of each workspace, one row for
 /// each workspace and setting. A setting is kept by its name, as text, with its value as
-/// text: the names and the values are those the module `settings.rs` writes.
-///
-/// Written out for the Store's package of slice 5, which adds it to [`STEPS`] as the
-/// fourth step, with the copy `store.db.v3` before it, and raises [`VERSION`] to 4.
-#[expect(dead_code, reason = "the Store's package of slice 5 applies it")]
+/// text: the names and the values are those the module `settings.rs` writes. A turn that
+/// was kept before has no start.
 const TABLES_4: &str = "
     ALTER TABLE turn ADD COLUMN start TEXT;
     CREATE TABLE setting (
@@ -789,7 +787,7 @@ mod tests {
     // Unit tests that make a file, because a database of an older version can only be
     // made beside the Store: no call of the Store writes one.
     #[test]
-    fn a_database_of_version_1_is_copied_and_then_brought_to_version_3_with_all_it_held() {
+    fn a_database_of_version_1_is_copied_and_then_brought_to_version_4_with_all_it_held() {
         let folder = Folder::new("upgrade");
         let old = version_one(&folder.file());
 
@@ -821,7 +819,7 @@ mod tests {
             .expect("put review");
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 3);
+        assert_eq!(user_version(&folder.file()), 4);
         // The copy is of version 1: the rows the write-ahead file held are in it, and
         // none of what version 2 adds.
         assert_eq!(user_version(&folder.copy()), 1);
@@ -847,7 +845,7 @@ mod tests {
     }
 
     #[test]
-    fn a_database_of_version_2_is_copied_and_then_brought_to_version_3_with_its_reviews() {
+    fn a_database_of_version_2_is_copied_and_then_brought_to_version_4_with_its_reviews() {
         let folder = Folder::new("upgrade-two");
         let old = version_two(&folder.file());
         let copy = folder.0.join(format!("{FILE_NAME}.v2"));
@@ -879,7 +877,7 @@ mod tests {
         assert_eq!(store.session(&session.id).expect("session"), Some(session));
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 3);
+        assert_eq!(user_version(&folder.file()), 4);
         assert_eq!(
             tables(&folder.file()),
             [
@@ -888,11 +886,13 @@ mod tests {
                 "review",
                 "round",
                 "session",
+                "setting",
                 "step",
                 "thread",
                 "turn",
                 "viewed",
-                "workspace"
+                "workspace",
+                "workspace_setting"
             ]
         );
         // The copy is of version 2: its review is in it, and none of what version 3 adds.
@@ -910,6 +910,113 @@ mod tests {
         assert_eq!(held, "abc");
     }
 
+    /// Makes a database of version 3, as the build of slice 4 made them, holding one
+    /// session with two turns, the first ended with a state and with two steps, and hands
+    /// back the connection it was made with.
+    fn version_three(file: &Path) -> Connection {
+        let old = version_two(file);
+        old.execute_batch(TABLES_3).expect("make the tables of 3");
+        old.execute_batch(
+            "INSERT INTO session (id, workspace, agent, cli_session, terminal, number, running)
+                 VALUES ('s-1', 'w-1', 'claude', 'cli-1', 't1', 1, 1);
+             INSERT INTO turn (id, session, number, ended, state)
+                 VALUES ('t-1', 's-1', 1, 0, 'aaa'), ('t-2', 's-1', 2, NULL, NULL);
+             INSERT INTO step (turn, number, kind, what, lines)
+                 VALUES ('t-1', 1, 0, x'612e747874', NULL), ('t-1', 2, 1, x'612e747874', '3-4,9-9');",
+        )
+        .expect("fill the session");
+        old
+    }
+
+    #[test]
+    fn a_database_of_version_3_is_copied_and_then_brought_to_version_4_with_its_sessions_and_turns()
+    {
+        let folder = Folder::new("upgrade-three");
+        let old = version_three(&folder.file());
+        let copy = folder.0.join(format!("{FILE_NAME}.v3"));
+
+        let store = Store::open(&folder.file()).expect("open");
+        drop(old);
+        let turns = store.turns_of(&WorkspaceId::new("w-1")).expect("turns");
+        // Neither turn has a start: version 3 kept none.
+        assert_eq!(
+            turns
+                .iter()
+                .map(|t| (
+                    t.id.as_str(),
+                    t.number,
+                    t.ended,
+                    t.state.as_deref(),
+                    &t.start
+                ))
+                .collect::<Vec<_>>(),
+            [
+                ("t-1", 1, Some(TurnEndRecord::Finished), Some("aaa"), &None),
+                ("t-2", 2, None, None, &None),
+            ]
+        );
+        let (_, steps) = store
+            .turn(&TurnId::new("t-1"))
+            .expect("turn")
+            .expect("kept");
+        assert_eq!(
+            steps,
+            [
+                StepRecord::Read(PathBuf::from("a.txt")),
+                StepRecord::Edit(PathBuf::from("a.txt"), Some(vec![3..=4, 9..=9])),
+            ]
+        );
+        assert_eq!(
+            store
+                .session(&SessionId::new("s-1"))
+                .expect("session")
+                .map(|s| (s.cli_session, s.running)),
+            Some(("cli-1".to_owned(), true))
+        );
+        // What version 4 adds is there to be used on the turns that were kept before.
+        store
+            .set_turn_start(&TurnId::new("t-2"), &"f".repeat(40))
+            .expect("set the start");
+        store
+            .set_setting(&Setting::Theme(Theme::Light))
+            .expect("set a setting");
+        assert_eq!(
+            store
+                .turn(&TurnId::new("t-2"))
+                .expect("turn")
+                .expect("kept")
+                .0
+                .start,
+            Some("f".repeat(40))
+        );
+        drop(store);
+
+        assert_eq!(user_version(&folder.file()), 4);
+        // The copy is of version 3: its turns are in it, and none of what version 4 adds.
+        // The file was not of version 1 or 2, so no copy of those is made.
+        assert_eq!(user_version(&copy), 3);
+        assert!(!folder.copy().exists());
+        assert!(!folder.0.join(format!("{FILE_NAME}.v2")).exists());
+        assert!(!tables(&copy).contains(&"setting".to_owned()));
+        assert!(tables(&copy).contains(&"step".to_owned()));
+        let held: (i64, Option<String>) = Connection::open(&copy)
+            .expect("open the copy")
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM turn), (SELECT state FROM turn WHERE id = 't-1')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("the turns are in the copy");
+        assert_eq!(held, (2, Some("aaa".to_owned())));
+        assert!(
+            Connection::open(&copy)
+                .expect("open the copy")
+                .prepare("SELECT start FROM turn")
+                .is_err(),
+            "the copy has no column of version 4"
+        );
+    }
+
     #[test]
     fn a_second_open_copies_nothing_more_and_a_new_file_is_copied_nowhere() {
         let folder = Folder::new("copies");
@@ -924,7 +1031,7 @@ mod tests {
 
         let fresh = Folder::new("fresh");
         drop(Store::open(&fresh.file()).expect("open"));
-        assert_eq!(user_version(&fresh.file()), 3);
+        assert_eq!(user_version(&fresh.file()), 4);
         assert_eq!(
             std::fs::read_dir(&fresh.0)
                 .expect("list")
