@@ -480,12 +480,52 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     );
     wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
 
+    // The files it read and did not change come after every file it changed, one row
+    // each, with no request: the row is there before anything is answered.
+    let changed = live_rows(&stage, &mut cx).len();
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 2, read("r.txt")));
+    wait_for_reads(&stage, &["r.txt"], &mut cx);
+    let rows = live_rows(&stage, &mut cx);
+    assert_eq!(rows.len(), changed + 1);
+    assert_eq!(
+        rows.last(),
+        Some(&PaneRow::Read {
+            path: "r.txt".into()
+        })
+    );
+    assert_eq!(headings(&rows), ["a.txt", "b.txt", "c.txt"]);
+    assert!(
+        !rows.iter().any(|row| matches!(
+            row,
+            PaneRow::File { path, .. } | PaneRow::Diff { path, .. } | PaneRow::Unshown { path, .. }
+                if path == &PathBuf::from("r.txt")
+        )),
+        "a file read has no heading, hunk or lines: {rows:#?}"
+    );
+    assert!(drawn(&format!("flow-read-{}", rows.len() - 1), &mut cx).is_some());
+    // A second file read comes after the first; a file read again is not listed twice.
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 3, read("q.txt")));
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 4, read("r.txt")));
+    wait_for_reads(&stage, &["r.txt", "q.txt"], &mut cx);
+    let rows = live_rows(&stage, &mut cx);
+    assert_eq!(rows.len(), changed + 2);
+    assert_eq!(reads(&rows), ["r.txt", "q.txt"]);
+    assert!(matches!(rows[rows.len() - 2], PaneRow::Read { .. }));
+
     // A file the agent edits again is read again, though the list holds it just as it did:
-    // its diff grows. Only that file is read.
+    // its diff grows. Only that file is read, which is also the barrier for the three reads
+    // above: a read that had asked for the list would have its question come first, and the
+    // read of a.txt would not be the next request.
     stage.keeper.tell(step_fact(
         session_id('a'),
         t.clone(),
-        2,
+        5,
         Step::Edit {
             path: "a.txt".into(),
             lines: None,
@@ -517,50 +557,79 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         },
         &mut cx,
     );
-    wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
-    let changed = live_rows(&stage, &mut cx).len();
+    wait_for_live(
+        &stage,
+        &["a.txt", "b.txt", "c.txt"],
+        &["r.txt", "q.txt"],
+        &mut cx,
+    );
 
-    // The files it read and did not change come after every file it changed, one row
-    // each, with no request: the row is there before anything is answered.
-    stage
-        .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 3, read("r.txt")));
-    wait_for_reads(&stage, &["r.txt"], &mut cx);
-    let rows = live_rows(&stage, &mut cx);
-    assert_eq!(rows.len(), changed + 1);
-    assert_eq!(
-        rows.last(),
-        Some(&PaneRow::Read {
-            path: "r.txt".into()
-        })
+    // A file whose status changes in a later list is taken anew: a shell command removes
+    // a.txt, and its heading says so; written again, it says Modified again. Each change is
+    // told by the watcher alone, which reads every file again, a.txt with no new side.
+    let a_is = |status: FileStatus| PaneRow::File {
+        path: a.clone(),
+        status,
+    };
+    the_files_changed(
+        &mut stage,
+        &s0(),
+        vec![
+            file("a.txt", FileStatus::Deleted),
+            file("b.txt", FileStatus::Added),
+            file("c.txt", FileStatus::Added),
+        ],
+        &mut cx,
     );
-    assert_eq!(headings(&rows), ["a.txt", "b.txt", "c.txt"]);
-    assert!(
-        !rows.iter().any(|row| matches!(
-            row,
-            PaneRow::File { path, .. } | PaneRow::Diff { path, .. } | PaneRow::Unshown { path, .. }
-                if path == &PathBuf::from("r.txt")
-        )),
-        "a file read has no heading, hunk or lines: {rows:#?}"
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[
+            ("a.txt", "one\ntwo\nthree\n", ""),
+            ("b.txt", "", "new b\n"),
+            ("c.txt", "", "new c\n"),
+        ],
+        &mut cx,
     );
-    assert!(drawn(&format!("flow-read-{}", rows.len() - 1), &mut cx).is_some());
-    // A second file read comes after the first; a file read again is not listed twice.
-    stage
-        .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 4, read("q.txt")));
-    stage
-        .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 5, read("r.txt")));
-    wait_for_reads(&stage, &["r.txt", "q.txt"], &mut cx);
+    wait_for_row(&stage, &a_is(FileStatus::Deleted), &mut cx);
+    wait_for_live(
+        &stage,
+        &["a.txt", "b.txt", "c.txt"],
+        &["r.txt", "q.txt"],
+        &mut cx,
+    );
     let rows = live_rows(&stage, &mut cx);
-    assert_eq!(rows.len(), changed + 2);
-    assert_eq!(reads(&rows), ["r.txt", "q.txt"]);
-    assert!(matches!(rows[rows.len() - 2], PaneRow::Read { .. }));
+    assert!(!rows.contains(&a_is(FileStatus::Modified)), "{rows:#?}");
+    let the_three = vec![
+        file("a.txt", FileStatus::Modified),
+        file("b.txt", FileStatus::Added),
+        file("c.txt", FileStatus::Added),
+    ];
+    the_files_changed(&mut stage, &s0(), the_three, &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[
+            ("a.txt", "one\n", "one\ntwo\nthree\n"),
+            ("b.txt", "", "new b\n"),
+            ("c.txt", "", "new c\n"),
+        ],
+        &mut cx,
+    );
+    wait_for_row(&stage, &a_is(FileStatus::Modified), &mut cx);
+    wait_for_live(
+        &stage,
+        &["a.txt", "b.txt", "c.txt"],
+        &["r.txt", "q.txt"],
+        &mut cx,
+    );
+    let rows = live_rows(&stage, &mut cx);
+    assert!(!rows.contains(&a_is(FileStatus::Deleted)), "{rows:#?}");
 
     // It leaves the group when the turn changes it: while the list that write asked for
-    // is not answered, r.txt is still a file read. What came before the write asked
-    // nothing: the first request is the list of the write, and a read that had asked would
-    // have it answered earlier, which the clause of the hidden form below would show.
+    // is not answered, r.txt is still a file read.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 6, write("r.txt")));
@@ -778,6 +847,22 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         })
     );
     assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
+
+    // The turn ended with a state: its change runs between two recorded states, which no
+    // later write changes, so a change of the files the watcher tells of asks nothing of
+    // the live diff. The barrier is the Frame's own question, told twice: a question of
+    // the live diff would come between the two.
+    for _ in 0..2 {
+        stage
+            .keeper
+            .tell(Fact::ChangesChanged { workspace: id('1') });
+        let (asked, request) = stage.keeper.request(&mut cx);
+        assert_eq!(request, Request::GetChanges { workspace: id('1') });
+        stage.keeper.reply(
+            asked,
+            Ok(Reply::Changes(since_main(Vec::new(), Vec::new()))),
+        );
+    }
 
     // The running turn is the one shown while its start is not known: it counts from the
     // commit checked out, and starts over from its start once that is kept.

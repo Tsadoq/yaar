@@ -39,12 +39,13 @@
 //! What makes it grow. While the turn runs, the list is asked again at each `Fact::Step`
 //! of that turn that is an edit or a file written whole, and at each `Fact::ChangesChanged`
 //! of the workspace on screen, which is how a file a shell command wrote reaches it; a read
-//! step asks nothing. At the `Fact::TurnEnded` of that turn with a state, the list is asked
-//! again to that state. One question for the list is on its way at a time; a reason to
-//! ask again that comes meanwhile asks once more when the answer is here. When the list is
-//! here, a file new to it is read, and so is every file a step named since the last list,
-//! and every file of the list when a `ChangesChanged` came since; a file keeps what is
-//! shown of it until its new versions are here, so that nothing blinks.
+//! step asks nothing, and neither does a `ChangesChanged` once the turn's change runs to a
+//! recorded state, which no write changes. At the `Fact::TurnEnded` of that turn with a
+//! state, the list is asked again to that state. One question for the list is on its way at
+//! a time; a reason to ask again that comes meanwhile asks once more when the answer is here.
+//! When the list is here, a file new to it is read, and so is every file a step named since
+//! the last list, and every file of the list when a `ChangesChanged` came since; a file keeps
+//! what is shown of it until its new versions are here, so that nothing blinks.
 //!
 //! The files read. After the rows of the files the turn changed, and after every other
 //! row, the live diff lists each file the turn read and did not change, one row each,
@@ -421,7 +422,11 @@ impl ReviewPane {
                     self.live.activity = self.live_row_of(&at).is_none().then_some(at);
                 }
             }
-            Fact::ChangesChanged { workspace } if *workspace == shown.workspace => {
+            // A change counted to a recorded state does not move with the files: only one
+            // that is counted to the files on disk needs the fact.
+            Fact::ChangesChanged { workspace }
+                if *workspace == shown.workspace && shown.to.is_none() =>
+            {
                 self.live.stale = true;
                 self.live.everything = true;
                 self.live_look(cx);
