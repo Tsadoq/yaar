@@ -152,6 +152,23 @@ impl Scratch {
         String::from_utf8_lossy(&output.stdout).lines().count()
     }
 
+    /// The content of `path` in the state `state` of `workspace`, read from the state
+    /// store as git does.
+    fn file_in_state(&self, workspace: &WorkspaceId, state: &str, path: &str) -> String {
+        let store = self
+            .data_dir()
+            .join("states")
+            .join(format!("{workspace}.git"));
+        let output = Command::new("git")
+            .arg("--git-dir")
+            .arg(&store)
+            .args(["show", &format!("{state}:{path}")])
+            .stdin(Stdio::null())
+            .output()
+            .expect("start git");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
     /// Waits until the Keeper has recorded at least one state of `workspace`: it does so
     /// after its watcher runs, so no change made after this is missed.
     fn wait_until_watched(&self, workspace: &WorkspaceId) {
@@ -296,12 +313,21 @@ impl Window {
     /// Starts a thread on the first line of `a.txt` in the files on disk, the `n`th of
     /// the test.
     fn new_thread(&mut self, review: &ReviewId, n: u8) {
+        self.new_thread_on(review, n, 1, "one");
+    }
+
+    /// Starts a thread on line `line` of `a.txt` in the files on disk, `text` being that
+    /// line, the `n`th of the test.
+    fn new_thread_on(&mut self, review: &ReviewId, n: u8, line: u32, text: &str) {
         let anchor = Anchor {
             tree: None,
             path: PathBuf::from("a.txt"),
             side: Side::New,
-            lines: Lines { first: 1, last: 1 },
-            text: "one".to_owned(),
+            lines: Lines {
+                first: line,
+                last: line,
+            },
+            text: text.to_owned(),
         };
         let saved = self.ask(Request::SaveDraft {
             review: review.clone(),
@@ -420,6 +446,32 @@ fn a_new_thread_on_the_files_on_disk_records_a_state_only_when_a_file_changed_si
     assert_ne!(sitting[2], sitting[0], "a new state for the changed files");
     assert_eq!(scratch.states_of(&workspace), 2);
     assert!(recordings() > first, "a state was recorded for it");
+    window.stop(keeper);
+}
+
+#[test]
+fn a_new_thread_on_lines_a_write_just_made_sits_on_a_state_that_holds_them() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
+    scratch.wait_until_watched(&workspace);
+    let (review, _) = window.thread_states(&workspace);
+
+    // The write is read from disk by a Window before the watcher tells of it, so the
+    // thread must not wait for that fact: the newest state lacks the line it comments on.
+    std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
+    window.new_thread_on(&review, 1, 2, "two");
+
+    let (_, sitting) = window.thread_states(&workspace);
+    assert_eq!(sitting.len(), 1);
+    assert_eq!(
+        scratch.file_in_state(&workspace, &sitting[0], "a.txt"),
+        "one\ntwo\n",
+        "the thread's state holds the line it comments on"
+    );
     window.stop(keeper);
 }
 

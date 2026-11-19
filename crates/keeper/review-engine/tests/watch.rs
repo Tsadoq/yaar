@@ -200,6 +200,51 @@ fn a_new_thread_records_a_state_when_the_watch_saw_files_change() {
 }
 
 #[test]
+fn a_new_thread_on_lines_the_newest_state_lacks_records_a_state_though_the_watch_saw_no_change() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    commit_all(&repo, "first");
+    let worktree = open(&repo);
+    let store = store(&scratch);
+    let watch = Arc::new(Watch::default());
+    let reviews = engine(&scratch, store.clone()).watching(watch.clone());
+    let w = workspace();
+    let review = reviews
+        .of_workspace(&w, Some(&worktree))
+        .expect("read")
+        .reviews[0]
+        .id()
+        .clone();
+    let before = reviews.mark_reviewed(&worktree, &review).expect("mark");
+    // The write is on disk, and the watch has not told of it yet.
+    write(&repo, "a.txt", "one\ntwo\n");
+
+    reviews
+        .save_draft(
+            Some(&worktree),
+            &review,
+            &new_thread(1, "a.txt", 2, "two", "x"),
+        )
+        .expect("a thread");
+
+    let thread = reviews.review(&review).expect("read").threads()[0].clone();
+    assert_ne!(thread.anchor.tree, before.as_str());
+    let states = reviews.states_of(&w).expect("the state store");
+    assert_eq!(
+        states
+            .content(&thread.anchor.tree, std::path::Path::new("a.txt"))
+            .expect("read"),
+        Some(b"one\ntwo\n".to_vec())
+    );
+    assert_eq!(
+        watch.told().last().map(|(_, state)| state.as_str()),
+        Some(thread.anchor.tree.as_str())
+    );
+}
+
+#[test]
 fn a_new_thread_records_the_first_state_though_the_watch_saw_no_change() {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");

@@ -591,13 +591,21 @@ impl Reviews {
             (None, None) => Err(EngineError::NoWorktree),
             (None, Some(worktree)) => {
                 // Files nobody changed since the newest state are that state: a thread
-                // goes on it, and nothing is recorded, unless there is no state yet.
+                // goes on it, and nothing is recorded, unless there is no state yet. The
+                // watcher tells of a write a moment after it, and a Window may have read
+                // the new lines by then, so the state must hold the lines too.
                 let unchanged = self
                     .watch
                     .as_ref()
                     .is_some_and(|watch| !watch.changed_since_state(workspace));
-                if unchanged && let Some(newest) = self.states_of(workspace)?.states()?.pop() {
-                    return Ok(newest.id.as_str().to_owned());
+                if unchanged {
+                    let states = self.states_of(workspace)?;
+                    if let Some(newest) = states.states()?.pop()
+                        && let Some(content) = states.content(newest.id.as_str(), &at.path)?
+                        && holds_lines(&content, at)
+                    {
+                        return Ok(newest.id.as_str().to_owned());
+                    }
                 }
                 Ok(self
                     .record_state(workspace, worktree)?
@@ -613,6 +621,26 @@ impl Reviews {
             (Some(commit), None) => Ok(commit.clone()),
         }
     }
+}
+
+// Whether the file `content` has, on the lines the anchor names, the text the anchor holds.
+fn holds_lines(content: &[u8], at: &NewAnchor) -> bool {
+    let Ok(content) = std::str::from_utf8(content) else {
+        return false;
+    };
+    let (Some(first), Some(last)) = (
+        at.first
+            .checked_sub(1)
+            .and_then(|n| usize::try_from(n).ok()),
+        usize::try_from(at.last).ok(),
+    ) else {
+        return false;
+    };
+    // A line end after the last line starts another, empty one, as the anchor counts it.
+    let lines: Vec<&str> = content.split('\n').collect();
+    lines
+        .get(first..last)
+        .is_some_and(|held| held.join("\n") == at.text)
 }
 
 // 32 lowercase hexadecimal digits from the random numbers of the system.
