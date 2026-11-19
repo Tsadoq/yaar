@@ -382,6 +382,47 @@ fn something_that_is_no_commit_is_refused_and_leaves_the_store_as_it_was() {
     assert_eq!(git(store.folder(), &["for-each-ref"]), refs_before);
 }
 
+// The commit that is asked first is not kept when the one asked second is refused: a call
+// that is an error changes nothing in the store.
+#[test]
+fn a_comparison_that_is_refused_keeps_neither_of_its_versions() {
+    let scratch = Scratch::new();
+    let store = store(&scratch);
+    let lived = lived(&scratch, &store);
+    let worktree = open(&lived.repo);
+    let never_kept = &lived.commits[3];
+    assert!(
+        store
+            .content_in(None, never_kept, Path::new("base.txt"))
+            .is_err(),
+        "the premise: the store does not hold it"
+    );
+    let refs_before = git(store.folder(), &["for-each-ref"]);
+
+    for given in ["HEAD", "not-an-id", &"0".repeat(40)] {
+        assert!(
+            store
+                .compare(Some(&worktree), never_kept, Some(given))
+                .is_err(),
+            "{given}"
+        );
+        assert!(
+            store
+                .compare(Some(&worktree), given, Some(never_kept))
+                .is_err(),
+            "{given}"
+        );
+    }
+
+    assert_eq!(git(store.folder(), &["for-each-ref"]), refs_before);
+    assert!(
+        store
+            .content_in(None, never_kept, Path::new("base.txt"))
+            .is_err(),
+        "still not held"
+    );
+}
+
 #[test]
 fn a_file_reads_in_a_state_in_a_commit_and_as_nothing_where_it_is_not() {
     let scratch = Scratch::new();

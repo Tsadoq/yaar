@@ -29,10 +29,12 @@ impl StateStore {
         from: &str,
         to: Option<&str>,
     ) -> Result<Vec<ChangedPath>, RecordError> {
-        self.hold(worktree, from)?;
+        match to {
+            Some(to) => self.hold(worktree, &[from, to])?,
+            None => self.hold(worktree, &[from])?,
+        }
         let changes = match to {
             Some(to) => {
-                self.hold(worktree, to)?;
                 // The objects of the real repository are not needed: a version the store
                 // holds is whole in it.
                 self.run(None, diff_tree_args(from, to))?
@@ -72,33 +74,52 @@ impl StateStore {
         version: &str,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, RecordError> {
-        self.hold(worktree, version)?;
+        self.hold(worktree, &[version])?;
         Ok(self.content(version, path)?)
     }
 
-    /// Makes the store hold `version`, a state or a commit, so that it reads with the real
-    /// repository gone: a commit the store has not got is copied from the repository of
-    /// `worktree`.
-    fn hold(&self, worktree: Option<&Worktree>, version: &str) -> Result<(), RecordError> {
-        if !is_full_id(version) {
-            return Err(not_a_commit(version).into());
+    /// Makes the store hold each of `versions`, states or commits, so that they read with
+    /// the real repository gone: a commit the store has not got is copied from the
+    /// repository of `worktree`. Every version is checked before any is copied, so that a
+    /// call with one that is refused leaves the store as it was.
+    fn hold(&self, worktree: Option<&Worktree>, versions: &[&str]) -> Result<(), RecordError> {
+        let mut to_keep = Vec::new();
+        for version in versions {
+            if !is_full_id(version) {
+                return Err(not_a_commit(version).into());
+            }
+            // A state is held, so is the commit a state was taken on and a commit kept
+            // before: those need nothing of the real repository, which may be gone by now.
+            let spec = format!("{version}^{{commit}}");
+            if self.run(None, ["cat-file", "-e", &spec])?.code == Some(0) {
+                continue;
+            }
+            let Some(worktree) = worktree else {
+                return Err(RecordError::Store {
+                    folder: self.folder.clone(),
+                    reason: format!(
+                        "{version} is not held, and with no worktree there is no repository \
+                         to copy it from"
+                    ),
+                });
+            };
+            let real_objects = worktree.common_dir().join("objects");
+            if self
+                .run(Some(&real_objects), ["cat-file", "-e", &spec])?
+                .code
+                != Some(0)
+            {
+                return Err(RecordError::Store {
+                    folder: self.folder.clone(),
+                    reason: format!("{version} is no commit of the repository"),
+                });
+            }
+            to_keep.push((worktree, *version));
         }
-        // A state is held, so is the commit a state was taken on and a commit kept before:
-        // those need nothing of the real repository, which may be gone by now.
-        let held = self.run(None, ["cat-file", "-e", &format!("{version}^{{commit}}")])?;
-        if held.code == Some(0) {
-            return Ok(());
+        for (worktree, version) in to_keep {
+            self.keep_commit(worktree, &CommitId::new(version))?;
         }
-        match worktree {
-            Some(worktree) => self.keep_commit(worktree, &CommitId::new(version)),
-            None => Err(RecordError::Store {
-                folder: self.folder.clone(),
-                reason: format!(
-                    "{version} is not held, and with no worktree there is no repository to \
-                     copy it from"
-                ),
-            }),
-        }
+        Ok(())
     }
 
     /// The commits of the branch checked out in `worktree` that come after `since`, in the
