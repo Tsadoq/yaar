@@ -49,8 +49,15 @@ mod tests {
         assert_eq!(made[0].workspace(), &w);
         assert_eq!(made[0].agent(), None);
 
-        // Given back, with a thread in it, it comes back unchanged and draws no id.
+        // Given back as it is, still empty, it comes back unchanged and draws no id: a
+        // review with no thread in it is still the workspace's review.
         let mut review = made.into_iter().next().expect("the review");
+        let empty = with_review_of_no_agent(&w, vec![review.clone()], || {
+            panic!("a workspace that has its review draws no id")
+        });
+        assert_eq!(empty, vec![review.clone()]);
+
+        // Given back with a thread in it, the same.
         review
             .start_thread(
                 ThreadId::new(format!("{:032x}", 1)),

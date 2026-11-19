@@ -160,7 +160,7 @@ mod tests {
                 Side::New,
                 12,
                 14,
-                "let alpha_one = 1;\nlet alpha_two = 2;\nlet alpha_three = 3;",
+                "let alpha_one = 1;\nlet alpha_two = \"```\";\nlet alpha_three = 3;",
             ),
             "alpha draft",
         );
@@ -218,7 +218,18 @@ mod tests {
             alpha.contains("src/alpha.rs, lines 12 to 14, on the new side"),
             "{alpha}"
         );
-        assert!(alpha.contains("let alpha_one = 1;\nlet alpha_two = 2;\nlet alpha_three = 3;"));
+        // A's code holds three backticks, so it is fenced with four; B's holds none, so
+        // three are enough.
+        assert!(
+            alpha.contains(
+                "\n````\nlet alpha_one = 1;\nlet alpha_two = \"```\";\nlet alpha_three = 3;\n````\n"
+            ),
+            "{alpha}"
+        );
+        assert!(
+            bravo.contains("\n```\nlet bravo_code = 7;\n```\n"),
+            "{bravo}"
+        );
         assert!(alpha.contains("alpha draft"));
 
         // What was sent before reads in its place, as context and not as a comment to send.
