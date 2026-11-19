@@ -679,6 +679,97 @@ fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_live
     end(world, client);
 }
 
+// Not a row: the process the Keeper takes for an agent's, which it looks at every little
+// while for as long as the agent works.
+#[test]
+fn an_agent_that_works_is_never_shown_as_not_running_while_the_keeper_finds_another_agents_process_gone()
+ {
+    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    let mut client = world.client();
+    let workspace = open(&mut client, &repo);
+    let one = client.open_terminal(&workspace, SIZE).expect("a terminal");
+    let two = client.open_terminal(&workspace, SIZE).expect("a terminal");
+    // The first holds its turn open until the test makes the file beside the repository.
+    let holding = script(&["turn", "hold ../go", "end", "turn"]);
+    start_in(&world, &mut client, &one, "one", "claude", "", &holding);
+    client.wait_for_prompt(&one, 0);
+    let idle = start_in(
+        &world,
+        &mut client,
+        &two,
+        "two",
+        "claude",
+        "",
+        &script(&["turn"]),
+    );
+    client.wait_for_prompt(&two, 0);
+    let both = client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents.sessions.len() == 2
+            && agents
+                .sessions
+                .iter()
+                .all(|s| s.state == SessionState::Idle)
+    });
+    let session_in = |terminal: &TerminalId| {
+        both.sessions
+            .iter()
+            .find(|s| s.terminal.as_ref() == Some(terminal))
+            .expect("a session in the terminal")
+            .id
+            .clone()
+    };
+    let (working, doomed) = (session_in(&one), session_in(&two));
+    client.type_line(&one, "work");
+    client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.id == working && s.state == SessionState::Works)
+    });
+
+    // The other agent is killed. The Keeper finds a process gone in a pass over every
+    // process it follows, and that pass looks at the working agent's as it looks at this
+    // one's, so the fact that this session is not running is the fact that the pass was
+    // made: no wait for a time to pass stands in its place.
+    let pid = idle.log(&world).pid;
+    assert_ne!(pid, 0);
+    // SAFETY: a signal to a process of this test.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    let not_running = |agents: &WorkspaceAgents, session: &yaar_link::SessionId| {
+        agents.workspace == workspace
+            && agents
+                .sessions
+                .iter()
+                .any(|s| s.id == *session && s.state == SessionState::NotRunning)
+    };
+    let seen = seen_until(
+        &mut client,
+        |fact| matches!(fact, Fact::AgentsChanged(agents) if not_running(agents, &doomed)),
+    );
+    assert!(
+        seen.iter().all(|fact| !matches!(fact,
+            Fact::AgentsChanged(agents) if not_running(agents, &working))),
+        "the working agent was found gone: {seen:?}"
+    );
+
+    // The agent goes on, and its turn ends as the turn of an agent that never stopped.
+    fs::write(repo.path().join("../go"), "").expect("let the turn go on");
+    let seen = seen_until(&mut client, |fact| {
+        matches!(fact, Fact::AgentsChanged(agents)
+            if agents.workspace == workspace
+                && agents
+                    .sessions
+                    .iter()
+                    .any(|s| s.id == working && s.state == SessionState::Unreviewed))
+    });
+    assert!(
+        seen.iter().all(|fact| !matches!(fact,
+            Fact::AgentsChanged(agents) if not_running(agents, &working))),
+        "the working agent was found gone: {seen:?}"
+    );
+    end(world, client);
+}
+
 // AGENT-20.
 #[test]
 fn two_sessions_in_one_worktree_each_have_a_review() {
