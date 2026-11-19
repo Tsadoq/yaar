@@ -34,9 +34,10 @@ const FLOOD_DEADLINE: Duration = Duration::from_secs(180);
 /// shell does not print its prompt, which comes at its own time, onto the screen that is
 /// compared. A folder of gates is its one argument.
 ///
-/// It names `/bin/sh` and so does not run in the user's own shell: zsh writes a carriage
-/// return of its own when it is told the window changed, which every attach does, and that
-/// would put a byte into the run of one terminal that the other's does not hold.
+/// It names `/bin/sh`. Without that line the terminal's interactive shell runs the script
+/// in a fork of itself, and that fork writes a carriage return of its own when it is told
+/// the window changed, which every attach does: a byte in the run of one terminal that the
+/// other's does not hold. With it the script is a new shell that writes nothing of its own.
 fn flood() -> String {
     format!(
         "\
@@ -63,22 +64,29 @@ read line
 /// gone. A child that ignores the hang-up and the stop would otherwise run on for good.
 /// Dropped before the world, so that the Keeper is still there to ask.
 struct Leftovers {
-    keeper: u32,
+    keeper: Option<u32>,
     known: Vec<u32>,
 }
 
 impl Leftovers {
     fn of(keeper: u32) -> Leftovers {
         Leftovers {
-            keeper,
+            keeper: Some(keeper),
             known: Vec::new(),
         }
+    }
+
+    /// Called once the test has seen every process gone: a process id may be given to an
+    /// unrelated process from then on, and the drop must not look for one.
+    fn disarm(&mut self) {
+        self.keeper = None;
+        self.known.clear();
     }
 }
 
 impl Drop for Leftovers {
     fn drop(&mut self) {
-        let mut all = descendants_of(self.keeper);
+        let mut all = self.keeper.map(descendants_of).unwrap_or_default();
         all.append(&mut self.known);
         for pid in all.into_iter().filter(|pid| is_alive(*pid)) {
             // SAFETY: a signal to a process the test started or was told of.
@@ -170,7 +178,7 @@ fn start_flood(
 fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_interrupted() {
     let mut world = World::new();
     let keeper = world.start_keeper();
-    let _leftovers = Leftovers::of(keeper);
+    let mut leftovers = Leftovers::of(keeper);
     let repo = world.repository("app");
     let program = script(&world, "flood.sh", &flood());
 
@@ -204,6 +212,19 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
         let wanted = format!("part {part} line ");
         let heard = killed.wait_for_output(&shown, DEADLINE, |bytes| newest_holds(bytes, &wanted));
 
+        // No goodbye, nothing more read. The client goes at once, before anything is
+        // checked: what it heard is a copy, and the checks below take longer than a part
+        // takes to be written, so that after them the part could be over.
+        killed.vanish();
+
+        // The part has only begun: the client had heard a frame that holds its first
+        // lines, which is less than a part, so that the kill fell in the middle of the
+        // flood and of a part, with output on its way.
+        assert!(
+            !newest_holds(&heard, &format!("part {part} line {LINES}")),
+            "part {part} was written whole when client {part} heard its first lines"
+        );
+
         // What reached it, the kept output and what came live after it, is one unbroken
         // run: nothing lost and nothing twice where the two meet.
         let lines = flood_lines(&heard);
@@ -218,17 +239,6 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
                 "client {part} heard a break in the flood"
             );
         }
-
-        // The part has only begun: the client has heard a frame that holds its first
-        // lines, which is less than a part, so that the kill falls in the middle of the
-        // flood and of a part, with output on its way.
-        assert!(
-            !newest_holds(&heard, &format!("part {part} line {LINES}")),
-            "part {part} was written whole before client {part} was killed"
-        );
-
-        // No goodbye, nothing more read.
-        killed.vanish();
     }
 
     // A last client attaches when the flood is over.
@@ -274,6 +284,7 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
             .filter(|pid| is_alive(**pid))
             .collect::<Vec<_>>()
     );
+    leftovers.disarm();
 }
 
 /// What `bytes` holds up to the end of the line that says the flood is done.
@@ -365,4 +376,5 @@ fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_
         "the Keeper has not exited {:?} after the stop",
         stopped.elapsed()
     );
+    leftovers.disarm();
 }
