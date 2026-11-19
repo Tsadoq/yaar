@@ -796,10 +796,12 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         &terminal,
         &format!("env > '{}'; printf 'env-%s\\n' done", printed.display()),
     );
+    // The prompt of the shell may stand in front of the marker on its line, and the typed
+    // line holds `env-%s`, never the marker.
     client.wait_for_output(&terminal, DEADLINE, |output| {
         String::from_utf8_lossy(output)
             .lines()
-            .any(|line| line.trim_end() == "env-done")
+            .any(|line| line.contains("env-done"))
     });
 
     let in_shell = environment(&fs::read(&printed).expect("the shell wrote its environment"));

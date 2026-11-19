@@ -144,22 +144,23 @@ fn every_program_a_test_starts_is_built_from_the_tree_and_the_companions_lie_bes
 fn a_shell_of_the_app_finds_the_worlds_claude_before_any_other() {
     let (world, mut client, terminal) = world_with_a_shell();
     client.type_line(&terminal, "command -v claude; printf 'path-%s\\n' done");
+    // The prompt of the shell may stand in front of what the line prints, so each line is
+    // read by its end.
     let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
-        lines_of(bytes).iter().any(|line| line == "path-done")
+        lines_of(bytes)
+            .iter()
+            .any(|line| line.ends_with("path-done"))
     });
     let lines = lines_of(&heard);
     let marker = lines
         .iter()
-        .position(|line| line == "path-done")
+        .position(|line| line.ends_with("path-done"))
         .expect("the marker is there");
     let agents = world
         .agents_dir()
         .expect("the world has a folder of agents");
-    assert_eq!(
-        lines[marker - 1],
-        agents.join("claude").display().to_string(),
-        "{lines:?}"
-    );
+    let claude = agents.join("claude").display().to_string();
+    assert!(lines[marker - 1].ends_with(&claude), "{lines:?}");
 }
 
 #[test]
@@ -677,6 +678,9 @@ fn screen_after(command: &str, marker: &str, size: TerminalSize) -> Vec<String> 
     let terminal = client
         .open_terminal(&workspace, size)
         .expect("open a terminal");
+    // The prompt is waited for: a line typed before it is echoed first, and the prompt then
+    // lands in front of the first thing the line prints.
+    client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
     // The marker is built so that the line typed does not hold it.
     client.type_line(
         &terminal,

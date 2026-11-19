@@ -327,11 +327,12 @@ fn up_to_the_end(bytes: &[u8]) -> &[u8] {
     &bytes[..at + end.len()]
 }
 
-/// The id a shell printed after `label`, as in `child 123`.
+/// The id a shell printed after `label`, as in `child 123`. The prompt of the shell may
+/// stand in front of the label on its line, and the typed line holds no digits after it.
 fn printed_id(output: &[u8], label: &str) -> Option<u32> {
     String::from_utf8_lossy(output).lines().find_map(|line| {
-        let digits = line.trim().strip_prefix(label)?.trim();
-        digits.parse().ok()
+        let (_, digits) = line.trim().rsplit_once(label)?;
+        digits.trim().parse().ok()
     })
 }
 
