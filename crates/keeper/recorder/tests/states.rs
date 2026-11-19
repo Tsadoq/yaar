@@ -948,3 +948,57 @@ fn several_threads_record_one_after_the_other_and_no_git_is_left_running() {
         .collect();
     assert!(left.is_empty(), "left behind: {left:?}");
 }
+
+#[test]
+fn two_stores_that_take_a_state_at_once_never_replace_one_state_with_another() {
+    let scratch = Scratch::new();
+    // A worktree for each thread, each with files of its own, so that no two recordings
+    // find the same tree. Every thread has a handle of its own on the one store folder:
+    // the lock of one handle does not hold the others back, as with two processes.
+    const THREADS: usize = 8;
+    let folder = scratch.join("app/states/one.git");
+    StateStore::open(&found(), &folder).expect("make the store");
+    let worktrees: Vec<Worktree> = (0..THREADS)
+        .map(|n| {
+            let repo = scratch.join(&format!("repo{n}"));
+            init(&repo);
+            write(&repo, "a.txt", "one\n");
+            commit_all(&repo, "start");
+            write(&repo, "a.txt", &format!("changed in {n}\n"));
+            open(&repo)
+        })
+        .collect();
+    let start = std::sync::Barrier::new(THREADS);
+
+    let recorded: Vec<Result<RecordedState, RecordError>> = std::thread::scope(|scope| {
+        let threads: Vec<_> = worktrees
+            .iter()
+            .map(|worktree| {
+                let (folder, start) = (&folder, &start);
+                scope.spawn(move || {
+                    let store = StateStore::open(&found(), folder).expect("open the store");
+                    start.wait();
+                    store.record(worktree)
+                })
+            })
+            .collect();
+        threads
+            .into_iter()
+            .map(|t| t.join().expect("a thread"))
+            .collect()
+    });
+
+    // A recording that lost its number says so, and one that says it recorded a state
+    // has that state: the store holds every one of them, each under a ref of its own.
+    let kept = StateStore::open(&found(), &folder).expect("open the store again");
+    let held = kept.states().expect("states");
+    let told: Vec<&RecordedState> = recorded.iter().filter_map(|r| r.as_ref().ok()).collect();
+    assert!(!told.is_empty(), "no recording succeeded: {recorded:?}");
+    for state in &told {
+        assert!(
+            held.contains(state),
+            "a recorded state is not in the store: {state:?} of {held:?}"
+        );
+    }
+    assert_eq!(held.len(), told.len(), "{recorded:?}");
+}

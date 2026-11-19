@@ -36,6 +36,9 @@ use crate::worktree::{
     ChangedPath, CommitId, Worktree, hooks_off, inside, is_full_id, name_status, os_string,
 };
 
+/// The old value that `git update-ref` takes for "no such ref".
+const NO_REF: &str = "0000000000000000000000000000000000000000";
+
 /// Where the refs of the states are, each named by its number.
 const STATES: &str = "refs/yaar/states/";
 /// Where the refs of the commits kept by [`StateStore::keep_commit`] are.
@@ -160,7 +163,10 @@ impl StateStore {
     /// files, and the same files are the same state.
     ///
     /// A new state is named by the ref `refs/yaar/states/<n>`, `n` the highest number of
-    /// the store's states plus 1, written with 10 digits.
+    /// the store's states plus 1, written with 10 digits. The ref is written only if no
+    /// ref has that number: when another handle on the store took it between the reading
+    /// of the numbers and the writing, the recording fails with git's words,
+    /// [`RecordError::Git`], and replaces no state. It is not tried again.
     ///
     /// The real repository is left as it was: its list of files, refs, stash, reflog,
     /// objects and working files. No hook of the user runs and none can stop it. A
@@ -245,7 +251,11 @@ impl StateStore {
 
         self.complete(&real_objects, head.as_ref().map(CommitId::as_str), &tree)?;
         let name = format!("{STATES}{number:010}");
-        self.run(None, ["update-ref", &name, &commit])?.printed()?;
+        // Written only where no ref has this number: all-zero is git's "nothing is there
+        // yet". Another handle on the store that took the number first makes this fail
+        // with git's words, and the state it wrote stays as it is.
+        self.run(None, ["update-ref", &name, &commit, NO_REF])?
+            .printed()?;
         Ok(RecordedState {
             id: StateId(commit),
             tree,
