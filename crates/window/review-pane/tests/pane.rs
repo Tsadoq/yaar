@@ -656,6 +656,72 @@ fn lines(version: &str) -> Vec<String> {
     version.lines().map(str::to_owned).collect()
 }
 
+/// What a key of the pane's table does on the state the next test puts it in: a reviewer
+/// on a line of a file whose change has no thread and no comment.
+#[derive(Clone, Copy)]
+enum Effect {
+    /// Moves the reviewer or switches the layout.
+    Moves,
+    /// Says in the notice why there is nothing to do.
+    Notice,
+    /// Opens a comment box.
+    Box,
+    /// Opens the field for a commit message.
+    Field,
+    /// Asks the Keeper for a request of this kind.
+    Sends(RequestKind),
+}
+
+/// The effect of the key of a control. A control with no effect named here fails the
+/// test, so that a key added to the table is not left out of it.
+fn effect_of(keystroke: &str) -> Effect {
+    match keystroke {
+        "j" | "down" | "k" | "up" | "s" => Effect::Moves,
+        "c" => Effect::Box,
+        "shift-c" => Effect::Field,
+        "i" | "o" | "d d" | "m" | "shift-m" => Effect::Notice,
+        "y" => Effect::Sends(RequestKind::CopyReview),
+        "r" => Effect::Sends(RequestKind::SetViewed),
+        "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
+        other => panic!("the test names no effect of the key {other}"),
+    }
+}
+
+impl Effect {
+    /// Asserts that this effect shows now, for the control called `title` run by `how`.
+    /// A request is read, and answered as a Keeper would that has nothing to give.
+    fn shown(self, stage: &mut Stage, title: &str, how: &str, cx: &mut VisualTestContext) {
+        let pane = stage.pane.clone();
+        match self {
+            // Their effect is asserted where the test reads the reviewer's place.
+            Effect::Moves => {}
+            Effect::Notice => assert!(
+                pane.read_with(cx, |pane, _| pane.notice().is_some()),
+                "{title} by {how} said nothing"
+            ),
+            Effect::Box => assert!(
+                pane.read_with(cx, |pane, _| pane.comment_box().is_some()),
+                "{title} by {how} opened no box"
+            ),
+            Effect::Field => assert!(
+                pane.read_with(cx, |pane, _| pane.commit_field_open()),
+                "{title} by {how} opened no field"
+            ),
+            Effect::Sends(kind) => {
+                let (to, request) = stage.keeper.request(cx);
+                assert_eq!(request.kind(), kind, "{title} by {how} asked {request:?}");
+                let reply = match kind {
+                    RequestKind::CopyReview => Err(Refusal::NothingToSend {
+                        review: common::review_id(),
+                    }),
+                    _ => Ok(Reply::Done),
+                };
+                stage.keeper.reply(to, reply);
+            }
+        }
+    }
+}
+
 // This shows an absence, and is as strong as its list of keys and no stronger: a key
 // that is not pressed here could still do what the test says no key does. The list is
 // every key and every action of the pane's own table, and the keys an editor would
@@ -703,19 +769,20 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // Something to paste, should a key paste.
     cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
 
-    // Every key of the pane's table, and every action of it run without its key. The
-    // five keys of slice 1 do reach the pane: each moves the reviewer or switches the
-    // layout, one way or the other. The keys of the review actions do their own work,
-    // which the tests of the comments show; here they only must not change a file.
-    let moves = ["j", "down", "k", "up", "s"];
+    // Every key of the pane's table, and every action of it run without its key. Each
+    // reaches the pane, which the test shows by what it does with it on this state: the
+    // five keys of slice 1 move the reviewer or switch the layout, one way or the other;
+    // the keys of the review actions open a box or a field, say in the notice why there
+    // is nothing for them to do, or send the request they name. No key passes by doing
+    // nothing, and none changes a file, which the lines read below show.
+    let the_pane = stage.pane.clone();
     let state = |cx: &mut VisualTestContext| {
-        stage
-            .pane
-            .read_with(cx, |pane, _| (pane.layout(), pane.position().cloned()))
+        the_pane.read_with(cx, |pane, _| (pane.layout(), pane.position().cloned()))
     };
     // After each of them every line of every file reads as it did: a key that changed
     // one would not pass because a later key changed it back.
     for control in controls() {
+        let effect = effect_of(control.keystroke);
         let at_first = state(&mut cx);
         cx.simulate_keystrokes(control.keystroke);
         let after_the_key = state(&mut cx);
@@ -725,6 +792,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             "after the key {}",
             control.keystroke
         );
+        effect.shown(&mut stage, control.title, "its key", &mut cx);
         cx.update(|window, cx| window.dispatch_action((control.action)(), cx));
         cx.run_until_parked();
         let after_the_action = state(&mut cx);
@@ -734,13 +802,15 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             "after the action {}",
             control.title
         );
-        assert!(
-            !moves.contains(&control.keystroke)
-                || at_first != after_the_key
-                || after_the_key != after_the_action,
-            "{} did nothing",
-            control.title
-        );
+        if matches!(effect, Effect::Moves) {
+            assert!(
+                at_first != after_the_key || after_the_key != after_the_action,
+                "{} did nothing",
+                control.title
+            );
+        } else {
+            effect.shown(&mut stage, control.title, "the action", &mut cx);
+        }
         // A comment box or the field for a commit message that a key opened takes the
         // keys that follow as its text.
         if stage.pane.read_with(&cx, |pane, _| {
