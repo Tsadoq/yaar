@@ -3,14 +3,21 @@
 //! Built by the review pane's second package of slice 5 (row RP-04). Comments written on
 //! its lines are `flow_comment.rs`'s.
 //!
-//! Which turn. The turn the live diff shows is the newest turn of the timeline: the newest
-//! that started, while one runs; else the one the timeline was filled with. The version it
+//! Which turn. The turn the live diff shows is the newest turn of the timeline that has not
+//! ended, so that the end of an earlier turn, told after a later one started, moves
+//! nothing; where every turn has ended, the newest of them, which is the one the timeline
+//! was filled with from the history. The version it
 //! counts from is that turn's start as the timeline's `GetTurn` answer gave it
 //! (`Timeline::start_of`): until that answer is taken the live diff asks nothing; where it
 //! gave none, the commit checked out (`crate::tree::checked_out` of the history, once the
 //! history is here, `ReviewPane::live_history`). When a later answer gives the turn
 //! another start (a turn that started while the state of the turn before was being
-//! recorded), the live diff starts over from it.
+//! recorded), the live diff starts over from it. The state a turn that ended is read to
+//! is the one the fact of its end gave, or the history's entry for it.
+//!
+//! The threads of the review on screen are placed under the lines they sit on, as Changes
+//! places them; the threads whose line no row of the live diff shows are not listed
+//! there: they are Changes' to list.
 //!
 //! What it is the diff of. While the turn runs: from that version to the files on disk,
 //! read with `Request::CompareVersions { from, to: None }` for the list and
