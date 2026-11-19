@@ -89,6 +89,13 @@ struct Heard {
 enum Keeper {
     /// Answers the request with `Done`.
     Answers,
+    /// Answers the request with `Reply::Answer` of these bytes.
+    AnswersWith(Vec<u8>),
+    /// Tells a reply to another request that holds an answer, then answers its own with
+    /// `Done`.
+    AnswersAnotherRequestFirst,
+    /// Waits until the program's deadline is past, then answers with an `Answer`.
+    AnswersTooLate,
     /// Answers the request with a refusal.
     Refuses,
     /// Tells a fact and a reply to another request, then checks the program has not gone,
@@ -272,6 +279,33 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
         match behaviour {
             Keeper::Answers => {
                 write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                return heard;
+            }
+            Keeper::AnswersWith(bytes) => {
+                let answer = Reply::Answer {
+                    bytes: bytes.clone(),
+                };
+                write_message(&mut stream, &reply(Ok(answer))).expect("answer");
+                return heard;
+            }
+            Keeper::AnswersAnotherRequestFirst => {
+                let other = Message::Reply {
+                    to: RequestId(id.0 + 7),
+                    reply: Ok(Reply::Answer {
+                        bytes: b"the answer to another request".to_vec(),
+                    }),
+                };
+                write_message(&mut stream, &other).expect("answer another request");
+                write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                return heard;
+            }
+            Keeper::AnswersTooLate => {
+                thread::sleep(DEADLINE + MARGIN);
+                // The program has left by now: the write may find nobody.
+                let late = Reply::Answer {
+                    bytes: b"too late".to_vec(),
+                };
+                let _ = write_message(&mut stream, &reply(Ok(late)));
                 return heard;
             }
             Keeper::Refuses => {
@@ -574,4 +608,64 @@ fn a_keeper_that_keeps_telling_facts_cannot_hold_the_program_past_the_deadline()
         "the deadline runs from the start, not from each read: {:?}",
         ran.took
     );
+}
+
+#[test]
+fn what_the_keeper_answers_is_printed_byte_for_byte_and_the_program_succeeds() {
+    let record = permission_request(REQUESTS[0]);
+    // What a delivery looks like, a lone line end, and bytes that are no text.
+    let answers: [(&str, Vec<u8>); 3] = [
+        (
+            "a JSON object with quotes, a line break and an accent",
+            serde_json::to_vec(&serde_json::json!({
+                "hookSpecificOutput": {"additionalContext": "say \"hi\"\n\u{e9}"}
+            }))
+            .expect("an answer"),
+        ),
+        ("a lone line end", b"\n".to_vec()),
+        (
+            "bytes that are no text",
+            vec![0xff, 0x00, 0xfe, b'\r', b'\n'],
+        ),
+    ];
+    for (what, bytes) in answers {
+        let mut world = World::new();
+        world.keeper(Keeper::AnswersWith(bytes.clone()));
+
+        let ran = world.run(record.terminal(), &record.input_bytes());
+        let heard = world.heard();
+
+        assert_eq!(
+            the_one_report(&heard).payload,
+            record.input_bytes(),
+            "{what}"
+        );
+        assert_eq!(ran.status.code(), Some(0), "{what}: the program exits 0");
+        assert_eq!(ran.printed, bytes, "{what}");
+    }
+}
+
+#[test]
+fn an_answer_to_another_request_is_not_printed_and_its_own_done_prints_nothing() {
+    let record = permission_request(REQUESTS[0]);
+    let mut world = World::new();
+    world.keeper(Keeper::AnswersAnotherRequestFirst);
+
+    let ran = world.run(record.terminal(), &record.input_bytes());
+    world.heard();
+
+    ran.assert_succeeded_with_no_word();
+}
+
+#[test]
+fn an_answer_that_comes_after_the_deadline_is_not_printed() {
+    let record = permission_request(REQUESTS[0]);
+    let mut world = World::new();
+    world.keeper(Keeper::AnswersTooLate);
+
+    let ran = world.run(record.terminal(), &record.input_bytes());
+    world.heard();
+
+    ran.assert_succeeded_with_no_word();
+    assert!(ran.took >= DEADLINE, "the program waited: {:?}", ran.took);
 }

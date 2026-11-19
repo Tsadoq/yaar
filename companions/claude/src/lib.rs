@@ -22,15 +22,14 @@
 //! does not answer within [`DEADLINE`], changes nothing of that: the program prints
 //! nothing and succeeds, and Claude Code goes on as without the app.
 
-use std::error::Error;
 use std::io;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    AgentReport, Hello, Message, Request, RequestId, TERMINAL_VARIABLE, TerminalId, connect,
-    handshake, read_message, socket_path, write_message,
+    AgentReport, Hello, LinkError, Message, Refusal, Reply, Request, RequestId, TERMINAL_VARIABLE,
+    TerminalId, connect, handshake, read_message, socket_path, write_message,
 };
 
 mod tools;
@@ -90,47 +89,115 @@ pub struct HookAnswer {
 /// reply. Waits at most [`DEADLINE`] for the Keeper; an answer that came in time and was
 /// not whole is not printed.
 pub fn run_hook(input: &[u8], place: &HookPlace) -> HookAnswer {
+    let sent = report_to_keeper(
+        &Reporter {
+            socket: &place.socket,
+            who: concat!("yaar-claude-hook ", env!("CARGO_PKG_VERSION")),
+            terminal: place.terminal.as_deref(),
+            parent: place.parent,
+        },
+        input,
+        Instant::now() + DEADLINE,
+    );
     // Whatever went wrong, Claude Code is better served by a hook that said nothing than
     // by one that held the user up or failed: the report is a courtesy to the app.
-    let _ = pass_on(input, place, Instant::now() + DEADLINE);
-    HookAnswer {
-        printed: Vec::new(),
-        status: 0,
-    }
+    let printed = match sent {
+        Ok(Ok(Reply::Answer { bytes })) => bytes,
+        _ => Vec::new(),
+    };
+    HookAnswer { printed, status: 0 }
 }
 
-/// Sends the report and reads until the Keeper's reply to it, all before `deadline`.
-fn pass_on(input: &[u8], place: &HookPlace, deadline: Instant) -> Result<(), Box<dyn Error>> {
-    let mut stream = connect(&place.socket)?;
-    let hello = Hello::for_this_process(concat!("yaar-claude-hook ", env!("CARGO_PKG_VERSION")));
-    limit(&stream, deadline)?;
-    let keeper = handshake(&mut stream, &hello)?;
+/// Who a report comes from and where it goes: what the hook program and the tool server
+/// each say of themselves.
+struct Reporter<'a> {
+    socket: &'a Path,
+    /// What the program calls itself in its hello.
+    who: &'a str,
+    terminal: Option<&'a str>,
+    parent: u32,
+}
+
+/// Why a report got no reply from the Keeper.
+#[derive(Debug)]
+enum Unanswered {
+    /// No Keeper was reached, or the one reached speaks another protocol: nothing was sent.
+    NotRunning,
+    /// The report was sent, or was to be, and the deadline came first.
+    TooLate,
+    /// The report could not be sent whole, or the connection broke before the reply.
+    Failed,
+}
+
+/// What the Keeper answered one report with: its reply or its refusal.
+type Answered = Result<Reply, Refusal>;
+
+/// Sends `payload` as one report of the Adapter `claude` and reads until the Keeper's reply
+/// to it, all before `deadline`.
+fn report_to_keeper(
+    from: &Reporter<'_>,
+    payload: &[u8],
+    deadline: Instant,
+) -> Result<Answered, Unanswered> {
+    let mut stream = connect(from.socket).map_err(|_| Unanswered::NotRunning)?;
+    let hello = Hello::for_this_process(from.who);
+    limit(&stream, deadline).map_err(late)?;
+    let keeper = handshake(&mut stream, &hello).map_err(|e| match e {
+        LinkError::Io(e) if is_late(&e) => Unanswered::TooLate,
+        _ => Unanswered::NotRunning,
+    })?;
     if !hello.speaks_with(&keeper) {
         // A Keeper of another version of the app: it would refuse the request, and the
         // report means nothing to it.
-        return Err("the Keeper speaks another protocol".into());
+        return Err(Unanswered::NotRunning);
     }
     let report = AgentReport {
         agent: AGENT.to_owned(),
-        terminal: place.terminal.clone().map(TerminalId::new),
-        pid: place.parent,
-        payload: input.to_vec(),
+        terminal: from.terminal.map(TerminalId::new),
+        pid: from.parent,
+        payload: payload.to_vec(),
     };
-    limit(&stream, deadline)?;
+    limit(&stream, deadline).map_err(late)?;
     write_message(
         &mut stream,
         &Message::Request {
             id: REQUEST,
             request: Request::Report { report },
         },
-    )?;
+    )
+    .map_err(late)?;
     loop {
         // Set again for each frame: a Keeper that keeps telling facts must not stretch
         // the deadline a read at a time.
-        limit(&stream, deadline)?;
-        if let Message::Reply { to: REQUEST, .. } = read_message(&mut stream)? {
-            return Ok(());
+        limit(&stream, deadline).map_err(late)?;
+        if let Message::Reply { to: REQUEST, reply } =
+            read_message(&mut stream).map_err(link_failure)?
+        {
+            return Ok(reply);
         }
+    }
+}
+
+/// Whether `error` is a read or write that gave up at its timeout.
+fn is_late(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
+}
+
+fn late(error: io::Error) -> Unanswered {
+    if is_late(&error) {
+        Unanswered::TooLate
+    } else {
+        Unanswered::Failed
+    }
+}
+
+fn link_failure(error: LinkError) -> Unanswered {
+    match error {
+        LinkError::Io(e) => late(e),
+        _ => Unanswered::Failed,
     }
 }
 
