@@ -1,0 +1,432 @@
+off	press-left		xterm: a program that asked for no reports is told nothing
+off	press-middle		xterm: a program that asked for no reports is told nothing
+off	press-right		xterm: a program that asked for no reports is told nothing
+off	release-left		xterm: a program that asked for no reports is told nothing
+off	release-middle		xterm: a program that asked for no reports is told nothing
+off	release-right		xterm: a program that asked for no reports is told nothing
+off	drag-left		xterm: a program that asked for no reports is told nothing
+off	drag-middle		xterm: a program that asked for no reports is told nothing
+off	drag-right		xterm: a program that asked for no reports is told nothing
+off	move		xterm: a program that asked for no reports is told nothing
+off	wheel-up		the pane scrolls its history, and sends the program nothing
+off	wheel-down		the pane scrolls its history, and sends the program nothing
+off	shift-press-left		xterm: a program that asked for no reports is told nothing
+off	shift-press-middle		xterm: a program that asked for no reports is told nothing
+off	shift-press-right		xterm: a program that asked for no reports is told nothing
+off	shift-release-left		xterm: a program that asked for no reports is told nothing
+off	shift-release-middle		xterm: a program that asked for no reports is told nothing
+off	shift-release-right		xterm: a program that asked for no reports is told nothing
+off	shift-drag-left		xterm: a program that asked for no reports is told nothing
+off	shift-drag-middle		xterm: a program that asked for no reports is told nothing
+off	shift-drag-right		xterm: a program that asked for no reports is told nothing
+off	shift-move		xterm: a program that asked for no reports is told nothing
+off	shift-wheel-up		the pane scrolls its history, and sends the program nothing
+off	shift-wheel-down		the pane scrolls its history, and sends the program nothing
+off	alt-press-left		xterm: a program that asked for no reports is told nothing
+off	alt-press-middle		xterm: a program that asked for no reports is told nothing
+off	alt-press-right		xterm: a program that asked for no reports is told nothing
+off	alt-release-left		xterm: a program that asked for no reports is told nothing
+off	alt-release-middle		xterm: a program that asked for no reports is told nothing
+off	alt-release-right		xterm: a program that asked for no reports is told nothing
+off	alt-drag-left		xterm: a program that asked for no reports is told nothing
+off	alt-drag-middle		xterm: a program that asked for no reports is told nothing
+off	alt-drag-right		xterm: a program that asked for no reports is told nothing
+off	alt-move		xterm: a program that asked for no reports is told nothing
+off	alt-wheel-up		the pane scrolls its history, and sends the program nothing
+off	alt-wheel-down		the pane scrolls its history, and sends the program nothing
+off	ctrl-press-left		xterm: a program that asked for no reports is told nothing
+off	ctrl-press-middle		xterm: a program that asked for no reports is told nothing
+off	ctrl-press-right		xterm: a program that asked for no reports is told nothing
+off	ctrl-release-left		xterm: a program that asked for no reports is told nothing
+off	ctrl-release-middle		xterm: a program that asked for no reports is told nothing
+off	ctrl-release-right		xterm: a program that asked for no reports is told nothing
+off	ctrl-drag-left		xterm: a program that asked for no reports is told nothing
+off	ctrl-drag-middle		xterm: a program that asked for no reports is told nothing
+off	ctrl-drag-right		xterm: a program that asked for no reports is told nothing
+off	ctrl-move		xterm: a program that asked for no reports is told nothing
+off	ctrl-wheel-up		the pane scrolls its history, and sends the program nothing
+off	ctrl-wheel-down		the pane scrolls its history, and sends the program nothing
+1000	press-left	1b5b4d202422	xterm ctlseqs, mouse tracking
+1000	press-middle	1b5b4d212422	xterm ctlseqs, mouse tracking
+1000	press-right	1b5b4d222422	xterm ctlseqs, mouse tracking
+1000	release-left	1b5b4d232422	xterm ctlseqs, mouse tracking
+1000	release-middle	1b5b4d232422	xterm ctlseqs, mouse tracking
+1000	release-right	1b5b4d232422	xterm ctlseqs, mouse tracking
+1000	drag-left		xterm ctlseqs, mouse tracking
+1000	drag-middle		xterm ctlseqs, mouse tracking
+1000	drag-right		xterm ctlseqs, mouse tracking
+1000	move		xterm ctlseqs, mouse tracking
+1000	wheel-up	1b5b4d602422	xterm ctlseqs, mouse tracking
+1000	wheel-down	1b5b4d612422	xterm ctlseqs, mouse tracking
+1000	shift-press-left	1b5b4d242422	xterm ctlseqs, mouse tracking
+1000	shift-press-middle	1b5b4d252422	xterm ctlseqs, mouse tracking
+1000	shift-press-right	1b5b4d262422	xterm ctlseqs, mouse tracking
+1000	shift-release-left	1b5b4d272422	xterm ctlseqs, mouse tracking
+1000	shift-release-middle	1b5b4d272422	xterm ctlseqs, mouse tracking
+1000	shift-release-right	1b5b4d272422	xterm ctlseqs, mouse tracking
+1000	shift-drag-left		xterm ctlseqs, mouse tracking
+1000	shift-drag-middle		xterm ctlseqs, mouse tracking
+1000	shift-drag-right		xterm ctlseqs, mouse tracking
+1000	shift-move		xterm ctlseqs, mouse tracking
+1000	shift-wheel-up	1b5b4d642422	xterm ctlseqs, mouse tracking
+1000	shift-wheel-down	1b5b4d652422	xterm ctlseqs, mouse tracking
+1000	alt-press-left	1b5b4d282422	xterm ctlseqs, mouse tracking
+1000	alt-press-middle	1b5b4d292422	xterm ctlseqs, mouse tracking
+1000	alt-press-right	1b5b4d2a2422	xterm ctlseqs, mouse tracking
+1000	alt-release-left	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1000	alt-release-middle	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1000	alt-release-right	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1000	alt-drag-left		xterm ctlseqs, mouse tracking
+1000	alt-drag-middle		xterm ctlseqs, mouse tracking
+1000	alt-drag-right		xterm ctlseqs, mouse tracking
+1000	alt-move		xterm ctlseqs, mouse tracking
+1000	alt-wheel-up	1b5b4d682422	xterm ctlseqs, mouse tracking
+1000	alt-wheel-down	1b5b4d692422	xterm ctlseqs, mouse tracking
+1000	ctrl-press-left	1b5b4d302422	xterm ctlseqs, mouse tracking
+1000	ctrl-press-middle	1b5b4d312422	xterm ctlseqs, mouse tracking
+1000	ctrl-press-right	1b5b4d322422	xterm ctlseqs, mouse tracking
+1000	ctrl-release-left	1b5b4d332422	xterm ctlseqs, mouse tracking
+1000	ctrl-release-middle	1b5b4d332422	xterm ctlseqs, mouse tracking
+1000	ctrl-release-right	1b5b4d332422	xterm ctlseqs, mouse tracking
+1000	ctrl-drag-left		xterm ctlseqs, mouse tracking
+1000	ctrl-drag-middle		xterm ctlseqs, mouse tracking
+1000	ctrl-drag-right		xterm ctlseqs, mouse tracking
+1000	ctrl-move		xterm ctlseqs, mouse tracking
+1000	ctrl-wheel-up	1b5b4d702422	xterm ctlseqs, mouse tracking
+1000	ctrl-wheel-down	1b5b4d712422	xterm ctlseqs, mouse tracking
+1000-sgr	press-left	1b5b3c303b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	press-middle	1b5b3c313b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	press-right	1b5b3c323b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	release-left	1b5b3c303b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	release-middle	1b5b3c313b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	release-right	1b5b3c323b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	drag-left		xterm ctlseqs, mouse tracking
+1000-sgr	drag-middle		xterm ctlseqs, mouse tracking
+1000-sgr	drag-right		xterm ctlseqs, mouse tracking
+1000-sgr	move		xterm ctlseqs, mouse tracking
+1000-sgr	wheel-up	1b5b3c36343b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	wheel-down	1b5b3c36353b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-press-left	1b5b3c343b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-press-middle	1b5b3c353b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-press-right	1b5b3c363b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-release-left	1b5b3c343b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-release-middle	1b5b3c353b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-release-right	1b5b3c363b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-drag-left		xterm ctlseqs, mouse tracking
+1000-sgr	shift-drag-middle		xterm ctlseqs, mouse tracking
+1000-sgr	shift-drag-right		xterm ctlseqs, mouse tracking
+1000-sgr	shift-move		xterm ctlseqs, mouse tracking
+1000-sgr	shift-wheel-up	1b5b3c36383b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	shift-wheel-down	1b5b3c36393b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-press-left	1b5b3c383b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-press-middle	1b5b3c393b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-press-right	1b5b3c31303b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-release-left	1b5b3c383b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-release-middle	1b5b3c393b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-release-right	1b5b3c31303b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-drag-left		xterm ctlseqs, mouse tracking
+1000-sgr	alt-drag-middle		xterm ctlseqs, mouse tracking
+1000-sgr	alt-drag-right		xterm ctlseqs, mouse tracking
+1000-sgr	alt-move		xterm ctlseqs, mouse tracking
+1000-sgr	alt-wheel-up	1b5b3c37323b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	alt-wheel-down	1b5b3c37333b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-press-left	1b5b3c31363b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-press-middle	1b5b3c31373b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-press-right	1b5b3c31383b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-release-left	1b5b3c31363b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-release-middle	1b5b3c31373b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-release-right	1b5b3c31383b343b326d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-drag-left		xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-drag-middle		xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-drag-right		xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-move		xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-wheel-up	1b5b3c38303b343b324d	xterm ctlseqs, mouse tracking
+1000-sgr	ctrl-wheel-down	1b5b3c38313b343b324d	xterm ctlseqs, mouse tracking
+1002	press-left	1b5b4d202422	xterm ctlseqs, mouse tracking
+1002	press-middle	1b5b4d212422	xterm ctlseqs, mouse tracking
+1002	press-right	1b5b4d222422	xterm ctlseqs, mouse tracking
+1002	release-left	1b5b4d232422	xterm ctlseqs, mouse tracking
+1002	release-middle	1b5b4d232422	xterm ctlseqs, mouse tracking
+1002	release-right	1b5b4d232422	xterm ctlseqs, mouse tracking
+1002	drag-left	1b5b4d402422	xterm ctlseqs, mouse tracking
+1002	drag-middle	1b5b4d412422	xterm ctlseqs, mouse tracking
+1002	drag-right	1b5b4d422422	xterm ctlseqs, mouse tracking
+1002	move		xterm ctlseqs, mouse tracking
+1002	wheel-up	1b5b4d602422	xterm ctlseqs, mouse tracking
+1002	wheel-down	1b5b4d612422	xterm ctlseqs, mouse tracking
+1002	shift-press-left	1b5b4d242422	xterm ctlseqs, mouse tracking
+1002	shift-press-middle	1b5b4d252422	xterm ctlseqs, mouse tracking
+1002	shift-press-right	1b5b4d262422	xterm ctlseqs, mouse tracking
+1002	shift-release-left	1b5b4d272422	xterm ctlseqs, mouse tracking
+1002	shift-release-middle	1b5b4d272422	xterm ctlseqs, mouse tracking
+1002	shift-release-right	1b5b4d272422	xterm ctlseqs, mouse tracking
+1002	shift-drag-left	1b5b4d442422	xterm ctlseqs, mouse tracking
+1002	shift-drag-middle	1b5b4d452422	xterm ctlseqs, mouse tracking
+1002	shift-drag-right	1b5b4d462422	xterm ctlseqs, mouse tracking
+1002	shift-move		xterm ctlseqs, mouse tracking
+1002	shift-wheel-up	1b5b4d642422	xterm ctlseqs, mouse tracking
+1002	shift-wheel-down	1b5b4d652422	xterm ctlseqs, mouse tracking
+1002	alt-press-left	1b5b4d282422	xterm ctlseqs, mouse tracking
+1002	alt-press-middle	1b5b4d292422	xterm ctlseqs, mouse tracking
+1002	alt-press-right	1b5b4d2a2422	xterm ctlseqs, mouse tracking
+1002	alt-release-left	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1002	alt-release-middle	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1002	alt-release-right	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1002	alt-drag-left	1b5b4d482422	xterm ctlseqs, mouse tracking
+1002	alt-drag-middle	1b5b4d492422	xterm ctlseqs, mouse tracking
+1002	alt-drag-right	1b5b4d4a2422	xterm ctlseqs, mouse tracking
+1002	alt-move		xterm ctlseqs, mouse tracking
+1002	alt-wheel-up	1b5b4d682422	xterm ctlseqs, mouse tracking
+1002	alt-wheel-down	1b5b4d692422	xterm ctlseqs, mouse tracking
+1002	ctrl-press-left	1b5b4d302422	xterm ctlseqs, mouse tracking
+1002	ctrl-press-middle	1b5b4d312422	xterm ctlseqs, mouse tracking
+1002	ctrl-press-right	1b5b4d322422	xterm ctlseqs, mouse tracking
+1002	ctrl-release-left	1b5b4d332422	xterm ctlseqs, mouse tracking
+1002	ctrl-release-middle	1b5b4d332422	xterm ctlseqs, mouse tracking
+1002	ctrl-release-right	1b5b4d332422	xterm ctlseqs, mouse tracking
+1002	ctrl-drag-left	1b5b4d502422	xterm ctlseqs, mouse tracking
+1002	ctrl-drag-middle	1b5b4d512422	xterm ctlseqs, mouse tracking
+1002	ctrl-drag-right	1b5b4d522422	xterm ctlseqs, mouse tracking
+1002	ctrl-move		xterm ctlseqs, mouse tracking
+1002	ctrl-wheel-up	1b5b4d702422	xterm ctlseqs, mouse tracking
+1002	ctrl-wheel-down	1b5b4d712422	xterm ctlseqs, mouse tracking
+1002-sgr	press-left	1b5b3c303b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	press-middle	1b5b3c313b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	press-right	1b5b3c323b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	release-left	1b5b3c303b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	release-middle	1b5b3c313b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	release-right	1b5b3c323b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	drag-left	1b5b3c33323b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	drag-middle	1b5b3c33333b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	drag-right	1b5b3c33343b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	move		xterm ctlseqs, mouse tracking
+1002-sgr	wheel-up	1b5b3c36343b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	wheel-down	1b5b3c36353b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-press-left	1b5b3c343b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-press-middle	1b5b3c353b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-press-right	1b5b3c363b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-release-left	1b5b3c343b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-release-middle	1b5b3c353b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-release-right	1b5b3c363b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-drag-left	1b5b3c33363b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-drag-middle	1b5b3c33373b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-drag-right	1b5b3c33383b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-move		xterm ctlseqs, mouse tracking
+1002-sgr	shift-wheel-up	1b5b3c36383b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	shift-wheel-down	1b5b3c36393b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-press-left	1b5b3c383b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-press-middle	1b5b3c393b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-press-right	1b5b3c31303b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-release-left	1b5b3c383b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-release-middle	1b5b3c393b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-release-right	1b5b3c31303b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-drag-left	1b5b3c34303b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-drag-middle	1b5b3c34313b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-drag-right	1b5b3c34323b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-move		xterm ctlseqs, mouse tracking
+1002-sgr	alt-wheel-up	1b5b3c37323b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	alt-wheel-down	1b5b3c37333b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-press-left	1b5b3c31363b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-press-middle	1b5b3c31373b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-press-right	1b5b3c31383b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-release-left	1b5b3c31363b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-release-middle	1b5b3c31373b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-release-right	1b5b3c31383b343b326d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-drag-left	1b5b3c34383b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-drag-middle	1b5b3c34393b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-drag-right	1b5b3c35303b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-move		xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-wheel-up	1b5b3c38303b343b324d	xterm ctlseqs, mouse tracking
+1002-sgr	ctrl-wheel-down	1b5b3c38313b343b324d	xterm ctlseqs, mouse tracking
+1003	press-left	1b5b4d202422	xterm ctlseqs, mouse tracking
+1003	press-middle	1b5b4d212422	xterm ctlseqs, mouse tracking
+1003	press-right	1b5b4d222422	xterm ctlseqs, mouse tracking
+1003	release-left	1b5b4d232422	xterm ctlseqs, mouse tracking
+1003	release-middle	1b5b4d232422	xterm ctlseqs, mouse tracking
+1003	release-right	1b5b4d232422	xterm ctlseqs, mouse tracking
+1003	drag-left	1b5b4d402422	xterm ctlseqs, mouse tracking
+1003	drag-middle	1b5b4d412422	xterm ctlseqs, mouse tracking
+1003	drag-right	1b5b4d422422	xterm ctlseqs, mouse tracking
+1003	move	1b5b4d432422	xterm ctlseqs, mouse tracking
+1003	wheel-up	1b5b4d602422	xterm ctlseqs, mouse tracking
+1003	wheel-down	1b5b4d612422	xterm ctlseqs, mouse tracking
+1003	shift-press-left	1b5b4d242422	xterm ctlseqs, mouse tracking
+1003	shift-press-middle	1b5b4d252422	xterm ctlseqs, mouse tracking
+1003	shift-press-right	1b5b4d262422	xterm ctlseqs, mouse tracking
+1003	shift-release-left	1b5b4d272422	xterm ctlseqs, mouse tracking
+1003	shift-release-middle	1b5b4d272422	xterm ctlseqs, mouse tracking
+1003	shift-release-right	1b5b4d272422	xterm ctlseqs, mouse tracking
+1003	shift-drag-left	1b5b4d442422	xterm ctlseqs, mouse tracking
+1003	shift-drag-middle	1b5b4d452422	xterm ctlseqs, mouse tracking
+1003	shift-drag-right	1b5b4d462422	xterm ctlseqs, mouse tracking
+1003	shift-move	1b5b4d472422	xterm ctlseqs, mouse tracking
+1003	shift-wheel-up	1b5b4d642422	xterm ctlseqs, mouse tracking
+1003	shift-wheel-down	1b5b4d652422	xterm ctlseqs, mouse tracking
+1003	alt-press-left	1b5b4d282422	xterm ctlseqs, mouse tracking
+1003	alt-press-middle	1b5b4d292422	xterm ctlseqs, mouse tracking
+1003	alt-press-right	1b5b4d2a2422	xterm ctlseqs, mouse tracking
+1003	alt-release-left	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1003	alt-release-middle	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1003	alt-release-right	1b5b4d2b2422	xterm ctlseqs, mouse tracking
+1003	alt-drag-left	1b5b4d482422	xterm ctlseqs, mouse tracking
+1003	alt-drag-middle	1b5b4d492422	xterm ctlseqs, mouse tracking
+1003	alt-drag-right	1b5b4d4a2422	xterm ctlseqs, mouse tracking
+1003	alt-move	1b5b4d4b2422	xterm ctlseqs, mouse tracking
+1003	alt-wheel-up	1b5b4d682422	xterm ctlseqs, mouse tracking
+1003	alt-wheel-down	1b5b4d692422	xterm ctlseqs, mouse tracking
+1003	ctrl-press-left	1b5b4d302422	xterm ctlseqs, mouse tracking
+1003	ctrl-press-middle	1b5b4d312422	xterm ctlseqs, mouse tracking
+1003	ctrl-press-right	1b5b4d322422	xterm ctlseqs, mouse tracking
+1003	ctrl-release-left	1b5b4d332422	xterm ctlseqs, mouse tracking
+1003	ctrl-release-middle	1b5b4d332422	xterm ctlseqs, mouse tracking
+1003	ctrl-release-right	1b5b4d332422	xterm ctlseqs, mouse tracking
+1003	ctrl-drag-left	1b5b4d502422	xterm ctlseqs, mouse tracking
+1003	ctrl-drag-middle	1b5b4d512422	xterm ctlseqs, mouse tracking
+1003	ctrl-drag-right	1b5b4d522422	xterm ctlseqs, mouse tracking
+1003	ctrl-move	1b5b4d532422	xterm ctlseqs, mouse tracking
+1003	ctrl-wheel-up	1b5b4d702422	xterm ctlseqs, mouse tracking
+1003	ctrl-wheel-down	1b5b4d712422	xterm ctlseqs, mouse tracking
+1003-sgr	press-left	1b5b3c303b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	press-middle	1b5b3c313b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	press-right	1b5b3c323b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	release-left	1b5b3c303b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	release-middle	1b5b3c313b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	release-right	1b5b3c323b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	drag-left	1b5b3c33323b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	drag-middle	1b5b3c33333b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	drag-right	1b5b3c33343b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	move	1b5b3c33353b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	wheel-up	1b5b3c36343b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	wheel-down	1b5b3c36353b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-press-left	1b5b3c343b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-press-middle	1b5b3c353b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-press-right	1b5b3c363b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-release-left	1b5b3c343b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-release-middle	1b5b3c353b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-release-right	1b5b3c363b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-drag-left	1b5b3c33363b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-drag-middle	1b5b3c33373b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-drag-right	1b5b3c33383b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-move	1b5b3c33393b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-wheel-up	1b5b3c36383b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	shift-wheel-down	1b5b3c36393b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-press-left	1b5b3c383b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-press-middle	1b5b3c393b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-press-right	1b5b3c31303b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-release-left	1b5b3c383b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-release-middle	1b5b3c393b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-release-right	1b5b3c31303b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-drag-left	1b5b3c34303b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-drag-middle	1b5b3c34313b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-drag-right	1b5b3c34323b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-move	1b5b3c34333b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-wheel-up	1b5b3c37323b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	alt-wheel-down	1b5b3c37333b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-press-left	1b5b3c31363b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-press-middle	1b5b3c31373b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-press-right	1b5b3c31383b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-release-left	1b5b3c31363b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-release-middle	1b5b3c31373b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-release-right	1b5b3c31383b343b326d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-drag-left	1b5b3c34383b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-drag-middle	1b5b3c34393b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-drag-right	1b5b3c35303b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-move	1b5b3c35313b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-wheel-up	1b5b3c38303b343b324d	xterm ctlseqs, mouse tracking
+1003-sgr	ctrl-wheel-down	1b5b3c38313b343b324d	xterm ctlseqs, mouse tracking
+alt-scroll	press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	wheel-up	1b5b41	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll	wheel-down	1b5b42	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll	shift-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	shift-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	shift-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	alt-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	alt-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	alt-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	ctrl-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll	ctrl-wheel-up	1b5b41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll	ctrl-wheel-down	1b5b42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	wheel-up	1b4f41	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll-appcursor	wheel-down	1b4f42	xterm: alternateScroll sends the cursor key, in the form the cursor mode says
+alt-scroll-appcursor	shift-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	shift-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	shift-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	alt-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	alt-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	alt-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	ctrl-press-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-press-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-press-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-release-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-left		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-middle		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-drag-right		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-move		xterm: a program that asked for no reports is told nothing, also on the alternate screen
+alt-scroll-appcursor	ctrl-wheel-up	1b4f41	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says
+alt-scroll-appcursor	ctrl-wheel-down	1b4f42	the plan: a wheel step on the alternate screen is one arrow whatever modifiers are held, in the form the cursor mode says

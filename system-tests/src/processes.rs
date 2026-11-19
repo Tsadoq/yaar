@@ -28,7 +28,11 @@ pub enum Descriptor {
     KernelSocket(String),
     /// One end of a pipe.
     Pipe,
-    /// A file, a folder, a device, or anything else that is no socket and no pipe.
+    /// A terminal device: the end of a pseudo-terminal the Keeper holds, or the terminal a
+    /// program runs on. Neither is a socket.
+    Terminal,
+    /// A file, a folder, a device that is no terminal, or anything else that is no
+    /// socket and no pipe.
     File,
 }
 
@@ -84,6 +88,24 @@ pub fn descendants_of(pid: u32) -> Vec<u32> {
     descendants(&running, pid)
 }
 
+/// Whether a link of `/proc/<pid>/fd` leads to the device of a pseudo-terminal: the file
+/// a master is made by opening, or the slave end a program runs on.
+fn is_terminal_on_linux(path: &str) -> bool {
+    path == "/dev/ptmx"
+        || path
+            .strip_prefix("/dev/pts/")
+            .is_some_and(|n| !n.is_empty())
+}
+
+/// Whether a character device `lsof` names is a pseudo-terminal of macOS: the file a
+/// master is made by opening, or the slave end a program runs on.
+fn is_terminal_on_macos(name: &str) -> bool {
+    name == "/dev/ptmx"
+        || name
+            .strip_prefix("/dev/ttys")
+            .is_some_and(|n| !n.is_empty())
+}
+
 /// What a link in `/proc/<pid>/fd` leads to, with the content of `/proc/net/unix` to
 /// tell the kind of a socket.
 fn from_proc(target: &str, unix_sockets: &str) -> Descriptor {
@@ -96,7 +118,11 @@ fn from_proc(target: &str, unix_sockets: &str) -> Descriptor {
         return Descriptor::Pipe;
     }
     let Some(inode) = inode_of("socket:[") else {
-        return Descriptor::File;
+        return if is_terminal_on_linux(target) {
+            Descriptor::Terminal
+        } else {
+            Descriptor::File
+        };
     };
     // One line for each unix socket of the machine:
     // `Num RefCount Protocol Flags Type St Inode Path`, the path only when bound.
@@ -143,6 +169,7 @@ fn from_lsof(listing: &str) -> Vec<Descriptor> {
                     },
                     Some("PIPE" | "FIFO") => Descriptor::Pipe,
                     Some("systm") => Descriptor::KernelSocket(name.to_owned()),
+                    Some("CHR") if is_terminal_on_macos(name) => Descriptor::Terminal,
                     Some(file) if NO_SOCKET.contains(&file) => Descriptor::File,
                     Some(other) => Descriptor::OtherSocket(other.to_owned()),
                     None => Descriptor::OtherSocket("of no stated type".to_owned()),
@@ -219,7 +246,11 @@ mod tests {
             f7\ntIPv6\nn*:*\n\
             f8\ntsystm\nn[ctl com.apple.netsrc id 9 unit 34]\n\
             f10\ntPIPE\nn->0xe62dd66e63945fc5\n\
-            f11\ntKQUEUE\nncount=0, state=0\n";
+            f11\ntKQUEUE\nncount=0, state=0\n\
+            f12\ntCHR\nn/dev/ptmx\n\
+            f13\ntCHR\nn/dev/ttys004\n\
+            f14\ntCHR\nn/dev/tty\n\
+            f15\ntCHR\nn/dev/ttys\n";
         assert_eq!(
             from_lsof(listing),
             [
@@ -232,6 +263,10 @@ mod tests {
                 Descriptor::OtherSocket("IPv6".to_owned()),
                 Descriptor::KernelSocket("[ctl com.apple.netsrc id 9 unit 34]".to_owned()),
                 Descriptor::Pipe,
+                Descriptor::File,
+                Descriptor::Terminal,
+                Descriptor::Terminal,
+                Descriptor::File,
                 Descriptor::File,
             ]
         );
@@ -265,6 +300,12 @@ Num       RefCount Protocol Flags    Type St Inode Path
         );
         assert_eq!(read("pipe:[4242]"), Descriptor::Pipe);
         assert_eq!(read("/dev/null"), Descriptor::File);
+        // Both ends of a pseudo-terminal: the master the Keeper holds, the slave a
+        // program runs on. The device of a serial line and the folder are neither.
+        assert_eq!(read("/dev/ptmx"), Descriptor::Terminal);
+        assert_eq!(read("/dev/pts/3"), Descriptor::Terminal);
+        assert_eq!(read("/dev/pts"), Descriptor::File);
+        assert_eq!(read("/dev/ttyS0"), Descriptor::File);
         assert_eq!(read("anon_inode:[eventpoll]"), Descriptor::File);
     }
 

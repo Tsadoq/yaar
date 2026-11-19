@@ -10,121 +10,42 @@
 //! the Window's own is outside the walk, and only a reader of that table can tell whether
 //! it belongs there.
 
-use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
-use std::time::Instant;
 
-use gpui_kit::{
-    Action, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
-    point, px,
-};
-use yaar_frame::{Asks, Control, Frame, LinkStatus, Models, Opened, Place, Sends};
-use yaar_link::{Origin, Request, RequestKind, Workspace};
-use yaar_system_tests::{DEADLINE, Repo, Tap, World};
+use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
+use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
+use yaar_link::{Origin, Program, Request, RequestKind, Workspace};
+use yaar_system_tests::DEADLINE;
 
-/// The composed Window of one test, in a world of its own, with a tap on its link.
-struct Composed {
-    // The tap goes before the world it leads into: fields are dropped in this order.
-    tap: Tap,
-    world: World,
-    frame: Entity<Frame>,
-    models: Models,
-    /// The actions the keystrokes ran since the list was last taken, by name, as the
-    /// test platform tells them.
-    ran: Rc<RefCell<Vec<&'static str>>>,
-    _watching_the_keys: Subscription,
-    /// The repositories the walk made, each opened as a workspace.
-    repositories: Vec<Repo>,
-    /// Counts what the walk makes, for names of its own.
-    made: u32,
-}
+mod common;
+
+use common::{Composed, wait_until};
+
+/// Which request a step of the walk waits for on the tap.
+type Wanted = Box<dyn Fn(&Request) -> bool>;
 
 /// What the walk has to give when a control asks the user for something.
 #[derive(Debug)]
 enum Answer {
+    /// Nothing: the key alone sends the request.
+    Nothing,
     /// The folder to choose in the dialog.
     Folder(PathBuf),
     /// The line to type into the field, before Enter.
     Text(String),
 }
 
-/// Opens the Window the way the program does, with [`yaar_window::init`] and
-/// [`yaar_window::open`], on the socket of a tap that leads to the Keeper of a new world,
-/// and waits until that Keeper has answered.
+/// Opens the composed Window as the tests of its other rows do, in a world of its own with
+/// a tap on its link, and checks that every pane of the Window's list is in it, as well as
+/// in the table of controls.
 fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
-    let mut world = World::new();
-    let keeper = world.start_keeper();
-    let tap = world.tap();
-
-    // A real socket and a real process: the connection is read by a thread, and answered
-    // by a program, that the test executor cannot see.
-    cx.executor().allow_parking();
-    let ran: Rc<RefCell<Vec<&'static str>>> = Rc::default();
-    let watching = cx.update(|cx| {
-        yaar_window::init(cx);
-        let ran = ran.clone();
-        cx.observe_keystrokes(move |event: &KeystrokeEvent, _, _| {
-            if let Some(action) = &event.action {
-                ran.borrow_mut().push(action.name());
-            }
-        })
-    });
-    let Opened {
-        window,
-        frame,
-        models,
-    } = cx
-        .update(|cx| yaar_window::open(tap.socket(), cx))
-        .expect("open the composed Window on the test platform");
-    let mut cx = VisualTestContext::from_window(window, cx);
-
-    wait_until(
-        &mut cx,
-        "the Keeper to answer through the tap",
-        |cx| match models.link.read_with(cx, |link, _| link.status().clone()) {
-            LinkStatus::Starting => false,
-            LinkStatus::Connected(answered) => {
-                assert_eq!(answered.pid, keeper, "the Keeper of the world answered");
-                true
-            }
-            other => panic!("the Window did not reach the Keeper of the world: {other:?}"),
-        },
-    );
-    // Every pane of the list is in the window, as well as in the table of controls.
+    let (window, cx) = common::open_composed(cx, Vec::new());
     let listed: Vec<&str> = yaar_window::panes().iter().map(|pane| pane.name).collect();
-    assert_eq!(frame.read_with(&cx, |frame, _| frame.panes()), listed);
-
-    (
-        Composed {
-            tap,
-            world,
-            frame,
-            models,
-            ran,
-            _watching_the_keys: watching,
-            repositories: Vec::new(),
-            made: 0,
-        },
-        cx,
-    )
-}
-
-/// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
-fn wait_until(
-    cx: &mut VisualTestContext,
-    what: &str,
-    mut holds: impl FnMut(&mut VisualTestContext) -> bool,
-) {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        cx.run_until_parked();
-        if holds(cx) {
-            return;
-        }
-        assert!(Instant::now() < deadline, "waited in vain for {what}");
-        std::thread::park_timeout(std::time::Duration::from_millis(1));
-    }
+    assert_eq!(
+        window.frame.read_with(&cx, |frame, _| frame.panes()),
+        listed
+    );
+    (window, cx)
 }
 
 /// The controls of the Window that say they send a request of this kind.
@@ -143,12 +64,6 @@ impl Composed {
                 .and_then(|selected| list.workspace(selected))
                 .cloned()
         })
-    }
-
-    /// A number no earlier call gave, for a name of the walk's own.
-    fn next(&mut self) -> u32 {
-        self.made += 1;
-        self.made
     }
 
     /// A new repository of the world with something to review: on a branch that left
@@ -182,29 +97,49 @@ impl Composed {
     }
 
     /// Puts the focus where the key of `control` works. A key that works anywhere is
-    /// pressed where the focus happens to be.
+    /// pressed where the focus happens to be, unless that is inside a terminal: off macOS
+    /// such a key does nothing there, so the focus is first put in the review pane, which
+    /// on macOS does no harm. New Terminal, Next Terminal and Previous Terminal move the
+    /// focus into a terminal, and so does a click into one, so this is looked at before
+    /// every key.
     fn focus_where_the_key_works(&mut self, control: &Control, cx: &mut VisualTestContext) {
         match control.place {
-            Place::Anywhere => {}
-            Place::In(yaar_review_pane::KEY_CONTEXT) => {
-                // The first row of the Review pane, at its left end: an offer to set a
-                // base, where the row holds one, lies further right.
-                let mut row = None;
-                wait_until(cx, "the first row of the Review pane", |cx| {
-                    row = cx.debug_bounds("review-row-0");
-                    row.is_some()
-                });
-                let row = row.expect("the row is drawn");
-                cx.simulate_click(
-                    point(row.left() + px(2.), row.center().y),
-                    Modifiers::none(),
-                );
+            // A kept key works wherever the focus is.
+            Place::Kept => {}
+            Place::Anywhere => {
+                if cx.update(|window, _| {
+                    window
+                        .context_stack()
+                        .iter()
+                        .any(|context| context.contains(PROGRAM_CONTEXT))
+                }) {
+                    self.click_into(cx, "review-row-0");
+                }
             }
+            // The first row of the Review pane, at its left end: an offer to set a base,
+            // where the row holds one, lies further right.
+            Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-row-0"),
+            // The view of the terminal on screen.
+            Place::In(PROGRAM_CONTEXT) => self.click_into(cx, "terminal-slot-0"),
             Place::In(other) => panic!(
                 "{} works in the context {other:?}, and the walk does not know where that is",
                 control.title
             ),
         }
+    }
+
+    /// Clicks at the left end of an element, once it is drawn.
+    fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
+        let mut found = None;
+        wait_until(cx, selector, |cx| {
+            found = cx.debug_bounds(selector);
+            found.is_some()
+        });
+        let found = found.expect("the element is drawn");
+        cx.simulate_click(
+            point(found.left() + px(2.), found.center().y),
+            Modifiers::none(),
+        );
     }
 
     /// Presses the key of `control` where it works, as a user does. Fails when the
@@ -217,12 +152,12 @@ impl Composed {
         );
         self.focus_where_the_key_works(control, cx);
         self.ran.borrow_mut().clear();
-        cx.simulate_keystrokes(control.keystroke);
+        cx.simulate_keystrokes(&control.key());
         assert_eq!(
             self.ran.take(),
             [(control.action)().name()],
             "what the key {} of {} ran",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
@@ -235,13 +170,13 @@ impl Composed {
         assert!(
             !cx.did_prompt_for_paths(),
             "the key {} of {} says it asks for nothing and opened the dialog for a folder",
-            control.keystroke,
+            control.key(),
             control.title
         );
         assert!(
             cx.debug_bounds("frame-base-field").is_none(),
             "the key {} of {} says it asks for nothing and opened the field for a line of text",
-            control.keystroke,
+            control.key(),
             control.title
         );
     }
@@ -249,11 +184,12 @@ impl Composed {
     /// Gives what `control` asks the user for after its key.
     fn give(&mut self, control: &Control, answer: &Answer, cx: &mut VisualTestContext) {
         match (control.asks, answer) {
+            (Asks::Nothing, Answer::Nothing) => self.assert_asks_nothing(control, cx),
             (Asks::Folder, Answer::Folder(folder)) => {
                 assert!(
                     cx.did_prompt_for_paths(),
                     "the key {} of {} opens the dialog for a folder",
-                    control.keystroke,
+                    control.key(),
                     control.title
                 );
                 cx.simulate_path_prompt_response(|_| Some(vec![folder.clone()]));
@@ -283,25 +219,52 @@ impl Composed {
         for control in controls {
             // No arm catches the rest: a kind added to the Link stops this from
             // compiling until somebody says here how to walk it.
-            let (answer, request) = match kind {
+            let (answer, wanted): (Answer, Wanted) = match kind {
                 RequestKind::OpenFolder => {
                     let folder = self.new_repository();
+                    let request = Request::OpenFolder {
+                        path: folder.clone(),
+                    };
                     (
-                        Answer::Folder(folder.clone()),
-                        Request::OpenFolder { path: folder },
+                        Answer::Folder(folder),
+                        Box::new(move |passed| *passed == request),
                     )
                 }
                 RequestKind::SetBase => {
                     let (on_screen, branch) = self.new_branch_on_screen(cx);
+                    let request = Request::SetBase {
+                        workspace: on_screen.id,
+                        base: branch.clone(),
+                    };
                     (
-                        Answer::Text(branch.clone()),
-                        Request::SetBase {
-                            workspace: on_screen.id,
-                            base: branch,
-                        },
+                        Answer::Text(branch),
+                        Box::new(move |passed| *passed == request),
                     )
                 }
-                RequestKind::ListWorkspaces | RequestKind::GetChanges | RequestKind::ReadFile => {
+                RequestKind::OpenTerminal => {
+                    // A shell for the workspace on screen, at whatever size the pane lays
+                    // a terminal out at. Only the step that asks for a terminal sends one.
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk opens a terminal");
+                    (
+                        Answer::Nothing,
+                        Box::new(move |passed| {
+                            matches!(
+                                passed,
+                                Request::OpenTerminal {
+                                    workspace,
+                                    program: Program::Shell,
+                                    ..
+                                } if *workspace == on_screen.id
+                            )
+                        }),
+                    )
+                }
+                RequestKind::ListWorkspaces
+                | RequestKind::GetChanges
+                | RequestKind::ReadFile
+                | RequestKind::ResizeTerminal => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
             };
@@ -309,10 +272,10 @@ impl Composed {
             self.press(&control, cx);
             self.give(&control, &answer, cx);
             // The Window writes a request before the action that asked returns, so it
-            // is on its way by now. The folder and the branch are new with each step:
-            // no request of an earlier step answers this wait.
-            self.tap
-                .wait_for_request(DEADLINE, |passed| *passed == request);
+            // is on its way by now. The folder and the branch are new with each step,
+            // and a terminal is asked for by this step alone: no request of an earlier
+            // step answers this wait.
+            self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
@@ -395,6 +358,12 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     // to, and so set off the questions the Window asks by itself.
     window.walk(RequestKind::OpenFolder, &mut cx);
     window.walk(RequestKind::OpenFolder, &mut cx);
+    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
+    // terminal pane have a terminal to act on and the focus is inside one.
+    window.walk(RequestKind::OpenTerminal, &mut cx);
+    wait_until(&mut cx, "the terminal on screen", |cx| {
+        cx.debug_bounds("terminal-slot-0").is_some()
+    });
 
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
@@ -432,7 +401,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         window.assert_asks_nothing(&control, &mut cx);
         // No such branch exists. The Keeper refuses it, which is all the same here: the
         // request has passed the tap.
-        let closed = window.set_base(&format!("after-{}", control.keystroke), &mut cx);
+        let closed = window.set_base(&format!("after-{}", control.key()), &mut cx);
 
         let passed = window.tap.requests();
         for request in &passed[before..closed] {
@@ -440,7 +409,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
                 request.kind().origin(),
                 Origin::User,
                 "the key {} of {} names no message and sent {request:?}",
-                control.keystroke,
+                control.key(),
                 control.title
             );
         }

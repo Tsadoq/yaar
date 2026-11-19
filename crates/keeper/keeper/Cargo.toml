@@ -16,6 +16,7 @@ libc.workspace = true
 yaar-recorder.workspace = true
 yaar-store.workspace = true
 yaar-workspaces.workspace = true
+yaar-dock.workspace = true
 
 [lints]
 workspace = true

@@ -7,8 +7,11 @@
 //! - [`Hello`], [`handshake`] and [`PROTOCOL_VERSION`], the exchange of versions;
 //! - [`Request`] with its [`RequestKind`] and [`Origin`], [`Reply`], [`Refusal`] and
 //!   [`Fact`]: what a Window asks, what the Keeper answers, and what it tells unasked;
+//! - [`Message::Input`] and [`Message::Output`], the bytes of a terminal in both
+//!   directions, which are a stream and have no reply;
 //! - what those carry: [`Repository`], [`Workspace`], [`Changes`], [`FileSides`] and their
-//!   parts;
+//!   parts; [`TerminalId`], [`TerminalSize`], [`Program`] and [`Ending`];
+//! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
 //!   reaches the Keeper makes sure it is the user's own.
@@ -26,6 +29,7 @@
 //! [`RequestKind::ALL`]: a test that walks the requests a user starts cannot miss it.
 
 mod request;
+mod terminal;
 mod wire;
 mod workspace;
 
@@ -38,6 +42,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
+pub use terminal::{Ending, Program, TerminalId, TerminalSize};
 pub use workspace::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, FileSides, FileStatus,
     Head, MAX_CONTENT, NoComparison, Repository, RepositoryId, Workspace, WorkspaceId,
@@ -46,8 +51,13 @@ pub use workspace::{
 use wire::{In, Out};
 
 /// The version of the protocol this crate speaks. Raised whenever a frame other than
-/// the two fixed ones changes.
-pub const PROTOCOL_VERSION: u16 = 2;
+/// the two fixed ones changes, and never lowered: of two sides that speak different
+/// versions, the one with the lower number is the older. [`Hello::age_against`] rests on
+/// that.
+///
+/// 2: requests, replies and facts about workspaces. 3: terminals, and the two frames of
+/// their bytes.
+pub const PROTOCOL_VERSION: u16 = 3;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -61,6 +71,8 @@ const KIND_SHUTDOWN: u8 = 2;
 const KIND_REQUEST: u8 = 3;
 const KIND_REPLY: u8 = 4;
 const KIND_FACT: u8 = 5;
+const KIND_INPUT: u8 = 6;
+const KIND_OUTPUT: u8 = 7;
 
 /// The first frame each side sends: who it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +99,74 @@ impl Hello {
     pub fn speaks_with(&self, other: &Hello) -> bool {
         self.protocol == other.protocol
     }
+
+    /// How the side that sent this hello stands to the side that sent `mine`, in version.
+    ///
+    /// The protocol decides first: it only ever rises, so a lower one is older whatever
+    /// the versions of the app say. With the same protocol the two versions of the app
+    /// are compared, read as numbers parted by dots, `0.2.10` after `0.2.9`; whatever
+    /// follows the numbers, as `-beta` or `+abc`, is not compared. The answer is
+    /// [`Age::Unknown`] when the protocols are the same and either version does not start
+    /// with a number, or when the numbers are the same and the texts differ.
+    pub fn age_against(&self, mine: &Hello) -> Age {
+        use std::cmp::Ordering;
+        match self.protocol.cmp(&mine.protocol) {
+            Ordering::Less => return Age::Older,
+            Ordering::Greater => return Age::Newer,
+            Ordering::Equal => {}
+        }
+        if self.app_version == mine.app_version {
+            return Age::Same;
+        }
+        match (
+            version_numbers(&self.app_version),
+            version_numbers(&mine.app_version),
+        ) {
+            (Some(theirs), Some(ours)) => match compare_numbers(&theirs, &ours) {
+                Ordering::Less => Age::Older,
+                Ordering::Greater => Age::Newer,
+                Ordering::Equal => Age::Unknown,
+            },
+            _ => Age::Unknown,
+        }
+    }
+}
+
+/// How one side of the Link stands to the other in version: see [`Hello::age_against`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Age {
+    /// An older version than this side.
+    Older,
+    /// The same version.
+    Same,
+    /// A newer version than this side.
+    Newer,
+    /// Another version, and which one is newer cannot be told.
+    Unknown,
+}
+
+/// The numbers a version of the app starts with, parted by dots: `[0, 2, 10]` for
+/// `0.2.10-beta`. None when it does not start with a number.
+fn version_numbers(version: &str) -> Option<Vec<u64>> {
+    let numeric = version
+        .split(['-', '+'])
+        .next()
+        .unwrap_or_default()
+        .split('.')
+        .map_while(|part| part.parse::<u64>().ok())
+        .collect::<Vec<_>>();
+    (!numeric.is_empty()).then_some(numeric)
+}
+
+/// Compares two lists of version numbers; a missing number counts as 0, so `1.2` and
+/// `1.2.0` are the same.
+fn compare_numbers(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
+    let len = a.len().max(b.len());
+    let at = |numbers: &[u64], i: usize| numbers.get(i).copied().unwrap_or(0);
+    (0..len)
+        .map(|i| at(a, i).cmp(&at(b, i)))
+        .find(|order| order.is_ne())
+        .unwrap_or(std::cmp::Ordering::Equal)
 }
 
 /// One message between the Window and the Keeper.
@@ -112,6 +192,25 @@ pub enum Message {
     },
     /// The Keeper tells a Window what changed.
     Fact(Fact),
+    /// A Window sends bytes to the program of a terminal: what the user typed or pasted,
+    /// encoded as the terminal's state asks, and the terminal's answers to the program's
+    /// questions. Nothing answers it. Bytes for a terminal the Keeper does not hold, as
+    /// one whose program has ended, are dropped.
+    Input {
+        /// The terminal.
+        terminal: TerminalId,
+        /// The bytes, in the order the program is to read them.
+        bytes: Vec<u8>,
+    },
+    /// The Keeper sends a Window bytes the program of a terminal wrote, in the order it
+    /// wrote them. Sent to the Window that opened the terminal, for as long as it is
+    /// attached. Nothing answers it.
+    Output {
+        /// The terminal.
+        terminal: TerminalId,
+        /// The bytes, as the program wrote them.
+        bytes: Vec<u8>,
+    },
 }
 
 /// Why a frame could not be read.
@@ -183,6 +282,20 @@ pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> 
             request::write_fact(&mut body, fact);
             frame = body.0;
         }
+        Message::Input { terminal, bytes } => {
+            frame.push(KIND_INPUT);
+            let mut body = Out(frame);
+            body.text(terminal.as_str());
+            body.bytes(bytes);
+            frame = body.0;
+        }
+        Message::Output { terminal, bytes } => {
+            frame.push(KIND_OUTPUT);
+            let mut body = Out(frame);
+            body.text(terminal.as_str());
+            body.bytes(bytes);
+            frame = body.0;
+        }
     }
     // What the reader would refuse is not sent.
     let len = u32::try_from(frame.len() - 4)
@@ -228,6 +341,17 @@ pub fn read_message(input: &mut impl Read) -> Result<Message, LinkError> {
             let fact = request::read_fact(&mut fields)?;
             fields.end()?;
             Ok(Message::Fact(fact))
+        }
+        KIND_INPUT | KIND_OUTPUT => {
+            let mut fields = In::new(payload);
+            let terminal = TerminalId::new(fields.text()?);
+            let bytes = fields.bytes()?;
+            fields.end()?;
+            Ok(if kind == KIND_INPUT {
+                Message::Input { terminal, bytes }
+            } else {
+                Message::Output { terminal, bytes }
+            })
         }
         other => Err(LinkError::UnknownKind(other)),
     }
@@ -747,6 +871,21 @@ mod tests {
                 old_path: PathBuf::from("src/was here.rs"),
                 path: PathBuf::from("src/moved.rs"),
             },
+            Request::OpenTerminal {
+                workspace: workspace.clone(),
+                program: Program::Shell,
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
+            },
+            Request::ResizeTerminal {
+                terminal: terminal(),
+                size: TerminalSize {
+                    columns: u16::MAX,
+                    rows: 1,
+                },
+            },
         ];
         // The same kind of request, asking for no old version.
         let without_old = Request::ReadFile {
@@ -820,6 +959,9 @@ mod tests {
                     size: MAX_CONTENT + 1,
                 },
             }),
+            Reply::TerminalOpened {
+                terminal: terminal(),
+            },
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -843,6 +985,9 @@ mod tests {
             Refusal::OutsideWorkspace {
                 path: PathBuf::from("../elsewhere"),
             },
+            Refusal::UnknownTerminal {
+                terminal: terminal(),
+            },
             Refusal::Failed {
                 reason: "git was not found".to_owned(),
             },
@@ -850,6 +995,18 @@ mod tests {
         let facts = [
             Fact::Workspaces(two_repositories()),
             Fact::ChangesChanged { workspace },
+            Fact::TerminalEnded {
+                terminal: terminal(),
+                ending: Ending::Exited(0),
+            },
+            Fact::TerminalEnded {
+                terminal: terminal(),
+                ending: Ending::Exited(-1),
+            },
+            Fact::TerminalEnded {
+                terminal: terminal(),
+                ending: Ending::Signalled(9),
+            },
         ];
 
         let mut messages = Vec::new();
@@ -876,7 +1033,26 @@ mod tests {
             });
         }
         messages.extend(facts.into_iter().map(Message::Fact));
+        // The bytes of a terminal, every byte value among them, and none at all.
+        let every_byte: Vec<u8> = (0..=u8::MAX).collect();
+        messages.push(Message::Input {
+            terminal: terminal(),
+            bytes: every_byte.clone(),
+        });
+        messages.push(Message::Output {
+            terminal: terminal(),
+            bytes: every_byte,
+        });
+        messages.push(Message::Output {
+            terminal: terminal(),
+            bytes: Vec::new(),
+        });
         messages
+    }
+
+    /// The id of a terminal, as the Keeper makes one.
+    fn terminal() -> TerminalId {
+        TerminalId::new("33333333333333333333333333333333")
     }
 
     #[test]
@@ -919,8 +1095,18 @@ mod tests {
         assert_eq!(RequestKind::from_code(0), None);
 
         let by_user: Vec<RequestKind> = RequestKind::started_by_user().collect();
-        assert_eq!(by_user, [RequestKind::OpenFolder, RequestKind::SetBase]);
+        assert_eq!(
+            by_user,
+            [
+                RequestKind::OpenFolder,
+                RequestKind::SetBase,
+                RequestKind::OpenTerminal
+            ]
+        );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
+        // The Window tells the size it shows a terminal at by itself, whenever its
+        // layout changes.
+        assert_eq!(RequestKind::ResizeTerminal.origin(), Origin::Window);
         assert_eq!(RequestKind::OpenFolder.name(), "OpenFolder");
     }
 
@@ -946,6 +1132,68 @@ mod tests {
                 4, 0, 0, 0, b'm', b'a', b'i', b'n', // the base
             ]
         );
+    }
+
+    #[test]
+    fn the_bytes_of_a_terminal_keep_their_frame() {
+        // Not a promise to other versions either: a check of the layout of the two frames
+        // that carry a terminal's bytes, which no reply follows.
+        let bytes = frame(&Message::Input {
+            terminal: TerminalId::new("t1"),
+            bytes: vec![0x1b, b'[', b'A'],
+        });
+        assert_eq!(
+            bytes,
+            [
+                14, 0, 0, 0, // length
+                6, // kind: input
+                2, 0, 0, 0, b't', b'1', // the terminal
+                3, 0, 0, 0, 0x1b, b'[', b'A', // the bytes
+            ]
+        );
+        let bytes = frame(&Message::Output {
+            terminal: TerminalId::new("t1"),
+            bytes: vec![b'$'],
+        });
+        assert_eq!(bytes[4], 7, "kind: output");
+    }
+
+    #[test]
+    fn the_side_with_the_lower_protocol_is_the_older_whatever_its_app_version_says() {
+        let mine = Hello {
+            protocol: 3,
+            pid: 1,
+            app_version: "0.2.0".to_owned(),
+        };
+        let with = |protocol: u16, app_version: &str| Hello {
+            protocol,
+            pid: 2,
+            app_version: app_version.to_owned(),
+        };
+        assert_eq!(with(2, "9.9.9").age_against(&mine), Age::Older);
+        assert_eq!(with(4, "0.0.1").age_against(&mine), Age::Newer);
+        assert_eq!(with(3, "0.2.0").age_against(&mine), Age::Same);
+    }
+
+    #[test]
+    fn with_one_protocol_the_app_versions_are_compared_as_numbers() {
+        let mine = Hello {
+            protocol: 3,
+            pid: 1,
+            app_version: "0.2.10".to_owned(),
+        };
+        let with = |app_version: &str| Hello {
+            protocol: 3,
+            pid: 2,
+            app_version: app_version.to_owned(),
+        };
+        assert_eq!(with("0.2.9").age_against(&mine), Age::Older);
+        assert_eq!(with("0.10.0").age_against(&mine), Age::Newer);
+        assert_eq!(with("0.2.10-beta").age_against(&mine), Age::Unknown);
+        assert_eq!(with("0.2.10.0").age_against(&mine), Age::Unknown);
+        assert_eq!(with("0.3").age_against(&mine), Age::Newer);
+        assert_eq!(with("scripted-window").age_against(&mine), Age::Unknown);
+        assert_eq!(with("").age_against(&mine), Age::Unknown);
     }
 
     #[test]

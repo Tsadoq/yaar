@@ -662,6 +662,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-015", "FR-016"]
+built = [
+    "crates/window/frame/tests/layout.rs::with_nothing_set_the_second_pane_is_to_the_right_of_the_first",
+    "crates/window/frame/tests/layout.rs::the_key_of_move_panes_takes_the_second_pane_below_then_to_the_left_then_to_the_right_and_to_no_other_place",
+    "crates/window/frame/tests/layout.rs::the_place_of_the_panes_lasts_through_a_resize_of_the_window",
+]
+note = "Shown with two panes the test writes: the Frame knows the first pane and the panes after it. That the review pane is first and the terminal pane second is the list of the Window program, held by a test of yaar-window."
 
 [[test]]
 id = "FRAME-09"
@@ -723,6 +729,12 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 2
+built = [
+    "crates/window/frame/tests/version.rs::a_keeper_of_a_lower_protocol_is_said_to_be_older_and_nothing_is_asked_of_it",
+    "crates/window/frame/tests/version.rs::a_keeper_of_the_same_protocol_and_a_lower_version_is_said_to_be_older_and_is_asked_as_usual",
+    "crates/window/frame/tests/version.rs::a_keeper_of_a_newer_version_or_of_this_one_is_no_reason_for_a_note",
+]
+note = "Older means a lower protocol, or the same protocol and a lower version of the app. The test shows both."
 
 [[test]]
 id = "WIN-01"
@@ -743,6 +755,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-122"]
+built = [
+    "crates/window/window/tests/keys.rs::with_a_terminal_focused_the_kept_keys_run_their_actions_and_no_other_key_does_and_with_another_pane_focused_no_key_reaches_the_program",
+    "crates/window/window/tests/keys.rs::the_documented_list_of_kept_keys_is_what_the_window_keeps",
+]
+note = "The list is yaar_window::kept_keys(). On Linux it is the six keys of the decision on kept keys. A key that is not kept reaches the program with the bytes TERM-01 expects in the legacy state, which for a Cmd key with no action on macOS are none. The absence is as strong as the keys the test presses: the keys of TERM-01's matrix and of every control."
 
 [[test]]
 id = "DOCK-01"
@@ -753,10 +770,13 @@ through = "its calls, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-017"]
+built = [
+    "crates/keeper/dock/tests/terminals.rs::three_terminals_run_at_once_each_with_its_own_program_and_their_output_stays_apart",
+]
 
 [[test]]
 id = "DOCK-02"
-what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder and by one folder put first on the search path: nothing in it names an editor connection."
+what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by one folder put first on the search path, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
 level = "component"
 part = "dock"
 through = "its calls, on a real pseudo-terminal"
@@ -783,6 +803,9 @@ through = "its calls, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-024"]
+built = [
+    "crates/keeper/dock/tests/terminals.rs::a_program_the_app_knows_nothing_of_gets_keys_and_gives_output_as_any_program",
+]
 
 [[test]]
 id = "DOCK-07"
@@ -813,6 +836,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-017"]
+built = [
+    "crates/window/terminal-pane/tests/pane.rs::the_pane_holds_several_terminals_at_once_and_switches_between_them",
+]
 
 [[test]]
 id = "TP-02"
@@ -823,6 +849,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-020"]
+built = [
+    "crates/window/terminal-pane/tests/pane.rs::the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one",
+]
 
 [[test]]
 id = "TP-03"
@@ -874,7 +903,10 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 2
-note = "Half of the typing limit rests on this; it is not built yet."
+built = [
+    "crates/window/terminal-pane/tests/pane.rs::after_each_key_the_pane_keeps_asking_for_frames_for_one_second",
+]
+note = "Read through the frames the window is asked for, on the test platform's clock. Half of the typing limit rests on this."
 
 [[test]]
 id = "TERM-01"
@@ -885,6 +917,24 @@ through = "keys and the mouse in on the test platform; read back as the bytes a 
 driver = "pty"
 runs = "ci"
 proves = ["FR-122"]
+built = [
+    "crates/window/terminal-pane/tests/bytes.rs::in_the_legacy_state_every_key_of_the_matrix_sends_the_expected_bytes",
+    "crates/window/terminal-pane/tests/bytes.rs::with_application_cursor_keys_every_key_of_the_matrix_sends_the_expected_bytes",
+    "crates/window/terminal-pane/tests/bytes.rs::after_a_program_pushed_kitty_flags_5_it_gets_flag_1_forms_for_every_key",
+    "crates/window/terminal-pane/tests/bytes.rs::after_a_program_pushed_kitty_flags_7_it_gets_the_press_of_every_key_in_flag_1_forms",
+    "crates/window/terminal-pane/tests/bytes.rs::after_a_program_pushed_kitty_flags_7_the_release_of_a_key_sends_what_the_matrix_says",
+    "crates/window/terminal-pane/tests/bytes.rs::a_program_that_asked_for_no_mouse_reports_is_sent_none",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1000_say_presses_releases_and_the_wheel_in_the_old_form",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1000_say_presses_releases_and_the_wheel_in_the_sgr_form",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1002_add_a_drag_in_the_old_form",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1002_add_a_drag_in_the_sgr_form",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1003_add_every_move_in_the_old_form",
+    "crates/window/terminal-pane/tests/bytes.rs::mouse_reports_of_mode_1003_add_every_move_in_the_sgr_form",
+    "crates/window/terminal-pane/tests/bytes.rs::on_the_alternate_screen_with_alternate_scroll_the_wheel_is_the_cursor_keys",
+    "crates/window/terminal-pane/tests/bytes.rs::on_the_alternate_screen_with_alternate_scroll_and_application_cursor_keys_the_wheel_is_the_application_form",
+    "crates/window/terminal-pane/tests/bytes.rs::the_matrix_holds_every_mouse_action_with_each_modifier_in_every_state_of_the_mouse",
+]
+note = "The expected bytes are Ghostty's, recorded in phase 4, with the departures the test lists; the mouse rows are written from xterm's rules. The rows of Option follow the layout of the test platform: Meta on Linux, characters on macOS."
 
 [[test]]
 id = "TERM-02"
@@ -896,6 +946,16 @@ driver = "call"
 runs = "ci"
 proves = []
 slice = 2
+built = [
+    "crates/window/terminal-pane/src/emulator.rs::the_query_for_keyboard_flags_answers_a_push_cut_to_the_implemented_flags",
+    "crates/window/terminal-pane/src/emulator.rs::the_query_for_keyboard_flags_is_answered_alike_in_every_form_the_core_reads_as_one",
+    "crates/window/terminal-pane/src/emulator.rs::the_query_for_keyboard_flags_answers_a_set_cut_to_the_implemented_flags",
+    "crates/window/terminal-pane/src/emulator.rs::a_pop_brings_back_the_flags_pushed_before",
+    "crates/window/terminal-pane/src/emulator.rs::the_modes_hold_the_granted_flags_and_no_others",
+    "crates/window/terminal-pane/src/emulator.rs::the_encoder_implements_the_flags_the_terminal_grants",
+    "crates/window/terminal-pane/src/emulator.rs::flags_the_encoder_does_not_have_change_nothing_it_sends",
+    "crates/window/terminal-pane/src/emulator.rs::flags_a_program_pushed_reach_the_encoder_only_as_granted",
+]
 
 [[test]]
 id = "TERM-03"
@@ -906,6 +966,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-122"]
+built = [
+    "crates/window/terminal-pane/tests/compose.rs::each_dead_key_pair_gives_the_composed_character_and_an_input_method_marks_and_commits",
+    "crates/window/terminal-pane/tests/compose.rs::an_input_method_shows_what_it_composes_and_commits_the_word",
+]
+note = "Dead keys and the input method are driven through the terminal's input handler, as the system's input method drives it; the system's own input methods are SCREEN-02, by hand. The dead-key pairs are those of the ABC layout, and of the U.S. layout with Option set to characters: on the U.S. layout the app's default makes Option Meta, which composes nothing."
 
 [[test]]
 id = "SWB-01"
@@ -2214,9 +2279,9 @@ driver = "client"
 runs = "ci"
 proves = ["NFR-007"]
 built = [
-    "system-tests/tests/workspaces.rs::the_keeper_and_the_git_it_keeps_running_listen_on_the_users_socket_file_only",
+    "system-tests/tests/workspaces.rs::the_keeper_and_everything_it_starts_listen_on_the_users_socket_file_only",
 ]
-note = "Everything it starts is, so far, the git processes it keeps for file contents. Terminals and agents join the test as they are built."
+note = "Everything it starts: the git processes it keeps for file contents, the programs of its terminals and what those start. Agents join the test as they are built."
 
 [[test]]
 id = "HOLD-01"
@@ -2247,6 +2312,7 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-118"]
+note = "The stop reaches every process of each terminal's session, background jobs of a shell included; a process that left the session by setsid, as a daemon, is not reached."
 
 [[test]]
 id = "HOLD-06"
@@ -2809,7 +2875,7 @@ built = [
     "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
     "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
 ]
-note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built."
+note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built. Opening a terminal is the user's; telling a terminal's size is the Window's."
 
 [[test]]
 id = "WIN-05"
@@ -2852,6 +2918,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["NFR-005"]
+built = [
+    "crates/window/window/tests/seam.rs::a_third_pane_joins_the_frame_watches_the_shared_model_and_takes_a_routed_action_with_no_pane_changed",
+    "crates/window/window/tests/seam.rs::the_window_lists_the_review_pane_then_the_terminal_pane_and_with_nothing_set_the_terminal_lies_to_the_right",
+]
+note = "No pane changed: the test pane needs only the Frame's surface and joins beside the unchanged list of the Window program. That the commits adding a pane change no file of another pane is read from the history at the merge, not by the test."
 
 # Requirements no test of the workflow can prove. Each has a check done by hand before a release.
 

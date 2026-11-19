@@ -1,0 +1,3 @@
+In these files, `minus` stands for the key `-`: a key written `ctrl-minus` or `alt-shift-minus` is the minus key with those modifiers, and a row never spells it with the sign itself.
+
+One row to a line, fields separated by a tab: state, key as GPUI writes it, expected bytes in hex, source, and for a row that holds on one system only, `macos` or `linux`. `departures.tsv` names the keys left out of the matrix and why. No test reads this file.

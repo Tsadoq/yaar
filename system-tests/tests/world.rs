@@ -52,6 +52,8 @@ fn a_program_of_the_world_sees_the_worlds_environment_and_nothing_of_this_proces
             .map(PathBuf::from)
     };
     assert_eq!(value("HOME"), Some(world.home()));
+    // The shell of a terminal is the same on every machine, and not the user's own.
+    assert_eq!(value("SHELL"), Some(PathBuf::from("/bin/sh")));
     assert_eq!(value("YAAR_SOCKET"), Some(world.socket()));
     assert_eq!(value("GIT_CONFIG_GLOBAL"), Some(PathBuf::from("/dev/null")));
     assert_eq!(value("GIT_CONFIG_NOSYSTEM"), Some(PathBuf::from("1")));

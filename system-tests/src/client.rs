@@ -11,14 +11,15 @@
 //! 4. No call sleeps for a fixed time. Each waits for what it wants, up to a deadline,
 //!    and panics with what it saw when the deadline passes.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Refusal, Reply, Repository,
-    RepositoryId, Request, RequestId, WorkspaceId, handshake, read_message, write_message,
+    ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Program, Refusal, Reply,
+    Repository, RepositoryId, Request, RequestId, TerminalId, TerminalSize, WorkspaceId, handshake,
+    read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -27,12 +28,16 @@ pub const DEADLINE: Duration = Duration::from_secs(10);
 /// A connection to a Keeper, speaking the Link as a Window speaks it.
 ///
 /// There is one call for each request of the Link. Facts that arrive while a call waits
-/// for its reply are kept, in order, for [`Client::wait_for_fact`].
+/// for its reply are kept, in order, for [`Client::wait_for_fact`]. What the program of a
+/// terminal writes is kept, as the bytes that came, for [`Client::wait_for_output`],
+/// whichever call was waiting when it arrived.
 pub struct Client {
     stream: UnixStream,
     keeper: Hello,
     next_id: u32,
     facts: VecDeque<Fact>,
+    /// What each terminal's program has written so far, as it came.
+    output: HashMap<TerminalId, Vec<u8>>,
 }
 
 impl Client {
@@ -55,6 +60,7 @@ impl Client {
                             keeper,
                             next_id: 0,
                             facts: VecDeque::new(),
+                            output: HashMap::new(),
                         };
                     }
                     // A Keeper that is just leaving may accept and then close.
@@ -91,6 +97,7 @@ impl Client {
             match self.read(deadline) {
                 Ok(Message::Reply { to, reply }) if to == id => return reply,
                 Ok(Message::Fact(fact)) => self.facts.push_back(fact),
+                Ok(Message::Output { terminal, bytes }) => self.keep(terminal, bytes),
                 Ok(other) => panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}"),
                 Err(e) => panic!("no reply to {kind:?}: {e}; facts kept: {:?}", self.facts),
             }
@@ -161,6 +168,88 @@ impl Client {
         }
     }
 
+    /// Opens a terminal with the user's shell in it for a workspace, at `size`, and
+    /// returns its id.
+    pub fn open_terminal(
+        &mut self,
+        workspace: &WorkspaceId,
+        size: TerminalSize,
+    ) -> Result<TerminalId, Refusal> {
+        match self.request(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Shell,
+            size,
+        })? {
+            Reply::TerminalOpened { terminal } => {
+                self.output.entry(terminal.clone()).or_default();
+                Ok(terminal)
+            }
+            other => panic!("asked to open a terminal, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Tells the Keeper that a terminal is shown at a new size.
+    pub fn resize_terminal(
+        &mut self,
+        terminal: &TerminalId,
+        size: TerminalSize,
+    ) -> Result<(), Refusal> {
+        match self.request(Request::ResizeTerminal {
+            terminal: terminal.clone(),
+            size,
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to resize a terminal, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Sends bytes to the program of a terminal, as a Window sends what the user types.
+    /// Nothing answers them.
+    pub fn type_into(&mut self, terminal: &TerminalId, bytes: &[u8]) {
+        write_message(
+            &mut self.stream,
+            &Message::Input {
+                terminal: terminal.clone(),
+                bytes: bytes.to_vec(),
+            },
+        )
+        .unwrap_or_else(|e| panic!("the bytes for terminal {terminal} could not be sent: {e}"));
+    }
+
+    /// Waits until everything the program of `terminal` has written so far, as one run
+    /// of bytes, is accepted by `wanted`, and returns that run. Panics, with what came,
+    /// when it is not accepted within `limit`.
+    ///
+    /// The run starts at the program's first byte and is never cut: a later call sees
+    /// what an earlier one saw, and more. A test that types a command and waits for its
+    /// answer should look for text the command prints and does not hold itself, as
+    /// `echo yaar-$((40 + 2))` prints `yaar-42`: the terminal echoes what is typed.
+    pub fn wait_for_output(
+        &mut self,
+        terminal: &TerminalId,
+        limit: Duration,
+        mut wanted: impl FnMut(&[u8]) -> bool,
+    ) -> Vec<u8> {
+        let deadline = Instant::now() + limit;
+        loop {
+            let so_far = self.output.entry(terminal.clone()).or_default();
+            if wanted(so_far) {
+                return so_far.clone();
+            }
+            let so_far = so_far.len();
+            match self.read(deadline) {
+                Ok(Message::Output { terminal, bytes }) => self.keep(terminal, bytes),
+                Ok(Message::Fact(fact)) => self.facts.push_back(fact),
+                Ok(other) => panic!("waiting for output, the Keeper sent {other:?}"),
+                Err(e) => panic!(
+                    "the output of terminal {terminal} was not what was wanted within {limit:?}: \
+                     {e}; the {so_far} bytes that came: {:?}",
+                    String::from_utf8_lossy(&self.output[terminal])
+                ),
+            }
+        }
+    }
+
     /// Waits for a fact that `wanted` accepts, among those kept and those still to
     /// come, and returns it. Facts before it are dropped. Panics, with the facts seen,
     /// when none comes within `limit`.
@@ -176,6 +265,10 @@ impl Client {
                 Some(kept) => kept,
                 None => match self.read(deadline) {
                     Ok(Message::Fact(fact)) => fact,
+                    Ok(Message::Output { terminal, bytes }) => {
+                        self.keep(terminal, bytes);
+                        continue;
+                    }
                     Ok(other) => panic!("waiting for a fact, the Keeper sent {other:?}"),
                     Err(e) => panic!("the fact did not come: {e}; facts seen: {seen:?}"),
                 },
@@ -185,6 +278,11 @@ impl Client {
             }
             seen.push(fact);
         }
+    }
+
+    /// Keeps what a program wrote, after what it wrote before.
+    fn keep(&mut self, terminal: TerminalId, bytes: Vec<u8>) {
+        self.output.entry(terminal).or_default().extend(bytes);
     }
 
     /// The next frame from the Keeper, or why none came before `deadline`.

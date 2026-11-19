@@ -9,13 +9,15 @@
 //! - [`init`], which prepares the app before a window opens;
 //! - [`open`], which opens the window with every pane, linked to the Keeper;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
-//!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them.
+//!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
+//! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
+//!   documented set of keys that never reach the program in a terminal.
 
 use std::path::PathBuf;
 
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
-use yaar_frame::{Asks, Control, Opened, PaneEntry, Place};
+use yaar_frame::{Asks, Control, Opened, PROGRAM_CONTEXT, PaneEntry, Place};
 
 /// The version of the app, as shown to the user and told to the Keeper.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -31,7 +33,24 @@ actions!(
 /// The panes of the Window, in the order they are laid out. Both [`controls`] and
 /// [`open`] read this list and nothing else about panes.
 pub fn panes() -> Vec<PaneEntry> {
-    vec![yaar_review_pane::entry()]
+    vec![yaar_review_pane::entry(), yaar_terminal_pane::entry()]
+}
+
+/// The documented set of keys that never reach a program in a terminal: every control of
+/// [`controls`] whose key works while a terminal has the focus. On macOS these are the
+/// Cmd keys of the app, the kept keys of the Frame and the terminal's own copy, paste and
+/// scrolling of the history; on Linux the kept keys and the terminal's own alone, since
+/// there the app's keys are Ctrl keys, and every other Ctrl key belongs to the program.
+pub fn kept_keys() -> Vec<Control> {
+    controls()
+        .into_iter()
+        .filter(|control| match control.place {
+            Place::Kept => true,
+            Place::In(context) => context == PROGRAM_CONTEXT,
+            // Bound for the whole app only where it is a Cmd key.
+            Place::Anywhere => control.context().is_none(),
+        })
+        .collect()
 }
 
 /// Every action of the Window that has a key.
@@ -51,10 +70,12 @@ pub fn controls() -> Vec<Control> {
     controls
 }
 
-/// Prepares the app: the toolkit, the theme of the system, the keys of [`controls`], and
-/// what quitting means.
+/// Prepares the app: the toolkit, the theme of the system, the keys of [`controls`], the
+/// toolkit's own keys given back to a program in a terminal, and what quitting means.
 pub fn init(cx: &mut App) {
     gpui_kit::init(cx);
+    // After the toolkit, whose bindings it has to outrank.
+    yaar_frame::release_program_keys(cx);
     Theme::sync_system_appearance(None, cx);
     yaar_frame::bind(&controls(), cx);
     cx.on_action(|_: &Quit, cx| cx.quit());
@@ -79,9 +100,9 @@ pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
 #[cfg(test)]
 mod tests {
     use gpui_kit::Action;
-    use yaar_frame::{Asks, Control, Place};
+    use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place};
 
-    use super::{Quit, controls, panes};
+    use super::{Quit, controls, kept_keys, panes};
 
     /// What tells one row of the table from another.
     fn row(control: &Control) -> (&'static str, &'static str, Place) {
@@ -148,13 +169,16 @@ mod tests {
         // The parts of the table come from crates that do not know each other. Of two
         // rows with one key that both apply somewhere, one wins there and nothing says
         // so. Both apply where their places are the same, and wherever one of them
-        // works anywhere: that one applies inside every pane too.
+        // works everywhere, as a key of the Frame does, a kept one included: that one
+        // applies inside every pane too. A key bound in a terminal applies in the
+        // terminal pane, which no other pane's key shares.
+        let everywhere = |place| matches!(place, Place::Anywhere | Place::Kept);
         let table = controls();
         for (at, control) in table.iter().enumerate() {
             for other in &table[at + 1..] {
                 let in_one_place = control.place == other.place
-                    || control.place == Place::Anywhere
-                    || other.place == Place::Anywhere;
+                    || everywhere(control.place)
+                    || everywhere(other.place);
                 assert!(
                     control.keystroke != other.keystroke || !in_one_place,
                     "the key {:?} belongs to {} and to {}",
@@ -162,6 +186,62 @@ mod tests {
                     control.title,
                     other.title
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn the_kept_keys_are_rows_of_the_table_each_with_a_key() {
+        let table: Vec<_> = controls().iter().map(row).collect();
+        let kept = kept_keys();
+        assert!(!kept.is_empty());
+        for control in &kept {
+            assert!(table.contains(&row(control)), "{} is no row", control.title);
+            assert!(!control.key().is_empty(), "{} has no key", control.title);
+        }
+        let mut keys: Vec<String> = kept.iter().map(Control::key).collect();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), kept.len(), "a key is kept twice");
+    }
+
+    #[test]
+    fn the_keys_of_a_pane_that_shows_no_program_are_not_kept() {
+        let kept: Vec<String> = kept_keys().iter().map(Control::key).collect();
+        for control in yaar_review_pane::controls() {
+            assert!(
+                !kept.contains(&control.key()),
+                "{} would never reach a program, and the review pane has none",
+                control.title
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_that_works_anywhere_is_kept_where_it_is_a_cmd_key_and_not_elsewhere() {
+        let kept: Vec<String> = kept_keys().iter().map(Control::key).collect();
+        let anywhere: Vec<Control> = controls()
+            .into_iter()
+            .filter(|control| control.place == Place::Anywhere)
+            .collect();
+        assert!(!anywhere.is_empty());
+        for control in anywhere {
+            assert_eq!(
+                kept.contains(&control.key()),
+                cfg!(target_os = "macos"),
+                "{} on {:?}",
+                control.title,
+                control.key()
+            );
+        }
+    }
+
+    #[test]
+    fn the_keys_bound_in_a_terminal_and_the_kept_keys_of_the_frame_are_kept_on_every_system() {
+        let kept: Vec<String> = kept_keys().iter().map(Control::key).collect();
+        for control in controls() {
+            if control.place == Place::Kept || control.place == Place::In(PROGRAM_CONTEXT) {
+                assert!(kept.contains(&control.key()), "{}", control.title);
             }
         }
     }
