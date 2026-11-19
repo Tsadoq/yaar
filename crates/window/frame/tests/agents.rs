@@ -328,8 +328,10 @@ fn of_two_answers_for_the_terminals_only_the_one_to_the_last_question_counts_whe
         keeper.held_terminals() == 1
     });
 
-    // While that answer is on its way, `one` ends and this Window opens `two`.
-    keeper.set_terminals(vec![two.clone()]);
+    // While that answer is on its way, `one` ends and this Window opens `two`. The
+    // Keeper answers each question with what it knows when it hears it: none after the
+    // end, then `two` after the opening.
+    keeper.set_terminals(Vec::new());
     keeper.tell(Fact::TerminalEnded {
         terminal: terminal_id('1'),
         ending: Ending::Exited(0),
@@ -342,6 +344,7 @@ fn of_two_answers_for_the_terminals_only_the_one_to_the_last_question_counts_whe
     wait_until(cx, "the question to be asked again", |_| {
         keeper.held_terminals() == 2
     });
+    keeper.set_terminals(vec![two.clone()]);
     models
         .terminals
         .update(cx, |list, cx| list.opened(two.clone(), cx));
@@ -349,18 +352,19 @@ fn of_two_answers_for_the_terminals_only_the_one_to_the_last_question_counts_whe
         keeper.held_terminals() == 3
     });
 
-    // The first answer still lists `one`, and the second lists none: neither is taken.
-    keeper.release_terminals(2);
-    settle('x', &models, &mut keeper, cx);
-    models.terminals.read_with(cx, |list, _| {
-        assert_eq!(list.terminals(), std::slice::from_ref(&two))
-    });
-
-    keeper.release_terminals(1);
-    settle('y', &models, &mut keeper, cx);
-    models.terminals.read_with(cx, |list, _| {
-        assert_eq!(list.terminals(), std::slice::from_ref(&two))
-    });
+    // The first answer still lists `one` and the second lists none, each late and each
+    // read alone after a barrier: neither is taken. Only the last, `two`, is.
+    for (mark, answer) in [('x', "first"), ('y', "second"), ('z', "last")] {
+        keeper.release_terminals(1);
+        settle(mark, &models, &mut keeper, cx);
+        models.terminals.read_with(cx, |list, _| {
+            assert_eq!(
+                list.terminals(),
+                std::slice::from_ref(&two),
+                "after the {answer} answer"
+            )
+        });
+    }
 }
 
 /// Clicks the row of a workspace in the sidebar where it was drawn.
@@ -573,7 +577,9 @@ fn the_stop_is_written_before_the_quit_goes_on_and_a_keeper_that_takes_nothing_h
     assert!(started.elapsed() < Duration::from_secs(2));
 
     // A Keeper that went before the frame was written: the writing thread reaches the
-    // frame and cannot write it. The call says so, instead of saying it left. The link
+    // frame and cannot write it. The call says so, instead of saying it left. This is
+    // the case that guards the order of the write and the signal: with the signal first,
+    // the answer above is still true, as the writing thread wins that race. The link
     // has not yet taken in that the Keeper is gone: nothing ran the app since.
     let link = cx.new(|_| KeeperLink::new());
     let gone = KeeperEnd::attach_deaf(&link, cx);
