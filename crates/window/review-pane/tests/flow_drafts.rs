@@ -490,7 +490,20 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     cx: &mut TestAppContext,
 ) {
     let t = turn_id('t');
-    let (mut stage, mut cx) = open_in(FlowForm::Timeline, Vec::new(), ("", ""), cx);
+    // Changes holds a file with a line to stand on, so that a comment written from where
+    // Changes has the reviewer, in place of the live diff's line, would open a box.
+    let (mut stage, mut cx) = open_in(
+        FlowForm::Timeline,
+        vec![file("a.txt", FileStatus::Modified)],
+        ("one\n", "one\ntwo\n"),
+        cx,
+    );
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.position().is_some()),
+        "Changes puts the reviewer on a line"
+    );
     click("review-view-flow", &mut cx);
     start_turn(&mut stage, &t, &s0(), &mut cx);
 
@@ -532,8 +545,8 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     );
     assert_eq!(comment_box(&stage, &mut cx), None);
 
-    // The barrier: nothing was saved, or it would be the next request, before the list
-    // this change of the files asks for.
+    // The barrier confirms that nothing else was sent: a draft is saved only on typed
+    // text, so the absence of a box above is what shows that no comment was begun.
     stage
         .keeper
         .tell(Fact::ChangesChanged { workspace: id('1') });

@@ -577,7 +577,9 @@ mod tests {
             anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
             anchor("S2", "src/b.rs", Side::New, 5, 5, "let drafted = 3;"),
         ];
-        // Neither view leaves a mark on the anchor: both are kept, field for field.
+        // This states the premise and shows nothing: both literals are the same. What can
+        // fail is below, where each of the two is kept as a thread of its own and comes
+        // back field for field.
         assert_eq!(given[3], given[4]);
         for (n, anchor) in given.iter().enumerate() {
             let n = n as u32 + 1;
