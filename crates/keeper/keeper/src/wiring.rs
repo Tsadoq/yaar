@@ -524,12 +524,16 @@ impl Parts {
             );
             Box::new(move |event| route.event(&shared, &id, event))
         };
-        self.dock
-            .open(id.clone(), start, events)
-            .map_err(|error| Refusal::Failed {
-                reason: error.to_string(),
-            })?;
         let terminal = yaar_link::TerminalId::new(id.as_str());
+        // Told before the program starts: a CLI in it reports from its first moment, and
+        // is followed only in a terminal the agents' side holds.
+        self.agents.terminal_opened(&terminal, workspace);
+        if let Err(error) = self.dock.open(id.clone(), start, events) {
+            self.agents.terminal_ended(&terminal);
+            return Err(Refusal::Failed {
+                reason: error.to_string(),
+            });
+        }
         let shared = self.shared.clone();
         Ok((
             Reply::TerminalOpened {
