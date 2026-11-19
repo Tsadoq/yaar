@@ -6,14 +6,25 @@
 //! edited, and a control `review-round-<n>-since`, drawn once the round has its state, that
 //! shows in Changes what changed since that round's comments were sent:
 //! `ChangeShown::Since` from the round's state to the newest state of the history after
-//! it, through the selection of the tree of Changes (`select_since` of `tree.rs`).
+//! it, through the selection of the tree of Changes (`select_since` of `tree.rs`). The line
+//! is drawn for a review that has a thread or a round, and says that no round was sent
+//! until the first one comes, so that the first send does not move the diff down by a row.
 //! [`crate::SinceRound`] does the same from the keyboard: the first press for the newest
 //! round with a state, each press after it for the round before, and after the first
 //! round the newest again; with no round that has a state, or no state of the worktree
-//! recorded to count to, the notice says so and nothing is selected.
+//! recorded to count to, or nothing recorded since the round's state, the notice says so and
+//! nothing is selected; a press passes over a round with nothing recorded since, so that
+//! the presses reach the rounds that have a change to show.
 //!
-//! Only the newest round can be waiting for an edit, so an older round shows as answered
-//! whatever its `edited` says: the Keeper sets that on the newest round only.
+//! The Keeper sets `edited` on the newest round only, at the agent's first edit after its
+//! send. An edit after a later send is after an earlier send too, so a round shows as sent
+//! while no round numbered as it is or higher has been edited.
+//!
+//! The newest state a round is counted to is the newest entry of the history. A round's
+//! state is recorded at its send and is no entry of the history, so the pane cannot tell
+//! whether an entry is newer than it: between a send and the end of the turn it starts, the
+//! newest entry is the turn before, and the change shown is that of the worktree since
+//! then, backward. A state that is an entry of the history is ordered by it.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -33,12 +44,37 @@ pub struct RoundShown {
     pub state: Option<String>,
 }
 
-/// The newest version of a history: the last commit or turn end that has one.
-fn newest_version(entries: &[HistoryEntry]) -> Option<&str> {
-    entries.iter().rev().find_map(|entry| match entry {
-        HistoryEntry::Commit(commit) => Some(commit.id.as_str()),
-        HistoryEntry::Turn { state, .. } => state.as_deref(),
-    })
+/// What a round's state is counted to.
+enum Counted {
+    /// The newest version of the history, newer than the round's state or of unknown order.
+    To(String),
+    /// No version of the history is recorded.
+    NoState,
+    /// The round's state is the newest version of the history: nothing was recorded since.
+    Nothing,
+}
+
+/// The versions of a history, oldest first: each commit and each turn end that has one.
+fn versions(entries: &[HistoryEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .filter_map(|entry| match entry {
+            HistoryEntry::Commit(commit) => Some(commit.id.as_str()),
+            HistoryEntry::Turn { state, .. } => state.as_deref(),
+        })
+        .collect()
+}
+
+/// What the state `state` of a round is counted to in a history.
+fn counted(entries: &[HistoryEntry], state: &str) -> Counted {
+    let versions = versions(entries);
+    let Some(&newest) = versions.last() else {
+        return Counted::NoState;
+    };
+    match versions.iter().rposition(|version| *version == state) {
+        Some(at) if at + 1 == versions.len() => Counted::Nothing,
+        _ => Counted::To(newest.to_owned()),
+    }
 }
 
 impl ReviewPane {
@@ -47,25 +83,30 @@ impl ReviewPane {
         let Some(review) = self.review() else {
             return Vec::new();
         };
-        let newest = review.rounds.last().map(|round| round.number);
         review
             .rounds
             .iter()
             .map(|round| RoundShown {
                 number: round.number,
-                sent: !round.edited && Some(round.number) == newest,
+                sent: !review
+                    .rounds
+                    .iter()
+                    .any(|later| later.number >= round.number && later.edited),
                 state: round.state.clone(),
             })
             .collect()
     }
 
     /// The line of the rounds, drawn above the tree of Changes; none for a review with no
-    /// round.
+    /// thread and no round.
     pub(crate) fn render_rounds(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let rounds = self.rounds_shown();
-        if rounds.is_empty() {
+        let review = self.review()?;
+        // A review with a comment can be sent, and its first round then comes: the line is
+        // there before it, at the height it will have, so that the diff does not move.
+        if review.threads.is_empty() && review.rounds.is_empty() {
             return None;
         }
+        let rounds = self.rounds_shown();
         let theme = cx.theme();
         let mut line = div()
             .debug_selector(|| "review-rounds".to_owned())
@@ -80,6 +121,13 @@ impl ReviewPane {
             .whitespace_nowrap()
             .border_b_1()
             .border_color(theme.border);
+        if rounds.is_empty() {
+            line = line.child(
+                div()
+                    .text_color(theme.muted_foreground)
+                    .child("No round sent yet"),
+            );
+        }
         for round in rounds {
             let number = round.number;
             let (kind, color) = match round.sent {
@@ -113,6 +161,14 @@ impl ReviewPane {
         Some(line.into_any_element())
     }
 
+    /// What the state of the round `state` is counted to in the history the pane holds.
+    fn counted_since(&self, state: &str) -> Counted {
+        match &self.tree.history {
+            Some(history) => counted(&history.entries, state),
+            None => Counted::NoState,
+        }
+    }
+
     /// Shows in Changes what changed since the comments of round `number` were sent: from
     /// the state recorded at the send to the newest state of the history.
     fn show_since(&mut self, number: u32, cx: &mut Context<Self>) {
@@ -124,16 +180,16 @@ impl ReviewPane {
         let Some(state) = state else {
             return self.say(format!("Round {number} has no recorded state yet"), cx);
         };
-        let newest = self
-            .tree
-            .history
-            .as_ref()
-            .and_then(|history| newest_version(&history.entries))
-            .map(str::to_owned);
-        let Some(newest) = newest else {
-            return self.say("No state of the worktree is recorded to count to yet", cx);
-        };
-        self.select_since(Some(state), newest, cx);
+        match self.counted_since(&state) {
+            Counted::To(newest) => self.select_since(Some(state), newest, cx),
+            Counted::NoState => {
+                self.say("No state of the worktree is recorded to count to yet", cx)
+            }
+            Counted::Nothing => self.say(
+                format!("Nothing was recorded since round {number} was sent"),
+                cx,
+            ),
+        }
     }
 
     /// [`SinceRound`].
@@ -153,8 +209,27 @@ impl ReviewPane {
             .into_iter()
             .filter_map(|round| Some((round.number, round.state?)))
             .collect();
-        let Some(&(newest, _)) = with_state.last() else {
+        if with_state.is_empty() {
             return self.say("No round has a recorded state yet", cx);
+        }
+        // The rounds with a change to show: one counted to nothing is passed over.
+        let counted_to: Vec<Counted> = with_state
+            .iter()
+            .map(|(_, state)| self.counted_since(state))
+            .collect();
+        let with_state: Vec<(u32, String)> = with_state
+            .into_iter()
+            .zip(counted_to)
+            .filter(|(_, counted)| matches!(counted, Counted::To(_)))
+            .map(|(round, _)| round)
+            .collect();
+        let Some(&(newest, _)) = with_state.last() else {
+            return match self.tree.history.as_ref().map(|h| versions(&h.entries)) {
+                Some(held) if !held.is_empty() => {
+                    self.say("Nothing was recorded since any round was sent", cx)
+                }
+                _ => self.say("No state of the worktree is recorded to count to yet", cx),
+            };
         };
         // Where the presses are: the round whose change is shown, the first of those with
         // one state, since they show the same change.

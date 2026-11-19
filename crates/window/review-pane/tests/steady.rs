@@ -14,8 +14,8 @@ use std::path::PathBuf;
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use yaar_link::{
-    Anchor, Author, Comment, CommentId, Fact, FileStatus, Lines, Placed, ReviewId, SessionState,
-    Side as LinkSide, Step, Thread, ThreadId, WorkspaceReviews,
+    Anchor, Author, Comment, CommentId, Fact, FileStatus, Lines, Placed, ReviewId, Round, SentBy,
+    SessionState, Side as LinkSide, Step, Thread, ThreadId, WorkspaceReviews,
 };
 use yaar_review_pane::{PaneRow, Position, View};
 
@@ -750,4 +750,39 @@ fn when_the_thread_first_in_view_goes_the_next_one_in_view_is_what_the_view_is_k
     tell_threads(&mut stage, vec![second()], &mut cx);
     assert_eq!(below_the_top(&second_row, &stage, &mut cx), offset);
     assert_eq!(reading(&stage, &mut cx).view, View::Changes);
+}
+
+#[gpui_kit::test]
+fn the_first_round_of_a_review_leaves_the_diff_where_it_is_on_screen(cx: &mut TestAppContext) {
+    // The reviewer reads the diff below a thread whose comment is a draft yet to send.
+    let comments = vec![comment('1', Author::Reviewer)];
+    let (mut stage, mut cx) = stage_with_thread_in_view(20, comments.clone(), 0, cx);
+    let (diff, offset) = diff_in_view(&stage, &mut cx);
+    let on_screen = |row: &PaneRow, stage: &Stage, cx: &mut VisualTestContext| {
+        let start = reading(stage, cx).start;
+        let index = start + below_the_top(row, stage, cx) as usize;
+        bounds_of_row(index, cx).origin
+    };
+    let before = on_screen(&diff, &stage, &mut cx);
+    assert!(offset > 0);
+
+    // A send: the same thread, and the first round of the review, which the pane lists in
+    // a line of its own. The diff the reviewer reads stays where it is on screen.
+    let mut review = review_of_a(thread_on(20, comments));
+    review.reviews[0].rounds = vec![Round {
+        number: 1,
+        state: None,
+        sent_by: SentBy::Delivered,
+        edited: false,
+    }];
+    stage.keeper.set_reviews(review);
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('1') });
+    wait_until(&mut cx, "the round", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().is_some_and(|review| review.rounds.len() == 1)
+        })
+    });
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
 }

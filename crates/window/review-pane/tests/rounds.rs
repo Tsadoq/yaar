@@ -269,7 +269,7 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
 ) {
     let (mut stage, mut cx) = open_on_story(
         review_of_a(vec![round(1, Some('5'), false)], Vec::new()),
-        history_of("56"),
+        history_of("567"),
         "a\nb\n",
         "a\nc\n",
         cx,
@@ -313,13 +313,13 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
         shown(&stage, &mut cx),
         ChangeShown::Since {
             from: Some(version('5')),
-            to: version('6'),
+            to: version('7'),
         }
     );
     compared(
         &mut stage,
         version('5'),
-        Some(version('6')),
+        Some(version('7')),
         Vec::new(),
         &mut cx,
     );
@@ -343,20 +343,20 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
         shown(&stage, &mut cx),
         ChangeShown::Since {
             from: Some(version('5')),
-            to: version('6'),
+            to: version('7'),
         }
     );
     compared(
         &mut stage,
         version('5'),
-        Some(version('6')),
+        Some(version('7')),
         Vec::new(),
         &mut cx,
     );
 
-    // A second round with no state yet: it shows as sent, and the first, which the Keeper
-    // never marked edited, as answered, since only the newest round waits for an edit. The
-    // control of the second is not drawn. Both are read in the frame that draws round two.
+    // A second round with no state yet: it shows as sent, and so does the first, whose agent
+    // has made no edit since either send. The control of the second is not drawn. Both are
+    // read in the frame that draws round two.
     tell_reviews(
         &mut stage,
         review_of_a(
@@ -370,10 +370,11 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
             .iter()
             .map(|round| (round.number, round.sent))
             .collect::<Vec<_>>(),
-        [(1, false), (2, true)]
+        [(1, true), (2, true)]
     );
     assert!(is_drawn("review-round-2:sent", &mut cx));
-    assert!(drawn("review-round-1:answered", &mut cx).is_some());
+    assert!(drawn("review-round-1:sent", &mut cx).is_some());
+    assert!(drawn("review-round-1:answered", &mut cx).is_none());
     assert!(drawn("review-round-1-since", &mut cx).is_some());
     assert!(
         drawn("review-round-2-since", &mut cx).is_none(),
@@ -391,16 +392,36 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
     );
     assert!(is_drawn("review-round-2-since", &mut cx));
 
+    // The agent's first edit after the second send is an edit after the first send too:
+    // both rounds show as answered.
+    tell_reviews(
+        &mut stage,
+        review_of_a(
+            vec![round(1, Some('5'), false), round(2, Some('6'), true)],
+            Vec::new(),
+        ),
+        &mut cx,
+    );
+    assert_eq!(
+        rounds(&stage, &mut cx)
+            .iter()
+            .map(|round| (round.number, round.sent))
+            .collect::<Vec<_>>(),
+        [(1, false), (2, false)]
+    );
+    assert!(is_drawn("review-round-1:answered", &mut cx));
+    assert!(drawn("review-round-2:answered", &mut cx).is_some());
+
     // Since Round: the first press shows the newest round's change, the next the round
     // before, and after the first round the newest again.
     focus_the_rows(&stage, &mut cx);
     let round_two = ChangeShown::Since {
         from: Some(version('6')),
-        to: version('6'),
+        to: version('7'),
     };
     let round_one = ChangeShown::Since {
         from: Some(version('5')),
-        to: version('6'),
+        to: version('7'),
     };
     for (wanted, from) in [(&round_two, '6'), (&round_one, '5'), (&round_two, '6')] {
         cx.simulate_keystrokes("shift-s");
@@ -408,7 +429,7 @@ fn a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_c
         compared(
             &mut stage,
             version(from),
-            Some(version('6')),
+            Some(version('7')),
             Vec::new(),
             &mut cx,
         );
@@ -428,13 +449,9 @@ fn a_thread_that_moved_to_rewritten_code_says_that_the_code_changed_and_shows_on
         4,
         Some(Notice::Changed),
     );
-    let removed = carried(
-        thread_at('8', Some(version('4')), 5, "gone line"),
-        version('5'),
-        5,
-        5,
-        Some(Notice::Deleted),
-    );
+    let mut written = thread_at('8', Some(version('4')), 5, "gone line\nsecond line");
+    written.anchor.lines = Lines { first: 5, last: 6 };
+    let removed = carried(written, version('5'), 5, 5, Some(Notice::Deleted));
     let (stage, mut cx) = open_on_story(
         review_of_a(vec![round(1, Some('5'), true)], vec![moved, removed]),
         history_of("5"),
@@ -537,6 +554,37 @@ fn a_thread_that_moved_to_rewritten_code_says_that_the_code_changed_and_shows_on
             .read_with(&cx, |pane, _| pane.shows_original(&the))
     );
     assert!(!is_drawn(&original, &mut cx));
+
+    // The text a row draws is the text the pane gives for it, all of it: a comment written on
+    // two lines shows both, on the one row. The test platform draws no glyph that a test can
+    // read, but it lays the text out in a monospace font, so the width of what is drawn
+    // tells how many characters it holds: both texts are shown, and the width of each is the
+    // same width for each character of the text the pane says it draws.
+    click(&format!("review-thread-original-{the}"), &mut cx);
+    click(&format!("review-thread-original-{other}"), &mut cx);
+    let text_of = |thread: &ThreadId, cx: &mut VisualTestContext| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.original_text(thread))
+            .expect("the line is shown")
+    };
+    assert_eq!(text_of(&other, &mut cx), "gone line | second line");
+    let advance = |thread: &ThreadId, cx: &mut VisualTestContext| {
+        assert!(is_drawn(
+            &format!("review-thread-original-text-{thread}"),
+            cx
+        ));
+        let width = drawn(&format!("review-thread-original-text-{thread}"), cx)
+            .expect("it was drawn")
+            .size
+            .width;
+        f32::from(width) / text_of(thread, cx).chars().count() as f32
+    };
+    let (one, two) = (advance(&the, &mut cx), advance(&other, &mut cx));
+    assert!(
+        (one - two).abs() < 0.2,
+        "a character is {one} wide in one text and {two} in the other"
+    );
 }
 
 #[gpui_kit::test]
@@ -716,4 +764,162 @@ fn a_round_with_no_recorded_state_of_the_worktree_to_count_to_says_so_and_select
             review: review_id()
         }
     );
+}
+
+#[gpui_kit::test]
+fn a_round_whose_state_is_the_newest_recorded_shows_no_change_and_a_state_the_history_does_not_hold_is_counted_to_its_newest(
+    cx: &mut TestAppContext,
+) {
+    // The one round was sent at the state the history ends with: nothing was recorded
+    // since, and an empty change is no change to show.
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(vec![round(1, Some('7'), true)], Vec::new()),
+        history_of("57"),
+        "a\nb\n",
+        "a\nc\n",
+        cx,
+    );
+    click("review-round-1-since", &mut cx);
+    let said = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.notice())
+        .expect("the notice says nothing was recorded since the send");
+    assert!(said.contains("Nothing"), "{said}");
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    let said = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.notice())
+        .expect("so does Since Round, with no round that has something since");
+    assert!(said.contains("Nothing"), "{said}");
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    // Barrier: a request the pane sends after both is the next the Keeper hears, so
+    // neither sent any before it.
+    click("review-history-0", &mut cx);
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert_eq!(
+        next,
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: COMMIT.to_owned(),
+            to: Some(version('5')),
+        }
+    );
+
+    // With an older round beside it, Since Round leaves that round out and shows the one
+    // that has something since.
+    tell_reviews(
+        &mut stage,
+        review_of_a(
+            vec![round(1, Some('5'), false), round(2, Some('7'), true)],
+            Vec::new(),
+        ),
+        &mut cx,
+    );
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('5')),
+            to: version('7'),
+        }
+    );
+
+    // A round sent at a state that is no entry of the history, as a state recorded at a
+    // send is not: counted to the newest entry.
+    tell_reviews(
+        &mut stage,
+        review_of_a(
+            vec![round(1, Some('5'), false), round(2, Some('9'), true)],
+            Vec::new(),
+        ),
+        &mut cx,
+    );
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('9')),
+            to: version('7'),
+        }
+    );
+}
+
+// Fails until `threads_on` of `comments.rs`, which the contract owns, finds a thread where the
+// pane draws it (`threads::place_of`) and not by its anchor: the change waits for the
+// orchestrator.
+#[gpui_kit::test]
+#[ignore = "waits for the change of threads_on in comments.rs"]
+fn a_reply_opens_on_a_thread_that_moved_from_the_line_it_sits_on_now_and_not_from_the_line_it_was_written_on(
+    cx: &mut TestAppContext,
+) {
+    // Written on line 3, carried by the Keeper to line 5, where the pane draws it.
+    let moved = carried(
+        thread_at('7', Some(version('4')), 3, "c"),
+        version('5'),
+        5,
+        5,
+        None,
+    );
+    let (stage, mut cx) = open_on_story(
+        review_of_a(vec![round(1, Some('5'), true)], vec![moved]),
+        history_of("5"),
+        "",
+        "a\nb\nc\nd\ne\nf\n",
+        cx,
+    );
+    let row_of_line = |line: u32, stage: &Stage, cx: &mut VisualTestContext| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| {
+                pane.rows().iter().position(
+                    |row| matches!(row, PaneRow::Diff { row, .. } if row.line(Side::New) == Some(line - 1)),
+                )
+            })
+            .unwrap_or_else(|| panic!("no row shows new line {line}"))
+    };
+    let on_line = |line: u32, stage: &Stage, cx: &mut VisualTestContext| {
+        let row = row_of_line(line, stage, cx);
+        let at = bounds_of_row(row, cx).center();
+        cx.simulate_click(at, Modifiers::none());
+        cx.update(|window, _| assert!(stage.focus.is_focused(window)));
+    };
+    let the = thread_id('7');
+    let row_five = row_of_line(5, &stage, &mut cx);
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.rows()[row_five + 1].clone()),
+        PaneRow::Thread {
+            thread: the.clone()
+        },
+        "the pane draws the thread after line 5"
+    );
+
+    // On line 5, where the thread is drawn, a reply opens in it.
+    on_line(5, &stage, &mut cx);
+    cx.simulate_keystrokes("o");
+    let opened = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.comment_box())
+        .expect("a reply box opens on the line the thread sits on");
+    assert_eq!(opened.thread, the);
+    cx.simulate_keystrokes("escape");
+
+    // On line 3, which is other code now, there is no thread to reply in.
+    on_line(3, &stage, &mut cx);
+    cx.simulate_keystrokes("o");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.comment_box()),
+        None
+    );
+    let said = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.notice())
+        .expect("the notice says there is no thread on the line");
+    assert!(said.contains("no thread"), "{said}");
 }

@@ -42,7 +42,7 @@ pub(crate) enum Place<'a> {
 
 impl Place<'_> {
     /// The path, the side and the last line (counted from 1) the thread's row follows.
-    fn at(&self) -> (&Path, LinkSide, u32) {
+    pub(crate) fn at(&self) -> (&Path, LinkSide, u32) {
         match self {
             Place::Anchor(thread) => (
                 &thread.anchor.path,

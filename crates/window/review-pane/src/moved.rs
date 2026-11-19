@@ -14,8 +14,10 @@
 //! A thread with a notice draws it on its row under
 //! `review-thread-notice-<thread id>:changed` or `:deleted`, with a control
 //! `review-thread-original-<thread id>` that, as [`crate::ShowOriginal`] does on its line,
-//! shows the anchor's text below the row under `review-thread-original-text-<thread id>`,
-//! or hides it. The notice and the control are drawn only on the lines the thread was
+//! shows the anchor's text after them on the row, under
+//! `review-thread-original-text-<thread id>`, or hides it. A row holds one line, so the
+//! lines of an anchor of several are joined on it, and what does not fit the width of the
+//! pane is cut off. The notice and the control are drawn only on the lines the thread was
 //! carried to: where it sits on its anchor, the code is as it was written.
 
 use std::collections::BTreeSet;
@@ -26,6 +28,9 @@ use yaar_link::{Notice, Thread, ThreadId};
 
 use crate::threads::{Place, place_of};
 use crate::{PaneRow, ReviewPane, ShowOriginal, View};
+
+/// What stands between two lines of an anchor's text on the one row that shows it.
+const LINE_BREAK: &str = " | ";
 
 /// What the pane keeps of the threads that moved: those whose original line is shown.
 #[derive(Default)]
@@ -39,12 +44,18 @@ impl ReviewPane {
         self.original_text(thread).is_some()
     }
 
-    /// The text of the line `thread` was written on, as its row shows it; none while it is
-    /// not shown. It is the anchor's text, which the Keeper keeps with a thread that moved.
+    /// The text of the line `thread` was written on, exactly as its row draws it; none
+    /// while it is not shown. It is the anchor's text, which the Keeper keeps with a thread
+    /// that moved, with its lines joined by [`LINE_BREAK`] since a row holds one line.
     pub fn original_text(&self, thread: &ThreadId) -> Option<String> {
         let held = self.thread(thread)?;
-        (self.moved.shown.contains(thread) && self.notice_of(held).is_some())
-            .then(|| held.anchor.text.clone())
+        (self.moved.shown.contains(thread) && self.notice_of(held).is_some()).then(|| {
+            held.anchor
+                .text
+                .lines()
+                .collect::<Vec<_>>()
+                .join(LINE_BREAK)
+        })
     }
 
     /// The thread of the review shown with this id.
@@ -120,18 +131,24 @@ impl ReviewPane {
                 .into_any_element(),
         ];
         if let Some(text) = shown {
-            // A row holds one line: the first of the text, with a mark that more follows.
-            let mut lines = text.lines();
-            let first = lines.next().unwrap_or_default();
-            let more = if lines.next().is_some() { " …" } else { "" };
+            // The text of the line is drawn as the getter gives it, with nothing added to
+            // it; its label is an element of its own.
+            marks.push(
+                div()
+                    .flex_none()
+                    .ml_2()
+                    .text_color(theme.muted_foreground)
+                    .child("Written as:")
+                    .into_any_element(),
+            );
             marks.push(
                 div()
                     .debug_selector(move || format!("review-thread-original-text-{id}"))
                     .min_w_0()
-                    .ml_2()
+                    .ml_1()
                     .truncate()
                     .text_color(theme.foreground)
-                    .child(format!("Written as: {first}{more}"))
+                    .child(text)
                     .into_any_element(),
             );
         }
