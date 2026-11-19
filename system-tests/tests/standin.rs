@@ -18,7 +18,7 @@ use yaar_system_tests::standin::{
     Did, IGNORE_PIECES, INTERRUPT_MARK, LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE, Script, StandinLog,
     Step,
 };
-use yaar_system_tests::{DEADLINE, Place, is_alive, wait_until};
+use yaar_system_tests::{DEADLINE, Place, is_alive, program, wait_until};
 
 /// The progress sequence of a turn that works, and the one that says no progress.
 const WORKING: &[u8] = b"\x1b]9;4;3;\x07";
@@ -336,9 +336,9 @@ impl<'a> Start<'a> {
         }
         let pty = Pty::open();
         let stdio = |pty: &Pty| Stdio::from(pty.slave.try_clone().expect("duplicate the slave"));
-        let mut command = self
-            .place
-            .command(Path::new(env!("CARGO_BIN_EXE_standin-agent")));
+        // A copy of the program, not the file Cargo built: Cargo puts that file in its place
+        // again at every build, and tests that start their own builds run beside this one.
+        let mut command = self.place.command(&program("standin-agent"));
         // The program is told its name the way a shell tells it: by what it was typed as.
         command
             .arg0(self.name)
