@@ -1,8 +1,9 @@
 //! Component test: Changes holds still, on GPUI's test platform. Keys, clicks and the wheel
 //! go in; the pane is read back through the model it shows. The test plays the Keeper on the
-//! other end of a socket pair: it tells the facts the Keeper tells, and, since the Keeper of
-//! this slice does not yet send a reply or a moved thread, it plays them as the Keeper will:
-//! a new answer to `GetReviews`, after `Fact::ReviewsChanged`.
+//! other end of a socket pair: it tells the facts the Keeper tells, and plays a reply and a
+//! moved thread as the Keeper does: a new answer to `GetReviews`, after
+//! `Fact::ReviewsChanged`, with the reply as a comment of the agent and the thread's anchor
+//! as written and its `now` on the lines the Keeper carried it to.
 //!
 //! A negative clause ("does not move") is read after a barrier: something the test causes
 //! after it, through the same path, whose arrival shows that everything before it arrived.
@@ -13,7 +14,7 @@ use std::path::PathBuf;
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use yaar_link::{
-    Anchor, Author, Comment, CommentId, Fact, FileStatus, Lines, ReviewId, SessionState,
+    Anchor, Author, Comment, CommentId, Fact, FileStatus, Lines, Placed, ReviewId, SessionState,
     Side as LinkSide, Step, Thread, ThreadId, WorkspaceReviews,
 };
 use yaar_review_pane::{PaneRow, Position, View};
@@ -86,6 +87,26 @@ fn thread_with(digit: char, line: u32, comments: Vec<Comment>) -> Thread {
         comments,
         now: None,
         state: yaar_link::ThreadState::Sent,
+    }
+}
+
+/// The thread, carried by the Keeper to `line` of the version the pane shows: its anchor
+/// stays where it was written, and `now` says where it sits, with no notice since the line
+/// only moved. The pane shows the files on disk, which the Keeper carries every thread
+/// toward, so the state it names is the one recorded last.
+fn carried_to(thread: Thread, line: u32) -> Thread {
+    Thread {
+        now: Some(Placed {
+            tree: "9".repeat(40),
+            path: PathBuf::from("long.txt"),
+            side: LinkSide::New,
+            lines: Lines {
+                first: line,
+                last: line,
+            },
+            notice: None,
+        }),
+        ..thread
     }
 }
 
@@ -258,19 +279,23 @@ fn tell_reviews(stage: &mut Stage, thread: Thread, comments: usize, cx: &mut Vis
     });
 }
 
-/// As [`tell_reviews`], for a thread that moved to `line`.
+/// As [`tell_reviews`], for a thread that was carried to `line`.
 fn tell_moved(stage: &mut Stage, thread: Thread, line: u32, cx: &mut VisualTestContext) {
-    stage.keeper.set_reviews(review_of_a(thread));
+    stage
+        .keeper
+        .set_reviews(review_of_a(carried_to(thread, line)));
     stage
         .keeper
         .tell(Fact::ReviewsChanged { workspace: id('1') });
     wait_until(cx, "the thread on its new line", |cx| {
         stage.pane.read_with(cx, |pane, _| {
             pane.reviews().is_some_and(|reviews| {
-                reviews.reviews[0]
-                    .threads
-                    .first()
-                    .is_some_and(|thread| thread.anchor.lines.first == line)
+                reviews.reviews[0].threads.first().is_some_and(|thread| {
+                    thread
+                        .now
+                        .as_ref()
+                        .is_some_and(|now| now.lines.first == line)
+                })
             })
         })
     });
@@ -395,7 +420,7 @@ fn no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a
     tell_moved(
         &mut stage,
         thread_on(
-            4,
+            3,
             vec![comment('1', Author::Reviewer), comment('2', Author::Agent)],
         ),
         4,
@@ -414,7 +439,7 @@ fn no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a
     tell_moved(
         &mut stage,
         thread_on(
-            LINES as u32 - 1,
+            3,
             vec![comment('1', Author::Reviewer), comment('2', Author::Agent)],
         ),
         LINES as u32 - 1,
@@ -440,13 +465,16 @@ fn no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a
     // view stays where it was.
     tell_reviews(
         &mut stage,
-        thread_on(
+        carried_to(
+            thread_on(
+                3,
+                vec![
+                    comment('1', Author::Reviewer),
+                    comment('2', Author::Agent),
+                    comment('3', Author::Reviewer),
+                ],
+            ),
             LINES as u32 - 1,
-            vec![
-                comment('1', Author::Reviewer),
-                comment('2', Author::Agent),
-                comment('3', Author::Reviewer),
-            ],
         ),
         3,
         &mut cx,
@@ -620,7 +648,7 @@ fn a_thread_that_moves_while_its_row_is_first_in_view_leaves_the_diff_where_it_i
 
     // The thread moves ten lines down: its two rows leave from above the diff the reviewer
     // reads, which stays where it is on screen. The view does not follow the thread.
-    tell_moved(&mut stage, thread_on(30, comments), 30, &mut cx);
+    tell_moved(&mut stage, thread_on(20, comments), 30, &mut cx);
     assert_eq!(below_the_top(&diff, &stage, &mut cx), offset);
     let after = reading(&stage, &mut cx);
     assert_eq!(after.view, View::Changes);
@@ -669,7 +697,7 @@ fn with_nothing_but_a_thread_in_view_the_thread_is_what_the_view_is_kept_by(
 
     // The thread moves a line down: a row of the diff comes above it, and the comments
     // stay where they were on screen.
-    tell_moved(&mut stage, thread_on(11, long), 11, &mut cx);
+    tell_moved(&mut stage, thread_on(10, long), 11, &mut cx);
     let after = reading(&stage, &mut cx);
     assert_eq!(after.view, View::Changes);
     assert_eq!(after.first, held.first);

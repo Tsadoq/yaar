@@ -1359,9 +1359,10 @@ impl ReviewPane {
     /// Puts what came for the file at `index` in the place of what was shown of it.
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
+        let shown = self.new_side_shown();
         let file = &mut self.files[index];
         file.content = content;
-        let (rows, placed) = file_rows(file, self.layout, review);
+        let (rows, placed) = file_rows_in(file, self.layout, review, shown.as_deref());
         file.placed = placed;
         let was = file.rows.clone();
         file.rows = was.start..was.start + rows.len();
@@ -1385,6 +1386,7 @@ impl ReviewPane {
     /// Makes the rows again from what the pane holds.
     pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
         let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
+        let shown = self.new_side_shown();
         let mut rows = Vec::new();
         // Above the files of the comparison goes what it is a comparison with; the files
         // of an entry of the tree are told by the tree.
@@ -1400,8 +1402,8 @@ impl ReviewPane {
         }
         for file in &mut self.files {
             let start = rows.len();
-            let (shown, placed) = file_rows(file, self.layout, review);
-            rows.extend(shown);
+            let (held, placed) = file_rows_in(file, self.layout, review, shown.as_deref());
+            rows.extend(held);
             file.placed = placed;
             file.rows = start..rows.len();
         }
@@ -1602,6 +1604,17 @@ fn file_rows(
     layout: Layout,
     review: Option<&Review>,
 ) -> (Vec<PaneRow>, Vec<ThreadId>) {
+    file_rows_in(file, layout, review, None)
+}
+
+/// As [`file_rows`], for a diff whose new side is the version `shown`, none for the files
+/// on disk: a thread that moved is placed by it (`threads::place_of`).
+fn file_rows_in(
+    file: &ShownFile,
+    layout: Layout,
+    review: Option<&Review>,
+    shown: Option<&str>,
+) -> (Vec<PaneRow>, Vec<ThreadId>) {
     let path = &file.file.path;
     let mut rows = vec![PaneRow::File {
         path: path.clone(),
@@ -1623,7 +1636,7 @@ fn file_rows(
                 }),
         ),
     }
-    threads::with_threads(&file.file, rows, review)
+    threads::with_threads(&file.file, rows, review, shown)
 }
 
 /// The lines a row shows that the reviewer can be on, each as [`Position`] names it: an
