@@ -378,7 +378,8 @@ pub enum Did {
         status: i32,
     },
     /// The reply tool was called through the plugin's tool server, and what the server
-    /// answered: the `result` of the call, or its `error`.
+    /// answered: the `result` of the call, or its `error`; when it answered nothing within
+    /// the stand-in's patience or ended, `{"message": <why>}`.
     Tool {
         /// The tool's arguments, as the stand-in sent them.
         arguments: Value,
