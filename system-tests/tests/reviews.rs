@@ -250,19 +250,19 @@ fn a_keeper_killed_while_a_draft_is_typed_comes_back_with_every_review_as_it_was
     assert_eq!(client.reviews(&b), before_b);
     assert_eq!(draft_text(&client.reviews(&b), 0), "other");
 
-    // Killed again with nothing on its way: a save whose reply has come is kept whole, so
-    // the draft after this restart is exactly that save's text. This shows a Keeper that
-    // answers a save before it keeps it, however fast it reads what follows a kill.
+    // Killed again right after a save's reply, with nothing asked in between: a save whose
+    // reply has come is kept whole, so the draft after this restart is exactly that save's
+    // text. This shows a Keeper that answers a save before it keeps it, however fast it
+    // reads what follows a kill, and one that keeps it only when the next request comes.
     let last = "second, the last one";
     second.save(&mut client, last);
-    let mut kept_a = client.reviews(&a);
-    assert_eq!(draft_text(&kept_a, 1), last);
     world.kill_keeper();
     assert!(!is_alive(second_keeper), "the killed Keeper is gone");
     drop(client);
     let third_keeper = world.start_keeper();
     let mut client = world.client();
-    assert_eq!(client.reviews(&a), kept_a);
+    let mut kept_a = client.reviews(&a);
+    assert_eq!(draft_text(&kept_a, 1), last);
     kept_a.reviews[0].threads[1].comments[0].text = draft_text(&before_a, 1);
     assert_eq!(kept_a, before_a);
     assert_eq!(client.reviews(&b), before_b);
