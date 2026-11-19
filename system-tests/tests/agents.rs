@@ -867,9 +867,22 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         "SHLVL",
         "_",
     ];
+    // What the system's profile adds to the environment of a login shell is not the app's
+    // either: on Ubuntu it adds XDG_DATA_DIRS. A login shell of the world, run with no
+    // app in between, shows which names those are.
+    let profile = world
+        .command(Path::new("/bin/sh"))
+        .args(["-l", "-c", "env"])
+        .output()
+        .expect("a login shell of the world");
+    let by_profile = environment(&profile.stdout);
     let extra: Vec<_> = in_shell
         .keys()
-        .filter(|name| !users.contains_key(*name) && !allowed.contains(&name.as_str()))
+        .filter(|name| {
+            !users.contains_key(*name)
+                && !by_profile.contains_key(*name)
+                && !allowed.contains(&name.as_str())
+        })
         .collect();
     assert!(extra.is_empty(), "variables nothing explains: {extra:?}");
     // No editor connection, and nothing of another terminal. The world's Keeper starts with
