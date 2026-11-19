@@ -307,6 +307,18 @@ impl Composed {
         })
     }
 
+    /// Gives the world back and lets go of the rest of this Window: its tap ends first,
+    /// since a tap that outlived its world could not be woken to end once the world's
+    /// folder was removed. The Window itself stays on the test platform, with its link
+    /// lost once the world's Keeper ends. For a test that ends the Keeper and starts
+    /// another in the same world, and opens a second Window against it; the Keeper must
+    /// hold no program, since this waits until the programs it listed have ended.
+    pub fn into_world(self) -> World {
+        let Composed { world, tap, .. } = self;
+        drop(tap);
+        world
+    }
+
     /// A number no earlier call gave, for a name of the test's own.
     pub fn next(&mut self) -> u32 {
         self.made += 1;
@@ -326,7 +338,15 @@ impl Composed {
         repository.write("notes.txt", "one\n2\nthree\n");
         let folder = repository.path().to_owned();
         self.repositories.push(repository);
+        self.open_this_folder(&folder, cx);
+        folder
+    }
 
+    /// Opens `folder` as a workspace by the key of Open Folder and the dialog, as a user
+    /// does it, and waits until the workspace is on screen and the review pane draws its
+    /// first row.
+    pub fn open_this_folder(&mut self, folder: &std::path::Path, cx: &mut VisualTestContext) {
+        let folder = folder.to_owned();
         cx.simulate_keystrokes(&key_of("Open Folder…"));
         assert!(
             cx.did_prompt_for_paths(),
@@ -344,6 +364,5 @@ impl Composed {
         wait_until(cx, "the first row of the review pane", |cx| {
             cx.debug_bounds("review-row-0").is_some()
         });
-        folder
     }
 }
