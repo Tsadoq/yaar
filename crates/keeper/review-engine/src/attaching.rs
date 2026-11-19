@@ -2,7 +2,7 @@
 //! started for a review takes it. Built by the engine's package "attaching and sending" of
 //! slice 6.
 
-use yaar_store::{ReviewId, SessionRecord};
+use yaar_store::{AttachedRecord, ReviewId, ReviewRecord, SessionRecord};
 
 use crate::engine::{EngineError, Reviews};
 use crate::review::{Attachment, Offer, SessionNow};
@@ -19,15 +19,25 @@ impl Reviews {
         attachment: Attachment,
         sessions: &[SessionNow],
     ) -> Result<Offer, EngineError> {
-        let _ = (review, attachment, sessions);
-        todo!()
+        let kept = match &attachment {
+            Attachment::Review => AttachedRecord::Review,
+            Attachment::Thread(thread) => AttachedRecord::Thread(thread.clone()),
+        };
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        let offer = current.attach_with(attachment, sessions)?;
+        self.store.set_attached(review, Some(&kept))?;
+        Ok(offer)
     }
 
     /// Takes the attachment of `review` away, and keeps that; every comment it would have
     /// carried stays an unsent draft. Nothing attached is no error.
     pub fn detach(&self, review: &ReviewId) -> Result<(), EngineError> {
-        let _ = review;
-        todo!()
+        let _turn = self.turn();
+        // A review that is not kept is refused, not detached.
+        self.review(review)?;
+        self.store.set_attached(review, None)?;
+        Ok(())
     }
 
     /// `session` starts in a terminal the app opened for `review`, the launcher of a CLI
@@ -41,7 +51,47 @@ impl Reviews {
         session: &SessionRecord,
         review: &ReviewId,
     ) -> Result<ReviewId, EngineError> {
-        let _ = (session, review);
-        todo!()
+        // The turn is let go before the general rule takes it: it is not reentrant.
+        if self.takes_for(session, review)? {
+            return Ok(review.clone());
+        }
+        self.session_started(session)
     }
+
+    // Whether `session` takes `review`, the review its terminal was opened for, and has
+    // taken it: kept, under the turn, before this returns.
+    fn takes_for(&self, session: &SessionRecord, review: &ReviewId) -> Result<bool, EngineError> {
+        let _turn = self.turn();
+        let Some(bound) = self.store.review(review)? else {
+            return Ok(false);
+        };
+        let reviews = self.store.reviews_of(&session.workspace)?;
+        // A session holds one review: the one it has already is the one it keeps.
+        let holds_one = reviews
+            .iter()
+            .any(|held| held.agent.as_deref() == Some(session.id.as_str()));
+        if bound.workspace != session.workspace || holds_one {
+            return Ok(false);
+        }
+        let sessions = self.store.sessions_of(&session.workspace)?;
+        if !free_to_take(&bound, &sessions, session) {
+            return Ok(false);
+        }
+        self.store.set_review_agent(review, Some(&session.id))?;
+        Ok(true)
+    }
+}
+
+// Whether `review` may be taken by a session of the CLI `taker` runs: it belongs to no
+// agent, or to a session of that CLI that does not run. A session the Store does not list
+// does not run, and its CLI is not known to differ: the offer made for such a review was
+// that of every CLI, and taking it is what accepting the offer means.
+fn free_to_take(review: &ReviewRecord, sessions: &[SessionRecord], taker: &SessionRecord) -> bool {
+    let Some(holder) = review.agent.as_deref() else {
+        return true;
+    };
+    sessions
+        .iter()
+        .find(|held| held.id.as_str() == holder)
+        .is_none_or(|held| !held.running && held.agent == taker.agent)
 }
