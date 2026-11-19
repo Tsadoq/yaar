@@ -996,6 +996,32 @@ mod tests {
     }
 
     #[test]
+    fn a_turn_started_while_the_session_waits_with_no_turn_open_works() {
+        // The hook socket and the terminal's mark are separate channels: a permission
+        // prompt can be heard with no turn open, after an interrupt already ended it.
+        let mut desk = Desk::new();
+        desk.hear("a", started());
+        let id = desk.id("a");
+        assert_eq!(
+            desk.hear("a", permission(true)),
+            [now(&id, State::WaitsForPermission)]
+        );
+        assert_eq!(desk.state("a"), State::WaitsForPermission);
+
+        assert_eq!(
+            desk.hear("a", Event::TurnStarted),
+            [
+                Change::TurnStarted {
+                    session: id.clone(),
+                    turn: turn_drawn(2),
+                },
+                now(&id, State::Works),
+            ]
+        );
+        assert_eq!(desk.state("a"), State::Works);
+    }
+
+    #[test]
     fn a_turn_ended_with_no_turn_open_gives_nothing() {
         let mut desk = Desk::new();
         desk.hear("a", started());
