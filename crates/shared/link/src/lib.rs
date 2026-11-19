@@ -343,7 +343,15 @@ pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> 
 /// Reads one frame and returns its message.
 pub fn read_message(input: &mut impl Read) -> Result<Message, LinkError> {
     let mut len = [0u8; 4];
-    match input.read(&mut len[..1])? {
+    // A read that a signal interrupts before it gives a byte is tried again, as
+    // `read_exact` does for the rest of the frame.
+    let first = loop {
+        match input.read(&mut len[..1]) {
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            read => break read?,
+        }
+    };
+    match first {
         0 => return Err(LinkError::Closed),
         _ => input.read_exact(&mut len[1..])?,
     }
@@ -678,6 +686,45 @@ mod tests {
         let mut input = Cursor::new(bytes);
         assert_eq!(read_message(&mut input).expect("first"), Message::Shutdown);
         assert!(matches!(read_message(&mut input), Ok(Message::Hello(_))));
+        assert!(matches!(read_message(&mut input), Err(LinkError::Closed)));
+    }
+
+    /// A reader that fails once with `Interrupted`, as a read does when a signal reaches
+    /// the process, before it gives its bytes.
+    struct Interrupted<R> {
+        inner: R,
+        interrupted: bool,
+    }
+
+    impl<R> Interrupted<R> {
+        fn once_before(inner: R) -> Interrupted<R> {
+            Interrupted {
+                inner,
+                interrupted: false,
+            }
+        }
+    }
+
+    impl<R: Read> Read for Interrupted<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if !self.interrupted {
+                self.interrupted = true;
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            self.inner.read(buf)
+        }
+    }
+
+    #[test]
+    fn a_read_interrupted_before_the_first_byte_of_a_frame_is_tried_again() {
+        let bytes = frame(&Message::Hello(Hello::for_this_process("1")));
+        let mut input = Interrupted::once_before(Cursor::new(bytes));
+        assert!(matches!(read_message(&mut input), Ok(Message::Hello(_))));
+    }
+
+    #[test]
+    fn a_read_interrupted_before_the_end_of_the_input_is_closed() {
+        let mut input = Interrupted::once_before(Cursor::new(Vec::new()));
         assert!(matches!(read_message(&mut input), Err(LinkError::Closed)));
     }
 
