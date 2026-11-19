@@ -20,7 +20,7 @@ use std::io::Read;
 use std::path::PathBuf;
 
 use ruzstd::decoding::StreamingDecoder;
-use yaar_diff::{FileDiff, Hunk, Side as YaarSide};
+use yaar_diff::{FileDiff, Hunk};
 use yaar_store::Side;
 
 use super::{FileStep, Notice, Place, Placed, carry_file};
