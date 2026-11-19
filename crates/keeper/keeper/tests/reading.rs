@@ -534,6 +534,9 @@ fn a_turn_with_no_state_and_no_turn_before_it_is_listed_before_the_next_turn_wit
     let a = kept.session(&workspace, 1);
 
     // The first turn of the workspace has no state; a commit follows, then a turn with one.
+    // Nothing the Store holds places the first turn among the commits (it really ended
+    // before the commit), so just before the next turn with a state is a choice made for
+    // lack of a fact, and the order asserted is that choice, not what happened.
     let t1 = kept.turn(&a, 1, None);
     write(&repo, "one.txt", "one\n");
     let c1 = commit_all(&repo, "first of the branch");
@@ -590,6 +593,37 @@ fn a_turn_with_no_state_that_follows_one_before_the_start_is_listed() {
         history.entries,
         [turn_entry(&t2, &a, None), turn_entry(&t3, &a, Some(&now))]
     );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_turn_with_no_state_that_started_before_one_before_the_start_is_not_listed() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let kept = Kept::new(&scratch);
+    let (workspace, worktree) = kept.open(&repo);
+    let a = kept.session(&workspace, 1);
+
+    // The first turn has no state, and the turn after it ended before the start of what
+    // Changes shows: the first started before that one, so it ended before the start too.
+    kept.turn(&a, 1, None);
+    write(&repo, "one.txt", "one\n");
+    let before = kept.state(&workspace, &worktree);
+    kept.turn(&a, 2, Some(&before));
+    git(&repo, &["switch", "--quiet", "-c", "feature"]);
+    commit_all(&repo, "first of the branch");
+    git(&repo, &["switch", "--quiet", "main"]);
+    git(&repo, &["merge", "--quiet", "--ff-only", "feature"]);
+    write(&repo, "two.txt", "two\n");
+    let now = kept.state(&workspace, &worktree);
+    let t3 = kept.turn(&a, 3, Some(&now));
+    drop((kept, worktree));
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+
+    let history = history_of(&mut window, &workspace);
+
+    assert_eq!(history.entries, [turn_entry(&t3, &a, Some(&now))]);
     window.stop(keeper);
 }
 

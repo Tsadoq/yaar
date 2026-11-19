@@ -227,9 +227,10 @@ enum Place {
 ///
 /// A turn with no state, or whose state is not held, has no place of its own: it goes right
 /// after the turn that started before it, or, when none did, before the turn that started
-/// after it, or, with none known, at the end. When that turn is left out as before the
-/// start, the place is the start of the history: the turn ended after it. A turn that has
-/// not ended is not listed.
+/// after it, or, with none known, at the end. When the turn it follows is left out as before
+/// the start, the place is the start of the history: it ended after that turn. When the turn
+/// it precedes is left out, so is it: it ended before that turn. A turn that has not ended
+/// is not listed.
 fn with_turns(
     recorded: Vec<Recorded>,
     held: &HashSet<String>,
@@ -258,7 +259,9 @@ fn with_turns(
             }
         })
         .collect();
-    // The place of a turn that borrows one: a turn left out is no place to go after.
+    // The place of a turn that borrows one from the turn before it: a turn left out is no
+    // place to go after, and the turn that follows it ended after the start, as far as is
+    // known.
     let borrowed = |place: Place| match place {
         Place::Before => Place::Start,
         other => other,
@@ -266,18 +269,21 @@ fn with_turns(
     let mut placed = Vec::with_capacity(turns.len());
     let mut before_it = None;
     for (number, place) in known.iter().enumerate() {
-        let place = place
-            .or(before_it.map(borrowed))
-            .or_else(|| {
-                known[number..]
-                    .iter()
-                    .flatten()
-                    .next()
-                    .copied()
-                    .map(borrowed)
-            })
-            .unwrap_or(Place::End);
-        before_it = Some(place);
+        let place = match place.or(before_it.map(borrowed)) {
+            Some(place) => {
+                before_it = Some(place);
+                place
+            }
+            // No turn before it has a place: it started before the first turn that has one,
+            // so it ended before it, and where that one is left out so is this one. This
+            // place is not one to borrow from.
+            None => known[number..]
+                .iter()
+                .flatten()
+                .next()
+                .copied()
+                .unwrap_or(Place::End),
+        };
         placed.push(place);
     }
 
