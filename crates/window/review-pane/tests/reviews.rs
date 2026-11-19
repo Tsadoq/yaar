@@ -150,6 +150,11 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     tell_sessions(&mut stage, vec![session_a()], &mut cx);
     assert!(drawn("review-session", &mut cx).is_some());
     assert!(drawn("review-session-0", &mut cx).is_none());
+    // What is drawn is the title of the session, not the name of its agent.
+    assert!(
+        drawn("review-session-name-0:Claude Code 1", &mut cx).is_some(),
+        "the session is named by its title"
+    );
     assert_eq!(
         stage
             .pane
@@ -165,6 +170,8 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     assert!(drawn("review-session-0", &mut cx).is_some());
     assert!(drawn("review-session-1", &mut cx).is_some());
     assert!(drawn("review-session-2", &mut cx).is_none());
+    assert!(drawn("review-session-name-0:Claude Code 1", &mut cx).is_some());
+    assert!(drawn("review-session-name-1:Claude Code 2", &mut cx).is_some());
     assert_eq!(review_shown(&stage, &mut cx), Some(r1()));
     click("review-session-1", &mut cx);
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
@@ -192,15 +199,21 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
 fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = open_with_two_reviews(cx);
     tell_sessions(&mut stage, vec![session_a(), session_b()], &mut cx);
+    // The Keeper answers R2's question with a list of its own, so that the pane showing it
+    // says the answer came: a list read again after the click would ask for the file twice.
+    wait_for_uncommitted_of(&stage, r1(), &mut cx);
+    let mut listed = outside();
+    listed[0].file = file("outside.txt", FileStatus::Modified);
+    stage.keeper.set_uncommitted(listed.clone());
     click("review-session-1", &mut cx);
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
 
     // The change no agent made is in the list of every review; its file is read.
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
     wait_until(&mut cx, "the uncommitted list of R2", |cx| {
-        stage.pane.read_with(cx, |pane, _| {
-            pane.uncommitted().is_some_and(|l| !l.is_empty())
-        })
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.uncommitted() == Some(&listed[..]))
     });
     click("review-history-uncommitted", &mut cx);
     let asked = stage.keeper.expect(

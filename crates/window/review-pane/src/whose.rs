@@ -169,9 +169,19 @@ impl ReviewPane {
             .border_b_1()
             .border_color(theme.border);
         for (index, session) in self.sessions.iter().enumerate() {
+            // The title is drawn in a child that carries the text in its selector, so a
+            // test reads what is on screen and not a copy of it.
+            let title = session.title.clone();
             let name = div()
                 .px_2()
-                .child(session.title.clone())
+                .child(
+                    div()
+                        .debug_selector({
+                            let title = title.clone();
+                            move || format!("review-session-name-{index}:{title}")
+                        })
+                        .child(title),
+                )
                 .when(several && shown == Some(&session.id), |name| {
                     name.bg(theme.secondary)
                 });

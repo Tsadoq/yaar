@@ -21,7 +21,7 @@ use yaar_link::{
     Request, RequestKind,
 };
 use yaar_review_pane::{
-    FILES_ON_THEIR_WAY, KEY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
+    FILES_ON_THEIR_WAY, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
 };
 
 use common::{
@@ -794,10 +794,11 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // one would not pass because a later key changed it back.
     // The keys of the tree of Changes work in the tree, beside the rows; with the focus in
     // the rows they are the rows' keys or none, so tests/changes.rs presses them where they
-    // work.
+    // work. Every other place is walked: a control added in one fails here until the walk
+    // knows its effect.
     for control in controls()
         .into_iter()
-        .filter(|control| control.place == Place::In(KEY_CONTEXT))
+        .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
     {
         let effect = effect_of(control.keystroke);
         let at_first = state(&mut cx);

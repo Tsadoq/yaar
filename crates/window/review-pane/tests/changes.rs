@@ -952,8 +952,16 @@ fn the_tree_is_not_drawn_where_there_is_nothing_in_it_to_select(cx: &mut TestApp
 /// its changes. The request for them is the first the Keeper hears; its id is given back,
 /// to be answered when the test wants the changes to come.
 fn open_before_the_changes(cx: &mut TestAppContext) -> (Stage, VisualTestContext, RequestId) {
+    open_before_the_changes_of(history(), cx)
+}
+
+/// As `open_before_the_changes`, for a history of the test's own.
+fn open_before_the_changes_of(
+    history: History,
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext, RequestId) {
     let (models, keeper) = link_up(vec![workspace('1', "feature")], cx);
-    keeper.set_history(history());
+    keeper.set_history(history);
     keeper.set_uncommitted(uncommitted());
     let (mut stage, mut cx) = open_window(models, keeper, cx);
     let changes = stage
@@ -1020,6 +1028,47 @@ fn until_the_changes_come_the_last_recorded_turn_is_shown_and_then_the_compariso
         rows(&stage.pane, &mut cx).first(),
         Some(PaneRow::Comparison { .. })
     ));
+}
+
+#[gpui_kit::test]
+fn the_picture_before_the_changes_come_is_the_newest_turn_that_has_a_state(
+    cx: &mut TestAppContext,
+) {
+    // Two turns with a state, and a turn after them whose state was not recorded: the
+    // picture is the change of the second turn, from the commit before it.
+    let (mut stage, mut cx, _changes_asked) = open_before_the_changes_of(
+        History {
+            workspace: id('1'),
+            start: Some(start()),
+            entries: vec![
+                HistoryEntry::Commit(commit('1', "First")),
+                turn('a', Some(s1())),
+                HistoryEntry::Commit(commit('2', "Second")),
+                turn('b', Some(s2())),
+                turn('c', None),
+            ],
+        },
+        cx,
+    );
+    compared(
+        &mut stage,
+        c2(),
+        Some(s2()),
+        vec![file("newest.txt", FileStatus::Modified)],
+        &mut cx,
+    );
+    read_versions(
+        &mut stage,
+        versions_of(Some(c2()), "newest.txt", Some(s2()), "newest.txt"),
+        "before\n",
+        "after\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["newest.txt"], &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 3, last: 3 }
+    );
 }
 
 #[gpui_kit::test]
