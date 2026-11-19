@@ -6,6 +6,10 @@
 //! - the repositories the user opened ([`RepositoryRecord`]) and their workspaces
 //!   ([`WorkspaceRecord`]), each with the base the user set for it, under the ids
 //!   [`RepositoryId`] and [`WorkspaceId`];
+//! - the agent sessions of each workspace ([`SessionRecord`]), the turns of each
+//!   ([`TurnRecord`]) with the state recorded at its end, and the steps of each turn
+//!   ([`StepRecord`]), under the ids [`SessionId`] and [`TurnId`]; see the module
+//!   `sessions.rs`;
 //! - the reviews of each workspace ([`ReviewRecord`]) with their [`Thread`]s, each on an
 //!   [`Anchor`], their [`Comment`]s and [`Round`]s, under the ids [`ReviewId`],
 //!   [`ThreadId`] and [`CommentId`]; and the files marked viewed ([`ViewedRecord`]).
@@ -23,7 +27,8 @@
 //! `reviews.rs` for both.
 //!
 //! The tables carry a version, SQLite's `user_version`. Version 1 holds the repositories
-//! and the workspaces; version 2 adds the reviews and the files marked viewed. A database
+//! and the workspaces; version 2 adds the reviews and the files marked viewed; version 3
+//! adds the agent sessions, the turns of each and the steps of each turn. A database
 //! of an older version is brought forward step by step when it is opened, and before the
 //! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
 //! step that goes wrong loses nothing. A database of a newer version is refused, and left
@@ -56,12 +61,12 @@ pub use sessions::{
 pub const FILE_NAME: &str = "store.db";
 
 /// The version of the tables this build makes and reads.
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 
 /// The steps that make the tables, in order: `STEPS[n]` brings a database from version
 /// `n` to version `n + 1`, and ends by setting `user_version` to that. A later version
 /// adds one step at the end.
-const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2];
+const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2, TABLES_3];
 
 /// The tables of version 1. `seq` is the order in which the rows were first kept. A
 /// path is kept as its bytes, since a path need not be text.
@@ -141,10 +146,6 @@ const TABLES_2: &str = "
 /// small numbers, in the order their types list them; a step's `what` is a path, as its
 /// bytes, or a command, as its text; `lines` are the lines of an edit, as `a-b` parted by
 /// `,` (`3-3,10-12`), empty for an edit that named none and null where none were said.
-///
-/// The Store's package applies it as the third step, raises `VERSION` to 3, adds it to
-/// `STEPS`, and removes the `expect` below.
-#[expect(dead_code, reason = "applied by the Store's package of slice 4")]
 const TABLES_3: &str = "
     CREATE TABLE session (
         seq INTEGER PRIMARY KEY,
@@ -758,7 +759,7 @@ mod tests {
     // Unit tests that make a file, because a database of an older version can only be
     // made beside the Store: no call of the Store writes one.
     #[test]
-    fn a_database_of_version_1_is_copied_and_then_brought_to_version_2_with_all_it_held() {
+    fn a_database_of_version_1_is_copied_and_then_brought_to_version_3_with_all_it_held() {
         let folder = Folder::new("upgrade");
         let old = version_one(&folder.file());
 
@@ -790,7 +791,7 @@ mod tests {
             .expect("put review");
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 2);
+        assert_eq!(user_version(&folder.file()), 3);
         // The copy is of version 1: the rows the write-ahead file held are in it, and
         // none of what version 2 adds.
         assert_eq!(user_version(&folder.copy()), 1);
@@ -800,6 +801,83 @@ mod tests {
         );
         assert_eq!(tables(&folder.copy()), ["repository", "workspace"]);
         assert!(tables(&folder.file()).contains(&"review".to_owned()));
+    }
+
+    /// Makes a database of version 2, as the build of slice 3 made them, holding one
+    /// review of no agent, and hands back the connection it was made with.
+    fn version_two(file: &Path) -> Connection {
+        let old = version_one(file);
+        old.execute_batch(TABLES_2).expect("make the tables of 2");
+        old.execute_batch(
+            "INSERT INTO review (id, workspace, agent, reviewed)
+                 VALUES ('v-1', 'w-1', NULL, 'abc');",
+        )
+        .expect("fill the review");
+        old
+    }
+
+    #[test]
+    fn a_database_of_version_2_is_copied_and_then_brought_to_version_3_with_its_reviews() {
+        let folder = Folder::new("upgrade-two");
+        let old = version_two(&folder.file());
+        let copy = folder.0.join(format!("{FILE_NAME}.v2"));
+
+        let store = Store::open(&folder.file()).expect("open");
+        drop(old);
+        let kept = store
+            .reviews_of(&WorkspaceId::new("w-1"))
+            .expect("reviews of the workspace");
+        assert_eq!(
+            kept.iter()
+                .map(|r| (r.id.as_str(), r.agent.as_deref(), r.reviewed.as_deref()))
+                .collect::<Vec<_>>(),
+            [("v-1", None, Some("abc"))]
+        );
+        // The tables of version 3 are there to be used.
+        let session = SessionRecord {
+            id: SessionId::new("s-1"),
+            workspace: WorkspaceId::new("w-1"),
+            agent: "claude".to_owned(),
+            cli_session: "cli-1".to_owned(),
+            terminal: None,
+            number: 1,
+            running: true,
+            ended: None,
+            ended_by: None,
+        };
+        store.put_session(&session).expect("put session");
+        assert_eq!(store.session(&session.id).expect("session"), Some(session));
+        drop(store);
+
+        assert_eq!(user_version(&folder.file()), 3);
+        assert_eq!(
+            tables(&folder.file()),
+            [
+                "comment",
+                "repository",
+                "review",
+                "round",
+                "session",
+                "step",
+                "thread",
+                "turn",
+                "viewed",
+                "workspace"
+            ]
+        );
+        // The copy is of version 2: its review is in it, and none of what version 3 adds.
+        // The file was not of version 1, so no copy of that version is made.
+        assert_eq!(user_version(&copy), 2);
+        assert!(!folder.copy().exists());
+        assert!(tables(&copy).contains(&"review".to_owned()));
+        assert!(!tables(&copy).contains(&"session".to_owned()));
+        let held: String = Connection::open(&copy)
+            .expect("open the copy")
+            .query_row("SELECT reviewed FROM review WHERE id = 'v-1'", [], |row| {
+                row.get(0)
+            })
+            .expect("the review is in the copy");
+        assert_eq!(held, "abc");
     }
 
     #[test]
@@ -816,7 +894,7 @@ mod tests {
 
         let fresh = Folder::new("fresh");
         drop(Store::open(&fresh.file()).expect("open"));
-        assert_eq!(user_version(&fresh.file()), 2);
+        assert_eq!(user_version(&fresh.file()), 3);
         assert_eq!(
             std::fs::read_dir(&fresh.0)
                 .expect("list")
