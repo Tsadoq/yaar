@@ -2,11 +2,13 @@
 //! it off: the recorded hooks and the recorded mark go in through the Adapter's calls, and
 //! the events come out.
 
-use std::path::{Path, PathBuf};
+mod support;
 
 use yaar_adapter_claude::{ClaudeCode, INTERRUPT_MARKS};
-use yaar_agent::{Adapter, CliSession, Event, Phase, Report, Reported, TurnEnd, WriteTool};
+use yaar_agent::{Adapter, Event, Phase, Reported, TurnEnd, WriteTool};
 use yaar_system_tests::recorded::{self, HookRecord};
+
+use support::{command_of, feed, in_project, told};
 
 /// The recording of the dialogs: a Write accepted at lines 3 to 6, a Bash denied at lines
 /// 11 and 12.
@@ -15,17 +17,6 @@ const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 /// The recording of the mark Claude Code writes when a dialog is denied or a turn
 /// interrupted.
 const MARK: &str = "claude/interrupt-mark.jsonl";
-
-/// Gives the hook of `record` to the Adapter as the Keeper would hand it.
-fn feed(adapter: &mut ClaudeCode, record: &HookRecord) -> Vec<Reported> {
-    adapter
-        .report(&Report {
-            terminal: record.terminal(),
-            pid: record.parent,
-            payload: &record.input_bytes(),
-        })
-        .expect("a recorded hook is a report")
-}
 
 /// The Adapter after the lines `0..=last` of the dialogs' recording, the events of the
 /// last one, and the record of it.
@@ -37,17 +28,6 @@ fn replay_to(last: usize) -> (ClaudeCode, Vec<Reported>, HookRecord) {
         events = feed(&mut adapter, record);
     }
     (adapter, events, records[last].clone())
-}
-
-/// The event as the Adapter should have told it for `record`.
-fn told(record: &HookRecord, event: Event) -> Reported {
-    Reported {
-        session: CliSession(record.session().to_owned()),
-        terminal: record.terminal().map(str::to_owned),
-        pid: record.parent,
-        folder: Some(PathBuf::from(recorded::PROJECT)),
-        event,
-    }
 }
 
 /// The index, in the Adapter's marks, of the first mark the recorded chunk 0 holds.
@@ -85,7 +65,6 @@ fn the_notification_that_follows_the_dialog_by_seconds_says_nothing() {
 fn the_answer_yes_turns_waiting_off_and_then_tells_the_write() {
     let (_, events, record) = replay_to(6);
 
-    let written = Path::new(recorded::PROJECT).join("p.txt");
     assert_eq!(
         events,
         [
@@ -93,7 +72,7 @@ fn the_answer_yes_turns_waiting_off_and_then_tells_the_write() {
             told(
                 &record,
                 Event::FileWritten {
-                    path: written,
+                    path: in_project("p.txt"),
                     tool: WriteTool::Write,
                     lines: None,
                 }
@@ -142,17 +121,13 @@ fn the_lines_before_the_denied_dialog_start_the_turn_and_begin_the_command() {
     }
 
     assert_eq!(by_line[10], [told(&records[10], Event::TurnStarted)]);
-    let command = records[11].input["tool_input"]["command"]
-        .as_str()
-        .expect("a shell command has its text")
-        .to_owned();
     assert_eq!(
         by_line[11],
         [told(
             &records[11],
             Event::Command {
                 phase: Phase::Began,
-                command
+                command: command_of(&records[11])
             }
         )]
     );
