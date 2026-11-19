@@ -19,12 +19,13 @@ pub mod recorded;
 pub mod standin;
 mod world;
 
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Once;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::{Duration, Instant};
+use std::sync::{Mutex, Once, PoisonError};
+use std::time::{Duration, Instant, SystemTime};
 
 use yaar_link::{Hello, handshake};
 
@@ -32,17 +33,37 @@ pub use client::{Client, DEADLINE};
 pub use processes::{Descriptor, descendants_of, descriptors_of};
 pub use world::{Repo, Tap, World, without_agent_clis};
 
+/// The programs the Keeper finds beside itself: its companions, and the stand-in agent.
+const KEEPER_SET: [&str; 3] = ["yaar-keeper", "yaar-claude-hook", "standin-agent"];
+
+/// The Window, kept apart: it is large, and nothing looks for it beside the others.
+const WINDOW_SET: [&str; 1] = ["yaar-review"];
+
 /// The path of a built program of the workspace, building the programs first: the Keeper,
-/// the Window, the hook program of the Claude Code companion and the stand-in agent. Cargo
-/// puts them in the profile folder, `target/debug` or the like; a test program runs from
-/// `build/` or `deps/` somewhere beneath it, depending on the Cargo version.
+/// the Window, the hook program of the Claude Code companion and the stand-in agent.
 ///
 /// They are built every time, once in each process that asks, and not only when one is
 /// missing: a run of the tests builds a program only for the tests of its own package,
-/// so one left in the folder by an earlier build can be older than the sources, and a
-/// test would then meet a Window or a Keeper that is no longer the one in the tree.
-/// Where both are up to date, the build does nothing.
+/// so one left in the profile folder by an earlier build can be older than the sources,
+/// and a test would then meet a Window or a Keeper that is no longer the one in the tree.
+/// Every program is named in the build, since a build that names one binary builds that
+/// one alone. Where all are up to date, the build does nothing.
+///
+/// What is returned is a copy, in a folder of its own under the profile folder, and not
+/// the file Cargo built. Cargo puts a program in its place again at every build, even one
+/// that has nothing to do, and test programs run side by side each run one: a path that
+/// leads to Cargo's file leads to nothing for the moment between its removal and its
+/// return, which a Keeper that is started or a shell that finds a stand-in would
+/// meet as a program that is not there. A copy is never touched again. The Keeper, its
+/// companions and the stand-in lie in one folder, as the Keeper expects its companions
+/// beside itself.
 pub fn program(name: &str) -> PathBuf {
+    static STAGED: Mutex<Vec<(&'static [&'static str], PathBuf)>> = Mutex::new(Vec::new());
+    static BUILD: Once = Once::new();
+    let set: &'static [&'static str] = [&KEEPER_SET[..], &WINDOW_SET[..]]
+        .into_iter()
+        .find(|set| set.contains(&name))
+        .unwrap_or_else(|| panic!("{name} is not a program the system tests build"));
     let test_exe = std::env::current_exe().expect("the test's own path");
     let profile_dir = test_exe
         .ancestors()
@@ -54,33 +75,114 @@ pub fn program(name: &str) -> PathBuf {
         .and_then(Path::parent)
         .expect("a test program runs from beneath build/ or deps/")
         .to_owned();
-    let path = profile_dir.join(name);
-    static BUILD: Once = Once::new();
-    BUILD.call_once(|| {
-        let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
-        let mut build = Command::new(cargo);
-        build.args([
-            "build",
-            "--locked",
-            "-p",
-            "yaar-keeper",
-            "-p",
-            "yaar-window",
-            "-p",
-            "yaar-companion-claude",
-            "-p",
-            "yaar-system-tests",
-            "--bin",
-            "standin-agent",
-        ]);
-        if profile_dir.file_name().is_some_and(|p| p == "release") {
-            build.arg("--release");
-        }
-        let status = build.status().expect("run cargo");
-        assert!(status.success(), "building the programs failed");
-    });
-    assert!(path.is_file(), "{} was not built", path.display());
+    BUILD.call_once(|| build_programs(&profile_dir));
+    let mut staged = STAGED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((_, folder)) = staged.iter().find(|(held, _)| *held == set) {
+        return folder.join(name);
+    }
+    let folder = stage(&profile_dir, set);
+    let path = folder.join(name);
+    staged.push((set, folder));
     path
+}
+
+/// Builds every program of the system tests, and panics unless Cargo says it built each.
+fn build_programs(profile_dir: &Path) {
+    let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
+    let mut build = Command::new(cargo);
+    build.args([
+        "build",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "-p",
+        "yaar-keeper",
+        "-p",
+        "yaar-window",
+        "-p",
+        "yaar-companion-claude",
+        "-p",
+        "yaar-system-tests",
+    ]);
+    for name in KEEPER_SET.iter().chain(&WINDOW_SET) {
+        build.args(["--bin", name]);
+    }
+    if profile_dir.file_name().is_some_and(|p| p == "release") {
+        build.arg("--release");
+    }
+    let output = build.stderr(Stdio::inherit()).output().expect("run cargo");
+    assert!(output.status.success(), "building the programs failed");
+    let reported = String::from_utf8_lossy(&output.stdout);
+    for name in KEEPER_SET.iter().chain(&WINDOW_SET) {
+        let artifact = format!(r#""name":"{name}","src_path""#);
+        assert!(
+            reported
+                .lines()
+                .any(|line| line.contains(r#""reason":"compiler-artifact""#)
+                    && line.contains(&artifact)),
+            "the build did not make {name}"
+        );
+    }
+}
+
+/// How long a copy of the programs is kept after it was last asked for: a copy is asked for
+/// by every test process that starts, and one nobody asked for in this time is of a build
+/// that is no more.
+const KEPT_FOR: Duration = Duration::from_secs(3600);
+
+/// Copies the built programs `names` into a folder named by what they hold, beneath the
+/// profile folder, unless a folder with that name is there, and gives that folder.
+fn stage(profile_dir: &Path, names: &[&str]) -> PathBuf {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let root = profile_dir.join("yaar-st-programs");
+    std::fs::create_dir_all(&root).expect("make the folder of the program copies");
+    let own = root.join(format!(
+        ".tmp-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&own);
+    std::fs::create_dir(&own).expect("make a folder for the program copies");
+
+    let mut hasher = DefaultHasher::new();
+    for name in names {
+        // The file Cargo built may be out of its place for a moment: another build puts it
+        // back.
+        let source = profile_dir.join(name);
+        let deadline = Instant::now() + DEADLINE;
+        while let Err(e) = std::fs::copy(&source, own.join(name)) {
+            assert!(
+                Instant::now() < deadline,
+                "could not copy {}: {e}",
+                source.display()
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        // Named by the copy and not the original, which may be replaced meanwhile.
+        name.hash(&mut hasher);
+        std::fs::read(own.join(name))
+            .expect("read the copy")
+            .hash(&mut hasher);
+    }
+    let folder = root.join(format!("{:016x}", hasher.finish()));
+    if folder.exists() {
+        let _ = std::fs::remove_dir_all(&own);
+    } else if let Err(e) = std::fs::rename(&own, &folder) {
+        // Another process made the same folder at the same moment: it holds the same.
+        assert!(folder.exists(), "could not keep the program copies: {e}");
+        let _ = std::fs::remove_dir_all(&own);
+    }
+    // Asked for now, so that no other process takes it away as unused.
+    let _ = std::fs::File::open(&folder).and_then(|held| held.set_modified(SystemTime::now()));
+    for old in std::fs::read_dir(&root).into_iter().flatten().flatten() {
+        let unused = old
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .is_ok_and(|asked| asked.elapsed().is_ok_and(|ago| ago > KEPT_FOR));
+        if unused && old.path() != folder {
+            let _ = std::fs::remove_dir_all(old.path());
+        }
+    }
+    folder
 }
 
 /// A folder of the test's own, with a path short enough for a socket on every system.

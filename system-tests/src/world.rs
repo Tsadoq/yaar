@@ -87,13 +87,45 @@ impl World {
         for folder in ["home", "run", "repos", "tmp"] {
             fs::create_dir_all(root.join(folder)).expect("make the folders of the world");
         }
-        World {
+        let world = World {
             root,
             keeper: None,
             keeper_under_wrapper: None,
             shell: PathBuf::from("/bin/sh"),
             agents: None,
+        };
+        world.write_profile(world.search_path());
+        world
+    }
+
+    /// The search path of the programs of this world: the machine's own less the folders
+    /// that hold an agent CLI, with the folder of stand-ins in front once there is one.
+    fn search_path(&self) -> Option<OsString> {
+        let machine = std::env::var_os("PATH").map(|search| without_agent_clis(&search));
+        match (&self.agents, machine) {
+            (Some(agents), Some(search)) => {
+                let folders = std::iter::once(agents.clone()).chain(std::env::split_paths(&search));
+                Some(std::env::join_paths(folders).expect("join the path"))
+            }
+            (Some(agents), None) => Some(agents.clone().into_os_string()),
+            (None, search) => search,
         }
+    }
+
+    /// Writes the profile of the world's user, which a login shell reads last and which
+    /// sets the search path to `search`: what the system's profile made of it is not what
+    /// a test wants. Both a login `dash` and a login `bash` started as `sh` read it.
+    fn write_profile(&self, search: Option<OsString>) {
+        let Some(search) = search else {
+            return;
+        };
+        // In single quotes, which keep every character but the quote itself.
+        let quoted = search.to_string_lossy().replace('\'', r"'\''");
+        fs::write(
+            self.home().join(".profile"),
+            format!("PATH='{quoted}'; export PATH\n"),
+        )
+        .expect("write the profile of the world's user");
     }
 
     /// The home folder of the world's user.
@@ -127,30 +159,18 @@ impl World {
     /// search path loses every folder that holds a program named `claude` or `pi`, so that
     /// no test starts a real agent CLI; after [`World::agents_on_path`] the world's folder
     /// of stand-ins comes first, and `STANDIN_SCRIPT` and `STANDIN_LOG` name the world's
-    /// `default.script` and `default.log`. That
-    /// names the home, data, runtime and temporary folders, the socket and the Keeper
-    /// program, the shell of a terminal (`/bin/sh` unless
+    /// `default.script` and `default.log`. A login shell of the world, as every terminal
+    /// runs, ends up with that same search path: the world's `.profile` sets it, since the
+    /// system's own profile may add folders (macOS's does, with those of `/etc/paths`).
+    /// The command also names the home, data, runtime and temporary folders, the socket
+    /// and the Keeper program, the shell of a terminal (`/bin/sh` unless
     /// [`World::keep_descriptors_in_terminals`] chose another), and tells git to read
     /// neither the machine's configuration nor the user's.
     pub fn command(&self, program: &Path) -> Command {
         let mut command = Command::new(program);
         command.env_clear();
-        let search = std::env::var_os("PATH").map(|search| without_agent_clis(&search));
-        match (&self.agents, search) {
-            (Some(agents), Some(search)) => {
-                let folders = std::iter::once(agents.clone()).chain(std::env::split_paths(&search));
-                command.env(
-                    "PATH",
-                    std::env::join_paths(folders).expect("join the path"),
-                );
-            }
-            (Some(agents), None) => {
-                command.env("PATH", agents);
-            }
-            (None, Some(search)) => {
-                command.env("PATH", search);
-            }
-            (None, None) => {}
+        if let Some(search) = self.search_path() {
+            command.env("PATH", search);
         }
         if self.agents.is_some() {
             command
@@ -287,16 +307,24 @@ impl World {
     }
 
     /// The process id of the Keeper this world started, while it runs: its own, also
-    /// when it runs under a wrapper.
+    /// when it runs under a wrapper. A wrapper that ended before the Keeper does not end
+    /// the Keeper's time as the world's, and a Keeper that ended under a wrapper that
+    /// runs on does: the wrapper is ended then, and the world may start another Keeper.
     pub fn keeper_pid(&mut self) -> Option<u32> {
         let own = self.keeper_under_wrapper;
         let keeper = self.keeper.as_mut()?;
-        match keeper.try_wait() {
-            Ok(None) => Some(own.unwrap_or_else(|| keeper.id())),
+        let started = keeper.id();
+        let wrapper_runs = matches!(keeper.try_wait(), Ok(None));
+        match own {
+            Some(own) if crate::is_alive(own) => Some(own),
+            Some(_) => {
+                self.end_keeper();
+                None
+            }
+            None if wrapper_runs => Some(started),
             // It has ended and is collected: the world may start another.
-            _ => {
+            None => {
                 self.keeper = None;
-                self.keeper_under_wrapper = None;
                 None
             }
         }
@@ -309,7 +337,9 @@ impl World {
             return true;
         };
         let mut gone = true;
-        if let Some(own) = self.keeper_under_wrapper.take() {
+        if let Some(own) = self.keeper_under_wrapper.take()
+            && crate::is_alive(own)
+        {
             // SAFETY: a plain signal to a process of this world.
             unsafe { libc::kill(own as libc::pid_t, libc::SIGKILL) };
             gone = crate::wait_until(DEADLINE, || !crate::is_alive(own));
@@ -346,26 +376,36 @@ impl World {
     /// Call it before [`World::start_keeper`].
     ///
     /// Every shell of the app is a login shell, and a login shell reads the system's
-    /// profile, which may put other folders first (macOS's `path_helper` does). So the
-    /// world's home gets a `.profile` that puts the folder first again, which both a login
-    /// `dash` and a login `bash` started as `sh` read.
+    /// profile, which may put other folders first. So the world's `.profile` sets the
+    /// search path again, with the folder first. Panics unless a login shell finds the
+    /// stand-ins in that folder.
     pub fn agents_on_path(&mut self) {
+        self.agents_on_path_with(|search| search);
+    }
+
+    /// [`World::agents_on_path`], with the search path the profile sets made of the one it
+    /// would set by `profile_path`: where the check that a login shell finds the stand-ins
+    /// first has to be seen to refuse a shell that does not.
+    fn agents_on_path_with(&mut self, profile_path: impl FnOnce(OsString) -> OsString) {
         let folder = self.root.join("agents");
         fs::create_dir_all(&folder).expect("make the folder of the stand-ins");
+        // A link to a copy of the stand-in that nothing replaces: a link to the file Cargo
+        // built would lead nowhere while a build puts that file in its place again.
         let standin = crate::program("standin-agent");
         for name in AGENT_NAMES {
             let link = folder.join(name);
             let _ = fs::remove_file(&link);
             symlink(&standin, &link).expect("link a stand-in");
         }
-        fs::write(
-            self.home().join(".profile"),
-            format!("PATH=\"{}:$PATH\"; export PATH\n", folder.display()),
-        )
-        .expect("write the profile of the world's user");
         self.agents = Some(folder.clone());
+        let search = self.search_path().expect("a search path");
+        self.write_profile(Some(profile_path(search)));
+        self.check_agents_found(&folder);
+    }
 
-        // What a shell of the app will find: asked once, the way the app starts it.
+    /// Panics, naming the paths, unless a login shell of this world, as the app starts
+    /// one, finds each stand-in in `folder`.
+    fn check_agents_found(&self, folder: &Path) {
         let found = self
             .command(Path::new("/bin/sh"))
             .args(["-l", "-c"])
@@ -768,6 +808,38 @@ mod tests {
             .expect("the panic says what it found");
         assert!(said.contains("/usr/local/bin/claude"), "{said}");
         assert!(said.contains("/world/agents/claude"), "{said}");
+    }
+
+    #[test]
+    fn a_world_whose_login_shell_finds_another_claude_first_panics_naming_both_paths() {
+        let mut world = World::new();
+        let elsewhere = world.home().join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("make the folder");
+        fs::write(elsewhere.join("claude"), "#!/bin/sh\n").expect("write a claude");
+        fs::set_permissions(elsewhere.join("claude"), fs::Permissions::from_mode(0o755))
+            .expect("make it runnable");
+
+        // A profile that puts the other folder in front of the world's own, as a system's
+        // profile may.
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            world.agents_on_path_with(|search| {
+                let folders =
+                    std::iter::once(elsewhere.clone()).chain(std::env::split_paths(&search));
+                std::env::join_paths(folders).expect("join the path")
+            })
+        }))
+        .expect_err("another claude first is refused");
+        let said = panic
+            .downcast_ref::<String>()
+            .expect("the panic says what it found");
+        assert!(
+            said.contains(&elsewhere.join("claude").display().to_string()),
+            "{said}"
+        );
+        assert!(
+            said.contains(&world.root.join("agents/claude").display().to_string()),
+            "{said}"
+        );
     }
 
     #[test]

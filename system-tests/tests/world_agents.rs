@@ -10,6 +10,7 @@ use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Duration;
 
 use yaar_link::{Program, Request, ReviewId, TerminalId, TerminalSize, TurnId, WorkspaceId};
@@ -72,6 +73,66 @@ fn parent_of(pid: u32) -> u32 {
     }
 }
 
+/// The programs of the app that tests start, by the names Cargo builds them under.
+const PROGRAMS: [&str; 4] = [
+    "yaar-keeper",
+    "yaar-review",
+    "yaar-claude-hook",
+    "standin-agent",
+];
+
+#[test]
+fn every_program_a_test_starts_is_built_from_the_tree_and_the_companions_lie_beside_the_keeper() {
+    for name in PROGRAMS {
+        let path = program(name);
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some(name));
+        let mode = std::fs::metadata(&path)
+            .unwrap_or_else(|e| panic!("{name} is not there: {e}"))
+            .permissions()
+            .mode();
+        assert_ne!(mode & 0o111, 0, "{name} runs");
+    }
+    // The Keeper looks for the hook program beside itself.
+    assert_eq!(
+        program("yaar-keeper").parent(),
+        program("yaar-claude-hook").parent()
+    );
+
+    // Nothing is left for a build to do: a program that was built earlier and has gone
+    // stale would show up here as one that Cargo builds again.
+    let mut build = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
+    build.args([
+        "build",
+        "--locked",
+        "--message-format=json-render-diagnostics",
+        "-p",
+        "yaar-keeper",
+        "-p",
+        "yaar-window",
+        "-p",
+        "yaar-companion-claude",
+        "-p",
+        "yaar-system-tests",
+    ]);
+    for name in PROGRAMS {
+        build.args(["--bin", name]);
+    }
+    if std::env::current_exe().is_ok_and(|exe| exe.components().any(|c| c.as_os_str() == "release"))
+    {
+        build.arg("--release");
+    }
+    let built = build.output().expect("run cargo");
+    assert!(built.status.success(), "building the programs failed");
+    let stale: Vec<String> = String::from_utf8_lossy(&built.stdout)
+        .lines()
+        .filter(|line| line.contains(r#""reason":"compiler-artifact""#))
+        .filter(|line| line.contains(r#""kind":["bin"]"#))
+        .filter(|line| line.contains(r#""fresh":false"#))
+        .map(str::to_owned)
+        .collect();
+    assert!(stale.is_empty(), "built again: {stale:?}");
+}
+
 #[test]
 fn a_shell_of_the_app_finds_the_worlds_claude_before_any_other() {
     let (world, mut client, terminal) = world_with_a_shell();
@@ -128,16 +189,26 @@ fn the_agents_folder_holds_the_stand_in_as_claude_pi_and_otheragent() {
 }
 
 #[test]
-fn a_world_with_no_stand_in_finds_no_agent_cli_of_the_machine() {
+fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_its_agent_clis() {
     let world = World::new();
-    // Where the machine has a `claude` or a `pi` of the user's, this is what keeps a
-    // test from starting it; where it has none, it holds trivially.
-    let found = world
+    // Every terminal of the app is a login shell, and the system's profile may add folders
+    // to the search path that the process had no part in: macOS's puts `/usr/local/bin`
+    // and the rest of `/etc/paths` in. Where the machine has a `claude` or a `pi` in one of
+    // those, this is what keeps a test from starting it.
+    let printed = world
         .command(Path::new("/bin/sh"))
-        .args(["-c", "command -v claude; command -v pi"])
+        .args([
+            "-l",
+            "-c",
+            "command -v claude; command -v pi; printf 'path-%s\\n' \"$PATH\"",
+        ])
         .output()
-        .expect("run a shell");
-    assert_eq!(String::from_utf8_lossy(&found.stdout), "");
+        .expect("run a login shell");
+    let machine = std::env::var_os("PATH").expect("the machine has a search path");
+    assert_eq!(
+        String::from_utf8_lossy(&printed.stdout),
+        format!("path-{}\n", without_agent_clis(&machine).to_string_lossy())
+    );
 }
 
 #[test]
@@ -253,6 +324,59 @@ fn a_world_that_ends_while_its_keeper_runs_under_a_wrapper_ends_both() {
         "the Keeper is {}, the wrapper is {}",
         if is_alive(pid) { "there" } else { "gone" },
         if is_alive(tracer) { "there" } else { "gone" },
+    );
+}
+
+#[test]
+fn a_keeper_that_ended_under_a_wrapper_that_runs_on_is_not_the_worlds_keeper_any_more() {
+    let mut world = World::new();
+    // The wrapper stays when the Keeper has gone, as a tracer may with other processes.
+    let wrapper = ["/bin/sh", "-c", "\"$0\" & wait; exec sleep 3600"].map(OsString::from);
+    let pid = world.start_keeper_under(&wrapper);
+    let tracer = parent_of(pid);
+    // SAFETY: a plain signal to the Keeper of this world.
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    assert!(
+        wait_until(DEADLINE, || world.keeper_pid().is_none()),
+        "the Keeper {pid} is gone, and the world still has it"
+    );
+    // The world holds nothing of it, so it may start another.
+    let again = world.start_keeper_under(&wrapper);
+    assert_ne!(again, pid);
+    assert!(!is_alive(tracer), "the first wrapper is still there");
+
+    let tracer = parent_of(again);
+    drop(world);
+    assert!(
+        wait_until(DEADLINE, || !is_alive(again) && !is_alive(tracer)),
+        "the Keeper or its wrapper is left"
+    );
+}
+
+#[test]
+fn a_wrapper_that_ends_before_its_keeper_leaves_the_keeper_the_worlds_to_end() {
+    let mut world = World::new();
+    // The wrapper ends once the test makes a file, leaving the Keeper running.
+    let wrapper = [
+        "/bin/sh",
+        "-c",
+        "\"$0\" & while [ ! -e \"$HOME/go\" ]; do :; done",
+    ]
+    .map(OsString::from);
+    let pid = world.start_keeper_under(&wrapper);
+    let tracer = parent_of(pid);
+    std::fs::write(world.home().join("go"), "").expect("let the wrapper end");
+    // A Keeper whose parent has ended is handed on to another process.
+    assert!(
+        wait_until(DEADLINE, || parent_of(pid) != tracer),
+        "the wrapper {tracer} did not end"
+    );
+    assert_eq!(world.keeper_pid(), Some(pid), "the Keeper still runs");
+
+    drop(world);
+    assert!(
+        wait_until(DEADLINE, || !is_alive(pid)),
+        "the Keeper {pid} is left"
     );
 }
 
