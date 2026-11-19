@@ -539,9 +539,10 @@ impl Client {
     /// Attaches to a terminal the Keeper holds, at `size`: gives whether its kept output
     /// was cut. The kept output, and what follows, is read as any terminal's output.
     ///
-    /// What this client holds of the terminal's output is dropped at the reply: the Keeper
-    /// sends the kept output from its start, so a terminal this client opened itself would
-    /// otherwise show its first bytes twice.
+    /// What this client holds of the terminal's output is dropped at the reply, and so is
+    /// what came just before it: the Keeper sends the kept output from its start, so a
+    /// terminal this client opened itself would otherwise show its first bytes twice. A
+    /// refusal sends none, and what came before it is kept.
     pub fn attach_terminal(
         &mut self,
         terminal: &TerminalId,
@@ -551,6 +552,9 @@ impl Client {
             terminal: terminal.clone(),
             size,
         });
+        // What the terminal wrote before the reply: held apart until the reply says
+        // whether the Keeper sends the kept output, which holds it.
+        let mut early = Vec::new();
         let reply = loop {
             match self.read(Instant::now() + DEADLINE) {
                 Ok(Message::Reply { to, reply }) if to == id => break reply,
@@ -558,26 +562,30 @@ impl Client {
                     self.aside.insert(to, reply);
                 }
                 Ok(Message::Fact(fact)) => self.facts.push_back(fact),
-                // Before the reply, what came is what the terminal wrote before the Keeper
-                // routed it again: the kept output holds it, so it is not kept twice.
                 Ok(Message::Output {
                     terminal: other,
                     bytes,
-                }) => {
-                    if other != *terminal {
-                        self.keep(other, bytes);
-                    }
-                }
+                }) if other == *terminal => early.extend(bytes),
+                Ok(Message::Output {
+                    terminal: other,
+                    bytes,
+                }) => self.keep(other, bytes),
                 Ok(other) => panic!("waiting for the reply to {id:?}, the Keeper sent {other:?}"),
                 Err(e) => panic!("no reply to {id:?}: {e}; facts kept: {:?}", self.facts),
             }
         };
-        match reply? {
-            Reply::Attached { cut } => {
+        match reply {
+            Ok(Reply::Attached { cut }) => {
+                // The kept output follows, from its start, and holds all of it.
                 self.output.insert(terminal.clone(), Vec::new());
                 Ok(cut)
             }
-            other => panic!("asked to attach to a terminal, the Keeper answered {other:?}"),
+            // Nothing follows a refusal: what came is all there is.
+            Err(refusal) => {
+                self.keep(terminal.clone(), early);
+                Err(refusal)
+            }
+            Ok(other) => panic!("asked to attach to a terminal, the Keeper answered {other:?}"),
         }
     }
 

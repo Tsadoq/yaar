@@ -3,20 +3,27 @@
 //! the client's reading of a terminal as lines and of the stand-in's prompt.
 //!
 //! The Keeper's side of the agent requests is not built when these tests are written, so
-//! the client's calls for it are tried only as far as the request they send; the calls
-//! themselves are used, and so tried, by the packages that wire them.
+//! the client's calls for it are tried against the real Keeper only as far as the request
+//! they send, and as far as the reply they read against a peer of the test's own that
+//! speaks the Link; the calls are also used, and so tried, by the packages that wire them.
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
-use yaar_link::{Program, Request, ReviewId, TerminalId, TerminalSize, TurnId, WorkspaceId};
+use yaar_link::{
+    ChangedFile, CreditedFile, Fact, FileStatus, Hello, History, Message, Program, Refusal, Reply,
+    Request, ReviewId, SessionState, TerminalId, TerminalInfo, TerminalSize, Turn, TurnId,
+    WorkspaceAgents, WorkspaceId, handshake, read_message, write_message,
+};
 use yaar_system_tests::standin::{Did, Script, Step};
 use yaar_system_tests::{
-    Client, DEADLINE, World, descendants_of, is_alive, program, wait_until, without_agent_clis,
+    Client, DEADLINE, Place, World, descendants_of, is_alive, program, wait_until,
+    without_agent_clis,
 };
 
 const SIZE: TerminalSize = TerminalSize {
@@ -696,6 +703,11 @@ fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_f
         .expect("open a terminal");
     client.type_line(&terminal, "claude");
     let prompt = client.wait_for_prompt(&terminal, 0);
+    // While it runs: the stand-in is among what the Keeper started, a shell and the program
+    // that shell started.
+    let started = descendants_of(keeper);
+    let running = world.agent_log("default").pid;
+    assert!(started.contains(&running), "{running} not in {started:?}");
     client.type_line(&terminal, "hello");
     // The stand-in ran with the default script and log, which the shell got from the
     // world.
@@ -718,11 +730,233 @@ fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_f
         log.received
     );
 
-    let started = descendants_of(keeper);
     drop(client);
     drop(world);
     assert!(
         wait_until(DEADLINE, || started.iter().all(|pid| !is_alive(*pid))),
         "still there: {started:?}"
     );
+}
+
+/// What a scripted Keeper does about one request: sends `before`, then the reply, then
+/// `after`.
+struct Answer {
+    before: Vec<Message>,
+    reply: Result<Reply, Refusal>,
+    after: Vec<Message>,
+}
+
+impl Answer {
+    fn to(reply: Result<Reply, Refusal>) -> Self {
+        Answer {
+            before: Vec::new(),
+            reply,
+            after: Vec::new(),
+        }
+    }
+}
+
+/// A peer at `place`'s socket that speaks the Link as a Keeper does, for a test of the
+/// client alone, where the Keeper of the app does not answer what the test needs: it
+/// answers the requests it gets, in order, as `answers` say, and then waits for the client
+/// to go. Gives what it was asked. It is no Keeper of the app and no test of one.
+fn scripted_keeper(place: &Place, answers: Vec<Answer>) -> std::thread::JoinHandle<Vec<Request>> {
+    let listener = UnixListener::bind(place.socket()).expect("listen");
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("a client");
+        handshake(&mut stream, &Hello::for_this_process("scripted-keeper")).expect("hello");
+        let mut asked = Vec::new();
+        for answer in answers {
+            let Ok(Message::Request { id, request }) = read_message(&mut stream) else {
+                break;
+            };
+            asked.push(request);
+            for message in answer.before {
+                write_message(&mut stream, &message).expect("send");
+            }
+            let reply = Message::Reply {
+                to: id,
+                reply: answer.reply,
+            };
+            write_message(&mut stream, &reply).expect("send the reply");
+            for message in answer.after {
+                write_message(&mut stream, &message).expect("send");
+            }
+        }
+        // Until the client goes, so that what was sent last is read.
+        while read_message(&mut stream).is_ok() {}
+        asked
+    })
+}
+
+fn output(terminal: &TerminalId, bytes: &str) -> Message {
+    Message::Output {
+        terminal: terminal.clone(),
+        bytes: bytes.as_bytes().to_vec(),
+    }
+}
+
+#[test]
+fn what_a_terminal_wrote_before_the_attach_was_refused_is_kept() {
+    let place = Place::new();
+    let terminal = TerminalId::new("t".repeat(32));
+    let keeper = scripted_keeper(
+        &place,
+        vec![Answer {
+            before: vec![output(&terminal, "early")],
+            ..Answer::to(Err(Refusal::UnknownTerminal {
+                terminal: terminal.clone(),
+            }))
+        }],
+    );
+    let mut client = Client::attach(&place.socket());
+
+    // No kept output follows a refusal, so what came before it is all there is.
+    assert_eq!(
+        client.attach_terminal(&terminal, SIZE),
+        Err(Refusal::UnknownTerminal {
+            terminal: terminal.clone()
+        })
+    );
+    let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| bytes == b"early");
+    assert_eq!(heard, b"early");
+    drop(client);
+    keeper.join().expect("the scripted Keeper");
+}
+
+#[test]
+fn an_attach_replaces_what_the_client_held_of_a_terminal_by_the_kept_output_and_keeps_other_terminals()
+ {
+    let place = Place::new();
+    let terminal = TerminalId::new("t".repeat(32));
+    let other = TerminalId::new("u".repeat(32));
+    let keeper = scripted_keeper(
+        &place,
+        vec![
+            // The terminal's first bytes reach the client that opened it.
+            Answer {
+                before: vec![output(&terminal, "old")],
+                ..Answer::to(Ok(Reply::Workspaces(Vec::new())))
+            },
+            // The Keeper then sends the kept output from its start, `old` among it, and
+            // what another terminal wrote meanwhile comes before the reply.
+            Answer {
+                before: vec![output(&terminal, "early"), output(&other, "other")],
+                after: vec![output(&terminal, "old+ring")],
+                ..Answer::to(Ok(Reply::Attached { cut: true }))
+            },
+        ],
+    );
+    let mut client = Client::attach(&place.socket());
+    client.workspaces();
+    assert_eq!(client.attach_terminal(&terminal, SIZE), Ok(true));
+
+    let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| bytes == b"old+ring");
+    assert_eq!(heard, b"old+ring", "the first bytes are held once");
+    let other_heard = client.wait_for_output(&other, DEADLINE, |bytes| bytes == b"other");
+    assert_eq!(other_heard, b"other");
+    drop(client);
+    keeper.join().expect("the scripted Keeper");
+}
+
+#[test]
+fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it_refuses() {
+    let place = Place::new();
+    let workspace = WorkspaceId::new("w".repeat(32));
+    let elsewhere = WorkspaceId::new("x".repeat(32));
+    let terminal = TerminalId::new("t".repeat(32));
+    let history = History {
+        workspace: workspace.clone(),
+        start: Some("abc".to_owned()),
+        entries: Vec::new(),
+    };
+    let credited = CreditedFile {
+        file: ChangedFile {
+            path: "a.txt".into(),
+            status: FileStatus::Added,
+        },
+        by: Vec::new(),
+    };
+    let compared = vec![ChangedFile {
+        path: "b.txt".into(),
+        status: FileStatus::Modified,
+    }];
+    let turn = Turn {
+        id: TurnId::new("u".repeat(32)),
+        session: yaar_link::SessionId::new("s".repeat(32)),
+        number: 3,
+        ended: None,
+        state: None,
+        steps: Vec::new(),
+    };
+    let info = TerminalInfo {
+        id: terminal.clone(),
+        workspace: workspace.clone(),
+        program: Program::Shell,
+    };
+    let agents = WorkspaceAgents {
+        workspace: workspace.clone(),
+        shown: Some(SessionState::Works),
+        sessions: Vec::new(),
+    };
+    let refused = Refusal::UnknownWorkspace {
+        workspace: workspace.clone(),
+    };
+    let keeper = scripted_keeper(
+        &place,
+        vec![
+            Answer::to(Ok(Reply::TerminalOpened {
+                terminal: terminal.clone(),
+            })),
+            Answer::to(Ok(Reply::History(history.clone()))),
+            Answer::to(Err(refused.clone())),
+            Answer::to(Ok(Reply::Uncommitted(vec![credited.clone()]))),
+            Answer::to(Ok(Reply::Compared(compared.clone()))),
+            Answer::to(Ok(Reply::Turn(turn.clone()))),
+            Answer::to(Ok(Reply::Done)),
+            Answer::to(Ok(Reply::Terminals(vec![info.clone()]))),
+            Answer::to(Ok(Reply::Agents(vec![agents.clone()]))),
+            // Two facts about agents come and one is the one waited for.
+            Answer {
+                after: vec![
+                    Message::Fact(Fact::AgentsChanged(WorkspaceAgents {
+                        workspace: elsewhere,
+                        shown: Some(SessionState::Works),
+                        sessions: Vec::new(),
+                    })),
+                    Message::Fact(Fact::AgentsChanged(WorkspaceAgents {
+                        shown: Some(SessionState::Idle),
+                        ..agents.clone()
+                    })),
+                    Message::Fact(Fact::AgentsChanged(agents.clone())),
+                ],
+                ..Answer::to(Ok(Reply::Done))
+            },
+        ],
+    );
+    let mut client = Client::attach(&place.socket());
+
+    assert_eq!(
+        client.open_launcher(&workspace, "claude", SIZE),
+        Ok(terminal.clone())
+    );
+    // A terminal that was opened has no output yet, and a screen of blank lines.
+    assert_eq!(client.screen(&terminal, SIZE).len(), usize::from(SIZE.rows));
+    assert_eq!(client.history(&workspace), Ok(history));
+    assert_eq!(client.history(&workspace), Err(refused));
+    assert_eq!(client.uncommitted(&workspace, None), Ok(vec![credited]));
+    assert_eq!(client.compare(&workspace, "a", None), Ok(compared));
+    assert_eq!(client.turn(&turn.id), Ok(turn));
+    assert_eq!(client.show_workspace(Some(&workspace)), Ok(()));
+    assert_eq!(client.terminals(), [info]);
+    assert_eq!(client.agents(), std::slice::from_ref(&agents));
+
+    // The wait skips the facts of another workspace and those `wanted` does not accept.
+    assert_eq!(client.show_workspace(None), Ok(()));
+    let waited = client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents.shown == Some(SessionState::Works)
+    });
+    assert_eq!(waited, agents);
+    drop(client);
+    assert_eq!(keeper.join().expect("the scripted Keeper").len(), 10);
 }
