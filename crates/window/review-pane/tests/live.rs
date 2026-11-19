@@ -9,21 +9,20 @@
 mod common;
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
 
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext};
 use yaar_diff::{Row, Side};
 use yaar_link::{
     Anchor, Author, ChangedFile, Comment, CommentId, Fact, FileStatus, FlowForm, History,
-    HistoryEntry, Lines, Reply, Request, Session, SessionState, Setting, Step, Thread, ThreadId,
-    TurnId,
+    HistoryEntry, Lines, Refusal, Reply, Request, Session, SessionState, Setting, Step, Thread,
+    ThreadId, TurnId,
 };
 use yaar_review_pane::{LiveChange, PaneRow, Position, Unshown, View};
 
 use common::{
-    COMMIT, DEADLINE, Stage, agents_of, drawn, file, id, no_agent_review, open_staged, review_id,
-    reviews_of, running_turn, session, session_id, since_main, step_fact, texts, turn_id,
-    wait_for_files, wait_until, working_on, workspace,
+    COMMIT, Stage, agents_of, drawn, file, id, no_agent_review, open_staged, review_id, reviews_of,
+    running_turn, session, session_id, since_main, step_fact, texts, turn_id, wait_for_files,
+    wait_until, working_on, workspace,
 };
 
 /// The state the turn counts from.
@@ -133,37 +132,35 @@ fn all_read(rows: &[PaneRow]) -> bool {
 /// Keeps the app running until the live diff holds the changed files `wanted`, in order,
 /// each with its lines read, and the files read `read` after them.
 fn wait_for_live(stage: &Stage, wanted: &[&str], read: &[&str], cx: &mut VisualTestContext) {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        cx.run_until_parked();
-        let rows = live_rows(stage, cx);
-        if headings(&rows) == wanted && reads(&rows) == read && all_read(&rows) {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "waited in vain for the files {wanted:?} and the reads {read:?}, the rows are {rows:#?}"
-        );
-        std::thread::park_timeout(Duration::from_millis(1));
-    }
+    let what = format!("the files {wanted:?} and the reads {read:?}");
+    wait_until(cx, &what, |cx| {
+        let rows = stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_rows().to_vec());
+        headings(&rows) == wanted && reads(&rows) == read && all_read(&rows)
+    });
 }
 
 /// Keeps the app running until the files read, in the live diff, are `wanted`: a fact the
 /// Keeper told reaches the pane by a thread of its own, which the app does not wait for.
 fn wait_for_reads(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
-    let deadline = Instant::now() + DEADLINE;
-    loop {
-        cx.run_until_parked();
-        let held = reads(&live_rows(stage, cx));
-        if held == wanted {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "waited in vain for the files read {wanted:?}, which are {held:?}"
-        );
-        std::thread::park_timeout(Duration::from_millis(1));
-    }
+    let what = format!("the files read {wanted:?}");
+    wait_until(cx, &what, |cx| {
+        reads(
+            &stage
+                .pane
+                .read_with(cx, |pane, _| pane.live_rows().to_vec()),
+        ) == wanted
+    });
+}
+
+/// Keeps the app running until the live diff holds `row`.
+fn wait_for_row(stage: &Stage, row: &PaneRow, cx: &mut VisualTestContext) {
+    wait_until(cx, &format!("the row {row:?}"), |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.live_rows().contains(row))
+    });
 }
 
 /// Answers the next request, which has to list the files of the change from `from` to
@@ -221,6 +218,60 @@ fn answer_reads(
         stage
             .keeper
             .reply(asked, texts(before, after).map(Reply::File));
+    }
+}
+
+/// Answers the two requests that come together when a list is answered while another
+/// reason to ask was there already: the read of the file `read` (named by its path, what
+/// it was and what it is now), new to the list, and the list asked once more, from `from`
+/// to the files on disk. They come in either order; the list is answered, with `files`,
+/// when both are in.
+fn a_read_and_the_next_list(
+    stage: &mut Stage,
+    from: &str,
+    read: (&str, &str, &str),
+    files: Vec<ChangedFile>,
+    cx: &mut VisualTestContext,
+) {
+    let mut list = None;
+    let mut read_yet = false;
+    while list.is_none() || !read_yet {
+        let (asked, request) = stage.keeper.request(cx);
+        match request {
+            Request::ReadVersions {
+                workspace,
+                old,
+                old_path,
+                new,
+                path,
+            } => {
+                assert!(!read_yet, "{path:?} was read twice");
+                assert_eq!(
+                    (workspace, old.as_deref(), new, old_path, path),
+                    (id('1'), Some(from), None, read.0.into(), read.0.into())
+                );
+                read_yet = true;
+                stage
+                    .keeper
+                    .reply(asked, texts(read.1, read.2).map(Reply::File));
+            }
+            Request::CompareVersions {
+                workspace,
+                from: counted_from,
+                to,
+            } => {
+                assert!(list.is_none(), "the list was asked twice");
+                assert_eq!(
+                    (workspace, counted_from.as_str(), to),
+                    (id('1'), from, None)
+                );
+                list = Some(asked);
+            }
+            other => panic!("a read and a list were expected, not {other:?}"),
+        }
+    }
+    if let Some(asked) = list {
+        stage.keeper.reply(asked, Ok(Reply::Compared(files)));
     }
 }
 
@@ -428,13 +479,52 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
     wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
+
+    // A file the agent edits again is read again, though the list holds it just as it did:
+    // its diff grows. Only that file is read.
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        2,
+        Step::Edit {
+            path: "a.txt".into(),
+            lines: None,
+        },
+    ));
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![
+            file("a.txt", FileStatus::Modified),
+            file("b.txt", FileStatus::Added),
+            file("c.txt", FileStatus::Added),
+        ],
+        &mut cx,
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("a.txt", "one\n", "one\ntwo\nthree\n")],
+        &mut cx,
+    );
+    wait_for_row(
+        &stage,
+        &PaneRow::Diff {
+            path: a.clone(),
+            row: Row::Added { new: 2 },
+        },
+        &mut cx,
+    );
+    wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
     let changed = live_rows(&stage, &mut cx).len();
 
     // The files it read and did not change come after every file it changed, one row
     // each, with no request: the row is there before anything is answered.
     stage
         .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 2, read("r.txt")));
+        .tell(step_fact(session_id('a'), t.clone(), 3, read("r.txt")));
     wait_for_reads(&stage, &["r.txt"], &mut cx);
     let rows = live_rows(&stage, &mut cx);
     assert_eq!(rows.len(), changed + 1);
@@ -457,10 +547,10 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     // A second file read comes after the first; a file read again is not listed twice.
     stage
         .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 3, read("q.txt")));
+        .tell(step_fact(session_id('a'), t.clone(), 4, read("q.txt")));
     stage
         .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 4, read("r.txt")));
+        .tell(step_fact(session_id('a'), t.clone(), 5, read("r.txt")));
     wait_for_reads(&stage, &["r.txt", "q.txt"], &mut cx);
     let rows = live_rows(&stage, &mut cx);
     assert_eq!(rows.len(), changed + 2);
@@ -468,10 +558,12 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     assert!(matches!(rows[rows.len() - 2], PaneRow::Read { .. }));
 
     // It leaves the group when the turn changes it: while the list that write asked for
-    // is not answered, r.txt is still a file read.
+    // is not answered, r.txt is still a file read. What came before the write asked
+    // nothing: the first request is the list of the write, and a read that had asked would
+    // have it answered earlier, which the clause of the hidden form below would show.
     stage
         .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 5, write("r.txt")));
+        .tell(step_fact(session_id('a'), t.clone(), 6, write("r.txt")));
     let (asked, request) = stage.keeper.request(&mut cx);
     assert_eq!(
         request,
@@ -480,24 +572,53 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
             from: s0(),
             to: None,
         },
-        "the reads asked nothing: the first request is the write's"
+        "the first request is the write's list"
     );
     cx.run_until_parked();
     assert_eq!(reads(&live_rows(&stage, &mut cx)), ["r.txt", "q.txt"]);
+    // One question for the list is on its way at a time: a write and a change the watcher
+    // told of, meanwhile, ask nothing, so the Frame's question about the changes is the
+    // next request.
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 7, write("a.txt")));
+    stage
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
+    let (frame, request) = stage.keeper.request(&mut cx);
+    assert_eq!(request, Request::GetChanges { workspace: id('1') });
     stage.keeper.reply(
-        asked,
-        Ok(Reply::Compared(vec![
+        frame,
+        Ok(Reply::Changes(since_main(Vec::new(), Vec::new()))),
+    );
+    let four = || {
+        vec![
             file("a.txt", FileStatus::Modified),
             file("b.txt", FileStatus::Added),
             file("c.txt", FileStatus::Added),
             file("r.txt", FileStatus::Modified),
-        ])),
+        ]
+    };
+    stage.keeper.reply(asked, Ok(Reply::Compared(four())));
+    // Once it is answered, the file new to it is read and the list is asked once more, for
+    // what came meanwhile; that list, after a change the watcher told of, reads every file.
+    a_read_and_the_next_list(
+        &mut stage,
+        &s0(),
+        ("r.txt", "old r\n", "new r\n"),
+        four(),
+        &mut cx,
     );
     answer_reads(
         &mut stage,
         &s0(),
         None,
-        &[("r.txt", "old r\n", "new r\n")],
+        &[
+            ("a.txt", "one\n", "one\ntwo\nthree\n"),
+            ("b.txt", "", "new b\n"),
+            ("c.txt", "", "new c\n"),
+            ("r.txt", "old r\n", "new r\n"),
+        ],
         &mut cx,
     );
     wait_for_live(
@@ -514,17 +635,78 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         })
     );
 
-    // Hidden, it asks nothing, and asks once when it comes on screen again. The barrier
-    // for the first is a change the Frame asks the Keeper about, told twice: no question
-    // of the live diff comes between the Frame's.
+    // With the timeline form on screen it asks nothing either: the Frame's question about
+    // the changes, after a write and a change the watcher told of, is the next request.
+    // Back in the live form it asks once.
+    press("shift-l", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
+        FlowForm::Timeline
+    );
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 8, write("a.txt")));
+    stage
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
+    let (frame, request) = stage.keeper.request(&mut cx);
+    assert_eq!(request, Request::GetChanges { workspace: id('1') });
+    stage.keeper.reply(
+        frame,
+        Ok(Reply::Changes(since_main(Vec::new(), Vec::new()))),
+    );
+    press("shift-l", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
+        FlowForm::LiveDiff
+    );
+    compared(&mut stage, &s0(), None, four(), &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[
+            ("a.txt", "one\n", "one\ntwo\nthree\n"),
+            ("b.txt", "", "new b\n"),
+            ("c.txt", "", "new c\n"),
+            ("r.txt", "old r\n", "new r\n"),
+        ],
+        &mut cx,
+    );
+    wait_for_live(
+        &stage,
+        &["a.txt", "b.txt", "c.txt", "r.txt"],
+        &["q.txt"],
+        &mut cx,
+    );
+
+    // Hidden, it asks nothing, not even for the files of a list that was on its way when
+    // it was hidden, and asks once when it comes on screen again. The barrier is a change
+    // the Frame asks the Keeper about, told twice: no question of the live diff comes
+    // between the Frame's.
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 9, write("d.txt")));
+    let (asked, request) = stage.keeper.request(&mut cx);
+    assert_eq!(
+        request,
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s0(),
+            to: None,
+        }
+    );
     press("f", &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.view()),
         View::Changes
     );
+    let mut all = four();
+    all.push(file("d.txt", FileStatus::Added));
+    stage.keeper.reply(asked, Ok(Reply::Compared(all.clone())));
     stage
         .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 6, write("d.txt")));
+        .tell(step_fact(session_id('a'), t.clone(), 10, write("a.txt")));
     for _ in 0..2 {
         stage
             .keeper
@@ -538,16 +720,10 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     }
     press("f", &mut cx);
     assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
-    let all = vec![
-        file("a.txt", FileStatus::Modified),
-        file("b.txt", FileStatus::Added),
-        file("c.txt", FileStatus::Added),
-        file("r.txt", FileStatus::Modified),
-        file("d.txt", FileStatus::Added),
-    ];
-    compared(&mut stage, &s0(), None, all, &mut cx);
+    // The file the list brought is read now, and the list is asked once.
+    a_read_and_the_next_list(&mut stage, &s0(), ("d.txt", "", "new d\n"), all, &mut cx);
     let every_file = [
-        ("a.txt", "one\n", "one\ntwo\n"),
+        ("a.txt", "one\n", "one\ntwo\nthree\n"),
         ("b.txt", "", "new b\n"),
         ("c.txt", "", "new c\n"),
         ("r.txt", "old r\n", "new r\n"),
@@ -660,11 +836,86 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
             .iter()
             .filter(|asked| **asked == t2)
             .count(),
-        before + 1
+        2,
+        "the turn was asked for once more, as {before} before"
     );
     assert_eq!(
         live_change(&stage, &mut cx).map(|change| (change.turn, change.from)),
         Some((t2, Some(s5())))
+    );
+}
+
+#[gpui_kit::test]
+fn a_list_the_keeper_refused_is_asked_again_with_the_files_the_writes_named_before(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    let three = || {
+        vec![
+            file("a.txt", FileStatus::Modified),
+            file("b.txt", FileStatus::Added),
+            file("c.txt", FileStatus::Added),
+        ]
+    };
+    compared(&mut stage, &s0(), None, three(), &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[
+            ("a.txt", "one\n", "one\ntwo\n"),
+            ("b.txt", "", "new b\n"),
+            ("c.txt", "", "new c\n"),
+        ],
+        &mut cx,
+    );
+    wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
+
+    // The Keeper refuses the list a write of a.txt asked for. What is shown stays.
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 1, write("a.txt")));
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s0(),
+            to: None,
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "the worktree is busy".to_owned(),
+        }),
+    );
+    wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
+
+    // The next write asks again, and a.txt, which the refused question was about, is read
+    // again with c.txt, which this write names: b.txt is not.
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 2, write("c.txt")));
+    compared(&mut stage, &s0(), None, three(), &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[
+            ("a.txt", "one\n", "one\ntwo\nthree\n"),
+            ("c.txt", "", "newer c\n"),
+        ],
+        &mut cx,
+    );
+    wait_for_row(
+        &stage,
+        &PaneRow::Diff {
+            path: "a.txt".into(),
+            row: Row::Added { new: 2 },
+        },
+        &mut cx,
     );
 }
 

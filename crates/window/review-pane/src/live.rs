@@ -31,7 +31,8 @@
 //! (`ReviewPane::view` is Flow and `ReviewPane::flow_form` the live diff). While it is not,
 //! the facts below only mark what it holds as stale, and nothing is asked. When it comes
 //! on screen, or when its turn or the version it counts from changes while it is, it asks
-//! for the list once, then for the files. [`ReviewPane::live_look`] is where it looks: the
+//! for the list once, then for the files; the files a list brought while it was hidden are
+//! read then, not before. [`ReviewPane::live_look`] is where it looks: the
 //! timeline calls it after each change the live diff reads (a turn added or read, the
 //! view, the form, a workspace on screen), and the live diff's own hooks below end with it.
 //!
@@ -360,6 +361,8 @@ impl ReviewPane {
         self.live_note_at();
         if on {
             self.live_ask(cx);
+            // What a list brought while the live diff was hidden waits for it here.
+            self.live_pump(cx);
             self.live_follow_scroll();
         }
     }
@@ -718,7 +721,16 @@ impl ReviewPane {
         }
         self.live.listing = false;
         let Ok(Reply::Compared(files)) = answer else {
-            // What is shown stays; the next fact asks again.
+            // What is shown stays, and a fact that comes asks again for what this question
+            // was asked for. One that came while it was on its way asks now; with none,
+            // nothing is asked, as a Keeper that keeps refusing would be asked without end.
+            let came_meanwhile = self.live.stale;
+            self.live.named.extend(named);
+            self.live.everything |= everything;
+            self.live.stale = true;
+            if came_meanwhile {
+                self.live_look(cx);
+            }
             return;
         };
         let mut before: HashMap<PathBuf, ShownFile> = self
@@ -753,8 +765,13 @@ impl ReviewPane {
         self.live_look(cx);
     }
 
-    /// Starts reads while fewer than [`FILES_ON_THEIR_WAY`] are on their way.
+    /// Starts reads while fewer than [`FILES_ON_THEIR_WAY`] are on their way, and only
+    /// while the live diff is on screen: a list that was answered after it was hidden
+    /// leaves its files queued until it is shown again.
     fn live_pump(&mut self, cx: &mut Context<Self>) {
+        if !self.live.on_screen {
+            return;
+        }
         while self.live.in_flight < FILES_ON_THEIR_WAY {
             let Some(path) = self.live.queue.pop_front() else {
                 return;
