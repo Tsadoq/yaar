@@ -108,6 +108,9 @@ fn review_of(store: &Store) -> ReviewRecord {
 
 const REPLIES: u128 = 400;
 
+/// How long a test waits for a fact that only becomes true.
+const DEADLINE: Duration = Duration::from_secs(10);
+
 #[test]
 fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_are_there() {
     let scratch = Scratch::new();
@@ -155,12 +158,13 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
             std::thread::spawn(move || {
                 // Only once the typing is under way, so that the two overlap.
                 typed_once.recv().expect("the typer saved once");
-                let saved_before = saves.load(Ordering::SeqCst);
+                let mut saved_before = 0;
                 for (k, comment) in replies.iter().enumerate() {
                     if k == replies.len() - 1 {
-                        // Before the last reply, a save has returned since the first: the
-                        // two overlapped. Looked at again until true, within a deadline.
-                        let deadline = Instant::now() + Duration::from_secs(60);
+                        // Before the last reply, a save has returned since the first
+                        // reply went in: the two overlapped. Looked at again until true,
+                        // within a deadline.
+                        let deadline = Instant::now() + DEADLINE;
                         while saves.load(Ordering::SeqCst) <= saved_before {
                             assert!(Instant::now() < deadline, "the typer saved no more");
                             std::thread::yield_now();
@@ -171,6 +175,11 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
                     store
                         .put_reply(&tid(10), comment, k % 2 == 0)
                         .expect("put the reply");
+                    if k == 0 {
+                        // Read once the first reply is in, so that a save counted later
+                        // returned between the first reply and the last.
+                        saved_before = saves.load(Ordering::SeqCst);
+                    }
                 }
                 replying.send(()).expect("say the replies are done");
             })
@@ -286,6 +295,33 @@ fn a_reply_sets_the_addressed_mark_to_what_it_says_and_never_resolves() {
     let kept = review_of(&store);
     assert!(kept.threads[0].resolved && kept.threads[0].addressed);
     assert_eq!(kept.threads[0].comments.len(), 4);
+}
+
+#[test]
+fn a_reply_keeps_the_round_it_names_and_not_the_newest_of_the_review() {
+    let scratch = Scratch::new();
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        sent_and_draft(&store);
+        // Round 2 exists before the replies, so the newest round is not round 1.
+        store
+            .put_round(&rid(1), &round(2), &[cid(110)])
+            .expect("put round 2");
+        store
+            .put_reply(&tid(10), &reply(500, "of round 1", 1), false)
+            .expect("reply naming round 1");
+        store
+            .put_reply(&tid(10), &reply(501, "of round 2", 2), false)
+            .expect("reply naming round 2");
+    }
+    // Read from a Store opened anew: what is on the drive.
+    let store = Store::open(&scratch.file()).expect("open again");
+    let rounds: Vec<Option<u32>> = review_of(&store).threads[0]
+        .comments
+        .iter()
+        .map(|comment| comment.round)
+        .collect();
+    assert_eq!(rounds, [Some(1), Some(1), Some(2)]);
 }
 
 #[test]
