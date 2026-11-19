@@ -24,8 +24,8 @@ use yaar_review_pane::{ChangeShown, FlowAt, Following, PaneRow, TimelineEntry, V
 
 use common::{
     Stage, agents_of, drawn, file, id, open, open_staged, review_id, review_with, reviews_of,
-    running_turn, session, session_id, since_main, step_fact, texts, turn_id, wait_for_files,
-    wait_until, working_on, workspace,
+    running_turn, self_started, session, session_id, since_main, step_fact, texts, turn_id,
+    wait_for_files, wait_until, working_on, workspace,
 };
 
 /// The state the turn counts from.
@@ -948,16 +948,36 @@ fn resuming_says_when_nothing_is_paused_or_follow_is_off_and_turning_it_off_ends
 }
 
 #[gpui_kit::test]
-fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_and_with_follow_off_it_does_not(
+fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_a_turn_the_cli_started_itself_does_not_and_with_follow_off_nothing_does(
     cx: &mut TestAppContext,
 ) {
-    let (t1, t2, t3) = (turn_id('1'), turn_id('2'), turn_id('3'));
+    let (t0, t1, t2, t3) = (turn_id('0'), turn_id('1'), turn_id('2'), turn_id('3'));
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| keeper.set_agents(vec![agents_of(vec![session_a_idle()])]),
         cx,
     );
     show_changes(&mut stage, &mut cx);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::On);
+
+    // A turn the CLI started itself, a task it finished or a hook it ran, is no message of
+    // the user: Changes stays on screen. A step of that turn told after it, which the
+    // timeline holds, is the barrier.
+    stage.keeper.set_turn(running_turn(
+        t0.clone(),
+        session_id('a'),
+        1,
+        Some(&s0()),
+        Vec::new(),
+    ));
+    stage
+        .keeper
+        .tell_agents(agents_of(vec![self_started(session_a_idle(), t0.clone())]));
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t0.clone(), 1, read("x.txt")));
+    wait_for_step(&stage, &t0, 1, &mut cx);
     assert_eq!(view(&stage, &cx), View::Changes);
     assert_eq!(following(&stage, &cx), Following::On);
 

@@ -715,6 +715,15 @@ pub fn working_on(session: Session, turn: TurnId) -> Session {
     }
 }
 
+/// The same session, working on `turn` that the CLI started itself, as the agents model
+/// shows a session whose turn is no message of the user: a task it finished, a hook it ran.
+pub fn self_started(session: Session, turn: TurnId) -> Session {
+    Session {
+        turn_from_user: false,
+        ..working_on(session, turn)
+    }
+}
+
 /// A turn of session `session` that runs, numbered `number` among its turns, counted from
 /// the state `start`, with these steps so far: what `GetTurn` answers.
 pub fn running_turn(

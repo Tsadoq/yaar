@@ -1,6 +1,6 @@
 //! Whose review the pane shows: the sessions of the workspace on screen that a review
-//! belongs to, the choice among them that the reviewer or a turn end makes, and the line
-//! above the review that names them.
+//! belongs to and the review of no agent, the choice among them that the reviewer or a
+//! turn end makes, and the line above the review that names them.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
@@ -89,6 +89,8 @@ impl ReviewPane {
         }
         self.chosen = Some(review);
         if moves {
+            // An offer to start an agent was made for the review that was shown.
+            self.attaching.forget();
             self.rebuild(cx);
         }
         moves
@@ -107,22 +109,37 @@ impl ReviewPane {
         }
     }
 
-    /// What a click on the session at `index` does: shows the review of that session, and
+    /// The reviews the reviewer can go through, in the order the session bar names them:
+    /// those of the sessions, then the review of no agent while there is one. Each with
+    /// the session it belongs to, none for the review of no agent.
+    fn cycle(&self) -> Vec<(ReviewId, Option<&Session>)> {
+        let mut cycle: Vec<(ReviewId, Option<&Session>)> = self
+            .sessions
+            .iter()
+            .filter_map(|session| Some((session.review.clone()?, Some(session))))
+            .collect();
+        let of_no_agent = self
+            .reviews
+            .as_ref()
+            .and_then(|reviews| reviews.reviews.iter().find(|review| review.agent.is_none()));
+        if let Some(review) = of_no_agent {
+            cycle.push((review.id.clone(), None));
+        }
+        cycle
+    }
+
+    /// What a click on the entry at `index` of the session bar does: shows its review, and
     /// puts the focus on the rows, where the keys of the pane work.
     fn click_session(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         self.focus.focus(window, cx);
-        if let Some(review) = self
-            .sessions
-            .get(index)
-            .and_then(|session| session.review.clone())
-        {
+        if let Some((review, _)) = self.cycle().get(index).cloned() {
             self.show_review(review, window, cx);
         }
     }
 
-    /// What [`NextReview`] does: shows the review of the session after the one whose
-    /// review is shown, and from the last the first.
+    /// What [`NextReview`] does: shows the review after the one shown, the review of no
+    /// agent among them, and from the last the first.
     pub(crate) fn next_review(
         &mut self,
         _: &NextReview,
@@ -130,33 +147,31 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        let at = self.review_session().and_then(|shown| {
-            self.sessions
-                .iter()
-                .position(|session| session.id == *shown)
-        });
-        let next = at.map_or(0, |at| (at + 1) % self.sessions.len());
-        match self
-            .sessions
-            .get(next)
-            .and_then(|session| session.review.clone())
-        {
+        let shown = self.review().map(|review| review.id.clone());
+        let cycle = self.cycle();
+        let at = cycle
+            .iter()
+            .position(|(review, _)| Some(review) == shown.as_ref());
+        let next = at.map_or(0, |at| (at + 1) % cycle.len());
+        match cycle.get(next).map(|(review, _)| review.clone()) {
             Some(review) if at != Some(next) => self.show_review(review, window, cx),
             _ => self.say("There is no other review to show", cx),
         }
     }
 
-    /// The line that names the sessions whose reviews there are, above the tree; none
-    /// while there is no session. With one session it is named under `review-session`;
-    /// with several, each under `review-session-<index>`, and a click on one shows its
-    /// review.
+    /// The line that names the reviews the reviewer can show, above the tree: the sessions
+    /// whose reviews there are, and the review of no agent, named "No agent", while there
+    /// is one; none while there is no session. With one entry it is named under
+    /// `review-session`; with several, each under `review-session-<index>`, and a click on
+    /// one shows its review.
     pub(crate) fn session_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         if self.sessions.is_empty() {
             return None;
         }
         let theme = cx.theme();
-        let several = self.sessions.len() > 1;
-        let shown = self.review_session();
+        let cycle = self.cycle();
+        let several = cycle.len() > 1;
+        let shown = self.review().map(|review| &review.id);
         let mut bar = div()
             .flex_none()
             .h(ROW_HEIGHT)
@@ -169,10 +184,11 @@ impl ReviewPane {
             .whitespace_nowrap()
             .border_b_1()
             .border_color(theme.border);
-        for (index, session) in self.sessions.iter().enumerate() {
+        for (index, (review, session)) in cycle.iter().enumerate() {
             // The title is drawn in a child that carries the text in its selector, so a
             // test reads what is on screen and not a copy of it.
-            let title = session.title.clone();
+            let title =
+                session.map_or_else(|| "No agent".to_owned(), |session| session.title.clone());
             let name = div()
                 .px_2()
                 .child(
@@ -183,7 +199,7 @@ impl ReviewPane {
                         })
                         .child(title),
                 )
-                .when(several && shown == Some(&session.id), |name| {
+                .when(several && shown == Some(review), |name| {
                     name.bg(theme.secondary)
                 });
             bar = bar.child(if several {

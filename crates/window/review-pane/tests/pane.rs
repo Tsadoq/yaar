@@ -687,14 +687,6 @@ enum Effect {
     Resume,
 }
 
-/// The keys of slice 6 that the walk leaves out while slice 6 is built: attaching,
-/// detaching, resolving, reopening, resolving every addressed thread, and the original
-/// line of a thread that moved. The review pane's package "attaching and the states of
-/// threads" of slice 6 takes this filter away and names their effects below.
-const OF_SLICE_6: [&str; 9] = [
-    "a", "t", "shift-d", "x", "u", "shift-x", "w", "shift-s", "shift-n",
-];
-
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.
 fn effect_of(keystroke: &str) -> Effect {
@@ -705,6 +697,9 @@ fn effect_of(keystroke: &str) -> Effect {
         // The pane has no history here to take the focus to.
         // And no turn offered anything, and no other session has a review.
         "i" | "o" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
+        // No thread is on the reviewer's line, none moved to code that changed, no round
+        // has a state, and no agent is offered to start.
+        "t" | "x" | "u" | "w" | "shift-s" | "shift-n" => Effect::Notice,
         "shift-t" => Effect::Setting,
         "f" => Effect::Views,
         "shift-f" => Effect::Follow,
@@ -713,6 +708,9 @@ fn effect_of(keystroke: &str) -> Effect {
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
+        "a" => Effect::Sends(RequestKind::AttachReview),
+        "shift-d" => Effect::Sends(RequestKind::DetachReview),
+        "shift-x" => Effect::Sends(RequestKind::ResolveAddressed),
         other => panic!("the test names no effect of the key {other}"),
     }
 }
@@ -781,6 +779,7 @@ impl Effect {
                     RequestKind::CopyReview => Err(Refusal::NothingToSend {
                         review: common::review_id(),
                     }),
+                    RequestKind::AttachReview => Ok(Reply::AttachedReview { start: Vec::new() }),
                     _ => Ok(Reply::Done),
                 };
                 stage.keeper.reply(to, reply);
@@ -858,7 +857,6 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     for control in controls()
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
-        .filter(|control| !OF_SLICE_6.contains(&control.keystroke))
     {
         let effect = effect_of(control.keystroke);
         let only_in_flow = matches!(effect, Effect::Form | Effect::Resume);
@@ -1046,6 +1044,13 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
                     | RequestKind::CopyReview
                     | RequestKind::MarkReviewed
                     | RequestKind::SetViewed
+                    // Attaching, detaching and the thread actions change what the Keeper
+                    // keeps of a review, and no file of the worktree.
+                    | RequestKind::AttachReview
+                    | RequestKind::DetachReview
+                    | RequestKind::ResolveThread
+                    | RequestKind::ReopenThread
+                    | RequestKind::ResolveAddressed
             ),
             "a key made the Window ask {request:?}"
         );
