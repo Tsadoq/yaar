@@ -890,6 +890,20 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         })
     );
     assert_eq!(live_rows(&stage, &mut cx), []);
+    // A turn that has only read so far: its list holds no file, and the read is a row.
+    stage.keeper.tell(step_fact(
+        session_id('b'),
+        t2.clone(),
+        1,
+        read("seen by u.txt"),
+    ));
+    wait_for_reads(&stage, &["seen by u.txt"], &mut cx);
+    assert_eq!(
+        live_rows(&stage, &mut cx),
+        [PaneRow::Read {
+            path: "seen by u.txt".into()
+        }]
+    );
     // The start is kept when the turn before is recorded: the Window reads the turn again
     // at the end of another turn of the workspace, and counts from it.
     stage.keeper.set_turn(running_turn(
@@ -1114,8 +1128,7 @@ fn a_file_read_outside_the_worktree_is_listed_by_its_whole_path_and_a_file_read_
         .keeper
         .reply(asked, texts("x\n", "x\n").map(Reply::File));
     wait_for_live(&stage, &["new name.txt"], &[], &mut cx);
-    // Before the list is here nothing is taken out of the group; once it is, the old
-    // name of a renamed file is the file that changed.
+    // The list is here: the old name of a renamed file is the file that changed.
     stage.keeper.tell(step_fact(
         session_id('a'),
         t.clone(),
@@ -1127,6 +1140,56 @@ fn a_file_read_outside_the_worktree_is_listed_by_its_whole_path_and_a_file_read_
         .tell(step_fact(session_id('a'), t.clone(), 2, read("/etc/hosts")));
     // The first read came before the second, which is here: the old name was left out.
     wait_for_reads(&stage, &["/etc/hosts"], &mut cx);
+}
+
+#[gpui_kit::test]
+fn files_read_before_the_first_list_is_answered_are_rows_and_leave_the_group_when_the_list_holds_them(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    start_turn(&mut stage, &t, &s0(), &mut cx);
+    // The first list is asked and not answered while the turn reads.
+    let first_list = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s0(),
+            to: None,
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 1, read("/etc/hosts")));
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 2, read("a.txt")));
+    wait_for_reads(&stage, &["/etc/hosts", "a.txt"], &mut cx);
+    assert_eq!(
+        live_rows(&stage, &mut cx),
+        [
+            PaneRow::Read {
+                path: "/etc/hosts".into()
+            },
+            PaneRow::Read {
+                path: "a.txt".into()
+            },
+        ],
+        "before the list is here nothing is taken out of the group"
+    );
+    // The list holds a file the turn read: it is a changed file now, and no file read.
+    stage.keeper.reply(
+        first_list,
+        Ok(Reply::Compared(vec![file("a.txt", FileStatus::Modified)])),
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("a.txt", "one\n", "two\n")],
+        &mut cx,
+    );
+    wait_for_live(&stage, &["a.txt"], &["/etc/hosts"], &mut cx);
 }
 
 #[gpui_kit::test]
