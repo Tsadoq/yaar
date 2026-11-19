@@ -311,6 +311,12 @@ impl Parts {
         self.dock.running()
     }
 
+    /// What the parts keep, when there is git and a database. The agents' side reads it
+    /// from its own threads, which are given no reference to it.
+    pub(crate) fn kept(&self) -> Option<&Kept> {
+        self.kept.as_ref().ok()
+    }
+
     /// Answers one request of `window`, or gives the work that answers it once the parts
     /// are let go.
     pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
