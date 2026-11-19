@@ -340,7 +340,9 @@ fn many_saves_of_one_comment_sent_with_no_wait_are_kept_in_the_order_sent() {
 /// path the line is written once, when the test lets the hook go or when this is dropped,
 /// so that the hook never outlives the test.
 struct Gate {
-    fifo: File,
+    // Held until the path is removed: kept in an option so that dropping it is a step of
+    // `Drop` that comes after the removal, in the order it is written.
+    fifo: Option<File>,
     released: bool,
     path: PathBuf,
 }
@@ -358,7 +360,7 @@ impl Gate {
             .open(path)
             .expect("open the pipe");
         Gate {
-            fifo,
+            fifo: Some(fifo),
             released: false,
             path: path.to_owned(),
         }
@@ -368,7 +370,11 @@ impl Gate {
     fn open(&mut self) {
         if !self.released {
             self.released = true;
-            self.fifo.write_all(b"go\n").expect("write to the pipe");
+            self.fifo
+                .as_mut()
+                .expect("the pipe is open until the gate is dropped")
+                .write_all(b"go\n")
+                .expect("write to the pipe");
         }
     }
 }
@@ -376,7 +382,11 @@ impl Gate {
 impl Drop for Gate {
     fn drop(&mut self) {
         self.open();
+        // The path goes first and the open file after it: a hook that opens the pipe
+        // before the path is gone finds a writer, and one that comes after finds no path,
+        // so none is left to wait on a pipe nobody writes to.
         let _ = fs::remove_file(&self.path);
+        self.fifo = None;
     }
 }
 
