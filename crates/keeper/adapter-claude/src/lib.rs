@@ -70,9 +70,13 @@
 //! before it answers the hook, and a mark on the same queue, so a `Stop` is always taken
 //! before the mark that follows it, which then means nothing.
 
+mod install;
+mod report;
+
 use std::io;
 use std::path::Path;
 
+use report::Remembered;
 use yaar_agent::{Adapter, Report, ReportError, Reported, ShellEntry};
 
 /// The name the app knows Claude Code by.
@@ -123,13 +127,13 @@ pub const INTERRUPT_MARKS: [&[u8]; 4] = [
 /// reported from it, whether a turn of it is open and whether it waits for a permission.
 #[derive(Debug, Default)]
 pub struct ClaudeCode {
-    _todo: (),
+    memory: Remembered,
 }
 
 impl ClaudeCode {
     /// The Adapter, knowing no session yet.
     pub fn new() -> ClaudeCode {
-        todo!("an adapter that knows no session")
+        ClaudeCode::default()
     }
 }
 
@@ -152,21 +156,22 @@ impl Adapter for ClaudeCode {
     /// with (a `'` inside written `'\''`). Each file is written to a temporary file of its
     /// folder and renamed into place. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
-        let _ = (folder, companions);
-        todo!("the plugin folder and the entry that loads it")
+        install::write(folder, companions)
     }
 
     fn marks(&self) -> Vec<Vec<u8>> {
-        todo!("the interrupt marks")
+        INTERRUPT_MARKS.iter().map(|mark| mark.to_vec()).collect()
     }
 
     fn report(&mut self, report: &Report<'_>) -> Result<Vec<Reported>, ReportError> {
-        let _ = report;
-        todo!("the events of one hook's input")
+        self.memory.report(report)
     }
 
     fn marked(&mut self, terminal: &str, mark: usize) -> Vec<Reported> {
-        let _ = (terminal, mark);
-        todo!("the events of an interrupt mark")
+        // Every form of the mark says the same.
+        if mark >= INTERRUPT_MARKS.len() {
+            return Vec::new();
+        }
+        self.memory.interrupted(terminal)
     }
 }
