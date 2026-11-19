@@ -262,20 +262,21 @@ impl Layout {
 /// workspace on screen the pane says how to open one, under the selector
 /// `terminal-how-to-open`, and the focus stays on its own handle.
 ///
-/// A terminal the Keeper holds that the Window did not open, listed by `Models::terminals`
-/// when the link connects or whenever the list gains one, is attached: the pane asks the
-/// Keeper to attach it at the size its own workspace would show it at: the grid of the
-/// room the pane itself has (so an attach at connect waits for the pane's first frame)
-/// when the workspace shows one terminal or none, a slot's grid when it is split, and
-/// never the size a view of another workspace fitted last. The view starts at that grid
-/// and tells the Keeper nothing more while it fits. The output that comes after the answer, the kept output
-/// first and then what the program writes, is read as the output of a terminal the pane
-/// opened is. It is listed beside the others, with the
-/// workspace the Keeper says; it is shown when its workspace shows no other terminal, and
-/// never takes a slot from one. A terminal the pane opens joins that list itself, and is
-/// not attached. When the Keeper had dropped the oldest output ([`TerminalPane::attached_cut`])
-/// the first line the view holds says that older output is gone, and the mark under the
-/// selector `terminal-cut-<its slot>` is drawn over that line for as long as it is in view.
+/// A terminal the Keeper holds that the Window did not open, listed by
+/// `Models::terminals` when the link connects or whenever the list gains one, is
+/// attached: the pane asks the Keeper to attach it at the size its own workspace would
+/// show it at: the grid of the room the pane itself has (so an attach at connect waits
+/// for the pane's first frame) when the workspace shows one terminal or none, a slot's
+/// grid when it is split, and never the size a view of another workspace fitted last. The
+/// view starts at that grid and tells the Keeper nothing more while it fits. The output
+/// that comes after the answer, the kept output first and then what the program writes,
+/// is read as the output of a terminal the pane opened is. It is listed beside the
+/// others, with the workspace the Keeper says; it is shown when its workspace shows no
+/// other terminal, and never takes a slot from one. A terminal the pane opens joins that
+/// list itself, and is not attached. When the Keeper had dropped the oldest output
+/// ([`TerminalPane::attached_cut`]) the first line the view holds says that older output
+/// is gone, and the mark under the selector `terminal-cut-<its slot>` is drawn over that
+/// line for as long as it is in view.
 ///
 /// A new terminal is added after the others, shown in the slot that has the focus, and
 /// given the focus, when its workspace is on screen; one whose answer comes after another
