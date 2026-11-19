@@ -788,15 +788,13 @@ impl Worktree {
         let backup = IndexBackup::take(&self.git_dir.join("index")).map_err(GitError::from)?;
         let mut add = self.git.plain(&self.root);
         add.args(["add", "--all"]);
-        let answer = match finish(add) {
-            Ok(answer) => answer,
-            Err(e) => {
-                let _ = backup.restore();
-                return Err(e.into());
-            }
-        };
+        // A git that ends in error here has written nothing: it writes the list last,
+        // through the lock, and dies before it when a file cannot be added or the lock is
+        // held. Putting the bytes back would overwrite what another git wrote after that
+        // failure, so nothing is put back.
+        let answer = finish(add)?;
         if answer.code != Some(0) {
-            return Err(refused_and_put_back(answer, backup));
+            return Err(CommitError::refused_by(answer));
         }
         // The message goes in on the standard input: it may hold any character.
         let mut commit = self.git.plain(&self.root);

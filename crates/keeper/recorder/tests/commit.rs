@@ -469,3 +469,36 @@ fn a_commit_where_another_git_holds_the_lock_of_the_list_changes_nothing() {
     assert_eq!(list_after, list, "the bytes of the list of files");
     assert_eq!(status_after, status, "what git status says");
 }
+
+// The other git whose lock made `git add --all` fail finishes before the refusal is
+// answered, and the list is then the one it wrote: the one taken before is not its to
+// overwrite, whatever the commit control does after its own add failed.
+#[test]
+fn a_list_that_the_git_holding_the_lock_wrote_after_our_add_failed_is_left_as_it_wrote_it() {
+    let scratch = Scratch::new();
+    let repo = with_a_partial_staging(&scratch);
+    settled(&repo);
+    std::fs::write(repo.join(".git/index.lock"), "the other git\n").expect("take the lock");
+    // The program the control runs as git: our add fails on the lock as before, and then
+    // the other git ends, giving up its lock and leaving a list with `new.txt` staged.
+    let wrapper = scratch.join("bin/git-other-ends");
+    program(
+        &wrapper,
+        &format!(
+            "git \"$@\"\ncode=$?\ncase \" $* \" in\n*' add --all '*)\n\
+             rm '{lock}'\ngit -C '{repo}' add new.txt\n;;\nesac\nexit $code",
+            lock = repo.join(".git/index.lock").display(),
+            repo = repo.display()
+        ),
+    );
+    let worktree = Worktree::open(&Git::at(wrapper), &repo).expect("open");
+
+    let error = worktree.commit_all("try").expect_err("no commit");
+
+    assert!(matches!(error, CommitError::Refused { .. }), "{error:?}");
+    assert_eq!(
+        git(&repo, &["diff", "--cached", "--name-only"]),
+        "new.txt\nstaged.txt",
+        "what the other git staged"
+    );
+}

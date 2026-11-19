@@ -75,19 +75,26 @@ impl IndexBackup {
         })
     }
 
+    /// The list as it is now, none where it is not there.
+    fn read_now(&self) -> io::Result<Option<Vec<u8>>> {
+        match fs::read(&self.file) {
+            Ok(now) => Ok(Some(now)),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Puts the list back as it was, byte for byte, through git's own lock: the bytes go
     /// to `index.lock`, created where none is, and that is renamed over the list, which
     /// is how git writes it, so that no one reads half of it and another git that is
     /// writing the list at the moment is not overwritten. Where the lock is held, the
     /// list is left as it is and the error says so. A list that is as it was already is
-    /// not touched, and one that did not exist is removed.
+    /// not touched, and one that did not exist is removed. The list is compared with the
+    /// bytes only once the lock is taken.
     pub(crate) fn restore(self) -> io::Result<()> {
-        let now = match fs::read(&self.file) {
-            Ok(now) => Some(now),
-            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-            Err(e) => return Err(e),
-        };
-        if now == self.bytes {
+        // A list that is as it was needs no lock, and taking one could only fail a put-back
+        // that has nothing to put.
+        if self.read_now()? == self.bytes {
             return Ok(());
         }
         let mut name = self.file.file_name().unwrap_or_default().to_owned();
@@ -104,6 +111,19 @@ impl IndexBackup {
                     e
                 }
             })?;
+        // Read with the lock held: no other git can write the list between the read and
+        // the rename.
+        let now = match self.read_now() {
+            Ok(now) => now,
+            Err(e) => {
+                let _ = fs::remove_file(&lock);
+                return Err(e);
+            }
+        };
+        if now == self.bytes {
+            drop(held);
+            return fs::remove_file(&lock);
+        }
         let put_back = match &self.bytes {
             Some(bytes) => held.write_all(bytes).and_then(|()| {
                 // The mode git gave the list, if there is one still.

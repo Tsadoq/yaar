@@ -909,9 +909,15 @@ fn byte_copy(scratch: &Scratch, repo: &Path, name: &str) -> PathBuf {
     copy
 }
 
-/// What a clean filter standing in for Git LFS prints: a fixed pointer, whatever it reads.
-const POINTER: &str = "version https://git-lfs.github.com/spec/v1\noid sha256:\
-    0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 5\n";
+/// The pointer a clean filter standing in for Git LFS prints for a file of `size` bytes: a
+/// fixed hash, and the size it read, so that a change of the file is a change of the
+/// pointer.
+fn pointer(size: usize) -> String {
+    format!(
+        "version https://git-lfs.github.com/spec/v1\noid sha256:\
+         0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize {size}\n"
+    )
+}
 
 // STATE-02. The tree of a state is the one `git add -A` writes in a byte copy of the
 // repository, with every kind of file whose blob git makes by more than copying the file.
@@ -925,10 +931,11 @@ fn the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_eve
     let lfs = scratch.join("bin/lfs-clean");
     program(
         &lfs,
-        &format!(
-            "cat > /dev/null\nprintf '%s' '{}'",
-            POINTER.replace('\'', "")
-        ),
+        // The size is counted by reading the input to its end; `wc` of some systems pads
+        // the number with spaces.
+        "size=$(wc -c | tr -d ' ')\nprintf 'version https://git-lfs.github.com/spec/v1\\n\
+         oid sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\\n\
+         size %s\\n' \"$size\"",
     );
     let config = repo.join(".git/config");
     let mut text = std::fs::read_to_string(&config).expect("read the configuration");
@@ -950,15 +957,16 @@ fn the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_eve
     write(&repo, "lines.md", "a\r\nb\r\n");
     write(&repo, "kept.log", "first\n");
     git(&repo, &["add", "-f", "kept.log"]);
+    write(&repo, "model.bin", "12345");
     commit_all(&repo, "start");
 
     // Each kind, changed after the commit.
     write(&repo, "notes.txt", "two lines\nmore\n");
     write(&repo, "lines.md", "a\r\nb\r\nc\r\n");
     write(&repo, "kept.log", "second\n");
-    // A large file the pointer stands in for, and a text file, both new; and an ignored
-    // file that is force-added and staged, never committed.
-    write(&repo, "model.bin", "12345");
+    // The large file the pointer stands in for, which is longer now, and a text file that
+    // is new; and an ignored file that is force-added and staged, never committed.
+    write(&repo, "model.bin", "1234567");
     write(&repo, "dir/new.txt", "new text\n");
     write(&repo, "staged.log", "forced in\n");
     git(&repo, &["add", "-f", "staged.log"]);
@@ -980,7 +988,7 @@ fn the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_eve
         ("lines.md", "a\nb\nc\n"),
         ("kept.log", "second\n"),
         ("staged.log", "forced in\n"),
-        ("model.bin", POINTER),
+        ("model.bin", &pointer(7)),
     ] {
         assert_eq!(blob(path), content.as_bytes(), "git's blob of {path}");
         assert_eq!(
