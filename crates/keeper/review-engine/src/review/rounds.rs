@@ -61,7 +61,8 @@ mod tests {
     }
 
     #[test]
-    fn a_round_shows_as_sent_until_the_first_edit_its_agent_reports_and_the_edit_is_reported_once() {
+    fn a_round_shows_as_sent_until_the_first_edit_its_agent_reports_and_the_edit_is_reported_once()
+    {
         let mut review = review();
         assert!(!review.shows_sent(1), "no round is held yet");
         assert_eq!(review.agent_edited(), None, "no round, no edit to count");
