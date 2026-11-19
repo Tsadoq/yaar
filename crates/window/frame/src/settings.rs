@@ -6,9 +6,9 @@
 //! and sets the rest through the same model.
 
 use gpui_kit::*;
-use yaar_link::{FlowForm, Setting, WorkspaceId};
+use yaar_link::{Fact, FlowForm, Reply, Request, Setting, WorkspaceId};
 
-use crate::link_model::KeeperLink;
+use crate::link_model::{AskError, KeeperLink, LinkStatus};
 
 /// The settings the user set, as the Keeper told them.
 ///
@@ -32,19 +32,90 @@ use crate::link_model::KeeperLink;
 pub struct SettingList {
     link: Entity<KeeperLink>,
     settings: Vec<Setting>,
+    /// The last question for the list. A new one takes its place, which drops the answer
+    /// to the old one.
+    listing: Option<Task<()>>,
+    /// Whether the answer to that question is still awaited.
+    awaits_list: bool,
 }
 
 impl SettingList {
     /// The list of one window, fed by `link`: empty until the Keeper answers.
     ///
-    /// The Frame's package of slice 5 makes it ask when the link connects and hear the
-    /// facts, as [`crate::AgentList::new`] does.
+    /// It asks when the link connects, and hears the facts, as [`crate::AgentList::new`]
+    /// does.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
-        let _ = cx;
-        Self {
+        // The link tells of a change only when the outcome of reaching a Keeper is
+        // recorded, so being connected then means a connection that was not asked yet.
+        cx.observe(&link, |list, link, cx| {
+            if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
+                list.refresh(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&link, |list, _, fact: &Fact, cx| {
+            if let Fact::SettingChanged(setting) = fact {
+                list.take_one(setting.clone(), cx);
+                // An answer still on its way may have been made before this fact was.
+                // It is not waited for; the question is asked again, and what answers
+                // it is no older than this fact.
+                if list.awaits_list {
+                    list.refresh(cx);
+                }
+            }
+        })
+        .detach();
+
+        let connected = matches!(link.read(cx).status(), LinkStatus::Connected(_));
+        let mut list = Self {
             link,
             settings: Vec::new(),
+            listing: None,
+            awaits_list: false,
+        };
+        if connected {
+            list.refresh(cx);
         }
+        list
+    }
+
+    /// Asks the Keeper for every setting, and takes the answer unless a later question
+    /// took its place.
+    fn refresh(&mut self, cx: &mut Context<Self>) {
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::GetSettings, cx));
+        self.awaits_list = true;
+        self.listing = Some(cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                list.awaits_list = false;
+                // A Keeper that refuses, as the one of the contract does, leaves the
+                // list as it was: every setting then holds its default.
+                if let Ok(Reply::Settings(settings)) = answer
+                    && settings != list.settings
+                {
+                    list.settings = settings;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// Takes what the Keeper told of one setting: it replaces the one it is the same
+    /// thing as, or comes last.
+    fn take_one(&mut self, told: Setting, cx: &mut Context<Self>) {
+        match self
+            .settings
+            .iter_mut()
+            .find(|held| held.same_thing_as(&told))
+        {
+            Some(held) if *held == told => return,
+            Some(held) => *held = told,
+            None => self.settings.push(told),
+        }
+        cx.notify();
     }
 
     /// The link this list is fed by.
@@ -77,7 +148,17 @@ impl SettingList {
     /// observers, and asks the Keeper to keep it with `Request::SetSetting`. The answer is
     /// not waited for; a refusal has the list asked again.
     pub fn set(&mut self, setting: Setting, cx: &mut Context<Self>) {
-        let _ = (setting, cx);
-        todo!("the Frame's package of slice 5: take it, then send SetSetting")
+        self.take_one(setting.clone(), cx);
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::SetSetting { setting }, cx));
+        cx.spawn(async move |list, cx| {
+            // A Keeper that refuses leaves the list showing a setting it does not keep:
+            // ask for what it does keep. A link that is gone has nothing to ask.
+            if let Err(AskError::Refused(_) | AskError::Unexpected) = asked.await {
+                list.update(cx, |list, cx| list.refresh(cx)).ok();
+            }
+        })
+        .detach();
     }
 }

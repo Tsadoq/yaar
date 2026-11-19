@@ -1,0 +1,265 @@
+//! Component test: the shared model of the settings, through what the panes use of it. The
+//! test plays the Keeper on the other end of a socket pair: it answers what the model asks,
+//! tells it facts, and reads back through the model.
+//!
+//! A negative clause is read after a barrier, see [`settle`].
+
+mod common;
+
+use std::net::Shutdown;
+
+use gpui_kit::{AppContext, Entity, TestAppContext};
+use yaar_frame::{KeeperLink, Models, SettingList};
+use yaar_link::{
+    Fact, FlowForm, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Request, RequestId, Setting,
+    read_message, write_message,
+};
+
+use common::{KeeperEnd, answer, id, repository, wait_until, workspace};
+
+fn hello() -> Hello {
+    Hello {
+        protocol: PROTOCOL_VERSION,
+        pid: 1,
+        app_version: "9.9.9".to_owned(),
+    }
+}
+
+/// The form of Flow chosen in workspace `workspace`.
+fn form(workspace: char, form: FlowForm) -> Setting {
+    Setting::FlowForm {
+        workspace: id(workspace),
+        form,
+    }
+}
+
+/// The models of a window whose Keeper the test plays. `stage` sets what the Keeper knows
+/// before the Window reaches it, as the first answers hold it. The first question for the
+/// list of workspaces is answered.
+fn connected(stage: impl FnOnce(&KeeperEnd), cx: &mut TestAppContext) -> (Models, KeeperEnd) {
+    let link = cx.new(|_| KeeperLink::new());
+    let models = cx.update(|cx| Models::new(link.clone(), cx));
+    let mut keeper = KeeperEnd::attach_staged(hello(), &link, cx, stage);
+    keeper.list(&[repository('a', vec![workspace('1', "main")])], cx);
+    (models, keeper)
+}
+
+fn held(models: &Models, cx: &mut TestAppContext) -> Vec<Setting> {
+    models.settings.read_with(cx, |list, _| list.all().to_vec())
+}
+
+/// A barrier: returns when the Keeper has heard everything the Window sent before it, and
+/// the Window has taken everything the Keeper sent before the answer to it. The Window
+/// asks for the list of workspaces and the Keeper answers with a list that carries `mark`,
+/// which the Window then holds. A count read after it is final for what came before.
+fn settle(mark: char, models: &Models, keeper: &mut KeeperEnd, cx: &mut TestAppContext) {
+    models.workspaces.update(cx, |list, cx| list.refresh(cx));
+    // The models of a Frame ask for more than the list: leave that unanswered.
+    let asked = loop {
+        let (asked, request) = keeper.request(cx);
+        if request == Request::ListWorkspaces {
+            break asked;
+        }
+    };
+    let marked = vec![repository(mark, vec![workspace('1', "main")])];
+    keeper.reply(asked, Ok(Reply::Workspaces(marked.clone())));
+    wait_until(cx, "the list the barrier carries", |cx| {
+        models
+            .workspaces
+            .read_with(cx, |list, _| list.repositories() == marked)
+    });
+}
+
+#[gpui_kit::test]
+fn the_settings_the_keeper_lists_when_reached_are_held_in_its_order_and_asked_for_once(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = connected(
+        |keeper| {
+            keeper.set_settings(vec![
+                form('2', FlowForm::LiveDiff),
+                form('1', FlowForm::Timeline),
+            ]);
+        },
+        cx,
+    );
+    wait_until(cx, "the settings", |cx| !held(&models, cx).is_empty());
+
+    assert_eq!(
+        held(&models, cx),
+        [form('2', FlowForm::LiveDiff), form('1', FlowForm::Timeline)]
+    );
+    models.settings.read_with(cx, |list, _| {
+        assert_eq!(list.flow_form(&id('2')), FlowForm::LiveDiff);
+        assert_eq!(list.flow_form(&id('1')), FlowForm::Timeline);
+        assert_eq!(list.flow_form(&id('3')), FlowForm::Timeline, "none chosen");
+    });
+    settle('x', &models, &mut keeper, cx);
+    assert_eq!(keeper.settings_asked(), 1);
+}
+
+#[gpui_kit::test]
+fn a_fact_replaces_the_setting_of_its_workspace_or_adds_one_and_asks_nothing(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = connected(
+        |keeper| keeper.set_settings(vec![form('1', FlowForm::Timeline)]),
+        cx,
+    );
+    wait_until(cx, "the first settings", |cx| !held(&models, cx).is_empty());
+
+    keeper.tell(Fact::SettingChanged(form('1', FlowForm::LiveDiff)));
+    wait_until(cx, "the new form of workspace 1", |cx| {
+        held(&models, cx) == [form('1', FlowForm::LiveDiff)]
+    });
+    keeper.tell(Fact::SettingChanged(form('3', FlowForm::LiveDiff)));
+    wait_until(cx, "workspace 3 among the settings", |cx| {
+        held(&models, cx).len() == 2
+    });
+
+    assert_eq!(
+        held(&models, cx),
+        [form('1', FlowForm::LiveDiff), form('3', FlowForm::LiveDiff)],
+        "one setting for each workspace, a new one last"
+    );
+    // The same fact again changes nothing, and nothing was asked for any of them.
+    keeper.tell(Fact::SettingChanged(form('3', FlowForm::LiveDiff)));
+    settle('x', &models, &mut keeper, cx);
+    assert_eq!(held(&models, cx).len(), 2);
+    assert_eq!(keeper.settings_asked(), 1);
+}
+
+#[gpui_kit::test]
+fn a_setting_set_shows_at_once_and_reaches_the_keeper_in_the_place_of_the_one_it_replaces(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = connected(
+        |keeper| keeper.set_settings(vec![form('1', FlowForm::Timeline)]),
+        cx,
+    );
+    wait_until(cx, "the first settings", |cx| !held(&models, cx).is_empty());
+
+    models.settings.update(cx, |list, cx| {
+        list.set(form('1', FlowForm::LiveDiff), cx);
+        list.set(form('2', FlowForm::LiveDiff), cx);
+    });
+    // Before the Keeper heard or answered anything.
+    assert_eq!(
+        held(&models, cx),
+        [form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)]
+    );
+
+    settle('x', &models, &mut keeper, cx);
+    assert_eq!(
+        keeper.settings_set(),
+        [form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)]
+    );
+    // The Keeper kept them and said Done: nothing is asked again.
+    assert_eq!(keeper.settings_asked(), 1);
+    assert_eq!(
+        held(&models, cx),
+        [form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)]
+    );
+}
+
+#[gpui_kit::test]
+fn a_setting_the_keeper_refuses_shows_at_once_and_goes_when_the_list_is_asked_again(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = connected(
+        |keeper| keeper.set_settings(vec![form('2', FlowForm::LiveDiff)]),
+        cx,
+    );
+    wait_until(cx, "the first settings", |cx| !held(&models, cx).is_empty());
+    keeper.refuse_settings(Some(Refusal::Failed {
+        reason: "not now".to_owned(),
+    }));
+
+    models
+        .settings
+        .update(cx, |list, cx| list.set(form('1', FlowForm::LiveDiff), cx));
+    assert_eq!(
+        held(&models, cx),
+        [form('2', FlowForm::LiveDiff), form('1', FlowForm::LiveDiff)],
+        "shown before the Keeper answered"
+    );
+
+    wait_until(cx, "the list to be asked again", |_| {
+        keeper.settings_asked() == 2
+    });
+    wait_until(cx, "what the Keeper keeps", |cx| {
+        held(&models, cx) == [form('2', FlowForm::LiveDiff)]
+    });
+    settle('x', &models, &mut keeper, cx);
+    assert_eq!(keeper.settings_asked(), 2, "asked again once");
+    assert_eq!(keeper.settings_set(), [form('1', FlowForm::LiveDiff)]);
+}
+
+/// The next request of the Window on a stream the test reads itself.
+fn next_request(
+    keeper: &mut std::os::unix::net::UnixStream,
+    cx: &mut TestAppContext,
+) -> (RequestId, Request) {
+    // What the Window sends is queued by the task that asks; run it first.
+    cx.run_until_parked();
+    keeper
+        .set_read_timeout(Some(common::DEADLINE))
+        .expect("a read timeout");
+    match read_message(keeper).expect("a message of the Window") {
+        Message::Request { id, request } => (id, request),
+        other => panic!("the Window sent {other:?}, which is no request"),
+    }
+}
+
+#[gpui_kit::test]
+fn of_two_answers_for_the_settings_only_the_one_to_the_last_question_counts_and_a_fact_on_the_way_asks_again(
+    cx: &mut TestAppContext,
+) {
+    let link = cx.new(|_| KeeperLink::new());
+    let list: Entity<SettingList> = cx.new(|cx| SettingList::new(link.clone(), cx));
+    let mut keeper = KeeperEnd::attach_deaf(&link, cx);
+
+    let (first, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings);
+
+    // The form was chosen while the answer was on its way: the Keeper tells it and
+    // answers the next question with it.
+    let now = vec![form('1', FlowForm::LiveDiff)];
+    let told = Message::Fact(Fact::SettingChanged(now[0].clone()));
+    write_message(&mut keeper, &told).expect("tell the fact");
+    wait_until(cx, "the fact", |cx| {
+        list.read_with(cx, |list, _| list.all() == now)
+    });
+    let (second, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings, "asked again");
+
+    // The old answer, made before the choice, comes late. A round trip after it shows the
+    // Window took it in; it is not held.
+    let stale = Message::Reply {
+        to: first,
+        reply: Ok(Reply::Settings(vec![form('1', FlowForm::Timeline)])),
+    };
+    write_message(&mut keeper, &stale).expect("answer late");
+    let barrier = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+    let (asked, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::ListWorkspaces);
+    let answered = Message::Reply {
+        to: asked,
+        reply: Ok(Reply::Workspaces(Vec::new())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the barrier");
+    answer(barrier, cx).expect("the barrier is answered");
+    assert_eq!(list.read_with(cx, |list, _| list.all().to_vec()), now);
+
+    let last = vec![form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)];
+    let answered = Message::Reply {
+        to: second,
+        reply: Ok(Reply::Settings(last.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer");
+    wait_until(cx, "the answer to the last question", |cx| {
+        list.read_with(cx, |list, _| list.all() == last)
+    });
+    // Ended, so that the Window's thread is not left on a socket nobody reads.
+    keeper.shutdown(Shutdown::Both).ok();
+}
