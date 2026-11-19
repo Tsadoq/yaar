@@ -490,6 +490,17 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
             list.workspace(&a).is_some() && list.workspace(&b).is_some()
         })
     });
+    // Both forms are in the Frame's settings before the first click, so that no check below
+    // leans on which answer came first: the default form of A is the one it was left in.
+    wait_until(&mut cx, "both workspaces' forms in the settings", |cx| {
+        window.models.settings.read_with(cx, |list, _| {
+            [&a, &b].into_iter().all(|workspace| {
+                list.all().iter().any(|setting| {
+                    matches!(setting, Setting::FlowForm { workspace: of, .. } if of == workspace)
+                })
+            })
+        })
+    });
 
     // A opens Flow as the timeline it was left in, and B as the live diff, whichever the
     // Keeper's last choice in any workspace was and whichever was chosen first. The form is

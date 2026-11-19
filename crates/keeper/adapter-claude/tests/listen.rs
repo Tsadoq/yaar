@@ -102,6 +102,13 @@ fn a_recorded_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_gives_its_ev
     let records = recorded::hook_events(TURN);
     let heard = replay_lines(&records, &lines_of_the_turn());
 
+    // The premise of the row's shell write: line 15's command writes `bash_made.txt`.
+    let shell_write = command_of(&records[15]);
+    assert!(
+        shell_write.contains('>') && shell_write.contains("bash_made.txt"),
+        "line 15 is {shell_write:?}"
+    );
+
     // Every line gives what the recording shows it did, and the others give nothing: the
     // events are exactly these, in this order.
     let events = vec![

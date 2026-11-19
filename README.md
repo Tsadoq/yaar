@@ -127,8 +127,8 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
 - Claude Code's own turns: a turn Claude Code starts by itself, as at the end of a
   background task, switches the pane to Flow as a message of yours does, since the app
   cannot tell the two apart yet.
-- Older turns in the timeline: it shows the running turns, or the newest turn of the
-  worktree. Earlier turns are kept, and cannot be picked.
+- Older turns in the timeline: it holds the turns the window has seen in this worktree,
+  or the newest one when it opens. An earlier turn cannot be picked.
 - A file the agent reads through an `@` mention or a shell command is in neither the
   timeline nor the files read of the live diff: the app hears reads by Claude Code's read
   tool only.
