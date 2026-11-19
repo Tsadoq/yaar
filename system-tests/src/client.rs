@@ -11,7 +11,7 @@
 //! 4. No call sleeps for a fixed time. Each waits for what it wants, up to a deadline,
 //!    and panics with what it saw when the deadline passes.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -38,6 +38,10 @@ pub struct Client {
     facts: VecDeque<Fact>,
     /// What each terminal's program has written so far, as it came.
     output: HashMap<TerminalId, Vec<u8>>,
+    /// The requests sent with [`Client::send`] whose reply has not been taken.
+    sent: HashSet<RequestId>,
+    /// Replies that came while another was waited for, until their request is waited for.
+    aside: HashMap<RequestId, Result<Reply, Refusal>>,
 }
 
 impl Client {
@@ -61,6 +65,8 @@ impl Client {
                             next_id: 0,
                             facts: VecDeque::new(),
                             output: HashMap::new(),
+                            sent: HashSet::new(),
+                            aside: HashMap::new(),
                         };
                     }
                     // A Keeper that is just leaving may accept and then close.
@@ -85,23 +91,11 @@ impl Client {
         &self.keeper
     }
 
-    /// Sends one request and waits for its reply.
+    /// Sends one request and waits for its reply. The replies to requests sent with
+    /// [`Client::send`] that come meanwhile are set aside.
     pub fn request(&mut self, request: Request) -> Result<Reply, Refusal> {
-        let id = RequestId(self.next_id);
-        self.next_id += 1;
-        let kind = request.kind();
-        write_message(&mut self.stream, &Message::Request { id, request })
-            .unwrap_or_else(|e| panic!("the request {kind:?} could not be sent: {e}"));
-        let deadline = Instant::now() + DEADLINE;
-        loop {
-            match self.read(deadline) {
-                Ok(Message::Reply { to, reply }) if to == id => return reply,
-                Ok(Message::Fact(fact)) => self.facts.push_back(fact),
-                Ok(Message::Output { terminal, bytes }) => self.keep(terminal, bytes),
-                Ok(other) => panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}"),
-                Err(e) => panic!("no reply to {kind:?}: {e}; facts kept: {:?}", self.facts),
-            }
-        }
+        let id = self.write(request);
+        self.wait_for(id, Instant::now() + DEADLINE)
     }
 
     /// Asks for every repository with its worktrees.
@@ -285,22 +279,30 @@ impl Client {
     /// way. Gives the request's id. The reply, when it comes, is set aside by the calls
     /// that wait, and is read with [`Client::wait_for_reply`].
     pub fn send(&mut self, request: Request) -> RequestId {
-        let _ = request;
-        todo!()
+        let id = self.write(request);
+        self.sent.insert(id);
+        id
     }
 
     /// Waits for the reply to a request [`Client::send`] sent, among those set aside and
     /// those still to come. Panics, with what came, when none comes within `limit`.
     pub fn wait_for_reply(&mut self, id: RequestId, limit: Duration) -> Result<Reply, Refusal> {
-        let _ = (id, limit);
-        todo!()
+        assert!(
+            self.sent.contains(&id) || self.aside.contains_key(&id),
+            "request {id:?} was not sent with Client::send, or its reply was taken already"
+        );
+        self.wait_for(id, Instant::now() + limit)
     }
 
     /// Asks for the reviews of a workspace and its files marked viewed. Panics when the
     /// Keeper refuses.
     pub fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
-        let _ = workspace;
-        todo!()
+        match self.request(Request::GetReviews {
+            workspace: workspace.clone(),
+        }) {
+            Ok(Reply::Reviews(reviews)) => reviews,
+            other => panic!("asked for the reviews, the Keeper answered {other:?}"),
+        }
     }
 
     /// Saves the text of a draft, as a Window does at each change of a comment box, and
@@ -313,26 +315,47 @@ impl Client {
         on: DraftOn,
         text: &str,
     ) -> Result<(), Refusal> {
-        let _ = (review, thread, comment, on, text);
-        todo!()
+        match self.request(Request::SaveDraft {
+            review: review.clone(),
+            thread: thread.clone(),
+            comment: comment.clone(),
+            on,
+            text: text.to_owned(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to save a draft, the Keeper answered {other:?}"),
+        }
     }
 
     /// Deletes a draft.
     pub fn delete_draft(&mut self, review: &ReviewId, comment: &CommentId) -> Result<(), Refusal> {
-        let _ = (review, comment);
-        todo!()
+        match self.request(Request::DeleteDraft {
+            review: review.clone(),
+            comment: comment.clone(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to delete a draft, the Keeper answered {other:?}"),
+        }
     }
 
     /// Copies a review as text: gives the text and the number of the round it started.
     pub fn copy_review(&mut self, review: &ReviewId) -> Result<(String, u32), Refusal> {
-        let _ = review;
-        todo!()
+        match self.request(Request::CopyReview {
+            review: review.clone(),
+        })? {
+            Reply::Copied { text, round } => Ok((text, round)),
+            other => panic!("asked to copy a review, the Keeper answered {other:?}"),
+        }
     }
 
     /// Marks the change of a review reviewed.
     pub fn mark_reviewed(&mut self, review: &ReviewId) -> Result<(), Refusal> {
-        let _ = review;
-        todo!()
+        match self.request(Request::MarkReviewed {
+            review: review.clone(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to mark a review reviewed, the Keeper answered {other:?}"),
+        }
     }
 
     /// Marks a file of a workspace viewed, or takes the mark away.
@@ -342,15 +365,59 @@ impl Client {
         path: &Path,
         viewed: bool,
     ) -> Result<(), Refusal> {
-        let _ = (workspace, path, viewed);
-        todo!()
+        match self.request(Request::SetViewed {
+            workspace: workspace.clone(),
+            path: path.to_owned(),
+            viewed,
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to mark a file viewed, the Keeper answered {other:?}"),
+        }
     }
 
     /// Commits every uncommitted change of a workspace with `message`: gives the id of the
     /// commit.
     pub fn commit(&mut self, workspace: &WorkspaceId, message: &str) -> Result<String, Refusal> {
-        let _ = (workspace, message);
-        todo!()
+        match self.request(Request::Commit {
+            workspace: workspace.clone(),
+            message: message.to_owned(),
+        })? {
+            Reply::Committed { commit } => Ok(commit),
+            other => panic!("asked to commit, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Writes one request and gives the id it went out under.
+    fn write(&mut self, request: Request) -> RequestId {
+        let id = RequestId(self.next_id);
+        self.next_id += 1;
+        let kind = request.kind();
+        write_message(&mut self.stream, &Message::Request { id, request })
+            .unwrap_or_else(|e| panic!("the request {kind:?} could not be sent: {e}"));
+        id
+    }
+
+    /// Reads until the reply to `id` is there, setting aside the replies to requests
+    /// that [`Client::send`] sent.
+    fn wait_for(&mut self, id: RequestId, deadline: Instant) -> Result<Reply, Refusal> {
+        if let Some(reply) = self.aside.remove(&id) {
+            return reply;
+        }
+        loop {
+            match self.read(deadline) {
+                Ok(Message::Reply { to, reply }) if to == id => {
+                    self.sent.remove(&id);
+                    return reply;
+                }
+                Ok(Message::Reply { to, reply }) if self.sent.remove(&to) => {
+                    self.aside.insert(to, reply);
+                }
+                Ok(Message::Fact(fact)) => self.facts.push_back(fact),
+                Ok(Message::Output { terminal, bytes }) => self.keep(terminal, bytes),
+                Ok(other) => panic!("waiting for the reply to {id:?}, the Keeper sent {other:?}"),
+                Err(e) => panic!("no reply to {id:?}: {e}; facts kept: {:?}", self.facts),
+            }
+        }
     }
 
     /// Keeps what a program wrote, after what it wrote before.

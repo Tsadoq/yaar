@@ -26,8 +26,14 @@
 //! the Store and the folder and runs no git: never through the list of every repository,
 //! which runs git in each. A save that changes a draft's text needs no worktree at all.
 //!
-//! The requests of reviews are not wired yet: until they are, each is refused with
-//! [`NOT_WIRED`], so that a Window that asks them keeps its connection.
+//! A copy of a review and a mark of reviewed need the worktree of the review's workspace,
+//! and are refused with the words "the worktree is gone" when there is none. So is a
+//! commit, and so is the mark of a viewed file. Reading the reviews of a gone worktree
+//! works, and so does the save of a draft's text.
+//!
+//! The commit is not answered by [`Parts::answer`] itself: that gives the work, which the
+//! Keeper runs once it has let its parts go, so that the user's hooks, which may run for
+//! minutes, hold up nothing.
 //!
 //! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
 //! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
@@ -65,7 +71,8 @@ use yaar_dock::{Dock, DockError, Event, Start};
 use yaar_link::{
     Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, TerminalSize,
 };
-use yaar_recorder::{CommitId, Git};
+use yaar_recorder::{CommitError, CommitId, Git, Worktree};
+use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
@@ -77,17 +84,22 @@ const TEXT_PROBE: usize = 8000;
 /// The most bytes of a program's output that one frame carries.
 const OUTPUT_FRAME: usize = 64 * 1024;
 
-/// The reason a request of reviews is refused with until it is wired.
-const NOT_WIRED: &str = "reviews are not wired into this Keeper yet";
-
 /// The parts of the Keeper, started and connected.
 pub(crate) struct Parts {
-    // Workspaces on git and the Store, or the sentence that says why there is none.
-    workspaces: Result<Workspaces, String>,
+    // Workspaces and the reviews, both on git and the Store, or the sentence that says
+    // why there are none.
+    kept: Result<Kept, String>,
     // The terminals and their programs. Dropped with the parts, which ends every program.
     dock: Dock,
     // What the programs of the Dock tell the Windows goes through here.
     shared: Weak<Shared>,
+}
+
+/// What the Keeper keeps for its Windows: the workspaces, and the reviews of their
+/// worktrees.
+struct Kept {
+    workspaces: Workspaces,
+    reviews: Reviews,
 }
 
 /// A step that waits for a reply to be queued, and runs after it.
@@ -203,20 +215,25 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
 
 impl Parts {
     /// Starts the parts: finds git, opens the database `yaar_store::FILE_NAME` in the
-    /// folder of `options.data_dir`, and puts Workspaces on both; and makes the Dock, whose
-    /// programs tell what they do to the Windows of `shared`.
+    /// folder of `options.data_dir`, and puts Workspaces and the Review engine on both,
+    /// the engine recording the states of worktrees in `states` beside the database; and
+    /// makes the Dock, whose programs tell what they do to the Windows of `shared`.
     ///
     /// A Keeper with no git, or with a database it cannot open, still starts and answers
     /// the hello, so that a Window can say what is wrong; each request is then refused
     /// with the reason.
     pub(crate) fn start(options: &Options, shared: Weak<Shared>) -> Parts {
-        let workspaces = Git::find().map_err(|e| e.to_string()).and_then(|git| {
+        let kept = Git::find().map_err(|e| e.to_string()).and_then(|git| {
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
-            Ok(Workspaces::new(git, store))
+            let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"));
+            Ok(Kept {
+                workspaces: Workspaces::new(git, store),
+                reviews,
+            })
         });
         Parts {
-            workspaces,
+            kept,
             dock: Dock::new(),
             shared,
         }
@@ -230,8 +247,11 @@ impl Parts {
     /// Answers one request of `window`, or gives the work that answers it once the parts
     /// are let go.
     pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
-        let workspaces = match &self.workspaces {
-            Ok(workspaces) => workspaces,
+        let Kept {
+            workspaces,
+            reviews,
+        } = match &self.kept {
+            Ok(kept) => kept,
             Err(reason) => return Answered::Now(Outcome::failed(reason.clone())),
         };
         let mut facts = Vec::new();
@@ -289,13 +309,61 @@ impl Parts {
                         reason: other.to_string(),
                     },
                 }),
-            Request::GetReviews { .. }
-            | Request::SaveDraft { .. }
-            | Request::DeleteDraft { .. }
-            | Request::CopyReview { .. }
-            | Request::MarkReviewed { .. }
-            | Request::SetViewed { .. }
-            | Request::Commit { .. } => return Answered::Now(Outcome::failed(NOT_WIRED)),
+            Request::GetReviews { workspace } => {
+                get_reviews(workspaces, reviews, workspace).map(Reply::Reviews)
+            }
+            Request::SaveDraft {
+                review,
+                thread,
+                comment,
+                on,
+                text,
+            } => save_draft(
+                workspaces,
+                reviews,
+                &review,
+                &draft_save(&thread, &comment, on, text),
+                &mut facts,
+            ),
+            Request::DeleteDraft { review, comment } => {
+                let review = ReviewId::new(review.as_str());
+                reviews
+                    .review(&review)
+                    .and_then(|found| {
+                        reviews.delete_draft(
+                            &review,
+                            &yaar_review_engine::CommentId::new(comment.as_str()),
+                        )?;
+                        Ok(found.workspace().clone())
+                    })
+                    .map(|workspace| {
+                        facts.push(reviews_changed(&workspace));
+                        Reply::Done
+                    })
+                    .map_err(engine_refusal)
+            }
+            Request::CopyReview { review } => copy_review(workspaces, reviews, &review, &mut facts),
+            Request::MarkReviewed { review } => {
+                mark_reviewed(workspaces, reviews, &review, &mut facts)
+            }
+            Request::SetViewed {
+                workspace,
+                path,
+                viewed,
+            } => set_viewed(workspaces, reviews, &workspace, &path, viewed, &mut facts),
+            Request::Commit { workspace, message } => {
+                return match worktree_of(workspaces, &workspace) {
+                    Ok(Some(worktree)) => {
+                        Answered::Later(Box::new(move || commit(&worktree, &workspace, &message)))
+                    }
+                    Ok(None) => Answered::Now(Outcome::failed(EngineError::NoWorktree.to_string())),
+                    Err(refused) => Answered::Now(Outcome {
+                        reply: Err(refused),
+                        facts: Vec::new(),
+                        then: None,
+                    }),
+                };
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -483,6 +551,197 @@ fn ending(ending: yaar_dock::Ending) -> Ending {
     match ending {
         yaar_dock::Ending::Exited(code) => Ending::Exited(code),
         yaar_dock::Ending::Signalled(signal) => Ending::Signalled(signal),
+    }
+}
+
+/// The worktree of a workspace: none when the worktree is gone, refused with
+/// `UnknownWorkspace` when the Keeper does not hold the workspace. It reads the Store and
+/// the folder and runs no git: a save of a draft may ask at every key.
+fn worktree_of(
+    workspaces: &Workspaces,
+    workspace: &yaar_link::WorkspaceId,
+) -> Result<Option<Arc<Worktree>>, Refusal> {
+    workspaces
+        .worktree(&WorkspaceId::new(workspace.as_str()))
+        .map_err(refusal)
+}
+
+/// The worktree a request of reviews needs, which is refused in the words of "the
+/// worktree is gone" when it is not there.
+fn worktree_needed(
+    workspaces: &Workspaces,
+    workspace: &yaar_link::WorkspaceId,
+) -> Result<Arc<Worktree>, Refusal> {
+    worktree_of(workspaces, workspace)?.ok_or_else(|| Refusal::Failed {
+        reason: EngineError::NoWorktree.to_string(),
+    })
+}
+
+/// The workspace of a review as the Store holds it, and the worktree of that workspace,
+/// none when it is gone. A review whose workspace the Store does not hold has no worktree
+/// either.
+fn worktree_of_review(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &ReviewId,
+) -> Result<(WorkspaceId, Option<Arc<Worktree>>), Refusal> {
+    let workspace = reviews.review(review).map_err(engine_refusal)?;
+    let workspace = workspace.workspace().clone();
+    match workspaces.worktree(&workspace) {
+        Ok(worktree) => Ok((workspace, worktree)),
+        Err(WorkspaceError::Refused(yaar_workspaces::Refusal::UnknownWorkspace(_))) => {
+            Ok((workspace, None))
+        }
+        Err(other) => Err(refusal(other)),
+    }
+}
+
+/// The same, for the requests that cannot go on without the worktree.
+fn worktree_of_review_needed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &ReviewId,
+) -> Result<(WorkspaceId, Arc<Worktree>), Refusal> {
+    match worktree_of_review(workspaces, reviews, review)? {
+        (workspace, Some(worktree)) => Ok((workspace, worktree)),
+        (_, None) => Err(Refusal::Failed {
+            reason: EngineError::NoWorktree.to_string(),
+        }),
+    }
+}
+
+/// What every Window is told when the reviews of a workspace changed.
+fn reviews_changed(workspace: &WorkspaceId) -> Fact {
+    Fact::ReviewsChanged {
+        workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
+    }
+}
+
+/// The reviews of a workspace, with its files marked viewed when the worktree is there.
+fn get_reviews(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    workspace: yaar_link::WorkspaceId,
+) -> Result<yaar_link::WorkspaceReviews, Refusal> {
+    let worktree = worktree_of(workspaces, &workspace)?;
+    let view = reviews
+        .of_workspace(&WorkspaceId::new(workspace.as_str()), worktree.as_deref())
+        .map_err(engine_refusal)?;
+    Ok(workspace_reviews(workspace, view))
+}
+
+/// Keeps one save of a draft. A text that changes a comment of the review is kept with no
+/// lookup of a worktree and told to nobody; one that makes a comment is told to every
+/// Window.
+fn save_draft(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    save: &yaar_review_engine::DraftSave,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let review = ReviewId::new(review.as_str());
+    // Only a thread that starts here is put on the files of the worktree, and needs it.
+    let worktree = match save.on {
+        yaar_review_engine::DraftOn::NewThread(_) => {
+            worktree_of_review(workspaces, reviews, &review)?.1
+        }
+        yaar_review_engine::DraftOn::Thread => None,
+    };
+    let saved = reviews
+        .save_draft(worktree.as_deref(), &review, save)
+        .map_err(engine_refusal)?;
+    if saved == Saved::Made
+        && let Ok(found) = reviews.review(&review)
+    {
+        facts.push(reviews_changed(found.workspace()));
+    }
+    Ok(Reply::Done)
+}
+
+/// Copies a review as text, and sends what was copied.
+fn copy_review(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let id = ReviewId::new(review.as_str());
+    let (workspace, worktree) = worktree_of_review_needed(workspaces, reviews, &id)?;
+    match reviews.copy_as_text(&worktree, &id) {
+        Ok(copied) => {
+            facts.push(reviews_changed(&workspace));
+            Ok(Reply::Copied {
+                text: copied.text,
+                round: copied.round,
+            })
+        }
+        // The error does not carry the review that has nothing to send; the request does.
+        Err(EngineError::Refused(ReviewError::NothingToSend)) => Err(Refusal::NothingToSend {
+            review: review.clone(),
+        }),
+        Err(other) => Err(engine_refusal(other)),
+    }
+}
+
+/// Marks the change of a review reviewed.
+fn mark_reviewed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let id = ReviewId::new(review.as_str());
+    let (workspace, worktree) = worktree_of_review_needed(workspaces, reviews, &id)?;
+    reviews
+        .mark_reviewed(&worktree, &id)
+        .map_err(engine_refusal)?;
+    facts.push(reviews_changed(&workspace));
+    Ok(Reply::Done)
+}
+
+/// Marks a file of a workspace viewed, or takes the mark away.
+fn set_viewed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    workspace: &yaar_link::WorkspaceId,
+    path: &std::path::Path,
+    viewed: bool,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let worktree = worktree_needed(workspaces, workspace)?;
+    let id = WorkspaceId::new(workspace.as_str());
+    reviews
+        .set_viewed(&id, &worktree, path, viewed)
+        .map_err(engine_refusal)?;
+    facts.push(reviews_changed(&id));
+    Ok(Reply::Done)
+}
+
+/// The commit: the user's own git, run once the parts are let go. Every Window is told
+/// that the changes of the workspace changed when a commit was made.
+fn commit(worktree: &Worktree, workspace: &yaar_link::WorkspaceId, message: &str) -> Outcome {
+    let mut facts = Vec::new();
+    let reply = match worktree.commit_all(message) {
+        Ok(commit) => {
+            facts.push(Fact::ChangesChanged {
+                workspace: workspace.clone(),
+            });
+            Ok(Reply::Committed {
+                commit: commit.to_string(),
+            })
+        }
+        Err(CommitError::NothingToCommit) => Err(Refusal::NothingToCommit {
+            workspace: workspace.clone(),
+        }),
+        Err(other) => Err(Refusal::Failed {
+            reason: other.to_string(),
+        }),
+    };
+    Outcome {
+        reply,
+        facts,
+        then: None,
     }
 }
 

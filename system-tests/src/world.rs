@@ -174,7 +174,13 @@ impl World {
     /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
     /// database. Panics when no Keeper of this world runs.
     pub fn kill_keeper(&mut self) {
-        todo!()
+        let mut keeper = self
+            .keeper
+            .take()
+            .expect("no Keeper of this world runs to kill");
+        // It may have ended on its own already; the kill then finds nothing to do.
+        let _ = keeper.kill();
+        keeper.wait().expect("collect the killed Keeper");
     }
 
     /// The process id of the Keeper this world started, while it runs.
