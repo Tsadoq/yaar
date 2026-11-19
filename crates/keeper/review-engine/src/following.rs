@@ -234,6 +234,13 @@ impl Reviews {
             }
         }
 
+        if carried.is_empty() {
+            return match failure {
+                Some(e) => Err(e),
+                None => Ok(Vec::new()),
+            };
+        }
+
         // The turn: the threads are read again, and one that was resolved, deleted or
         // carried meanwhile is left out.
         let _turn = self.turn();
