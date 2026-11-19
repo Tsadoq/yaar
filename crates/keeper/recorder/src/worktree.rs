@@ -180,11 +180,26 @@ pub enum CommitError {
     /// git ended with an error: a hook rejected the commit, no identity is set, or the
     /// message was empty. Nothing was committed.
     Refused {
-        /// What git wrote to its standard error, as it wrote it.
+        /// What git wrote to its standard error, as it wrote it; when it wrote nothing
+        /// there, what it wrote to its standard output, as git says some refusals, such
+        /// as that there are no changes added to commit, only there.
         stderr: String,
     },
     /// git could not be run.
     Git(GitError),
+}
+
+impl CommitError {
+    /// The refusal for a git that ended with an error: its error stream, or its output
+    /// stream when the error stream says nothing.
+    fn refused_by(answer: Answer) -> Self {
+        let stderr = if answer.stderr.trim().is_empty() {
+            String::from_utf8_lossy(&answer.stdout).into_owned()
+        } else {
+            answer.stderr
+        };
+        Self::Refused { stderr }
+    }
 }
 
 impl fmt::Display for CommitError {
@@ -770,18 +785,14 @@ impl Worktree {
         add.args(["add", "--all"]);
         let answer = finish(add)?;
         if answer.code != Some(0) {
-            return Err(CommitError::Refused {
-                stderr: answer.stderr,
-            });
+            return Err(CommitError::refused_by(answer));
         }
         // The message goes in on the standard input: it may hold any character.
         let mut commit = self.git.plain(&self.root);
         commit.args(["commit", "--file=-"]);
         let answer = finish_with(commit, message.as_bytes())?;
         if answer.code != Some(0) {
-            return Err(CommitError::Refused {
-                stderr: answer.stderr,
-            });
+            return Err(CommitError::refused_by(answer));
         }
         match self.head_commit()? {
             Some(id) => Ok(id),

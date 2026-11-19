@@ -182,6 +182,35 @@ fn an_empty_message_is_refused_by_git_and_makes_no_commit() {
 }
 
 #[test]
+fn a_commit_git_refuses_with_its_words_on_its_standard_output_still_gives_them() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    // A repository inside the worktree, committed as the commit it is on.
+    let inner = repo.join("inner");
+    init(&inner);
+    write(&inner, "b.txt", "one\n");
+    commit_all(&inner, "start inner");
+    commit_all(&repo, "start");
+    // A change inside it shows in the status of the worktree and is not one that
+    // `git add --all` stages, so that `git commit` has nothing to commit and says so on
+    // its standard output, with nothing on its standard error.
+    write(&inner, "b.txt", "two\n");
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+
+    let error = open(&repo).commit_all("try").expect_err("no commit");
+
+    match error {
+        CommitError::Refused { stderr } => {
+            assert!(stderr.contains("no changes added to commit"), "{stderr:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+}
+
+#[test]
 fn the_first_commit_of_a_repository_is_made_too() {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");
