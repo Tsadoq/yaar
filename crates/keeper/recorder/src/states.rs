@@ -424,16 +424,29 @@ impl StateStore {
                 )?
                 .printed()
             };
-            if stage(&staged).is_err() {
-                // One path at a time, to tell a path that failed for what the program
-                // beside us did to it from one that fails for itself, as a clean filter
-                // that errors does: only that one is a failure.
-                for path in &staged {
-                    if let Err(e) = stage(&[path]) {
+            // The whole list at once, which is one run of git. A run that fails says
+            // nothing of which path made it fail, and git stages one path after another
+            // until that one, so the list is cut in halves until the failing path stands
+            // alone: a few runs where one for each path would be tens of thousands. A path
+            // that fails alone is either one that a program beside us changed after git
+            // named it, which is left out as the worktree has it now, or one that fails
+            // for itself, as a clean filter that errors does, and that is the failure.
+            let mut pending: Vec<&[&[u8]]> = vec![&staged];
+            while let Some(range) = pending.pop() {
+                let Err(e) = stage(range) else { continue };
+                match range {
+                    [path] => {
                         if !changed_under_us(worktree.root(), path) {
                             return Err(e.into());
                         }
                         finish_with(in_worktree(&FORGET), &zero_ended(&[path]))?.printed()?;
+                    }
+                    _ => {
+                        let (first, second) = range.split_at(range.len() / 2);
+                        // The first half is taken first, the paths in the order git named
+                        // them.
+                        pending.push(second);
+                        pending.push(first);
                     }
                 }
             }
@@ -795,7 +808,11 @@ fn is_plain_folder(root: &Path, path: &[u8]) -> bool {
 fn changed_under_us(root: &Path, path: &[u8]) -> bool {
     let place = root.join(os_string(path));
     match fs::symlink_metadata(&place) {
-        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        // A folder above it that is a file now leaves no such path either.
+        Err(e) => matches!(
+            e.kind(),
+            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+        ),
         Ok(found) => found.is_dir() && !place.join(".git").exists(),
     }
 }

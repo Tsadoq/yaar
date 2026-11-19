@@ -1232,6 +1232,149 @@ fn forty_states_taken_beside_a_loop_that_creates_and_deletes_files_all_succeed()
     assert!(!store.states().expect("states").is_empty());
 }
 
+/// Configures the clean filter `name` of the repository as `program`, one that has to
+/// succeed for git to stage a file.
+fn required_filter(repo: &Path, name: &str, program: &Path) {
+    use std::io::Write;
+    let mut configuration = std::fs::OpenOptions::new()
+        .append(true)
+        .open(repo.join(".git/config"))
+        .expect("open the configuration");
+    write!(
+        configuration,
+        "[filter \"{name}\"]\n\tclean = '{}'\n\trequired = true\n",
+        program.display()
+    )
+    .expect("configure the filter");
+}
+
+// A path git cannot stage for a reason of its own, as a clean filter that fails, fails the
+// recording with git's words. It is found by cutting the list in halves, not by staging
+// each path on its own in a run of git of its own, which for a worktree of tens of
+// thousands of files would be that many runs at every recording.
+#[test]
+fn a_path_that_cannot_be_staged_fails_the_recording_after_a_few_runs_of_git_and_not_one_for_each_path()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    let filter = scratch.join("bin/cannot-read");
+    program(&filter, "echo 'the filter cannot read it' >&2\nexit 1");
+    required_filter(&repo, "bad", &filter);
+    write(&repo, ".gitattributes", "*.bad filter=bad\n");
+    for n in 0..100 {
+        write(&repo, &format!("f{n:03}.txt"), &format!("{n}\n"));
+    }
+    // The last of the paths, in the order git lists them.
+    write(&repo, "zz.bad", "unreadable\n");
+    let (program, list) = support::git_that_keeps_a_list(&scratch);
+    let git = Git::at(program);
+    let worktree = Worktree::open(&git, &repo).expect("open");
+    let store = StateStore::open(&git, &scratch.join("app/states/one.git")).expect("open");
+
+    let error = store.record(&worktree).expect_err("no state");
+
+    assert!(
+        error.to_string().contains("the filter cannot read it"),
+        "git's words: {error}"
+    );
+    let staging_runs = std::fs::read_to_string(&list)
+        .expect("the list of starts")
+        .lines()
+        .filter(|start| start.contains("update-index --add"))
+        .count();
+    assert!(
+        (1..=20).contains(&staging_runs),
+        "{staging_runs} runs of git to stage 102 paths"
+    );
+    assert!(store.states().expect("states").is_empty());
+}
+
+/// A repository in which `path`, a file of `.race`, is not committed, and a clean filter
+/// for such files that runs `effect` on the worktree, as a program beside the recording
+/// would, and then fails: git has named the path, and by the time it fails to stage it
+/// the worktree is not as it was.
+fn with_a_file_that_changes_as_it_is_staged(
+    scratch: &Scratch,
+    path: &str,
+    effect: &str,
+) -> PathBuf {
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, ".gitattributes", "*.race filter=race\n");
+    write(&repo, "kept.txt", "kept\n");
+    commit_all(&repo, "start");
+    let filter = scratch.join("bin/disturb");
+    program(&filter, &format!("{effect}\nexit 1"));
+    required_filter(&repo, "race", &filter);
+    write(&repo, path, "here\n");
+    repo
+}
+
+// A path that is gone when git fails to stage it is no failure: it is what the worktree
+// looks like by then.
+#[test]
+fn a_path_that_is_gone_when_it_fails_to_be_staged_is_left_out_and_the_state_is_taken() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/gone.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "gone.race",
+        &format!("rm -f '{}'", file.display()),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
+// The same where the folder above the path is a file by then, which is not a missing path
+// to the system but is no path either.
+#[test]
+fn a_path_whose_folder_became_a_file_when_it_fails_to_be_staged_is_left_out_too() {
+    let scratch = Scratch::new();
+    let folder = scratch.join("repo/folder");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "folder/inside.race",
+        &format!("rm -rf '{0}'\necho 'a file now' > '{0}'", folder.display()),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
+// Among many paths the one that changed is found without failing the others.
+#[test]
+fn a_path_that_is_gone_when_it_fails_to_be_staged_among_many_leaves_the_others_in_the_state() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/gone.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "gone.race",
+        &format!("rm -f '{}'", file.display()),
+    );
+    for n in 0..30 {
+        write(&repo, &format!("f{n:02}.txt"), &format!("{n}\n"));
+    }
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    let paths = store.paths(state.id.as_str()).expect("paths");
+    assert_eq!(paths.len(), 2 + 30, "{paths:?}");
+    assert!(!paths.contains(&PathBuf::from("gone.race")));
+}
+
 // STATE-08, as `record` shows it: the recording that used to fail with git's words now
 // succeeds.
 #[test]
