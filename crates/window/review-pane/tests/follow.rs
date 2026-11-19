@@ -17,14 +17,15 @@ use gpui_kit::{
     AppContext, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px,
 };
 use yaar_link::{
-    ChangedFile, Fact, FileStatus, FlowForm, Reply, Request, Session, SessionState, Step, TurnId,
+    ChangedFile, Fact, FileStatus, FlowForm, History, Reply, Request, Session, SessionState, Step,
+    TurnId,
 };
 use yaar_review_pane::{ChangeShown, FlowAt, Following, PaneRow, TimelineEntry, View};
 
 use common::{
-    COMMIT, Stage, agents_of, drawn, file, id, open, open_staged, review_id, review_with,
-    reviews_of, running_turn, session, session_id, since_main, step_fact, texts, turn_id,
-    wait_for_files, wait_until, working_on, workspace,
+    Stage, agents_of, drawn, file, id, open, open_staged, review_id, review_with, reviews_of,
+    running_turn, session, session_id, since_main, step_fact, texts, turn_id, wait_for_files,
+    wait_until, working_on, workspace,
 };
 
 /// The state the turn counts from.
@@ -40,6 +41,12 @@ fn s1() -> String {
 /// The state recorded at the end of the turn.
 fn s2() -> String {
     "7".repeat(40)
+}
+
+/// Where the history of the workspace starts, which is not the commit the changes are
+/// counted from, so that a count from the wrong one shows.
+fn history_start() -> String {
+    "8".repeat(40)
 }
 
 fn read(path: &str) -> Step {
@@ -219,9 +226,25 @@ fn click_an_entry(stage: &Stage, cx: &mut VisualTestContext) {
 /// A pane that meets session `a` working on turn `t` (read with `steps`), with Flow on
 /// screen in the timeline form, the focus in the pane and follow on.
 fn at_work_in_flow(steps: Vec<Step>, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    at_work_in_flow_with(steps, None, cx)
+}
+
+/// [`at_work_in_flow`] with the history of workspace `1` starting at `start`, when given.
+fn at_work_in_flow_with(
+    steps: Vec<Step>,
+    start: Option<String>,
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature"), workspace('2', "other")],
         |keeper| {
+            if let Some(start) = start {
+                keeper.set_history(History {
+                    workspace: id('1'),
+                    start: Some(start),
+                    entries: Vec::new(),
+                });
+            }
             keeper.set_agents(vec![agents_of(vec![session_a_on(&turn_id('t'))])]);
             keeper.set_turn(running_turn(
                 turn_id('t'),
@@ -684,6 +707,7 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
     tell_step(&mut stage, &t, 32, &mut cx);
     assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
     press("shift-g", &mut cx);
+    assert_eq!(following(&stage, &cx), Following::On);
     assert_eq!(flow_at(&stage, &cx), Some(at(&t, 32)));
     assert_eq!(
         wait_for_its_row_in_view(&stage, &mut cx),
@@ -917,6 +941,47 @@ fn a_pane_that_connects_while_a_turn_runs_stays_in_changes_and_so_does_a_turn_th
 }
 
 #[gpui_kit::test]
+fn agents_read_after_the_changes_are_shown_start_nothing_and_a_turn_that_only_changes_state_stays_in_changes(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            keeper.set_agents(vec![agents_of(vec![session_a_on(&turn_id('t'))])]);
+            // A Keeper that is slow with its list of the agents: the changes of the
+            // workspace are on screen long before the turn running in it is known.
+            keeper.hold_agents();
+        },
+        cx,
+    );
+    wait_until(&mut cx, "the question for the agents", |_| {
+        stage.keeper.held_agents() == 1
+    });
+    show_changes(&mut stage, &mut cx);
+    stage.keeper.release_agents(1);
+    wait_until(&mut cx, "the agents of the workspace", |cx| {
+        stage
+            .models
+            .agents
+            .read_with(cx, |agents, _| agents.of(&id('1')).is_some())
+    });
+    // The session's state changes with the turn it already ran: nothing started. A step
+    // told after it, which the timeline holds, is the barrier.
+    let waiting = Session {
+        state: SessionState::WaitsForPermission,
+        ..session_a_on(&t)
+    };
+    stage.keeper.tell_agents(agents_of(vec![waiting]));
+    stage
+        .keeper
+        .tell(step_fact(session_id('a'), t.clone(), 1, read("x.txt")));
+    wait_for_step(&stage, &t, 1, &mut cx);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::On);
+}
+
+#[gpui_kit::test]
 fn a_workspace_that_comes_on_screen_with_a_turn_running_starts_nothing(cx: &mut TestAppContext) {
     let t = turn_id('t');
     let (mut stage, mut cx) = open_staged(
@@ -1031,12 +1096,13 @@ fn the_offer_is_taken_with_shift_o_and_a_turn_end_with_no_since_counts_from_the_
     cx: &mut TestAppContext,
 ) {
     let t = turn_id('t');
-    let (mut stage, mut cx) = at_work_in_flow(vec![read("a.txt")], cx);
+    // The history of the workspace starts at a commit of its own, not the one the changes
+    // are counted from.
+    let (mut stage, mut cx) = at_work_in_flow_with(vec![read("a.txt")], Some(history_start()), cx);
     stage.keeper.tell(turn_ended(&t, Some(s2()), None));
-    // The history of the workspace starts at the commit checked out.
-    the_turn_end_selects(&mut stage, COMMIT, &s2(), &mut cx);
+    the_turn_end_selects(&mut stage, &history_start(), &s2(), &mut cx);
     let since = ChangeShown::Since {
-        from: Some(COMMIT.to_owned()),
+        from: Some(history_start()),
         to: s2(),
     };
     assert_eq!(wait_for_the_offer(&stage, &mut cx), since);
