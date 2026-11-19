@@ -23,6 +23,14 @@ const PARTS: u32 = 50;
 /// How many lines one part writes.
 const LINES: u32 = 4_000;
 
+/// What the Keeper keeps of a terminal's output for a client that attaches later: the
+/// ring of the Dock, `RING_BYTES` in its crate, which the system tests do not depend on.
+const RING: usize = 1 << 20;
+
+/// How far under the ring what the last client heard may fall: the bytes after the end of
+/// the flood that are cut away from it.
+const SLACK: usize = 4096;
+
 /// How long the control client waits for the whole flood to be over: 200,000 lines through
 /// a shell's loop and a terminal, twice at once, on a machine that builds other things. A
 /// bound on that one wait, which spans the fifty rounds of the test, and not a measure:
@@ -251,7 +259,8 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
 
     // A last client attaches when the flood is over.
     let mut last = world.client();
-    last.attach_terminal(&shown, SIZE)
+    let cut = last
+        .attach_terminal(&shown, SIZE)
         .expect("attach to the terminal");
     let heard = last.wait_for_output(&shown, DEADLINE, |bytes| newest_holds(bytes, "flood-done"));
     let (uninterrupted_screen, uninterrupted_run) = control.join().expect("the control client");
@@ -271,9 +280,13 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
     // to the byte, up to the end of the flood: what the Keeper kept lost and doubled
     // nothing where its memory ends and the live output begins.
     let (heard, run) = (up_to_the_end(&heard), up_to_the_end(&uninterrupted_run));
+    // The flood is several times what the Keeper keeps, so its kept output was cut, and
+    // is as long as the ring the Dock keeps for each terminal: `RING_BYTES`, 1 MiB. A
+    // Keeper that kept less would not give the last client a whole ring.
+    assert!(cut, "the Keeper did not say its kept output was cut");
     assert!(
-        heard.len() > 1 << 19,
-        "the flood is shorter than what the Keeper keeps: {} bytes",
+        (RING - SLACK..=RING).contains(&heard.len()),
+        "the last client heard {} bytes, and the ring holds {RING}",
         heard.len()
     );
     assert!(
