@@ -10,8 +10,15 @@
 //! Started as `claude` it behaves as Claude Code does towards the app's pieces: it reads
 //! the plugin folders `CLAUDE_CODE_PLUGIN_DIRS` names, and for each event of its script
 //! runs every command `hooks/hooks.json` of those folders gives for that event, through
-//! `/bin/sh -c`, with the event's input on its standard input, as the shapes recorded from
-//! the real Claude Code have it, and waits for it. That command is the app's own hook
+//! `/bin/sh -c` in the folder it was started in, with the event's input on its standard
+//! input, as the shapes recorded from the real Claude Code have it, and waits for it. The
+//! file is Claude Code's plugin format, as the crate `yaar-adapter-claude` shows it:
+//! `{"hooks": {"<event>": [{"matcher": "<tools parted by |>", "hooks": [{"type":
+//! "command", "command": "<command>"}]}]}}`, a group with no `matcher` being for every
+//! tool. The hook's environment is the stand-in's own, with `CLAUDE_PID` (its process
+//! id), `CLAUDECODE=1` and `CLAUDE_PROJECT_DIR` (the folder it was started in) added, as
+//! the recordings show Claude Code's hooks get. A hook that has not ended within 10 s is
+//! killed and written down so. That command is the app's own hook
 //! program, which reports to the Keeper over its socket: the stand-in knows neither the
 //! Keeper, nor the Link, nor the socket. As `otheragent` it runs no hook at all: a CLI the
 //! app does not support, that only edits files. As `pi` it refuses to start in slice 4,
@@ -22,6 +29,14 @@
 //! decides nothing: it follows the script and the keys. What reached it, every byte read
 //! from its terminal, every hook's answer and its own arguments, it writes down in the
 //! file [`LOG_VARIABLE`] names: the agent's side of a test, read with [`StandinLog`].
+//!
+//! Its terminal. It turns echo, line editing, the signals of keys, flow control and the
+//! change of a carriage return into a line feed off, so that Esc and Ctrl-C reach it as
+//! bytes, and leaves the output as the terminal makes it, so that each line it writes
+//! starts at the left. Every step writes a line of its own in the terminal, after the
+//! hooks before it and before the hooks after it: `● Read <path>`, `● Edit <path>`,
+//! `● Write <path>`, `● Bash <command>`, `● Hold <path>`, and `● Done` at the end of a
+//! turn. A test that reads the screen looks for those lines and for [`PROMPT`].
 
 use std::path::{Path, PathBuf};
 
@@ -43,8 +58,10 @@ pub const PROMPT: &str = "standin> ";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
     /// Prints [`PROMPT`] and waits for a line typed at it, ended by Enter: the user's
-    /// message. Its submission starts a turn: `UserPromptSubmit`. A line typed while a
-    /// turn runs is held until the turn ends, and then starts the next, as both CLIs do.
+    /// message. Its submission starts a turn: `UserPromptSubmit`, and then the progress
+    /// sequence of a turn that works, `ESC ] 9 ; 4 ; 3 ; BEL`, as Claude Code writes it. A
+    /// line typed while a turn runs is held until the turn ends, and then starts the next
+    /// without a prompt printed, as both CLIs do.
     Turn,
     /// Reads a file of the worktree with its read tool: `PreToolUse` and `PostToolUse` of
     /// `Read`, the file really read in between.
@@ -59,9 +76,11 @@ pub enum Step {
     /// `Bash`, the command, `PostToolUse` of `Bash`.
     Shell(String),
     /// Asks for permission to write a file whole: `PreToolUse` and `PermissionRequest` of
-    /// `Write`, then a dialog printed in the terminal that waits for one key. `y` writes
-    /// the file and gives `PostToolUse`; `n` or Esc denies it, prints the mark Claude Code
-    /// prints, [`INTERRUPT_MARK`], gives no event, and ends the turn as interrupted.
+    /// `Write`, then the line `Do you want to create <path>? (y/n)` printed in the
+    /// terminal, and a wait for one key. `y` writes the file and gives `PostToolUse`; `n`
+    /// or Esc denies it, prints the mark Claude Code prints, [`INTERRUPT_MARK`], gives no
+    /// event, and ends the turn as interrupted. Any other byte is written down and
+    /// ignored, and the wait goes on.
     Ask(PathBuf, String),
     /// Holds the turn open until the file exists: a test that wants to act while the
     /// agent works makes the file when it is done.
@@ -69,15 +88,25 @@ pub enum Step {
     /// Writes this many numbered lines into its terminal as fast as it can, and writes
     /// down in its log the longest a single write waited.
     Flood(u32),
-    /// Ends the turn: `Stop`. Esc pressed during a turn, before this step, prints
-    /// [`INTERRUPT_MARK`], gives no event, and ends the turn as interrupted.
+    /// Ends the turn: prints `● Done`, runs the `Stop` hooks and waits for them to return,
+    /// and only then prints the progress sequence that says no progress,
+    /// `ESC ] 9 ; 4 ; 0 ; BEL`, as Claude Code does. Esc pressed during a turn, before
+    /// this step, prints [`INTERRUPT_MARK`], gives no event, and ends the turn as
+    /// interrupted: the script goes on after the next `end`.
     End,
-    /// Ends the session, `SessionEnd`, and the program.
+    /// Prints the progress sequence that says no progress, `ESC ] 9 ; 4 ; 0 ; BEL`, alone,
+    /// and runs no hook: what any program may print, as a test's `otheragent` does to show
+    /// that such a sequence in a terminal with no session ends no turn.
+    Mark,
+    /// Ends the session, `SessionEnd` with `reason` `prompt_input_exit`, puts the
+    /// terminal back as it found it, and ends the program with 0.
     Exit,
 }
 
 /// The mark Claude Code prints when a turn stops: the progress sequence that says no
-/// progress, as the recordings hold it, then the words it prints on an interrupt.
+/// progress, as the recordings hold it, then the words it prints on an interrupt. Claude
+/// Code wraps those words in moves of the cursor and colours, in a write of their own;
+/// the stand-in leaves those out, since the Keeper reads the sequence alone.
 pub const INTERRUPT_MARK: &[u8] =
     b"\x1b]9;4;0;\x07Interrupted \xc2\xb7 What should Claude do instead?\r\n";
 
@@ -100,6 +129,63 @@ impl Script {
     }
 }
 
+/// One thing a stand-in did, in the order it did it, with how many bytes it had read
+/// from its terminal by then: a test asserts on positions in this list, and reads what
+/// reached the stand-in between two of them from `StandinLog::received`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Did {
+    /// Step `step` of the script, by its index, began.
+    Began {
+        /// The step's index in the script.
+        step: usize,
+        /// The bytes read so far.
+        received: usize,
+    },
+    /// Step `step` is done.
+    Done {
+        /// The step's index in the script.
+        step: usize,
+        /// The bytes read so far.
+        received: usize,
+    },
+    /// A hook ran, and what it printed.
+    Hook {
+        /// The hook's event, as `PermissionRequest`.
+        event: String,
+        /// What it printed on its standard output.
+        answer: Vec<u8>,
+        /// Whether it was killed for not ending within 10 s.
+        killed: bool,
+        /// The bytes read so far.
+        received: usize,
+    },
+    /// The turn was interrupted by Esc, or a dialog denied, during step `step`.
+    Interrupted {
+        /// The step's index in the script.
+        step: usize,
+        /// The bytes read so far.
+        received: usize,
+    },
+    /// A [`Step::Flood`] ended: the longest a single write of it waited.
+    Flooded {
+        /// The step's index in the script.
+        step: usize,
+        /// The longest write, in microseconds.
+        longest_us: u64,
+    },
+    /// The script ran out with no `exit`: the stand-in reads its terminal on until it
+    /// closes.
+    ScriptDone {
+        /// The bytes read so far.
+        received: usize,
+    },
+    /// The program ends, with this status.
+    Exited {
+        /// Its exit status.
+        status: i32,
+    },
+}
+
 /// What reached a stand-in, as it wrote it down.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StandinLog {
@@ -111,13 +197,8 @@ pub struct StandinLog {
     pub session: String,
     /// Every byte it read from its terminal, in order.
     pub received: Vec<u8>,
-    /// The bytes it had read when each step began, by the step's index: a test reads what
-    /// reached it between two steps from the difference.
-    pub received_at_step: Vec<usize>,
-    /// What each hook it ran printed, in order, with the hook's event.
-    pub answers: Vec<(String, Vec<u8>)>,
-    /// The longest a single write of a [`Step::Flood`] waited, in microseconds.
-    pub longest_write_us: Option<u64>,
+    /// What it did, in order.
+    pub did: Vec<Did>,
 }
 
 impl StandinLog {
@@ -131,6 +212,11 @@ impl StandinLog {
 
 /// The stand-in's program: what `standin-agent` runs, given its name as it was started,
 /// its arguments, and its environment through the process. Gives its exit status.
+///
+/// When its script runs out with no [`Step::Exit`], it runs no hook and ends no session:
+/// it reads its terminal on, writing down every byte, until the terminal closes, and then
+/// ends with 0. Only `exit` ends the session; a stand-in whose terminal ends, or that is
+/// killed, reports no end, as Claude Code does not.
 pub fn run(name: &str, args: &[String]) -> i32 {
     let _ = (name, args);
     todo!("the stand-in agent")

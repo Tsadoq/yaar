@@ -22,9 +22,15 @@ yaar-agent.workspace = true
 yaar-switchboard.workspace = true
 yaar-adapter-claude.workspace = true
 
+[dev-dependencies]
+# The hook program of Claude Code, built, and the recorded hooks it is run with in the
+# tests of the agents' side, as Claude Code would run it.
+yaar-system-tests.workspace = true
+serde_json.workspace = true
+
 # Used by the builders of slice 4; the contract has signatures only.
 [package.metadata.cargo-machete]
-ignored = ["yaar-adapter-claude", "yaar-agent", "yaar-switchboard"]
+ignored = ["yaar-adapter-claude", "yaar-agent", "yaar-switchboard", "yaar-system-tests", "serde_json"]
 
 [lints]
 workspace = true

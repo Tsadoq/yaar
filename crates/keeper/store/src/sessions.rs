@@ -5,6 +5,7 @@
 //! Every call that changes something is one transaction that waits for the drive, as the
 //! calls of slice 1 do: a step is a few bytes, and an agent takes a few steps a second.
 
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use crate::{ReviewId, Store, StoreError, WorkspaceId};
@@ -73,6 +74,20 @@ pub struct SessionRecord {
     /// When it last stopped running, as the order of ends: a session that ended later has
     /// a larger number. None while it runs, and for one that never ended.
     pub ended: Option<u64>,
+    /// How it last stopped running; none while it runs, and for one that never ended.
+    pub ended_by: Option<EndedBy>,
+}
+
+/// How a session stopped running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndedBy {
+    /// Its CLI reported its end: the user quit it, or cleared it for a new session.
+    Cli,
+    /// Its process went with no end reported, or its terminal ended.
+    ProcessGone,
+    /// The Keeper stopped while it ran, as when the machine restarted: the session was cut
+    /// off, not ended, and is one the app may offer to resume.
+    KeeperStopped,
 }
 
 /// How a turn ended.
@@ -104,8 +119,8 @@ pub struct TurnRecord {
 pub enum StepRecord {
     /// A file read. Kept as its bytes.
     Read(PathBuf),
-    /// A file changed with the edit tool.
-    Edit(PathBuf),
+    /// A file changed with the edit tool, with the lines it changed when the CLI said.
+    Edit(PathBuf, Option<Vec<RangeInclusive<u32>>>),
     /// A file written whole.
     Write(PathBuf),
     /// A shell command.
@@ -143,21 +158,27 @@ impl Store {
     }
 
     /// Every session the Store holds that runs, in every workspace: those a Keeper started
-    /// again finds still marked running, which it marks ended.
+    /// again finds still marked running, which it marks ended by
+    /// [`EndedBy::KeeperStopped`].
     pub fn running_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
         todo!("the sessions marked running")
     }
 
-    /// Marks a session running in `terminal`, or ended; an end gets the next number of
-    /// the order of ends.
+    /// Marks a session running in `terminal`, as when its CLI resumed it; how it last
+    /// ended is cleared.
     pub fn set_running(
         &self,
         session: &SessionId,
-        running: bool,
         terminal: Option<&str>,
     ) -> Result<(), StoreError> {
-        let _ = (session, running, terminal);
-        todo!("mark a session running or ended")
+        let _ = (session, terminal);
+        todo!("mark a session running")
+    }
+
+    /// Marks a session ended, and how; the end gets the next number of the order of ends.
+    pub fn set_ended(&self, session: &SessionId, how: EndedBy) -> Result<(), StoreError> {
+        let _ = (session, how);
+        todo!("mark a session ended")
     }
 
     /// Gives a review to a session, or to no agent: the takeover of a review.

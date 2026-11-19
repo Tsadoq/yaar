@@ -20,7 +20,7 @@
 //!
 //! Changes. Above the files the pane shows the tree of the worktree's history, which it
 //! asks the Keeper for: its commits and the turns of its agents, oldest first, and last
-//! its uncommitted changes, those no agent made marked. The reviewer selects one entry, or
+//! the uncommitted changes the review shown lists, those no agent made marked. The reviewer selects one entry, or
 //! a range of them, by clicks or with the keys tuicr gives its commit selector, and the
 //! files below are the change from the version before the first to the version of the
 //! last. Until the reviewer selects one, the pane shows the changes of the workspace as
@@ -61,8 +61,8 @@ use gpui_kit::*;
 use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
-    Anchor, ChangedFile, Changes, CommentId, Comparison, Content, Fact, FileSides, FileStatus,
-    History, RequestKind, Review, ReviewId, Session, SessionId, ThreadId, WorkspaceId,
+    Anchor, ChangedFile, Changes, CommentId, Comparison, Content, CreditedFile, Fact, FileSides,
+    FileStatus, History, RequestKind, Review, ReviewId, Session, SessionId, ThreadId, WorkspaceId,
     WorkspaceReviews,
 };
 
@@ -151,8 +151,9 @@ pub enum ChangeShown {
         /// The last entry.
         last: usize,
     },
-    /// The uncommitted changes: from the commit checked out to the files on disk, with
-    /// those no agent made marked.
+    /// The uncommitted changes the review shown lists, as the Keeper answers
+    /// `GetUncommitted` for that review: from the commit checked out to the files on
+    /// disk, with those no agent made marked.
     Uncommitted,
     /// From one version to another, as what changed since the last review is: from the
     /// state the reviewer last marked reviewed, or the history's start before the first
@@ -645,7 +646,8 @@ impl ReviewPane {
     }
 
     /// The agent sessions of the worktree on screen that a review belongs to, in the
-    /// order they started, as `yaar_frame::AgentList` holds them. With one, the pane
+    /// order they started, as `yaar_frame::AgentList` held them when the pane last drew:
+    /// a copy, read without the app's context. With one, the pane
     /// names it above the review, under the selector `review-session`; with several, it
     /// names each under `review-session-<index>`, which a click shows the review of.
     pub fn sessions(&self) -> Vec<Session> {
@@ -658,11 +660,19 @@ impl ReviewPane {
     }
 
     /// Whether the change of `path` that the pane lists under uncommitted changes was made
-    /// by no agent, as the history's credits say; such a file's heading carries a mark under
-    /// the selector `review-no-agent-<index of its row>`.
+    /// by no agent, as the credits of the uncommitted list say; such a file's heading
+    /// carries a mark under the selector `review-no-agent-<index of its row>`.
     pub fn made_by_no_agent(&self, path: &Path) -> bool {
         let _ = path;
         todo!("whether no agent made a change")
+    }
+
+    /// The uncommitted changes the review shown lists, as the Keeper last answered
+    /// `GetUncommitted` for it, ordered by path, each with who made it; none before its
+    /// first answer. The pane asks again when the review shown changes, at
+    /// `ChangesChanged` and at `TurnEnded` of the workspace on screen.
+    pub fn uncommitted(&self) -> Option<&[CreditedFile]> {
+        todo!("the uncommitted changes of the review shown")
     }
 
     /// The comment box, while one is open.

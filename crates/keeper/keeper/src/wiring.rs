@@ -21,9 +21,10 @@
 //! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
 //! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
 //! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
-//! | `Report` | `Agents::report`, at once; what it means on the agents' own thread | later `AgentsChanged`, `Step`, `TurnEnded` |
+//! | `Report` | `Agents::report`: queued, then answered; what it means on the agents' own thread | later `AgentsChanged`, `Step`, `TurnEnded` |
 //! | `ListAgents` | `Agents::list` | none |
 //! | `GetHistory` | `Agents::history` | none |
+//! | `GetUncommitted` | `Agents::uncommitted` | none |
 //! | `CompareVersions` | `Agents::compare` | none |
 //! | `ReadVersions` | `Agents::read_versions` | none |
 //! | `GetTurn` | `Agents::turn` | none |
@@ -200,9 +201,10 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // git in the worktree or in its state store, up to a second on a large repository,
         // reading the files on disk: the Window's typing into its terminals must not wait
         // for it, nor its saves.
-        RequestKind::GetHistory | RequestKind::CompareVersions | RequestKind::ReadVersions => {
-            Answerer::Apart
-        }
+        RequestKind::GetHistory
+        | RequestKind::GetUncommitted
+        | RequestKind::CompareVersions
+        | RequestKind::ReadVersions => Answerer::Apart,
     }
 }
 
@@ -258,6 +260,7 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         RequestKind::Report => false,
         // What these read, a fact makes a Window read again.
         RequestKind::GetHistory
+        | RequestKind::GetUncommitted
         | RequestKind::CompareVersions
         | RequestKind::ReadVersions
         | RequestKind::GetTurn
@@ -438,6 +441,9 @@ impl Parts {
             Request::Report { report } => return Answered::Now(self.agents.report(kept, report)),
             Request::ListAgents => self.agents.list(kept),
             Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
+            Request::GetUncommitted { workspace, review } => {
+                self.agents.uncommitted(kept, &workspace, review.as_ref())
+            }
             Request::CompareVersions {
                 workspace,
                 from,

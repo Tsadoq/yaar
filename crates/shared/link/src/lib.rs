@@ -994,9 +994,13 @@ mod tests {
                     rows: 40,
                 },
             },
+            Request::GetUncommitted {
+                workspace: workspace.clone(),
+                review: Some(review_id()),
+            },
         ];
         // A launcher, a report from outside the app's terminals, the files on disk as the
-        // new side, and no workspace on screen.
+        // new side, no workspace on screen, and the uncommitted list of no review named.
         let launcher = Request::OpenTerminal {
             workspace: workspace.clone(),
             program: Program::Agent {
@@ -1028,6 +1032,10 @@ mod tests {
             path: PathBuf::from("src/new.rs"),
         };
         let nothing_on_screen = Request::ShowWorkspace { workspace: None };
+        let every_change = Request::GetUncommitted {
+            workspace: workspace.clone(),
+            review: None,
+        };
         // A draft saved again, or a reply, names a thread that exists.
         let in_a_thread = Request::SaveDraft {
             review: review_id(),
@@ -1141,8 +1149,9 @@ mod tests {
                 workspace: workspace.clone(),
                 start: None,
                 entries: Vec::new(),
-                uncommitted: Vec::new(),
             }),
+            Reply::Uncommitted(uncommitted()),
+            Reply::Uncommitted(Vec::new()),
             Reply::Compared(
                 changes(
                     Comparison::NothingToCompare {
@@ -1234,14 +1243,14 @@ mod tests {
                 workspace: workspace.clone(),
                 session: session_id(),
                 turn: turn_id(),
-                state: STATE.to_owned(),
+                state: Some(STATE.to_owned()),
                 since: Some(COMMIT.to_owned()),
             },
             Fact::TurnEnded {
                 workspace,
                 session: session_id(),
                 turn: turn_id(),
-                state: STATE.to_owned(),
+                state: None,
                 since: None,
             },
             Fact::Step {
@@ -1289,6 +1298,7 @@ mod tests {
             to_disk,
             disk_side,
             nothing_on_screen,
+            every_change,
         ] {
             messages.push(Message::Request {
                 id: RequestId(u32::MAX - 2),
@@ -1367,6 +1377,11 @@ mod tests {
                     workspace: WorkspaceId::new("11111111111111111111111111111111"),
                     terminal: (*state != SessionState::NotRunning).then(terminal),
                     state: *state,
+                    turn: matches!(
+                        state,
+                        SessionState::Works | SessionState::WaitsForPermission
+                    )
+                    .then(turn_id),
                     review: (n != 0).then(review_id),
                 })
                 .collect(),
@@ -1387,6 +1402,15 @@ mod tests {
                 },
                 Step::Edit {
                     path: PathBuf::from("src/été.rs"),
+                    lines: Some(vec![3..=3, 10..=12, u32::MAX..=u32::MAX]),
+                },
+                Step::Edit {
+                    path: PathBuf::from("notes.txt"),
+                    lines: None,
+                },
+                Step::Edit {
+                    path: PathBuf::from("empty.txt"),
+                    lines: Some(Vec::new()),
                 },
                 Step::Write {
                     path: PathBuf::from("/elsewhere/new.txt"),
@@ -1412,28 +1436,37 @@ mod tests {
                 HistoryEntry::Turn {
                     turn: turn_id(),
                     session: session_id(),
-                    state: STATE.to_owned(),
+                    state: Some(STATE.to_owned()),
                 },
-            ],
-            uncommitted: vec![
-                CreditedFile {
-                    file: ChangedFile {
-                        path: PathBuf::from("by-the-agent.txt"),
-                        status: FileStatus::Added,
-                    },
-                    by: vec![session_id()],
-                },
-                CreditedFile {
-                    file: ChangedFile {
-                        path: PathBuf::from("src/moved.rs"),
-                        status: FileStatus::Renamed {
-                            from: PathBuf::from("src/was here.rs"),
-                        },
-                    },
-                    by: Vec::new(),
+                HistoryEntry::Turn {
+                    turn: turn_id(),
+                    session: session_id(),
+                    state: None,
                 },
             ],
         }
+    }
+
+    /// Uncommitted changes made by a session and by no agent.
+    fn uncommitted() -> Vec<CreditedFile> {
+        vec![
+            CreditedFile {
+                file: ChangedFile {
+                    path: PathBuf::from("by-the-agent.txt"),
+                    status: FileStatus::Added,
+                },
+                by: vec![session_id()],
+            },
+            CreditedFile {
+                file: ChangedFile {
+                    path: PathBuf::from("src/moved.rs"),
+                    status: FileStatus::Renamed {
+                        from: PathBuf::from("src/was here.rs"),
+                    },
+                },
+                by: Vec::new(),
+            },
+        ]
     }
 
     fn anchor(tree: Option<&str>, side: Side) -> Anchor {
@@ -1536,7 +1569,7 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; eight kinds are tried a second time.
+        // One of each, in the order of the table; nine kinds are tried a second time.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
@@ -1549,6 +1582,7 @@ mod tests {
                 RequestKind::CompareVersions,
                 RequestKind::ReadVersions,
                 RequestKind::ShowWorkspace,
+                RequestKind::GetUncommitted,
             ]
         );
     }
@@ -1598,6 +1632,7 @@ mod tests {
             RequestKind::ShowWorkspace,
             RequestKind::ListTerminals,
             RequestKind::AttachTerminal,
+            RequestKind::GetUncommitted,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

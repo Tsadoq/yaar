@@ -19,7 +19,8 @@
 //!   [`ShellEntry`] and [`ReportError`].
 //!
 //! Every event names its session, and a write made with the CLI's edit tool names its
-//! path: a marker per agent in Flow, after the first release, needs both.
+//! path and the lines it changed: a marker per agent in Flow, after the first release,
+//! needs all three.
 //!
 //! What later slices add here, each beside what is here and changing none of it: a
 //! delivery module (the review that rides with the user's next message, and how the
@@ -32,6 +33,7 @@
 use std::ffi::OsString;
 use std::fmt;
 use std::io;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 /// The CLI's own name for one of its sessions, as its reports carry it: for Claude Code
@@ -114,6 +116,11 @@ pub enum Event {
         path: PathBuf,
         /// What it was written with.
         tool: WriteTool,
+        /// The lines of the file as it is now that the write changed, numbered from 1, in
+        /// order: for each part the edit tool replaced, the lines that took its place, or
+        /// the one line where a part that left nothing in its place was. None for a file
+        /// written whole, and where the CLI did not say.
+        lines: Option<Vec<RangeInclusive<u32>>>,
     },
     /// A shell command of the agent begins or has ended. It names no file: what it writes
     /// is seen by the watcher of the worktree.
@@ -140,6 +147,10 @@ pub struct Reported {
     pub terminal: Option<String>,
     /// The process of the CLI.
     pub pid: u32,
+    /// The folder the CLI works in, as it reported it: for Claude Code the `cwd` of the
+    /// hook's input. The Keeper finds the session's workspace from it, and from the
+    /// terminal where it names none.
+    pub folder: Option<PathBuf>,
     /// What happened.
     pub event: Event,
 }
@@ -150,7 +161,8 @@ pub struct Reported {
 pub struct Report<'a> {
     /// The terminal of the app the CLI runs in, as the piece's environment named it.
     pub terminal: Option<&'a str>,
-    /// The process of the CLI: the piece's parent.
+    /// The process of the agent CLI, as the piece found it: for Claude Code's hook
+    /// program, its parent.
     pub pid: u32,
     /// What the CLI handed the piece, byte for byte.
     pub payload: &'a [u8],
@@ -175,7 +187,8 @@ pub enum ShellEntry {
     SearchFirst(PathBuf),
 }
 
-/// Why a report could not be read. The Keeper answers the piece with it; the CLI goes on.
+/// Why a report could not be read. The Keeper has answered the piece already, and writes
+/// this down; the CLI goes on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ReportError {
     /// The payload is not what this CLI hands its pieces: what is wrong, as a sentence.

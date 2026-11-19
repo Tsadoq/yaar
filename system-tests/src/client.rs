@@ -19,10 +19,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    ChangedFile, Changes, CommentId, DraftOn, Fact, FileSides, FileStatus, Hello, History, Message,
-    Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId,
-    TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents, WorkspaceId,
-    WorkspaceReviews, handshake, read_message, write_message,
+    ChangedFile, Changes, CommentId, CreditedFile, DraftOn, Fact, FileSides, FileStatus, Hello,
+    History, Message, Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId,
+    ReviewId, TerminalId, TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents,
+    WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -423,6 +423,17 @@ impl Client {
     pub fn history(&mut self, workspace: &WorkspaceId) -> Result<History, Refusal> {
         let _ = workspace;
         todo!("the history of a workspace")
+    }
+
+    /// Asks for the uncommitted changes of a workspace that `review` lists, or every one
+    /// with none named, each with who made it.
+    pub fn uncommitted(
+        &mut self,
+        workspace: &WorkspaceId,
+        review: Option<&ReviewId>,
+    ) -> Result<Vec<CreditedFile>, Refusal> {
+        let _ = (workspace, review);
+        todo!("the uncommitted changes a review lists")
     }
 
     /// Asks for the files that differ between two versions of a workspace.

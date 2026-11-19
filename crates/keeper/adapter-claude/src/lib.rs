@@ -14,6 +14,32 @@
 //! folder added, and a plain `claude` typed there, or started from its launcher, loads the
 //! plugin. Nothing is written into the user's settings or into a worktree.
 //!
+//! The two files, with `<hook>` the absolute path of the hook program quoted for `sh`, and
+//! one entry under `hooks` for each event of [`HOOK_EVENTS`], each a list of one group
+//! with no `matcher`, which Claude Code reads as every tool:
+//!
+//! ```json
+//! {"name": "yaar-review", "version": "0.1.0", "description": "..."}
+//! ```
+//!
+//! ```json
+//! {"hooks": {
+//!   "SessionStart": [{"hooks": [{"type": "command", "command": "'<hook>'"}]}],
+//!   "PreToolUse": [{"hooks": [{"type": "command", "command": "'<hook>'"}]}]
+//! }}
+//! ```
+//!
+//! A group may also carry `"matcher": "Edit|Write"`, the tools it is for, parted by `|`;
+//! the app's own groups carry none, and the stand-in agent of the system tests reads both.
+//!
+//! The command is the lone quoted path and nothing else, no redirection and no `;`:
+//! Claude Code runs it through `sh -c`, and `sh` runs a lone command in its own place, so
+//! that the hook program's parent is Claude Code itself, whose process the Keeper watches.
+//! A command of several parts would leave a short-lived `sh` as that parent.
+//!
+//! Every event carries the hook input's `cwd` as the folder of its session, and its
+//! `session_id`. Paths are given as the CLI named them, absolute.
+//!
 //! What the hooks report, read as the app's events:
 //!
 //! | Hook | Event |
@@ -25,8 +51,8 @@
 //! | `PermissionRequest` | waiting for permission on |
 //! | `PostToolUse` after a `PermissionRequest` of the session | waiting for permission off, then what follows |
 //! | `PostToolUse` of `Read` | file read, `tool_input.file_path` |
-//! | `PostToolUse` of `Edit`, `MultiEdit`, `NotebookEdit` | file written by the edit tool |
-//! | `PostToolUse` of `Write` | file written by the write tool |
+//! | `PostToolUse` of `Edit`, `MultiEdit`, `NotebookEdit` | file written by the edit tool, with the lines of `tool_response.structuredPatch`: for each hunk `newStart` to `newStart + newLines - 1`, or `newStart` alone when `newLines` is 0; none without a patch |
+//! | `PostToolUse` of `Write` | file written by the write tool, no lines |
 //! | `PostToolUse` or `PostToolUseFailure` of `Bash` | command ended |
 //! | `Stop` | turn ended, finished |
 //! | `SessionEnd` | session ended |
@@ -35,7 +61,14 @@
 //! Any other hook, as `InstructionsLoaded`, `PostToolBatch`, `Notification`,
 //! `SubagentStart` or `SubagentStop`, gives nothing; a tool event inside a sub-agent is
 //! the session's own. A dialog denied, and an Esc during a turn, run no hook at all:
-//! Claude Code writes the mark into its terminal then, and only the mark tells.
+//! Claude Code writes the mark into its terminal then, and only the mark tells. A shell
+//! command that began and was denied or interrupted is never reported ended here: the
+//! Switchboard ends it with its turn.
+//!
+//! The mark follows every turn's end, `Stop` included, by some milliseconds, and Claude
+//! Code writes it only once its `Stop` hooks have returned: the Keeper queues a report
+//! before it answers the hook, and a mark on the same queue, so a `Stop` is always taken
+//! before the mark that follows it, which then means nothing.
 
 use std::io;
 use std::path::Path;
@@ -54,9 +87,10 @@ pub const COMMAND: &str = "claude";
 /// The variable that names the plugin folders Claude Code loads, a list parted by `:`.
 pub const PLUGIN_DIRS: &str = "CLAUDE_CODE_PLUGIN_DIRS";
 
-/// The name of the app's plugin, as `plugin.json` gives it; Claude Code names the app's
-/// tools after it.
-pub const PLUGIN: &str = "yaar";
+/// The name of the app's plugin, as `plugin.json` gives it: the app's name where a name
+/// must be unique, since it must be unique among the user's plugins. Claude Code names the
+/// app's tools after it, `mcp__plugin_yaar-review_<server>__<tool>`.
+pub const PLUGIN: &str = "yaar-review";
 
 /// The program of the app that Claude Code runs for each hook: it lies in the folder of
 /// the app's programs, beside the Keeper.
@@ -112,9 +146,11 @@ impl Adapter for ClaudeCode {
         COMMAND
     }
 
-    /// Writes `folder/plugin`: `.claude-plugin/plugin.json` and `hooks/hooks.json`, whose
-    /// every hook of [`HOOK_EVENTS`] runs `companions/`[`HOOK_PROGRAM`], quoted for the
-    /// shell Claude Code runs it with. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
+    /// Writes `folder/plugin`: `.claude-plugin/plugin.json` and `hooks/hooks.json` as the
+    /// crate's doc shows them, whose every hook of [`HOOK_EVENTS`] runs
+    /// `companions/`[`HOOK_PROGRAM`] alone, single-quoted for the shell Claude Code runs it
+    /// with (a `'` inside written `'\''`). Each file is written to a temporary file of its
+    /// folder and renamed into place. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
         let _ = (folder, companions);
         todo!("the plugin folder and the entry that loads it")

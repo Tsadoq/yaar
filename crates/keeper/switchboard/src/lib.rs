@@ -19,13 +19,15 @@
 //! by name: an Adapter's name is a text to it.
 
 use std::fmt;
+use std::path::PathBuf;
 
 use yaar_agent::{CliSession, Event, Reported, TurnEnd};
 
 /// What a session is doing.
 ///
 /// The order of the variants is the order in which a workspace with several sessions
-/// shows them, the first first: see [`shown`].
+/// shows them, the first first: see [`shown`]. Idle is last, so that the four states the
+/// sidebar marks keep their order among themselves whatever else runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum State {
     /// The agent waits at a permission prompt for the user's answer.
@@ -34,15 +36,15 @@ pub enum State {
     Unreviewed,
     /// The agent works on a turn.
     Works,
-    /// The agent runs and waits for the user, with nothing unreviewed.
-    Idle,
     /// The session ended, or its process is gone.
     NotRunning,
+    /// The agent runs and waits for the user, with nothing unreviewed.
+    Idle,
 }
 
 /// The state a workspace shows for its sessions: the first of these that holds for any
-/// of them, waits for permission, finished a turn and not reviewed, works, idle, not
-/// running. None for no session.
+/// of them, waits for permission, finished a turn and not reviewed, works, not running;
+/// idle only when every one is idle. None for no session.
 pub fn shown(states: impl IntoIterator<Item = State>) -> Option<State> {
     let _ = states;
     todo!("the first state of the order that holds for any session")
@@ -80,8 +82,10 @@ pub struct Known {
     pub cli: CliSession,
     /// The terminal it runs in, by the id the app gave it.
     pub terminal: Option<String>,
-    /// The process of the CLI; 0 when none was reported.
-    pub pid: u32,
+    /// The folder its CLI works in, as the last report that named one said.
+    pub folder: Option<PathBuf>,
+    /// The process of the CLI; none when no report named one.
+    pub pid: Option<u32>,
     /// What it is doing.
     pub state: State,
     /// Its open turn, with the number of steps told in it so far; none between turns.
@@ -102,6 +106,8 @@ pub enum Change {
         cli: CliSession,
         /// The terminal it runs in.
         terminal: Option<String>,
+        /// The folder its CLI works in, as its report named it.
+        folder: Option<PathBuf>,
         /// Whether it is a session that ran before, resumed.
         resumed: bool,
     },
@@ -133,7 +139,9 @@ pub enum Change {
         event: Event,
     },
     /// A shell command of the session ended; it is no step, but who wrote what during it
-    /// is judged by when it ran.
+    /// is judged by when it ran. Also told for a command that began and was never
+    /// reported ended, before the end of its turn or of its session: a command denied at
+    /// its permission prompt, or interrupted, gets no report of its end.
     CommandEnded {
         /// The session.
         session: SessionId,
@@ -182,6 +190,12 @@ impl Switchboard {
     /// or by the mark of an interrupt, leaves it finished and not reviewed; the session's
     /// end, not running. An event of a session that has ended is taken as its CLI resuming
     /// it. A step outside a turn opens none: it is told with no turn, as nothing.
+    ///
+    /// Ends that came unreported. A turn that starts while one is open ends the open one
+    /// as interrupted first, as when the mark of an interrupt was missed. A turn's end with
+    /// no turn open changes nothing. Before any end of a turn, and before the end of the
+    /// session, a shell command that began and was not reported ended is
+    /// [`Change::CommandEnded`].
     pub fn take(
         &mut self,
         agent: &str,
@@ -193,7 +207,8 @@ impl Switchboard {
     }
 
     /// The process `pid` of a CLI is gone, with no end reported: every session of it is
-    /// not running, and its open turn, if any, ends as interrupted.
+    /// not running, and its open turn, if any, ends as interrupted, after its open shell
+    /// command, if any, as [`Change::CommandEnded`].
     pub fn gone(&mut self, pid: u32) -> Vec<Change> {
         let _ = pid;
         todo!("the changes of a process that is gone")

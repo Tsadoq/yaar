@@ -8,6 +8,7 @@
 //! CLI, which turns it into the app's own events; a Window hears only what follows from
 //! them, as facts.
 
+use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use crate::LinkError;
@@ -29,7 +30,8 @@ pub struct AgentReport {
     /// The terminal of the app the CLI runs in, as its environment names it; none for a
     /// CLI that runs outside the app's terminals.
     pub terminal: Option<TerminalId>,
-    /// The process of the agent CLI that started the piece: the piece's parent.
+    /// The process of the agent CLI, as the piece found it: for the hook program of
+    /// Claude Code, its parent.
     pub pid: u32,
     /// What the CLI handed its piece, byte for byte: for Claude Code the input of the hook.
     pub payload: Vec<u8>,
@@ -38,7 +40,9 @@ pub struct AgentReport {
 /// What an agent session is doing, as the sidebar and the agent's terminal show it.
 ///
 /// The order of the variants is the order in which a workspace with several sessions
-/// shows them: the first that holds for any session is the workspace's.
+/// shows them: the first that holds for any session is the workspace's. Idle comes last:
+/// a workspace shows it only when every session is idle, so that the four states the
+/// sidebar marks keep their own order whatever else runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SessionState {
     /// The agent waits at a permission prompt for the user's answer.
@@ -48,10 +52,10 @@ pub enum SessionState {
     Unreviewed,
     /// The agent works on a turn.
     Works,
-    /// The agent runs and waits for the user's next message, with nothing unreviewed.
-    Idle,
     /// The session has ended, or its process is gone; its review stays.
     NotRunning,
+    /// The agent runs and waits for the user's next message, with nothing unreviewed.
+    Idle,
 }
 
 /// One session of an agent CLI, as the Keeper knows it.
@@ -71,6 +75,9 @@ pub struct Session {
     pub terminal: Option<TerminalId>,
     /// What it is doing.
     pub state: SessionState,
+    /// Its turn that runs, from the turn's start to its end; none between turns. A
+    /// Window that follows the agent learns the turn's id here as it starts.
+    pub turn: Option<TurnId>,
     /// The review that belongs to it; none once the next session of its CLI took that
     /// review over.
     pub review: Option<ReviewId>,
@@ -103,6 +110,9 @@ pub enum Step {
     Edit {
         /// The path, as for [`Step::Read`].
         path: PathBuf,
+        /// The lines of the file after the edit that it changed, numbered from 1, in
+        /// order; none where the CLI did not say.
+        lines: Option<Vec<RangeInclusive<u32>>>,
     },
     /// The agent wrote a file whole with its write tool, a new file among them.
     Write {
@@ -155,8 +165,10 @@ pub enum HistoryEntry {
         turn: TurnId,
         /// Its session.
         session: SessionId,
-        /// The state recorded when it ended, by its full id.
-        state: String,
+        /// The state recorded when it ended, by its full id; none when the recording
+        /// failed or the state is no longer kept. A Window shows such a turn and does not
+        /// let it be selected.
+        state: Option<String>,
     },
 }
 
@@ -171,7 +183,10 @@ pub struct CreditedFile {
     pub by: Vec<SessionId>,
 }
 
-/// The history of a worktree: what Changes shows as its tree.
+/// The history of a worktree: what Changes shows as its tree, but for its last entry,
+/// the uncommitted changes, which [`crate::Request::GetUncommitted`] reads. It is read
+/// from what the Keeper keeps and from the commits, without asking git what changed on
+/// disk, so that a window that opens draws it at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
     /// The workspace.
@@ -182,9 +197,6 @@ pub struct History {
     /// The commits of the branch since `start` and the turns that ended on them, oldest
     /// first, in the order they happened.
     pub entries: Vec<HistoryEntry>,
-    /// The changes that are not committed, from the commit checked out to the files on
-    /// disk, ordered by path, each with who made it.
-    pub uncommitted: Vec<CreditedFile>,
 }
 
 /// A terminal the Keeper holds.
@@ -221,8 +233,8 @@ fn write_state(out: &mut Out, state: SessionState) {
         SessionState::WaitsForPermission => 0,
         SessionState::Unreviewed => 1,
         SessionState::Works => 2,
-        SessionState::Idle => 3,
-        SessionState::NotRunning => 4,
+        SessionState::NotRunning => 3,
+        SessionState::Idle => 4,
     });
 }
 
@@ -231,8 +243,8 @@ fn read_state(input: &mut In<'_>) -> Result<SessionState, LinkError> {
         0 => SessionState::WaitsForPermission,
         1 => SessionState::Unreviewed,
         2 => SessionState::Works,
-        3 => SessionState::Idle,
-        4 => SessionState::NotRunning,
+        3 => SessionState::NotRunning,
+        4 => SessionState::Idle,
         _ => return Err(LinkError::Malformed("an unknown state of a session")),
     })
 }
@@ -246,6 +258,7 @@ fn write_session(out: &mut Out, session: &Session) {
         out.text(terminal.as_str())
     });
     write_state(out, session.state);
+    out.optional(session.turn.as_ref(), |out, turn| out.text(turn.as_str()));
     out.optional(session.review.as_ref(), |out, review| {
         out.text(review.as_str())
     });
@@ -259,6 +272,7 @@ fn read_session(input: &mut In<'_>) -> Result<Session, LinkError> {
         workspace: WorkspaceId::new(input.text()?),
         terminal: input.optional(|input| Ok(TerminalId::new(input.text()?)))?,
         state: read_state(input)?,
+        turn: input.optional(|input| Ok(TurnId::new(input.text()?)))?,
         review: input.optional(|input| Ok(ReviewId::new(input.text()?)))?,
     })
 }
@@ -283,9 +297,15 @@ pub(crate) fn write_step(out: &mut Out, step: &Step) {
             out.u8(0);
             out.path(path);
         }
-        Step::Edit { path } => {
+        Step::Edit { path, lines } => {
             out.u8(1);
             out.path(path);
+            out.optional(lines.as_ref(), |out, lines| {
+                out.list(lines, |out, range| {
+                    out.u32(*range.start());
+                    out.u32(*range.end());
+                });
+            });
         }
         Step::Write { path } => {
             out.u8(2);
@@ -305,6 +325,18 @@ pub(crate) fn read_step(input: &mut In<'_>) -> Result<Step, LinkError> {
         },
         1 => Step::Edit {
             path: input.path()?,
+            lines: input.optional(|input| {
+                input.list(|input| {
+                    let start = input.u32()?;
+                    let end = input.u32()?;
+                    if end < start {
+                        return Err(LinkError::Malformed(
+                            "a range of lines ends before it starts",
+                        ));
+                    }
+                    Ok(start..=end)
+                })
+            })?,
         },
         2 => Step::Write {
             path: input.path()?,
@@ -365,7 +397,7 @@ fn write_entry(out: &mut Out, entry: &HistoryEntry) {
             out.u8(1);
             out.text(turn.as_str());
             out.text(session.as_str());
-            out.text(state);
+            out.optional(state.as_deref(), Out::text);
         }
     }
 }
@@ -376,18 +408,18 @@ fn read_entry(input: &mut In<'_>) -> Result<HistoryEntry, LinkError> {
         1 => HistoryEntry::Turn {
             turn: TurnId::new(input.text()?),
             session: SessionId::new(input.text()?),
-            state: input.text()?,
+            state: input.optional(In::text)?,
         },
         _ => return Err(LinkError::Malformed("an unknown kind of history entry")),
     })
 }
 
-fn write_credited(out: &mut Out, credited: &CreditedFile) {
+pub(crate) fn write_credited(out: &mut Out, credited: &CreditedFile) {
     write_changed_file(out, &credited.file);
     out.list(&credited.by, |out, session| out.text(session.as_str()));
 }
 
-fn read_credited(input: &mut In<'_>) -> Result<CreditedFile, LinkError> {
+pub(crate) fn read_credited(input: &mut In<'_>) -> Result<CreditedFile, LinkError> {
     Ok(CreditedFile {
         file: read_changed_file(input)?,
         by: input.list(|input| Ok(SessionId::new(input.text()?)))?,
@@ -398,7 +430,6 @@ pub(crate) fn write_history(out: &mut Out, history: &History) {
     out.text(history.workspace.as_str());
     out.optional(history.start.as_deref(), Out::text);
     out.list(&history.entries, write_entry);
-    out.list(&history.uncommitted, write_credited);
 }
 
 pub(crate) fn read_history(input: &mut In<'_>) -> Result<History, LinkError> {
@@ -406,7 +437,6 @@ pub(crate) fn read_history(input: &mut In<'_>) -> Result<History, LinkError> {
         workspace: WorkspaceId::new(input.text()?),
         start: input.optional(In::text)?,
         entries: input.list(read_entry)?,
-        uncommitted: input.list(read_credited)?,
     })
 }
 

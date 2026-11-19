@@ -45,6 +45,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Instant;
 
 use yaar_recorder::{Branch, Commits, Git, GitError, OpenError};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
@@ -328,6 +329,9 @@ impl Workspaces {
     /// What git keeps of its own in the worktree's git folder is no change of a file, but
     /// a change of `HEAD`, of the list of files or of a ref is [`Seen::Head`]. Reads are
     /// not seen; the system tells nothing of them.
+    ///
+    /// The ledger notes the moment a path was seen before `told` hears of it: once `told`
+    /// has heard [`Seen::Files`] after a write, [`Workspaces::credits`] judges that write.
     pub fn watch(
         &self,
         workspace: &WorkspaceId,
@@ -357,16 +361,19 @@ impl Workspaces {
         todo!("note a write an agent's tool named")
     }
 
-    /// A shell command of `session` begins in the worktree of `workspace`.
-    pub fn command_began(&self, workspace: &WorkspaceId, session: &str) {
-        let _ = (workspace, session);
+    /// A shell command of `session` begins in the worktree of `workspace`, at `at`: the
+    /// moment the report of it reached the Keeper, taken before the Keeper answered it, so
+    /// that a command the CLI runs at once cannot write before its window opens.
+    pub fn command_began(&self, workspace: &WorkspaceId, session: &str, at: Instant) {
+        let _ = (workspace, session, at);
         todo!("note a shell command that begins")
     }
 
-    /// The shell command of `session` has ended. Changes seen up to [`SETTLE`] after this
-    /// call still fall within it: the system tells of a write some milliseconds after it.
-    pub fn command_ended(&self, workspace: &WorkspaceId, session: &str) {
-        let _ = (workspace, session);
+    /// The shell command of `session` has ended, at `at`, taken as for
+    /// [`Workspaces::command_began`]. Changes seen up to [`SETTLE`] after it still fall
+    /// within it: the system tells of a write some milliseconds after it.
+    pub fn command_ended(&self, workspace: &WorkspaceId, session: &str, at: Instant) {
+        let _ = (workspace, session, at);
         todo!("note a shell command that ended")
     }
 
@@ -378,6 +385,18 @@ impl Workspaces {
     pub fn credits(&self, workspace: &WorkspaceId) -> Result<Vec<CreditedPath>, WorkspaceError> {
         let _ = workspace;
         todo!("who made each uncommitted change")
+    }
+
+    /// The commit the changes of a workspace are counted from and the commits since, as
+    /// [`Workspaces::changes`] gives them in [`Changes::counted_from`] and
+    /// [`Changes::commits`], by the same rules, without reading what changed on disk: no
+    /// `git status` runs, so that a window that opens can draw the history at once.
+    pub fn counted_from(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<(Option<CommitId>, Vec<Commit>), WorkspaceError> {
+        let _ = workspace;
+        todo!("where the changes are counted from, without the files")
     }
 
     /// Opens the repository that `folder` lies in, and with it the workspace of the

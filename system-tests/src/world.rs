@@ -84,7 +84,11 @@ impl World {
     }
 
     /// A command that runs `program` as the world's user: with the environment of this
-    /// process cleared but for the search path, and the world's own in its place. That
+    /// process cleared but for the search path, and the world's own in its place. The
+    /// search path loses every folder that holds a program named `claude` or `pi`, so that
+    /// no test starts a real agent CLI; after [`World::agents_on_path`] the world's folder
+    /// of stand-ins comes first, and `STANDIN_SCRIPT` and `STANDIN_LOG` name the world's
+    /// `default.script` and `default.log`. That
     /// names the home, data, runtime and temporary folders, the socket and the Keeper
     /// program, the shell of a terminal (`/bin/sh` unless
     /// [`World::keep_descriptors_in_terminals`] chose another), and tells git to read
@@ -173,9 +177,13 @@ impl World {
     }
 
     /// Starts the built Keeper program as [`World::start_keeper`] does, but as the last
-    /// arguments of `wrapper`: `["strace", "-f", "-o", <file>]` runs it under a tracer
-    /// that follows every process it starts. Gives the process id of the Keeper itself,
-    /// found among the wrapper's children, once it listens.
+    /// arguments of `wrapper`: `["strace", "-f", "-o", <file>, ...]` runs it under a
+    /// tracer that follows every process it starts. Gives the process id of the Keeper
+    /// itself, the wrapper's child named `yaar-keeper` in `/proc`, once it listens, and
+    /// remembers it: [`World::kill_keeper`] and the end of the world kill that process
+    /// first with the kill signal and wait until it is gone, and only then kill and
+    /// collect the wrapper, since a tracer that is killed lets its processes run on.
+    /// Linux only, as the one row that needs it.
     pub fn start_keeper_under(&mut self, wrapper: &[std::ffi::OsString]) -> u32 {
         let _ = wrapper;
         todo!("the Keeper started under a wrapper")
@@ -232,6 +240,11 @@ impl World {
     /// now on, the Keeper and its shells among them: a folder of the world, first on
     /// `PATH`, holding `claude`, `pi` and `otheragent`, each the built `standin-agent`.
     /// Call it before [`World::start_keeper`].
+    ///
+    /// Every shell of the app is a login shell, and a login shell reads the system's
+    /// profile, which may put other folders first (macOS's `path_helper` does). So the
+    /// world's home gets a `.profile` that puts the folder first again, which both a login
+    /// `dash` and a login `bash` started as `sh` read.
     pub fn agents_on_path(&mut self) {
         todo!("the stand-in on the search path of the world")
     }

@@ -8969,6 +8969,7 @@ name = "yaar-keeper"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "serde_json",
  "yaar-adapter-claude",
  "yaar-agent",
  "yaar-dock",
@@ -8977,6 +8978,7 @@ dependencies = [
  "yaar-review-engine",
  "yaar-store",
  "yaar-switchboard",
+ "yaar-system-tests",
  "yaar-workspaces",
 ]
 

@@ -186,8 +186,8 @@ impl StateStore {
     /// The real repository is left as it was: its list of files, refs, stash, reflog,
     /// objects and working files. No hook of the user runs and none can stop it. A
     /// repository inside the worktree is recorded as the commit it is on; one with no
-    /// commit yet makes the recording fail with git's words, [`RecordError::Git`], until a
-    /// later version handles it.
+    /// commit yet is left out of the state, as [`StateStore::record_reporting`] says,
+    /// which gives the same state and names what it left out.
     pub fn record(&self, worktree: &Worktree) -> Result<RecordedState, RecordError> {
         let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let head = worktree.head_commit()?;
@@ -386,6 +386,21 @@ impl StateStore {
     pub fn record_reporting(&self, worktree: &Worktree) -> Result<Recording, RecordError> {
         let _ = worktree;
         todo!("record, leaving out a nested repository with no commit")
+    }
+
+    /// The tree of the files of `worktree` on disk as a recording reads them, written into
+    /// this store and named by no commit and no ref, and the folders left out of it, as
+    /// for [`Recording::left_out`]: the steps a recording takes up to `git write-tree`, on
+    /// a copy of the worktree's list of files, the store's objects written and the real
+    /// repository's only read. [`StateStore::record_reporting`] makes its state of this
+    /// tree; [`StateStore::compare`] compares a version with it, recording nothing.
+    #[expect(dead_code, reason = "written by the recording's package of slice 4")]
+    pub(crate) fn tree_on_disk(
+        &self,
+        worktree: &Worktree,
+    ) -> Result<(String, Vec<PathBuf>), RecordError> {
+        let _ = worktree;
+        todo!("the tree of the files on disk, as a recording reads them")
     }
 
     /// A run of git in the store, not yet started; with the objects of a repository

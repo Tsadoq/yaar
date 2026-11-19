@@ -62,6 +62,12 @@ pub struct Options {
     pub app_version: String,
     /// The app's folder, where the database is kept. Made when it is not there.
     pub data_dir: PathBuf,
+    /// The folder of the app's programs that pass a CLI's reports on, as the hook program
+    /// of Claude Code: where the pieces the Adapters write find them. None for the folder
+    /// of the Keeper's own program, where the build and the packages put them beside it;
+    /// a test that runs the Keeper in its own process names the folder of the built
+    /// programs.
+    pub companions: Option<PathBuf>,
 }
 
 impl Options {
@@ -73,6 +79,7 @@ impl Options {
             linger: Duration::from_secs(5),
             app_version: app_version.to_owned(),
             data_dir: yaar_link::data_dir(),
+            companions: None,
         }
     }
 }

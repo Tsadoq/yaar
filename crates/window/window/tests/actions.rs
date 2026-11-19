@@ -160,6 +160,7 @@ impl Composed {
             | RequestKind::SaveDraft
             | RequestKind::ListAgents
             | RequestKind::GetHistory
+            | RequestKind::GetUncommitted
             | RequestKind::CompareVersions
             | RequestKind::ReadVersions
             | RequestKind::GetTurn
@@ -440,6 +441,7 @@ impl Composed {
                 | RequestKind::SaveDraft
                 | RequestKind::ListAgents
                 | RequestKind::GetHistory
+                | RequestKind::GetUncommitted
                 | RequestKind::CompareVersions
                 | RequestKind::ReadVersions
                 | RequestKind::GetTurn

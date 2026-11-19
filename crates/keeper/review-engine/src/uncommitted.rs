@@ -16,8 +16,10 @@ pub struct Credited {
 
 /// The uncommitted changes `review` lists under uncommitted changes, in the order of
 /// `changes`: every change no agent made, in every review of the worktree, while it is
-/// uncommitted; and those credited to the review's own session. The review of no agent
-/// lists them all.
+/// uncommitted; and those credited to the review's own session, also one credited to
+/// another session as well, which then shows in both. The review of no agent lists them
+/// all. The Keeper answers `GetUncommitted` with it: the review pane lists what this
+/// gives, and nothing else.
 pub fn uncommitted_of<'a>(review: &Review, changes: &'a [Credited]) -> Vec<&'a Credited> {
     let _ = (review, changes);
     todo!("the uncommitted changes a review lists")

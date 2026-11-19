@@ -92,6 +92,7 @@ impl Scratch {
             linger: Duration::from_secs(60),
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
+            companions: None,
         };
         std::thread::spawn(move || run(options))
     }
@@ -589,6 +590,10 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
             RequestKind::ListAgents => Request::ListAgents,
             RequestKind::GetHistory => Request::GetHistory {
                 workspace: workspace.clone(),
+            },
+            RequestKind::GetUncommitted => Request::GetUncommitted {
+                workspace: workspace.clone(),
+                review: None,
             },
             RequestKind::CompareVersions => Request::CompareVersions {
                 workspace: workspace.clone(),

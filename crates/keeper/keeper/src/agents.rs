@@ -4,19 +4,26 @@
 //! the agents, a turn, the history of a worktree and the versions of a change.
 //!
 //! How it fits the rest of the Keeper. A report of a CLI's piece comes in as
-//! `Request::Report` and is answered at once with `Reply::Done`; what it means is worked
-//! out on a thread of this side's own, in the order the reports came, so that no hook of
-//! a CLI waits for a recording. Every change of a session is kept in the Store before it
-//! is told, and told to every Window under the Keeper's turn, so that a Window that asks
-//! for the agents never takes an older list for a newer one.
+//! `Request::Report`, with the moment it arrived, and is put on the queue of this side's
+//! own thread before it is answered with `Reply::Done`; the marks the Dock finds in a
+//! terminal go on the same queue. That thread works them out in the order they came, so
+//! that no hook of a CLI waits for a recording, and so that a mark printed after a hook
+//! returned is always taken after that hook's report. Every change of a session is kept in
+//! the Store before it is told, and told to every Window under the Keeper's turn, so that
+//! a Window that asks for the agents never takes an older list for a newer one.
+//!
+//! What a Window reads of agents, turns and the history of a worktree is answered in
+//! `reading.rs`, from the Store, the state stores and Workspaces, through `Kept`: it holds
+//! nothing of this side's thread.
 //!
 //! Until this side is built, every request it answers is refused with [`NOT_WIRED`] and it
 //! gives the terminals nothing: no entries, no marks, no launcher.
 
-use std::path::Path;
+mod reading;
+
 use std::sync::{Arc, Weak};
 
-use yaar_link::{AgentReport, Refusal, Reply, ReviewId, TerminalId, TurnId, WorkspaceId};
+use yaar_link::{AgentReport, Refusal, Reply, ReviewId, TerminalId};
 
 use crate::watching::Watching;
 use crate::wiring::{Kept, Outcome};
@@ -34,12 +41,12 @@ pub(crate) struct Agents {
 
 impl Agents {
     /// Starts this side: every supported Adapter, each with its pieces written by
-    /// `Adapter::install` into `<data folder>/agents/<its name>`, and the folder of the
-    /// app's programs, the one that holds the Keeper program, as where the pieces find the
-    /// companions; the Switchboard, told of every session the Store holds; and those the
-    /// Store holds as running marked ended, since a Keeper that starts runs none. `kept`
-    /// is none for a Keeper with no git or no database, which follows no agent. A
-    /// workspace is watched, through `watching`, while a session runs in it.
+    /// `Adapter::install` into `<data folder>/agents/<its name>`, and `options.companions`
+    /// as where the pieces find the companions; the Switchboard, told of every session the
+    /// Store holds; and those the Store holds as running marked ended by
+    /// `EndedBy::KeeperStopped`, since a Keeper that starts runs none and they were cut
+    /// off. `kept` is none for a Keeper with no git or no database, which follows no agent.
+    /// A workspace is watched, through `watching`, while a session runs in it.
     pub(crate) fn start(
         options: &Options,
         kept: Option<&Kept>,
@@ -69,16 +76,19 @@ impl Agents {
         None
     }
 
-    /// Takes one report of a CLI's piece: answered `Reply::Done` at once, refused for an
-    /// Adapter the Keeper does not have or a report it cannot read. A report from outside
-    /// the app's terminals, or from a terminal the Keeper does not hold, is answered and
-    /// followed no further.
+    /// Takes one report of a CLI's piece: stamps the moment it arrived, puts it on the
+    /// queue of this side's thread, and only then answers `Reply::Done`; refused only for
+    /// an Adapter the Keeper does not have. Nothing else is done on the caller's thread: a
+    /// report the Adapter cannot read is written down by that thread. A report from
+    /// outside the app's terminals, or from a terminal the Keeper does not hold, is
+    /// answered and followed no further.
     pub(crate) fn report(&self, kept: &Kept, report: AgentReport) -> Outcome {
         let _ = (kept, report);
         Outcome::failed(NOT_WIRED)
     }
 
-    /// The Dock found mark `mark` of [`Agents::marks`] in the output of `terminal`.
+    /// The Dock found mark `mark` of [`Agents::marks`] in the output of `terminal`: put on
+    /// the same queue as the reports, and nothing else on the Dock's thread.
     pub(crate) fn marked(&self, terminal: &TerminalId, mark: usize) {
         let _ = (terminal, mark);
     }
@@ -88,52 +98,16 @@ impl Agents {
         let _ = terminal;
     }
 
-    /// The review `review` was marked reviewed: the session it belongs to, if any, has
-    /// nothing unreviewed any more, and every Window is told.
-    pub(crate) fn reviewed(&self, kept: &Kept, review: &ReviewId) {
-        let _ = (kept, review);
-    }
-
-    /// `Request::ListAgents`.
+    /// `Request::ListAgents`: the sessions as the Switchboard holds them.
     pub(crate) fn list(&self, kept: &Kept) -> Result<Reply, Refusal> {
         let _ = kept;
         Err(not_wired())
     }
 
-    /// `Request::GetTurn`.
-    pub(crate) fn turn(&self, kept: &Kept, turn: &TurnId) -> Result<Reply, Refusal> {
-        let _ = (kept, turn);
-        Err(not_wired())
-    }
-
-    /// `Request::GetHistory`.
-    pub(crate) fn history(&self, kept: &Kept, workspace: &WorkspaceId) -> Result<Reply, Refusal> {
-        let _ = (kept, workspace);
-        Err(not_wired())
-    }
-
-    /// `Request::CompareVersions`.
-    pub(crate) fn compare(
-        &self,
-        kept: &Kept,
-        workspace: &WorkspaceId,
-        from: &str,
-        to: Option<&str>,
-    ) -> Result<Reply, Refusal> {
-        let _ = (kept, workspace, from, to);
-        Err(not_wired())
-    }
-
-    /// `Request::ReadVersions`.
-    pub(crate) fn read_versions(
-        &self,
-        kept: &Kept,
-        workspace: &WorkspaceId,
-        old: Option<(&str, &Path)>,
-        new: (Option<&str>, &Path),
-    ) -> Result<Reply, Refusal> {
-        let _ = (kept, workspace, old, new);
-        Err(not_wired())
+    /// The review `review` was marked reviewed: the session it belongs to, if any, has
+    /// nothing unreviewed any more, and every Window is told.
+    pub(crate) fn reviewed(&self, kept: &Kept, review: &ReviewId) {
+        let _ = (kept, review);
     }
 }
 
