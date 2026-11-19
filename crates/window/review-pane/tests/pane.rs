@@ -741,11 +741,11 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             "{} did nothing",
             control.title
         );
-        // A comment box that a key opened takes the keys that follow as its text.
-        if stage
-            .pane
-            .read_with(&cx, |pane, _| pane.comment_box().is_some())
-        {
+        // A comment box or the field for a commit message that a key opened takes the
+        // keys that follow as its text.
+        if stage.pane.read_with(&cx, |pane, _| {
+            pane.comment_box().is_some() || pane.commit_field_open()
+        }) {
             cx.simulate_keystrokes("escape");
         }
     }
@@ -801,8 +801,10 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     let closing = Request::GetChanges { workspace: id('2') };
     loop {
         let (_, request) = stage.keeper.request(&mut cx);
-        // Of the requests of the Link, these two only read, and the other two keep and
-        // delete the drafts of comments, which are no file of the worktree.
+        // Of the requests of the Link, these two only read, and the others keep, delete
+        // and send the drafts of comments, mark a file viewed and the change reviewed,
+        // none of which writes a file of the worktree. The commit is not asked here: the
+        // field for its message is closed by Escape before a key can send it.
         assert!(
             matches!(
                 request.kind(),
@@ -810,6 +812,9 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
                     | RequestKind::ReadFile
                     | RequestKind::SaveDraft
                     | RequestKind::DeleteDraft
+                    | RequestKind::CopyReview
+                    | RequestKind::MarkReviewed
+                    | RequestKind::SetViewed
             ),
             "a key made the Window ask {request:?}"
         );

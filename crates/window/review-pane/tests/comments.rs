@@ -9,7 +9,8 @@ mod common;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px,
+    ClipboardItem, Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
+    point, px,
 };
 use yaar_diff::{Row, Side};
 use yaar_link::{
@@ -1269,4 +1270,415 @@ fn another_workspace_on_screen_shows_its_own_reviews_and_closes_the_box_of_the_o
         .read_with(&cx, |pane, _| pane.review().cloned())
         .expect("a review");
     assert!(held.threads.is_empty());
+}
+
+/// What is on the clipboard of the test platform, as text.
+fn clipboard(cx: &mut TestAppContext) -> Option<String> {
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui_kit::test]
+fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comments_show_as_sent(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // Something of the test's own is on the clipboard: only the copy may replace it.
+    cx.write_to_clipboard(ClipboardItem::new_string("before".to_owned()));
+    let drafts = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![draft('1', "why remove this")],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![draft('2', "and this")],
+        ),
+    ]);
+    give(&mut stage, &drafts, &mut cx);
+    assert!(drawn_comment('1', "draft", &mut cx) && drawn_comment('2', "draft", &mut cx));
+
+    // The key asks the Keeper to copy the review of the pane. Nothing is on the clipboard
+    // before the Keeper has answered.
+    cx.simulate_keystrokes("y");
+    let asked = stage.keeper.expect(
+        Request::CopyReview {
+            review: review_id(),
+        },
+        &mut cx,
+    );
+    cx.run_until_parked();
+    assert_eq!(clipboard(&mut cx).as_deref(), Some("before"));
+
+    // The Keeper's text, whatever it is, is what lands on the clipboard.
+    let text = "Answer each thread by its id.\n\n## Thread a\nwhy remove this\n";
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::Copied {
+            text: text.to_owned(),
+            round: 1,
+        }),
+    );
+    wait_until(&mut cx, "the review on the clipboard", |cx| {
+        clipboard(cx).as_deref() == Some(text)
+    });
+    // The round is the Keeper's to name: until it tells, the comments are drafts still.
+    assert!(drawn_comment('1', "draft", &mut cx) && drawn_comment('2', "draft", &mut cx));
+    assert_eq!(notice(&pane, &mut cx), None);
+
+    // The Keeper tells that the reviews changed and holds both comments at round 1.
+    let sent_in_one = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![sent('1', "why remove this", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('2', "and this", 1)],
+        ),
+    ]);
+    give(&mut stage, &sent_in_one, &mut cx);
+    let shown = pane.read_with(&cx, |pane, _| pane.review().cloned());
+    assert_eq!(shown, Some(sent_in_one.reviews[0].clone()));
+    for comment in ['1', '2'] {
+        assert!(drawn_comment(comment, "round-1", &mut cx));
+        assert!(!drawn_comment(comment, "draft", &mut cx));
+    }
+
+    // Nothing is left to send: the Keeper refuses, the clipboard stays as it was, and the
+    // notice says so.
+    cx.simulate_keystrokes("y");
+    let asked = stage.keeper.expect(
+        Request::CopyReview {
+            review: review_id(),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::NothingToSend {
+            review: review_id(),
+        }),
+    );
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(drawn("review-notice", &mut cx).is_some());
+    assert_eq!(clipboard(&mut cx).as_deref(), Some(text));
+}
+
+#[gpui_kit::test]
+fn copying_closes_the_box_whose_draft_the_copy_sends(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    let opened = comment_on(&added, &pane, &mut cx);
+    cx.simulate_input("a");
+    let asked = stage.keeper.expect(new_thread_save(&opened, "a"), &mut cx);
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    // A click on a row gives the keys of the pane the focus; the box stays open.
+    let row = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(row, Modifiers::none());
+    assert!(comment_box(&pane, &mut cx).is_some());
+
+    cx.simulate_keystrokes("y");
+    // The save came first, so the copy has it; a sent comment is not edited, so more
+    // typing into the box would only be refused.
+    stage.keeper.expect(
+        Request::CopyReview {
+            review: review_id(),
+        },
+        &mut cx,
+    );
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert!(drawn("review-comment-box", &mut cx).is_none());
+}
+
+#[gpui_kit::test]
+fn the_copy_of_a_pane_with_no_reviews_yet_asks_nothing_and_says_so(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    // The changes are not here, so the reviews were never asked for.
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.reviews().cloned()),
+        None
+    );
+    let focus = stage.focus.clone();
+    cx.update(|window, cx| focus.focus(window, cx));
+    cx.simulate_keystrokes("y");
+    assert!(notice(&stage.pane, &mut cx).is_some());
+    // The next thing the Window asks is the changes, not a copy.
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert!(matches!(next, Request::GetChanges { .. }), "{next:?}");
+}
+
+#[gpui_kit::test]
+fn r_marks_the_file_the_reviewer_is_in_viewed_and_a_second_r_takes_the_mark_away(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let heading = |path: &PathBuf, cx: &mut VisualTestContext| {
+        rows(&pane, cx)
+            .iter()
+            .position(|row| matches!(row, PaneRow::File { path: at, .. } if at == path))
+            .expect("the heading of the file")
+    };
+    let (lib_heading, long_heading) = (heading(&lib(), &mut cx), heading(&long_path(), &mut cx));
+    let viewed = |index: usize, cx: &mut VisualTestContext| {
+        drawn(&format!("review-viewed-{index}"), cx).is_some()
+    };
+    assert!(!viewed(lib_heading, &mut cx) && !viewed(long_heading, &mut cx));
+
+    // The reviewer is in lib.rs: the file is marked for the workspace on screen.
+    cx.simulate_keystrokes("r");
+    let asked = stage.keeper.expect(
+        Request::SetViewed {
+            workspace: id('1'),
+            path: lib(),
+            viewed: true,
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    // Nothing is drawn until the Keeper tells the reviews changed.
+    cx.run_until_parked();
+    assert!(!viewed(lib_heading, &mut cx));
+    let mut marked = reviews_with(Vec::new());
+    marked.viewed = vec![lib()];
+    give(&mut stage, &marked, &mut cx);
+    assert!(viewed(lib_heading, &mut cx));
+    assert!(!viewed(long_heading, &mut cx));
+
+    // A second `r` on the same file takes the mark away.
+    cx.simulate_keystrokes("r");
+    let asked = stage.keeper.expect(
+        Request::SetViewed {
+            workspace: id('1'),
+            path: lib(),
+            viewed: false,
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    give(&mut stage, &reviews_with(Vec::new()), &mut cx);
+    assert!(!viewed(lib_heading, &mut cx));
+
+    // In another file `r` marks that one, whatever else is marked.
+    give(&mut stage, &marked, &mut cx);
+    let in_long = Position {
+        path: long_path(),
+        side: Side::Old,
+        line: 197,
+    };
+    walk_to(&in_long, "j", &pane, &mut cx);
+    cx.simulate_keystrokes("r");
+    let asked = stage.keeper.expect(
+        Request::SetViewed {
+            workspace: id('1'),
+            path: long_path(),
+            viewed: true,
+        },
+        &mut cx,
+    );
+    // The Keeper refuses: the notice says why, and the heading is not marked.
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "the worktree is gone".to_owned(),
+        }),
+    );
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(
+        notice(&pane, &mut cx)
+            .expect("a notice")
+            .contains("the worktree is gone")
+    );
+    assert!(!viewed(long_heading, &mut cx));
+}
+
+#[gpui_kit::test]
+fn shift_r_marks_the_change_reviewed_and_the_comparison_row_shows_it_once_the_keeper_tells(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    assert!(drawn("review-reviewed", &mut cx).is_none());
+
+    cx.simulate_keystrokes("shift-r");
+    let asked = stage.keeper.expect(
+        Request::MarkReviewed {
+            review: review_id(),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    cx.run_until_parked();
+    assert!(drawn("review-reviewed", &mut cx).is_none());
+
+    let mut reviewed = reviews_with(Vec::new());
+    reviewed.reviews[0].reviewed = Some("7".repeat(40));
+    give(&mut stage, &reviewed, &mut cx);
+    assert!(drawn("review-reviewed", &mut cx).is_some());
+    assert_eq!(
+        pane.read_with(&cx, |pane, _| pane
+            .review()
+            .and_then(|r| r.reviewed.clone())),
+        Some("7".repeat(40))
+    );
+    // The comparison row is where it is drawn: the first.
+    let first = bounds_of_row(0, &mut cx);
+    let mark = drawn("review-reviewed", &mut cx).expect("drawn");
+    assert!(first.contains(&mark.center()));
+}
+
+#[gpui_kit::test]
+fn shift_c_opens_a_field_for_a_message_and_enter_commits_with_it(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let open = |cx: &mut VisualTestContext| pane.read_with(cx, |pane, _| pane.commit_field_open());
+    assert!(!open(&mut cx) && drawn("review-commit-field", &mut cx).is_none());
+
+    cx.simulate_keystrokes("shift-c");
+    assert!(open(&mut cx));
+    assert!(drawn("review-commit-field", &mut cx).is_some());
+    // The field has the focus: the letters are its text, and not the keys of the pane,
+    // which would open a comment box on `c` and `i`.
+    cx.simulate_input("Fix the thing");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert!(open(&mut cx));
+    cx.simulate_keystrokes("enter");
+    let asked = stage.keeper.expect(
+        Request::Commit {
+            workspace: id('1'),
+            message: "Fix the thing".to_owned(),
+        },
+        &mut cx,
+    );
+    assert!(!open(&mut cx));
+    assert!(drawn("review-commit-field", &mut cx).is_none());
+
+    // Nothing was uncommitted: the notice says so.
+    stage
+        .keeper
+        .reply(asked, Err(Refusal::NothingToCommit { workspace: id('1') }));
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(drawn("review-notice", &mut cx).is_some());
+
+    // The keys of the pane work again: the focus came back to the rows.
+    cx.simulate_keystrokes("c");
+    assert!(comment_box(&pane, &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn a_commit_that_is_made_says_nothing_and_one_git_refused_says_why(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let commit_with = |message: &str, cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes("shift-c");
+        cx.simulate_input(message);
+        cx.simulate_keystrokes("enter");
+    };
+    let message = |text: &str| Request::Commit {
+        workspace: id('1'),
+        message: text.to_owned(),
+    };
+
+    commit_with("One", &mut cx);
+    let asked = stage.keeper.expect(message("One"), &mut cx);
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::Committed {
+            commit: "c".repeat(40),
+        }),
+    );
+    cx.run_until_parked();
+    assert_eq!(notice(&pane, &mut cx), None);
+
+    commit_with("Two", &mut cx);
+    let asked = stage.keeper.expect(message("Two"), &mut cx);
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "pre-commit hook failed: lint".to_owned(),
+        }),
+    );
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(
+        notice(&pane, &mut cx)
+            .expect("a notice")
+            .contains("pre-commit hook failed: lint")
+    );
+}
+
+#[gpui_kit::test]
+fn escape_closes_the_commit_field_and_asks_nothing_and_a_blank_message_keeps_it_open(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let open = |cx: &mut VisualTestContext| pane.read_with(cx, |pane, _| pane.commit_field_open());
+
+    cx.simulate_keystrokes("shift-c");
+    cx.simulate_input("Not this");
+    cx.simulate_keystrokes("escape");
+    assert!(!open(&mut cx));
+    assert!(drawn("review-commit-field", &mut cx).is_none());
+
+    // A field with nothing but blanks stays open: git would refuse the message.
+    cx.simulate_keystrokes("shift-c");
+    cx.simulate_input("  ");
+    cx.simulate_keystrokes("enter");
+    assert!(open(&mut cx));
+    assert!(notice(&pane, &mut cx).is_some());
+    // The key again keeps the field, and its text.
+    cx.simulate_keystrokes("escape");
+
+    // Neither asked the Keeper for anything: the next request is a comment's first save.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("a");
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert!(matches!(next, Request::SaveDraft { .. }), "{next:?}");
+}
+
+#[gpui_kit::test]
+fn another_workspace_on_screen_closes_the_commit_field_of_the_one_before(cx: &mut TestAppContext) {
+    let (stage, _changes, mut cx) =
+        open_on_two_files_of(vec![workspace('1', "feature"), workspace('2', "other")], cx);
+    let pane = stage.pane.clone();
+    cx.simulate_keystrokes("shift-c");
+    cx.simulate_input("For workspace one");
+    assert!(pane.read_with(&cx, |pane, _| pane.commit_field_open()));
+
+    stage
+        .models
+        .workspaces
+        .update(&mut cx, |list, cx| list.select(&id('2'), cx));
+    cx.run_until_parked();
+    // A commit goes to the workspace the field was opened on, so it is not kept for
+    // the one that came.
+    assert!(!pane.read_with(&cx, |pane, _| pane.commit_field_open()));
+    assert!(drawn("review-commit-field", &mut cx).is_none());
 }

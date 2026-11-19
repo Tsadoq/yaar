@@ -56,6 +56,10 @@ impl ReviewPane {
             if self.open_box.is_some() {
                 self.close_box(window, cx);
             }
+            // A commit is of the workspace the field was opened on.
+            if self.commit_field.is_some() {
+                self.close_commit_field(window, cx);
+            }
             self.rebuild(cx);
         }
         if let (true, Some(workspace)) = (answered, workspace) {
@@ -125,7 +129,7 @@ impl ReviewPane {
     }
 
     /// Says something under the rows.
-    fn say(&mut self, words: impl Into<String>, cx: &mut Context<Self>) {
+    pub(crate) fn say(&mut self, words: impl Into<String>, cx: &mut Context<Self>) {
         self.notice = Some(words.into());
         cx.notify();
     }
@@ -333,7 +337,7 @@ impl ReviewPane {
 
     /// Says why a request of the reviewer was not done, when the Keeper's answer is not
     /// a plain yes.
-    fn report(&mut self, asked: Task<Result<Reply, AskError>>, cx: &mut Context<Self>) {
+    pub(crate) fn report(&mut self, asked: Task<Result<Reply, AskError>>, cx: &mut Context<Self>) {
         cx.spawn(async move |pane, cx| {
             let words = match asked.await {
                 Ok(Reply::Done) => return,

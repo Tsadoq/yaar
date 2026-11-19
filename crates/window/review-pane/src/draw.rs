@@ -7,7 +7,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 
-use gpui_kit::component::input::Textarea;
+use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::{Hunk, Row, Side};
@@ -123,6 +123,17 @@ impl Render for ReviewPane {
                 .on_action(cx.listener(Self::escape))
                 .child(Textarea::new(&open.input))
         });
+        let commit_field = self.commit_field.as_ref().map(|field| {
+            div()
+                .debug_selector(|| "review-commit-field".to_owned())
+                .flex_none()
+                .p_2()
+                .border_t_1()
+                .border_color(theme.border)
+                // The input lets Escape pass once it has nothing of its own to close.
+                .on_action(cx.listener(Self::escape_commit))
+                .child(Input::new(&field.input))
+        });
         if self.rows.is_empty() {
             let idle = div()
                 .flex_1()
@@ -134,7 +145,8 @@ impl Render for ReviewPane {
             return pane
                 .child(self.with_keys(idle, cx))
                 .children(notice)
-                .children(comment_box);
+                .children(comment_box)
+                .children(commit_field);
         }
         // The rows stay while the Keeper refuses to read the changes again, and may
         // then be out of date: the reviewer is told.
@@ -166,6 +178,7 @@ impl Render for ReviewPane {
             .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
             .children(notice)
             .children(comment_box)
+            .children(commit_field)
     }
 }
 
@@ -185,6 +198,10 @@ impl ReviewPane {
             .on_action(cx.listener(Self::delete_draft))
             .on_action(cx.listener(Self::next_thread))
             .on_action(cx.listener(Self::previous_thread))
+            .on_action(cx.listener(Self::copy_review))
+            .on_action(cx.listener(Self::toggle_viewed))
+            .on_action(cx.listener(Self::mark_reviewed))
+            .on_action(cx.listener(Self::commit))
     }
 
     /// What the pane says while it has no row to show.
@@ -223,6 +240,17 @@ impl ReviewPane {
                         .truncate()
                         .child(comparison_sentence(comparison)),
                 );
+                let reviewed = self
+                    .review()
+                    .and_then(|review| review.reviewed.as_deref())
+                    .map(|state| format!("Reviewed at {}", short(state)));
+                let row = row.children(reviewed.map(|words| {
+                    div()
+                        .debug_selector(|| "review-reviewed".to_owned())
+                        .flex_none()
+                        .text_color(theme.success)
+                        .child(words)
+                }));
                 if !offers_base {
                     return row;
                 }
@@ -252,18 +280,29 @@ impl ReviewPane {
                         .child(short(id).to_owned()),
                 )
                 .child(summary.clone()),
-            PaneRow::File { path, status } => row
-                .px_2()
-                .gap_3()
-                .bg(theme.secondary)
-                .text_color(theme.secondary_foreground)
-                .child(path.display().to_string())
-                .child(
-                    div()
-                        .flex_none()
-                        .text_color(theme.muted_foreground)
-                        .child(status_words(status)),
-                ),
+            PaneRow::File { path, status } => {
+                let viewed = self
+                    .reviews()
+                    .is_some_and(|reviews| reviews.viewed.contains(path));
+                row.px_2()
+                    .gap_3()
+                    .bg(theme.secondary)
+                    .text_color(theme.secondary_foreground)
+                    .child(path.display().to_string())
+                    .child(
+                        div()
+                            .flex_none()
+                            .text_color(theme.muted_foreground)
+                            .child(status_words(status)),
+                    )
+                    .children(viewed.then(|| {
+                        div()
+                            .debug_selector(|| format!("review-viewed-{index}"))
+                            .flex_none()
+                            .text_color(theme.success)
+                            .child("viewed")
+                    }))
+            }
             PaneRow::Unshown { why, .. } => row
                 .px_2()
                 .text_color(theme.muted_foreground)

@@ -27,6 +27,7 @@
 //!
 //! It depends on the Frame and on no other pane.
 
+mod actions;
 mod comments;
 mod draw;
 mod saves;
@@ -46,6 +47,7 @@ use yaar_link::{
     RequestKind, Review, ReviewId, ThreadId, WorkspaceId, WorkspaceReviews,
 };
 
+use crate::actions::CommitField;
 use crate::comments::OpenBox;
 use crate::saves::Save;
 
@@ -383,7 +385,9 @@ struct ShownDiff {
 /// drawn by an element inside its row that carries `review-text-<index>-old:<text>` or
 /// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
 /// system for that line: the line, or of a line of more than 1,024 bytes its start.
-/// The control that offers to set a base carries `review-offer-base`.
+/// The control that offers to set a base carries `review-offer-base`. The heading of a
+/// file marked viewed carries `review-viewed-<index>`, with the index of its row, and the
+/// comparison line carries `review-reviewed` while the review has a reviewed state.
 ///
 /// When the Keeper refuses to read the changes again, the pane keeps the rows it has
 /// and says above them, in a line that carries `review-refused`, that they could not be
@@ -427,6 +431,8 @@ pub struct ReviewPane {
     reading_reviews: Option<Task<()>>,
     /// The comment box, while one is open.
     open_box: Option<OpenBox>,
+    /// The field for a commit message, while one is open.
+    commit_field: Option<CommitField>,
     /// What is said under the rows, until the reviewer acts again.
     notice: Option<String>,
 }
@@ -462,6 +468,7 @@ impl ReviewPane {
             saved: 0,
             reading_reviews: None,
             open_box: None,
+            commit_field: None,
             notice: None,
         };
         pane.follow(cx);
@@ -533,7 +540,7 @@ impl ReviewPane {
     /// Whether the field for a commit message is open. It is drawn under the selector
     /// `review-commit-field`; `enter` commits with its line, `escape` closes it.
     pub fn commit_field_open(&self) -> bool {
-        todo!()
+        self.commit_field.is_some()
     }
 
     /// Why the last review action the reviewer took was not done, as the pane says it in
