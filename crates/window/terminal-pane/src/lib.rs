@@ -656,8 +656,11 @@ impl Render for TerminalPane {
         let (border, muted) = (theme.border, theme.muted_foreground);
         let shown = self.shown();
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
-            let view = self.entry(id)?.view.clone();
-            let name = id.as_str().to_owned();
+            // The name comes from the entry the view is taken from, so that no view is
+            // drawn under the name of another terminal.
+            let entry = self.entry(id)?;
+            let view = entry.view.clone();
+            let name = entry.id.as_str().to_owned();
             // A click in a slot gives it the focus; its view takes the focus itself, and
             // the pane learns which slot has it here, whatever GPUI tells of the focus.
             let slot = div()
