@@ -47,14 +47,6 @@ const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 const PRINT_THE_MARK: &[u8] = b"printf '\\033]9;4;0;\\007'; printf 'after-%s\\n' mark\r";
 const AFTER_THE_MARK: &str = "after-mark";
 
-/// The folder of the built programs, where the hook program lies.
-fn built_programs() -> PathBuf {
-    program("yaar-claude-hook")
-        .parent()
-        .expect("the hook program lies in a folder")
-        .to_owned()
-}
-
 /// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
@@ -121,10 +113,35 @@ impl Scratch {
         self.0.join("data").join(yaar_store::FILE_NAME)
     }
 
-    /// Starts the Keeper's library on a thread of this test, with the folder of the built
-    /// hook program as where the pieces of the agents lie.
+    /// The folder of the test's own copy of the built hook program, made at the first
+    /// call. Every test process asks `program` to build, and cargo puts a program it built
+    /// in place again each time: where tests run side by side, the program is gone for a
+    /// moment, and one started from there fails. A copy is made at the first try that finds
+    /// the program, and is the test's own.
+    fn companions(&self) -> PathBuf {
+        let folder = self.0.join("companions");
+        let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
+        if copy.is_file() {
+            return folder;
+        }
+        std::fs::create_dir_all(&folder).expect("make the folder");
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let built = std::panic::catch_unwind(|| program("yaar-claude-hook"));
+            if let Ok(built) = built
+                && std::fs::copy(built, &copy).is_ok()
+            {
+                return folder;
+            }
+            assert!(Instant::now() < deadline, "the hook program is never there");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Starts the Keeper's library on a thread of this test, with the folder of the hook
+    /// program as where the pieces of the agents lie.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
-        self.keeper_told(Some(built_programs()))
+        self.keeper_told(Some(self.companions()))
     }
 
     /// The same, told this folder for the pieces, or none.
@@ -184,7 +201,7 @@ impl Scratch {
     /// in the terminal `terminal` of the app; none for a CLI outside the app. Returns how
     /// long it took. It must succeed and print nothing, whatever became of the report.
     fn hook(&self, terminal: Option<&TerminalId>, payload: &[u8]) -> Duration {
-        let mut command = Command::new(program("yaar-claude-hook"));
+        let mut command = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM));
         command
             .env(SOCKET_VARIABLE, self.socket())
             .stdin(Stdio::piped())
@@ -486,7 +503,7 @@ fn assert_the_plugin_runs(data: &Path, hook: &Path) {
 #[test]
 fn the_plugin_of_claude_code_is_written_at_every_start_to_run_the_hook_program_where_told() {
     let scratch = Scratch::new();
-    let hook = built_programs().join(yaar_adapter_claude::HOOK_PROGRAM);
+    let hook = scratch.companions().join(yaar_adapter_claude::HOOK_PROGRAM);
     let data = scratch.0.join("data");
     let plugin = data
         .join("agents")
