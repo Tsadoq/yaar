@@ -131,6 +131,21 @@ fn nothing_was_sent(panes: &mut Panes, id: &TerminalId, cx: &mut VisualTestConte
     assert_eq!(panes.keeper.input_until(id, b"z", cx), b"");
 }
 
+/// Shows that no request is left unread: a new terminal is asked for, and the next request
+/// has to be that one. A surplus request sent before it would be read in its place.
+fn no_other_request_was_sent(panes: &mut Panes, cx: &mut VisualTestContext) {
+    panes.press_in_the_app::<NewTerminal>(cx);
+    let (id, request) = panes.keeper.request(cx);
+    assert!(
+        matches!(request, Request::OpenTerminal { .. }),
+        "the Window asked {request:?}"
+    );
+    panes.keeper.reply(
+        id,
+        Err(common::refused("this test needs no second terminal")),
+    );
+}
+
 /// A pane with one terminal `t` in slot 0 that has the focus, in the workspace on
 /// screen, and the session `x` that runs in it, in `state`, with `attached`.
 fn one_agent(
@@ -149,8 +164,7 @@ fn one_agent(
     (panes, cx, t)
 }
 
-/// Whether the sentence of the one control was typed since `before` frames: what the pane
-/// sent the terminal after those is that sentence in one frame.
+/// The frames of input the pane sent `id` after the first `before` ones.
 fn typed_since(panes: &Panes, id: &TerminalId, before: usize) -> Vec<Vec<u8>> {
     panes.keeper.inputs(id)[before..].to_vec()
 }
@@ -238,15 +252,19 @@ fn an_attached_review_shows_at_the_agents_terminal_with_a_control_to_view_what_w
 
     // The control that detaches it sends the detach of the review. No question for the
     // text was sent in between: this is the next request.
+    // One press sends one: what follows each is the next request, not a second detach.
     click_in("terminal-attachment-detach-0", &mut cx);
     answer_detach(&panes, &review('x'), &mut cx);
+    no_other_request_was_sent(&mut panes, &mut cx);
     // Its key does the same, from outside the terminal.
     panes.press_in_the_app::<DetachAttachment>(&mut cx);
     answer_detach(&panes, &review('x'), &mut cx);
+    no_other_request_was_sent(&mut panes, &mut cx);
     if cfg!(target_os = "macos") {
         panes.click_slot(0, &mut cx);
         cx.simulate_keystrokes(key_of::<DetachAttachment>());
         answer_detach(&panes, &review('x'), &mut cx);
+        no_other_request_was_sent(&mut panes, &mut cx);
     }
 
     // The Keeper tells it is detached: the line is gone.
