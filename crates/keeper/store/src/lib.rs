@@ -37,6 +37,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
+use std::time::Instant;
 
 use rusqlite::Connection;
 
@@ -51,7 +52,12 @@ pub use reviews::{
 pub const FILE_NAME: &str = "store.db";
 
 /// The version of the tables this build makes and reads.
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
+
+/// The steps that make the tables, in order: `STEPS[n]` brings a database from version
+/// `n` to version `n + 1`, and ends by setting `user_version` to that. A later version
+/// adds one step at the end.
+const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2];
 
 /// The tables of version 1. `seq` is the order in which the rows were first kept. A
 /// path is kept as its bytes, since a path need not be text.
@@ -75,10 +81,6 @@ const TABLES: &str = "
 /// and rounds, and the files marked viewed. A path is kept as its bytes; a side, an
 /// author and a way of sending are small numbers, in the order their types list them.
 /// A comment whose `round` is null is a draft.
-#[expect(
-    dead_code,
-    reason = "the tables of version 2, which the builder of the Store applies"
-)]
 const TABLES_2: &str = "
     CREATE TABLE review (
         seq INTEGER PRIMARY KEY,
@@ -238,8 +240,84 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// What is handed to the writer: one piece of work on the one connection.
-type Job = Box<dyn FnOnce(&mut Connection) + Send>;
+/// Why a piece of work on the connection did not give its answer: the database failed,
+/// or the Store refused what was asked in a sentence of its own. The database library's
+/// error stays inside the crate.
+#[derive(Debug)]
+enum Failed {
+    Sql(rusqlite::Error),
+    Refused(String),
+}
+
+impl From<rusqlite::Error> for Failed {
+    fn from(e: rusqlite::Error) -> Self {
+        Self::Sql(e)
+    }
+}
+
+impl From<Failed> for StoreError {
+    fn from(failed: Failed) -> Self {
+        match failed {
+            Failed::Sql(e) => Self::Database(e.to_string()),
+            Failed::Refused(sentence) => Self::Database(sentence),
+        }
+    }
+}
+
+/// What is handed to the writer: one piece of work on what the writer holds.
+type Job = Box<dyn FnOnce(&mut Writer) + Send>;
+
+/// What the writer thread holds: the one connection, and since when a draft saved
+/// without a flush of the drive waits for one.
+struct Writer {
+    connection: Connection,
+    /// When the last draft was saved that the drive has not been flushed for; none when
+    /// there is no such draft.
+    unflushed_since: Option<Instant>,
+}
+
+impl Writer {
+    /// Moves everything the write-ahead file holds into the database file and empties
+    /// the file; with `checkpoint_fullfsync` on, the drive is flushed in full for it.
+    fn flush(&mut self) -> rusqlite::Result<()> {
+        // The statement answers with a row, so it is a query.
+        self.connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        self.unflushed_since = None;
+        Ok(())
+    }
+
+    /// Runs until the last way to the writer is dropped: each job in turn, and a flush
+    /// once no draft was saved for `FLUSH_AFTER`.
+    fn run(mut self, jobs: &mpsc::Receiver<Job>) {
+        loop {
+            let job = match self.unflushed_since {
+                None => jobs
+                    .recv()
+                    .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                Some(last_save) => {
+                    jobs.recv_timeout(FLUSH_AFTER.saturating_sub(last_save.elapsed()))
+                }
+            };
+            match job {
+                Ok(job) => job(&mut self),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // A flush that failed is tried again after another pause, not in a
+                    // loop.
+                    if self.flush().is_err() {
+                        self.unflushed_since = Some(Instant::now());
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        // Closing the connection checkpoints too; doing it here keeps the draft's flush
+        // from depending on that.
+        if self.unflushed_since.is_some() {
+            let _ = self.flush();
+        }
+    }
+}
 
 /// The database, and the way to its one writer.
 ///
@@ -318,28 +396,16 @@ impl Store {
                  PRAGMA foreign_keys = ON;",
             )
             .map_err(|e| refused(e.to_string()))?;
-        // The tables have had one version so far: there is nothing older to bring
-        // forward, only a new file to fill.
-        if found < VERSION {
-            let filling = connection
-                .transaction()
-                .map_err(|e| refused(e.to_string()))?;
-            filling
-                .execute_batch(TABLES)
-                .and_then(|()| filling.commit())
-                .map_err(|e| refused(e.to_string()))?;
-        }
+        bring_forward(&mut connection, file, found).map_err(|e| refused(e.to_string()))?;
 
         let (writer, jobs) = mpsc::channel::<Job>();
+        let writer_state = Writer {
+            connection,
+            unflushed_since: None,
+        };
         let thread = std::thread::Builder::new()
             .name("store-writer".to_owned())
-            .spawn(move || {
-                // Ends when the last clone of the Store has dropped its sender; the
-                // connection closes with it.
-                while let Ok(job) = jobs.recv() {
-                    job(&mut connection);
-                }
-            })
+            .spawn(move || writer_state.run(&jobs))
             .map_err(|e| refused(e.to_string()))?;
         Ok(Store {
             writer,
@@ -443,17 +509,89 @@ impl Store {
         T: Send + 'static,
         W: FnOnce(&mut Connection) -> rusqlite::Result<T> + Send + 'static,
     {
+        self.try_ask(move |connection| work(connection).map_err(Failed::Sql))
+    }
+
+    /// As [`ask`](Self::ask), for work that may refuse in a sentence of its own.
+    fn try_ask<T, W>(&self, work: W) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        W: FnOnce(&mut Connection) -> Result<T, Failed> + Send + 'static,
+    {
+        self.with_writer(move |writer| work(&mut writer.connection))
+    }
+
+    /// As [`try_ask`](Self::try_ask), for work that needs what the writer holds besides
+    /// the connection.
+    fn with_writer<T, W>(&self, work: W) -> Result<T, StoreError>
+    where
+        T: Send + 'static,
+        W: FnOnce(&mut Writer) -> Result<T, Failed> + Send + 'static,
+    {
         let (answer, answered) = mpsc::channel();
-        let job: Job = Box::new(move |connection| {
+        let job: Job = Box::new(move |writer| {
             // Whoever asked may have stopped waiting; the work is done all the same.
-            let _ = answer.send(work(connection));
+            let _ = answer.send(work(writer));
         });
         self.writer.send(job).map_err(|_| StoreError::Closed)?;
         answered
             .recv()
             .map_err(|_| StoreError::Closed)?
-            .map_err(|e| StoreError::Database(e.to_string()))
+            .map_err(StoreError::from)
     }
+}
+
+/// Brings the tables of a database found at version `found` up to [`VERSION`], one step
+/// at a time, each in a transaction. A database of an older version is copied first, so
+/// that a step that goes wrong loses nothing.
+fn bring_forward(connection: &mut Connection, file: &Path, found: u32) -> Result<(), String> {
+    if found > 0 && found < VERSION {
+        copy_beside(connection, file, found)?;
+    }
+    for step in &STEPS[found as usize..] {
+        let applying = connection.transaction().map_err(|e| e.to_string())?;
+        applying
+            .execute_batch(step)
+            .and_then(|()| applying.commit())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Copies everything the database holds that is committed, the write-ahead file's
+/// content included, to `<file>.v<version>`. The copy is made under another name and
+/// renamed once it is on the drive, so that a copy cut short is never taken for a whole
+/// one; a copy left by an earlier try is replaced, since the database has not moved on
+/// from that version.
+fn copy_beside(connection: &Connection, file: &Path, version: u32) -> Result<(), String> {
+    let beside = |suffix: String| {
+        let mut name = file.as_os_str().to_owned();
+        name.push(suffix);
+        PathBuf::from(name)
+    };
+    let copy = beside(format!(".v{version}"));
+    let partial = beside(format!(".v{version}.partial"));
+    let as_text = partial
+        .to_str()
+        .ok_or_else(|| format!("the path {} is not text", partial.display()))?;
+    match std::fs::remove_file(&partial) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.to_string()),
+    }
+    connection
+        .execute("VACUUM INTO ?1", [as_text])
+        .map_err(|e| format!("could not copy the database before changing it: {e}"))?;
+    std::fs::File::open(&partial)
+        .and_then(|copied| copied.sync_all())
+        .and_then(|()| std::fs::rename(&partial, &copy))
+        .map_err(|e| format!("could not keep the copy {}: {e}", copy.display()))?;
+    // The rename is kept by flushing the folder; where a folder cannot be opened it is
+    // only as safe as the drive makes it.
+    if let Some(folder) = copy.parent() {
+        let _ = std::fs::File::open(folder).and_then(|folder| folder.sync_all());
+    }
+    Ok(())
 }
 
 fn bytes(path: &Path) -> Vec<u8> {
@@ -467,6 +605,191 @@ fn path(bytes: Vec<u8>) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A folder of the test's own, removed when the test ends.
+    struct Folder(PathBuf);
+
+    impl Folder {
+        fn new(what: &str) -> Self {
+            let folder =
+                std::env::temp_dir().join(format!("yaar-store-{what}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&folder);
+            std::fs::create_dir_all(&folder).expect("make the folder");
+            Self(folder)
+        }
+
+        fn file(&self) -> PathBuf {
+            self.0.join(FILE_NAME)
+        }
+
+        fn copy(&self) -> PathBuf {
+            self.0.join(format!("{FILE_NAME}.v1"))
+        }
+    }
+
+    impl Drop for Folder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// Makes a database of version 1, as the build of slice 1 made them, holding one
+    /// repository and two workspaces, and hands back the connection it was made with:
+    /// kept open, the rows the connection wrote still lie in the write-ahead file.
+    fn version_one(file: &Path) -> Connection {
+        let old = Connection::open(file).expect("make the file");
+        old.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA wal_autocheckpoint = 0;",
+        )
+        .expect("set the mode");
+        old.execute_batch(TABLES).expect("make the tables");
+        old.execute_batch(
+            "INSERT INTO repository (id, git_dir) VALUES ('r-1', x'2f722f2e676974');
+             INSERT INTO workspace (id, repository, path, base)
+                 VALUES ('w-2', 'r-1', x'2f72', 'main'), ('w-1', 'r-1', x'2f722d6c', NULL);",
+        )
+        .expect("fill the tables");
+        old
+    }
+
+    fn user_version(file: &Path) -> u32 {
+        Connection::open(file)
+            .expect("open")
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read the version")
+    }
+
+    fn tables(file: &Path) -> Vec<String> {
+        let connection = Connection::open(file).expect("open");
+        connection
+            .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name")
+            .expect("prepare")
+            .query_map([], |row| row.get(0))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("read")
+    }
+
+    fn rows(file: &Path) -> Vec<(String, String)> {
+        let connection = Connection::open(file).expect("open");
+        connection
+            .prepare("SELECT id, repository FROM workspace ORDER BY seq")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("read")
+    }
+
+    // Unit tests that make a file, because a database of an older version can only be
+    // made beside the Store: no call of the Store writes one.
+    #[test]
+    fn a_database_of_version_1_is_copied_and_then_brought_to_version_2_with_all_it_held() {
+        let folder = Folder::new("upgrade");
+        let old = version_one(&folder.file());
+
+        let store = Store::open(&folder.file()).expect("open");
+        drop(old);
+        assert_eq!(
+            store.repositories().expect("repositories"),
+            vec![RepositoryRecord {
+                id: RepositoryId::new("r-1"),
+                git_dir: PathBuf::from("/r/.git"),
+            }]
+        );
+        let workspaces = store.workspaces().expect("workspaces");
+        assert_eq!(
+            workspaces.iter().map(|w| w.id.as_str()).collect::<Vec<_>>(),
+            ["w-2", "w-1"]
+        );
+        assert_eq!(workspaces[0].base.as_deref(), Some("main"));
+        // The tables of version 2 are there to be used.
+        store
+            .put_review(&ReviewRecord {
+                id: ReviewId::new("v"),
+                workspace: workspaces[0].id.clone(),
+                agent: None,
+                reviewed: None,
+                threads: vec![],
+                rounds: vec![],
+            })
+            .expect("put review");
+        drop(store);
+
+        assert_eq!(user_version(&folder.file()), 2);
+        // The copy is of version 1: the rows the write-ahead file held are in it, and
+        // none of what version 2 adds.
+        assert_eq!(user_version(&folder.copy()), 1);
+        assert_eq!(
+            rows(&folder.copy()),
+            [("w-2".into(), "r-1".into()), ("w-1".into(), "r-1".into())]
+        );
+        assert_eq!(tables(&folder.copy()), ["repository", "workspace"]);
+        assert!(tables(&folder.file()).contains(&"review".to_owned()));
+    }
+
+    #[test]
+    fn a_second_open_copies_nothing_more_and_a_new_file_is_copied_nowhere() {
+        let folder = Folder::new("copies");
+        drop(version_one(&folder.file()));
+        drop(Store::open(&folder.file()).expect("open"));
+        assert!(folder.copy().is_file());
+
+        // Were the copy made again it would be there again.
+        std::fs::remove_file(folder.copy()).expect("remove the copy");
+        drop(Store::open(&folder.file()).expect("open again"));
+        assert!(!folder.copy().exists());
+
+        let fresh = Folder::new("fresh");
+        drop(Store::open(&fresh.file()).expect("open"));
+        assert_eq!(user_version(&fresh.file()), 2);
+        assert_eq!(
+            std::fs::read_dir(&fresh.0)
+                .expect("list")
+                .map(|e| e.expect("entry").file_name())
+                .filter(|name| name.to_string_lossy().contains(".v"))
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_step_that_fails_leaves_the_database_at_version_1_with_the_copy_beside_it() {
+        let folder = Folder::new("failing");
+        let old = version_one(&folder.file());
+        // A table of the name version 2 makes: the step cannot be applied.
+        old.execute_batch("CREATE TABLE review (what TEXT)")
+            .expect("make the table");
+        drop(old);
+
+        assert!(matches!(
+            Store::open(&folder.file()),
+            Err(StoreError::Open { .. })
+        ));
+        assert_eq!(user_version(&folder.file()), 1);
+        assert_eq!(
+            tables(&folder.file()),
+            ["repository", "review", "workspace"]
+        );
+        assert_eq!(user_version(&folder.copy()), 1);
+        assert_eq!(rows(&folder.copy()).len(), 2);
+    }
+
+    #[test]
+    fn a_copy_that_an_earlier_try_left_whole_or_cut_short_is_replaced() {
+        let folder = Folder::new("stale");
+        drop(version_one(&folder.file()));
+        std::fs::write(folder.copy(), b"left by a try that stopped").expect("write");
+        let mut partial = folder.copy().into_os_string();
+        partial.push(".partial");
+        std::fs::write(&partial, b"cut short").expect("write");
+
+        drop(Store::open(&folder.file()).expect("open"));
+        assert_eq!(user_version(&folder.copy()), 1);
+        assert_eq!(rows(&folder.copy()).len(), 2);
+        assert!(!Path::new(&partial).exists());
+    }
 
     // A unit test that makes a file, because a database of a later version can only be
     // made beside the Store: no call of the Store writes one.
