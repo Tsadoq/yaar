@@ -14,6 +14,16 @@
 //! | `ReadFile` | `Workspaces::file` | none |
 //! | `OpenTerminal` | `Dock::open`, in the folder of the workspace | none; later `TerminalEnded` |
 //! | `ResizeTerminal` | `Dock::resize` | none |
+//! | `GetReviews` | `Reviews::of_workspace`, with the worktree when it is there | none |
+//! | `SaveDraft` | `Reviews::save_draft` | `ReviewsChanged` of its workspace when it made a comment |
+//! | `DeleteDraft` | `Reviews::delete_draft` | `ReviewsChanged` of its workspace |
+//! | `CopyReview` | `Reviews::copy_as_text` | `ReviewsChanged` of its workspace |
+//! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
+//! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
+//! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
+//!
+//! The requests of reviews are not wired yet: until they are, each is refused with
+//! [`NOT_WIRED`], so that a Window that asks them keeps its connection.
 //!
 //! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
 //! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
@@ -60,6 +70,9 @@ const TEXT_PROBE: usize = 8000;
 
 /// The most bytes of a program's output that one frame carries.
 const OUTPUT_FRAME: usize = 64 * 1024;
+
+/// The reason a request of reviews is refused with until it is wired.
+const NOT_WIRED: &str = "reviews are not wired into this Keeper yet";
 
 /// The parts of the Keeper, started and connected.
 pub(crate) struct Parts {
@@ -114,6 +127,16 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // They lead to no fact, and a program that takes its time to start must not hold
         // up the Windows' other questions.
         RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
+        // Each changes what the Keeper keeps, and each but a save of a draft's text is told
+        // as a fact: in the order the changes were made.
+        RequestKind::SaveDraft
+        | RequestKind::DeleteDraft
+        | RequestKind::CopyReview
+        | RequestKind::MarkReviewed
+        | RequestKind::SetViewed
+        | RequestKind::Commit => true,
+        // What it reads, no fact carries: a Window that is told of a change asks again.
+        RequestKind::GetReviews => false,
     }
 }
 
@@ -204,6 +227,13 @@ impl Parts {
                         reason: other.to_string(),
                     },
                 }),
+            Request::GetReviews { .. }
+            | Request::SaveDraft { .. }
+            | Request::DeleteDraft { .. }
+            | Request::CopyReview { .. }
+            | Request::MarkReviewed { .. }
+            | Request::SetViewed { .. }
+            | Request::Commit { .. } => return Outcome::failed(NOT_WIRED),
         };
         Outcome { reply, facts, then }
     }
@@ -431,7 +461,7 @@ fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> 
                 .map(|workspace| yaar_link::Workspace {
                     id: yaar_link::WorkspaceId::new(workspace.id.as_str()),
                     path: workspace.path,
-                    head: head(workspace.head),
+                    head: workspace.head.map(head),
                 })
                 .collect(),
         })
@@ -532,6 +562,143 @@ fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
         yaar_link::Content::TooLarge { size }
     } else {
         yaar_link::Content::Text(bytes)
+    }
+}
+
+/// The reviews of a workspace, in the words of the Link.
+fn workspace_reviews(
+    workspace: yaar_link::WorkspaceId,
+    view: yaar_review_engine::WorkspaceView,
+) -> yaar_link::WorkspaceReviews {
+    yaar_link::WorkspaceReviews {
+        workspace,
+        reviews: view.reviews.iter().map(review).collect(),
+        viewed: view.viewed,
+    }
+}
+
+/// One review, in the words of the Link.
+fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
+    use yaar_review_engine::{Attachment, Author, SentBy};
+
+    yaar_link::Review {
+        id: yaar_link::ReviewId::new(review.id().as_str()),
+        agent: review.agent().map(yaar_link::SessionId::new),
+        reviewed: review.reviewed().map(str::to_owned),
+        attached: review.attached().map(|attached| match attached {
+            Attachment::Review => yaar_link::Attachment::Review,
+            Attachment::Thread(thread) => {
+                yaar_link::Attachment::Thread(yaar_link::ThreadId::new(thread.as_str()))
+            }
+        }),
+        threads: review
+            .threads()
+            .iter()
+            .map(|thread| yaar_link::Thread {
+                id: yaar_link::ThreadId::new(thread.id.as_str()),
+                anchor: yaar_link::Anchor {
+                    tree: Some(thread.anchor.tree.clone()),
+                    path: thread.anchor.path.clone(),
+                    side: side(thread.anchor.side),
+                    lines: yaar_link::Lines {
+                        first: thread.anchor.first,
+                        last: thread.anchor.last,
+                    },
+                    text: thread.anchor.text.clone(),
+                },
+                resolved: thread.resolved,
+                addressed: thread.addressed,
+                comments: thread
+                    .comments
+                    .iter()
+                    .map(|comment| yaar_link::Comment {
+                        id: yaar_link::CommentId::new(comment.id.as_str()),
+                        author: match comment.author {
+                            Author::Reviewer => yaar_link::Author::Reviewer,
+                            Author::Agent => yaar_link::Author::Agent,
+                        },
+                        text: comment.text.clone(),
+                        round: comment.round,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        rounds: review
+            .rounds()
+            .iter()
+            .map(|round| yaar_link::Round {
+                number: round.number,
+                state: round.state.clone(),
+                sent_by: match round.sent_by {
+                    SentBy::Copied => yaar_link::SentBy::Copied,
+                    SentBy::Delivered => yaar_link::SentBy::Delivered,
+                },
+            })
+            .collect(),
+    }
+}
+
+/// A side of a diff, in the words of the Link.
+fn side(side: yaar_review_engine::Side) -> yaar_link::Side {
+    match side {
+        yaar_review_engine::Side::Old => yaar_link::Side::Old,
+        yaar_review_engine::Side::New => yaar_link::Side::New,
+    }
+}
+
+/// One save of a draft, in the words of the engine.
+fn draft_save(
+    thread: &yaar_link::ThreadId,
+    comment: &yaar_link::CommentId,
+    on: yaar_link::DraftOn,
+    text: String,
+) -> yaar_review_engine::DraftSave {
+    use yaar_review_engine::{DraftOn, NewAnchor};
+
+    yaar_review_engine::DraftSave {
+        thread: yaar_review_engine::ThreadId::new(thread.as_str()),
+        comment: yaar_review_engine::CommentId::new(comment.as_str()),
+        on: match on {
+            yaar_link::DraftOn::NewThread { anchor } => DraftOn::NewThread(NewAnchor {
+                tree: anchor.tree,
+                path: anchor.path,
+                side: match anchor.side {
+                    yaar_link::Side::Old => yaar_review_engine::Side::Old,
+                    yaar_link::Side::New => yaar_review_engine::Side::New,
+                },
+                first: anchor.lines.first,
+                last: anchor.lines.last,
+                text: anchor.text,
+            }),
+            yaar_link::DraftOn::Thread => DraftOn::Thread,
+        },
+        text,
+    }
+}
+
+/// Puts a failure of the Review engine into the words of the Link: what names something
+/// the Keeper does not hold, a sent comment, and an empty send keep their kind; the rest
+/// becomes `Refusal::Failed` with the sentence of the error.
+fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
+    use yaar_review_engine::{EngineError, ReviewError};
+
+    match error {
+        EngineError::UnknownReview(review) => Refusal::UnknownReview {
+            review: yaar_link::ReviewId::new(review.as_str()),
+        },
+        EngineError::Refused(ReviewError::UnknownThread(thread)) => Refusal::UnknownThread {
+            thread: yaar_link::ThreadId::new(thread.as_str()),
+        },
+        EngineError::Refused(ReviewError::UnknownComment(comment)) => Refusal::UnknownComment {
+            comment: yaar_link::CommentId::new(comment.as_str()),
+        },
+        EngineError::Refused(ReviewError::NotADraft(comment)) => Refusal::NotADraft {
+            comment: yaar_link::CommentId::new(comment.as_str()),
+        },
+        EngineError::OutsideWorktree(path) => Refusal::OutsideWorkspace { path },
+        other => Refusal::Failed {
+            reason: other.to_string(),
+        },
     }
 }
 

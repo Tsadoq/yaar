@@ -52,10 +52,12 @@ pub enum SidebarRow {
         /// Its id.
         id: WorkspaceId,
         /// The name it is listed by: its branch, or the commit it sits on when no branch
-        /// is checked out.
+        /// is checked out; for a worktree that is gone, the name of its folder.
         name: String,
         /// Whether it is the workspace on screen.
         selected: bool,
+        /// Whether its worktree is gone: it is listed for its reviews, and marked so.
+        gone: bool,
     },
 }
 
@@ -125,10 +127,20 @@ impl Sidebar {
                 name: repository.name.clone(),
             });
             for workspace in &repository.workspaces {
+                let name = match &workspace.head {
+                    Some(head) => head.label(),
+                    None => workspace
+                        .path
+                        .file_name()
+                        .unwrap_or(workspace.path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned(),
+                };
                 rows.push(SidebarRow::Workspace {
                     id: workspace.id.clone(),
-                    name: workspace.head.label(),
+                    name,
                     selected: on_screen == Some(&workspace.id),
+                    gone: workspace.head.is_none(),
                 });
             }
         }
@@ -190,7 +202,10 @@ impl Sidebar {
                         .into_any_element()
                 }
             }
-            SidebarRow::Workspace { id, name, selected } => {
+            // How a worktree that is gone is marked is drawn in the slice that lists it.
+            SidebarRow::Workspace {
+                id, name, selected, ..
+            } => {
                 let selector = format!("sidebar-workspace-{id}");
                 let row = div()
                     .id(SharedString::from(selector.clone()))

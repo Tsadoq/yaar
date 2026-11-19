@@ -8963,6 +8963,7 @@ dependencies = [
  "yaar-dock",
  "yaar-link",
  "yaar-recorder",
+ "yaar-review-engine",
  "yaar-store",
  "yaar-workspaces",
 ]
@@ -8985,6 +8986,10 @@ version = "0.1.0"
 [[package]]
 name = "yaar-review-engine"
 version = "0.1.0"
+dependencies = [
+ "yaar-recorder",
+ "yaar-store",
+]
 
 [[package]]
 name = "yaar-review-pane"

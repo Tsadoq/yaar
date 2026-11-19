@@ -3,9 +3,10 @@
 //! Owns: workspaces, worktree identity, base, creating worktrees, the worktree watcher, who is credited with a changed path.
 //!
 //! Surface:
-//! - [`Workspaces`]: opening a folder, the repositories with their worktrees, the base of
-//!   a workspace and setting it, the changes of a workspace and the two versions of one
-//!   of its files;
+//! - [`Workspaces`]: opening a folder, the repositories with their worktrees, those that
+//!   are gone and hold reviews among them, the base of a workspace and setting it, the
+//!   changes of a workspace and the two versions of one of its files, and the worktree of
+//!   a workspace for the parts that read, record and commit in it;
 //! - [`default_base`] and [`on_base_branch`], the two rules behind the base, as plain
 //!   functions of what git reports;
 //! - what those return: [`Repository`], [`Workspace`], [`Base`], [`Changes`],
@@ -30,11 +31,11 @@ use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use yaar_recorder::{Branch, Commits, Git, GitError, OpenError, Worktree};
+use yaar_recorder::{Branch, Commits, Git, GitError, OpenError};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
 
 pub use base::{default_base, on_base_branch};
-pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs};
+pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs, Worktree};
 pub use yaar_store::{RepositoryId, WorkspaceId};
 
 /// The name of the file, in the git folder of a worktree, that holds the id of its
@@ -59,10 +60,11 @@ pub struct Repository {
 pub struct Workspace {
     /// Its id.
     pub id: WorkspaceId,
-    /// The folder of the worktree.
+    /// The folder of the worktree: where it was last seen, when it is gone.
     pub path: PathBuf,
-    /// What is checked out in it.
-    pub head: Head,
+    /// What is checked out in it; none when the worktree is gone. See
+    /// [`Workspaces::repositories`] for when a worktree that is gone is listed.
+    pub head: Option<Head>,
 }
 
 /// What opening a folder gave.
@@ -385,6 +387,13 @@ impl Workspaces {
     ///
     /// A worktree that was opened after its folder was moved without git's knowing is
     /// listed too, after the others, for as long as git has not caught up.
+    ///
+    /// A worktree that is gone, removed by git or deleted, is listed, after the others of
+    /// its repository and with no head, for as long as one of its reviews in the Store
+    /// holds a thread: its reviews are kept until the user deletes them, and they are not
+    /// to be lost from sight. A worktree that is gone and holds no thread is not listed,
+    /// as before. A call that needs the files of a worktree that is gone is refused with
+    /// [`Refusal::UnknownWorkspace`], as for an id nobody knows.
     pub fn repositories(&self) -> Result<Vec<Repository>, WorkspaceError> {
         let _naming = lock(&self.naming);
         let kept = self.store.workspaces()?;
@@ -423,7 +432,7 @@ impl Workspaces {
             workspaces.push(Workspace {
                 id,
                 path: listed.path,
-                head: listed.head,
+                head: Some(listed.head),
             });
         }
         // What the Store holds for this repository and git did not list: gone, as a
@@ -437,7 +446,7 @@ impl Workspaces {
                     workspaces.push(Workspace {
                         id: known.id.clone(),
                         path: known.path.clone(),
-                        head: worktree.head()?,
+                        head: Some(worktree.head()?),
                     });
                 }
                 Ok(_) | Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => {}
@@ -596,6 +605,16 @@ impl Workspaces {
             old,
             new: worktree.content_on_disk(path)?,
         })
+    }
+
+    /// The worktree of a workspace, as the Recorder reads and records it: what the other
+    /// parts of the Keeper are handed to read, record and commit in it. The one kept from
+    /// an earlier call, with its running git process, when it is still the worktree at
+    /// that folder. Refused with [`Refusal::UnknownWorkspace`] for an id the Store does
+    /// not hold, and for a workspace whose worktree is gone.
+    pub fn worktree(&self, workspace: &WorkspaceId) -> Result<Arc<Worktree>, WorkspaceError> {
+        let _ = workspace;
+        todo!()
     }
 
     /// What the Store holds for a workspace, and its worktree.

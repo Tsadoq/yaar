@@ -11,11 +11,12 @@ use yaar_workspaces::{
     Head, ID_FILE, Opened, Refusal, Repository, Workspace, WorkspaceError, Workspaces,
 };
 
-fn branch(name: &str, commit: &str) -> Head {
-    Head::Branch {
+/// What a listed worktree with this branch checked out has as its head.
+fn branch(name: &str, commit: &str) -> Option<Head> {
+    Some(Head::Branch {
         name: name.to_owned(),
         commit: Some(yaar_workspaces::CommitId::new(commit)),
-    }
+    })
 }
 
 fn refused(result: Result<impl std::fmt::Debug, WorkspaceError>) -> Refusal {
@@ -260,7 +261,7 @@ fn a_worktree_made_or_removed_outside_the_app_shows_at_the_next_listing() {
     assert_eq!(with_a_third.workspaces[2].path, scratch.join("third"));
     assert_eq!(
         with_a_third.workspaces[2].head,
-        Head::Detached(yaar_workspaces::CommitId::new(&first))
+        Some(Head::Detached(yaar_workspaces::CommitId::new(&first)))
     );
 
     // One removed through git, one whose folder was deleted: neither is listed, and

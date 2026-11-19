@@ -14,10 +14,10 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, Fact, FileSides,
-    FileStatus, Head, Hello, MAX_CONTENT, Message, PROTOCOL_VERSION, Program, Refusal, Reply,
-    Repository, Request, RequestId, RequestKind, TerminalId, TerminalSize, Workspace, WorkspaceId,
-    handshake, read_message, write_message,
+    Base, BaseSource, ChangedFile, Changes, CommentId, Commit, Comparison, Content, DraftOn, Fact,
+    FileSides, FileStatus, Head, Hello, MAX_CONTENT, Message, PROTOCOL_VERSION, Program, Refusal,
+    Reply, Repository, Request, RequestId, RequestKind, ReviewId, TerminalId, TerminalSize,
+    ThreadId, Workspace, WorkspaceId, handshake, read_message, write_message,
 };
 
 /// What the one file of a new repository holds.
@@ -242,7 +242,7 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
         workspaces: vec![Workspace {
             id: workspace.clone(),
             path: repo.clone(),
-            head: Head::Branch("feature".to_owned()),
+            head: Some(Head::Branch("feature".to_owned())),
         }],
     }];
     assert_eq!(asking.fact(), Fact::Workspaces(list.clone()));
@@ -266,7 +266,7 @@ fn the_window_that_asked_is_answered_first_and_then_every_window_is_told_what_ch
         Workspace {
             id: second_workspace,
             path: linked,
-            head: Head::Branch("second".to_owned()),
+            head: Some(Head::Branch("second".to_owned())),
         }
     );
     // The list is told for a folder that was open already, too.
@@ -494,6 +494,35 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                     columns: 80,
                     rows: 24,
                 },
+            },
+            RequestKind::GetReviews => Request::GetReviews {
+                workspace: workspace.clone(),
+            },
+            RequestKind::SaveDraft => Request::SaveDraft {
+                review: ReviewId::new("0".repeat(32)),
+                thread: ThreadId::new("0".repeat(32)),
+                comment: CommentId::new("0".repeat(32)),
+                on: DraftOn::Thread,
+                text: "a".to_owned(),
+            },
+            RequestKind::DeleteDraft => Request::DeleteDraft {
+                review: ReviewId::new("0".repeat(32)),
+                comment: CommentId::new("0".repeat(32)),
+            },
+            RequestKind::CopyReview => Request::CopyReview {
+                review: ReviewId::new("0".repeat(32)),
+            },
+            RequestKind::MarkReviewed => Request::MarkReviewed {
+                review: ReviewId::new("0".repeat(32)),
+            },
+            RequestKind::SetViewed => Request::SetViewed {
+                workspace: workspace.clone(),
+                path: PathBuf::from("a.txt"),
+                viewed: true,
+            },
+            RequestKind::Commit => Request::Commit {
+                workspace: workspace.clone(),
+                message: "Commit".to_owned(),
             },
         };
         assert_eq!(

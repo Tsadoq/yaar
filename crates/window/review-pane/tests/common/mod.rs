@@ -183,7 +183,7 @@ pub fn workspace(digit: char, branch: &str) -> Workspace {
     Workspace {
         id: id(digit),
         path: PathBuf::from(format!("/gits/{branch}")),
-        head: Head::Branch(branch.to_owned()),
+        head: Some(Head::Branch(branch.to_owned())),
     }
 }
 

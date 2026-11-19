@@ -96,6 +96,7 @@ fn workspace_row(digit: char, name: &str, selected: bool) -> SidebarRow {
         id: id(digit),
         name: name.to_owned(),
         selected,
+        gone: false,
     }
 }
 
@@ -134,7 +135,9 @@ fn two_repositories() -> Vec<Repository> {
                 Workspace {
                     id: id('4'),
                     path: "/gits/elsewhere".into(),
-                    head: Head::Detached("0123456789abcdef0123456789abcdef01234567".to_owned()),
+                    head: Some(Head::Detached(
+                        "0123456789abcdef0123456789abcdef01234567".to_owned(),
+                    )),
                 },
             ],
         ),
@@ -263,7 +266,7 @@ fn the_wheel_brings_a_worktree_far_down_the_list_within_reach_of_a_click(cx: &mu
         .map(|n| Workspace {
             id: WorkspaceId::new(format!("{n:032x}")),
             path: format!("/gits/worktree-{n}").into(),
-            head: Head::Branch(format!("branch-{n}")),
+            head: Some(Head::Branch(format!("branch-{n}"))),
         })
         .collect();
     let last = many[59].id.clone();

@@ -172,6 +172,39 @@ pub enum Commits<'a> {
     OnNoRemoteBranch,
 }
 
+/// Why the commit control made no commit.
+#[derive(Debug)]
+pub enum CommitError {
+    /// Nothing is uncommitted: there is nothing to commit.
+    NothingToCommit,
+    /// git ended with an error: a hook rejected the commit, no identity is set, or the
+    /// message was empty. Nothing was committed.
+    Refused {
+        /// What git wrote to its standard error, as it wrote it.
+        stderr: String,
+    },
+    /// git could not be run.
+    Git(GitError),
+}
+
+impl fmt::Display for CommitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NothingToCommit => write!(f, "nothing is uncommitted"),
+            Self::Refused { stderr } => write!(f, "git made no commit: {}", stderr.trim()),
+            Self::Git(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for CommitError {}
+
+impl From<GitError> for CommitError {
+    fn from(e: GitError) -> Self {
+        Self::Git(e)
+    }
+}
+
 /// Why a folder could not be opened as a worktree.
 #[derive(Debug)]
 pub enum OpenError {
@@ -732,6 +765,23 @@ impl Worktree {
             Ok(content) => Ok(Some(content)),
             Err(e) => nothing_there(e),
         }
+    }
+
+    /// Makes an ordinary git commit of every uncommitted change of the worktree, with
+    /// `message`, on what is checked out, and gives its id: what `git add --all` and then
+    /// `git commit` with that message make when the user types them.
+    ///
+    /// This is the user's own command, made through the app, and so it is not run the way
+    /// the app reads and records: it runs with the user's hooks, identity and signing, as
+    /// their git would, and it writes their list of the files. Only the variables that
+    /// name another repository than this worktree's are left out, as for every run.
+    ///
+    /// Refused with [`CommitError::NothingToCommit`] when nothing is uncommitted, and
+    /// with [`CommitError::Refused`] and git's own words when git ends with an error, as
+    /// when a hook rejects the commit or no identity is set.
+    pub fn commit_all(&self, message: &str) -> Result<CommitId, CommitError> {
+        let _ = message;
+        todo!()
     }
 
     /// One run of git in this worktree.

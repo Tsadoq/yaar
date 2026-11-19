@@ -11,6 +11,9 @@
 //!   directions, which are a stream and have no reply;
 //! - what those carry: [`Repository`], [`Workspace`], [`Changes`], [`FileSides`] and their
 //!   parts; [`TerminalId`], [`TerminalSize`], [`Program`] and [`Ending`];
+//!   [`WorkspaceReviews`] with its [`Review`]s, [`Thread`]s, [`Comment`]s and [`Round`]s,
+//!   the [`Anchor`] a thread sits on, and [`DraftOn`], what a draft that is saved belongs
+//!   to;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -29,6 +32,7 @@
 //! [`RequestKind::ALL`]: a test that walks the requests a user starts cannot miss it.
 
 mod request;
+mod review;
 mod terminal;
 mod wire;
 mod workspace;
@@ -42,6 +46,10 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
+pub use review::{
+    Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Review, ReviewId, Round,
+    SentBy, SessionId, Side, Thread, ThreadId, WorkspaceReviews,
+};
 pub use terminal::{Ending, Program, TerminalId, TerminalSize};
 pub use workspace::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, FileSides, FileStatus,
@@ -56,8 +64,8 @@ use wire::{In, Out};
 /// that.
 ///
 /// 2: requests, replies and facts about workspaces. 3: terminals, and the two frames of
-/// their bytes.
-pub const PROTOCOL_VERSION: u16 = 3;
+/// their bytes. 4: reviews, and a workspace whose worktree is gone.
+pub const PROTOCOL_VERSION: u16 = 4;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -791,12 +799,20 @@ mod tests {
                     Workspace {
                         id: WorkspaceId::new("11111111111111111111111111111111"),
                         path: PathBuf::from("/home/a/gits/yaar"),
-                        head: Head::Branch("main".to_owned()),
+                        head: Some(Head::Branch("main".to_owned())),
                     },
                     Workspace {
                         id: WorkspaceId::new("22222222222222222222222222222222"),
                         path: PathBuf::from("/home/a/gits/yaar.worktrees/été"),
-                        head: Head::Detached("89abcdef0123456789abcdef0123456789abcdef".to_owned()),
+                        head: Some(Head::Detached(
+                            "89abcdef0123456789abcdef0123456789abcdef".to_owned(),
+                        )),
+                    },
+                    // Gone: removed by git, and listed for its reviews.
+                    Workspace {
+                        id: WorkspaceId::new("44444444444444444444444444444444"),
+                        path: PathBuf::from("/home/a/gits/yaar.worktrees/removed"),
+                        head: None,
                     },
                 ],
             },
@@ -886,7 +902,51 @@ mod tests {
                     rows: 1,
                 },
             },
+            Request::GetReviews {
+                workspace: workspace.clone(),
+            },
+            Request::SaveDraft {
+                review: review_id(),
+                thread: ThreadId::new("55555555555555555555555555555555"),
+                comment: CommentId::new("66666666666666666666666666666666"),
+                on: DraftOn::NewThread {
+                    anchor: anchor(None, Side::Old),
+                },
+                text: "Why is this gone?\nIt was used.".to_owned(),
+            },
+            Request::DeleteDraft {
+                review: review_id(),
+                comment: CommentId::new("66666666666666666666666666666666"),
+            },
+            Request::CopyReview {
+                review: review_id(),
+            },
+            Request::MarkReviewed {
+                review: review_id(),
+            },
+            Request::SetViewed {
+                workspace: workspace.clone(),
+                path: PathBuf::from("src/été.rs"),
+                viewed: true,
+            },
+            Request::Commit {
+                workspace: workspace.clone(),
+                message: "Say what the change does\n\nAnd why.".to_owned(),
+            },
         ];
+        // A draft saved again, or a reply, names a thread that exists.
+        let in_a_thread = Request::SaveDraft {
+            review: review_id(),
+            thread: ThreadId::new("55555555555555555555555555555555"),
+            comment: CommentId::new("77777777777777777777777777777777"),
+            on: DraftOn::Thread,
+            text: String::new(),
+        };
+        let unviewed = Request::SetViewed {
+            workspace: workspace.clone(),
+            path: PathBuf::from("src/lib.rs"),
+            viewed: false,
+        };
         // The same kind of request, asking for no old version.
         let without_old = Request::ReadFile {
             workspace: workspace.clone(),
@@ -962,6 +1022,19 @@ mod tests {
             Reply::TerminalOpened {
                 terminal: terminal(),
             },
+            Reply::Reviews(reviews()),
+            Reply::Reviews(WorkspaceReviews {
+                workspace: workspace.clone(),
+                reviews: Vec::new(),
+                viewed: Vec::new(),
+            }),
+            Reply::Copied {
+                text: "## Thread 5555\n```\nfn main() {}\n```\n".to_owned(),
+                round: u32::MAX,
+            },
+            Reply::Committed {
+                commit: COMMIT.to_owned(),
+            },
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -988,13 +1061,34 @@ mod tests {
             Refusal::UnknownTerminal {
                 terminal: terminal(),
             },
+            Refusal::UnknownReview {
+                review: review_id(),
+            },
+            Refusal::UnknownThread {
+                thread: ThreadId::new("55555555555555555555555555555555"),
+            },
+            Refusal::UnknownComment {
+                comment: CommentId::new("66666666666666666666666666666666"),
+            },
+            Refusal::NotADraft {
+                comment: CommentId::new("66666666666666666666666666666666"),
+            },
+            Refusal::NothingToSend {
+                review: review_id(),
+            },
+            Refusal::NothingToCommit {
+                workspace: workspace.clone(),
+            },
             Refusal::Failed {
                 reason: "git was not found".to_owned(),
             },
         ];
         let facts = [
             Fact::Workspaces(two_repositories()),
-            Fact::ChangesChanged { workspace },
+            Fact::ChangesChanged {
+                workspace: workspace.clone(),
+            },
+            Fact::ReviewsChanged { workspace },
             Fact::TerminalEnded {
                 terminal: terminal(),
                 ending: Ending::Exited(0),
@@ -1020,6 +1114,12 @@ mod tests {
             id: RequestId(u32::MAX),
             request: without_old,
         });
+        for request in [in_a_thread, unviewed] {
+            messages.push(Message::Request {
+                id: RequestId(u32::MAX - 1),
+                request,
+            });
+        }
         for reply in replies {
             messages.push(Message::Reply {
                 to: RequestId(u32::MAX),
@@ -1055,6 +1155,87 @@ mod tests {
         TerminalId::new("33333333333333333333333333333333")
     }
 
+    fn review_id() -> ReviewId {
+        ReviewId::new("88888888888888888888888888888888")
+    }
+
+    fn anchor(tree: Option<&str>, side: Side) -> Anchor {
+        Anchor {
+            tree: tree.map(str::to_owned),
+            path: PathBuf::from("src/was here.rs"),
+            side,
+            lines: Lines {
+                first: 12,
+                last: u32::MAX,
+            },
+            text: "    let a = 1;\n    let b = 2;".to_owned(),
+        }
+    }
+
+    /// Reviews of every shape a review can have: of no agent and of a session, with a
+    /// draft, a sent comment, an agent's reply, a resolved thread, an attachment of the
+    /// review and of one thread, and rounds of both kinds.
+    fn reviews() -> WorkspaceReviews {
+        let comment = |id: char, author: Author, round: Option<u32>| Comment {
+            id: CommentId::new(id.to_string().repeat(32)),
+            author,
+            text: format!("comment {id}"),
+            round,
+        };
+        WorkspaceReviews {
+            workspace: WorkspaceId::new("11111111111111111111111111111111"),
+            reviews: vec![
+                Review {
+                    id: review_id(),
+                    agent: None,
+                    reviewed: Some(COMMIT.to_owned()),
+                    attached: Some(Attachment::Review),
+                    threads: vec![
+                        Thread {
+                            id: ThreadId::new("a".repeat(32)),
+                            anchor: anchor(Some(COMMIT), Side::New),
+                            resolved: false,
+                            addressed: true,
+                            comments: vec![
+                                comment('b', Author::Reviewer, Some(1)),
+                                comment('c', Author::Agent, Some(1)),
+                                comment('d', Author::Reviewer, None),
+                            ],
+                        },
+                        Thread {
+                            id: ThreadId::new("e".repeat(32)),
+                            anchor: anchor(Some(COMMIT), Side::Old),
+                            resolved: true,
+                            addressed: false,
+                            comments: vec![comment('f', Author::Reviewer, None)],
+                        },
+                    ],
+                    rounds: vec![
+                        Round {
+                            number: 1,
+                            state: COMMIT.to_owned(),
+                            sent_by: SentBy::Copied,
+                        },
+                        Round {
+                            number: 2,
+                            state: COMMIT.to_owned(),
+                            sent_by: SentBy::Delivered,
+                        },
+                    ],
+                },
+                Review {
+                    id: ReviewId::new("9".repeat(32)),
+                    agent: Some(SessionId::new("a-session")),
+                    reviewed: None,
+                    attached: Some(Attachment::Thread(ThreadId::new("a".repeat(32)))),
+                    threads: Vec::new(),
+                    rounds: Vec::new(),
+                },
+            ],
+            viewed: vec![PathBuf::from("src/lib.rs"), PathBuf::from("src/été.rs")],
+        }
+    }
+
     #[test]
     fn every_request_reply_refusal_and_fact_comes_back_as_it_was_sent() {
         let messages = every_shape();
@@ -1078,9 +1259,16 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; the last kind is tried a second time.
+        // One of each, in the order of the table; three kinds are tried a second time.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
-        assert_eq!(tried[RequestKind::ALL.len()..], [RequestKind::ReadFile]);
+        assert_eq!(
+            tried[RequestKind::ALL.len()..],
+            [
+                RequestKind::ReadFile,
+                RequestKind::SaveDraft,
+                RequestKind::SetViewed
+            ]
+        );
     }
 
     #[test]
@@ -1100,10 +1288,19 @@ mod tests {
             [
                 RequestKind::OpenFolder,
                 RequestKind::SetBase,
-                RequestKind::OpenTerminal
+                RequestKind::OpenTerminal,
+                RequestKind::DeleteDraft,
+                RequestKind::CopyReview,
+                RequestKind::MarkReviewed,
+                RequestKind::SetViewed,
+                RequestKind::Commit,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
+        // The Window reads the reviews to show them, and keeps what the user types in a
+        // comment box by itself: no control stands for either.
+        assert_eq!(RequestKind::GetReviews.origin(), Origin::Window);
+        assert_eq!(RequestKind::SaveDraft.origin(), Origin::Window);
         // The Window tells the size it shows a terminal at by itself, whenever its
         // layout changes.
         assert_eq!(RequestKind::ResizeTerminal.origin(), Origin::Window);

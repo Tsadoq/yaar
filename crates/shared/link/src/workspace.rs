@@ -70,10 +70,12 @@ pub struct Repository {
 pub struct Workspace {
     /// Its name on the Link.
     pub id: WorkspaceId,
-    /// The folder of the worktree.
+    /// The folder of the worktree: where it was last seen, when it is gone.
     pub path: PathBuf,
-    /// What is checked out in it.
-    pub head: Head,
+    /// What is checked out in it; none when the worktree is gone. A worktree git removed
+    /// stays listed while its reviews hold a thread, so that they are not lost from sight;
+    /// the Window shows it as gone, and nothing that needs its files can be asked of it.
+    pub head: Option<Head>,
 }
 
 /// What is checked out in a worktree.
@@ -265,14 +267,15 @@ pub(crate) fn write_repository(out: &mut Out, repository: &Repository) {
         out.text(workspace.id.as_str());
         out.path(&workspace.path);
         match &workspace.head {
-            Head::Branch(name) => {
+            Some(Head::Branch(name)) => {
                 out.u8(0);
                 out.text(name);
             }
-            Head::Detached(commit) => {
+            Some(Head::Detached(commit)) => {
                 out.u8(1);
                 out.text(commit);
             }
+            None => out.u8(2),
         }
     });
 }
@@ -286,8 +289,9 @@ pub(crate) fn read_repository(input: &mut In<'_>) -> Result<Repository, LinkErro
                 id: WorkspaceId(input.text()?),
                 path: input.path()?,
                 head: match input.u8()? {
-                    0 => Head::Branch(input.text()?),
-                    1 => Head::Detached(input.text()?),
+                    0 => Some(Head::Branch(input.text()?)),
+                    1 => Some(Head::Detached(input.text()?)),
+                    2 => None,
                     _ => return Err(LinkError::Malformed("unknown kind of head")),
                 },
             })

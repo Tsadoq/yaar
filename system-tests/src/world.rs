@@ -169,6 +169,14 @@ impl World {
         pid
     }
 
+    /// Kills the Keeper this world started with the kill signal, as a crash or the system
+    /// does, and returns once it is gone and collected; the world may then start another
+    /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
+    /// database. Panics when no Keeper of this world runs.
+    pub fn kill_keeper(&mut self) {
+        todo!()
+    }
+
     /// The process id of the Keeper this world started, while it runs.
     pub fn keeper_pid(&mut self) -> Option<u32> {
         let keeper = self.keeper.as_mut()?;

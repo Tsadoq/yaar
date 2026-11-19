@@ -2,10 +2,13 @@
 //!
 //! Owns: the SQLite database and its one writer: reviews, sessions, steps of turns, marks, settings.
 //!
-//! Surface: [`Store`], opened on one database file, and what it keeps so far: the
-//! repositories the user opened ([`RepositoryRecord`]) and their workspaces
-//! ([`WorkspaceRecord`]), each with the base the user set for it, under the ids
-//! [`RepositoryId`] and [`WorkspaceId`].
+//! Surface: [`Store`], opened on one database file, and what it keeps:
+//! - the repositories the user opened ([`RepositoryRecord`]) and their workspaces
+//!   ([`WorkspaceRecord`]), each with the base the user set for it, under the ids
+//!   [`RepositoryId`] and [`WorkspaceId`];
+//! - the reviews of each workspace ([`ReviewRecord`]) with their [`Thread`]s, each on an
+//!   [`Anchor`], their [`Comment`]s and [`Round`]s, under the ids [`ReviewId`],
+//!   [`ThreadId`] and [`CommentId`]; and the files marked viewed ([`ViewedRecord`]).
 //!
 //! One database file holds everything, for all workspaces, in the app's folder; nothing of
 //! it lies in a worktree or in a repository. No other crate opens the file or knows its
@@ -13,13 +16,18 @@
 //!
 //! One thread writes. Each call below that changes something is one transaction, handed
 //! to that thread, and returns when the change is on the drive: what such a call has
-//! returned is still there after the Keeper is killed. A call that saves without waiting
-//! for the drive says so in its own words.
+//! returned is still there after the Keeper is killed, and after the machine loses its
+//! power. One call saves without waiting for the drive, [`Store::save_draft`], made at
+//! every keystroke of a draft: what it has returned is still there after the Keeper is
+//! killed, and the writer flushes the drive once the typing pauses. See the module
+//! `reviews.rs` for both.
 //!
-//! The tables carry a version, and have had one so far: there is no older database to
-//! bring forward yet. The first change of the tables brings one, and with it the copy of
-//! the file beside itself that is made before an older database is touched. A database of
-//! a newer version is refused, and left as it is.
+//! The tables carry a version, SQLite's `user_version`. Version 1 holds the repositories
+//! and the workspaces; version 2 adds the reviews and the files marked viewed. A database
+//! of an older version is brought forward step by step when it is opened, and before the
+//! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
+//! step that goes wrong loses nothing. A database of a newer version is refused, and left
+//! as it is.
 //!
 //! What goes wrong is told in words of this crate: no caller sees the database library.
 
@@ -31,6 +39,13 @@ use std::sync::{Arc, mpsc};
 use std::thread::JoinHandle;
 
 use rusqlite::Connection;
+
+mod reviews;
+
+pub use reviews::{
+    Anchor, Author, Comment, CommentId, FLUSH_AFTER, ReviewId, ReviewRecord, Round, SentBy, Side,
+    Thread, ThreadId, ViewedRecord,
+};
 
 /// The name of the database file in the app's folder.
 pub const FILE_NAME: &str = "store.db";
@@ -54,6 +69,62 @@ const TABLES: &str = "
         base TEXT
     ) STRICT;
     PRAGMA user_version = 1;
+";
+
+/// What version 2 adds to the tables of version 1: the reviews, their threads, comments
+/// and rounds, and the files marked viewed. A path is kept as its bytes; a side, an
+/// author and a way of sending are small numbers, in the order their types list them.
+/// A comment whose `round` is null is a draft.
+#[expect(
+    dead_code,
+    reason = "the tables of version 2, which the builder of the Store applies"
+)]
+const TABLES_2: &str = "
+    CREATE TABLE review (
+        seq INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        workspace TEXT NOT NULL,
+        agent TEXT,
+        reviewed TEXT
+    ) STRICT;
+    CREATE INDEX review_of_workspace ON review (workspace);
+    CREATE TABLE thread (
+        seq INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        review TEXT NOT NULL REFERENCES review (id),
+        tree TEXT NOT NULL,
+        path BLOB NOT NULL,
+        side INTEGER NOT NULL CHECK (side IN (0, 1)),
+        first_line INTEGER NOT NULL CHECK (first_line >= 1),
+        last_line INTEGER NOT NULL CHECK (last_line >= first_line),
+        text TEXT NOT NULL,
+        resolved INTEGER NOT NULL DEFAULT 0 CHECK (resolved IN (0, 1)),
+        addressed INTEGER NOT NULL DEFAULT 0 CHECK (addressed IN (0, 1))
+    ) STRICT;
+    CREATE INDEX thread_of_review ON thread (review);
+    CREATE TABLE comment (
+        seq INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        thread TEXT NOT NULL REFERENCES thread (id),
+        author INTEGER NOT NULL CHECK (author IN (0, 1)),
+        text TEXT NOT NULL,
+        round INTEGER
+    ) STRICT;
+    CREATE INDEX comment_of_thread ON comment (thread);
+    CREATE TABLE round (
+        review TEXT NOT NULL REFERENCES review (id),
+        number INTEGER NOT NULL CHECK (number >= 1),
+        state TEXT NOT NULL,
+        sent_by INTEGER NOT NULL CHECK (sent_by IN (0, 1)),
+        PRIMARY KEY (review, number)
+    ) STRICT;
+    CREATE TABLE viewed (
+        workspace TEXT NOT NULL,
+        path BLOB NOT NULL,
+        content TEXT NOT NULL,
+        PRIMARY KEY (workspace, path)
+    ) STRICT;
+    PRAGMA user_version = 2;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its
@@ -201,7 +272,9 @@ impl Drop for Closing {
 impl Store {
     /// Opens the database at `file`, making the file and its folder when they are not
     /// there. A database of a newer version than this build knows is refused and left
-    /// as it is; there is no older version yet, so nothing is brought forward.
+    /// as it is. One of an older version is copied beside itself, as
+    /// `<file>.v<its version>`, and then brought forward to this build's version; a new,
+    /// empty file is filled with every version in turn and copied nowhere.
     ///
     /// One process opens a database at a time; that is the Keeper's to see to.
     pub fn open(file: &Path) -> Result<Store, StoreError> {

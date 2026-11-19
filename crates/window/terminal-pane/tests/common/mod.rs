@@ -87,7 +87,7 @@ pub fn one_repository() -> Repository {
         workspaces: vec![Workspace {
             id: workspace_id('1'),
             path: PathBuf::from("/gits/main"),
-            head: Head::Branch("main".to_owned()),
+            head: Some(Head::Branch("main".to_owned())),
         }],
     }
 }

@@ -17,9 +17,9 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    ChangedFile, Changes, Fact, FileSides, FileStatus, Hello, Message, Program, Refusal, Reply,
-    Repository, RepositoryId, Request, RequestId, TerminalId, TerminalSize, WorkspaceId, handshake,
-    read_message, write_message,
+    ChangedFile, Changes, CommentId, DraftOn, Fact, FileSides, FileStatus, Hello, Message, Program,
+    Refusal, Reply, Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId,
+    TerminalSize, ThreadId, WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -278,6 +278,79 @@ impl Client {
             }
             seen.push(fact);
         }
+    }
+
+    /// Sends one request and does not wait for its reply: as a Window that goes on while
+    /// the Keeper answers, and as a test that kills the Keeper while a request is on its
+    /// way. Gives the request's id. The reply, when it comes, is set aside by the calls
+    /// that wait, and is read with [`Client::wait_for_reply`].
+    pub fn send(&mut self, request: Request) -> RequestId {
+        let _ = request;
+        todo!()
+    }
+
+    /// Waits for the reply to a request [`Client::send`] sent, among those set aside and
+    /// those still to come. Panics, with what came, when none comes within `limit`.
+    pub fn wait_for_reply(&mut self, id: RequestId, limit: Duration) -> Result<Reply, Refusal> {
+        let _ = (id, limit);
+        todo!()
+    }
+
+    /// Asks for the reviews of a workspace and its files marked viewed. Panics when the
+    /// Keeper refuses.
+    pub fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
+        let _ = workspace;
+        todo!()
+    }
+
+    /// Saves the text of a draft, as a Window does at each change of a comment box, and
+    /// waits until the Keeper keeps it.
+    pub fn save_draft(
+        &mut self,
+        review: &ReviewId,
+        thread: &ThreadId,
+        comment: &CommentId,
+        on: DraftOn,
+        text: &str,
+    ) -> Result<(), Refusal> {
+        let _ = (review, thread, comment, on, text);
+        todo!()
+    }
+
+    /// Deletes a draft.
+    pub fn delete_draft(&mut self, review: &ReviewId, comment: &CommentId) -> Result<(), Refusal> {
+        let _ = (review, comment);
+        todo!()
+    }
+
+    /// Copies a review as text: gives the text and the number of the round it started.
+    pub fn copy_review(&mut self, review: &ReviewId) -> Result<(String, u32), Refusal> {
+        let _ = review;
+        todo!()
+    }
+
+    /// Marks the change of a review reviewed.
+    pub fn mark_reviewed(&mut self, review: &ReviewId) -> Result<(), Refusal> {
+        let _ = review;
+        todo!()
+    }
+
+    /// Marks a file of a workspace viewed, or takes the mark away.
+    pub fn set_viewed(
+        &mut self,
+        workspace: &WorkspaceId,
+        path: &Path,
+        viewed: bool,
+    ) -> Result<(), Refusal> {
+        let _ = (workspace, path, viewed);
+        todo!()
+    }
+
+    /// Commits every uncommitted change of a workspace with `message`: gives the id of the
+    /// commit.
+    pub fn commit(&mut self, workspace: &WorkspaceId, message: &str) -> Result<String, Refusal> {
+        let _ = (workspace, message);
+        todo!()
     }
 
     /// Keeps what a program wrote, after what it wrote before.

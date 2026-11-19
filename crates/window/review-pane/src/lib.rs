@@ -6,14 +6,24 @@
 //! - [`entry`], the pane as the Window program registers it: the one line that program
 //!   needs. It holds [`pane`], which builds the pane for the Frame, and [`controls`];
 //! - [`ReviewPane`], the view, and the model of what it shows: its [`PaneRow`]s, its
-//!   [`Layout`], and the [`Position`] of the line the reviewer is on;
+//!   [`Layout`], the [`Position`] of the line the reviewer is on, the reviews of the
+//!   workspace on screen, and the [`CommentBox`] while one is open;
 //! - [`controls`], the actions of the pane with their keys: [`LineDown`], [`LineUp`],
-//!   [`ToggleLayout`].
+//!   [`ToggleLayout`], and the review actions [`Comment`], [`EditDraft`], [`Reply`],
+//!   [`DeleteDraft`], [`NextThread`], [`PreviousThread`], [`CopyReview`],
+//!   [`ToggleViewed`], [`MarkReviewed`] and [`Commit`].
 //!
 //! The pane shows the changes of the workspace on screen: it observes
 //! `yaar_frame::WorkspaceChanges`, asks through it for the two versions of each changed
 //! file, a few files at a time, and diffs them with `yaar-diff` off the thread that
-//! draws. It reads and shows; nothing in it changes a file, and it offers no way to.
+//! draws. Nothing in it changes a file of the worktree, and it offers no way to, but one:
+//! the commit control, which asks the Keeper for an ordinary git commit of what is
+//! uncommitted.
+//!
+//! It shows the reviews of the workspace on screen too, which it asks the Keeper for, and
+//! their threads on the lines they sit on. A comment is written in a comment box, which
+//! saves its text at every change, while the reviewer types, and never waits for the
+//! answer: what is typed is the Keeper's to keep from the first keystroke.
 //!
 //! It depends on the Frame and on no other pane.
 
@@ -28,7 +38,10 @@ use std::rc::Rc;
 use gpui_kit::*;
 use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place};
-use yaar_link::{ChangedFile, Changes, Comparison, Content, FileSides, FileStatus};
+use yaar_link::{
+    Anchor, ChangedFile, Changes, CommentId, Comparison, Content, FileSides, FileStatus, Review,
+    ReviewId, ThreadId, WorkspaceReviews,
+};
 
 pub use yaar_diff::Layout;
 
@@ -41,6 +54,29 @@ actions!(
         LineUp,
         /// Switches the diff between the unified and the split view.
         ToggleLayout,
+        /// Opens a comment box on the line the reviewer is on, for the first comment of a
+        /// new thread there.
+        Comment,
+        /// Opens the comment box on the reviewer's draft in the thread on the line the
+        /// reviewer is on, to edit it.
+        EditDraft,
+        /// Opens a comment box for a reply in the thread on the line the reviewer is on,
+        /// whose last comment was sent.
+        Reply,
+        /// Deletes the reviewer's draft in the thread on the line the reviewer is on.
+        DeleteDraft,
+        /// Puts the reviewer on the line of the next thread, in the order of the rows.
+        NextThread,
+        /// Puts the reviewer on the line of the previous thread.
+        PreviousThread,
+        /// Copies the review as text to the clipboard, which sends its comments.
+        CopyReview,
+        /// Marks the file the reviewer is in viewed, or takes the mark away.
+        ToggleViewed,
+        /// Marks the change reviewed.
+        MarkReviewed,
+        /// Asks for a commit message, and commits every uncommitted change with it.
+        Commit,
     ]
 );
 
@@ -87,8 +123,26 @@ pub fn pane() -> BuildPane {
 }
 
 /// The actions of the pane with their keys, all in [`KEY_CONTEXT`]: `j` and `down` for
-/// [`LineDown`], `k` and `up` for [`LineUp`], `s` for [`ToggleLayout`]. None of them
-/// sends a message a user starts.
+/// [`LineDown`], `k` and `up` for [`LineUp`], `s` for [`ToggleLayout`].
+///
+/// The review actions follow vim and tuicr wherever either has a key for the action, and
+/// take a key neither uses for another action of this pane where neither has one:
+///
+/// | Action | Key | Where the key comes from | Sends |
+/// | --- | --- | --- | --- |
+/// | [`Comment`] | `c` | tuicr, add a line comment | nothing; the box saves as it is typed |
+/// | [`EditDraft`] | `i` | tuicr, edit the comment at the cursor; vim, insert | nothing; the box saves |
+/// | [`Reply`] | `o` | neither; vim's `o` opens a line below | nothing; the box saves |
+/// | [`DeleteDraft`] | `d d` | tuicr and vim, `dd` | `DeleteDraft` |
+/// | [`NextThread`], [`PreviousThread`] | `m`, `shift-m` | tuicr, next and previous comment | nothing |
+/// | [`CopyReview`] | `y` | tuicr, copy the review to the clipboard; vim, yank | `CopyReview` |
+/// | [`ToggleViewed`] | `r` | tuicr, toggle a file reviewed | `SetViewed` |
+/// | [`MarkReviewed`] | `shift-r` | neither; tuicr's `R` marks a hunk reviewed | `MarkReviewed` |
+/// | [`Commit`] | `shift-c` | neither; git's own tools use `C` for a commit | `Commit`, after a line of text |
+///
+/// In the comment box the keys type text; `enter` closes the box, `shift-enter` starts a new
+/// line, and `escape` closes it too, as in tuicr. Closing the box keeps the draft: it was
+/// saved as it was typed.
 pub fn controls() -> Vec<Control> {
     fn control(
         title: &'static str,
@@ -111,6 +165,28 @@ pub fn controls() -> Vec<Control> {
         control("Line Up", || Box::new(LineUp), "up"),
         control("Unified or Split Diff", || Box::new(ToggleLayout), "s"),
     ]
+}
+
+/// The comment box, while one is open: what is typed in it and where it goes.
+///
+/// It is drawn in the pane under the selector `review-comment-box`, below the rows and
+/// outside the element that holds the pane's key context, so that the letters typed in it
+/// are text and not keys of the pane. It has the focus while it is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommentBox {
+    /// The review the draft belongs to.
+    pub review: ReviewId,
+    /// The thread: a new one when `anchor` is some.
+    pub thread: ThreadId,
+    /// The draft, by the id the pane drew for it, or the id it has when it is edited.
+    pub comment: CommentId,
+    /// Where the new thread sits; none for a draft in a thread that exists, an edit or a
+    /// reply. Its lines are counted from 1, as the Link counts them.
+    pub anchor: Option<Anchor>,
+    /// The line the box was opened on.
+    pub at: Position,
+    /// The text in the box now.
+    pub text: String,
 }
 
 /// One line of one version of one changed file: where the reviewer is.
@@ -336,6 +412,36 @@ impl ReviewPane {
     /// The indices in [`ReviewPane::rows`] of the rows in view, as last laid out.
     pub fn rows_in_view(&self) -> Range<usize> {
         self.in_view.borrow().clone()
+    }
+
+    /// The reviews of the workspace on screen, with its files marked viewed, as the Keeper
+    /// last answered; none before its first answer and while no workspace is on screen.
+    pub fn reviews(&self) -> Option<&WorkspaceReviews> {
+        todo!()
+    }
+
+    /// The review the pane shows and acts on: the first of [`ReviewPane::reviews`]. In this
+    /// slice a workspace has one review.
+    pub fn review(&self) -> Option<&Review> {
+        todo!()
+    }
+
+    /// The comment box, while one is open.
+    pub fn comment_box(&self) -> Option<CommentBox> {
+        todo!()
+    }
+
+    /// Whether the field for a commit message is open. It is drawn under the selector
+    /// `review-commit-field`; `enter` commits with its line, `escape` closes it.
+    pub fn commit_field_open(&self) -> bool {
+        todo!()
+    }
+
+    /// Why the last review action the reviewer took was not done, as the pane says it in
+    /// the line under the selector `review-notice`: a refusal of the Keeper, as for a copy
+    /// with nothing to send or a commit git refused. None once the reviewer acts again.
+    pub fn notice(&self) -> Option<String> {
+        todo!()
     }
 
     /// Takes up what the shared model holds, each time the model says it changed.
