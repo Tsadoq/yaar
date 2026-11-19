@@ -193,8 +193,9 @@ impl Reviews {
 
     /// The reviews of a workspace, whole, and its files marked viewed. A workspace with no
     /// review of an agent session gets its review of no agent here, kept at once, when it
-    /// has none: one, also when several calls ask at once. The marks of files whose content changed since are taken away and kept so
-    /// first; with no `worktree`, as for a worktree that is gone, no file is viewed.
+    /// has none: one, also when several calls ask at once. Marks of files whose content
+    /// changed since they were marked are taken away, and that is kept, before the view is
+    /// given; with no `worktree`, as for a worktree that is gone, no file is viewed.
     pub fn of_workspace(
         &self,
         workspace: &WorkspaceId,
