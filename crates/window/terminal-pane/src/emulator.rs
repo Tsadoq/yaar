@@ -1850,7 +1850,11 @@ mod tests {
             emulator.advance(&text.as_bytes()[..cut]);
             assert_eq!(emulator.progress(), None, "cut at {cut}: nothing yet");
             emulator.advance(&text.as_bytes()[cut..]);
-            assert_eq!(emulator.progress(), Some(Progress::Normal(42)), "cut at {cut}");
+            assert_eq!(
+                emulator.progress(),
+                Some(Progress::Normal(42)),
+                "cut at {cut}"
+            );
         }
     }
 
@@ -1878,7 +1882,11 @@ mod tests {
             "\x1b]9;4;1;10\x18",
         ] {
             emulator.advance(other.as_bytes());
-            assert_eq!(emulator.progress(), Some(Progress::Indeterminate), "{other:?}");
+            assert_eq!(
+                emulator.progress(),
+                Some(Progress::Indeterminate),
+                "{other:?}"
+            );
         }
         // A string far too long to be a progress is dropped with no harm: the next
         // sequence is read as ever.

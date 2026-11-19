@@ -34,7 +34,7 @@ use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
-    Fact, Program, Reply, Request, RequestKind, TerminalId, TerminalSize, WorkspaceId,
+    Fact, Program, Reply, Request, RequestKind, SessionState, TerminalId, TerminalSize, WorkspaceId,
 };
 
 pub use emulator::{
@@ -313,6 +313,8 @@ impl TerminalPane {
         let workspaces = cx.observe_in(&models.workspaces, window, |pane, _, window, cx| {
             pane.workspace_changed(window, cx);
         });
+        // The waiting mark follows the agents, whatever else changes.
+        let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
         let on_screen = models.workspaces.read(cx).selected().cloned();
         Self {
             models: models.clone(),
@@ -325,7 +327,7 @@ impl TerminalPane {
             layouts: HashMap::new(),
             frames_until: None,
             window_title: None,
-            _subscriptions: vec![handed_on, keys, facts, workspaces],
+            _subscriptions: vec![handed_on, keys, facts, workspaces, agents],
         }
     }
 
@@ -378,8 +380,11 @@ impl TerminalPane {
     /// `terminal-waiting-<its slot>`, beside `terminal-slot-<its slot>`. The pane sends
     /// the program nothing for it.
     pub fn waiting(&self, terminal: &TerminalId, cx: &App) -> bool {
-        let _ = (terminal, cx);
-        todo!("whether an agent waits for permission in this terminal")
+        self.models
+            .agents
+            .read(cx)
+            .in_terminal(terminal)
+            .is_some_and(|session| session.state == SessionState::WaitsForPermission)
     }
 
     /// Whether the pane attached to `terminal` after the Keeper had dropped part of its
@@ -675,6 +680,7 @@ impl Render for TerminalPane {
 
         let theme = cx.theme();
         let (border, muted) = (theme.border, theme.muted_foreground);
+        let (warning, warning_text) = (theme.warning, theme.warning_foreground);
         let shown = self.shown();
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             // The name comes from the entry the view is taken from, so that no view is
@@ -693,6 +699,22 @@ impl Render for TerminalPane {
                     gpui_kit::MouseButton::Left,
                     cx.listener(move |pane, _, window, cx| pane.click_slot(n, window, cx)),
                 );
+            // The mark of an agent that waits for the user sits over the top right corner
+            // of its terminal, and takes no mouse event from it.
+            let mark = self.waiting(id, cx).then(|| {
+                div()
+                    .debug_selector(move || format!("terminal-waiting-{n}"))
+                    .absolute()
+                    .top_2()
+                    .right_3()
+                    .px_2()
+                    .py_0p5()
+                    .rounded_md()
+                    .text_xs()
+                    .bg(warning)
+                    .text_color(warning_text)
+                    .child("Waiting for permission")
+            });
             // The divider is a sibling of the slot, so the slot's bounds are exactly its
             // view's.
             let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
@@ -702,7 +724,7 @@ impl Render for TerminalPane {
                 .debug_selector(move || format!("terminal-{name}"))
                 .size_full()
                 .child(view);
-            Some((divider, slot.child(named)))
+            Some((divider, slot.relative().child(named).children(mark)))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = shown.is_empty().then(|| {
