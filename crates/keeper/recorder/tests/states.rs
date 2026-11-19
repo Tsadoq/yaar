@@ -895,6 +895,317 @@ fn a_repository_inside_the_worktree_is_recorded_as_the_commit_it_is_on() {
     );
 }
 
+/// A byte copy of `repo`, in which the user's own git can be asked what it would have
+/// done, without touching the real one.
+fn byte_copy(scratch: &Scratch, repo: &Path, name: &str) -> PathBuf {
+    let copy = scratch.join(name);
+    let status = std::process::Command::new("cp")
+        .arg("-R")
+        .arg(repo)
+        .arg(&copy)
+        .status()
+        .expect("copy");
+    assert!(status.success(), "cp -R failed");
+    copy
+}
+
+/// What a clean filter standing in for Git LFS prints: a fixed pointer, whatever it reads.
+const POINTER: &str = "version https://git-lfs.github.com/spec/v1\noid sha256:\
+    0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsize 5\n";
+
+// STATE-02. The tree of a state is the one `git add -A` writes in a byte copy of the
+// repository, with every kind of file whose blob git makes by more than copying the file.
+#[test]
+fn the_tree_of_a_state_is_the_tree_a_commit_of_everything_would_have_through_every_filter() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    // The stand-in for Git LFS: the CI machine has none. A POSIX shell script that reads
+    // its input to the end and prints the pointer, as the real clean filter does.
+    let lfs = scratch.join("bin/lfs-clean");
+    program(
+        &lfs,
+        &format!(
+            "cat > /dev/null\nprintf '%s' '{}'",
+            POINTER.replace('\'', "")
+        ),
+    );
+    let config = repo.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).expect("read the configuration");
+    // Written into the file, as a user's own settings are.
+    text.push_str(&format!(
+        "[core]\n\tautocrlf = true\n\
+         [filter \"upper\"]\n\tclean = tr a-z A-Z\n\
+         [filter \"lfs\"]\n\tclean = '{lfs}'\n\tsmudge = cat\n\trequired = true\n",
+        lfs = lfs.display()
+    ));
+    std::fs::write(&config, text).expect("write the configuration");
+    write(&repo, ".gitignore", "*.log\n");
+    write(
+        &repo,
+        ".gitattributes",
+        "*.txt filter=upper\n*.bin filter=lfs\n",
+    );
+    write(&repo, "notes.txt", "one\n");
+    write(&repo, "lines.md", "a\r\nb\r\n");
+    write(&repo, "kept.log", "first\n");
+    git(&repo, &["add", "-f", "kept.log"]);
+    commit_all(&repo, "start");
+
+    // Each kind, changed after the commit.
+    write(&repo, "notes.txt", "two lines\nmore\n");
+    write(&repo, "lines.md", "a\r\nb\r\nc\r\n");
+    write(&repo, "kept.log", "second\n");
+    // A large file the pointer stands in for, and a text file, both new; and an ignored
+    // file that is force-added and staged, never committed.
+    write(&repo, "model.bin", "12345");
+    write(&repo, "dir/new.txt", "new text\n");
+    write(&repo, "staged.log", "forced in\n");
+    git(&repo, &["add", "-f", "staged.log"]);
+    write(&repo, "ignored.log", "stays out\n");
+    let copy = byte_copy(&scratch, &repo, "copy");
+    git(&copy, &["add", "-A"]);
+    let wanted = git(&copy, &["write-tree"]);
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(state.tree, wanted);
+    // What git wrote for each file in the copy, and what each must be by the rule that
+    // makes it: the clean filter, the line ends, the forced file as it is now, the pointer.
+    let blob = |path: &str| git_bytes(&copy, &["cat-file", "blob", &format!("{wanted}:{path}")]);
+    for (path, content) in [
+        ("notes.txt", "TWO LINES\nMORE\n"),
+        ("dir/new.txt", "NEW TEXT\n"),
+        ("lines.md", "a\nb\nc\n"),
+        ("kept.log", "second\n"),
+        ("staged.log", "forced in\n"),
+        ("model.bin", POINTER),
+    ] {
+        assert_eq!(blob(path), content.as_bytes(), "git's blob of {path}");
+        assert_eq!(
+            store
+                .content(state.id.as_str(), Path::new(path))
+                .expect("read"),
+            Some(content.as_bytes().to_vec()),
+            "the state's content of {path}"
+        );
+    }
+    // An ignored file that nothing forced in is in no commit of everything.
+    assert_eq!(
+        store
+            .content(state.id.as_str(), Path::new("ignored.log"))
+            .expect("read"),
+        None
+    );
+}
+
+/// Where each place a hook can be in, one repository for each so that only that place is
+/// the one git would read the hook from.
+#[derive(Clone, Copy, Debug)]
+enum HookPlace {
+    /// In the hooks folder of the repository.
+    Folder,
+    /// In a folder that a global configuration names as `core.hooksPath`.
+    Global,
+    /// In configuration, as `hook.<name>.command` with its event.
+    Configuration,
+}
+
+// STATE-03. Each place a hook can be in gets a repository of its own: a global hooks path
+// replaces the hooks folder, so one repository could not have both at work.
+#[test]
+fn with_a_failing_hook_in_the_repository_behind_a_global_path_and_in_configuration_a_state_is_taken_and_none_runs()
+ {
+    let scratch = Scratch::new();
+    let global = scratch.join("global-config");
+    std::fs::write(
+        &global,
+        format!(
+            "[core]\n\thooksPath = {}\n",
+            scratch.join("global-hooks").display()
+        ),
+    )
+    .expect("write the global configuration");
+    let note = |place: HookPlace, hook: &str| {
+        format!(
+            "echo {hook} >> '{}'\nexit 1",
+            scratch.join(&format!("ran-{place:?}")).display()
+        )
+    };
+
+    let mut supported = Vec::new();
+    for place in [
+        HookPlace::Folder,
+        HookPlace::Global,
+        HookPlace::Configuration,
+    ] {
+        // Only the global place reads the global file: a global hooks path would
+        // replace the hooks folder of every other repository of the test.
+        // SAFETY: changing the environment is sound only while no other thread reads it:
+        // this test starts none, and `cargo nextest` gives it a process of its own.
+        unsafe {
+            std::env::set_var(
+                "GIT_CONFIG_GLOBAL",
+                if matches!(place, HookPlace::Global) {
+                    global.as_path()
+                } else {
+                    Path::new("/dev/null")
+                },
+            );
+        }
+        let repo = scratch.join(&format!("repo-{place:?}"));
+        init(&repo);
+        write(&repo, "a.txt", "one\n");
+        commit_all(&repo, "start");
+        for hook in ["post-index-change", "pre-commit"] {
+            let script = note(place, hook);
+            match place {
+                HookPlace::Folder => program(&repo.join(".git/hooks").join(hook), &script),
+                HookPlace::Global => program(&scratch.join("global-hooks").join(hook), &script),
+                HookPlace::Configuration => {
+                    let script_file = scratch.join(&format!("config-{hook}"));
+                    program(&script_file, &script);
+                    let config = repo.join(".git/config");
+                    let mut text = std::fs::read_to_string(&config).expect("read");
+                    // Both keys: with no event a hook is none.
+                    text.push_str(&format!(
+                        "[hook \"yaar-{hook}\"]\n\tcommand = {}\n\tevent = {hook}\n",
+                        script_file.display()
+                    ));
+                    std::fs::write(&config, text).expect("write the configuration");
+                }
+            }
+        }
+        write(&repo, "a.txt", "changed\n");
+        write(&repo, "b.txt", "new\n");
+
+        // The premise, in a byte copy: the hook of this place refuses a commit, where this
+        // git runs hooks of that place at all. A git that does not is told so.
+        let copy = byte_copy(&scratch, &repo, &format!("copy-{place:?}"));
+        let refused = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&copy)
+            .args(["commit", "--quiet", "-am", "x"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .expect("start git");
+        let ran = scratch.join(&format!("ran-{place:?}"));
+        if refused.status.success() {
+            assert!(
+                matches!(place, HookPlace::Configuration),
+                "git ran no hook of {place:?}, which every git does"
+            );
+            println!("hooks in configuration are not supported by this git: {place:?} skipped");
+            assert!(
+                !ran.exists(),
+                "a hook ran in the copy, and no commit was refused"
+            );
+            continue;
+        }
+        assert!(
+            ran.exists(),
+            "the commit was refused by something else than the hook of {place:?}"
+        );
+        println!("hooks of {place:?} are run by this git");
+        supported.push(place);
+        std::fs::remove_file(&ran).expect("clear what the copy's hooks wrote");
+
+        let store = StateStore::open(&found(), &scratch.join(&format!("store-{place:?}.git")))
+            .expect("open the store");
+        let state = store.record(&open(&repo)).expect("record");
+
+        let held = held_by(&store, &state);
+        assert_eq!(held.get("a.txt"), Some(&b"changed\n".to_vec()), "{place:?}");
+        assert_eq!(held.get("b.txt"), Some(&b"new\n".to_vec()), "{place:?}");
+        assert_eq!(
+            store.states().expect("states"),
+            vec![state],
+            "{place:?}: the state is held"
+        );
+        assert!(
+            !ran.exists(),
+            "{place:?}: a hook ran: {:?}",
+            std::fs::read_to_string(&ran)
+        );
+    }
+    assert!(
+        supported.len() >= 2,
+        "the hooks folder and the global hooks path are run by every git: {supported:?}"
+    );
+}
+
+// STATE-06. A program that creates and deletes files beside the recordings, and flips a
+// path between a file and a folder, as a build does.
+#[test]
+fn forty_states_taken_beside_a_loop_that_creates_and_deletes_files_all_succeed() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    write(&repo, "churn/kept.txt", "kept\n");
+    commit_all(&repo, "start");
+    let worktree = open(&repo);
+    let store = store(&scratch);
+    let stop = std::sync::atomic::AtomicBool::new(false);
+    let churn = repo.join("churn");
+
+    // Tells the loop to end however the recordings end: a failed one panics, and the scope
+    // waits for the loop.
+    struct Stops<'a>(&'a std::sync::atomic::AtomicBool);
+    impl Drop for Stops<'_> {
+        fn drop(&mut self) {
+            self.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    let made = std::thread::scope(|scope| {
+        let _stops = Stops(&stop);
+        let loop_of_files = scope.spawn(|| {
+            let mut made = 0_u64;
+            while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                let n = made % 64;
+                let file = churn.join(format!("f{n}"));
+                std::fs::write(&file, format!("{made}\n")).expect("create");
+                // Deleted a few files behind, so that some are there when git looks and
+                // gone when it stages them.
+                let _ = std::fs::remove_file(churn.join(format!("f{}", (n + 60) % 64)));
+                if made % 7 == 0 {
+                    // A path that is a file, then a folder with a file in it, then a file.
+                    let flip = churn.join("flip");
+                    let _ = std::fs::remove_dir_all(&flip);
+                    let _ = std::fs::write(&flip, "a file\n");
+                    let _ = std::fs::remove_file(&flip);
+                    let _ = std::fs::create_dir(&flip);
+                    let _ = std::fs::write(flip.join("inside"), "in a folder\n");
+                }
+                made += 1;
+            }
+            made
+        });
+        let mut states = Vec::new();
+        for n in 0..40 {
+            let state = store
+                .record(&worktree)
+                .unwrap_or_else(|e| panic!("recording {n} of 40 failed: {e}"));
+            // A tree git can read: its files list.
+            store
+                .paths(state.id.as_str())
+                .unwrap_or_else(|e| panic!("the state {n} does not read: {e}"));
+            states.push(state);
+        }
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        println!(
+            "the loop made {} files",
+            loop_of_files.join().expect("the loop")
+        );
+        states
+    });
+
+    assert_eq!(made.len(), 40);
+    assert!(!store.states().expect("states").is_empty());
+}
+
 #[test]
 fn a_repository_inside_the_worktree_with_no_commit_fails_the_recording_with_gits_words() {
     let scratch = Scratch::new();
