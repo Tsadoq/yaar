@@ -541,8 +541,9 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     let (first_write, last_write) = writing.join().expect("the writes");
 
     // A fact for each write would be sixty. One for the start, one for each calm time that
-    // fits in the span of the writes (rounded up, since the writes are timed after they
-    // are made) and one for the rest after the last write is all there may be, and there
+    // fits in the span of the writes (rounded up: the time between a write and the
+    // watcher's notice differs from write to write, which can move one fact more into the
+    // span) and one for the rest after the last write is all there may be, and there
     // is one at least for the start and one for the rest. That bound must also stay at
     // half of the writes or less: above it a Keeper that told most writes would pass, so a
     // run too slow to show the calming fails for that reason and proves nothing.
