@@ -616,15 +616,20 @@ impl Parts {
         };
         let route = self.terminals.route(terminal).ok_or_else(unknown)?;
         let id = yaar_dock::TerminalId::new(terminal.as_str());
-        let mut cut = false;
+        let (mut cut, mut shown) = (false, false);
         // The Window is put among those the output goes to while the Dock holds the
         // output still, so that the kept output ends where the live output begins.
         self.dock
             .attach(&id, |kept, dropped| {
                 cut = dropped;
-                route.attach(window, kept);
+                shown = route.attach(window, kept);
             })
             .map_err(|_| unknown())?;
+        // The program ended between finding the route and the attach, and the Windows have
+        // been told: the terminal is no more.
+        if !shown {
+            return Err(unknown());
+        }
         // A program that ended meanwhile has nothing to draw: its end is told as it comes.
         // What the redraw writes is held behind the kept output like all that follows it.
         let _ = self.dock.resize(&id, size(at));
@@ -742,6 +747,9 @@ struct RouteState {
     /// The program ended, and the end is not told yet: it is told once every Window has
     /// what came before it.
     ended: Option<Ending>,
+    /// The end has been told: no Window is shown the terminal any more, since nothing
+    /// more would be told to one that came after.
+    over: bool,
 }
 
 /// One Window a terminal is shown to.
@@ -755,6 +763,19 @@ struct Member {
     kept: Vec<u8>,
     /// Frames of output that came before the reply was queued, in order.
     held: Vec<Vec<u8>>,
+}
+
+impl RouteState {
+    /// Shows `window` the terminal from the start of `kept`; one shown it already is
+    /// shown it again from there. False, and nothing done, when the end has been told.
+    fn admit(&mut self, window: &Arc<Window>, kept: &[u8]) -> bool {
+        if self.over {
+            return false;
+        }
+        self.members.retain(|member| !member.is(window));
+        self.members.push(Member::new(window, kept));
+        true
+    }
 }
 
 impl Member {
@@ -793,6 +814,7 @@ impl Route {
             state: Mutex::new(RouteState {
                 members: vec![Member::new(opener, &[])],
                 ended: None,
+                over: false,
             }),
             agents,
         }
@@ -832,7 +854,9 @@ impl Route {
     /// came before it: taken, so that it is told once. None before.
     fn settle(state: &mut RouteState) -> Option<Ending> {
         if state.members.iter().all(|member| member.released) {
-            state.ended.take()
+            let told = state.ended.take();
+            state.over |= told.is_some();
+            told
         } else {
             None
         }
@@ -841,11 +865,10 @@ impl Route {
     /// `window` is shown the terminal from now on, after the kept output `kept`. One that
     /// was shown it already is shown it from the start of the kept output again, as its
     /// reply says: what it was sent before the reply it has, and the kept output holds.
-    /// Called with the Dock holding the output still.
-    fn attach(&self, window: &Arc<Window>, kept: &[u8]) {
-        let mut state = self.state();
-        state.members.retain(|member| !member.is(window));
-        state.members.push(Member::new(window, kept));
+    /// Called with the Dock holding the output still. False when the end of the program
+    /// has been told already: the Window is not shown it.
+    fn attach(&self, window: &Arc<Window>, kept: &[u8]) -> bool {
+        self.state().admit(window, kept)
     }
 
     /// The reply to `window`'s request is queued: what was held goes out after it, in
@@ -1431,6 +1454,7 @@ pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use yaar_link::Content;
 
@@ -1578,5 +1602,28 @@ mod tests {
                 reason: "the database is closed".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn a_window_is_not_shown_a_terminal_whose_end_has_been_told() {
+        let window = || Window::new(UnixStream::pair().expect("a pair of sockets").0);
+        let (opener, late) = (window(), window());
+        let mut state = RouteState::default();
+        state.admit(&opener, &[]);
+        state.members[0].released = true;
+        state.ended = Some(Ending::Exited(0));
+
+        // The end waits for a Window whose reply is not queued: one more may still be shown
+        // the terminal, and is told of the end with the rest.
+        let waiting = window();
+        assert!(state.admit(&waiting, b"kept"));
+        assert!(Route::settle(&mut state).is_none());
+        state.members[1].released = true;
+
+        // Once the end is told, the terminal is over, and no Window is shown it after that:
+        // it would never hear what it is told of an end that has gone by.
+        assert_eq!(Route::settle(&mut state), Some(Ending::Exited(0)));
+        assert!(!state.admit(&late, b"kept"));
+        assert!(!state.members.iter().any(|member| member.is(&late)));
     }
 }
