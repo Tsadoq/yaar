@@ -118,9 +118,6 @@ pub struct TurnRecord {
     /// state of the turn before was still being recorded, that state, kept with
     /// [`Store::set_turn_start`] once it is recorded. None where there was none, and until
     /// then.
-    ///
-    /// Kept from version 4 of the tables on. Until the Store's package of slice 5 brings
-    /// the tables to version 4, [`Store::put_turn`] drops it and [`Store::turn`] gives none.
     pub start: Option<String>,
     /// The full id of the state recorded at its end.
     pub state: Option<String>,
@@ -362,12 +359,14 @@ impl Store {
                 ));
             }
             keeping.execute(
-                "INSERT INTO turn (id, session, number, ended, state) VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO turn (id, session, number, ended, start, state)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     turn.id.0,
                     turn.session.0,
                     turn.number,
                     turn.ended.map(turn_end_number),
+                    turn.start,
                     turn.state
                 ],
             )?;
@@ -379,8 +378,17 @@ impl Store {
     /// for a turn that started while the state of the turn before was still being recorded.
     /// Refused for a turn that is not kept.
     pub fn set_turn_start(&self, turn: &TurnId, start: &str) -> Result<(), StoreError> {
-        let _ = (turn, start);
-        todo!("the Store's package of slice 5: `UPDATE turn SET start`")
+        let (turn, start) = (turn.0.clone(), start.to_owned());
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE turn SET start = ?2 WHERE id = ?1",
+                params![turn, start],
+            )?;
+            if changed == 0 {
+                return refused(format!("turn {turn} is not kept"));
+            }
+            Ok(())
+        })
     }
 
     /// Keeps how a turn ended and the state recorded then.
@@ -481,7 +489,8 @@ const SESSION: &str = "SELECT id, workspace, agent, cli_session, terminal, numbe
                               ended, ended_by FROM session";
 
 /// The columns of a turn, in the order [`turn_of_row`] reads them.
-const TURN: &str = "SELECT turn.id, turn.session, turn.number, turn.ended, turn.state FROM turn";
+const TURN: &str =
+    "SELECT turn.id, turn.session, turn.number, turn.ended, turn.start, turn.state FROM turn";
 
 fn session_of_row(row: &Row<'_>) -> rusqlite::Result<SessionRecord> {
     let ended: Option<i64> = row.get(7)?;
@@ -504,9 +513,8 @@ fn turn_of_row(row: &Row<'_>) -> rusqlite::Result<TurnRecord> {
         session: SessionId(row.get(1)?),
         number: row.get(2)?,
         ended: row.get::<_, Option<i64>>(3)?.map(turn_end_of),
-        // Version 4 keeps it: the Store's package of slice 5 reads it here.
-        start: None,
-        state: row.get(4)?,
+        start: row.get(4)?,
+        state: row.get(5)?,
     })
 }
 
