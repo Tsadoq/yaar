@@ -67,7 +67,14 @@ impl Scratch {
             // Where the Keeper's copies of git's lists of files go, and a program of a
             // terminal's too: a folder that goes with the test.
             std::env::set_var("TMPDIR", root.join("tmp"));
-            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+                "GIT_CONFIG",
+            ] {
                 std::env::remove_var(name);
             }
         }
@@ -215,6 +222,24 @@ fn added(path: &str) -> ChangedFile {
     ChangedFile {
         path: PathBuf::from(path),
         status: FileStatus::Added,
+    }
+}
+
+#[test]
+fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
+    // SAFETY: changing the environment is sound only while no other thread reads it.
+    // This is the first statement of a test, and these tests are run by `cargo
+    // nextest`, which gives each test a process of its own.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "log");
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'alias.status'='log'");
+        std::env::set_var("GIT_CONFIG", "/nonexistent/config");
+    }
+    let _scratch = Scratch::new();
+    for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"] {
+        assert_eq!(std::env::var_os(name), None, "{name} is still set");
     }
 }
 

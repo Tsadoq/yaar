@@ -27,6 +27,24 @@ fn comment(n: u128) -> CommentId {
 }
 
 #[test]
+fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
+    // SAFETY: changing the environment is sound only while no other thread reads it.
+    // This is the first statement of a test, and these tests are run by `cargo
+    // nextest`, which gives each test a process of its own.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "log");
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'alias.status'='log'");
+        std::env::set_var("GIT_CONFIG", "/nonexistent/config");
+    }
+    let _scratch = Scratch::new();
+    for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"] {
+        assert_eq!(std::env::var_os(name), None, "{name} is still set");
+    }
+}
+
+#[test]
 fn eight_readings_at_once_of_a_new_workspace_make_one_review_and_give_its_id() {
     let scratch = Scratch::new();
     let repo = repo_with_one_file(&scratch);

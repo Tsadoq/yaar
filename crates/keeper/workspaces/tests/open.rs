@@ -64,6 +64,24 @@ fn id_in(git_dir: &Path) -> String {
 
 // WS-07.
 #[test]
+fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
+    // SAFETY: changing the environment is sound only while no other thread reads it.
+    // This is the first statement of a test, and these tests are run by `cargo
+    // nextest`, which gives each test a process of its own.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "log");
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'alias.status'='log'");
+        std::env::set_var("GIT_CONFIG", "/nonexistent/config");
+    }
+    let _scratch = Scratch::new();
+    for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"] {
+        assert_eq!(std::env::var_os(name), None, "{name} is still set");
+    }
+}
+
+#[test]
 fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch() {
     let scratch = Scratch::new();
     let (repo, linked, first) = a_repository_with_two_worktrees(&scratch);
