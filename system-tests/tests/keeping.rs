@@ -121,11 +121,16 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
     // go on is made there, so that making it is no change of the worktree.
     let (world, repo) = World::with_standin("default", &Script(vec![]));
     let go = world.home().with_file_name("go");
-    let files: Vec<String> = (1..=READS).map(|k| format!("f{k:03}.txt")).collect();
-    for file in &files {
+    let named: Vec<String> = (1..=READS).map(|k| format!("f{k:03}.txt")).collect();
+    for file in &named {
         repo.write(file, &format!("{file}\n"));
     }
-    repo.commit("Add the files the agent reads");
+    let head = repo.commit("Add the files the agent reads");
+    // The agent reads them in an order that is neither by name nor by its reverse, so that
+    // steps kept in the order of their paths are not mistaken for steps kept in the order
+    // they came: 37 and 100 share no factor, so each file is read once.
+    let files: Vec<String> = (0..READS).map(|k| named[k * 37 % READS].clone()).collect();
+    assert_ne!(files, named, "the reads are in the order of their names");
     let mut steps = vec!["turn".to_owned(), format!("hold {}", go.display())];
     steps.extend(files.iter().map(|file| format!("read {file}")));
     steps.extend(["end".to_owned(), "turn".to_owned()]);
@@ -147,6 +152,10 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
 
     // The client leaves while the agent works, with no goodbye.
     client.vanish();
+
+    // A file the agent does not touch, written while the client is away and the turn is
+    // open: only a state taken when the turn ends holds it.
+    repo.write("late.txt", "written while the agent works\n");
 
     // The agent finishes its turn.
     let began = Instant::now();
@@ -198,10 +207,20 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
     };
     assert_eq!(*session_of_turn, session.id);
 
-    // Its recorded state is what the files hold.
+    // Its recorded state is what the files hold, `late.txt` of the turn's end among them.
     assert_eq!(
         later.compare(&workspace, state, None).expect("compare"),
         vec![]
+    );
+    let since_head = later
+        .compare(&workspace, state, Some(&head))
+        .expect("compare with the commit");
+    assert_eq!(
+        since_head
+            .iter()
+            .map(|change| change.path.as_path())
+            .collect::<Vec<_>>(),
+        [std::path::Path::new("late.txt")]
     );
 
     // Every one of the events sent meanwhile, in order.
@@ -226,6 +245,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
     );
 
     // The terminal's screen: the last of what the agent printed, and its prompt.
+    let last_read = format!("● Read {}", files.last().expect("reads"));
     let cut = later
         .attach_terminal(&terminal, SIZE)
         .expect("attach to the terminal");
@@ -241,7 +261,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
         .collect();
     assert_eq!(
         last,
-        ["standin>", "● Done", "● Read f100.txt"],
+        ["standin>", "● Done", last_read.as_str()],
         "the screen: {screen:?}"
     );
     end(world, later);

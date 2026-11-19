@@ -286,15 +286,20 @@ fn full_turn(world: &World, repo: &yaar_system_tests::Repo) -> Client {
     client
 }
 
-/// Ends the world, and waits until every process its Keeper started is gone.
-fn leave(mut world: World, client: Client) {
+/// Asks the Keeper to stop everything, and waits until every process it started and it
+/// itself are gone, so that what it does as it ends is done. Its children go first: the
+/// world ends a tracer as soon as the Keeper's own process is gone.
+fn stop_the_keeper(world: &mut World, client: &mut Client) {
     let keeper = world.keeper_pid().expect("the Keeper runs");
     let started = descendants_of(keeper);
-    drop(client);
-    drop(world);
+    client.stop_everything();
     assert!(
         wait_until(DEADLINE, || started.iter().all(|pid| !is_alive(*pid))),
         "still there: {started:?}"
+    );
+    assert!(
+        wait_until(DEADLINE, || world.keeper_pid().is_none()),
+        "the Keeper did not end at the stop"
     );
 }
 
@@ -303,7 +308,7 @@ fn leave(mut world: World, client: Client) {
 fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored()
  {
     let Prepared {
-        world,
+        mut world,
         repo,
         marker,
         before,
@@ -316,7 +321,10 @@ fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_cr
         SETTINGS.len() + CREDENTIALS.len()
     );
 
-    let client = full_turn(&world, &repo);
+    let mut client = full_turn(&world, &repo);
+    // The Keeper ends before anything is looked at: what it does as it ends is part of
+    // what the app did.
+    stop_the_keeper(&mut world, &mut client);
 
     // The settings files of both CLIs are unchanged, and nothing was added beside them.
     let after = record(&home, &data);
@@ -368,7 +376,6 @@ fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_cr
             store.display()
         );
     }
-    leave(world, client);
 }
 
 // Not rows: what AGENT-12 looks with.
@@ -708,17 +715,7 @@ fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_trac
 
     // The Keeper ends of its own accord, and the tracer with it, so that everything it
     // saw is written down.
-    let keeper = world.keeper_pid().expect("the Keeper runs");
-    let started = descendants_of(keeper);
-    client.stop_everything();
-    assert!(
-        wait_until(DEADLINE, || world.keeper_pid().is_none()),
-        "the Keeper did not end at the stop"
-    );
-    assert!(
-        wait_until(DEADLINE, || started.iter().all(|pid| !is_alive(*pid))),
-        "still there: {started:?}"
-    );
+    stop_the_keeper(&mut world, &mut client);
     let trace = fs::read(trace_of(&world)).expect("the trace of the Keeper");
     let trace = String::from_utf8_lossy(&trace);
 
