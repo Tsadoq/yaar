@@ -164,8 +164,21 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Called first by every action of the reviewer: what was said is gone.
+    /// Called first by every action of the reviewer: what was said is gone, and the
+    /// reviewer at work in the pane pauses follow ([`ReviewPane::touched`]). A key bound to
+    /// an action reaches the pane only as that action, never as a key event, so this is
+    /// where a key of the pane pauses follow. The controls of the views and of follow call
+    /// [`ReviewPane::steered`] instead.
     pub(crate) fn acted(&mut self, cx: &mut Context<Self>) {
+        self.steered(cx);
+        self.touched(cx);
+    }
+
+    /// Called first by the four controls of the views and of follow, [`crate::ToggleView`],
+    /// [`crate::ToggleFlowForm`], [`crate::ToggleFollow`] and [`crate::ResumeFollow`], by key
+    /// or by a click on the bar: what was said is gone, and follow is not paused, since
+    /// they choose what Flow shows rather than read it.
+    pub(crate) fn steered(&mut self, cx: &mut Context<Self>) {
         if self.notice.take().is_some() {
             cx.notify();
         }

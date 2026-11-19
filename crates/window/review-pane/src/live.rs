@@ -1,13 +1,16 @@
-//! The live diff of Flow: the change of one turn of the workspace on screen, as it grows,
-//! and the comments written on its lines.
+//! The live diff of Flow: the change of one turn of the workspace on screen, as it grows.
 //!
-//! Built by the review pane's second package of slice 5 (rows RP-04, RP-14).
+//! Built by the review pane's second package of slice 5 (row RP-04). Comments written on
+//! its lines are `flow_comment.rs`'s.
 //!
 //! Which turn. The turn the live diff shows is the newest turn of the timeline: the newest
-//! that started, while one runs; else the one the timeline was filled with. It reads the
-//! version that turn counts from in `yaar_link::Turn::start`, which the timeline's
-//! `GetTurn` answer gives (`ReviewPane::flow`, `Timeline::step` and its entries), or, where
-//! that is none, the commit checked out (`crate::tree::checked_out` of the history).
+//! that started, while one runs; else the one the timeline was filled with. The version it
+//! counts from is that turn's start as the timeline's `GetTurn` answer gave it
+//! (`Timeline::start_of`): until that answer is taken the live diff asks nothing; where it
+//! gave none, the commit checked out (`crate::tree::checked_out` of the history, once the
+//! history is here, `ReviewPane::live_history`). When a later answer gives the turn
+//! another start (a turn that started while the state of the turn before was being
+//! recorded), the live diff starts over from it.
 //!
 //! What it is the diff of. While the turn runs: from that version to the files on disk,
 //! read with `Request::CompareVersions { from, to: None }` for the list and
@@ -17,28 +20,39 @@
 //! requests with `to` and `new` the state. With no turn known: no rows, and the line
 //! `flow-empty`.
 //!
+//! When it asks. Only while it is on screen: Flow on screen in its second form
+//! (`ReviewPane::view` is Flow and `ReviewPane::flow_form` the live diff). While it is not,
+//! the facts below only mark what it holds as stale, and nothing is asked. When it comes
+//! on screen, or when its turn or the version it counts from changes while it is, it asks
+//! for the list once, then for the files. [`ReviewPane::live_look`] is where it looks: the
+//! timeline calls it after each change the live diff reads (a turn added or read, the
+//! view, the form, a workspace on screen), and the live diff's own hooks below end with it.
+//!
 //! What makes it grow. While the turn runs, the list is asked again at each `Fact::Step`
 //! of that turn that is an edit or a file written whole, and at each `Fact::ChangesChanged`
-//! of the workspace on screen, which is how a file a shell command wrote reaches it. One
-//! question for the list is on its way at a time; a reason to ask again that comes
-//! meanwhile asks once more when the answer is here. When the list is here, a file new to
-//! it is read, and so is every file a step named since the last list, and every file of the
-//! list when a `ChangesChanged` came since; a file keeps what is shown of it until its new
-//! versions are here, so that nothing blinks.
+//! of the workspace on screen, which is how a file a shell command wrote reaches it; a read
+//! step asks nothing. At the `Fact::TurnEnded` of that turn with a state, the list is asked
+//! again to that state. One question for the list is on its way at a time; a reason to
+//! ask again that comes meanwhile asks once more when the answer is here. When the list is
+//! here, a file new to it is read, and so is every file a step named since the last list,
+//! and every file of the list when a `ChangesChanged` came since; a file keeps what is
+//! shown of it until its new versions are here, so that nothing blinks.
+//!
+//! Following. When the rows are made again while follow is `On` and Flow is at a step
+//! (`ReviewPane::at`) whose file the live diff now holds, the list is scrolled so that the
+//! heading of that file is in view: a step that came before its file was in the list is
+//! followed once it is. While follow is paused or off the scroll stays where it is.
 //!
 //! Its rows are [`crate::PaneRow`]s, as Changes' are, in the pane's layout, with the
 //! threads of the review on screen on their lines (`crate::threads`), made again whenever
 //! Changes' are (`ReviewPane::rebuild` calls [`ReviewPane::live_rebuild`]). The reviewer is
-//! on one line of it, moved by `j`, `k` and a click; `c` writes a comment there: the box is
-//! the pane's one comment box, and the draft's anchor is the line's path in its version,
-//! its side, its line and its text, in the version of that side: the new side in `to`, or
-//! the files on disk (none), the old side in `from`, exactly as Changes anchors a line of
-//! the same version, so that the thread shows on that line in Changes.
+//! on one line of it, moved by `j`, `k` and a click.
 
 use std::ops::Range;
+use std::path::Path;
 
 use gpui_kit::*;
-use yaar_link::Fact;
+use yaar_link::{ChangedFile, Fact};
 
 use crate::{FlowAt, LiveChange, PaneRow, Position, ReviewPane};
 
@@ -73,6 +87,14 @@ impl Live {
         todo!("the second package of the review pane: the text of a line")
     }
 
+    /// The file of the list at `path`, as the last `CompareVersions` answer named it: its
+    /// status, and for a renamed file the path it had in the version counted from. What a
+    /// comment's anchor is built from.
+    pub(crate) fn file(&self, path: &Path) -> Option<&ChangedFile> {
+        let _ = path;
+        todo!("the second package of the review pane: a file of the list")
+    }
+
     /// The step named in the line above the files, while it has no row.
     pub(crate) fn activity(&self) -> Option<&FlowAt> {
         todo!("the second package of the review pane: the step with no row")
@@ -85,6 +107,16 @@ impl Live {
 }
 
 impl ReviewPane {
+    /// The live diff looks at what it shows and whether it is on screen, as the module
+    /// says, and asks for the list when it is on screen and what it holds is stale, of
+    /// another turn, or counted from another version. Called by the timeline after each
+    /// change the live diff reads, and last by the live diff's own hooks.
+    ///
+    /// Filled by the second package of the review pane; the contract's body does nothing.
+    pub(crate) fn live_look(&mut self, cx: &mut Context<Self>) {
+        let _ = cx;
+    }
+
     /// The workspace on screen may be another: the live diff is emptied when it is.
     ///
     /// Filled by the second package of the review pane; the contract's body does nothing.
@@ -142,13 +174,5 @@ impl ReviewPane {
     pub(crate) fn scroll_live_to(&mut self, row: usize) {
         let _ = row;
         todo!("the second package of the review pane: scrolling the live diff")
-    }
-
-    /// What [`crate::Comment`] does in Flow: on the line of the live diff the reviewer is
-    /// on, the comment box opens for the first comment of a new thread; in the timeline,
-    /// the pane says that a comment is written on a line of the live diff.
-    pub(crate) fn comment_in_flow(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let _ = (window, cx);
-        todo!("the second package of the review pane: a comment written in Flow")
     }
 }

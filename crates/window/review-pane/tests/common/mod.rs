@@ -262,6 +262,17 @@ pub struct KeeperEnd {
 impl KeeperEnd {
     /// Links `link` to a Keeper that speaks the Window's protocol.
     pub fn attach(link: &Entity<KeeperLink>, cx: &mut TestAppContext) -> Self {
+        Self::attach_staged(link, cx, |_| {})
+    }
+
+    /// [`KeeperEnd::attach`], with what the Keeper knows set by `stage` before the Window
+    /// is linked to it: the Window asks for the agents and the settings the moment it is,
+    /// so what the first answers hold has to be set before.
+    pub fn attach_staged(
+        link: &Entity<KeeperLink>,
+        cx: &mut TestAppContext,
+        stage: impl FnOnce(&KeeperEnd),
+    ) -> Self {
         // The connection is read by a real thread, which the test executor cannot see.
         cx.executor().allow_parking();
         let (ours, theirs) = UnixStream::pair().expect("a socket pair");
@@ -332,6 +343,13 @@ impl KeeperEnd {
                 }
             });
         }
+        let end = Self {
+            stream,
+            heard,
+            reviews,
+            standing,
+        };
+        stage(&end);
         let keeper = Hello {
             protocol: PROTOCOL_VERSION,
             pid: 1,
@@ -347,12 +365,7 @@ impl KeeperEnd {
                 cx,
             )
         });
-        Self {
-            stream,
-            heard,
-            reviews,
-            standing,
-        }
+        end
     }
 
     /// The next request of the Window that is not for the reviews, which this end answers
@@ -884,13 +897,24 @@ pub struct Stage {
 /// its changes is the next the Keeper hears. The keys of the pane are bound from the
 /// pane's own table, the way the Window program binds them.
 pub fn link_up(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Models, KeeperEnd) {
+    link_up_staged(workspaces, |_| {}, cx)
+}
+
+/// [`link_up`], with what the Keeper knows set by `stage` before the Window is linked to
+/// it, as [`KeeperEnd::attach_staged`] says: the agents a running turn is read from
+/// (`set_agents`), the settings (`set_settings`), a turn (`set_turn`).
+pub fn link_up_staged(
+    workspaces: Vec<Workspace>,
+    stage: impl FnOnce(&KeeperEnd),
+    cx: &mut TestAppContext,
+) -> (Models, KeeperEnd) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         bind(&(yaar_review_pane::entry().controls)(), cx);
     });
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
-    let mut keeper = KeeperEnd::attach(&link, cx);
+    let mut keeper = KeeperEnd::attach_staged(&link, cx, stage);
     let asked = keeper.expect(Request::ListWorkspaces, cx);
     keeper.reply(asked, Ok(Reply::Workspaces(vec![repository(workspaces)])));
     wait_until(cx, "a workspace on screen", |cx| {
@@ -947,7 +971,17 @@ pub fn open_window(
 /// A window with the pane in it, linked as [`link_up`] links it: the pane is there
 /// before the Keeper has said anything about the changes.
 pub fn open(workspaces: Vec<Workspace>, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
-    let (models, keeper) = link_up(workspaces, cx);
+    open_staged(workspaces, |_| {}, cx)
+}
+
+/// [`open`], with what the Keeper knows set by `stage` before the Window is linked to it,
+/// as [`link_up_staged`] says.
+pub fn open_staged(
+    workspaces: Vec<Workspace>,
+    stage: impl FnOnce(&KeeperEnd),
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
+    let (models, keeper) = link_up_staged(workspaces, stage, cx);
     open_window(models, keeper, cx)
 }
 

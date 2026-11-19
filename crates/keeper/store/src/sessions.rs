@@ -113,8 +113,11 @@ pub struct TurnRecord {
     pub number: u32,
     /// How it ended; none while it runs.
     pub ended: Option<TurnEndRecord>,
-    /// The full id of the newest state of the worktree recorded before the turn started:
-    /// what its change counts from. None where there was none.
+    /// The full id of the state the turn's change counts from: the newest state of the
+    /// worktree recorded before the turn started, or, for a turn that started while the
+    /// state of the turn before was still being recorded, that state, kept with
+    /// [`Store::set_turn_start`] once it is recorded. None where there was none, and until
+    /// then.
     ///
     /// Kept from version 4 of the tables on. Until the Store's package of slice 5 brings
     /// the tables to version 4, [`Store::put_turn`] drops it and [`Store::turn`] gives none.
@@ -370,6 +373,14 @@ impl Store {
             )?;
             Ok(keeping.commit()?)
         })
+    }
+
+    /// Keeps the state a kept turn's change counts from, in the place of the one it had:
+    /// for a turn that started while the state of the turn before was still being recorded.
+    /// Refused for a turn that is not kept.
+    pub fn set_turn_start(&self, turn: &TurnId, start: &str) -> Result<(), StoreError> {
+        let _ = (turn, start);
+        todo!("the Store's package of slice 5: `UPDATE turn SET start`")
     }
 
     /// Keeps how a turn ended and the state recorded then.

@@ -60,6 +60,7 @@ mod actions;
 mod comments;
 mod draw;
 mod flow;
+mod flow_comment;
 mod flow_draw;
 mod follow;
 mod live;
@@ -747,6 +748,7 @@ impl ReviewPane {
             pane.sessions_changed(cx);
             pane.flow_agents(cx);
             pane.live_agents(cx);
+            pane.follow_agents(cx);
         })
         .detach();
         cx.observe(&models.settings, |pane, _, cx| pane.flow_settings(cx))
@@ -792,6 +794,15 @@ impl ReviewPane {
         pane.follow_history(window, cx);
         pane.follow(cx);
         pane.follow_reviews(window, cx);
+        // A pane built while a workspace, its agents and its settings are already in the
+        // models starts from them, as it would from a change of each.
+        pane.flow_workspace(cx);
+        pane.live_workspace(cx);
+        pane.follow_workspace(cx);
+        pane.flow_agents(cx);
+        pane.live_agents(cx);
+        pane.follow_agents(cx);
+        pane.flow_settings(cx);
         pane
     }
 

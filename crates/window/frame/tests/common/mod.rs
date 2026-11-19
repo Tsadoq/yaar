@@ -101,6 +101,9 @@ struct Inner {
     settings: Vec<Setting>,
     /// What each `SetSetting` named, in the order they were heard.
     settings_set: Vec<Setting>,
+    /// What every `SetSetting` is refused with, when a test says so: the setting is then
+    /// not kept.
+    setting_refusal: Option<Refusal>,
     /// What each `ShowWorkspace` named, in the order they were heard.
     shown: Vec<Option<WorkspaceId>>,
     /// The review the last `GetUncommitted` named.
@@ -205,6 +208,9 @@ impl Standing {
             }
             Request::SetSetting { setting } => {
                 inner.settings_set.push(setting.clone());
+                if let Some(refusal) = inner.setting_refusal.clone() {
+                    return Heard::Answer(Err(refusal));
+                }
                 match inner
                     .settings
                     .iter_mut()
@@ -507,6 +513,12 @@ impl KeeperEnd {
     /// How many times the Window asked for the settings so far.
     pub fn settings_asked(&self) -> usize {
         self.standing.lock().asked.settings
+    }
+
+    /// From now on refuses every `SetSetting` with this, and keeps nothing of it; none to
+    /// keep and answer them again. Each is still listed in [`KeeperEnd::settings_set`].
+    pub fn refuse_settings(&self, refusal: Option<Refusal>) {
+        self.standing.lock().setting_refusal = refusal;
     }
 
     /// How many times the Window asked for the agents so far.

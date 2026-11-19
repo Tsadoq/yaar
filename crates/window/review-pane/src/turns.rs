@@ -116,8 +116,9 @@ impl ReviewPane {
         self.take(window, cx);
     }
 
-    /// Shows what a turn end offered, if it offered anything.
-    fn take(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Shows what a turn end offered, if it offered anything. Also how Flow's offer is
+    /// taken while the pane keeps the selection (`take_flow_offer`).
+    pub(crate) fn take(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(offer) = self.tree.offer.take() else {
             return self.say("No turn has ended since the selection was kept", cx);
         };

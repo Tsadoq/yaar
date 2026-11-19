@@ -536,7 +536,7 @@ pub enum Reply {
     /// The uncommitted changes a review lists, ordered by path, each with who made it.
     Uncommitted(Vec<CreditedFile>),
     /// Every setting the user set, each once: those of the whole app first, then those of
-    /// each workspace, in the order the workspaces were opened.
+    /// each workspace, in the order the workspaces were first kept.
     Settings(Vec<Setting>),
 }
 

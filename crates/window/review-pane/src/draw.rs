@@ -103,9 +103,18 @@ impl Render for ReviewPane {
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.mono_font_family.clone())
-            .text_size(theme.mono_font_size)
-            // A mouse button, the wheel or a key anywhere in the pane is the reviewer at
-            // work in it, which pauses follow: heard before anything inside acts on it.
+            .text_size(theme.mono_font_size);
+        // Everything below the bar: what the reviewer reads and works in. A mouse button
+        // or the wheel there, or a key that no action of the pane takes while the focus is
+        // there (text typed in the comment box), is the reviewer at work, which pauses
+        // follow; a mouse button is heard before anything inside acts on it. A key that an
+        // action takes reaches the pane only as the action, which pauses follow through
+        // `acted`. The bar is left out: its controls choose what Flow shows.
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
             .capture_any_mouse_down(cx.listener(|pane, _: &MouseDownEvent, _, cx| {
                 pane.touched(cx);
             }))
@@ -151,12 +160,12 @@ impl Render for ReviewPane {
                 .child(Input::new(&field.input))
         });
         if let Some(flow) = flow {
-            return pane
-                .children(bar)
-                .child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
-                .children(notice)
-                .children(comment_box)
-                .children(commit_field);
+            return pane.children(bar).child(
+                body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                    .children(notice)
+                    .children(comment_box)
+                    .children(commit_field),
+            );
         }
         if self.rows.is_empty() {
             let idle = div()
@@ -166,15 +175,15 @@ impl Render for ReviewPane {
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
-            return pane
-                .children(bar)
-                .children(sessions)
-                .children(offer)
-                .children(tree)
-                .child(self.with_keys(idle, cx))
-                .children(notice)
-                .children(comment_box)
-                .children(commit_field);
+            return pane.children(bar).child(
+                body.children(sessions)
+                    .children(offer)
+                    .children(tree)
+                    .child(self.with_keys(idle, cx))
+                    .children(notice)
+                    .children(comment_box)
+                    .children(commit_field),
+            );
         }
         // The rows stay while the Keeper refuses to read the changes again, and may
         // then be out of date: the reviewer is told.
@@ -202,15 +211,16 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(bar)
-            .children(sessions)
-            .children(offer)
-            .children(tree)
-            .children(refused)
-            .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
-            .children(notice)
-            .children(comment_box)
-            .children(commit_field)
+        pane.children(bar).child(
+            body.children(sessions)
+                .children(offer)
+                .children(tree)
+                .children(refused)
+                .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+                .children(notice)
+                .children(comment_box)
+                .children(commit_field),
+        )
     }
 }
 

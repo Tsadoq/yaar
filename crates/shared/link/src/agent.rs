@@ -150,8 +150,11 @@ pub struct Turn {
     /// The state the turn's change counts from, by its full id: the newest state of the
     /// worktree recorded before the turn started, which the live diff of Flow compares
     /// with the files on disk while the turn runs, and with [`Turn::state`] once it ended.
-    /// None where the worktree had no recorded state then: the change then counts from the
-    /// commit checked out.
+    /// A turn that started while the state of the turn before was still being recorded
+    /// counts from that state: none until it is kept, which is before the
+    /// [`crate::Fact::TurnEnded`] of the turn before is told, so a Window that hears that
+    /// fact and asks again reads it. None where the worktree had no recorded state then:
+    /// the change then counts from the commit checked out.
     pub start: Option<String>,
     /// The state of the worktree recorded when it ended, by its full id; none while it
     /// runs, and when the recording failed.

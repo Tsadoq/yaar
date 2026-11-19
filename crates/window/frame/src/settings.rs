@@ -23,6 +23,12 @@ use crate::link_model::KeeperLink;
 /// the Keeper answered, and asks the Keeper to keep it with `Request::SetSetting`, which is
 /// the user's request. A refusal has the list asked again, so that the model shows what
 /// the Keeper keeps.
+///
+/// The Keeper tells `SettingChanged` to every Window, this one too, after it answered the
+/// set. Each fact is taken as it comes, the echo of this window's own set included: two
+/// sets of one setting in quick succession are echoed in the order they were kept, so the
+/// first echo can bring back the first value for a moment, until the second echo comes.
+/// That is accepted: the list ends as the Keeper keeps it, and no set is lost.
 pub struct SettingList {
     link: Entity<KeeperLink>,
     settings: Vec<Setting>,
