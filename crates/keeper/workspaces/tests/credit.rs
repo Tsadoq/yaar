@@ -364,7 +364,7 @@ fn a_write_noted_while_git_reads_the_files_is_credited_though_the_list_git_gave_
     // Its time of change is not the list's, so git has to read it, through the filter.
     touch(&w.root, "slow.txt");
 
-    std::thread::scope(|scope| {
+    let first = std::thread::scope(|scope| {
         let asking = scope.spawn(|| w.workspaces.credits(&w.workspace));
         wait_until("git is reading the files", || started.exists());
         // `a.txt` is written, and named by the agent's tool, after git looked at it.
@@ -372,8 +372,15 @@ fn a_write_noted_while_git_reads_the_files_is_credited_though_the_list_git_gave_
         w.workspaces
             .agent_wrote(&w.workspace, "agent-session", Path::new("a.txt"));
         std::fs::write(&go, "").expect("let git go on");
-        asking.join().expect("credits ran").expect("credits");
+        asking.join().expect("credits ran").expect("credits")
     });
+    // The premise of the test: the list git gave while it read has no entry for the file,
+    // on every git, so that the credit of the second call is the one thing that shows the
+    // write was noted.
+    assert!(
+        first.iter().all(|one| one.path != Path::new("a.txt")),
+        "the first list already holds a.txt: {first:?}"
+    );
     assert_eq!(w.by("a.txt"), Some(strings(&["agent-session"])));
 }
 
