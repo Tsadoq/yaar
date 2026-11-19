@@ -602,3 +602,17 @@ fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_f
         "still there: {started:?}"
     );
 }
+
+#[test]
+fn every_program_of_the_app_is_built_for_a_test_that_asks_for_it() {
+    // The hook program of Claude Code among them: a test of the Keeper runs it as Claude
+    // Code would, and finds it beside the Keeper.
+    for name in [
+        "yaar-keeper",
+        "yaar-review",
+        "yaar-claude-hook",
+        "standin-agent",
+    ] {
+        assert!(program(name).is_file(), "{name} is not built");
+    }
+}
