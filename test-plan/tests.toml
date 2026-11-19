@@ -1212,6 +1212,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-097", "FR-098"]
+note = "Claude Code's tool server only; pi's registered tool is PIX-01, slice 7. The agent's side is the recorded MCP trace, written to the server by the test."
 
 [[test]]
 id = "PIX-01"
@@ -1806,7 +1807,7 @@ driver = "git"
 runs = "ci"
 proves = []
 slice = 6
-note = "Added in slice 4 for the rest of ADR-007 point 8: slice 4 lists the uncommitted changes per review and keeps credits in memory only. The contract of slice 6 moves the row if the mark is the pane's to draw."
+note = "The engine lists what a review shows of a change, with the mark on a path two sessions changed; drawing the mark and narrowing a turn end's selection to a session's paths are WIN-09, slice 7."
 
 [[test]]
 id = "THREAD-01"
@@ -1837,6 +1838,7 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105"]
+note = "Its clause on the original text is shown by REV-23 (the engine keeps the anchor and its text with a moved thread) and RP-39 (the pane shows it on request): at this unit's level the follower is given no text."
 
 [[test]]
 id = "THREAD-04"
@@ -1881,13 +1883,14 @@ proves = ["FR-106"]
 
 [[test]]
 id = "THREAD-08"
-what = "Three rounds in a row place every thread where the recorded corpus says, for the first and the last state."
+what = "Over the recorded corpus of 569 real changes, each followed in one round and in three, every thread whose code survived sits where the corpus says in the last state with no notice, and every thread whose code changed or was deleted carries a notice; the few that differ are named in the test with what the engine gives."
 level = "unit"
 part = "review-engine"
 through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105", "FR-106"]
+note = "The truth is phase 4's blame, repaired and corrected by hand (crates/keeper/review-engine/corpus/NOTICE.md), for the first and the last version only; SPLIT and EXCLUDE anchors are left out. The three rounds cut each change's n hunks at the ceilings of n/3 and 2n/3, a change of one or two hunks having empty rounds. One round differs on at most 17 anchors; three rounds differ further only on moved code a round cut in two. The sentence gets the counted numbers when the slice closes, as DIFF-02 has them."
 
 [[test]]
 id = "RP-01"
@@ -2011,7 +2014,7 @@ built = [
     "crates/window/review-pane/tests/follow.rs::agents_read_after_the_changes_are_shown_start_nothing_and_a_turn_that_only_changes_state_stays_in_changes",
     "crates/window/review-pane/tests/follow.rs::a_workspace_that_comes_on_screen_with_a_turn_running_starts_nothing",
 ]
-note = "A turn Claude Code starts by itself, as at the end of a background task, counts as a message: the Link cannot tell the two apart in slice 5."
+note = "A turn the CLI starts by itself, at the end of a background task, does not switch: Session::turn_from_user tells them apart since slice 6."
 
 
 [[test]]
@@ -2045,7 +2048,7 @@ proves = ["FR-039"]
 built = [
     "crates/window/review-pane/tests/steady.rs::no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a_thread_that_moved",
 ]
-note = "A turn end under the default setting selects what changed since the last review (FR-047, RP-19), which shows from its top. A reply and a thread that moved reach the pane as a new answer to GetReviews after ReviewsChanged; until slice 6 the test plays them as the Keeper will send them."
+note = "A turn end under the default setting selects what changed since the last review (FR-047, RP-19), which shows from its top. A reply and a thread that moved reach the pane as a new answer to GetReviews after ReviewsChanged; until slice 6 the test plays them as the Keeper will send them. A reply comes as a new comment of the agent, and a thread that moved as its Thread::now, in a new answer to GetReviews after ReviewsChanged, as the Keeper of slice 6 sends them."
 
 
 [[test]]
@@ -2673,6 +2676,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-080", "FR-086", "FR-097", "FR-081", "FR-108"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-01"
@@ -2721,6 +2725,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-093"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-09"
@@ -2781,6 +2786,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-120", "FR-119"]
+note = "The resume control is the Link's offer (Session::resumable) and Program::Resume, shown at this level; the Window's control, and pi, come with slice 7 (SWB-06, CLI-05). With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-16"
@@ -2805,6 +2811,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-102", "FR-103", "FR-105", "FR-097", "FR-098", "FR-099", "FR-108"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-19"
@@ -2815,6 +2822,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-094", "FR-095"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-14"
@@ -2825,6 +2833,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-026"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-20"
@@ -2849,7 +2858,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-092"]
-note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4."
+note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "STORE-04"
@@ -3278,6 +3287,7 @@ driver = "test-platform"
 runs = "ci"
 proves = ["FR-019", "FR-028", "FR-085", "FR-089"]
 slice = 6
+note = "The turn end and the permission prompt come from turns the stand-in starts itself, each behind a gate the test opens (hold), so that no line end is typed; the notice is the Frame's notice of a turn that ended in a workspace not on screen."
 
 [[test]]
 id = "WIN-06"
@@ -3317,6 +3327,18 @@ proves = ["FR-032"]
 built = [
     "crates/window/window/tests/flow.rs::the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_restarts",
 ]
+
+[[test]]
+id = "WIN-09"
+what = "With two sessions in one worktree that changed the same file, each session's review shows that file whole with a mark that the other agent changed it too, and the end of a turn selects only the paths credited to its session and those no agent made."
+level = "component"
+part = "window"
+through = "keys in, with a real Keeper and the stand-in agent beneath; read back through the models it shows"
+driver = "test-platform"
+runs = "ci"
+proves = []
+slice = 7
+note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change. Two CLIs in one worktree come with slice 7."
 
 [[test]]
 id = "SEAM-03"
