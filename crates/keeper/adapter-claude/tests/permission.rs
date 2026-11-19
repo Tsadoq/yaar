@@ -52,13 +52,10 @@ fn a_permission_dialog_turns_waiting_for_permission_on() {
 
 #[test]
 fn the_notification_that_follows_the_dialog_by_seconds_says_nothing() {
-    let (_, events, _) = replay_to(5);
+    let (_, events, record) = replay_to(5);
 
-    assert_eq!(
-        events,
-        [],
-        "line 5 is the Notification, 6 s after the dialog"
-    );
+    assert_eq!(record.event, "Notification", "line 5 is the Notification");
+    assert_eq!(events, [], "it comes 6 s after the dialog");
 }
 
 #[test]

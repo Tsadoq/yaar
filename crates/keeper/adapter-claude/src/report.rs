@@ -426,6 +426,38 @@ mod tests {
     }
 
     #[test]
+    fn a_tool_that_begins_while_a_dialog_is_open_leaves_waiting_on() {
+        let mut adapter = ClaudeCode::new();
+        said(&mut adapter, None, &hook("PermissionRequest", json!({}))).expect("a report");
+        let begun = hook(
+            "PreToolUse",
+            json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+        );
+        let ended = hook(
+            "PostToolUse",
+            json!({"tool_name": "Bash", "tool_input": {"command": "ls"}}),
+        );
+
+        assert_eq!(
+            said(&mut adapter, None, &begun).expect("a report"),
+            [Event::Command {
+                phase: Phase::Began,
+                command: "ls".to_owned()
+            }]
+        );
+        assert_eq!(
+            said(&mut adapter, None, &ended).expect("a report"),
+            [
+                Event::Permission { waiting: false },
+                Event::Command {
+                    phase: Phase::Ended,
+                    command: "ls".to_owned()
+                }
+            ]
+        );
+    }
+
+    #[test]
     fn a_tool_that_follows_no_dialog_turns_no_permission_off() {
         let input = hook(
             "PostToolUse",
