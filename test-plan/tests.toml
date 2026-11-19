@@ -1061,6 +1061,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-030"]
+built = [
+    "crates/keeper/switchboard/src/steps.rs::the_steps_of_a_turn_are_kept_in_order_each_with_its_session_its_kind_and_an_edit_with_its_path_and_lines",
+    "crates/keeper/switchboard/src/steps.rs::the_steps_of_the_next_turn_number_from_1_again_and_a_step_between_two_turns_is_none",
+]
 
 [[test]]
 id = "SWB-06"
@@ -1081,6 +1085,13 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-030", "FR-035"]
+built = [
+    "crates/keeper/adapter-claude/tests/listen.rs::a_recorded_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_gives_its_events_in_order",
+    "crates/keeper/adapter-claude/tests/listen.rs::every_event_of_the_turn_names_the_session_of_the_first_line_its_terminal_its_process_and_folder",
+    "crates/keeper/adapter-claude/tests/listen.rs::a_file_named_by_an_at_mention_gives_no_read",
+    "crates/keeper/adapter-claude/tests/listen.rs::a_file_read_through_a_shell_command_gives_the_command_and_no_read",
+    "crates/keeper/adapter-claude/tests/listen.rs::a_shell_command_that_rewrites_a_file_the_agent_read_gives_commands_and_no_second_read",
+]
 note = "The seven are session started, turn started, file read, file written, shell command, turn ended, session ended: the seven kinds of event with the shell command in place of the permission, which this turn does not ask (LISTEN-02 shows it). The read through a shell command is a shape typed by hand, hand-made/claude-shell-read.jsonl."
 
 
@@ -1453,6 +1464,9 @@ through = "its calls, on a real database file"
 driver = "database"
 runs = "ci"
 proves = ["FR-032", "FR-124"]
+built = [
+    "crates/keeper/store/tests/settings.rs::every_setting_is_still_set_after_the_process_that_set_it_is_killed",
+]
 note = "The base is kept with its workspace since slice 1; the five others since slice 5. The screen that sets them is slice 9 (FRAME-11): only the form of Flow is set from the Window before it."
 
 
@@ -1898,6 +1912,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-029"]
+built = [
+    "crates/window/review-pane/tests/flow.rs::the_pane_offers_flow_and_changes_and_switches_between_them",
+]
 
 [[test]]
 id = "RP-03"
@@ -1908,6 +1925,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-030"]
+built = [
+    "crates/window/review-pane/tests/flow.rs::the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order",
+    "crates/window/review-pane/tests/flow.rs::a_pane_opened_where_no_turn_runs_lists_the_newest_turn_of_the_history_and_the_turns_that_start_after_it",
+]
 
 [[test]]
 id = "RP-04"
@@ -1918,6 +1939,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-030"]
+built = [
+    "crates/window/review-pane/tests/live.rs::the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive",
+    "crates/window/review-pane/tests/live.rs::a_list_the_keeper_refused_is_asked_again_with_the_files_the_writes_named_before",
+]
 
 [[test]]
 id = "RP-06"
@@ -1928,6 +1953,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-031", "FR-032"]
+built = [
+    "crates/window/review-pane/tests/flow.rs::flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_time",
+    "crates/window/review-pane/tests/flow.rs::afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window",
+]
 note = "The form is chosen for each workspace, as the Store keeps it."
 
 
@@ -1940,6 +1969,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-033", "FR-034", "FR-035"]
+built = [
+    "crates/window/review-pane/tests/follow.rs::follow_is_on_until_the_user_turns_it_off_with_its_control",
+    "crates/window/review-pane/tests/follow.rs::with_follow_on_flow_moves_to_each_step_as_it_comes_a_file_read_as_a_file_written",
+    "crates/window/review-pane/tests/follow.rs::in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote",
+    "crates/window/review-pane/tests/follow.rs::with_follow_off_a_step_leaves_flow_where_it_was",
+]
 note = "In the live diff a file the turn read and did not change is a row of its own, with its path and no changed lines, and Flow moves to it as to a file written. The timeline has a row for every read and write."
 
 
@@ -1952,6 +1987,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-036"]
+built = [
+    "crates/window/review-pane/tests/follow.rs::a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_offer_resumes_it",
+    "crates/window/review-pane/tests/follow.rs::the_controls_of_the_views_and_of_follow_do_not_pause_follow_and_nothing_pauses_it_with_no_turn_running",
+    "crates/window/review-pane/tests/follow.rs::a_key_no_action_takes_pauses_follow_too",
+    "crates/window/review-pane/tests/follow.rs::a_step_of_another_workspace_is_not_counted_and_a_pause_ends_with_the_workspace",
+]
 note = "The controls of the views and of follow (the bar, f, shift-l, shift-f, shift-g) do not pause follow, and nothing pauses it while no turn of the workspace on screen runs: the test shows both."
 
 
@@ -1964,6 +2005,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-037"]
+built = [
+    "crates/window/review-pane/tests/follow.rs::with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_and_with_follow_off_it_does_not",
+    "crates/window/review-pane/tests/follow.rs::a_pane_that_connects_while_a_turn_runs_stays_in_changes_and_so_does_a_turn_that_only_changes_state",
+    "crates/window/review-pane/tests/follow.rs::agents_read_after_the_changes_are_shown_start_nothing_and_a_turn_that_only_changes_state_stays_in_changes",
+    "crates/window/review-pane/tests/follow.rs::a_workspace_that_comes_on_screen_with_a_turn_running_starts_nothing",
+]
 note = "A turn Claude Code starts by itself, as at the end of a background task, counts as a message: the Link cannot tell the two apart in slice 5."
 
 
@@ -1976,6 +2023,15 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-038"]
+built = [
+    "crates/window/review-pane/tests/follow.rs::when_a_turn_ends_while_flow_is_on_screen_the_pane_stays_in_flow_and_offers_what_changed_since_the_last_review",
+    "crates/window/review-pane/tests/follow.rs::the_offer_is_taken_with_shift_o_and_a_turn_end_with_no_since_counts_from_the_history_start",
+    "crates/window/review-pane/tests/follow.rs::a_pane_that_keeps_the_selection_offers_in_flow_and_asks_for_the_change_when_the_offer_is_taken",
+    "crates/window/review-pane/tests/follow.rs::with_changes_on_screen_at_a_turn_end_nothing_is_offered_in_flow",
+    "crates/window/review-pane/tests/follow.rs::a_turn_end_with_no_state_offers_nothing",
+    "crates/window/review-pane/tests/follow.rs::the_offer_goes_when_changes_is_shown_when_another_turn_starts_and_when_the_workspace_changes",
+    "crates/window/review-pane/tests/follow.rs::resuming_says_when_nothing_is_paused_or_follow_is_off_and_turning_it_off_ends_a_pause",
+]
 
 [[test]]
 id = "RP-13"
@@ -1986,6 +2042,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-039"]
+built = [
+    "crates/window/review-pane/tests/steady.rs::no_fact_of_the_keeper_moves_what_changes_shows_a_step_a_turn_end_a_reply_or_a_thread_that_moved",
+]
 note = "A turn end under the default setting selects what changed since the last review (FR-047, RP-19), which shows from its top. A reply and a thread that moved reach the pane as a new answer to GetReviews after ReviewsChanged; until slice 6 the test plays them as the Keeper will send them."
 
 
@@ -1998,6 +2057,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-041"]
+built = [
+    "crates/window/review-pane/tests/flow_drafts.rs::a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anchored_as_changes_anchors_it",
+    "crates/window/review-pane/tests/flow_drafts.rs::a_comment_on_a_removed_line_in_flow_is_anchored_in_the_version_the_turn_started_from_under_the_name_the_file_had_there",
+    "crates/window/review-pane/tests/flow_drafts.rs::c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on",
+]
 
 [[test]]
 id = "RP-15"
@@ -3237,6 +3301,9 @@ through = "keys in, with a real Keeper and the stand-in agent beneath; read back
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-030", "FR-034", "FR-037", "FR-038"]
+built = [
+    "crates/window/window/tests/flow.rs::a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff",
+]
 
 [[test]]
 id = "WIN-08"
@@ -3247,6 +3314,9 @@ through = "keys in, with a real Keeper beneath that is ended and started again; 
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-032"]
+built = [
+    "crates/window/window/tests/flow.rs::the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_restarts",
+]
 
 [[test]]
 id = "SEAM-03"
