@@ -47,6 +47,14 @@ const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 const PRINT_THE_MARK: &[u8] = b"printf '\\033]9;4;0;\\007'; printf 'after-%s\\n' mark\r";
 const AFTER_THE_MARK: &str = "after-mark";
 
+/// The folder of the built programs, where the hook program lies.
+fn built_programs() -> PathBuf {
+    program("yaar-claude-hook")
+        .parent()
+        .expect("the hook program lies in a folder")
+        .to_owned()
+}
+
 /// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
@@ -116,16 +124,17 @@ impl Scratch {
     /// Starts the Keeper's library on a thread of this test, with the folder of the built
     /// hook program as where the pieces of the agents lie.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
-        let companions = program("yaar-claude-hook")
-            .parent()
-            .expect("the hook program lies in a folder")
-            .to_owned();
+        self.keeper_told(Some(built_programs()))
+    }
+
+    /// The same, told this folder for the pieces, or none.
+    fn keeper_told(&self, companions: Option<PathBuf>) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
             linger: Duration::from_secs(60),
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
-            companions: Some(companions),
+            companions,
         };
         std::thread::spawn(move || run(options))
     }
@@ -446,6 +455,74 @@ impl Setup {
 
 fn is_state(state: SessionState) -> impl Fn(&WorkspaceAgents) -> bool {
     move |agents| agents.sessions.iter().any(|session| session.state == state)
+}
+
+/// Checks that the plugin the Keeper writes for Claude Code names the app's plugin and has
+/// every hook run `hook`, quoted as the shell reads it.
+fn assert_the_plugin_runs(data: &Path, hook: &Path) {
+    let plugin = data
+        .join("agents")
+        .join(yaar_adapter_claude::NAME)
+        .join("plugin");
+    let read = |file: &str| -> serde_json::Value {
+        let text = std::fs::read_to_string(plugin.join(file))
+            .unwrap_or_else(|e| panic!("the plugin has no {file}: {e}"));
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{file} is not JSON: {e}"))
+    };
+    assert_eq!(
+        read(".claude-plugin/plugin.json")["name"],
+        yaar_adapter_claude::PLUGIN
+    );
+    let hooks = read("hooks/hooks.json");
+    for event in yaar_adapter_claude::HOOK_EVENTS {
+        assert_eq!(
+            hooks["hooks"][event][0]["hooks"][0]["command"],
+            format!("'{}'", hook.display()),
+            "the hook {event}"
+        );
+    }
+}
+
+#[test]
+fn the_plugin_of_claude_code_is_written_at_every_start_to_run_the_hook_program_where_told() {
+    let scratch = Scratch::new();
+    let hook = built_programs().join(yaar_adapter_claude::HOOK_PROGRAM);
+    let data = scratch.0.join("data");
+    let plugin = data
+        .join("agents")
+        .join(yaar_adapter_claude::NAME)
+        .join("plugin");
+
+    let keeper = scratch.keeper();
+    let window = scratch.window();
+    assert_the_plugin_runs(&data, &hook);
+    window.stop(keeper);
+
+    // A start writes it again, whether it is gone or was changed.
+    std::fs::remove_dir_all(&plugin).expect("remove the plugin");
+    let keeper = scratch.keeper();
+    let window = scratch.window();
+    assert_the_plugin_runs(&data, &hook);
+    window.stop(keeper);
+    std::fs::write(plugin.join("hooks/hooks.json"), "{}").expect("change a file");
+    let keeper = scratch.keeper();
+    let window = scratch.window();
+    assert_the_plugin_runs(&data, &hook);
+    window.stop(keeper);
+}
+
+#[test]
+fn with_no_folder_told_the_pieces_are_looked_for_beside_the_keepers_own_program() {
+    let scratch = Scratch::new();
+    let beside = std::env::current_exe()
+        .expect("this program's path")
+        .parent()
+        .expect("its folder")
+        .join(yaar_adapter_claude::HOOK_PROGRAM);
+    let keeper = scratch.keeper_told(None);
+    let window = scratch.window();
+    assert_the_plugin_runs(&scratch.0.join("data"), &beside);
+    window.stop(keeper);
 }
 
 #[test]
@@ -1015,7 +1092,19 @@ fn a_bash_command_denied_at_its_dialog_leaves_no_command_window_open() {
     // waited for here because it is the clock the rule is written in, not a fact to wait
     // for.
     std::thread::sleep(2 * yaar_workspaces::SETTLE);
+    // What the Keeper told so far is read, and the file is made: the watcher's fact for it
+    // is one that comes after.
+    setup.window.ask(Request::ListAgents).expect("the list");
+    setup.window.looked_at = setup.window.facts.len();
     std::fs::write(setup.repo.join("by-hand.txt"), "typed\n").expect("write a file");
+    // The change is judged once the watcher has seen it: its fact says so.
+    let workspace = setup.workspace.clone();
+    setup
+        .window
+        .until("the watcher saw the file", |fact| match fact {
+            Fact::ChangesChanged { workspace: seen } if *seen == workspace => Some(()),
+            _ => None,
+        });
     let deadline = Instant::now() + DEADLINE;
     let credited = loop {
         let listed = setup.window.ask(Request::GetUncommitted {

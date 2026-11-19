@@ -273,8 +273,7 @@ impl Agents {
     /// queue of this side's thread, and only then answers `Reply::Done`; refused only for
     /// an Adapter the Keeper does not have. Nothing else is done on the caller's thread: a
     /// report the Adapter cannot read is written down by that thread. A report from
-    /// outside the app's terminals, or from a terminal the Keeper does not hold, is
-    /// answered and followed no further.
+    /// outside the app's terminals is answered and followed no further.
     pub(crate) fn report(&self, kept: &Kept, report: AgentReport) -> Outcome {
         let _ = kept;
         if !self
