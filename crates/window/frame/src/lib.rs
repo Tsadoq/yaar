@@ -13,8 +13,9 @@
 //!   which the Window asks the Keeper and hears its facts;
 //! - [`Models`], the shared models a pane observes: [`WorkspaceList`], the repositories
 //!   with their worktrees and the workspace on screen, [`WorkspaceChanges`], the changes
-//!   of that workspace, [`AgentList`], the agent sessions of every workspace, and
-//!   [`TerminalList`], the terminals the Keeper holds;
+//!   of that workspace, [`AgentList`], the agent sessions of every workspace,
+//!   [`TerminalList`], the terminals the Keeper holds, and [`SettingList`], the settings
+//!   the user set;
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
@@ -38,6 +39,7 @@ pub mod keeper;
 mod link_model;
 mod models;
 mod routes;
+mod settings;
 mod sidebar;
 pub mod trace;
 mod view;
@@ -52,6 +54,7 @@ pub use controls::{
 pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
 pub use routes::Routes;
+pub use settings::SettingList;
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
 };

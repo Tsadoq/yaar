@@ -1038,6 +1038,7 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
         session: yaar_link::SessionId::new("s".repeat(32)),
         number: 3,
         ended: None,
+        start: None,
         state: None,
         steps: Vec::new(),
     };

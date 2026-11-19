@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Mutex, PoisonError};
 
-use crate::contents::{Contents, Read};
+use crate::contents::{Contents, Read, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::IndexCopy;
 use crate::worktree::{
@@ -144,6 +144,15 @@ pub struct StateStore {
     hooks_off: Vec<OsString>,
     // Held while a state is taken or a commit is copied: one at a time.
     writing: Mutex<()>,
+    // The running process that hands out file contents, once one was asked for. It has a
+    // lock of its own, so that a read never waits for a recording.
+    contents: Mutex<Option<Contents>>,
+}
+
+impl Drop for StateStore {
+    fn drop(&mut self) {
+        stop_kept(&mut self.contents);
+    }
 }
 
 impl StateStore {
@@ -164,6 +173,7 @@ impl StateStore {
             folder: folder.to_owned(),
             hooks_off: hooks_off(git, Place::GitDir(folder))?,
             writing: Mutex::new(()),
+            contents: Mutex::new(None),
         })
     }
 
@@ -246,6 +256,11 @@ impl StateStore {
     /// The content of one file of a state or of a kept commit, `commit` named as for
     /// [`StateStore::paths`]; none when it has no file there, or when the store holds no
     /// such state or commit. A link is given as the path it points at, as git stores it.
+    ///
+    /// Answered by the one process this store keeps for contents, started at the first
+    /// read and ended with the store; a process that has died is started again once. It
+    /// sees what the store comes to hold after it started. A read never waits for a state
+    /// being recorded.
     pub fn content(&self, commit: &str, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
         let (Some(path), true) = (inside(path), is_full_id(commit)) else {
             return Ok(None);
@@ -253,12 +268,12 @@ impl StateStore {
         let mut name = commit.as_bytes().to_vec();
         name.push(b':');
         name.extend_from_slice(path.as_os_str().as_bytes());
-        // One git process for the one file: the reader that stays running for many comes
-        // with the reader of many files.
-        let mut contents = Contents::start_in(self.command(None))?;
-        let read = contents.read(&name);
-        contents.stop();
-        match read? {
+        // Asked of the one process the store keeps, which holds no lock of recording.
+        match read_kept(
+            &self.contents,
+            || Contents::start_in(self.command(None)),
+            &name,
+        )? {
             Read::Blob(content) => Ok(Some(content)),
             Read::NoBlob => Ok(None),
         }

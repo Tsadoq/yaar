@@ -14,7 +14,7 @@ use yaar_diff::{Hunk, Row, Side};
 use yaar_frame::SetBase;
 use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
 
-use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
+use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown, View};
 use yaar_link::{CommentId, ThreadId};
 
 /// The height of every row. The list lays its rows out by the height of one of them, so
@@ -91,6 +91,10 @@ impl Render for ReviewPane {
         let tree = self.tree_view(window, cx);
         let sessions = self.session_bar(cx);
         let offer = self.offer_bar(cx);
+        // The bar names both views and is drawn in both; Flow, when it is on screen, takes
+        // the place of everything of Changes below it.
+        let bar = self.render_bar(window, cx);
+        let flow = (self.view == View::Flow).then(|| self.render_flow(window, cx));
         let theme = cx.theme();
         let pane = div()
             .size_full()
@@ -100,6 +104,22 @@ impl Render for ReviewPane {
             .text_color(theme.foreground)
             .font_family(theme.mono_font_family.clone())
             .text_size(theme.mono_font_size);
+        // Everything below the bar: what the reviewer reads and works in. A mouse button
+        // or the wheel there, or a key that no action of the pane takes while the focus is
+        // there (text typed in the comment box), is the reviewer at work, which pauses
+        // follow; a mouse button is heard before anything inside acts on it. A key that an
+        // action takes reaches the pane only as the action, which pauses follow through
+        // `acted`. The bar is left out: its controls choose what Flow shows.
+        let body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .capture_any_mouse_down(cx.listener(|pane, _: &MouseDownEvent, _, cx| {
+                pane.touched(cx);
+            }))
+            .capture_key_down(cx.listener(|pane, _: &KeyDownEvent, _, cx| pane.touched(cx)))
+            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| pane.touched(cx)));
         // Under the rows and outside the element that sets the pane's key context, so
         // that the letters typed in the box are text and not keys of the pane.
         let notice = self.notice.as_ref().map(|notice| {
@@ -139,6 +159,14 @@ impl Render for ReviewPane {
                 .on_action(cx.listener(Self::escape_commit))
                 .child(Input::new(&field.input))
         });
+        if let Some(flow) = flow {
+            return pane.children(bar).child(
+                body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                    .children(notice)
+                    .children(comment_box)
+                    .children(commit_field),
+            );
+        }
         if self.rows.is_empty() {
             let idle = div()
                 .flex_1()
@@ -147,14 +175,15 @@ impl Render for ReviewPane {
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
-            return pane
-                .children(sessions)
-                .children(offer)
-                .children(tree)
-                .child(self.with_keys(idle, cx))
-                .children(notice)
-                .children(comment_box)
-                .children(commit_field);
+            return pane.children(bar).child(
+                body.children(sessions)
+                    .children(offer)
+                    .children(tree)
+                    .child(self.with_keys(idle, cx))
+                    .children(notice)
+                    .children(comment_box)
+                    .children(commit_field),
+            );
         }
         // The rows stay while the Keeper refuses to read the changes again, and may
         // then be out of date: the reviewer is told.
@@ -182,14 +211,16 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(sessions)
-            .children(offer)
-            .children(tree)
-            .children(refused)
-            .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
-            .children(notice)
-            .children(comment_box)
-            .children(commit_field)
+        pane.children(bar).child(
+            body.children(sessions)
+                .children(offer)
+                .children(tree)
+                .children(refused)
+                .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+                .children(notice)
+                .children(comment_box)
+                .children(commit_field),
+        )
     }
 }
 
@@ -217,6 +248,41 @@ impl ReviewPane {
             .on_action(cx.listener(Self::toggle_keep_selection))
             .on_action(cx.listener(Self::take_offer))
             .on_action(cx.listener(Self::next_review))
+            .on_action(cx.listener(Self::toggle_view))
+            .on_action(cx.listener(Self::toggle_flow_form_in_flow))
+            .on_action(cx.listener(Self::toggle_follow))
+            .on_action(cx.listener(Self::resume_follow_in_flow))
+    }
+
+    /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
+    /// the form while Flow is on screen, and in Changes does nothing at all. It switches
+    /// no form out of the reviewer's sight and sends no `SetSetting`; and since the action
+    /// takes the key, the key does not reach the listeners below the bar, so it does not
+    /// pause follow either.
+    fn toggle_flow_form_in_flow(
+        &mut self,
+        action: &crate::ToggleFlowForm,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == View::Flow {
+            self.toggle_flow_form(action, window, cx);
+        }
+    }
+
+    /// What [`crate::ResumeFollow`] does, by its key `shift-g` or as an action: resumes
+    /// follow while Flow is on screen, and in Changes does nothing at all, notice
+    /// included: no follow is resumed out of the reviewer's sight, and, as for `shift-l`,
+    /// the key pauses nothing.
+    fn resume_follow_in_flow(
+        &mut self,
+        action: &crate::ResumeFollow,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.view == View::Flow {
+            self.resume_follow(action, window, cx);
+        }
     }
 
     /// What the pane says while it has no row to show.
@@ -344,6 +410,12 @@ impl ReviewPane {
                         .debug_selector(|| "review-threads-elsewhere".to_owned())
                         .child("Threads elsewhere: their lines are in no row shown"),
                 ),
+            // Only the live diff of Flow lists the files a turn read, and draws them itself.
+            // Changes builds no such row; were one here, it would read as its path.
+            PaneRow::Read { path } => row
+                .px_2()
+                .text_color(theme.muted_foreground)
+                .child(path.display().to_string()),
         }
     }
 

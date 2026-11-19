@@ -65,9 +65,10 @@ impl ReviewPane {
     }
 
     /// The review shown is another: its threads are drawn and its uncommitted changes are
-    /// asked for.
+    /// asked for. Its threads may add or take rows above what the reviewer reads, so the
+    /// rows are made again as reviews read anew are (`rebuild_steady`).
     pub(crate) fn review_moved(&mut self, cx: &mut Context<Self>) {
-        self.rebuild(cx);
+        self.rebuild_steady(cx);
         self.review_shown(cx);
     }
 

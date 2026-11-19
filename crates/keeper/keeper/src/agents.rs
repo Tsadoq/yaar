@@ -79,7 +79,26 @@ struct Core {
     // first turn that ends there, and the channel it is given turns on.
     recorders: Mutex<HashMap<WorkspaceId, Sender<Recording>>>,
     recorder_threads: Mutex<Vec<JoinHandle<()>>>,
+    // Per workspace, which recordings of turn ends are in flight and which turns wait for
+    // one to be kept before they have the state their change counts from. Read and written
+    // only under the Keeper's turn, so that a turn's start and the end of a recording are
+    // never taken in the same moment.
+    starts: Mutex<HashMap<WorkspaceId, Starts>>,
     this: Weak<Core>,
+}
+
+/// The recordings of a workspace's turn ends and the turns that wait for them.
+#[derive(Default)]
+struct Starts {
+    /// How many recordings were given out: the last one's number.
+    issued: u64,
+    /// The number of the last recording that is kept or failed. The thread of a workspace
+    /// records in the order the turns ended, so every recording below it is done as well.
+    done: u64,
+    /// The turns that started while a recording was in flight, each with the number of the
+    /// last one in flight then: the state of that recording is the state the worktree was
+    /// in when the turn before left it.
+    waiting: Vec<(TurnId, u64)>,
 }
 
 /// What the thread that works the queue is given.
@@ -104,6 +123,9 @@ enum Work {
 
 /// A turn whose state is to be recorded.
 struct Recording {
+    /// Its place among the recordings of its workspace, from 1 in the order the turns
+    /// ended.
+    number: u64,
     workspace: WorkspaceId,
     session: SessionId,
     turn: TurnId,
@@ -224,6 +246,7 @@ impl Agents {
             switchboard: Mutex::new(switchboard),
             recorders: Mutex::new(HashMap::new()),
             recorder_threads: Mutex::new(Vec::new()),
+            starts: Mutex::new(HashMap::new()),
             this: this.clone(),
         });
         let (queue, work) = mpsc::channel();
@@ -630,11 +653,14 @@ impl Core {
                 Change::State { .. } => {}
                 Change::TurnStarted { session, turn } => {
                     let number = turns_of_session(kept, &workspace, &session) + 1;
+                    let id = TurnId::new(turn.0);
+                    let start = self.start_of(kept, &workspace, &id);
                     keep(kept.store.put_turn(&TurnRecord {
-                        id: TurnId::new(turn.0),
+                        id,
                         session: SessionId::new(session.0),
                         number,
                         ended: None,
+                        start,
                         state: None,
                     }));
                 }
@@ -668,7 +694,16 @@ impl Core {
                     // that stops between knows the turn ended.
                     let turn = TurnId::new(turn.0);
                     keep(kept.store.end_turn(&turn, how, None));
+                    // In flight from here, not from the recording thread's first look: a
+                    // turn that starts later in this same item has to see it.
+                    let number = {
+                        let mut starts = lock(&self.starts);
+                        let starts = starts.entry(workspace.clone()).or_default();
+                        starts.issued += 1;
+                        starts.issued
+                    };
                     told.recordings.push(Recording {
+                        number,
                         workspace: workspace.clone(),
                         session: SessionId::new(session.0),
                         turn,
@@ -708,6 +743,54 @@ impl Core {
                 eprintln!("yaar-keeper: a session could not be read: {e}");
                 None
             }
+        }
+    }
+
+    /// The state the change of the turn `turn`, which starts now in `workspace`, counts
+    /// from: the newest state of the worktree. None while the state of the turn before is
+    /// being recorded, which is newer than any the store holds: the turn waits for it, and
+    /// [`Core::recorded`] gives it its start when the recording is kept. None too where the
+    /// store holds no state, and the change then counts from the commit checked out.
+    fn start_of(&self, kept: &Kept, workspace: &WorkspaceId, turn: &TurnId) -> Option<String> {
+        {
+            let mut starts = lock(&self.starts);
+            if let Some(starts) = starts.get_mut(workspace)
+                && starts.done < starts.issued
+            {
+                starts.waiting.push((turn.clone(), starts.issued));
+                return None;
+            }
+        }
+        newest_state(kept, workspace)
+    }
+
+    /// The recording `recording` is kept, or failed with `state` none: the turns that
+    /// waited for it get their start. A recording that failed leaves them the newest state
+    /// of the store, and none if it holds none.
+    fn recorded(&self, kept: &Kept, recording: &Recording, state: Option<&str>) {
+        let ready: Vec<TurnId> = {
+            let mut starts = lock(&self.starts);
+            let Some(starts) = starts.get_mut(&recording.workspace) else {
+                return;
+            };
+            starts.done = starts.done.max(recording.number);
+            let (ready, waiting) = std::mem::take(&mut starts.waiting)
+                .into_iter()
+                .partition(|(_, after)| *after <= recording.number);
+            starts.waiting = waiting;
+            ready.into_iter().map(|(turn, _)| turn).collect()
+        };
+        if ready.is_empty() {
+            return;
+        }
+        let Some(start) = state
+            .map(str::to_owned)
+            .or_else(|| newest_state(kept, &recording.workspace))
+        else {
+            return;
+        };
+        for turn in ready {
+            keep(kept.store.set_turn_start(&turn, &start));
         }
     }
 
@@ -820,6 +903,7 @@ impl Core {
                 .command_began(workspace, &session.0, cause.at()),
         }
         told.steps.push(Fact::Step {
+            workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
             session: yaar_link::SessionId::new(session.0.clone()),
             turn: yaar_link::TurnId::new(turn.0.clone()),
             number,
@@ -932,6 +1016,9 @@ impl Core {
                     .end_turn(&recording.turn, recording.how, state.as_deref()),
             );
         }
+        // Before the turn's end is told: a Window that hears it reads the turns that
+        // waited, and finds their start.
+        self.recorded(kept, recording, state.as_deref());
         shared.tell(&[Fact::TurnEnded {
             workspace: yaar_link::WorkspaceId::new(recording.workspace.as_str()),
             session: yaar_link::SessionId::new(recording.session.as_str()),
@@ -969,6 +1056,26 @@ fn record_state(kept: &Kept, recording: &Recording) -> (Option<String>, Option<S
         Err(e) => {
             eprintln!("yaar-keeper: no state was recorded: {e}");
             (None, None)
+        }
+    }
+}
+
+/// The newest state recorded for `workspace`: one `git for-each-ref` of its state store.
+/// None where it holds none, and where it cannot be read, which is written down.
+fn newest_state(kept: &Kept, workspace: &WorkspaceId) -> Option<String> {
+    let id = yaar_workspaces::WorkspaceId::new(workspace.as_str());
+    let store = match kept.reviews.states_of(&id) {
+        Ok(store) => store,
+        Err(e) => {
+            eprintln!("yaar-keeper: the states of {workspace} could not be read: {e}");
+            return None;
+        }
+    };
+    match store.states() {
+        Ok(states) => states.last().map(|state| state.id.as_str().to_owned()),
+        Err(e) => {
+            eprintln!("yaar-keeper: the states of {workspace} could not be read: {e}");
+            None
         }
     }
 }

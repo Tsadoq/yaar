@@ -20,6 +20,7 @@ use yaar_link::{
 use crate::agents::{AgentList, TerminalList};
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
 use crate::routes::Routes;
+use crate::settings::SettingList;
 
 /// The shared models, as one handle. Cheap to clone.
 #[derive(Clone)]
@@ -34,6 +35,8 @@ pub struct Models {
     pub agents: Entity<AgentList>,
     /// The terminals the Keeper holds that this Window shows or may show.
     pub terminals: Entity<TerminalList>,
+    /// The settings the user set, the form of Flow of each workspace among them.
+    pub settings: Entity<SettingList>,
     /// Where a pane puts the actions it takes from wherever the focus is in the window.
     pub routes: Routes,
 }
@@ -45,12 +48,14 @@ impl Models {
         let changes = cx.new(|cx| WorkspaceChanges::new(link.clone(), workspaces.clone(), cx));
         let agents = cx.new(|cx| AgentList::new(link.clone(), cx));
         let terminals = cx.new(|cx| TerminalList::new(link.clone(), cx));
+        let settings = cx.new(|cx| SettingList::new(link.clone(), cx));
         Models {
             link,
             workspaces,
             changes,
             agents,
             terminals,
+            settings,
             routes: Routes::default(),
         }
     }

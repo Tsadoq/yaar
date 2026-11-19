@@ -8,9 +8,9 @@ on lines, and send the comments back to the agent.
 you comment on any line of the diff and keeps those comments, copies the review as text to
 paste to an agent, and runs terminals beside the diff. It hears Claude Code, which you run in
 one of those terminals as always: the sidebar shows whether it works, waits for you or has
-finished a turn, and Changes shows what the turn changed. It does not deliver comments to the
-agent by itself yet: you hand it the copied review by hand. pi runs in a terminal as any
-program does, and the app does not hear it yet.
+finished a turn, Flow shows what it does as it works, and Changes shows what the turn
+changed. It does not deliver comments to the agent by itself yet: you hand it the copied
+review by hand. pi runs in a terminal as any program does, and the app does not hear it yet.
 
 ## What it does now
 
@@ -66,6 +66,30 @@ program does, and the app does not hear it yet.
   last reviewed. Shift-T sets the app to keep the selection instead: Changes stays as it
   is and offers what changed, which Shift-O, or a click, takes. The setting lasts until the
   window closes.
+- **Shows what the agent does, in Flow.** The review pane has two views, Changes and Flow;
+  the bar at its top names both, and `f` switches between them. Flow has two forms, which
+  Shift-L switches between. The *timeline* lists each read, edit, new file and shell command
+  of the turn in order, as the agent does it. The *live diff* shows the files the running
+  turn has changed so far, from the state the worktree was in when the turn started up to
+  the files on disk (once the turn ended, up to the state recorded at its end), and grows as
+  the agent writes; a file a shell command writes shows once the watcher sees it. After the
+  files it changed come the files the turn read and left as they were, each marked as read,
+  with its path and no lines; a file leaves that group when the turn changes it. Flow opens
+  as the timeline the first time, and afterwards in the form you chose last in that
+  worktree, which the Keeper keeps.
+- **Follows the agent.** Follow is on in every new window and stays on until you turn it off
+  with its control in the bar or with Shift-F. While it is on and the agent works, Flow
+  moves to each step as it happens, to a file the agent reads as to a file it writes. When
+  you send the agent a message while follow is on, the review pane switches to Flow.
+  Scrolling, clicking or typing in the pane while a turn runs pauses follow: the line under
+  the bar counts the steps you miss, and Shift-G, or its button, jumps to the newest step and
+  follows again. The bar and the keys `f`, Shift-L, Shift-F and Shift-G pause nothing, and
+  nothing pauses while no turn runs. Flow and the agent's steps never scroll Changes.
+- **Offers what a turn changed, in Flow.** When a turn ends with Flow on screen, Flow stays
+  and a line offers what changed since you last reviewed; Shift-O, or its button, opens that
+  change in Changes.
+- **Drafts in Flow.** In the live diff, go to a line with `j`, `k` or a click and press `c`:
+  the comment is a draft as in Changes, and it shows on that line in Changes.
 - **Records the worktree at the end of every turn** and at each send of a review, as a
   state in the app's own folder, without a commit and without touching your index or
   branch.
@@ -98,6 +122,20 @@ program does, and the app does not hear it yet.
 
 ### Not there yet
 
+- A settings screen: the form of Flow is the one setting kept, and Shift-L sets it.
+- Follow is not kept: every new window starts with it on, however you left the last one.
+- Claude Code's own turns: a turn Claude Code starts by itself, as at the end of a
+  background task, switches the pane to Flow as a message of yours does, since the app
+  cannot tell the two apart yet.
+- Older turns in the timeline: it holds the turns the window has seen in this worktree,
+  or the newest one when it opens. An earlier turn cannot be picked.
+- A file the agent reads through an `@` mention or a shell command is in neither the
+  timeline nor the files read of the live diff: the app hears reads by Claude Code's read
+  tool only.
+- A file you change by hand between two turns shows in the next turn's live diff, which
+  counts from the state the worktree was in when that turn started.
+- The live diff finds its files with one `git status` for each question, one question at a
+  time, so on a large repository it can lag behind the writes by about a second.
 - Delivering a review to an agent: the app cannot send a comment by itself, and no tool of
   the agent hands it one. Copy the review and paste it.
 - pi: it runs in a terminal, and the app hears no session, turn or permission prompt of it
@@ -137,7 +175,7 @@ program does, and the app does not hear it yet.
 
 ### Keys in the review pane
 
-They work in the diff, as plain keys. The review keys follow vim and tuicr (0.29.0,
+They work in the diff and in Flow, as plain keys. The review keys follow vim and tuicr (0.29.0,
 `docs/KEYBINDINGS.md`) wherever either has a key for the action; where neither has, the key
 is the app's own choice.
 
@@ -158,6 +196,10 @@ is the app's own choice.
 | Shift-O | Takes the offer: shows what changed since the last review | the app |
 | Shift-A | Shows the review of the next agent session of the worktree | the app |
 | `tab` | Moves the focus from the diff to the tree of Changes, and back | tuicr cycles the focus with Tab |
+| `f` | Switches between Changes and Flow, in both views | the app; neither vim nor tuicr has the action |
+| Shift-F | Turns follow on and off, in both views | the app; neither has the action |
+| Shift-L | Switches Flow between the timeline and the live diff, and keeps the form for the worktree; in Flow only, in Changes it does nothing | the app; neither has the action |
+| Shift-G | Resumes follow at the newest step; in Flow only, in Changes it does nothing | vim, last line; tuicr, last file |
 
 In the tree of Changes, as plain keys:
 
@@ -301,10 +343,11 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 
 Built so far: the Link and the diff; in the Keeper, the reading of git, the recording of
 states and the commit, the database, the workspaces with their watcher, the review engine,
-the terminals (the Dock), the Switchboard that follows each agent session, and the adapter
-and the companion of Claude Code; in the Window, the frame with its sidebar, the review pane
-and the terminal pane. Every other crate is still a shell that says in its `lib.rs` which
-part of the app it will hold.
+the terminals (the Dock), the Switchboard that follows each agent session with the steps it
+takes, and the adapter and the companion of Claude Code; in the Window, the frame with its
+sidebar and its settings, the review pane with Changes and Flow, and the terminal pane.
+Every other crate is still a shell that says in its `lib.rs` which part of the app it will
+hold.
 
 Tests come at three levels. Unit tests sit in a crate's source. Component tests sit in its
 `tests/` folder and use only what other crates may use; those of the Window run on GPUI's

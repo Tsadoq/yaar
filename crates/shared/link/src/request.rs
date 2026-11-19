@@ -18,6 +18,7 @@ use crate::review::{
     CommentId, DraftOn, ReviewId, SessionId, ThreadId, TurnId, WorkspaceReviews, read_draft_on,
     read_workspace_reviews, write_draft_on, write_workspace_reviews,
 };
+use crate::setting::{Setting, read_setting, write_setting};
 use crate::terminal::{
     Ending, Program, TerminalId, TerminalSize, read_ending, read_program, read_size, write_ending,
     write_program, write_size,
@@ -146,6 +147,10 @@ request_kinds! {
     AttachTerminal = 23, Window;
     /// See [`Request::GetUncommitted`].
     GetUncommitted = 24, Window;
+    /// See [`Request::GetSettings`].
+    GetSettings = 25, Window;
+    /// See [`Request::SetSetting`].
+    SetSetting = 26, User;
 }
 
 impl RequestKind {
@@ -424,6 +429,21 @@ pub enum Request {
         /// The size the Window shows it at.
         size: TerminalSize,
     },
+    /// Every setting the user set, as the Keeper keeps them. Answered by
+    /// [`Reply::Settings`]. The Window asks it when it connects, and holds the default of
+    /// every setting the answer does not list.
+    GetSettings,
+    /// Keep a setting the user chose, in place of the one it is the same thing as. Answered
+    /// by [`Reply::Done`] once the Keeper's database holds it, where a Keeper started again
+    /// finds it; refused with [`Refusal::UnknownWorkspace`] for a setting of a workspace the
+    /// Keeper does not know. Told to every Window as [`Fact::SettingChanged`].
+    ///
+    /// The user starts it by a control: switching the form of Flow keeps the form chosen
+    /// for the workspace on screen.
+    SetSetting {
+        /// The setting, with its value.
+        setting: Setting,
+    },
 }
 
 impl Request {
@@ -454,6 +474,8 @@ impl Request {
             Self::ListTerminals => RequestKind::ListTerminals,
             Self::AttachTerminal { .. } => RequestKind::AttachTerminal,
             Self::GetUncommitted { .. } => RequestKind::GetUncommitted,
+            Self::GetSettings => RequestKind::GetSettings,
+            Self::SetSetting { .. } => RequestKind::SetSetting,
         }
     }
 }
@@ -513,6 +535,9 @@ pub enum Reply {
     },
     /// The uncommitted changes a review lists, ordered by path, each with who made it.
     Uncommitted(Vec<CreditedFile>),
+    /// Every setting the user set, each once: those of the whole app first, then those of
+    /// each workspace, in the order the workspaces were first kept.
+    Settings(Vec<Setting>),
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -716,8 +741,12 @@ pub enum Fact {
         since: Option<String>,
     },
     /// An agent took one more step in a turn. Steps are told in the order they happened,
-    /// each with its number in the turn.
+    /// each with its number in the turn, and after the [`Fact::AgentsChanged`] that shows
+    /// the turn running. Each step is kept before it is told, so that
+    /// [`Request::GetTurn`] gives every step told so far.
     Step {
+        /// The workspace the session works in.
+        workspace: WorkspaceId,
         /// The session.
         session: SessionId,
         /// The turn.
@@ -727,6 +756,9 @@ pub enum Fact {
         /// The step.
         step: Step,
     },
+    /// A Window set a setting: every Window is told it, the one that set it included, in
+    /// the order the settings were kept.
+    SettingChanged(Setting),
 }
 
 pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
@@ -837,6 +869,8 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(terminal.as_str());
             write_size(out, *size);
         }
+        Request::GetSettings => {}
+        Request::SetSetting { setting } => write_setting(out, setting),
     }
 }
 
@@ -938,6 +972,10 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
             terminal: TerminalId::new(input.text()?),
             size: read_size(input)?,
         },
+        RequestKind::GetSettings => Request::GetSettings,
+        RequestKind::SetSetting => Request::SetSetting {
+            setting: read_setting(input)?,
+        },
     };
     Ok((id, request))
 }
@@ -1013,6 +1051,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::Uncommitted(files) => {
                     out.u16(15);
                     out.list(files, write_credited);
+                }
+                Reply::Settings(settings) => {
+                    out.u16(16);
+                    out.list(settings, write_setting);
                 }
             }
         }
@@ -1126,6 +1168,7 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
                 },
             },
             15 => Reply::Uncommitted(input.list(read_credited)?),
+            16 => Reply::Settings(input.list(read_setting)?),
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {
@@ -1222,16 +1265,22 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.optional(since.as_deref(), Out::text);
         }
         Fact::Step {
+            workspace,
             session,
             turn,
             number,
             step,
         } => {
             out.u16(7);
+            out.text(workspace.as_str());
             out.text(session.as_str());
             out.text(turn.as_str());
             out.u32(*number);
             write_step(out, step);
+        }
+        Fact::SettingChanged(setting) => {
+            out.u16(8);
+            write_setting(out, setting);
         }
     }
 }
@@ -1258,11 +1307,13 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
             since: input.optional(In::text)?,
         },
         7 => Fact::Step {
+            workspace: WorkspaceId::new(input.text()?),
             session: SessionId::new(input.text()?),
             turn: TurnId::new(input.text()?),
             number: input.u32()?,
             step: read_step(input)?,
         },
+        8 => Fact::SettingChanged(read_setting(input)?),
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })
 }

@@ -2,6 +2,13 @@
 //!
 //! Owns: Flow and Changes, unified and split diff, threads and comment boxes, file views, follow.
 //!
+//! The pane shows one of two views, [`View`]: Changes, the change of the worktree the
+//! reviewer selects, and Flow, what the agent does as it works. Flow has two forms,
+//! `yaar_link::FlowForm`: the timeline of the agent's steps, each read, edit, new file and
+//! command in order ([`TimelineEntry`]), and the live diff of the running turn
+//! ([`LiveChange`]). While follow is on ([`Following`]), Flow moves to each step of the
+//! agent as it comes ([`FlowAt`]); a scroll, a click or a key in the pane pauses it.
+//!
 //! Surface:
 //! - [`entry`], the pane as the Window program registers it: the one line that program
 //!   needs. It holds [`pane`], which builds the pane for the Frame, and [`controls`];
@@ -16,7 +23,11 @@
 //!   [`ShowChange`], [`FocusRows`], [`ToggleKeepSelection`], [`TakeOffer`] and
 //!   [`NextReview`], which the pane's package of slice 4 gives their keys;
 //! - [`ChangeShown`], the change of the worktree the pane shows the files of, and what a
-//!   turn end offers.
+//!   turn end offers;
+//! - [`View`], [`TimelineEntry`], [`FlowAt`], [`Following`] and [`LiveChange`], what Flow
+//!   shows, and the actions of Flow and follow: [`ToggleView`], [`ToggleFlowForm`],
+//!   [`ToggleFollow`] and [`ResumeFollow`]; [`TakeOffer`] takes, in Flow, what a turn end
+//!   offered to open in Changes.
 //!
 //! Changes. Above the files the pane shows the tree of the worktree's history, which it
 //! asks the Keeper for: its commits and the turns of its agents, oldest first, and last
@@ -48,7 +59,14 @@
 mod actions;
 mod comments;
 mod draw;
+mod flow;
+mod flow_comment;
+mod flow_draw;
+mod follow;
+mod live;
+mod live_draw;
 mod saves;
+mod steady;
 mod threads;
 mod tree;
 mod turns;
@@ -65,8 +83,8 @@ use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
     Anchor, ChangedFile, Changes, CommentId, Comparison, Content, CreditedFile, Fact, FileSides,
-    FileStatus, History, RequestKind, Review, ReviewId, Session, SessionId, ThreadId, WorkspaceId,
-    WorkspaceReviews,
+    FileStatus, FlowForm, History, RequestKind, Review, ReviewId, Session, SessionId, Step,
+    ThreadId, TurnEnd, TurnId, WorkspaceId, WorkspaceReviews,
 };
 
 use crate::actions::CommitField;
@@ -129,6 +147,17 @@ actions!(
         TakeOffer,
         /// Shows the review of the next agent session of the worktree.
         NextReview,
+        /// Shows Flow when Changes is on screen, and Changes when Flow is.
+        ToggleView,
+        /// Switches Flow between its two forms, the timeline and the live diff, and keeps
+        /// the form chosen for the workspace on screen. Only while Flow is on screen: in
+        /// Changes it does nothing and sends nothing.
+        ToggleFlowForm,
+        /// Turns follow off when it is on, paused or not, and on when it is off.
+        ToggleFollow,
+        /// Resumes follow where it was paused: Flow moves to the newest step. Only while
+        /// Flow is on screen: in Changes it does nothing.
+        ResumeFollow,
     ]
 );
 
@@ -169,6 +198,95 @@ pub enum ChangeShown {
         /// The state it leads to.
         to: String,
     },
+}
+
+/// Which of its two views the pane shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum View {
+    /// The change of the worktree the reviewer selects in the tree: what the pane shows
+    /// when it opens.
+    #[default]
+    Changes,
+    /// What the agent does as it works, in the form chosen last in the workspace on
+    /// screen.
+    Flow,
+}
+
+/// A step of an agent in a turn, as Flow names the one it is at: the turn, and the
+/// number of the step in it, from 1.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct FlowAt {
+    /// The turn.
+    pub turn: TurnId,
+    /// The number of the step in the turn.
+    pub number: u32,
+}
+
+/// One entry of Flow's timeline, in the order drawn: the turns of the workspace on screen
+/// in the order they started, each as its heading, then its steps in the order of their
+/// numbers, then its end once it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TimelineEntry {
+    /// The heading of a turn.
+    Turn {
+        /// The turn.
+        turn: TurnId,
+        /// Its session.
+        session: SessionId,
+        /// The session as the Window names it, `Claude Code 1`.
+        title: String,
+    },
+    /// A step of a turn: a read, an edit, a file written whole or a command.
+    Step {
+        /// The turn.
+        turn: TurnId,
+        /// Its number in the turn, from 1.
+        number: u32,
+        /// What the agent did.
+        step: Step,
+    },
+    /// The end of a turn.
+    End {
+        /// The turn.
+        turn: TurnId,
+        /// How it ended, when the pane knows it: a turn read with `GetTurn` says, a
+        /// `TurnEnded` fact does not.
+        how: Option<TurnEnd>,
+    },
+}
+
+/// Follow, as the reviewer sees it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Following {
+    /// Flow moves to each step of the agent as it comes: what the pane starts with.
+    #[default]
+    On,
+    /// Follow is on, and paused by a scroll, a click or a key in the pane while a turn
+    /// ran; `missed` steps came since. An offer to resume is drawn.
+    Paused {
+        /// The steps that came since follow paused.
+        missed: u32,
+    },
+    /// The reviewer turned follow off.
+    Off,
+}
+
+/// The change the live diff shows: of one turn of the workspace on screen, from the state
+/// it counts from to the files on disk while it runs, and to the state recorded at its end
+/// once it ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LiveChange {
+    /// The workspace.
+    pub workspace: WorkspaceId,
+    /// The turn.
+    pub turn: TurnId,
+    /// The version the change counts from: the turn's `start`, or, where the turn has
+    /// none, the commit checked out, as the history gives it; none where nothing is
+    /// committed.
+    pub from: Option<String>,
+    /// The state recorded at the turn's end; none while it runs, and when the recording
+    /// failed: the files on disk.
+    pub to: Option<String>,
 }
 
 /// The layout a diff is shown in until the reviewer switches it.
@@ -239,6 +357,17 @@ pub fn pane() -> BuildPane {
 /// | [`ToggleKeepSelection`] | `shift-t` | neither | nothing |
 /// | [`TakeOffer`] | `shift-o` | neither | nothing; the files come by `CompareVersions` and `ReadVersions` |
 /// | [`NextReview`] | `shift-a` | neither | nothing; the uncommitted changes of the review come by `GetUncommitted` |
+/// | [`ToggleView`] | `f` | neither | nothing; Flow asks `GetTurn` for what it has not heard |
+/// | [`ToggleFollow`] | `shift-f` | neither | nothing |
+/// | [`ToggleFlowForm`] | `shift-l` | neither | `SetSetting`, the form of the workspace on screen, in Flow only |
+/// | [`ResumeFollow`] | `shift-g` | vim, `G` goes to the last line; tuicr, `G` to the last file | nothing |
+///
+/// In Flow, `j`, `k` and the arrows move through the timeline's entries, or through the
+/// lines of the live diff; `c` writes a comment on the line of the live diff the reviewer
+/// is on; `shift-o` opens in Changes what a turn end offered. `f` and `shift-f` work in
+/// both views. `shift-l` and `shift-g` work only while Flow is on screen: in Changes they,
+/// and their actions, do nothing at all, so that no form is switched and no follow resumed
+/// out of the reviewer's sight, and nothing is sent.
 ///
 /// In the comment box the keys type text; `enter` closes the box and `shift-enter` starts
 /// a new line, as in tuicr. `escape` closes it too and keeps the draft, where tuicr's
@@ -323,6 +452,17 @@ pub fn controls() -> Vec<Control> {
         ),
         control("Take Offer", || Box::new(TakeOffer), "shift-o"),
         control("Next Review", || Box::new(NextReview), "shift-a"),
+        control("Flow or Changes", || Box::new(ToggleView), "f"),
+        control("Follow", || Box::new(ToggleFollow), "shift-f"),
+        sends(
+            control(
+                "Timeline or Live Diff",
+                || Box::new(ToggleFlowForm),
+                "shift-l",
+            ),
+            RequestKind::SetSetting,
+        ),
+        control("Resume Follow", || Box::new(ResumeFollow), "shift-g"),
     ]
 }
 
@@ -437,6 +577,15 @@ pub enum PaneRow {
     /// is never hidden. Drawn under the selector `review-threads-elsewhere`. The threads
     /// of a workspace whose worktree is gone are all there.
     ThreadsElsewhere,
+    /// A file the turn of Flow's live diff read and did not change: one row, its path
+    /// marked as read, with no diff below it and no line the reviewer can be on. Only the
+    /// live diff holds such rows, after every other row of it, one a file, in the order
+    /// of the file's first read in the turn. Changes holds none.
+    Read {
+        /// The path, as the read step names it: relative to the worktree's folder when
+        /// the file lies inside it, absolute otherwise.
+        path: PathBuf,
+    },
 }
 
 /// A changed file as the pane holds it.
@@ -575,6 +724,24 @@ pub struct ReviewPane {
     /// The sessions of the workspace on screen that a review belongs to, as the agents
     /// model held them when it last changed.
     sessions: Vec<Session>,
+    /// Which view is on screen. Changed by [`ToggleView`], by a message of the user to the
+    /// agent while follow is on, and by taking a turn end's offer in Flow.
+    view: View,
+    /// The form Flow shows: the one chosen last in the workspace on screen, as
+    /// `yaar_frame::SettingList` holds it, until the reviewer switches it.
+    form: FlowForm,
+    /// The step Flow is at, where follow last moved it; none before the first step.
+    at: Option<FlowAt>,
+    /// Follow, as the reviewer sees it. Flow moves with the steps only while it is
+    /// [`Following::On`].
+    following: Following,
+    /// The timeline of Flow, and what Flow keeps of the turns of the workspace on screen.
+    flow: flow::Timeline,
+    /// The live diff of Flow.
+    live: live::Live,
+    /// What follow keeps beside [`Following`]: the turns it has seen start, and what a
+    /// turn end offered in Flow.
+    follow: follow::Follow,
 }
 
 impl ReviewPane {
@@ -586,9 +753,19 @@ impl ReviewPane {
             pane.follow(cx);
             pane.follow_reviews(window, cx);
             pane.sessions_changed(cx);
+            pane.flow_workspace(cx);
+            pane.live_workspace(cx);
+            pane.follow_workspace(cx);
         })
         .detach();
-        cx.observe(&models.agents, |pane, _, cx| pane.sessions_changed(cx))
+        cx.observe(&models.agents, |pane, _, cx| {
+            pane.sessions_changed(cx);
+            pane.flow_agents(cx);
+            pane.live_agents(cx);
+            pane.follow_agents(cx);
+        })
+        .detach();
+        cx.observe(&models.settings, |pane, _, cx| pane.flow_settings(cx))
             .detach();
         cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
             .detach();
@@ -619,11 +796,27 @@ impl ReviewPane {
             keep: false,
             chosen: None,
             sessions: Vec::new(),
+            view: View::Changes,
+            form: FlowForm::Timeline,
+            at: None,
+            following: Following::On,
+            flow: flow::Timeline::new(cx),
+            live: live::Live::new(cx),
+            follow: follow::Follow::new(cx),
         };
         pane.sessions_changed(cx);
         pane.follow_history(window, cx);
         pane.follow(cx);
         pane.follow_reviews(window, cx);
+        // A pane built while a workspace, its agents and its settings are already in the
+        // models starts from them, as it would from a change of each.
+        pane.flow_workspace(cx);
+        pane.live_workspace(cx);
+        pane.follow_workspace(cx);
+        pane.flow_agents(cx);
+        pane.live_agents(cx);
+        pane.follow_agents(cx);
+        pane.flow_settings(cx);
         pane
     }
 
@@ -753,6 +946,115 @@ impl ReviewPane {
     /// `ChangesChanged` and at `TurnEnded` of the workspace on screen.
     pub fn uncommitted(&self) -> Option<&[CreditedFile]> {
         self.tree.uncommitted.as_deref()
+    }
+
+    /// Which view is on screen: Changes until the reviewer, or a message to the agent
+    /// while follow is on, shows Flow. The pane draws the view's name under
+    /// `review-view-flow` and `review-view-changes` in the bar at its top, `review-bar`,
+    /// which a click on either switches.
+    pub fn view(&self) -> View {
+        self.view
+    }
+
+    /// The form Flow shows, now or when it next comes on screen: the one chosen last in
+    /// the workspace on screen, the timeline where none was chosen.
+    pub fn flow_form(&self) -> FlowForm {
+        self.form
+    }
+
+    /// The timeline of Flow: the turns of the workspace on screen with their steps, as
+    /// [`TimelineEntry`] says. Entry `i` is drawn under `flow-entry-<i>` while the
+    /// timeline is on screen.
+    pub fn timeline(&self) -> &[TimelineEntry] {
+        self.flow.entries()
+    }
+
+    /// The entry of the timeline the reviewer is on, by its index in
+    /// [`ReviewPane::timeline`]: where `j`, `k` or a click put the reviewer, or where
+    /// follow moved Flow; none before either.
+    pub fn timeline_cursor(&self) -> Option<usize> {
+        self.flow.cursor()
+    }
+
+    /// The step Flow is at: the newest step while follow is on, where follow paused, or
+    /// where the reviewer resumed it; none before the first step.
+    pub fn flow_at(&self) -> Option<&FlowAt> {
+        self.at.as_ref()
+    }
+
+    /// The index of the row of [`ReviewPane::flow_at`] in the rows of the form on screen:
+    /// its entry in [`ReviewPane::timeline`], or in [`ReviewPane::live_rows`] the heading of
+    /// the file the step names, or, for a read of a file the turn did not change, that
+    /// file's [`PaneRow::Read`]; none when that form has no row for it, as the live diff
+    /// for a command, or for an edit or a write whose file its list does not hold yet,
+    /// which it names in the line above its files, [`ReviewPane::activity`].
+    pub fn flow_at_row(&self) -> Option<usize> {
+        let at = self.at.as_ref()?;
+        match self.form {
+            FlowForm::Timeline => self.flow.row_of(at),
+            FlowForm::LiveDiff => self.live_row_of(at),
+        }
+    }
+
+    /// The indices of the rows of the form of Flow last laid out that are in view: of
+    /// [`ReviewPane::timeline`] or of [`ReviewPane::live_rows`].
+    pub fn flow_rows_in_view(&self) -> Range<usize> {
+        match self.form {
+            FlowForm::Timeline => self.flow.in_view(),
+            FlowForm::LiveDiff => self.live.in_view(),
+        }
+    }
+
+    /// Follow, as the reviewer sees it. Drawn as the control `flow-follow` in the bar, and,
+    /// while paused, as the line `flow-follow-paused`, which says how many steps came
+    /// since, with the control `flow-follow-resume`.
+    pub fn following(&self) -> Following {
+        self.following
+    }
+
+    /// What a turn end offered while Flow was on screen: the change since the reviewer's
+    /// last review, to open in Changes. Drawn under `flow-offer`, with the control
+    /// `flow-offer-take`; [`TakeOffer`] takes it too. None when nothing is offered.
+    pub fn flow_offer(&self) -> Option<&ChangeShown> {
+        self.follow.offer()
+    }
+
+    /// The change the live diff shows; none before a turn of the workspace on screen is
+    /// known.
+    pub fn live_change(&self) -> Option<&LiveChange> {
+        self.live.change()
+    }
+
+    /// The rows of the live diff, top to bottom, as [`ReviewPane::rows`] are for Changes:
+    /// each changed file's heading, then the rows of its diff and the threads on them;
+    /// last, each file the turn read and did not change, as a [`PaneRow::Read`], in the
+    /// order of its first read. Row `i` is drawn under `flow-row-<i>`, the text of a line
+    /// in it under `flow-text-<i>-old:<text>` or `flow-text-<i>-new:<text>`, and the mark
+    /// of a file read under `flow-read-<i>`.
+    pub fn live_rows(&self) -> &[PaneRow] {
+        self.live.rows()
+    }
+
+    /// The line of the live diff the reviewer is on, where `j`, `k` or a click put the
+    /// reviewer; the line a comment written in Flow sits on.
+    pub fn live_position(&self) -> Option<&Position> {
+        self.live.position()
+    }
+
+    /// The text of one line of one version of a file of the live diff, as
+    /// [`ReviewPane::text`] gives it for Changes.
+    pub fn live_text(&self, position: &Position) -> Option<String> {
+        self.live.text(position)
+    }
+
+    /// The step the live diff names in the line above its files, `flow-activity`, while it
+    /// has no row for it: a command, or an edit or a write whose file the live diff's list
+    /// does not hold yet. A read always has a row.
+    pub fn activity(&self) -> Option<&FlowAt> {
+        let shown = self.live.change()?;
+        self.at
+            .as_ref()
+            .filter(|at| at.turn == shown.turn && self.live_row_of(at).is_none())
     }
 
     /// The comment box, while one is open.
@@ -1023,6 +1325,9 @@ impl ReviewPane {
         rows.extend(threads::elsewhere(&self.files, review));
         self.rows = rows;
         self.settle(cx);
+        // What the rows of Changes are made again for, the reviews or the layout, the rows
+        // of the live diff are made again for too.
+        self.live_rebuild(cx);
     }
 
     /// After the rows changed: finds the row of the line the reviewer is on, and puts
@@ -1093,13 +1398,28 @@ impl ReviewPane {
     /// What [`LineDown`] does.
     pub(crate) fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        if self.view == View::Flow {
+            return self.flow_step(1, cx);
+        }
         self.step(1, cx);
     }
 
     /// What [`LineUp`] does.
     pub(crate) fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        if self.view == View::Flow {
+            return self.flow_step(-1, cx);
+        }
         self.step(-1, cx);
+    }
+
+    /// What [`LineDown`] and [`LineUp`] do in Flow: move the reviewer through the entries
+    /// of the timeline, or through the lines of the live diff, by `by`.
+    fn flow_step(&mut self, by: isize, cx: &mut Context<Self>) {
+        match self.form {
+            FlowForm::Timeline => self.timeline_step(by, cx),
+            FlowForm::LiveDiff => self.live_step(by, cx),
+        }
     }
 
     /// What [`ToggleLayout`] does.
@@ -1299,8 +1619,9 @@ mod tests {
     use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
         HISTORY_CONTEXT, HistoryDown, HistoryUp, KEY_CONTEXT, LineDown, LineUp, MarkChange,
-        MarkReviewed, NextReview, NextThread, PreviousThread, Reply, ShowChange, TakeOffer,
-        ToggleKeepSelection, ToggleLayout, ToggleViewed, controls,
+        MarkReviewed, NextReview, NextThread, PreviousThread, Reply, ResumeFollow, ShowChange,
+        TakeOffer, ToggleFlowForm, ToggleFollow, ToggleKeepSelection, ToggleLayout, ToggleView,
+        ToggleViewed, controls,
     };
 
     #[test]
@@ -1389,6 +1710,15 @@ mod tests {
                 ("shift-t", ToggleKeepSelection.name(), None, Asks::Nothing),
                 ("shift-o", TakeOffer.name(), None, Asks::Nothing),
                 ("shift-a", NextReview.name(), None, Asks::Nothing),
+                ("f", ToggleView.name(), None, Asks::Nothing),
+                ("shift-f", ToggleFollow.name(), None, Asks::Nothing),
+                (
+                    "shift-l",
+                    ToggleFlowForm.name(),
+                    request(RequestKind::SetSetting),
+                    Asks::Nothing
+                ),
+                ("shift-g", ResumeFollow.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1422,6 +1752,9 @@ mod tests {
             (HistoryUp.name(), "up", vec![TUICR]),
             (MarkChange.name(), "space", vec![TUICR]),
             (ShowChange.name(), "enter", vec![TUICR]),
+            // Resuming follow goes to the newest step, the last of Flow: vim's `G` goes to
+            // the last line, tuicr's to the last file.
+            (ResumeFollow.name(), "shift-g", vec!["vim", TUICR]),
         ];
         // The actions that neither has a key for, and why.
         let others: Vec<(&str, &str)> = vec![
@@ -1452,6 +1785,18 @@ mod tests {
             (
                 NextReview.name(),
                 "neither has one; neither shows the review of another agent session",
+            ),
+            (
+                ToggleView.name(),
+                "neither has one; neither shows what an agent does as it works",
+            ),
+            (
+                ToggleFollow.name(),
+                "neither has one; neither follows an agent",
+            ),
+            (
+                ToggleFlowForm.name(),
+                "neither has one; neither has a timeline of steps or a live diff",
             ),
         ];
         let held = controls();

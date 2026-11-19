@@ -322,6 +322,7 @@ impl Kept {
                 session: session.id.clone(),
                 number,
                 ended: None,
+                start: None,
                 state: None,
             })
             .expect("keep the turn");
@@ -777,6 +778,7 @@ fn a_turn_is_read_with_its_steps_in_order_also_while_it_runs_and_an_unknown_one_
             session: SessionId::new(a.id.as_str()),
             number: 1,
             ended: Some(TurnEnd::Finished),
+            start: None,
             state: Some(s1),
             steps: vec![
                 Step::Read {
@@ -808,6 +810,7 @@ fn a_turn_is_read_with_its_steps_in_order_also_while_it_runs_and_an_unknown_one_
             session: SessionId::new(a.id.as_str()),
             number: 2,
             ended: None,
+            start: None,
             state: None,
             steps: vec![Step::Command {
                 command: "ls".to_owned()

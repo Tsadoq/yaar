@@ -53,6 +53,7 @@ fn turn(n: u128, session: u128, number: u32) -> TurnRecord {
         session: sid(session),
         number,
         ended: None,
+        start: None,
         state: None,
     }
 }
@@ -621,4 +622,96 @@ fn the_turns_of_a_workspace_come_in_the_order_they_started_across_its_sessions()
         [turn(40, 3, 1)]
     );
     assert_eq!(store.turns_of(&workspace(3)).expect("of 3"), []);
+}
+
+#[test]
+fn a_turn_kept_with_a_start_reads_it_back_with_the_turn_and_among_the_turns_of_its_workspace() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    put_all(&store, &[session(1, 1)]);
+    let start = "c".repeat(40);
+    let started = TurnRecord {
+        start: Some(start.clone()),
+        ..turn(10, 1, 1)
+    };
+    store.put_turn(&started).expect("put turn");
+    store.put_turn(&turn(11, 1, 2)).expect("put turn");
+
+    let (read, steps) = store.turn(&tid(10)).expect("turn").expect("kept");
+    assert_eq!(read, started);
+    assert_eq!(read.start.as_deref(), Some(start.as_str()));
+    assert_eq!(steps, []);
+    assert_eq!(
+        store.turns_of(&workspace(1)).expect("turns"),
+        [started.clone(), turn(11, 1, 2)]
+    );
+
+    // The start is not the state recorded at the end, and ending the turn leaves it.
+    let end = "d".repeat(40);
+    store
+        .end_turn(&tid(10), TurnEndRecord::Finished, Some(&end))
+        .expect("end");
+    let (ended, _) = store.turn(&tid(10)).expect("turn").expect("kept");
+    assert_eq!(
+        (ended.start.as_deref(), ended.state.as_deref()),
+        (Some(start.as_str()), Some(end.as_str()))
+    );
+}
+
+#[test]
+fn a_start_set_later_is_read_back_by_both_calls_and_a_second_one_replaces_the_first() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    put_all(&store, &[session(1, 1)]);
+    store.put_turn(&turn(10, 1, 1)).expect("put turn");
+    store.put_turn(&turn(11, 1, 2)).expect("put turn");
+    store
+        .end_turn(&tid(10), TurnEndRecord::Finished, Some(&"e".repeat(40)))
+        .expect("end");
+
+    let first = "1".repeat(40);
+    store.set_turn_start(&tid(11), &first).expect("set");
+    let started = |start: &str| TurnRecord {
+        start: Some(start.to_owned()),
+        ..turn(11, 1, 2)
+    };
+    assert_eq!(
+        store.turn(&tid(11)).expect("turn").expect("kept").0,
+        started(&first)
+    );
+    // Only the turn named gets it.
+    let turns = store.turns_of(&workspace(1)).expect("turns");
+    assert_eq!(turns[0].start, None);
+    assert_eq!(turns[1], started(&first));
+
+    let second = "2".repeat(40);
+    store.set_turn_start(&tid(11), &second).expect("set again");
+    assert_eq!(
+        store.turn(&tid(11)).expect("turn").expect("kept").0,
+        started(&second)
+    );
+    assert_eq!(
+        store.turns_of(&workspace(1)).expect("turns")[1],
+        started(&second)
+    );
+    // A turn that ended keeps what it ended with.
+    let ended = &store.turns_of(&workspace(1)).expect("turns")[0];
+    assert_eq!(ended.ended, Some(TurnEndRecord::Finished));
+    assert_eq!(ended.state.as_deref(), Some("e".repeat(40).as_str()));
+}
+
+#[test]
+fn a_start_for_a_turn_that_is_not_kept_is_refused_with_its_id_and_keeps_nothing() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    put_all(&store, &[session(1, 1)]);
+    store.put_turn(&turn(10, 1, 1)).expect("put turn");
+
+    let sentence = refusal_of(store.set_turn_start(&tid(99), &"3".repeat(40)));
+    assert!(sentence.contains(&id(99)), "{sentence}");
+    assert_eq!(store.turn(&tid(99)).expect("turn"), None);
+    assert_eq!(
+        store.turns_of(&workspace(1)).expect("turns"),
+        [turn(10, 1, 1)]
+    );
 }

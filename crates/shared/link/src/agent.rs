@@ -147,6 +147,15 @@ pub struct Turn {
     pub number: u32,
     /// How it ended; none while it runs.
     pub ended: Option<TurnEnd>,
+    /// The state the turn's change counts from, by its full id: the newest state of the
+    /// worktree recorded before the turn started, which the live diff of Flow compares
+    /// with the files on disk while the turn runs, and with [`Turn::state`] once it ended.
+    /// A turn that started while the state of the turn before was still being recorded
+    /// counts from that state: none until it is kept, which is before the
+    /// [`crate::Fact::TurnEnded`] of the turn before is told, so a Window that hears that
+    /// fact and asks again reads it. None where the worktree had no recorded state then:
+    /// the change then counts from the commit checked out.
+    pub start: Option<String>,
     /// The state of the worktree recorded when it ended, by its full id; none while it
     /// runs, and when the recording failed.
     pub state: Option<String>,
@@ -368,6 +377,7 @@ pub(crate) fn write_turn(out: &mut Out, turn: &Turn) {
     out.text(turn.session.as_str());
     out.u32(turn.number);
     out.optional(turn.ended.as_ref(), |out, end| write_turn_end(out, *end));
+    out.optional(turn.start.as_deref(), Out::text);
     out.optional(turn.state.as_deref(), Out::text);
     out.list(&turn.steps, write_step);
 }
@@ -378,6 +388,7 @@ pub(crate) fn read_turn(input: &mut In<'_>) -> Result<Turn, LinkError> {
         session: SessionId::new(input.text()?),
         number: input.u32()?,
         ended: input.optional(read_turn_end)?,
+        start: input.optional(In::text)?,
         state: input.optional(In::text)?,
         steps: input.list(read_step)?,
     })

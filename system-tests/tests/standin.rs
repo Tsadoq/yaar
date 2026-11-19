@@ -247,6 +247,8 @@ struct Run {
     work: PathBuf,
     log: PathBuf,
     pty: Pty,
+    /// The settings of the terminal before any program ran in it.
+    before: libc::termios,
     child: Child,
     gates: Vec<PathBuf>,
     sleepers: Vec<PathBuf>,
@@ -359,6 +361,9 @@ impl<'a> Start<'a> {
             dirs.push(folder.display().to_string());
         }
         let pty = Pty::open();
+        // Read here, not after the start: the program sets the terminal raw as it begins, and
+        // a read made later may come after that.
+        let before = pty.termios();
         let stdio = |pty: &Pty| Stdio::from(pty.slave.try_clone().expect("duplicate the slave"));
         // A copy of the program, not the file Cargo built: Cargo puts that file in its place
         // again at every build, and tests that start their own builds run beside this one.
@@ -396,6 +401,7 @@ impl<'a> Start<'a> {
             work,
             log,
             pty,
+            before,
             child,
             gates: self.gates,
             sleepers: self.sleepers,
@@ -1560,7 +1566,7 @@ fn a_new_session_has_a_uuid_shaped_id_of_its_own_every_time() {
 #[test]
 fn the_terminal_is_raw_while_the_stand_in_runs_and_as_it_was_after_it_exits() {
     let mut run = Start::new(Place::new(), "claude", Script(vec![Step::Turn, Step::Exit])).start();
-    let before = run.pty.termios();
+    let before = run.before;
     assert_ne!(
         before.c_lflag & (libc::ECHO | libc::ICANON | libc::ISIG),
         0,
