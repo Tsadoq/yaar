@@ -160,7 +160,12 @@ fn a_shell_of_the_app_finds_the_worlds_claude_before_any_other() {
         .agents_dir()
         .expect("the world has a folder of agents");
     let claude = agents.join("claude").display().to_string();
-    assert!(lines[marker - 1].ends_with(&claude), "{lines:?}");
+    // The line is the path, or what the shell wrote in front of it, ended by a space.
+    let line = &lines[marker - 1];
+    assert!(
+        *line == claude || line.ends_with(&format!(" {claude}")),
+        "{lines:?}"
+    );
 }
 
 #[test]

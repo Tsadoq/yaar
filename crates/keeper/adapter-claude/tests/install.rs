@@ -205,6 +205,6 @@ fn the_command_runs_a_hook_program_whose_folder_holds_a_space_and_a_quote_in_its
     assert_eq!(
         parent.trim(),
         std::process::id().to_string(),
-        "`sh` ran the lone command in its own place, so the program's parent is the test"
+        "`exec` put the program in the place of `sh`, so the program's parent is the test"
     );
 }
