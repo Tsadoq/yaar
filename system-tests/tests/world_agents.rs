@@ -1114,6 +1114,284 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
     assert_eq!(keeper.join().expect("the scripted Keeper").len(), 10);
 }
 
+// Killing everything, as a restart of the machine does.
+
+/// Every path under `folder`, relative to it, folders and links among them.
+fn tree_of(folder: &Path) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    let mut open = vec![folder.to_owned()];
+    while let Some(next) = open.pop() {
+        for entry in std::fs::read_dir(&next).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                open.push(path.clone());
+            }
+            paths.push(path.strip_prefix(folder).expect("beneath it").to_owned());
+        }
+    }
+    paths.sort();
+    paths
+}
+
+#[test]
+fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_temporary_folders_and_keeps_the_rest()
+ {
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(PathBuf::from("never")),
+        Step::End,
+        Step::Exit,
+    ]);
+    let (mut world, repo) = World::with_standin("default", &script);
+    let keeper = world.keeper_pid().expect("the Keeper runs");
+    let mut client = world.client();
+    let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
+    // One terminal runs the agent, in the middle of a turn; another runs a shell that has
+    // started a shell that has started a program, three levels below the Keeper's own
+    // child.
+    let agent = client
+        .open_terminal(&workspace, SIZE)
+        .expect("open a terminal");
+    client.type_line(&agent, "claude");
+    client.wait_for_prompt(&agent, 0);
+    client.type_line(&agent, "go");
+    let log_file = world.home().with_file_name("default.log");
+    let held = wait_until(DEADLINE, || {
+        world
+            .agent_log("default")
+            .did
+            .iter()
+            .any(|did| matches!(did, Did::Hook { event, .. } if event == "UserPromptSubmit"))
+    });
+    assert!(held, "{:?}", world.agent_log("default"));
+    let other = client
+        .open_terminal(&workspace, SIZE)
+        .expect("open a terminal");
+    client.type_line(
+        &other,
+        "sh -c 'sleep 3600 & echo $! > bg.pid; echo $$ > sh.pid; wait' &",
+    );
+    let pid_in = |name: &str| {
+        let mut pid = None;
+        wait_until(DEADLINE, || {
+            pid = std::fs::read_to_string(repo.path().join(name))
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok());
+            pid.is_some()
+        });
+        pid.unwrap_or_else(|| panic!("{name} was never written"))
+    };
+    let (background, shell) = (pid_in("bg.pid"), pid_in("sh.pid"));
+    let started = descendants_of(keeper);
+    let agent_pid = world.agent_log("default").pid;
+    for pid in [background, shell, agent_pid] {
+        assert!(started.contains(&pid), "{pid} not in {started:?}");
+    }
+
+    // What a restart empties: files, a folder, a link and a socket in each of the two, and
+    // what the link leads to, which is kept.
+    let root = world
+        .socket()
+        .parent()
+        .expect("the world's folder")
+        .to_owned();
+    let kept = world.data_dir().join("kept.txt");
+    std::fs::create_dir_all(world.data_dir()).expect("the data folder");
+    std::fs::write(&kept, "kept").expect("write a file of the data folder");
+    for folder in ["run", "tmp"] {
+        let folder = root.join(folder);
+        std::fs::write(folder.join("file"), "x").expect("a file");
+        std::fs::create_dir_all(folder.join("folder/inner")).expect("a folder");
+        std::fs::write(folder.join("folder/inner/file"), "x").expect("a file");
+        std::os::unix::fs::symlink(&kept, folder.join("link")).expect("a link");
+        drop(UnixListener::bind(folder.join("socket")).expect("a socket"));
+    }
+    // Without the temporary files a git of the Keeper's state store makes and removes by
+    // itself: one that ended between this look and the kill takes its own away.
+    let permanent = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
+        paths
+            .into_iter()
+            .filter(|path| {
+                let name = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned());
+                name.is_some_and(|name| !name.starts_with("tmp_") && !name.ends_with(".lock"))
+            })
+            .collect()
+    };
+    let data_before = permanent(tree_of(&world.data_dir()));
+    let log_before = std::fs::read(&log_file).expect("the log");
+    drop(client);
+
+    world.kill_everything();
+
+    // Returned, so everything is gone already: no wait.
+    let alive: Vec<u32> = started
+        .iter()
+        .copied()
+        .filter(|pid| is_alive(*pid))
+        .collect();
+    assert!(alive.is_empty(), "still running: {alive:?}");
+    assert!(!is_alive(keeper));
+    assert_eq!(world.keeper_pid(), None);
+    for folder in ["run", "tmp"] {
+        let folder = root.join(folder);
+        assert!(folder.is_dir(), "{} is gone", folder.display());
+        assert_eq!(tree_of(&folder), Vec::<PathBuf>::new());
+    }
+    assert_eq!(
+        std::fs::read_to_string(&kept).unwrap(),
+        "kept",
+        "a link was followed"
+    );
+    let data_after = permanent(tree_of(&world.data_dir()));
+    let lost: Vec<_> = data_before
+        .iter()
+        .filter(|p| !data_after.contains(p))
+        .collect();
+    assert!(lost.is_empty(), "the data folder lost {lost:?}");
+    // The stand-in's log is as it was, and nothing of the agent ran at its end: it was
+    // killed, not asked to stop.
+    let log_after = std::fs::read(&log_file).expect("the log");
+    assert!(log_after.starts_with(&log_before));
+    let log = world.agent_log("default");
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Exited { .. } | Did::Done { step: 2, .. })
+                && !matches!(did, Did::Hook { event, .. } if event == "SessionEnd" || event == "Stop")),
+        "{:?}",
+        log.did
+    );
+
+    // A Keeper starts again on what was kept: the folder opened before is still known.
+    world.start_keeper();
+    let mut client = world.client();
+    assert_eq!(client.workspaces().len(), 1);
+}
+
+#[test]
+#[should_panic(expected = "no Keeper of this world runs")]
+fn killing_everything_of_a_world_with_no_keeper_is_refused() {
+    World::new().kill_everything();
+}
+
+// An agent started outside every terminal of the app.
+
+/// The variables `env` printed, as pairs.
+fn variables_in(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
+}
+
+#[test]
+fn an_agent_started_outside_runs_in_a_terminal_of_the_worlds_with_the_worlds_plugin_and_no_terminal_of_the_app()
+ {
+    let mut world = World::new();
+    world.agents_on_path();
+    world.start_keeper();
+    let repo = world.repository("app");
+    let script = Script(vec![
+        Step::Turn,
+        Step::Shell("env > env.out".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut agent = world.start_agent_outside("claude", &script, repo.path());
+    let pid = agent.pid();
+    agent.wait_for_prompt();
+    agent.type_line("go");
+    let ended = wait_until(DEADLINE, || {
+        world
+            .agent_log("claude")
+            .did
+            .iter()
+            .any(|did| matches!(did, Did::Exited { status: 0 }))
+    });
+    let log = world.agent_log("claude");
+    assert!(ended, "{log:?}");
+    assert_eq!(log.pid, pid);
+    assert_eq!(log.received, b"go\r");
+    // The plugin's hooks ran, through the app's own hook program.
+    assert!(log.did.iter().any(|did| matches!(
+        did,
+        Did::Hook { event, killed: false, .. } if event == "SessionStart"
+    )));
+
+    // What it started its shell command with is its own environment.
+    let env = variables_in(&std::fs::read_to_string(repo.path().join("env.out")).expect("env.out"));
+    let value = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
+    assert_eq!(value("YAAR_TERMINAL"), None, "{env:?}");
+    let plugin = world.data_dir().join("agents/claude/plugin");
+    assert_eq!(value("CLAUDE_CODE_PLUGIN_DIRS"), plugin.to_str());
+    assert_eq!(value("HOME"), world.home().to_str());
+    assert_eq!(value("YAAR_SOCKET"), world.socket().to_str());
+    assert!(
+        value("PATH").is_some_and(|search| search.starts_with(
+            world
+                .agents_dir()
+                .expect("the stand-ins")
+                .to_str()
+                .expect("text")
+        )),
+        "{env:?}"
+    );
+
+    // It ended on its own; dropping what is left of it leaves nothing running.
+    drop(agent);
+    assert!(!is_alive(pid));
+}
+
+#[test]
+fn each_wait_for_the_prompt_of_an_agent_outside_waits_for_one_it_printed_after_the_last() {
+    let mut world = World::new();
+    world.agents_on_path();
+    world.start_keeper();
+    let repo = world.repository("app");
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(PathBuf::from("go")),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut agent = world.start_agent_outside("claude", &script, repo.path());
+    agent.wait_for_prompt();
+    agent.type_line("one");
+    let held = wait_until(DEADLINE, || {
+        world.agent_log("claude").did.contains(&Did::Began {
+            step: 1,
+            received: 4,
+        })
+    });
+    assert!(held, "{:?}", world.agent_log("claude"));
+    std::fs::write(repo.path().join("go"), "").expect("make the file");
+    // The first prompt is behind: this wait is for the second, which the stand-in prints
+    // when its next `turn` begins, after the first turn's end.
+    agent.wait_for_prompt();
+    let log = world.agent_log("claude");
+    assert!(
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 3, .. })),
+        "{:?}",
+        log.did
+    );
+    agent.type_line("two");
+    let ended = wait_until(DEADLINE, || {
+        world
+            .agent_log("claude")
+            .did
+            .iter()
+            .any(|did| matches!(did, Did::Exited { status: 0 }))
+    });
+    assert!(ended);
+    assert_eq!(world.agent_log("claude").received, b"one\rtwo\r");
+}
+
 #[test]
 fn every_program_of_the_app_is_built_for_a_test_that_asks_for_it() {
     // The hook program of Claude Code among them: a test of the Keeper runs it as Claude
