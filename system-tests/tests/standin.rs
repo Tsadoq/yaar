@@ -110,56 +110,80 @@ impl Pty {
         }
     }
 
-    /// Waits until `needle` is in the output after byte `from`; gives where it ends.
-    fn wait_for(&mut self, needle: &[u8], from: usize) -> usize {
-        let mut end = None;
-        let seen = wait_until(DEADLINE, || {
-            self.drain();
-            end = find(&self.output[from..], needle).map(|at| from + at + needle.len());
-            end.is_some()
-        });
-        assert!(
-            seen,
-            "never saw {:?} after byte {from}; the output was {:?}",
-            String::from_utf8_lossy(needle),
-            String::from_utf8_lossy(&self.output)
-        );
-        end.expect("seen")
+    /// Reads one chunk of what the program has written, waiting for it in `poll` until
+    /// `deadline` when there is none yet. Gives false when nothing came in time or the
+    /// terminal is closed. The wait is the system's own: a loop that looks and sleeps hands
+    /// over a chunk per sleep, which a slow machine stretches past any deadline.
+    fn read_chunk(&mut self, deadline: Instant) -> bool {
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            // Rounded up, so that a part of a millisecond left is not a look that waits not at all.
+            let wait = i32::try_from(left.as_micros().div_ceil(1000)).unwrap_or(i32::MAX);
+            let mut poll = libc::pollfd {
+                fd: self.master(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid `pollfd`.
+            let ready = unsafe { libc::poll(&mut poll, 1, wait) };
+            if ready < 0
+                && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+            {
+                continue;
+            }
+            if ready <= 0 || poll.revents & libc::POLLIN == 0 {
+                return false;
+            }
+            let mut buffer = [0u8; 8192];
+            // SAFETY: the buffer is live and its length is given.
+            let n = unsafe { libc::read(self.master(), buffer.as_mut_ptr().cast(), buffer.len()) };
+            if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            if n <= 0 {
+                return false;
+            }
+            self.output.extend_from_slice(&buffer[..n as usize]);
+            return true;
+        }
     }
 
     /// Reads, one chunk at a time and no further than it has to, until `needle` is in the
-    /// output after byte `from`. What the program writes after that stays unread, so that it
-    /// soon waits in a write again.
-    fn read_until(&mut self, needle: &[u8], from: usize) {
-        // Only what came in since the last look is searched: the output is a megabyte.
+    /// output after byte `from`, for at most [`DEADLINE`]; gives where it ends. What the
+    /// program writes after that stays unread.
+    fn read_to(&mut self, needle: &[u8], from: usize) -> Option<usize> {
+        let deadline = Instant::now() + DEADLINE;
+        // Only what came in since the last look is searched: the output may be a megabyte.
         let mut looked = from;
-        let seen = wait_until(DEADLINE, || {
-            loop {
-                if find(&self.output[looked..], needle).is_some() {
-                    return true;
-                }
-                looked = self.output.len().saturating_sub(needle.len()).max(from);
-                let mut poll = libc::pollfd {
-                    fd: self.master(),
-                    events: libc::POLLIN,
-                    revents: 0,
-                };
-                // SAFETY: one valid `pollfd`.
-                if unsafe { libc::poll(&mut poll, 1, 0) } <= 0 || poll.revents & libc::POLLIN == 0 {
-                    return false;
-                }
-                let mut buffer = [0u8; 8192];
-                // SAFETY: the buffer is live and its length is given.
-                let n =
-                    unsafe { libc::read(self.master(), buffer.as_mut_ptr().cast(), buffer.len()) };
-                if n <= 0 {
-                    return false;
-                }
-                self.output.extend_from_slice(&buffer[..n as usize]);
+        loop {
+            if let Some(at) = find(&self.output[looked..], needle) {
+                return Some(looked + at + needle.len());
             }
-        });
+            looked = self.output.len().saturating_sub(needle.len()).max(from);
+            if Instant::now() >= deadline || !self.read_chunk(deadline) {
+                return None;
+            }
+        }
+    }
+
+    /// Waits until `needle` is in the output after byte `from`; gives where it ends.
+    fn wait_for(&mut self, needle: &[u8], from: usize) -> usize {
+        let end = self.read_to(needle, from);
+        self.drain();
+        end.unwrap_or_else(|| {
+            panic!(
+                "never saw {:?} after byte {from}; the output was {:?}",
+                String::from_utf8_lossy(needle),
+                String::from_utf8_lossy(&self.output)
+            )
+        })
+    }
+
+    /// Reads until `needle` is in the output after byte `from`, and no further, so that
+    /// what the program writes after that stays unread and it soon waits in a write again.
+    fn read_until(&mut self, needle: &[u8], from: usize) {
         assert!(
-            seen,
+            self.read_to(needle, from).is_some(),
             "never read as far as {:?}",
             String::from_utf8_lossy(needle)
         );
