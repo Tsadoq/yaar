@@ -27,7 +27,9 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails.
+/// How long a test waits for the Keeper before it fails: longer than the plan's ten
+/// seconds, as every test file of this crate has it, since a Keeper starts git and shells
+/// of its own and a throttled machine runs them slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -507,6 +509,14 @@ impl Setup {
         }
     }
 
+    /// Runs the hook of the line `line` of the recording as the CLI number `cli` of the
+    /// terminal `terminal` would: its own session, other than the recording's.
+    fn hook_of_cli(&self, terminal: &TerminalId, cli: u32, line: usize) {
+        let mut record: HookRecord = self.records[line].in_project(&self.repo);
+        record.input["session_id"] = format!("{cli:08}-0000-4000-8000-{cli:012}").into();
+        self.scratch.hook(terminal, &record.input_bytes());
+    }
+
     /// Stops the Keeper.
     fn finish(self) -> Scratch {
         self.window.stop(self.keeper);
@@ -565,10 +575,12 @@ fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) -> Held {
         .status()
         .expect("start mkfifo");
     assert!(made.success(), "mkfifo failed");
-    // The filter runs for every file git stages and for each look of git at the folder: it
-    // writes into the pipe the first time only, since nobody reads it after that.
+    // The filter runs for every file git stages and for each look of git at the folder, and
+    // several runs can overlap: the one that makes the folder `held` is the only one that
+    // writes into the pipe, since nobody reads it after that and a second writer would wait
+    // for a reader for ever.
     let filter = format!(
-        "[ -e {root}/held ] || {{ touch {root}/held; echo > {pipe}; }}; \
+        "mkdir {root}/held 2>/dev/null && echo > {pipe}; \
          while [ -d {root} ] && [ ! -e {root}/gate ]; do sleep 0.05; done; cat",
         pipe = pipe.display()
     );
@@ -783,9 +795,10 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
     assert_eq!(setup.window.turn(&two).start, None);
 
     // The recording ends, and the turn that waited has its start, which is that state. That
-    // the Keeper keeps it before it tells the end is not shown here: a read of a turn is
-    // answered without waiting for the Keeper's turn, and a read sent after the fact is
-    // heard nearly always comes after the keeping, in either order of the two.
+    // the Keeper keeps it before it tells the end is shown only by chance here, and by the
+    // test of many waiting turns below with a likelihood that grows with their number: a
+    // read of a turn is answered without waiting for the Keeper's turn, so no read of the
+    // Link tells the two orders apart for certain.
     open_the_gate(&setup.scratch);
     let state = setup
         .window
@@ -795,6 +808,65 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
         setup.window.turn(&two).start.as_deref(),
         Some(state.as_str())
     );
+    let _ = setup.finish();
+}
+
+#[test]
+fn every_turn_that_waited_for_a_recording_has_its_start_when_the_end_of_the_turn_before_is_heard() {
+    /// CLIs, each in a terminal of its own, whose turns start while one recording is held.
+    const WAITING: u32 = 6;
+    let scratch = Scratch::new();
+    let first = scratch.repository("first");
+    let repo = scratch.repository("repo");
+    let _held = hold_recordings_at_a_gate(&scratch, &repo);
+    let mut setup = Setup::on(scratch, &first, repo);
+    setup.show_and_wait_for_the_first_state();
+
+    setup.hooks(&SESSION_AND_PROMPT);
+    let one = setup
+        .window
+        .turn_until(&setup.workspace, "the first turn works", |_| true);
+    let terminals: Vec<TerminalId> = (0..WAITING)
+        .map(|_| setup.window.open_terminal(&setup.workspace))
+        .collect();
+    for (cli, terminal) in (2..).zip(&terminals) {
+        setup.hook_of_cli(terminal, cli, 1);
+    }
+    std::fs::write(setup.repo.join("slow.txt"), "slow\n").expect("write a file");
+    setup.hooks(&[STOP]);
+
+    // The recording of the first turn's state is held: every other CLI starts a turn
+    // during it, and each of those turns waits for that state.
+    let mut waiting: Vec<TurnId> = Vec::new();
+    for (cli, terminal) in (2..).zip(&terminals) {
+        setup.hook_of_cli(terminal, cli, 2);
+        let seen = waiting.clone();
+        waiting.push(
+            setup
+                .window
+                .turn_until(&setup.workspace, "another turn works", |turn| {
+                    *turn != one && !seen.contains(turn)
+                }),
+        );
+    }
+    open_the_gate(&setup.scratch);
+    let state = setup
+        .window
+        .ended(&one)
+        .expect("a state is recorded at the turn's end");
+
+    // A read of a turn is answered without waiting for the Keeper's turn, so no read tells
+    // for certain whether the starts were kept before the end was told. Each start kept
+    // after it is a write the Keeper still has to make when this read arrives, and the
+    // turn kept last is read first: the more turns waited, the less likely a Keeper that
+    // tells first is to pass. This never fails for a Keeper that keeps first.
+    for turn in waiting.iter().rev() {
+        assert_eq!(
+            setup.window.turn(turn).start.as_deref(),
+            Some(state.as_str()),
+            "a turn that waited has no start when the end it waited for is heard"
+        );
+    }
     let _ = setup.finish();
 }
 
