@@ -30,7 +30,7 @@
 //! | `GetTurn` | `Agents::turn` | none |
 //! | `ShowWorkspace` | the watchers of the worktrees on screen | later `ChangesChanged`, `Workspaces` |
 //! | `ListTerminals` | the terminals the Dock holds, with their workspace and program | none |
-//! | `AttachTerminal` | `Dock::attach`, then `Dock::resize` and `Dock::redraw` | none |
+//! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -49,9 +49,12 @@
 //! minutes, hold up nothing.
 //!
 //! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
-//! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
-//! that opened the terminal, and only after the reply that named it. When the program
-//! ends, every Window is told `Fact::TerminalEnded`, after the last output.
+//! to `Dock::write`; what the program writes goes, as `Message::Output`, to every Window
+//! the terminal is shown to: the one that opened it, and each that attached to it later.
+//! A Window gets it only after the reply that named the terminal or attached it, and an
+//! attached Window first gets the kept output of the terminal, so that nothing is lost or
+//! sent twice where that ends. When the program ends, every Window is told
+//! `Fact::TerminalEnded`, after the last output of each that was sent any.
 //!
 //! The reply goes out before the facts. A Window that opened a folder therefore learns
 //! the id of the new workspace before the list that holds it.
@@ -79,18 +82,20 @@
 //! them is told as `ChangesChanged`, and a change of what is checked out as `Workspaces`
 //! too. The list of every repository is read from git when a Window asks for it.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
-use yaar_dock::{Dock, DockError, Event, Start};
+use yaar_dock::{Dock, DockError, Entry, Event, Start};
 use yaar_link::{
-    Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, TerminalSize,
+    Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, SOCKET_VARIABLE,
+    TERMINAL_VARIABLE, TerminalSize,
 };
 use yaar_recorder::{CommitError, CommitId, Git, Worktree};
 use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
-use crate::agents::{Agents, not_wired};
+use crate::agents::Agents;
 use crate::watching::Watching;
 use crate::{Options, Shared, Window, frame_of};
 
@@ -113,8 +118,14 @@ pub(crate) struct Parts {
     watching: Arc<Watching>,
     // The terminals and their programs. Dropped with the parts, which ends every program.
     dock: Dock,
+    // The terminals the Dock runs, with who is shown each: what `ListTerminals` and
+    // `AttachTerminal` read, and what a Window that goes leaves.
+    terminals: Arc<Terminals>,
     // What the programs of the Dock tell the Windows goes through here.
     shared: Weak<Shared>,
+    // Where the Keeper was asked to listen: what every shell of the app is told is its
+    // socket.
+    socket: PathBuf,
 }
 
 /// What the Keeper keeps for its Windows: the workspaces, the reviews of their worktrees,
@@ -302,7 +313,23 @@ impl Parts {
             agents,
             watching,
             dock: Dock::new(),
+            terminals: Arc::new(Terminals::default()),
             shared,
+            socket: options.socket.clone(),
+        }
+    }
+
+    /// What the Keeper keeps for its Windows, unless it has no git or no database.
+    pub(crate) fn kept(&self) -> Option<&Kept> {
+        self.kept.as_ref().ok()
+    }
+
+    /// `window` has gone, whatever the way: it is no longer shown any terminal, and what
+    /// it showed on screen is no longer needed on its account.
+    pub(crate) fn window_gone(&self, window: &Arc<Window>) {
+        self.terminals.window_gone(window, &self.shared);
+        if let Ok(kept) = &self.kept {
+            self.watching.window_gone(kept, window);
         }
     }
 
@@ -473,7 +500,13 @@ impl Parts {
             Request::ShowWorkspace { workspace } => {
                 self.watching.show(kept, window, workspace.as_ref())
             }
-            Request::ListTerminals | Request::AttachTerminal { .. } => Err(not_wired()),
+            Request::ListTerminals => Ok(Reply::Terminals(self.terminals.list())),
+            Request::AttachTerminal { terminal, size: at } => {
+                self.attach(window, &terminal, at).map(|(reply, release)| {
+                    then = Some(release);
+                    reply
+                })
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -501,7 +534,8 @@ impl Parts {
         let id = yaar_dock::TerminalId::random().map_err(|error| Refusal::Failed {
             reason: format!("no name for the terminal could be made: {error}"),
         })?;
-        let mut start = match program {
+        let terminal = yaar_link::TerminalId::new(id.as_str());
+        let start = match program {
             Program::Shell => Start::shell(folder, size(at)),
             Program::Agent { agent } => match self.agents.launcher(agent) {
                 Some(command) => Start::launcher(folder, size(at), command),
@@ -512,34 +546,109 @@ impl Parts {
                 }
             },
         };
-        // Every terminal is watched for the marks of every agent CLI: a CLI typed in a
-        // shell writes them as one started from its launcher does.
+        // Every shell of the app is told where the Keeper listens and which terminal it
+        // is in, so that a piece of an agent CLI started in it finds its way back, and
+        // gets what each agent CLI's piece asks for. A CLI typed in a shell of the app
+        // finds all of it as one started from its launcher does.
+        let mut entries = vec![
+            Entry::Variable {
+                name: SOCKET_VARIABLE.into(),
+                value: self.socket.clone().into_os_string(),
+            },
+            Entry::Variable {
+                name: TERMINAL_VARIABLE.into(),
+                value: terminal.as_str().into(),
+            },
+        ];
+        entries.extend(self.agents.entries());
+        let mut start = start.with(&entries);
+        // Every terminal is watched for the marks of every agent CLI, for the same reason.
         start.marks = self.agents.marks();
         let route = Arc::new(Route::new(window, Arc::clone(&self.agents)));
+        // Listed before the program starts, so that its end, which may come at once,
+        // finds it there to take it out; shown to nobody until it runs.
+        self.terminals.add(Held {
+            id: terminal.clone(),
+            workspace: workspace.clone(),
+            program: program.clone(),
+            route: Arc::clone(&route),
+            opened: false,
+        });
         let events = {
-            let (route, shared, id) = (
+            let (route, terminals, shared, terminal) = (
                 Arc::clone(&route),
+                Arc::clone(&self.terminals),
                 self.shared.clone(),
-                yaar_link::TerminalId::new(id.as_str()),
+                terminal.clone(),
             );
-            Box::new(move |event| route.event(&shared, &id, event))
+            Box::new(move |event| {
+                // Gone from the list before the Windows are told, so that one that asks
+                // when it hears of the end does not find it.
+                if matches!(event, Event::Ended(_)) {
+                    terminals.remove(&terminal);
+                }
+                route.event(&shared, &terminal, event);
+            })
         };
-        let terminal = yaar_link::TerminalId::new(id.as_str());
         // Told before the program starts: a CLI in it reports from its first moment, and
         // is followed only in a terminal the agents' side holds.
         self.agents.terminal_opened(&terminal, workspace);
-        if let Err(error) = self.dock.open(id.clone(), start, events) {
+        if let Err(error) = self.dock.open(id, start, events) {
             self.agents.terminal_ended(&terminal);
+            self.terminals.remove(&terminal);
             return Err(Refusal::Failed {
                 reason: error.to_string(),
             });
         }
-        let shared = self.shared.clone();
+        self.terminals.opened(&terminal);
+        let (shared, opener) = (self.shared.clone(), Arc::clone(window));
         Ok((
             Reply::TerminalOpened {
                 terminal: terminal.clone(),
             },
-            Box::new(move || route.release(&shared, &terminal)),
+            Box::new(move || route.release(&opener, &shared, &terminal)),
+        ))
+    }
+
+    /// Shows `window` the terminal `terminal` too, as it was opened for another Window or
+    /// for this one before it was killed: the reply, then the newest output the Dock kept,
+    /// then what the program writes from then on, with nothing lost or sent twice where
+    /// the kept output ends. The terminal is given the size of this Window and asked to
+    /// draw itself again, which mends what the cut at the start of the kept output spoiled.
+    fn attach(
+        &self,
+        window: &Arc<Window>,
+        terminal: &yaar_link::TerminalId,
+        at: TerminalSize,
+    ) -> Result<(Reply, Step), Refusal> {
+        let unknown = || Refusal::UnknownTerminal {
+            terminal: terminal.clone(),
+        };
+        let route = self.terminals.route(terminal).ok_or_else(unknown)?;
+        let id = yaar_dock::TerminalId::new(terminal.as_str());
+        let (mut cut, mut shown) = (false, false);
+        // The Window is put among those the output goes to while the Dock holds the
+        // output still, so that the kept output ends where the live output begins.
+        self.dock
+            .attach(&id, |kept, dropped| {
+                cut = dropped;
+                shown = route.attach(window, kept);
+            })
+            .map_err(|_| unknown())?;
+        // The program ended between finding the route and the attach, and the Windows have
+        // been told: the terminal is no more.
+        if !shown {
+            return Err(unknown());
+        }
+        // A program that ended meanwhile has nothing to draw: its end is told as it comes.
+        // What the redraw writes is held behind the kept output like all that follows it.
+        let _ = self.dock.resize(&id, size(at));
+        let _ = self.dock.redraw(&id);
+        let (shared, window, terminal) =
+            (self.shared.clone(), Arc::clone(window), terminal.clone());
+        Ok((
+            Reply::Attached { cut },
+            Box::new(move || route.release(&window, &shared, &terminal)),
         ))
     }
 
@@ -553,16 +662,88 @@ impl Parts {
     }
 }
 
-/// Where the output of one terminal goes: to the Window that opened it, and in order.
+/// The terminals the Dock runs, in the order they were opened, with who they were opened
+/// for and what runs in them.
+#[derive(Default)]
+pub(crate) struct Terminals {
+    held: Mutex<Vec<Held>>,
+}
+
+/// One terminal of the Keeper.
+struct Held {
+    id: yaar_link::TerminalId,
+    workspace: yaar_link::WorkspaceId,
+    program: Program,
+    route: Arc<Route>,
+    /// The Dock runs its program: before that, it is shown to nobody.
+    opened: bool,
+}
+
+impl Terminals {
+    fn held(&self) -> std::sync::MutexGuard<'_, Vec<Held>> {
+        self.held.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn add(&self, terminal: Held) {
+        self.held().push(terminal);
+    }
+
+    /// The Dock runs the program of `terminal` now.
+    fn opened(&self, terminal: &yaar_link::TerminalId) {
+        if let Some(held) = self.held().iter_mut().find(|held| held.id == *terminal) {
+            held.opened = true;
+        }
+    }
+
+    /// `terminal` is no more: its program ended, or could not start.
+    fn remove(&self, terminal: &yaar_link::TerminalId) {
+        self.held().retain(|held| held.id != *terminal);
+    }
+
+    /// Every terminal that runs, in the order opened.
+    fn list(&self) -> Vec<yaar_link::TerminalInfo> {
+        self.held()
+            .iter()
+            .filter(|held| held.opened)
+            .map(|held| yaar_link::TerminalInfo {
+                id: held.id.clone(),
+                workspace: held.workspace.clone(),
+                program: held.program.clone(),
+            })
+            .collect()
+    }
+
+    /// Where the output of `terminal` goes, if it runs.
+    fn route(&self, terminal: &yaar_link::TerminalId) -> Option<Arc<Route>> {
+        self.held()
+            .iter()
+            .find(|held| held.opened && held.id == *terminal)
+            .map(|held| Arc::clone(&held.route))
+    }
+
+    /// `window` has gone: it is shown no terminal any more.
+    fn window_gone(&self, window: &Arc<Window>, shared: &Weak<Shared>) {
+        // The list is not held while a route is: a route tells of an end to Windows.
+        let routes: Vec<(yaar_link::TerminalId, Arc<Route>)> = self
+            .held()
+            .iter()
+            .map(|held| (held.id.clone(), Arc::clone(&held.route)))
+            .collect();
+        for (terminal, route) in routes {
+            route.leave(window, shared, &terminal);
+        }
+    }
+}
+
+/// Where the output of one terminal goes: to every Window it is shown to, the one that
+/// opened it first, and in order.
 ///
 /// The reply that names a terminal must reach its Window before the terminal's first
 /// output, and nothing may be lost in between. The program starts before the reply is
 /// made, so what it writes first is held until the reply is queued, and then queued
-/// behind it.
+/// behind it. A Window that attaches later is treated the same way: the output waits
+/// behind the reply and the kept output that follows it.
 struct Route {
-    // Not held for long: a Window that has gone away is gone, though its terminal runs
-    // on, and its connection closes with it.
-    opener: Weak<Window>,
     state: Mutex<RouteState>,
     // Told the marks found in the output and the end of the program.
     agents: Arc<Agents>,
@@ -570,31 +751,87 @@ struct Route {
 
 #[derive(Default)]
 struct RouteState {
-    /// The reply is queued: output goes straight to the opener.
+    /// The Windows the terminal is shown to. A Window that has gone is dropped when the
+    /// route finds it so, which is at the next output or at once when it is told of.
+    members: Vec<Member>,
+    /// The program ended, and the end is not told yet: it is told once every Window has
+    /// what came before it.
+    ended: Option<Ending>,
+    /// The end has been told: no Window is shown the terminal any more, since nothing
+    /// more would be told to one that came after.
+    over: bool,
+}
+
+/// One Window a terminal is shown to.
+struct Member {
+    // Not held for long: a Window that has gone away is gone, though its terminal runs
+    // on, and its connection closes with it.
+    window: Weak<Window>,
+    /// The reply is queued: output goes straight to the Window.
     released: bool,
+    /// The kept output the Dock handed over at the attach, to go right behind the reply.
+    kept: Vec<u8>,
     /// Frames of output that came before the reply was queued, in order.
     held: Vec<Vec<u8>>,
-    /// The program ended before the reply was queued: the end is told after the output.
-    ended: Option<Ending>,
+}
+
+impl RouteState {
+    /// Shows `window` the terminal from the start of `kept`; one shown it already is
+    /// shown it again from there. False, and nothing done, when the end has been told.
+    fn admit(&mut self, window: &Arc<Window>, kept: &[u8]) -> bool {
+        if self.over {
+            return false;
+        }
+        self.members.retain(|member| !member.is(window));
+        self.members.push(Member::new(window, kept));
+        true
+    }
+}
+
+impl Member {
+    fn new(window: &Arc<Window>, kept: &[u8]) -> Member {
+        Member {
+            window: Arc::downgrade(window),
+            released: false,
+            kept: kept.to_vec(),
+            held: Vec::new(),
+        }
+    }
+
+    fn is(&self, window: &Arc<Window>) -> bool {
+        self.window
+            .upgrade()
+            .is_some_and(|ours| Arc::ptr_eq(&ours, window))
+    }
+
+    /// Gives the Window what the program wrote, or keeps it until the reply is queued.
+    /// False when the Window has gone, and takes nothing more.
+    fn take(&mut self, frames: &[Vec<u8>]) -> bool {
+        let Some(window) = self.window.upgrade() else {
+            return false;
+        };
+        if !self.released {
+            self.held.extend_from_slice(frames);
+            return true;
+        }
+        frames.iter().all(|frame| window.queue(frame.clone()))
+    }
 }
 
 impl Route {
     fn new(opener: &Arc<Window>, agents: Arc<Agents>) -> Route {
         Route {
-            opener: Arc::downgrade(opener),
-            state: Mutex::new(RouteState::default()),
+            state: Mutex::new(RouteState {
+                members: vec![Member::new(opener, &[])],
+                ended: None,
+                over: false,
+            }),
             agents,
         }
     }
 
-    /// Queues frames for the Window that opened the terminal. A Window that is gone takes
-    /// nothing, and the program goes on.
-    fn queue(&self, frames: Vec<Vec<u8>>) {
-        if let Some(opener) = self.opener.upgrade() {
-            for frame in frames {
-                let _ = opener.queue(frame);
-            }
-        }
+    fn state(&self) -> std::sync::MutexGuard<'_, RouteState> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// What the Dock tells of the terminal, on the Dock's thread for it.
@@ -602,40 +839,82 @@ impl Route {
         match event {
             Event::Output(bytes) => {
                 let frames = frames_of(terminal, bytes);
-                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                if state.released {
-                    drop(state);
-                    self.queue(frames);
-                } else {
-                    state.held.extend(frames);
-                }
+                self.state()
+                    .members
+                    .retain_mut(|member| member.take(&frames));
             }
             // After the output that held it: what the mark means is the agents' side's.
             Event::Mark(mark) => self.agents.marked(terminal, mark),
             Event::Ended(how) => {
                 self.agents.terminal_ended(terminal);
-                let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-                if state.released {
-                    drop(state);
-                    // From this thread, which queued the last output: the end follows
-                    // it on the connection of the Window that opened the terminal.
-                    tell_ended(shared, terminal, ending(how));
-                } else {
-                    state.ended = Some(ending(how));
+                let mut state = self.state();
+                state.ended = Some(ending(how));
+                let told = Self::settle(&mut state);
+                drop(state);
+                // From this thread, which queued the last output: the end follows it on
+                // the connection of each Window that holds it.
+                if let Some(how) = told {
+                    tell_ended(shared, terminal, how);
                 }
             }
         }
     }
 
-    /// The reply that names the terminal is queued: what was held goes out after it, in
-    /// order, and from now on output goes out as it comes.
-    fn release(&self, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId) {
-        let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
-        self.queue(std::mem::take(&mut state.held));
-        state.released = true;
-        let ended = state.ended.take();
+    /// The end of the program, once every Window that is shown the terminal has what
+    /// came before it: taken, so that it is told once. None before.
+    fn settle(state: &mut RouteState) -> Option<Ending> {
+        if state.members.iter().all(|member| member.released) {
+            let told = state.ended.take();
+            state.over |= told.is_some();
+            told
+        } else {
+            None
+        }
+    }
+
+    /// `window` is shown the terminal from now on, after the kept output `kept`. One that
+    /// was shown it already is shown it from the start of the kept output again, as its
+    /// reply says: what it was sent before the reply it has, and the kept output holds.
+    /// Called with the Dock holding the output still. False when the end of the program
+    /// has been told already: the Window is not shown it.
+    fn attach(&self, window: &Arc<Window>, kept: &[u8]) -> bool {
+        self.state().admit(window, kept)
+    }
+
+    /// The reply to `window`'s request is queued: what was held goes out after it, in
+    /// order, the kept output first, and from now on output goes out as it comes.
+    fn release(
+        &self,
+        window: &Arc<Window>,
+        shared: &Weak<Shared>,
+        terminal: &yaar_link::TerminalId,
+    ) {
+        let mut state = self.state();
+        if let Some(at) = state.members.iter().position(|member| member.is(window)) {
+            let member = &mut state.members[at];
+            let mut frames = frames_of(terminal, std::mem::take(&mut member.kept));
+            frames.append(&mut member.held);
+            member.released = true;
+            // A Window that takes nothing more is gone, and so is its place.
+            if !frames.iter().all(|frame| window.queue(frame.clone())) {
+                state.members.remove(at);
+            }
+        }
+        let told = Self::settle(&mut state);
         drop(state);
-        if let Some(how) = ended {
+        if let Some(how) = told {
+            tell_ended(shared, terminal, how);
+        }
+    }
+
+    /// `window` has gone: it is shown the terminal no more, and a program that ended
+    /// while it waited for its reply no longer holds the end back.
+    fn leave(&self, window: &Arc<Window>, shared: &Weak<Shared>, terminal: &yaar_link::TerminalId) {
+        let mut state = self.state();
+        state.members.retain(|member| !member.is(window));
+        let told = Self::settle(&mut state);
+        drop(state);
+        if let Some(how) = told {
             tell_ended(shared, terminal, how);
         }
     }
@@ -900,7 +1179,7 @@ fn open_folder(
 }
 
 /// Every opened repository with its worktrees, in the words of the Link.
-fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> {
+pub(crate) fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> {
     let repositories = workspaces.repositories().map_err(refusal)?;
     Ok(repositories
         .into_iter()
@@ -1185,6 +1464,7 @@ pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::net::UnixStream;
     use std::path::PathBuf;
     use yaar_link::Content;
 
@@ -1332,5 +1612,28 @@ mod tests {
                 reason: "the database is closed".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn a_window_is_not_shown_a_terminal_whose_end_has_been_told() {
+        let window = || Window::new(UnixStream::pair().expect("a pair of sockets").0);
+        let (opener, late) = (window(), window());
+        let mut state = RouteState::default();
+        state.admit(&opener, &[]);
+        state.members[0].released = true;
+        state.ended = Some(Ending::Exited(0));
+
+        // The end waits for a Window whose reply is not queued: one more may still be shown
+        // the terminal, and is told of the end with the rest.
+        let waiting = window();
+        assert!(state.admit(&waiting, b"kept"));
+        assert!(Route::settle(&mut state).is_none());
+        state.members[1].released = true;
+
+        // Once the end is told, the terminal is over, and no Window is shown it after that:
+        // it would never hear what it is told of an end that has gone by.
+        assert_eq!(Route::settle(&mut state), Some(Ending::Exited(0)));
+        assert!(!state.admit(&late, b"kept"));
+        assert!(!state.members.iter().any(|member| member.is(&late)));
     }
 }
