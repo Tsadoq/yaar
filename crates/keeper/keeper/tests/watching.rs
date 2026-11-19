@@ -511,19 +511,23 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     // The facts the opening and the first watching told are not those of the writes.
     window.facts_until_quiet();
 
-    // Sixty writes with 20 ms between them, which is 1.2 s at the pace of an agent saving
-    // and takes longer on a slow machine: the test measures the span itself. They are made
-    // on a thread of their own, so that the facts are read as they come.
+    // Sixty writes, one due every 20 ms from the first, which is 1.2 s at the pace of an
+    // agent saving. The pace is a schedule and not a sleep after each write, so that a slow
+    // machine whose sleeps overshoot writes late and then catches up, and the span stays
+    // near 1.2 s: it is what the bound is made of. The writes are made on a thread of their
+    // own, so that the facts are read as they come.
     let writing = {
         let file = repo.join("a.txt");
         std::thread::spawn(move || {
+            let start = Instant::now();
             let mut first_write = None;
-            let mut last_write = Instant::now();
-            for n in 0..60 {
+            let mut last_write = start;
+            for n in 0..60u32 {
                 std::fs::write(&file, format!("{n}\n")).expect("write a file");
                 last_write = Instant::now();
                 first_write.get_or_insert(last_write);
-                std::thread::sleep(Duration::from_millis(20));
+                let due = start + Duration::from_millis(20) * (n + 1);
+                std::thread::sleep(due.saturating_duration_since(Instant::now()));
             }
             (first_write.expect("a first write"), last_write)
         })
@@ -539,14 +543,22 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     // A fact for each write would be sixty. One for the start, one for each calm time that
     // fits in the span of the writes (rounded up, since the writes are timed after they
     // are made) and one for the rest after the last write is all there may be, and there
-    // is one at least for the start and one for the rest.
+    // is one at least for the start and one for the rest. That bound must also stay at
+    // half of the writes or less: above it a Keeper that told most writes would pass, so a
+    // run too slow to show the calming fails for that reason and proves nothing.
     let span = last_write - first_write;
     let calm_times = span.as_millis().div_ceil(250) as usize;
     let most = calm_times + 2;
     assert!(
+        most * 2 <= 60,
+        "the sixty writes spread over {span:?} leave room for {most} facts, more than half \
+         of them: too slow a run to show that the facts are fewer than the writes"
+    );
+    assert!(
         (2..=most).contains(&told.len()),
         "{} facts for sixty writes spread over {span:?}, where at most {most} are told: \
-         the start, one in each of {calm_times} calm times of 250 ms, and the last",
+         the start, one in each of {calm_times} calm times of 250 ms, and the last; \
+         one for each write would be 60",
         told.len()
     );
     for pair in told.windows(2) {
