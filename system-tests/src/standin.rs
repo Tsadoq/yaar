@@ -72,9 +72,17 @@ pub enum Step {
     /// Prints [`PROMPT`] and waits for a line typed at it, ended by Enter: the user's
     /// message. Its submission starts a turn: `UserPromptSubmit`, and then the progress
     /// sequence of a turn that works, `ESC ] 9 ; 4 ; 3 ; BEL`, as Claude Code writes it. A
-    /// line typed while a turn runs is held until the turn ends, and then starts the next
-    /// without a prompt printed, as both CLIs do.
+    /// line typed between the steps of a turn is held until the turn ends, and then starts
+    /// the next without a prompt printed. A line typed during a [`Step::Hold`], which
+    /// stands for a tool that runs, is a message Claude Code queues: `UserPromptSubmit`
+    /// runs for it at once, when Enter is read, and the message goes with the turn that
+    /// runs; it starts no turn of its own and is not held for the next `turn`.
     Turn,
+    /// Starts a turn by itself, as Claude Code does when a background task ends: prints
+    /// nothing at the prompt, reads nothing, and runs `UserPromptSubmit` with a prompt
+    /// that opens with `<task-notification>`, then the progress sequence of a turn that
+    /// works.
+    SelfTurn,
     /// Reads a file of the worktree with its read tool: `PreToolUse` and `PostToolUse` of
     /// `Read`, the file really read in between.
     Read(PathBuf),
@@ -113,6 +121,22 @@ pub enum Step {
     /// Ends the session, `SessionEnd` with `reason` `prompt_input_exit`, puts the
     /// terminal back as it found it, and ends the program with 0.
     Exit,
+    /// Replies to thread `thread`, counted from 1 in the order the last review it received
+    /// names its threads (the headings `## Thread <id>` of the text a `UserPromptSubmit`
+    /// hook answered with, and of a file that text names by its absolute path), with
+    /// `body`, addressed or not, through the reply tool of the plugin it loaded, as Claude
+    /// Code calls it: `PreToolUse` of `mcp__plugin_yaar-review_yaar__reply_to_thread`, the
+    /// call `tools/call` to the tool server of the plugin's `.mcp.json`, which the stand-in
+    /// starts at its first reply and keeps for the session, then `PostToolUse`. The server
+    /// gets `CLAUDE_CODE_SESSION_ID`, the stand-in's own session, as Claude Code gives it.
+    Reply {
+        /// The thread, counted from 1.
+        thread: u32,
+        /// Whether the reply marks it addressed.
+        addressed: bool,
+        /// The reply, byte for byte.
+        body: String,
+    },
 }
 
 /// The mark Claude Code prints when a turn stops: the progress sequence that says no
@@ -177,6 +201,16 @@ impl Step {
             Step::End => "end".into(),
             Step::Mark => "mark".into(),
             Step::Exit => "exit".into(),
+            Step::SelfTurn => "self-turn".into(),
+            Step::Reply {
+                thread,
+                addressed,
+                body,
+            } => format!(
+                "reply {thread} {} {}",
+                if *addressed { "addressed" } else { "open" },
+                escape(body)
+            ),
         }
     }
 
@@ -219,6 +253,26 @@ impl Step {
             "end" => alone(Step::End),
             "mark" => alone(Step::Mark),
             "exit" => alone(Step::Exit),
+            "self-turn" => alone(Step::SelfTurn),
+            "reply" => {
+                let mut words = rest.splitn(3, ' ');
+                let thread = words
+                    .next()
+                    .and_then(|word| word.parse().ok())
+                    .filter(|thread| *thread >= 1)
+                    .ok_or_else(|| "`reply` needs a thread counted from 1".to_owned())?;
+                let addressed = match words.next() {
+                    Some("addressed") => true,
+                    Some("open") => false,
+                    _ => return Err("`reply` needs `addressed` or `open`".to_owned()),
+                };
+                let body = unescape(words.next().unwrap_or(""))?;
+                Ok(Step::Reply {
+                    thread,
+                    addressed,
+                    body,
+                })
+            }
             _ => Err(format!("no step is called `{keyword}`")),
         }
     }
@@ -306,6 +360,16 @@ pub enum Did {
         /// Its exit status.
         status: i32,
     },
+    /// The reply tool was called through the plugin's tool server, and what the server
+    /// answered: the `result` of the call, or its `error`.
+    Tool {
+        /// The tool's arguments, as the stand-in sent them.
+        arguments: Value,
+        /// What the server answered.
+        answer: Value,
+        /// The bytes read so far.
+        received: usize,
+    },
 }
 
 /// What reached a stand-in, as it wrote it down.
@@ -376,6 +440,11 @@ impl StandinLog {
                 "script-done" => Did::ScriptDone { received },
                 "exited" => Did::Exited {
                     status: entry["status"].as_i64().unwrap_or(0) as i32,
+                },
+                "tool" => Did::Tool {
+                    arguments: entry["arguments"].clone(),
+                    answer: entry["answer"].clone(),
+                    received,
                 },
                 _ => return,
             });
@@ -758,6 +827,9 @@ impl Standin {
                 self.restore();
                 Ended::Exit
             }
+            // Built by the package "the stand-in and the world" of slice 6.
+            Step::SelfTurn => todo!(),
+            Step::Reply { .. } => todo!(),
         }
     }
 

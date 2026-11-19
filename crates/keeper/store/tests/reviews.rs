@@ -31,6 +31,7 @@ fn review_record(n: u128, workspace: u128, agent: Option<&str>) -> ReviewRecord 
         reviewed: None,
         threads: vec![],
         rounds: vec![],
+        attached: None,
     }
 }
 
@@ -62,14 +63,16 @@ fn thread(n: u128, first_comment: u128, text: &str) -> Thread {
         resolved: false,
         addressed: false,
         comments: vec![comment(first_comment, Author::Reviewer, text, None)],
+        now: None,
     }
 }
 
 fn round(number: u32) -> Round {
     Round {
         number,
-        state: format!("{number:040x}"),
+        state: Some(format!("{number:040x}")),
         sent_by: SentBy::Copied,
+        edited: false,
     }
 }
 
@@ -217,6 +220,7 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
                     },
                 ],
                 rounds: vec![round(1), round(2)],
+                attached: None,
             },
             ReviewRecord {
                 id: rid(5),
@@ -225,6 +229,7 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
                 reviewed: None,
                 threads: vec![thread(40, 400, "of the agent's review")],
                 rounds: vec![],
+                attached: None,
             },
         ];
         assert_eq!(store.reviews_of(&workspace(1)).expect("reviews"), expected);

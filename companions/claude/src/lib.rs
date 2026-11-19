@@ -5,19 +5,22 @@
 //!
 //! Surface: [`run_hook`], what the hook program `yaar-claude-hook` does, with
 //! [`HookPlace`], where it finds the Keeper and what it says of its CLI, [`HookAnswer`],
-//! what it gives Claude Code back, and [`DEADLINE`].
+//! what it gives Claude Code back, and [`DEADLINE`]; and [`serve`], what the reply tool's
+//! server `yaar-claude-tools` does, with [`ToolPlace`], [`tool`], [`TOOL`],
+//! [`SERVER_NAME`] and [`TOOL_DEADLINE`] (`tools.rs`).
 //!
 //! Claude Code runs the hook program for every hook the app's plugin asks for, with the
 //! hook's input on its standard input. The program passes that input on, unread, to the
 //! Keeper as one `yaar_link::Request::Report`, with the terminal id its environment names
-//! and its parent process, which is Claude Code. Its answer to Claude Code is empty: it
-//! decides nothing, a permission request least of all, so Claude Code shows the user its
-//! own dialog and the user answers it there. A Keeper that is not there, or that does not
-//! answer within [`DEADLINE`], changes nothing of that: the program prints nothing and
-//! succeeds, and Claude Code goes on as without the app.
-//!
-//! In slice 6 the same program answers the submit hook with the review that rides along,
-//! and the reply tool server and the allow hooks join it.
+//! and its parent process, which is Claude Code, and prints what the Keeper answers: the
+//! bytes of `yaar_link::Reply::Answer`, as the Keeper's Adapter of Claude Code wrote them,
+//! and nothing for `yaar_link::Reply::Done`. It decides nothing itself, a permission
+//! request least of all: the Keeper never answers one, so Claude Code shows the user its
+//! own dialog and the user answers it there. What the Keeper answers is a review that
+//! rides with the user's message, and the allowing of the read of a review file the app
+//! wrote and of a call of the app's own reply tool. A Keeper that is not there, or that
+//! does not answer within [`DEADLINE`], changes nothing of that: the program prints
+//! nothing and succeeds, and Claude Code goes on as without the app.
 
 use std::error::Error;
 use std::io;
@@ -29,6 +32,10 @@ use yaar_link::{
     AgentReport, Hello, Message, Request, RequestId, TERMINAL_VARIABLE, TerminalId, connect,
     handshake, read_message, socket_path, write_message,
 };
+
+mod tools;
+
+pub use tools::{SERVER_NAME, TOOL, TOOL_DEADLINE, ToolPlace, serve, tool};
 
 /// The Adapter the reports are for.
 const AGENT: &str = "claude";
@@ -70,15 +77,18 @@ impl HookPlace {
 /// What the hook program gives Claude Code back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAnswer {
-    /// What it prints on its standard output. Empty: no decision, nothing added.
+    /// What it prints on its standard output: the bytes of the Keeper's
+    /// `yaar_link::Reply::Answer`, and nothing for any other reply or none.
     pub printed: Vec<u8>,
     /// Its exit status: 0, whatever became of the report.
     pub status: i32,
 }
 
 /// Passes `input`, the hook's input as Claude Code gave it, to the Keeper at `place` as
-/// one report of the Adapter `claude`, and gives the answer for Claude Code. Waits at
-/// most [`DEADLINE`] for the Keeper.
+/// one report of the Adapter `claude`, and gives the answer for Claude Code: what the
+/// Keeper's `yaar_link::Reply::Answer` holds, byte for byte, and nothing for any other
+/// reply. Waits at most [`DEADLINE`] for the Keeper; an answer that came in time and was
+/// not whole is not printed.
 pub fn run_hook(input: &[u8], place: &HookPlace) -> HookAnswer {
     // Whatever went wrong, Claude Code is better served by a hook that said nothing than
     // by one that held the user up or failed: the report is a courtesy to the app.

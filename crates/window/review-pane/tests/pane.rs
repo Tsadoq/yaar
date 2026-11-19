@@ -687,6 +687,12 @@ enum Effect {
     Resume,
 }
 
+/// The keys of slice 6 that the walk leaves out while slice 6 is built: attaching,
+/// detaching, resolving, reopening, resolving every addressed thread, and the original
+/// line of a thread that moved. The review pane's package "attaching and the states of
+/// threads" of slice 6 takes this filter away and names their effects below.
+const OF_SLICE_6: [&str; 7] = ["a", "t", "shift-d", "x", "u", "shift-x", "w"];
+
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.
 fn effect_of(keystroke: &str) -> Effect {
@@ -850,6 +856,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     for control in controls()
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
+        .filter(|control| !OF_SLICE_6.contains(&control.keystroke))
     {
         let effect = effect_of(control.keystroke);
         let only_in_flow = matches!(effect, Effect::Form | Effect::Resume);

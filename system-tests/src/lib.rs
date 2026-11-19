@@ -31,16 +31,23 @@ use yaar_link::{Hello, handshake};
 
 pub use client::{Client, DEADLINE};
 pub use processes::{Descriptor, descendants_of, descriptors_of};
-pub use world::{Repo, Tap, World, without_agent_clis};
+pub use world::{OutsideAgent, Repo, Tap, World, without_agent_clis};
 
-/// The programs the Keeper finds beside itself: its companions, and the stand-in agent.
-const KEEPER_SET: [&str; 3] = ["yaar-keeper", "yaar-claude-hook", "standin-agent"];
+/// The programs the Keeper finds beside itself: its companions, the hook program and the
+/// reply tool's server of Claude Code, and the stand-in agent.
+const KEEPER_SET: [&str; 4] = [
+    "yaar-keeper",
+    "yaar-claude-hook",
+    "yaar-claude-tools",
+    "standin-agent",
+];
 
 /// The Window, kept apart: it is large, and nothing looks for it beside the others.
 const WINDOW_SET: [&str; 1] = ["yaar-review"];
 
 /// The path of a built program of the workspace, building the programs first: the Keeper,
-/// the Window, the hook program of the Claude Code companion and the stand-in agent.
+/// the Window, the hook program and the reply tool's server of the Claude Code companion,
+/// and the stand-in agent.
 ///
 /// They are built every time, once in each process that asks, and not only when one is
 /// missing: a run of the tests builds a program only for the tests of its own package,

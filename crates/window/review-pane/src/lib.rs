@@ -57,6 +57,7 @@
 //! It depends on the Frame and on no other pane.
 
 mod actions;
+mod attaching;
 mod comments;
 mod draw;
 mod flow;
@@ -65,7 +66,10 @@ mod flow_draw;
 mod follow;
 mod live;
 mod live_draw;
+mod moved;
+mod rounds;
 mod saves;
+mod states;
 mod steady;
 mod threads;
 mod tree;
@@ -92,6 +96,7 @@ use crate::comments::OpenBox;
 use crate::saves::Save;
 use crate::tree::{Source, Tree};
 
+pub use rounds::RoundShown;
 pub use yaar_diff::Layout;
 
 actions!(
@@ -158,6 +163,23 @@ actions!(
         /// Resumes follow where it was paused: Flow moves to the newest step. Only while
         /// Flow is on screen: in Changes it does nothing.
         ResumeFollow,
+        /// Attaches the review shown to the user's next message to its agent: every unsent
+        /// comment on an unresolved thread, those written later included.
+        AttachReview,
+        /// Attaches the thread on the line the reviewer is on alone to the user's next
+        /// message to the agent: a new draft elsewhere does not join it.
+        AttachThread,
+        /// Takes away what is attached of the review shown.
+        DetachReview,
+        /// Resolves the thread on the line the reviewer is on.
+        ResolveThread,
+        /// Reopens the resolved thread on the line the reviewer is on.
+        ReopenThread,
+        /// Resolves every thread of the review shown that the agent marked addressed.
+        ResolveAddressed,
+        /// Shows the line a moved thread on the line the reviewer is on was written on,
+        /// or hides it again.
+        ShowOriginal,
     ]
 );
 
@@ -463,6 +485,35 @@ pub fn controls() -> Vec<Control> {
             RequestKind::SetSetting,
         ),
         control("Resume Follow", || Box::new(ResumeFollow), "shift-g"),
+        sends(
+            control("Attach Review", || Box::new(AttachReview), "a"),
+            RequestKind::AttachReview,
+        ),
+        sends(
+            control("Attach Thread", || Box::new(AttachThread), "t"),
+            RequestKind::AttachReview,
+        ),
+        sends(
+            control("Detach Review", || Box::new(DetachReview), "shift-d"),
+            RequestKind::DetachReview,
+        ),
+        sends(
+            control("Resolve Thread", || Box::new(ResolveThread), "x"),
+            RequestKind::ResolveThread,
+        ),
+        sends(
+            control("Reopen Thread", || Box::new(ReopenThread), "u"),
+            RequestKind::ReopenThread,
+        ),
+        sends(
+            control(
+                "Resolve Addressed",
+                || Box::new(ResolveAddressed),
+                "shift-x",
+            ),
+            RequestKind::ResolveAddressed,
+        ),
+        control("Original Line", || Box::new(ShowOriginal), "w"),
     ]
 }
 
@@ -742,6 +793,10 @@ pub struct ReviewPane {
     /// What follow keeps beside [`Following`]: the turns it has seen start, and what a
     /// turn end offered in Flow.
     follow: follow::Follow,
+    /// What attaching keeps: the offer to start an agent the last attach answered with.
+    attaching: attaching::Attaching,
+    /// What the threads that moved keep: whose original line is shown.
+    moved: moved::Moved,
 }
 
 impl ReviewPane {
@@ -803,6 +858,8 @@ impl ReviewPane {
             flow: flow::Timeline::new(cx),
             live: live::Live::new(cx),
             follow: follow::Follow::new(cx),
+            attaching: attaching::Attaching::default(),
+            moved: moved::Moved::default(),
         };
         pane.sessions_changed(cx);
         pane.follow_history(window, cx);
@@ -868,6 +925,23 @@ impl ReviewPane {
     /// also after the comment box was closed.
     pub fn reviews(&self) -> Option<&WorkspaceReviews> {
         self.reviews.as_ref()
+    }
+
+    /// Every thread of the review shown, in the order of its threads, with its state as
+    /// the Keeper told it: draft, sent, addressed, waiting for the reviewer, resolved.
+    /// Each thread's row draws its state under the selector
+    /// `review-thread-state-<thread id>:<state>`, the state written `draft`, `sent`,
+    /// `addressed`, `waiting` or `resolved`.
+    pub fn thread_states(&self) -> Vec<(ThreadId, yaar_link::ThreadState)> {
+        self.review()
+            .map(|review| {
+                review
+                    .threads
+                    .iter()
+                    .map(|thread| (thread.id.clone(), thread.state))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// The review the pane shows and acts on: the one the reviewer chose, or a turn end
@@ -1617,6 +1691,10 @@ mod tests {
     use yaar_link::RequestKind;
 
     use super::{
+        AttachReview, AttachThread, DetachReview, ReopenThread, ResolveAddressed, ResolveThread,
+        ShowOriginal,
+    };
+    use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
         HISTORY_CONTEXT, HistoryDown, HistoryUp, KEY_CONTEXT, LineDown, LineUp, MarkChange,
         MarkReviewed, NextReview, NextThread, PreviousThread, Reply, ResumeFollow, ShowChange,
@@ -1719,6 +1797,43 @@ mod tests {
                     Asks::Nothing
                 ),
                 ("shift-g", ResumeFollow.name(), None, Asks::Nothing),
+                (
+                    "a",
+                    AttachReview.name(),
+                    request(RequestKind::AttachReview),
+                    Asks::Nothing
+                ),
+                (
+                    "t",
+                    AttachThread.name(),
+                    request(RequestKind::AttachReview),
+                    Asks::Nothing
+                ),
+                (
+                    "shift-d",
+                    DetachReview.name(),
+                    request(RequestKind::DetachReview),
+                    Asks::Nothing
+                ),
+                (
+                    "x",
+                    ResolveThread.name(),
+                    request(RequestKind::ResolveThread),
+                    Asks::Nothing
+                ),
+                (
+                    "u",
+                    ReopenThread.name(),
+                    request(RequestKind::ReopenThread),
+                    Asks::Nothing
+                ),
+                (
+                    "shift-x",
+                    ResolveAddressed.name(),
+                    request(RequestKind::ResolveAddressed),
+                    Asks::Nothing
+                ),
+                ("w", ShowOriginal.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1797,6 +1912,34 @@ mod tests {
             (
                 ToggleFlowForm.name(),
                 "neither has one; neither has a timeline of steps or a live diff",
+            ),
+            (
+                AttachReview.name(),
+                "neither has one; neither sends a review with a message to an agent",
+            ),
+            (
+                AttachThread.name(),
+                "neither has one; neither sends one thread alone",
+            ),
+            (
+                DetachReview.name(),
+                "neither has one; vim's `D` deletes to the end of a line",
+            ),
+            (
+                ResolveThread.name(),
+                "neither has one; tuicr resolves remote threads only through `:comments`",
+            ),
+            (
+                ReopenThread.name(),
+                "neither has one; vim's `u` undoes the last change, the nearest action",
+            ),
+            (
+                ResolveAddressed.name(),
+                "neither has one; neither has an agent that marks a thread addressed",
+            ),
+            (
+                ShowOriginal.name(),
+                "neither has one; neither keeps the line a comment was written on",
             ),
         ];
         let held = controls();

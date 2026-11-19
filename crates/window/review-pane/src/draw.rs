@@ -91,6 +91,9 @@ impl Render for ReviewPane {
         let tree = self.tree_view(window, cx);
         let sessions = self.session_bar(cx);
         let offer = self.offer_bar(cx);
+        // What attaching offers to start, and the rounds of the review shown.
+        let start = self.render_offer_to_start(cx);
+        let rounds = self.render_rounds(cx);
         // The bar names both views and is drawn in both; Flow, when it is on screen, takes
         // the place of everything of Changes below it.
         let bar = self.render_bar(window, cx);
@@ -177,6 +180,8 @@ impl Render for ReviewPane {
                 .child(self.idle_line(cx));
             return pane.children(bar).child(
                 body.children(sessions)
+                    .children(start)
+                    .children(rounds)
                     .children(offer)
                     .children(tree)
                     .child(self.with_keys(idle, cx))
@@ -213,6 +218,8 @@ impl Render for ReviewPane {
         .size_full();
         pane.children(bar).child(
             body.children(sessions)
+                .children(start)
+                .children(rounds)
                 .children(offer)
                 .children(tree)
                 .children(refused)
@@ -252,6 +259,13 @@ impl ReviewPane {
             .on_action(cx.listener(Self::toggle_flow_form_in_flow))
             .on_action(cx.listener(Self::toggle_follow))
             .on_action(cx.listener(Self::resume_follow_in_flow))
+            .on_action(cx.listener(Self::attach_review))
+            .on_action(cx.listener(Self::attach_thread))
+            .on_action(cx.listener(Self::detach_review))
+            .on_action(cx.listener(Self::resolve_thread))
+            .on_action(cx.listener(Self::reopen_thread))
+            .on_action(cx.listener(Self::resolve_addressed))
+            .on_action(cx.listener(Self::show_original))
     }
 
     /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
@@ -438,15 +452,23 @@ impl ReviewPane {
             false => format!("{}-{}", anchor.lines.first, anchor.lines.last),
         };
         let id = thread.id.clone();
-        row.pl_6().pr_2().text_color(theme.muted_foreground).child(
-            div()
-                .debug_selector(|| format!("review-thread-{id}"))
-                .child(format!(
-                    "Thread on {}:{place} ({side}){}",
-                    anchor.path.display(),
-                    if thread.resolved { ", resolved" } else { "" }
-                )),
-        )
+        // Its state, and the notice of code that changed under it, beside its place.
+        let state = self.thread_state_mark(&thread.id, cx);
+        let moved = self.thread_moved_marks(&thread.id, cx);
+        row.pl_6()
+            .pr_2()
+            .text_color(theme.muted_foreground)
+            .child(
+                div()
+                    .debug_selector(|| format!("review-thread-{id}"))
+                    .child(format!(
+                        "Thread on {}:{place} ({side}){}",
+                        anchor.path.display(),
+                        if thread.resolved { ", resolved" } else { "" }
+                    )),
+            )
+            .children(state)
+            .children(moved)
     }
 
     /// The row of a comment of a thread: who wrote it and the first line of its text.

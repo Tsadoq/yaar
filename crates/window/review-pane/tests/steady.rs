@@ -84,6 +84,8 @@ fn thread_with(digit: char, line: u32, comments: Vec<Comment>) -> Thread {
         resolved: false,
         addressed: false,
         comments,
+        now: None,
+        state: yaar_link::ThreadState::Sent,
     }
 }
 

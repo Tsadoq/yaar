@@ -28,17 +28,40 @@
 //! - the records it reads and writes, from the Store: [`Anchor`], [`Thread`], [`Comment`],
 //!   [`Round`], [`SessionRecord`] and their ids.
 //!
+//! - what slice 6 adds: attaching a review with the [`Offer`] to start its agent, given
+//!   the [`SessionNow`] of the workspace's sessions; the one general send of what is
+//!   attached, [`Reviews::send_attached`], and its round's state recorded after
+//!   ([`Reviews::record_round`]); the agent's replies ([`ThreadReply`]) and the
+//!   [`ThreadState`] of a thread; resolving, reopening, and resolving every addressed
+//!   thread; a round shown as sent until its agent's first edit, and what changed since a
+//!   round; who is credited with each path of a recorded state, and what one review shows
+//!   of a change ([`CreditedChange`]); and the thread follower, [`follow`], with its
+//!   [`Placed`], [`Place`], [`Notice`] and [`FileStep`], which every state the engine
+//!   records carries the threads to.
+//!
 //! It knows nothing of what kind of change a tree is: a recorded state and a commit are
 //! both a tree, named by an id, and only the Recorder tells them apart. It holds no
 //! interface code and opens no database: the Store keeps, the Recorder records.
 
+mod attaching;
+mod credits;
 mod engine;
+pub mod follow;
+mod following;
+mod replies;
 mod review;
+mod rounds;
+mod sending;
 mod takeover;
 mod text;
 mod uncommitted;
 mod viewed;
 mod workspace;
+
+pub use credits::CreditedChange;
+pub use follow::{FileStep, MOVED_BLOCK, Notice, Place, Placed, carry, carry_file};
+pub use replies::ThreadReply;
+pub use review::{Offer, SessionNow, ThreadState};
 
 pub use engine::{
     Copied, DraftOn, DraftSave, EngineError, NewAnchor, Reviews, Saved, StateWatch, TurnEnded,
@@ -51,6 +74,6 @@ pub use uncommitted::{Credited, uncommitted_of};
 pub use viewed::{ViewedFiles, fingerprint};
 pub use workspace::with_review_of_no_agent;
 pub use yaar_store::{
-    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, SessionId,
-    SessionRecord, Side, Thread, ThreadId, WorkspaceId,
+    Anchor, AttachedRecord, Author, Comment, CommentId, NoticeRecord, ReviewId, ReviewRecord,
+    Round, SentBy, SessionId, SessionRecord, Side, Thread, ThreadId, ThreadPlace, WorkspaceId,
 };

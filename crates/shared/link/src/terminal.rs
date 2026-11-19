@@ -49,9 +49,6 @@ pub struct TerminalSize {
 }
 
 /// What a new terminal runs.
-///
-/// The resumption of an agent's session is a further kind of the same field, a new
-/// variant with a number of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
     /// The user's shell, started as a login shell in the folder of the workspace.
@@ -63,6 +60,26 @@ pub enum Program {
     Agent {
         /// The Adapter of the CLI, by its name: `claude`.
         agent: String,
+    },
+    /// The launcher of an agent CLI, as [`Program::Agent`], started for a review the user
+    /// attached: the first session of that CLI that reports from this terminal takes the
+    /// review, and its first message carries what is attached. Offered when a review is
+    /// attached whose agent does not run, and for the review of no agent. Refused when the
+    /// Keeper has no Adapter by that name, or holds no such review.
+    AgentFor {
+        /// The Adapter of the CLI, by its name: `claude`.
+        agent: String,
+        /// The review the session takes.
+        review: crate::ReviewId,
+    },
+    /// The user's shell, as for [`Program::Shell`], told to run the CLI's own command for
+    /// bringing back this session, as `claude --resume <its id>`: the session keeps its
+    /// id and its review. Offered for a session that ran when its Keeper stopped
+    /// ([`crate::Session::resumable`]). Refused when the Keeper holds no such session, or
+    /// one that runs.
+    Resume {
+        /// The session, by the app's id for it.
+        session: crate::SessionId,
     },
 }
 
@@ -103,6 +120,15 @@ pub(crate) fn write_program(out: &mut Out, program: &Program) {
             out.u16(2);
             out.text(agent);
         }
+        Program::AgentFor { agent, review } => {
+            out.u16(3);
+            out.text(agent);
+            out.text(review.as_str());
+        }
+        Program::Resume { session } => {
+            out.u16(4);
+            out.text(session.as_str());
+        }
     }
 }
 
@@ -111,6 +137,13 @@ pub(crate) fn read_program(input: &mut In<'_>) -> Result<Program, LinkError> {
         1 => Ok(Program::Shell),
         2 => Ok(Program::Agent {
             agent: input.text()?,
+        }),
+        3 => Ok(Program::AgentFor {
+            agent: input.text()?,
+            review: crate::ReviewId::new(input.text()?),
+        }),
+        4 => Ok(Program::Resume {
+            session: crate::SessionId::new(input.text()?),
         }),
         _ => Err(LinkError::Malformed("unknown kind of program")),
     }

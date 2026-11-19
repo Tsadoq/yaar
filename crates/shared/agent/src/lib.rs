@@ -15,17 +15,21 @@
 //!   to the Adapter;
 //! - [`Adapter`], what one integration module of a CLI supplies: its names, the pieces it
 //!   writes into the app's folder and the entries every shell of the app gets for them,
-//!   the marks of the terminal output it watches for, and the reading of its reports;
-//!   [`ShellEntry`] and [`ReportError`].
+//!   the marks of the terminal output it watches for, the reading of its reports, its
+//!   delivery module and its command for bringing a session back; [`ShellEntry`] and
+//!   [`ReportError`];
+//! - what a report waits for the app to answer, [`Asked`] with its [`Asks`] and the
+//!   agent's [`AgentReply`] to a thread; and what the app answers, [`Answer`], which the
+//!   Adapter writes in its CLI's own words.
 //!
 //! Every event names its session, and a write made with the CLI's edit tool names its
 //! path and the lines it changed: a marker per agent in Flow, after the first release,
 //! needs all three.
 //!
-//! What later slices add here, each beside what is here and changing none of it: a
-//! delivery module (the review that rides with the user's next message, and how the
-//! piece answers with it), the reading of the agent's replies to threads, and the command
-//! that resumes a session.
+//! The delivery module of a CLI (NFR-003) is the part of its Adapter that says how the
+//! agent answers each thread ([`Adapter::instruction`]) and hands a review to the CLI in
+//! the CLI's own way ([`Adapter::answer`] with [`Answer::Deliver`]). The review itself is
+//! rendered by the Review engine; nothing here knows its form.
 //!
 //! Nothing here knows the Link, the Store or the Window. The Keeper program lists the
 //! Adapters, and no other crate of the app names one.
@@ -205,6 +209,87 @@ impl fmt::Display for ReportError {
 
 impl std::error::Error for ReportError {}
 
+/// What a report of a CLI's piece waits for the app to answer, beyond its events: the
+/// moments at which the piece hands its CLI something of the app's.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Asks {
+    /// The user submitted a message, which the CLI hands the model now, a message the CLI
+    /// queued while the agent worked among them: what is attached for the session rides
+    /// with it. A message the CLI starts itself, and the answer to a permission prompt or
+    /// any other dialog, are never this.
+    Message,
+    /// The agent is about to read a file the Adapter itself wrote for this session, a
+    /// review too long to ride inline: the app allows the read, so that the CLI asks the
+    /// user nothing. Any other read is not this.
+    ReadOwnFile,
+    /// The agent is about to call the app's own reply tool: the app allows the call, so
+    /// that the CLI asks the user nothing.
+    OwnTool,
+    /// The agent replied to a thread through the reply tool.
+    Reply(AgentReply),
+}
+
+/// What a report waits for, and for which session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Asked {
+    /// The CLI's own name for the session the report is of.
+    pub session: CliSession,
+    /// The terminal of the app the CLI runs in, as the piece's environment named it; none
+    /// outside the app's terminals.
+    pub terminal: Option<String>,
+    /// The folder the CLI works in, as the report named it.
+    pub folder: Option<PathBuf>,
+    /// What it waits for.
+    pub asks: Asks,
+}
+
+/// A reply of the agent to one thread, through the app's reply tool, as the agent wrote
+/// it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentReply {
+    /// The thread, by the id the review the agent received names it with.
+    pub thread: String,
+    /// The reply, byte for byte as the agent wrote it.
+    pub text: String,
+    /// Whether the agent says it addressed the thread. Only the reviewer resolves a
+    /// thread: the tool has no way to.
+    pub addressed: bool,
+}
+
+/// What the app answers a report that waits, for the Adapter to hand its piece in the
+/// CLI's own words.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer<'a> {
+    /// The review rides with the message: `text` is everything the agent is to receive,
+    /// as the Review engine rendered it after [`Adapter::instruction`]. The Adapter hands
+    /// it whole, whatever its length: inline where the CLI takes it so, else as a file of
+    /// its own folder that the agent is told to read.
+    Deliver {
+        /// The text.
+        text: &'a str,
+        /// The review, by its id, and the round the send started: what names the file of
+        /// a review handed as one.
+        review: &'a str,
+        /// The round.
+        round: u32,
+    },
+    /// The read, or the call of the app's own tool, is allowed.
+    Allow,
+    /// The reply was kept in the thread.
+    Replied {
+        /// The thread.
+        thread: &'a str,
+        /// Whether it was marked addressed.
+        addressed: bool,
+    },
+    /// The reply was refused, for this reason, as a sentence the agent reads: a thread
+    /// the session's review does not hold, or the app not running.
+    Refused {
+        /// Why.
+        why: &'a str,
+    },
+}
+
 /// One integration module of an agent CLI: everything the app knows of that CLI. Adding
 /// a CLI is adding one of these and the CLI's own piece, and changing nothing else.
 ///
@@ -243,4 +328,29 @@ pub trait Adapter: Send {
     /// `terminal`: the events it means, none when it means nothing now, as the mark that
     /// follows a turn already reported ended.
     fn marked(&mut self, terminal: &str, mark: usize) -> Vec<Reported>;
+
+    /// What the same report [`Adapter::report`] was just given waits for the app to
+    /// answer; none for a report that waits for nothing, which is answered with nothing
+    /// for the CLI. A report from the app's reply tool gives no event, only this. It
+    /// changes nothing the Adapter remembers.
+    fn asked(&self, report: &Report<'_>) -> Result<Option<Asked>, ReportError>;
+
+    /// What tells the agent how to answer each thread of a review it receives: with this
+    /// CLI's reply tool, by its name as the CLI lists it to the agent, one call for each
+    /// thread, with the thread's id, the reply and whether the change addressed it. It
+    /// goes first in every review delivered to the CLI, whatever the user's message says,
+    /// and asks for nothing that resolves a thread.
+    fn instruction(&self) -> &'static str;
+
+    /// What the piece of `asked` hands its CLI for `answer`, as bytes: for Claude Code the
+    /// output of a hook, or the result of a call of the reply tool. A review too long to
+    /// ride inline is written into `folder`, the Adapter's own folder of the app where
+    /// [`Adapter::install`] wrote its pieces, outside every repository, and the Adapter
+    /// then allows the read of that one file in that session ([`Asks::ReadOwnFile`]).
+    fn answer(&mut self, folder: &Path, asked: &Asked, answer: &Answer<'_>) -> io::Result<Vec<u8>>;
+
+    /// What a terminal runs in the user's shell to bring back `session`, as the user would
+    /// type it: the CLI's own command for that, with the session's id quoted for the
+    /// shell, as `claude --resume '<id>'`.
+    fn resume(&self, session: &CliSession) -> String;
 }

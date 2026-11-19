@@ -47,6 +47,8 @@ fn thread_on_story(digit: char) -> Thread {
             text: "a thought".to_owned(),
             round: Some(1),
         }],
+        now: None,
+        state: yaar_link::ThreadState::Sent,
     }
 }
 

@@ -60,6 +60,7 @@ struct Described {
     title: &'static str,
     command: &'static str,
     marks: Vec<Vec<u8>>,
+    instruction: &'static str,
 }
 
 /// What the threads of this side share.
@@ -228,6 +229,7 @@ impl Agents {
                 title: adapter.title(),
                 command: adapter.command(),
                 marks: adapter.marks(),
+                instruction: adapter.instruction(),
             })
             .collect();
 
@@ -346,6 +348,72 @@ impl Agents {
             terminal.as_str().to_owned(),
             WorkspaceId::new(workspace.as_str()),
         );
+    }
+
+    /// The Keeper opened `terminal` for `review`, the launcher of a CLI offered when the
+    /// review was attached ([`yaar_link::Program::AgentFor`]): the first session that
+    /// starts in it takes that review (`Reviews::session_started_for`), and its first
+    /// message carries what is attached. Called right after [`Agents::terminal_opened`].
+    pub(crate) fn terminal_opened_for(&self, terminal: &TerminalId, review: &ReviewId) {
+        let _ = (terminal, review);
+        todo!()
+    }
+
+    /// What a terminal runs in the user's shell to bring back `session`, a session of the
+    /// Store that ran when its Keeper stopped and runs no more: its Adapter's
+    /// `Adapter::resume` with the CLI's own id of it. Refused with [`Refusal::Failed`] for
+    /// a session the Store does not hold, one that runs, and one of a CLI the Keeper has
+    /// no Adapter for.
+    pub(crate) fn resume_command(
+        &self,
+        kept: &Kept,
+        session: &yaar_link::SessionId,
+    ) -> Result<String, Refusal> {
+        let _ = (kept, session);
+        todo!()
+    }
+
+    /// The instruction on how to answer each thread of the CLI named `agent`, its
+    /// delivery module's; none for a name no Adapter has.
+    pub(crate) fn instruction(&self, agent: &str) -> Option<&'static str> {
+        self.core
+            .described
+            .iter()
+            .find(|adapter| adapter.name == agent)
+            .map(|adapter| adapter.instruction)
+    }
+
+    /// Every agent CLI the Keeper has an Adapter for, in the order of the Adapters: what
+    /// attaching the review of no agent offers to start.
+    pub(crate) fn supported(&self) -> Vec<yaar_link::AgentCli> {
+        self.core
+            .described
+            .iter()
+            .map(|adapter| yaar_link::AgentCli {
+                agent: adapter.name.to_owned(),
+                title: adapter.title.to_owned(),
+            })
+            .collect()
+    }
+
+    /// The sessions of `workspace` as the Keeper knows them now, whether each runs and
+    /// waits at a permission prompt: what attaching a review needs to say what to offer.
+    pub(crate) fn sessions_now(
+        &self,
+        kept: &Kept,
+        workspace: &yaar_link::WorkspaceId,
+    ) -> Vec<yaar_review_engine::SessionNow> {
+        let _ = (kept, workspace);
+        todo!()
+    }
+
+    /// What is attached of `review` changed: the sessions of its workspace are told again
+    /// as [`Fact::AgentsChanged`], from this side's thread under the Keeper's turn, so that
+    /// the agent's terminal shows the attachment. Pushed on the queue; nothing else is done
+    /// on the caller's thread.
+    pub(crate) fn attachment_changed(&self, review: &ReviewId) {
+        let _ = review;
+        todo!()
     }
 
     /// The program of `terminal` ended: a session that ran in it runs no more.
@@ -960,6 +1028,12 @@ impl Core {
                     .and_then(|known| known.turn)
                     .map(|(turn, _)| yaar_link::TurnId::new(turn.0)),
                 review,
+                // Slice 6's agents' side fills these: the attachment of the session's
+                // review, whether its turn began with a message of the user, and whether
+                // it ran when its Keeper stopped.
+                attached: None,
+                turn_from_user: false,
+                resumable: false,
             });
         }
         Ok(Some(WorkspaceAgents {

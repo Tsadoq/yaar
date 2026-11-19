@@ -1325,6 +1325,8 @@ fn the_threads_of_the_review_sit_under_the_lines_of_the_live_diff_they_are_on(
             text: "why?".to_owned(),
             round: None,
         }],
+        now: None,
+        state: yaar_link::ThreadState::Sent,
     };
     let mut review = no_agent_review();
     review.threads.push(thread.clone());

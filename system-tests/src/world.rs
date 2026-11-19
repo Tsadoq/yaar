@@ -326,6 +326,34 @@ impl World {
         answering.expect("the Keeper answered")
     }
 
+    /// Kills everything a restart of the machine would end: every process the Keeper this
+    /// world started has started, and their descendants, the shells and agents of its
+    /// terminals and every hook among them, and then the Keeper, each with the kill
+    /// signal; returns once all are gone, the Keeper collected. Nothing of theirs runs: no
+    /// stop, no `SessionEnd`, no close of the Keeper's database. The world's folders stay,
+    /// and the world may start another Keeper on them. Panics when no Keeper of this world
+    /// runs.
+    pub fn kill_everything(&mut self) {
+        todo!()
+    }
+
+    /// Starts the stand-in agent `name` as a user would start it outside every terminal of
+    /// the app, in `folder`: in a pseudo-terminal the world opens itself, with the world's
+    /// environment for programs (`World::command`), `YAAR_TERMINAL` unset, and
+    /// `CLAUDE_CODE_PLUGIN_DIRS` naming the plugin folder the world's Keeper wrote, as a
+    /// user who points Claude Code at the app's plugin by hand would. It reports over the
+    /// Keeper's socket from no terminal the Keeper holds. Its script is `script`; its log
+    /// is `agent_log(name)`.
+    pub fn start_agent_outside(
+        &self,
+        name: &str,
+        script: &crate::standin::Script,
+        folder: &Path,
+    ) -> OutsideAgent {
+        let _ = (name, script, folder);
+        todo!()
+    }
+
     /// Kills the Keeper this world started with the kill signal, as a crash or the system
     /// does, and returns once it is gone and collected; the world may then start another
     /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
@@ -551,6 +579,41 @@ impl World {
             stop,
             accepting: Some(accepting),
         }
+    }
+}
+
+/// A stand-in agent that runs outside every terminal of the app, in a pseudo-terminal of
+/// the world's own (`World::start_agent_outside`). Dropping it kills it and waits for it.
+pub struct OutsideAgent {
+    child: std::process::Child,
+    /// The pseudo-terminal's end the test types into and reads, with what was read.
+    terminal: std::fs::File,
+}
+
+impl OutsideAgent {
+    /// Its process.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Types `text` and Enter into its terminal.
+    pub fn type_line(&mut self, text: &str) {
+        let _ = (text, &self.terminal);
+        todo!()
+    }
+
+    /// Waits, until [`crate::DEADLINE`], for its prompt `standin> ` in what it wrote since
+    /// it started, read in `poll` and never with a sleep between looks; panics, naming
+    /// what it wrote, when it does not come.
+    pub fn wait_for_prompt(&mut self) {
+        todo!()
+    }
+}
+
+impl Drop for OutsideAgent {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

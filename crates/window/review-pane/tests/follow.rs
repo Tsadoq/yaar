@@ -871,8 +871,8 @@ fn the_controls_of_the_views_and_of_follow_do_not_pause_follow_and_nothing_pause
 fn a_key_no_action_takes_pauses_follow_too(cx: &mut TestAppContext) {
     let t = turn_id('t');
     let (mut stage, mut cx) = at_work_in_flow(vec![read("a.txt")], cx);
-    // `x` is bound to nothing: it reaches the pane as a key, which is the reviewer typing.
-    press("x", &mut cx);
+    // `z` is bound to nothing: it reaches the pane as a key, which is the reviewer typing.
+    press("z", &mut cx);
     assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 2, &mut cx);
     assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
@@ -931,8 +931,9 @@ fn resuming_says_when_nothing_is_paused_or_follow_is_off_and_turning_it_off_ends
     assert_eq!(following(&stage, &cx), Following::Off);
     press("shift-f", &mut cx);
 
-    // Turning follow off from a pause turns it off, and on again puts it on.
-    press("x", &mut cx);
+    // Turning follow off from a pause turns it off, and on again puts it on. `z` is bound
+    // to nothing.
+    press("z", &mut cx);
     assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 2, &mut cx);
     press("shift-f", &mut cx);

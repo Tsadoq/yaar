@@ -153,9 +153,30 @@ impl AgentList {
     }
 }
 
+/// A terminal a pane wants opened, which the terminal pane opens: no pane calls another,
+/// so the wish goes through the shared list of terminals, which tells it as an event to
+/// whoever subscribes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Wanted {
+    /// The launcher of an agent CLI, in a workspace, for a review the user attached: the
+    /// offer the review pane makes when the review's agent does not run, or the review
+    /// belongs to no agent. Opened as `yaar_link::Program::AgentFor`.
+    AgentFor {
+        /// The workspace.
+        workspace: yaar_link::WorkspaceId,
+        /// The Adapter of the CLI, by its name.
+        agent: String,
+        /// The review.
+        review: yaar_link::ReviewId,
+    },
+}
+
 /// The terminals the Keeper holds: those it listed when the link connected, as after a
 /// plain quit, and those this Window opened since, in the order they were opened. A
 /// terminal whose program ended leaves it when `Fact::TerminalEnded` is told.
+///
+/// A pane that wants a terminal opened tells it with [`TerminalList::want`]; the list
+/// emits the [`Wanted`] at once, and the terminal pane, which subscribes, opens it.
 pub struct TerminalList {
     link: Entity<KeeperLink>,
     terminals: Vec<TerminalInfo>,
@@ -166,7 +187,14 @@ pub struct TerminalList {
     awaits_list: bool,
 }
 
+impl EventEmitter<Wanted> for TerminalList {}
+
 impl TerminalList {
+    /// Tells whoever subscribes that a pane wants `wanted` opened.
+    pub fn want(&mut self, wanted: Wanted, cx: &mut Context<Self>) {
+        cx.emit(wanted);
+    }
+
     /// The list of one window, fed by `link`: empty until the Keeper answers.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         cx.observe(&link, |list, link, cx| {

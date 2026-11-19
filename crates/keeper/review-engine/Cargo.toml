@@ -9,6 +9,17 @@ publish.workspace = true
 [dependencies]
 yaar-store.workspace = true
 yaar-recorder.workspace = true
+# The one line diff, which the threads follow the code through.
+yaar-diff.workspace = true
+
+[dev-dependencies]
+# Unpacks the recorded changes of the diff's corpus, which row THREAD-08 follows threads
+# through. For tests only.
+ruzstd.workspace = true
+
+# Used by the packages of slice 6 that build the follower: named here until they do.
+[package.metadata.cargo-machete]
+ignored = ["yaar-diff", "ruzstd"]
 
 [lints]
 workspace = true

@@ -361,6 +361,9 @@ fn text_typed_in_a_comment_box_is_saved_while_the_reviewer_types_without_leaving
                 resolved: false,
                 addressed: false,
                 comments: vec![draft.clone()],
+                now: None,
+                // A thread the pane started holds its draft until the Keeper says more.
+                state: yaar_link::ThreadState::Draft,
             }],
             ..no_agent_review()
         })
@@ -439,6 +442,8 @@ fn thread(digit: char, path: &str, side: LinkSide, line: u32, comments: Vec<Comm
         resolved: false,
         addressed: false,
         comments,
+        now: None,
+        state: yaar_link::ThreadState::Sent,
     }
 }
 
@@ -455,8 +460,9 @@ fn reviews_with(threads: Vec<Thread>) -> WorkspaceReviews {
             rounds: if any_sent {
                 vec![Round {
                     number: 1,
-                    state: "5".repeat(40),
+                    state: Some("5".repeat(40)),
                     sent_by: SentBy::Copied,
+                    edited: false,
                 }]
             } else {
                 Vec::new()
@@ -1247,6 +1253,8 @@ fn a_draft_typed_while_the_reviews_are_on_their_way_is_still_there_when_they_com
         },
         resolved: false,
         addressed: false,
+        now: None,
+        state: yaar_link::ThreadState::Sent,
     }]);
     give(&mut stage, &kept, &mut cx);
     assert_eq!(

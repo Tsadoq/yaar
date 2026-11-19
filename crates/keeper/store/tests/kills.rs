@@ -81,8 +81,9 @@ fn whole_text_of(n: u128) -> String {
 fn round_of(number: u128) -> Round {
     Round {
         number: u32::try_from(number).expect("a round number fits"),
-        state: "a".repeat(40),
+        state: Some("a".repeat(40)),
         sent_by: SentBy::Copied,
+        edited: false,
     }
 }
 
@@ -116,6 +117,7 @@ fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_withou
                 reviewed: None,
                 threads: vec![],
                 rounds: vec![],
+                attached: None,
             })
             .expect("put the review");
         review = store.reviews_of(&workspace()).expect("read").pop();
@@ -174,6 +176,7 @@ fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_withou
                                 text: so_far,
                                 round: None,
                             }],
+                            now: None,
                         },
                     )
                     .expect("put the thread");

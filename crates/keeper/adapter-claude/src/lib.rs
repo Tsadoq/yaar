@@ -5,7 +5,9 @@
 //!
 //! Surface: [`ClaudeCode`], the [`yaar_agent::Adapter`] of Claude Code, and the names it
 //! stands on: [`NAME`], [`TITLE`], [`COMMAND`], [`PLUGIN_DIRS`], [`PLUGIN`],
-//! [`HOOK_PROGRAM`], [`HOOK_EVENTS`] and [`INTERRUPT_MARKS`].
+//! [`HOOK_PROGRAM`], [`HOOK_EVENTS`] and [`INTERRUPT_MARKS`]; and those of its delivery
+//! module (`deliver.rs`): [`INSTRUCTION`], [`INLINE_LIMIT`], [`REVIEWS`], [`TOOL_SERVER`],
+//! [`TOOL_SERVER_NAME`], [`REPLY_TOOL`] and [`LISTED_REPLY_TOOL`].
 //!
 //! How Claude Code reaches the app. The Adapter writes a plugin folder into its own folder
 //! of the app: `plugin/.claude-plugin/plugin.json`, which names the plugin [`PLUGIN`], and
@@ -31,6 +33,18 @@
 //!
 //! A group may also carry `"matcher": "Edit|Write"`, the tools it is for, parted by `|`;
 //! the app's own groups carry none, and the stand-in agent of the system tests reads both.
+//!
+//! The plugin also serves the reply tool: `plugin/.mcp.json` names the tool server
+//! [`TOOL_SERVER_NAME`], which Claude Code starts as the absolute path of the program
+//! [`TOOL_SERVER`] beside the hook program, with no argument:
+//!
+//! ```json
+//! {"mcpServers": {"yaar": {"command": "<tools>", "args": []}}}
+//! ```
+//!
+//! Claude Code lists its one tool to the agent as [`LISTED_REPLY_TOOL`]. What the hooks
+//! answer, and how a review rides with a message, is the delivery module's: see
+//! `deliver.rs`.
 //!
 //! The command is `exec` and the quoted path and nothing else, no redirection and no `;`:
 //! Claude Code runs it through `sh -c`, and `exec` puts the hook program in the place of
@@ -71,14 +85,20 @@
 //! before it answers the hook, and a mark on the same queue, so a `Stop` is always taken
 //! before the mark that follows it, which then means nothing.
 
+mod deliver;
 mod install;
 mod report;
+
+pub use deliver::{
+    INLINE_LIMIT, INSTRUCTION, LISTED_REPLY_TOOL, REPLY_TOOL, REVIEWS, TOOL_SERVER,
+    TOOL_SERVER_NAME,
+};
 
 use std::io;
 use std::path::Path;
 
 use report::Remembered;
-use yaar_agent::{Adapter, Report, ReportError, Reported, ShellEntry};
+use yaar_agent::{Adapter, Answer, Asked, CliSession, Report, ReportError, Reported, ShellEntry};
 
 /// The name the app knows Claude Code by.
 pub const NAME: &str = "claude";
@@ -151,11 +171,13 @@ impl Adapter for ClaudeCode {
         COMMAND
     }
 
-    /// Writes `folder/plugin`: `.claude-plugin/plugin.json` and `hooks/hooks.json` as the
-    /// crate's doc shows them, whose every hook of [`HOOK_EVENTS`] runs
+    /// Writes `folder/plugin`: `.claude-plugin/plugin.json`, `hooks/hooks.json` and
+    /// `.mcp.json` as the crate's doc shows them, whose every hook of [`HOOK_EVENTS`] runs
     /// `companions/`[`HOOK_PROGRAM`] alone after `exec`, single-quoted for the shell Claude
-    /// Code runs it with (a `'` inside written `'\''`). Each file is written to a temporary
-    /// file of its folder and renamed into place. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
+    /// Code runs it with (a `'` inside written `'\''`), and whose tool server is
+    /// `companions/`[`TOOL_SERVER`] by its absolute path, which Claude Code starts with no
+    /// shell. Each file is written to a temporary file of its folder and renamed into place.
+    /// Gives [`PLUGIN_DIRS`] with `folder/plugin`.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
         install::write(folder, companions)
     }
@@ -174,5 +196,21 @@ impl Adapter for ClaudeCode {
             return Vec::new();
         }
         self.memory.interrupted(terminal)
+    }
+
+    fn asked(&self, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
+        self.memory.asked(report)
+    }
+
+    fn instruction(&self) -> &'static str {
+        INSTRUCTION
+    }
+
+    fn answer(&mut self, folder: &Path, asked: &Asked, answer: &Answer<'_>) -> io::Result<Vec<u8>> {
+        self.memory.answer(folder, asked, answer)
+    }
+
+    fn resume(&self, session: &CliSession) -> String {
+        deliver::resume(session)
     }
 }

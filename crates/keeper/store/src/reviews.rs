@@ -131,10 +131,60 @@ pub struct Thread {
     pub anchor: Anchor,
     /// Whether the reviewer resolved it.
     pub resolved: bool,
-    /// Whether the agent said it addressed it.
+    /// Whether the agent said it addressed it, in its last reply.
     pub addressed: bool,
     /// Its comments, in the order they were first kept.
     pub comments: Vec<Comment>,
+    /// Where it sits now, in the newest state it was carried to; none while it sits where
+    /// its anchor says.
+    pub now: Option<ThreadPlace>,
+}
+
+/// Where a thread sits now, after the code it was written on changed: kept by
+/// [`Store::set_place`], read back with the thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadPlace {
+    /// The version it sits in now: the full id of a recorded state.
+    pub tree: String,
+    /// The path of the file in that version.
+    pub path: PathBuf,
+    /// The side, as the anchor's.
+    pub side: Side,
+    /// The first line, counted from 1.
+    pub first: u32,
+    /// The last line.
+    pub last: u32,
+    /// What became of the lines it was written on; none when they only moved.
+    pub notice: Option<NoticeRecord>,
+}
+
+/// What became of the lines a thread was written on, as the Store keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeRecord {
+    /// They were rewritten.
+    Changed,
+    /// They were deleted.
+    Deleted,
+}
+
+/// What of a review is attached to the user's next message, as the Store keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachedRecord {
+    /// The review.
+    Review,
+    /// One thread alone.
+    Thread(ThreadId),
+}
+
+/// Who is credited with one path that changed into a recorded state, as the Store keeps
+/// it with that state: see [`Store::put_credits`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreditRecord {
+    /// The path, relative to the folder of the worktree.
+    pub path: PathBuf,
+    /// The sessions it is credited to, by their ids, in the order given; empty for a
+    /// change no agent made.
+    pub sessions: Vec<String>,
 }
 
 /// How the comments of a round left the app.
@@ -151,10 +201,14 @@ pub enum SentBy {
 pub struct Round {
     /// Its number, from 1.
     pub number: u32,
-    /// The full id of the state of the worktree recorded at the send.
-    pub state: String,
+    /// The full id of the state of the worktree recorded at the send; none until it is,
+    /// as for a round delivered with a message, whose state is recorded after the
+    /// message was handed to the agent ([`Store::set_round_state`]).
+    pub state: Option<String>,
     /// How the comments left.
     pub sent_by: SentBy,
+    /// Whether the agent reported an edit since the send ([`Store::set_round_edited`]).
+    pub edited: bool,
 }
 
 /// One review, whole: what [`Store::reviews_of`] and [`Store::review`] give.
@@ -173,6 +227,8 @@ pub struct ReviewRecord {
     pub threads: Vec<Thread>,
     /// Its rounds, by number.
     pub rounds: Vec<Round>,
+    /// What is attached to the user's next message; none while nothing is.
+    pub attached: Option<AttachedRecord>,
 }
 
 /// A file marked viewed: the mark holds for the content it had.
@@ -394,7 +450,10 @@ impl Store {
     }
 
     /// Keeps a new round of a review and marks these comments sent in it, in one
-    /// transaction: either all of it is kept or none. The round's number must be the next
+    /// transaction: either all of it is kept or none. Every thread one of whose comments it
+    /// sends loses its addressed mark in the same transaction: the agent has a follow-up to
+    /// answer. A round may be kept with no state, which [`Store::set_round_state`] gives it
+    /// later. The round's number must be the next
     /// of the review, and every comment a draft of the review. Returns when it is on the
     /// drive and the write-ahead file has been moved into the database file. When that
     /// move could not be made, because another connection reads the file, the call fails
@@ -548,6 +607,102 @@ impl Store {
         })
     }
 
+    /// Keeps what of a review is attached to the user's next message, in place of what
+    /// was; none takes the attachment away. Returns when it is on the drive. Refused for a
+    /// review that is not kept, and for a thread the review does not hold.
+    pub fn set_attached(
+        &self,
+        review: &ReviewId,
+        attached: Option<&AttachedRecord>,
+    ) -> Result<(), StoreError> {
+        let _ = (review, attached);
+        todo!()
+    }
+
+    /// Keeps a reply of the agent in a thread, and whether it marked the thread addressed,
+    /// in one transaction: either both are kept or neither. The comment's author is the
+    /// agent and its round the number given, which must be a round of the thread's
+    /// review. Returns when it is on the drive. Refused for a thread that is not kept, an
+    /// id that is taken, and a comment of the reviewer.
+    pub fn put_reply(
+        &self,
+        thread: &ThreadId,
+        reply: &Comment,
+        addressed: bool,
+    ) -> Result<(), StoreError> {
+        let _ = (thread, reply, addressed);
+        todo!()
+    }
+
+    /// Sets whether the agent's last word on a thread marked it addressed. Returns when it
+    /// is on the drive.
+    pub fn set_addressed(&self, thread: &ThreadId, addressed: bool) -> Result<(), StoreError> {
+        let _ = (thread, addressed);
+        todo!()
+    }
+
+    /// Resolves each of `threads`, in one transaction. Returns when it is on the drive.
+    /// Refused, with nothing changed, when one is not kept.
+    pub fn resolve_threads(&self, threads: &[ThreadId]) -> Result<(), StoreError> {
+        let _ = threads;
+        todo!()
+    }
+
+    /// Keeps the state recorded for a round that was kept with none. Returns when it is on
+    /// the drive. Refused for a round that is not kept, and one that has a state already.
+    pub fn set_round_state(
+        &self,
+        review: &ReviewId,
+        round: u32,
+        state: &str,
+    ) -> Result<(), StoreError> {
+        let _ = (review, round, state);
+        todo!()
+    }
+
+    /// Marks a round as one its agent has edited since. Returns when it is on the drive.
+    /// Refused for a round that is not kept.
+    pub fn set_round_edited(&self, review: &ReviewId, round: u32) -> Result<(), StoreError> {
+        let _ = (review, round);
+        todo!()
+    }
+
+    /// Keeps where a thread sits now, in place of where it sat; none puts it back on its
+    /// anchor. Returns when it is on the drive. Refused for a thread that is not kept.
+    pub fn set_place(
+        &self,
+        thread: &ThreadId,
+        place: Option<&ThreadPlace>,
+    ) -> Result<(), StoreError> {
+        let _ = (thread, place);
+        todo!()
+    }
+
+    /// Keeps, with the recorded state `state` of `workspace`, who is credited with each
+    /// path that changed into it, in place of what was kept for that state. Returns when
+    /// it is on the drive.
+    pub fn put_credits(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+        credits: &[CreditRecord],
+    ) -> Result<(), StoreError> {
+        let _ = (workspace, state, credits);
+        todo!()
+    }
+
+    /// Who is credited with each path that changed into the recorded state `state` of
+    /// `workspace`, ordered by the bytes of the paths; empty for a state nothing was kept
+    /// with.
+    pub fn credits_of(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+    ) -> Result<Vec<CreditRecord>, StoreError> {
+        let _ = (workspace, state);
+        todo!()
+    }
+
     /// Flushes the drive now: every draft saved so far is then on it. The writer does
     /// this by itself after a pause in the typing, and when the last clone of the Store is
     /// dropped, as when the Keeper stops and lets its parts go.
@@ -642,6 +797,7 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
                 resolved: row.get(7)?,
                 addressed: row.get(8)?,
                 comments: Vec::new(),
+                now: None,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -680,6 +836,7 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
                 number: row.get(0)?,
                 state: row.get(1)?,
                 sent_by: sent_by_of(row.get(2)?),
+                edited: false,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -691,6 +848,7 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
         reviewed,
         threads,
         rounds,
+        attached: None,
     }))
 }
 

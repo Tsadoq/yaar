@@ -115,6 +115,8 @@ pub enum EngineError {
     /// The Store holds no review of this session: it holds no such session, or the
     /// session was never told to the engine as started.
     NoReviewOfSession(SessionId),
+    /// What was to hand out a review that rides with a message failed: nothing was sent.
+    HandOut(std::io::Error),
 }
 
 impl fmt::Display for EngineError {
@@ -131,6 +133,7 @@ impl fmt::Display for EngineError {
             Self::NoReviewOfSession(session) => {
                 write!(f, "there is no review of the session {session}")
             }
+            Self::HandOut(e) => write!(f, "the review could not be handed out: {e}"),
         }
     }
 }
@@ -177,7 +180,7 @@ impl From<GitError> for EngineError {
 /// first use and kept.
 #[derive(Debug)]
 pub struct Reviews {
-    store: Store,
+    pub(crate) store: Store,
     git: Git,
     states: PathBuf,
     // The state store of each workspace, once opened.
@@ -561,7 +564,7 @@ impl Reviews {
 
     // Records the state of `worktree` in the state store of `workspace` and tells the watch
     // of it: every state the engine takes goes through here.
-    fn record_state(
+    pub(crate) fn record_state(
         &self,
         workspace: &WorkspaceId,
         worktree: &Worktree,
@@ -570,11 +573,14 @@ impl Reviews {
         if let Some(watch) = &self.watch {
             watch.state_taken(workspace, &state.id);
         }
+        // Every thread of the workspace is carried to each state the engine takes, one
+        // state at a time.
+        self.followed(workspace, &state.id);
         Ok(state)
     }
 
     // The turn: held while a call reads what it changes and keeps the change.
-    fn turn(&self) -> MutexGuard<'_, ()> {
+    pub(crate) fn turn(&self) -> MutexGuard<'_, ()> {
         self.writing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -644,7 +650,7 @@ fn holds_lines(content: &[u8], at: &NewAnchor) -> bool {
 }
 
 // 32 lowercase hexadecimal digits from the random numbers of the system.
-fn random_id() -> Result<String, EngineError> {
+pub(crate) fn random_id() -> Result<String, EngineError> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut from| from.read_exact(&mut bytes))

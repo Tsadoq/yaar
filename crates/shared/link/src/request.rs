@@ -9,10 +9,10 @@ use std::path::PathBuf;
 
 use crate::LinkError;
 use crate::agent::{
-    AgentReport, CreditedFile, History, Step, TerminalInfo, Turn, WorkspaceAgents, read_credited,
-    read_history, read_report, read_step, read_terminal_info, read_turn, read_workspace_agents,
-    write_credited, write_history, write_report, write_step, write_terminal_info, write_turn,
-    write_workspace_agents,
+    AgentCli, AgentReport, CreditedFile, History, Step, TerminalInfo, Turn, WorkspaceAgents,
+    read_agent_cli, read_credited, read_history, read_report, read_step, read_terminal_info,
+    read_turn, read_workspace_agents, write_agent_cli, write_credited, write_history, write_report,
+    write_step, write_terminal_info, write_turn, write_workspace_agents,
 };
 use crate::review::{
     CommentId, DraftOn, ReviewId, SessionId, ThreadId, TurnId, WorkspaceReviews, read_draft_on,
@@ -151,6 +151,18 @@ request_kinds! {
     GetSettings = 25, Window;
     /// See [`Request::SetSetting`].
     SetSetting = 26, User;
+    /// See [`Request::AttachReview`].
+    AttachReview = 27, User;
+    /// See [`Request::DetachReview`].
+    DetachReview = 28, User;
+    /// See [`Request::ResolveThread`].
+    ResolveThread = 29, User;
+    /// See [`Request::ReopenThread`].
+    ReopenThread = 30, User;
+    /// See [`Request::ResolveAddressed`].
+    ResolveAddressed = 31, User;
+    /// See [`Request::GetAttachment`].
+    GetAttachment = 32, Window;
 }
 
 impl RequestKind {
@@ -327,18 +339,23 @@ pub enum Request {
         /// The message, as the user wrote it.
         message: String,
     },
-    /// What an agent CLI handed a piece of the app, passed on by that piece. Answered by
-    /// [`Reply::Done`] once the Keeper has queued it, in the order reports and the marks of
-    /// its terminals came, and before it reads it: the CLI waits for the piece, so nothing
-    /// the report leads to is waited for, a recording least of all. Refused with
-    /// [`Refusal::Failed`] only when the Keeper has no Adapter by the report's name. A
-    /// report the Adapter cannot read is answered all the same, and written down by the
-    /// Keeper.
+    /// What an agent CLI handed a piece of the app, passed on by that piece: the input of
+    /// one of Claude Code's hooks, or a call of the app's reply tool. Answered once the
+    /// agents' side of the Keeper has taken it, in the order reports and the marks of its
+    /// terminals came: with [`Reply::Answer`], what the piece hands its CLI back, where the
+    /// CLI's Adapter has something for it, else [`Reply::Done`]. Nothing the report leads
+    /// to beyond that is waited for, a recording least of all: the CLI waits for its
+    /// piece. Refused with [`Refusal::Failed`] only when the Keeper has no Adapter by the
+    /// report's name. A report the Adapter cannot read is answered [`Reply::Done`], and
+    /// written down by the Keeper.
     ///
-    /// The Keeper answers it with no decision of its own on anything the CLI asks the
-    /// user, a permission above all: the piece then adds nothing to what the CLI shows.
-    /// What the report leads to is told to every Window as facts:
-    /// [`Fact::AgentsChanged`], [`Fact::Step`] and [`Fact::TurnEnded`].
+    /// What the piece is answered with is never a decision on anything the CLI asks the
+    /// user, a permission prompt above all: an attached review that rides with a message
+    /// the user submitted; the allowing of a read of a review file the app wrote for that
+    /// session, and of a call of the app's own reply tool, both of which the user allowed
+    /// by installing the app; and what a reply to a thread became. What the report leads
+    /// to is told to every Window as facts: [`Fact::AgentsChanged`], [`Fact::Step`],
+    /// [`Fact::TurnEnded`] and [`Fact::ReviewsChanged`].
     Report {
         /// What the CLI handed the piece.
         report: AgentReport,
@@ -444,6 +461,67 @@ pub enum Request {
         /// The setting, with its value.
         setting: Setting,
     },
+    /// Attach the review, or one of its threads alone, to the user's next message to the
+    /// agent the review belongs to, in place of what was attached. The comments are not
+    /// sent now: the review rides with the next message the user submits to that agent,
+    /// and its unsent comments on unresolved threads are then sent, as they are at that
+    /// moment. While it is attached its drafts can be edited, and a new draft joins it,
+    /// except when one thread is attached alone. Answered by [`Reply::AttachedReview`],
+    /// which names the agent CLIs the Window offers to start with the review; refused with
+    /// [`Refusal::NothingToSend`] when what would be attached holds no unsent comment on
+    /// an unresolved thread, and [`Refusal::UnknownReview`], [`Refusal::UnknownThread`].
+    /// Told as [`Fact::ReviewsChanged`], and as [`Fact::AgentsChanged`] of the session the
+    /// review belongs to, whose terminal shows the attachment.
+    AttachReview {
+        /// The review.
+        review: ReviewId,
+        /// One thread to attach alone; none attaches the review.
+        thread: Option<ThreadId>,
+    },
+    /// Take the attachment away: every comment it would have carried stays an unsent
+    /// draft, and the next message carries no review. Answered by [`Reply::Done`], also
+    /// when nothing was attached; refused with [`Refusal::UnknownReview`]. Told as
+    /// [`Request::AttachReview`] is.
+    DetachReview {
+        /// The review.
+        review: ReviewId,
+    },
+    /// Resolve a thread: the reviewer's own decision, which nothing the agent sends can
+    /// take. A resolved thread is sent no more, an unsent comment on it included. Answered
+    /// by [`Reply::Done`]; refused with [`Refusal::UnknownReview`],
+    /// [`Refusal::UnknownThread`]. Told as [`Fact::ReviewsChanged`].
+    ResolveThread {
+        /// The review.
+        review: ReviewId,
+        /// The thread.
+        thread: ThreadId,
+    },
+    /// Reopen a resolved thread: it is sent again with the next message, its unsent
+    /// comments included. Answered and told as [`Request::ResolveThread`].
+    ReopenThread {
+        /// The review.
+        review: ReviewId,
+        /// The thread.
+        thread: ThreadId,
+    },
+    /// Resolve every thread of the review that the agent marked addressed and that is not
+    /// resolved, at once. Answered by [`Reply::Done`], also when there is none; refused
+    /// with [`Refusal::UnknownReview`]. Told as [`Fact::ReviewsChanged`] when a thread was
+    /// resolved.
+    ResolveAddressed {
+        /// The review.
+        review: ReviewId,
+    },
+    /// What the user's next message would carry to the agent now, as the agent will
+    /// receive it: what the control that views the attachment shows. Answered by
+    /// [`Reply::Attachment`]; refused with [`Refusal::NothingToSend`] when nothing is
+    /// attached, when what is attached holds no unsent comment on an unresolved thread,
+    /// and for the review of no agent, which no agent receives until a session takes it;
+    /// and with [`Refusal::UnknownReview`].
+    GetAttachment {
+        /// The review.
+        review: ReviewId,
+    },
 }
 
 impl Request {
@@ -476,6 +554,12 @@ impl Request {
             Self::GetUncommitted { .. } => RequestKind::GetUncommitted,
             Self::GetSettings => RequestKind::GetSettings,
             Self::SetSetting { .. } => RequestKind::SetSetting,
+            Self::AttachReview { .. } => RequestKind::AttachReview,
+            Self::DetachReview { .. } => RequestKind::DetachReview,
+            Self::ResolveThread { .. } => RequestKind::ResolveThread,
+            Self::ReopenThread { .. } => RequestKind::ReopenThread,
+            Self::ResolveAddressed { .. } => RequestKind::ResolveAddressed,
+            Self::GetAttachment { .. } => RequestKind::GetAttachment,
         }
     }
 }
@@ -538,6 +622,28 @@ pub enum Reply {
     /// Every setting the user set, each once: those of the whole app first, then those of
     /// each workspace, in the order the workspaces were first kept.
     Settings(Vec<Setting>),
+    /// What the piece of the app that sent a [`Request::Report`] hands its CLI back, byte
+    /// for byte, as the CLI's Adapter wrote it: for Claude Code's hook program what it
+    /// prints, for its reply tool's server the result of the call.
+    Answer {
+        /// The bytes.
+        bytes: Vec<u8>,
+    },
+    /// The review is attached. The Window offers to start each CLI named here, with the
+    /// review attached to its first message: none while the agent the review belongs to
+    /// runs, the CLI of that agent when it does not, whether or not another agent runs in
+    /// the workspace, and every CLI the app supports for the review of no agent.
+    AttachedReview {
+        /// The CLIs to offer.
+        start: Vec<AgentCli>,
+    },
+    /// What the next message would carry to the agent, as the agent will receive it: the
+    /// instruction on how to answer each thread, then the threads. A review delivered as a
+    /// file is this text in the file.
+    Attachment {
+        /// The text.
+        text: String,
+    },
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -871,6 +977,17 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
         }
         Request::GetSettings => {}
         Request::SetSetting { setting } => write_setting(out, setting),
+        Request::AttachReview { review, thread } => {
+            out.text(review.as_str());
+            out.optional(thread.as_ref(), |out, thread| out.text(thread.as_str()));
+        }
+        Request::DetachReview { review }
+        | Request::ResolveAddressed { review }
+        | Request::GetAttachment { review } => out.text(review.as_str()),
+        Request::ResolveThread { review, thread } | Request::ReopenThread { review, thread } => {
+            out.text(review.as_str());
+            out.text(thread.as_str());
+        }
     }
 }
 
@@ -976,6 +1093,27 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::SetSetting => Request::SetSetting {
             setting: read_setting(input)?,
         },
+        RequestKind::AttachReview => Request::AttachReview {
+            review: ReviewId::new(input.text()?),
+            thread: input.optional(|input| Ok(ThreadId::new(input.text()?)))?,
+        },
+        RequestKind::DetachReview => Request::DetachReview {
+            review: ReviewId::new(input.text()?),
+        },
+        RequestKind::ResolveThread => Request::ResolveThread {
+            review: ReviewId::new(input.text()?),
+            thread: ThreadId::new(input.text()?),
+        },
+        RequestKind::ReopenThread => Request::ReopenThread {
+            review: ReviewId::new(input.text()?),
+            thread: ThreadId::new(input.text()?),
+        },
+        RequestKind::ResolveAddressed => Request::ResolveAddressed {
+            review: ReviewId::new(input.text()?),
+        },
+        RequestKind::GetAttachment => Request::GetAttachment {
+            review: ReviewId::new(input.text()?),
+        },
     };
     Ok((id, request))
 }
@@ -1055,6 +1193,18 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::Settings(settings) => {
                     out.u16(16);
                     out.list(settings, write_setting);
+                }
+                Reply::Answer { bytes } => {
+                    out.u16(17);
+                    out.bytes(bytes);
+                }
+                Reply::AttachedReview { start } => {
+                    out.u16(18);
+                    out.list(start, write_agent_cli);
+                }
+                Reply::Attachment { text } => {
+                    out.u16(19);
+                    out.text(text);
                 }
             }
         }
@@ -1169,6 +1319,15 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             },
             15 => Reply::Uncommitted(input.list(read_credited)?),
             16 => Reply::Settings(input.list(read_setting)?),
+            17 => Reply::Answer {
+                bytes: input.bytes()?,
+            },
+            18 => Reply::AttachedReview {
+                start: input.list(read_agent_cli)?,
+            },
+            19 => Reply::Attachment {
+                text: input.text()?,
+            },
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {

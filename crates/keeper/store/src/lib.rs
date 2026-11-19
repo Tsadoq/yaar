@@ -34,7 +34,10 @@
 //! The tables carry a version, SQLite's `user_version`. Version 1 holds the repositories
 //! and the workspaces; version 2 adds the reviews and the files marked viewed; version 3
 //! adds the agent sessions, the turns of each and the steps of each turn; version 4 adds the
-//! state each turn's change counts from and the settings. A database
+//! state each turn's change counts from and the settings; version 5 adds what a review
+//! round of an agent needs: a round whose state is recorded after its send and whether
+//! its agent edited since, where each thread sits now, what is attached to the next
+//! message, and who is credited with each path of a recorded state. A database
 //! of an older version is brought forward step by step when it is opened, and before the
 //! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
 //! step that goes wrong loses nothing. A database of a newer version is refused, and left
@@ -57,8 +60,8 @@ mod sessions;
 mod settings;
 
 pub use reviews::{
-    Anchor, Author, Comment, CommentId, FLUSH_AFTER, ReviewId, ReviewRecord, Round, SentBy, Side,
-    Thread, ThreadId, ViewedRecord,
+    Anchor, AttachedRecord, Author, Comment, CommentId, CreditRecord, FLUSH_AFTER, NoticeRecord,
+    ReviewId, ReviewRecord, Round, SentBy, Side, Thread, ThreadId, ThreadPlace, ViewedRecord,
 };
 pub use sessions::{
     EndedBy, SessionId, SessionRecord, StepRecord, TurnEndRecord, TurnId, TurnRecord,
@@ -207,6 +210,46 @@ const TABLES_4: &str = "
         PRIMARY KEY (workspace, name)
     ) STRICT;
     PRAGMA user_version = 4;
+";
+
+/// What version 5 adds: a round's state may be null until it is recorded after the
+/// send, and a round knows whether its agent edited since; where a thread sits now, null
+/// while it sits on its anchor, with its notice; what of a review is attached, null for
+/// nothing, 0 for the review and 1 for one thread, named by `attached_thread`; and who is
+/// credited with each path of a recorded state, one row per path and session, the session
+/// `''` for a change no agent made. SQLite cannot drop the `NOT NULL` of a column, so the
+/// table `round` is made again and its rows copied. Not applied until the Store's package
+/// of slice 6 raises [`VERSION`] and adds it to `STEPS`.
+#[expect(dead_code, reason = "the Store's package of slice 6 applies it")]
+const TABLES_5: &str = "
+    CREATE TABLE round_5 (
+        review TEXT NOT NULL REFERENCES review (id),
+        number INTEGER NOT NULL CHECK (number >= 1),
+        state TEXT,
+        sent_by INTEGER NOT NULL CHECK (sent_by IN (0, 1)),
+        edited INTEGER NOT NULL DEFAULT 0 CHECK (edited IN (0, 1)),
+        PRIMARY KEY (review, number)
+    ) STRICT;
+    INSERT INTO round_5 (review, number, state, sent_by)
+        SELECT review, number, state, sent_by FROM round;
+    DROP TABLE round;
+    ALTER TABLE round_5 RENAME TO round;
+    ALTER TABLE thread ADD COLUMN now_tree TEXT;
+    ALTER TABLE thread ADD COLUMN now_path BLOB;
+    ALTER TABLE thread ADD COLUMN now_side INTEGER CHECK (now_side IN (0, 1));
+    ALTER TABLE thread ADD COLUMN now_first INTEGER CHECK (now_first >= 1);
+    ALTER TABLE thread ADD COLUMN now_last INTEGER;
+    ALTER TABLE thread ADD COLUMN notice INTEGER CHECK (notice IN (0, 1));
+    ALTER TABLE review ADD COLUMN attached INTEGER CHECK (attached IN (0, 1));
+    ALTER TABLE review ADD COLUMN attached_thread TEXT;
+    CREATE TABLE state_credit (
+        workspace TEXT NOT NULL,
+        state TEXT NOT NULL,
+        path BLOB NOT NULL,
+        session TEXT NOT NULL,
+        PRIMARY KEY (workspace, state, path, session)
+    ) STRICT;
+    PRAGMA user_version = 5;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its
@@ -815,6 +858,7 @@ mod tests {
                 reviewed: None,
                 threads: vec![],
                 rounds: vec![],
+                attached: None,
             })
             .expect("put review");
         drop(store);
@@ -1090,6 +1134,7 @@ mod tests {
                 reviewed: None,
                 threads: vec![],
                 rounds: vec![],
+                attached: None,
             })
             .expect("put review");
         let draft = CommentId::new("4".repeat(32));
@@ -1114,6 +1159,7 @@ mod tests {
                         text: "a".to_owned(),
                         round: None,
                     }],
+                    now: None,
                 },
             )
             .expect("put thread");

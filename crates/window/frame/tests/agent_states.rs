@@ -56,6 +56,9 @@ fn session(name: char, workspace: char, state: SessionState) -> Session {
         state,
         turn: None,
         review: None,
+        attached: None,
+        resumable: false,
+        turn_from_user: false,
     }
 }
 

@@ -10,9 +10,15 @@ publish.workspace = true
 name = "yaar-claude-hook"
 path = "src/main.rs"
 
+[[bin]]
+name = "yaar-claude-tools"
+path = "src/bin/yaar-claude-tools.rs"
+
 [dependencies]
-# The hook program speaks the Link to the Keeper.
+# The hook program and the tool server speak the Link to the Keeper.
 yaar-link.workspace = true
+# The tool server reads and writes the JSON-RPC messages of MCP.
+serde_json.workspace = true
 
 [dev-dependencies]
 # The recorded hook inputs the tests hand the program.

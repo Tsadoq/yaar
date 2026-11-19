@@ -411,6 +411,7 @@ fn review(n: u128, workspace: u128, agent: Option<&SessionId>) -> ReviewRecord {
         reviewed: None,
         threads: vec![],
         rounds: vec![],
+        attached: None,
     }
 }
 

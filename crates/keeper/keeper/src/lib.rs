@@ -17,6 +17,7 @@
 //! No interface code belongs here or in any crate beside this one.
 
 mod agents;
+mod reviewing;
 mod settings;
 mod watching;
 mod wiring;

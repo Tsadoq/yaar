@@ -44,7 +44,7 @@ mod sidebar;
 pub mod trace;
 mod view;
 
-pub use agents::{AgentList, TerminalList};
+pub use agents::{AgentList, TerminalList, Wanted};
 pub use controls::{
     Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
     PROGRAM_CONTEXT, PROGRAM_KEYS, Place, Quit, QuitAndStopAgents, SelectNextWorkspace,

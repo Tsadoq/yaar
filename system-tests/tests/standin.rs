@@ -478,6 +478,7 @@ fn story(log: &StandinLog) -> Vec<String> {
             Did::Flooded { step, .. } => format!("flooded {step}"),
             Did::ScriptDone { received } => format!("script done at {received}"),
             Did::Exited { status } => format!("exited {status}"),
+            Did::Tool { received, .. } => format!("tool at {received}"),
         })
         .collect()
 }

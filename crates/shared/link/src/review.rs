@@ -167,10 +167,66 @@ pub struct Thread {
     /// Whether the reviewer resolved it. A resolved thread is sent no more, an unsent
     /// comment on it included.
     pub resolved: bool,
-    /// Whether the agent said it addressed it. Only the reviewer resolves.
+    /// Whether the agent said it addressed it, in its last reply. Only the reviewer
+    /// resolves.
     pub addressed: bool,
     /// Its comments, oldest first; at least one.
     pub comments: Vec<Comment>,
+    /// Its state, as the Keeper works it out from the fields above, by the one rule of
+    /// [`ThreadState`]: what the review pane lists for it.
+    pub state: ThreadState,
+    /// Where it sits in the newest recorded state of the worktree the Keeper carried it
+    /// to, with what that state did to the lines it was written on; none while it sits
+    /// where its anchor says, as before the first state after it, and for a thread the
+    /// Keeper does not carry: one on the old side, or on a file outside the worktree.
+    pub now: Option<Placed>,
+}
+
+/// The state of a thread, as the review pane lists it. Worked out in this order, the first
+/// that holds:
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThreadState {
+    /// The reviewer resolved it. It is sent no more.
+    Resolved,
+    /// It holds a comment of the reviewer that was not sent: a new thread, or a follow-up
+    /// written after the last send.
+    Draft,
+    /// The agent's last reply marked it addressed. It waits for the reviewer to resolve it,
+    /// or to answer.
+    Addressed,
+    /// The agent replied last, without the addressed mark: it waits for the reviewer's
+    /// answer.
+    WaitsForReviewer,
+    /// Its comments were sent, and the agent has not replied since.
+    Sent,
+}
+
+/// Where a thread sits now, after the code it was written on changed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    /// The version it sits in now: the full id of the recorded state it was carried to.
+    pub tree: String,
+    /// The path of the file in that version: the path a renamed file has now. A file that
+    /// was deleted keeps the path it had.
+    pub path: PathBuf,
+    /// The side, as the anchor's.
+    pub side: Side,
+    /// The lines it sits on in that version: the lines that replaced the ones it was
+    /// written on, or, where they were deleted, the one line at the point of deletion.
+    pub lines: Lines,
+    /// What the code it was written on became; none when it only moved, or did not
+    /// change at all. Once said, it stays said in later states.
+    pub notice: Option<Notice>,
+}
+
+/// What became of the lines a thread was written on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Notice {
+    /// They were rewritten, or a line was put inside them: the thread sits on the lines
+    /// that replaced them. The lines it was written on are the anchor's text.
+    Changed,
+    /// They were deleted, or their file was: the thread sits at the point of deletion.
+    Deleted,
 }
 
 /// How the comments of a round left the app.
@@ -187,10 +243,16 @@ pub enum SentBy {
 pub struct Round {
     /// Its number: 1 for the first send of the review, one more for each later one.
     pub number: u32,
-    /// The state of the worktree recorded at the send, by its full id.
-    pub state: String,
+    /// The state of the worktree recorded at the send, by its full id; none until it is
+    /// recorded. A delivered review is handed to the agent at once and its state is
+    /// recorded after, off the agent's way; a copy records it first.
+    pub state: Option<String>,
     /// How the comments left.
     pub sent_by: SentBy,
+    /// Whether the agent the review belongs to reported an edit, with its edit or write
+    /// tool, since the comments were sent: set on the newest round only, at the first such
+    /// edit. Until then the review pane shows the round as sent.
+    pub edited: bool,
 }
 
 /// What of a review goes with the user's next message to its agent.
@@ -341,6 +403,56 @@ fn write_thread(out: &mut Out, thread: &Thread) {
     write_flag(out, thread.resolved);
     write_flag(out, thread.addressed);
     out.list(&thread.comments, write_comment);
+    write_thread_state(out, thread.state);
+    out.optional(thread.now.as_ref(), write_placed);
+}
+
+fn write_thread_state(out: &mut Out, state: ThreadState) {
+    out.u8(match state {
+        ThreadState::Resolved => 0,
+        ThreadState::Draft => 1,
+        ThreadState::Addressed => 2,
+        ThreadState::WaitsForReviewer => 3,
+        ThreadState::Sent => 4,
+    });
+}
+
+fn read_thread_state(input: &mut In<'_>) -> Result<ThreadState, LinkError> {
+    Ok(match input.u8()? {
+        0 => ThreadState::Resolved,
+        1 => ThreadState::Draft,
+        2 => ThreadState::Addressed,
+        3 => ThreadState::WaitsForReviewer,
+        4 => ThreadState::Sent,
+        _ => return Err(LinkError::Malformed("an unknown state of a thread")),
+    })
+}
+
+fn write_placed(out: &mut Out, placed: &Placed) {
+    out.text(&placed.tree);
+    out.path(&placed.path);
+    write_side(out, placed.side);
+    write_lines(out, placed.lines);
+    out.optional(placed.notice.as_ref(), |out, notice| {
+        out.u8(match notice {
+            Notice::Changed => 0,
+            Notice::Deleted => 1,
+        })
+    });
+}
+
+fn read_placed(input: &mut In<'_>) -> Result<Placed, LinkError> {
+    Ok(Placed {
+        tree: input.text()?,
+        path: input.path()?,
+        side: read_side(input)?,
+        lines: read_lines(input)?,
+        notice: input.optional(|input| match input.u8()? {
+            0 => Ok(Notice::Changed),
+            1 => Ok(Notice::Deleted),
+            _ => Err(LinkError::Malformed("an unknown notice of a thread")),
+        })?,
+    })
 }
 
 fn read_thread(input: &mut In<'_>) -> Result<Thread, LinkError> {
@@ -350,31 +462,35 @@ fn read_thread(input: &mut In<'_>) -> Result<Thread, LinkError> {
         resolved: read_flag(input)?,
         addressed: read_flag(input)?,
         comments: input.list(read_comment)?,
+        state: read_thread_state(input)?,
+        now: input.optional(read_placed)?,
     })
 }
 
 fn write_round(out: &mut Out, round: &Round) {
     out.u32(round.number);
-    out.text(&round.state);
+    out.optional(round.state.as_deref(), Out::text);
     out.u8(match round.sent_by {
         SentBy::Copied => 0,
         SentBy::Delivered => 1,
     });
+    write_flag(out, round.edited);
 }
 
 fn read_round(input: &mut In<'_>) -> Result<Round, LinkError> {
     Ok(Round {
         number: input.u32()?,
-        state: input.text()?,
+        state: input.optional(In::text)?,
         sent_by: match input.u8()? {
             0 => SentBy::Copied,
             1 => SentBy::Delivered,
             _ => return Err(LinkError::Malformed("a round sent in an unknown way")),
         },
+        edited: read_flag(input)?,
     })
 }
 
-fn write_attachment(out: &mut Out, attachment: &Attachment) {
+pub(crate) fn write_attachment(out: &mut Out, attachment: &Attachment) {
     match attachment {
         Attachment::Review => out.u8(0),
         Attachment::Thread(thread) => {
@@ -384,7 +500,7 @@ fn write_attachment(out: &mut Out, attachment: &Attachment) {
     }
 }
 
-fn read_attachment(input: &mut In<'_>) -> Result<Attachment, LinkError> {
+pub(crate) fn read_attachment(input: &mut In<'_>) -> Result<Attachment, LinkError> {
     match input.u8()? {
         0 => Ok(Attachment::Review),
         1 => Ok(Attachment::Thread(ThreadId::new(input.text()?))),
