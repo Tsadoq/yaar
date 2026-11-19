@@ -9,7 +9,7 @@ use yaar_link::{
     Hello, LinkError, Message, Refusal, Request, RequestId, RequestKind, handshake, read_message,
     write_message,
 };
-use yaar_system_tests::{Client, DEADLINE, World, attach};
+use yaar_system_tests::{Client, DEADLINE, Place, World, attach};
 
 #[test]
 fn the_same_steps_in_two_worlds_give_the_same_commits_on_main() {
@@ -69,6 +69,45 @@ fn a_program_of_the_world_sees_the_worlds_environment_and_nothing_of_this_proces
         assert!(place.starts_with(&root), "{name}={place:?}");
     }
     assert!(world.data_dir().starts_with(&root));
+}
+
+#[test]
+fn a_program_of_the_world_is_told_a_temporary_folder_that_lies_in_the_world_and_exists() {
+    let world = World::new();
+    let printed = world
+        .command(Path::new("/usr/bin/env"))
+        .output()
+        .expect("run env");
+    let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+    let temporary = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("TMPDIR="))
+        .map(PathBuf::from)
+        .expect("the world names a temporary folder");
+    let root = world.home().with_file_name("");
+    assert!(temporary.starts_with(&root), "TMPDIR={temporary:?}");
+    assert!(temporary.is_dir(), "{temporary:?} is made by the world");
+    // The folder is the world's own: it goes with the world.
+    drop(world);
+    assert!(!temporary.exists(), "{temporary:?} outlived its world");
+}
+
+#[test]
+fn a_program_of_a_bare_place_is_told_a_temporary_folder_of_the_place_too() {
+    let place = Place::new();
+    let printed = place
+        .command(Path::new("/usr/bin/env"))
+        .output()
+        .expect("run env");
+    let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+    let temporary = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("TMPDIR="))
+        .map(PathBuf::from)
+        .expect("the place names a temporary folder");
+    let root = place.socket().with_file_name("");
+    assert!(temporary.starts_with(&root), "TMPDIR={temporary:?}");
+    assert!(temporary.is_dir(), "{temporary:?} is made with the place");
 }
 
 fn opens(path: &str) -> Request {

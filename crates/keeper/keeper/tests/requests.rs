@@ -42,7 +42,9 @@ impl Scratch {
             .canonicalize()
             .expect("the temporary folder")
             .join(format!("yaar-keeper-requests-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(root.join("home")).expect("make the test's folder");
+        for folder in ["home", "tmp"] {
+            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
+        }
         let settings = [
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -62,6 +64,9 @@ impl Scratch {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
+            // Where the Keeper's copies of git's lists of files go, and a program of a
+            // terminal's too: a folder that goes with the test.
+            std::env::set_var("TMPDIR", root.join("tmp"));
             for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"] {
                 std::env::remove_var(name);
             }
@@ -211,6 +216,17 @@ fn added(path: &str) -> ChangedFile {
         path: PathBuf::from(path),
         status: FileStatus::Added,
     }
+}
+
+#[test]
+fn the_temporary_files_of_the_keeper_of_a_test_go_in_a_folder_of_the_test() {
+    let scratch = Scratch::new();
+    let temporary = std::env::temp_dir();
+    assert!(temporary.starts_with(&scratch.0), "{temporary:?}");
+    assert!(
+        temporary.is_dir(),
+        "{temporary:?} is made with the test's folder"
+    );
 }
 
 #[test]
