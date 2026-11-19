@@ -345,6 +345,19 @@ fn the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cann
         "it says it serves tools: {initialized}"
     );
 
+    // The same line with its one field `params.protocolVersion` changed to a version the
+    // server has no reason to name unasked: it comes back as asked, not as a constant.
+    let mut other_version = recorded_in(2);
+    other_version["params"]["protocolVersion"] = json!("2026-07-28");
+    assert_ne!(
+        other_version["params"]["protocolVersion"],
+        recorded_in(2)["params"]["protocolVersion"]
+    );
+    server.send(&other_version);
+    let asked_again = server.next();
+    assert_eq!(asked_again["id"], 0);
+    assert_eq!(asked_again["result"]["protocolVersion"], "2026-07-28");
+
     // Line 4 is a notification: nothing is written for it. The barrier is the answer to
     // the next message, which is the next line the server writes.
     server.send(&recorded_in(4));
@@ -508,6 +521,38 @@ fn reply_bodies_with_quotes_backticks_line_breaks_and_shell_syntax_arrive_byte_f
         .filter(|name| name.to_string_lossy().starts_with("PWNED"))
         .collect();
     assert!(made.is_empty(), "a body ran as a command: {made:?}");
+}
+
+#[test]
+fn the_result_the_keeper_hands_back_reaches_the_agent_whole_an_error_result_too() {
+    // The kinds of result the Keeper's Adapter writes, and one with a key of its own: the
+    // agent is told what the Keeper said, an `isError` of a refused reply above all.
+    let results = [
+        (
+            "a reply that was refused",
+            json!({"isError": true, "content": [{"type": "text",
+                "text": "thread T9 belongs to the review of another session"}]}),
+        ),
+        (
+            "a result with a key no one planned for",
+            json!({"content": [{"type": "text", "text": "kept"}], "isError": false,
+                "structuredContent": {"thread": "T1", "kept": true}, "_meta": {"n": 3}}),
+        ),
+        ("a result with no content", json!({})),
+    ];
+    for (what, result) in results {
+        let scratch = Scratch::new();
+        let bytes = serde_json::to_vec(&result).expect("a result");
+        let keeper = keeper_that_answers(&scratch, Ok(Reply::Answer { bytes }));
+        let mut server = Server::start(&scratch, Some(SESSION));
+
+        server.send(&call_with_body("hello"));
+        let answer = server.next();
+
+        keeper.report();
+        assert_eq!(answer["id"], 2, "{what}");
+        assert_eq!(answer["result"], result, "{what}: as the Keeper gave it");
+    }
 }
 
 #[test]

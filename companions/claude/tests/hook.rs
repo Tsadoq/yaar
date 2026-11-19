@@ -33,6 +33,10 @@ const MARGIN: Duration = Duration::from_secs(3);
 /// What a test waits for at most when it does not expect to wait at all.
 const PATIENCE: Duration = Duration::from_secs(20);
 
+/// How many facts a Keeper tells before its answer when it means the program to be reading
+/// after the Keeper has gone.
+const MANY_FACTS: usize = 200;
+
 /// A folder of this test's own, removed with whatever else the test made outside it.
 struct Scratch {
     folder: PathBuf,
@@ -91,6 +95,9 @@ enum Keeper {
     Answers,
     /// Answers the request with `Reply::Answer` of these bytes.
     AnswersWith(Vec<u8>),
+    /// Tells many facts, then answers with `Reply::Answer` of these bytes and leaves at
+    /// once, so that the program finds the Keeper gone with the answer still to read.
+    AnswersAndLeaves(Vec<u8>),
     /// Tells a reply to another request that holds an answer, then answers its own with
     /// `Done`.
     AnswersAnotherRequestFirst,
@@ -279,9 +286,23 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
         match behaviour {
             Keeper::Answers => {
                 write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                stays_until_the_program_leaves(&mut stream);
                 return heard;
             }
             Keeper::AnswersWith(bytes) => {
+                let answer = Reply::Answer {
+                    bytes: bytes.clone(),
+                };
+                write_message(&mut stream, &reply(Ok(answer))).expect("answer");
+                stays_until_the_program_leaves(&mut stream);
+                return heard;
+            }
+            Keeper::AnswersAndLeaves(bytes) => {
+                // The program reads a frame, looks at the clock and reads the next: with
+                // this many, it is still reading when the Keeper has long closed.
+                for _ in 0..MANY_FACTS {
+                    write_message(&mut stream, &a_fact()).expect("tell a fact");
+                }
                 let answer = Reply::Answer {
                     bytes: bytes.clone(),
                 };
@@ -297,10 +318,13 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                 };
                 write_message(&mut stream, &other).expect("answer another request");
                 write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                stays_until_the_program_leaves(&mut stream);
                 return heard;
             }
             Keeper::AnswersTooLate => {
-                thread::sleep(DEADLINE + MARGIN);
+                // The program leaves at its deadline, which ends this wait: a fact, not a
+                // sleep, and it bounds the wait by the deadline and not by a guess of it.
+                stays_until_the_program_leaves(&mut stream);
                 // The program has left by now: the write may find nobody.
                 let late = Reply::Answer {
                     bytes: b"too late".to_vec(),
@@ -313,6 +337,7 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                     reason: "no Adapter of this name".to_owned(),
                 };
                 write_message(&mut stream, &reply(Err(refusal))).expect("refuse");
+                stays_until_the_program_leaves(&mut stream);
                 return heard;
             }
             Keeper::TellsOtherThingsFirst => {
@@ -340,6 +365,15 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
         }
     }
     heard
+}
+
+/// Holds the connection until the program closes its end, as the real Keeper does, so that
+/// what the program does after its answer does not depend on the Keeper having gone.
+fn stays_until_the_program_leaves(stream: &mut UnixStream) {
+    stream
+        .set_read_timeout(Some(PATIENCE))
+        .expect("set the Keeper's read timeout");
+    while read_message(stream).is_ok() {}
 }
 
 /// Whether the other end is still there after a short while, which is to say that a read
@@ -643,6 +677,23 @@ fn what_the_keeper_answers_is_printed_byte_for_byte_and_the_program_succeeds() {
         assert_eq!(ran.status.code(), Some(0), "{what}: the program exits 0");
         assert_eq!(ran.printed, bytes, "{what}");
     }
+}
+
+#[test]
+fn an_answer_that_is_in_the_socket_when_the_keeper_has_gone_is_still_printed() {
+    let record = permission_request(REQUESTS[0]);
+    let bytes = b"{\"answer\": \"left behind\"}".to_vec();
+    let mut world = World::new();
+    world.keeper(Keeper::AnswersAndLeaves(bytes.clone()));
+
+    let ran = world.run(record.terminal(), &record.input_bytes());
+    world.heard();
+
+    assert_eq!(ran.status.code(), Some(0));
+    assert_eq!(
+        ran.printed, bytes,
+        "read from the socket after the Keeper left"
+    );
 }
 
 #[test]

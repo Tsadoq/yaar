@@ -18,9 +18,10 @@
 //! and its parent, Claude Code, and as payload the JSON object `{"tool_server": "yaar",
 //! "session_id": <CLAUDE_CODE_SESSION_ID>, "cwd": <its folder>, "name": <the tool>,
 //! "arguments": <the call's arguments, as Claude Code sent them>}`, so that the reply's
-//! body reaches the Keeper byte for byte. The Keeper's `yaar_link::Reply::Answer` is the
-//! call's `result`, which the server writes back as it came. Any other answer, and none,
-//! is a result that says the reply was not kept, an error the agent reads,
+//! body reaches the Keeper byte for byte. The Keeper's `yaar_link::Reply::Answer` holds a JSON
+//! object, which is the call's `result`: every key of it comes back with its value, though
+//! the keys need not keep the order the Keeper wrote them in. Any other answer, and none, is
+//! a result that says the reply was not kept, an error the agent reads,
 //! `{"isError": true, "content": [{"type": "text", "text": <why>}]}`, `why` one of: "the
 //! app did not keep the reply" for `yaar_link::Reply::Done`, the Keeper's reason for a
 //! refusal, "the app did not answer in time" past [`TOOL_DEADLINE`], and "the app is not

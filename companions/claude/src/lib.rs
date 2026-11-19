@@ -207,6 +207,14 @@ fn limit(stream: &UnixStream, deadline: Instant) -> io::Result<()> {
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the deadline is over"))?;
-    stream.set_read_timeout(Some(left))?;
-    stream.set_write_timeout(Some(left))
+    match stream
+        .set_read_timeout(Some(left))
+        .and_then(|()| stream.set_write_timeout(Some(left)))
+    {
+        // macOS refuses a timeout on a socket whose peer has closed. Nothing can then block
+        // a read, which gives what is still buffered and then the end, and a write gives a
+        // broken pipe: the frames the Keeper left must still be read.
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => Ok(()),
+        done => done,
+    }
 }
