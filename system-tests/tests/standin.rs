@@ -911,8 +911,8 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     let place = Place::new();
     let root = root_of(&place);
     let out = root.join("who");
-    // A lone command: `sh -c` runs it in its own place, as it does for the app's hook
-    // program, whose parent has to be the agent.
+    // A lone `exec`: `sh -c` runs the program in its own place, whichever `sh` it is, as it
+    // does for the app's hook program, whose parent has to be the agent.
     let hook = root.join("who.sh");
     fs::write(
         &hook,
@@ -923,7 +923,7 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     )
     .expect("write the hook");
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("make it run");
-    let command = format!("'{}'", hook.display());
+    let command = format!("exec '{}'", hook.display());
     let mut start = Start::new(
         place,
         "claude",

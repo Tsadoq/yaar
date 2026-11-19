@@ -43,9 +43,10 @@ fn hooks(command: &str) -> Value {
     json!({ "hooks": hooks })
 }
 
-/// The command that runs the hook program: its absolute path, which holds spaces on a
-/// Mac, quoted for `sh` as one word and nothing more, so that `sh` runs it in its own
-/// place.
+/// The command that runs the hook program: `exec` and its absolute path, which holds
+/// spaces on a Mac, quoted for `sh` as one word and nothing more. `exec` makes every `sh`
+/// run the program in its own place: a plain command is left in a `sh` of its own by dash,
+/// the `sh` of Ubuntu, and that short-lived parent would be taken for the agent.
 fn hook_program(companions: &Path) -> io::Result<String> {
     let path: PathBuf = std::path::absolute(companions.join(HOOK_PROGRAM))?;
     let text = path.to_str().ok_or_else(|| {
@@ -57,7 +58,7 @@ fn hook_program(companions: &Path) -> io::Result<String> {
             ),
         )
     })?;
-    Ok(format!("'{}'", text.replace('\'', r"'\''")))
+    Ok(format!("exec '{}'", text.replace('\'', r"'\''")))
 }
 
 /// Writes `value` as `folder/name`, through a temporary file of the folder that is renamed

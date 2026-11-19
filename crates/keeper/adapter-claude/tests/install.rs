@@ -98,7 +98,7 @@ fn every_hook_runs_the_quoted_path_of_the_hook_program_for_every_tool() {
 
     let group = json!([{"hooks": [{
         "type": "command",
-        "command": format!("'/opt/yaar/programs/{HOOK_PROGRAM}'"),
+        "command": format!("exec '/opt/yaar/programs/{HOOK_PROGRAM}'"),
     }]}]);
     let expected: serde_json::Map<String, Value> = HOOK_EVENTS
         .iter()
@@ -156,7 +156,7 @@ fn a_folder_of_programs_given_as_a_relative_path_is_written_as_an_absolute_one()
     let command = hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
         .as_str()
         .expect("a command");
-    assert!(command.starts_with("'/"), "{command}");
+    assert!(command.starts_with("exec '/"), "{command}");
     assert!(
         command.ends_with(&format!("/programs/{HOOK_PROGRAM}'")),
         "{command}"

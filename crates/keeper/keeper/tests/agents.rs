@@ -545,7 +545,7 @@ fn assert_the_plugin_runs(data: &Path, hook: &Path) {
     for event in yaar_adapter_claude::HOOK_EVENTS {
         assert_eq!(
             hooks["hooks"][event][0]["hooks"][0]["command"],
-            format!("'{}'", hook.display()),
+            format!("exec '{}'", hook.display()),
             "the hook {event}"
         );
     }

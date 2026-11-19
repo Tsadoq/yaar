@@ -24,16 +24,17 @@
 //!
 //! ```json
 //! {"hooks": {
-//!   "SessionStart": [{"hooks": [{"type": "command", "command": "'<hook>'"}]}],
-//!   "PreToolUse": [{"hooks": [{"type": "command", "command": "'<hook>'"}]}]
+//!   "SessionStart": [{"hooks": [{"type": "command", "command": "exec '<hook>'"}]}],
+//!   "PreToolUse": [{"hooks": [{"type": "command", "command": "exec '<hook>'"}]}]
 //! }}
 //! ```
 //!
 //! A group may also carry `"matcher": "Edit|Write"`, the tools it is for, parted by `|`;
 //! the app's own groups carry none, and the stand-in agent of the system tests reads both.
 //!
-//! The command is the lone quoted path and nothing else, no redirection and no `;`:
-//! Claude Code runs it through `sh -c`, and `sh` runs a lone command in its own place, so
+//! The command is `exec` and the quoted path and nothing else, no redirection and no `;`:
+//! Claude Code runs it through `sh -c`, and `exec` puts the hook program in the place of
+//! that `sh` (dash, the `sh` of Ubuntu, would keep a lone command in a child otherwise), so
 //! that the hook program's parent is Claude Code itself, whose process the Keeper watches.
 //! A command of several parts would leave a short-lived `sh` as that parent.
 //!
@@ -152,9 +153,9 @@ impl Adapter for ClaudeCode {
 
     /// Writes `folder/plugin`: `.claude-plugin/plugin.json` and `hooks/hooks.json` as the
     /// crate's doc shows them, whose every hook of [`HOOK_EVENTS`] runs
-    /// `companions/`[`HOOK_PROGRAM`] alone, single-quoted for the shell Claude Code runs it
-    /// with (a `'` inside written `'\''`). Each file is written to a temporary file of its
-    /// folder and renamed into place. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
+    /// `companions/`[`HOOK_PROGRAM`] alone after `exec`, single-quoted for the shell Claude
+    /// Code runs it with (a `'` inside written `'\''`). Each file is written to a temporary
+    /// file of its folder and renamed into place. Gives [`PLUGIN_DIRS`] with `folder/plugin`.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
         install::write(folder, companions)
     }
