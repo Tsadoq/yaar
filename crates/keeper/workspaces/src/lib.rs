@@ -397,9 +397,10 @@ impl Workspaces {
     pub fn repositories(&self) -> Result<Vec<Repository>, WorkspaceError> {
         let _naming = lock(&self.naming);
         let kept = self.store.workspaces()?;
+        let with_threads = self.store.workspaces_with_threads()?;
         let mut repositories = Vec::new();
         for record in self.store.repositories()? {
-            let workspaces = match self.worktrees_of(&record, &kept) {
+            let workspaces = match self.worktrees_of(&record, &kept, &with_threads) {
                 Ok(workspaces) => workspaces,
                 // `Repository` has no place yet to say what failed.
                 Err(e) if of_one_repository(&e) => Vec::new(),
@@ -416,11 +417,13 @@ impl Workspaces {
     }
 
     /// The worktrees of one kept repository as they are now, each kept as a workspace;
-    /// `kept` is what the Store held of all repositories before.
+    /// `kept` is what the Store held of all repositories before, and `with_threads` the
+    /// workspaces one of whose reviews holds a thread.
     fn worktrees_of(
         &self,
         record: &RepositoryRecord,
         kept: &[WorkspaceRecord],
+        with_threads: &[WorkspaceId],
     ) -> Result<Vec<Workspace>, WorkspaceError> {
         let mut workspaces = Vec::new();
         for listed in Worktree::list_of(&self.git, &record.git_dir)? {
@@ -435,8 +438,10 @@ impl Workspaces {
                 head: Some(listed.head),
             });
         }
-        // What the Store holds for this repository and git did not list: gone, as a
-        // rule, and then passed over; or moved by hand and opened since.
+        // What the Store holds for this repository and git did not list: moved by hand
+        // and opened since, or gone. A worktree that is gone is listed, after the others
+        // and with no head, while its reviews hold a thread; with none it is passed over.
+        let mut gone = Vec::new();
         for known in kept.iter().filter(|known| known.repository == record.id) {
             if workspaces.iter().any(|listed| listed.id == known.id) {
                 continue;
@@ -449,10 +454,20 @@ impl Workspaces {
                         head: Some(worktree.head()?),
                     });
                 }
-                Ok(_) | Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => {}
+                Ok(_) => {}
+                Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => {
+                    if with_threads.contains(&known.id) {
+                        gone.push(Workspace {
+                            id: known.id.clone(),
+                            path: known.path.clone(),
+                            head: None,
+                        });
+                    }
+                }
                 Err(e) => return Err(e),
             }
         }
+        workspaces.extend(gone);
         Ok(workspaces)
     }
 
@@ -621,8 +636,17 @@ impl Workspaces {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<Option<Arc<Worktree>>, WorkspaceError> {
-        let _ = workspace;
-        todo!()
+        let record = self
+            .store
+            .workspaces()?
+            .into_iter()
+            .find(|record| &record.id == workspace)
+            .ok_or_else(|| Refusal::UnknownWorkspace(workspace.clone()))?;
+        match self.worktree_of(&record) {
+            Ok(worktree) => Ok(Some(worktree)),
+            Err(WorkspaceError::Refused(Refusal::UnknownWorkspace(_))) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// What the Store holds for a workspace, and its worktree.
