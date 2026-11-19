@@ -3,10 +3,11 @@
 //! path two sessions changed whole in both reviews, marked. Built by the engine's package
 //! "credits with recorded states" of slice 6.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use yaar_recorder::Change;
-use yaar_store::{ReviewId, WorkspaceId};
+use yaar_recorder::{Change, ChangedPath};
+use yaar_store::{CreditRecord, ReviewId, WorkspaceId};
 
 use crate::engine::{EngineError, Reviews};
 use crate::uncommitted::Credited;
@@ -40,8 +41,14 @@ impl Reviews {
         state: &str,
         credits: &[Credited],
     ) -> Result<(), EngineError> {
-        let _ = (workspace, state, credits);
-        todo!()
+        let kept: Vec<CreditRecord> = credits
+            .iter()
+            .map(|credit| CreditRecord {
+                path: credit.path.clone(),
+                sessions: credit.by.clone(),
+            })
+            .collect();
+        Ok(self.store.put_credits(workspace, state, &kept)?)
     }
 
     /// The paths that differ from version `from` to the recorded state `to` that `review`
@@ -56,14 +63,71 @@ impl Reviews {
     /// kept, as one recorded at a send between two turn ends, counts with the first state
     /// after it, even past `to`, that has credits kept: the turn end that follows a send
     /// keeps the credits of the writes before the send too. A path none of those names is
-    /// one no agent made.
+    /// one no agent made. A version that is no state of the list, as a commit kept in the
+    /// store, counts from the first state when it is `from`, and to the newest when it is
+    /// `to`.
     pub fn credited_change(
         &self,
         review: &ReviewId,
         from: &str,
         to: &str,
     ) -> Result<Vec<CreditedChange>, EngineError> {
-        let _ = (review, from, to);
-        todo!()
+        let review = self.review(review)?;
+        let states = self.states_of(review.workspace())?;
+        let changed = states.changed_paths(from, to)?;
+        let listed = states.states()?;
+
+        // The states after `from` up to `to`, as places in the list: a version that is not a
+        // state, as a commit kept in the store, is no place, and counts from the start for
+        // `from` and to the end for `to`.
+        let place = |version: &str| listed.iter().position(|state| state.id.as_str() == version);
+        let first = place(from).map_or(0, |at| at + 1);
+        let last = place(to).unwrap_or(listed.len().saturating_sub(1));
+
+        let mut by: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
+        // The states in range with no credits kept, which count with the next state that
+        // has some.
+        let mut waiting = false;
+        for (at, state) in listed.iter().enumerate().skip(first) {
+            if at > last && !waiting {
+                break;
+            }
+            let kept = self
+                .store
+                .credits_of(review.workspace(), state.id.as_str())?;
+            if kept.is_empty() {
+                waiting |= at <= last;
+                continue;
+            }
+            for credit in kept {
+                let sessions = by.entry(credit.path).or_default();
+                for session in credit.sessions {
+                    if !sessions.contains(&session) {
+                        sessions.push(session);
+                    }
+                }
+            }
+            waiting = false;
+            if at > last {
+                break;
+            }
+        }
+
+        Ok(changed
+            .into_iter()
+            .filter_map(|ChangedPath { path, change }| {
+                let by = by.remove(&path).unwrap_or_default();
+                let shown = match review.agent() {
+                    None => true,
+                    Some(session) => by.is_empty() || by.iter().any(|by| by == session),
+                };
+                shown.then_some(CreditedChange {
+                    shared: by.len() > 1,
+                    path,
+                    change,
+                    by,
+                })
+            })
+            .collect())
     }
 }
