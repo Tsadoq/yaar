@@ -47,6 +47,13 @@ const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 const PRINT_THE_MARK: &[u8] = b"printf '\\033]9;4;0;\\007'; printf 'after-%s\\n' mark\r";
 const AFTER_THE_MARK: &str = "after-mark";
 
+/// The first and the last of the four forms of that mark, as the shell's `printf` writes
+/// them: ended by BEL with the last `;`, and ended by the string terminator without it.
+/// The Keeper maps each form to the place it holds in its Adapter's list, so the two ends
+/// of the list are the ones an index that is off by one gets wrong.
+const FIRST_FORM: &str = "\\033]9;4;0;\\007";
+const LAST_FORM: &str = "\\033]9;4;0\\033\\\\";
+
 /// A second line, typed once the first is seen: its output is read from the terminal after
 /// everything the first line printed.
 const PRINT_THE_NEXT: &[u8] = b"printf 'then-%s\\n' mark\r";
@@ -490,7 +497,17 @@ impl Setup {
     /// seen before the Keeper has been told; the output of the second line is read from the
     /// terminal after all of that, so the Keeper has been told the mark by the time it is seen.
     fn print_the_mark(&mut self) {
-        self.window.type_into(&self.terminal, PRINT_THE_MARK);
+        self.print_the_mark_in(PRINT_THE_MARK);
+    }
+
+    /// [`Setup::print_the_mark`] with the form `form` of the mark, as `printf` writes it.
+    fn print_the_mark_form(&mut self, form: &str) {
+        let line = format!("printf '{form}'; printf 'after-%s\\n' mark\r");
+        self.print_the_mark_in(line.as_bytes());
+    }
+
+    fn print_the_mark_in(&mut self, line: &[u8]) {
+        self.window.type_into(&self.terminal, line);
         self.window.output_until(&self.terminal, AFTER_THE_MARK);
         self.window.type_into(&self.terminal, PRINT_THE_NEXT);
         self.window.output_until(&self.terminal, THEN);
@@ -676,13 +693,19 @@ fn a_stop_followed_at_once_by_the_mark_ends_the_turn_finished_and_the_mark_chang
 
 #[test]
 fn the_mark_alone_during_a_turn_ends_it_interrupted() {
+    for form in [FIRST_FORM, LAST_FORM] {
+        a_mark_alone_ends_the_turn_interrupted(form);
+    }
+}
+
+fn a_mark_alone_ends_the_turn_interrupted(form: &str) {
     let mut setup = Setup::new();
     let records = recorded::hook_events(TOOLS);
     setup.hooks(&records, &[1, 2]);
     let working = setup.agents_until("the turn works", is_state(SessionState::Works));
     let turn = working.sessions[0].turn.clone().expect("the open turn");
 
-    setup.print_the_mark();
+    setup.print_the_mark_form(form);
     let ended = setup.agents_until("the turn is unreviewed", is_state(SessionState::Unreviewed));
     assert_eq!(ended.shown, Some(SessionState::Unreviewed));
     assert_eq!(ended.sessions[0].turn, None, "no turn is open any more");
