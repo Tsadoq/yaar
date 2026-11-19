@@ -499,9 +499,18 @@ fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_r
             numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
             "a run that breaks where the kept output ends and the live output begins"
         );
-        joins += usize::from(!tail_holds(&heard, "\r\n400000\r\n"));
+        let ended = tail_holds(&heard, "\r\n400000\r\n");
+        joins += usize::from(!ended);
         // Gone with no goodbye, and the program writes on.
         drop(window);
+        // The loop ends with the first Window that hears the end of the run. Once the run is
+        // over, every attach has the shell draw its prompt again behind the last number, some
+        // 40 bytes each time; after a few such Windows the last 256 bytes of the kept output no
+        // longer hold the last number, and a Window would wait for output that never comes.
+        // Nothing is lost: the subject here is a Window that joins while the program writes.
+        if ended {
+            break;
+        }
     }
     assert!(
         joins > 0,
