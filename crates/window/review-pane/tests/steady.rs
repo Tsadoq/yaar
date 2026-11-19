@@ -179,16 +179,24 @@ fn wheel(stage: &Stage, by: f32, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// Turns the wheel, a row at a time, until `row` is the first row in view.
+/// Turns the wheel, a row at a time, until `row` is the first row in view. Every turn must
+/// move the view down, so a wheel that does nothing, or a list that ends before `row`,
+/// fails the test instead of turning for ever.
 fn scroll_until_first(stage: &Stage, row: usize, cx: &mut VisualTestContext) {
+    let mut start = reading(stage, cx).start;
     loop {
-        let start = reading(stage, cx).start;
         assert!(start <= row, "the view is past row {row}, at {start}");
         if start == row {
             return;
         }
         let height = f32::from(bounds_of_row(start, cx).size.height);
         wheel(stage, -height, cx);
+        let now = reading(stage, cx).start;
+        assert!(
+            now > start,
+            "a turn of the wheel left the view at row {start}, short of row {row}"
+        );
+        start = now;
     }
 }
 

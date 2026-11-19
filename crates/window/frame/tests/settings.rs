@@ -281,6 +281,65 @@ fn a_set_the_keeper_answers_with_a_reply_of_another_kind_has_the_list_asked_agai
 }
 
 #[gpui_kit::test]
+fn a_list_the_keeper_refuses_to_give_leaves_the_list_as_it_was(cx: &mut TestAppContext) {
+    let link = cx.new(|_| KeeperLink::new());
+    let list: Entity<SettingList> = cx.new(|cx| SettingList::new(link.clone(), cx));
+    let mut keeper = KeeperEnd::attach_deaf(&link, cx);
+    let (first, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings);
+    let kept = vec![form('2', FlowForm::LiveDiff)];
+    let answered = Message::Reply {
+        to: first,
+        reply: Ok(Reply::Settings(kept.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the first question");
+    wait_until(cx, "the first settings", |cx| {
+        list.read_with(cx, |list, _| list.all() == kept)
+    });
+
+    // A set that is answered with a reply of another kind has the list asked again.
+    list.update(cx, |list, cx| list.set(form('1', FlowForm::LiveDiff), cx));
+    let (set, request) = next_request(&mut keeper, cx);
+    assert!(matches!(request, Request::SetSetting { .. }));
+    let odd = Message::Reply {
+        to: set,
+        reply: Ok(Reply::Workspaces(Vec::new())),
+    };
+    write_message(&mut keeper, &odd).expect("answer with another kind of reply");
+    let (second, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings, "asked again");
+    let held_before = list.read_with(cx, |list, _| list.all().to_vec());
+    assert_eq!(
+        held_before,
+        [form('2', FlowForm::LiveDiff), form('1', FlowForm::LiveDiff)]
+    );
+
+    // The Keeper cannot give the list now. A round trip after the refusal shows the
+    // Window took it in; the list holds what it held.
+    let refused = Message::Reply {
+        to: second,
+        reply: Err(Refusal::Failed {
+            reason: "the Store is not there".to_owned(),
+        }),
+    };
+    write_message(&mut keeper, &refused).expect("refuse the second question");
+    let barrier = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+    let (asked, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::ListWorkspaces);
+    let answered = Message::Reply {
+        to: asked,
+        reply: Ok(Reply::Workspaces(Vec::new())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the barrier");
+    answer(barrier, cx).expect("the barrier is answered");
+    assert_eq!(
+        list.read_with(cx, |list, _| list.all().to_vec()),
+        held_before
+    );
+    keeper.shutdown(Shutdown::Both).ok();
+}
+
+#[gpui_kit::test]
 fn of_two_answers_for_the_settings_only_the_one_to_the_last_question_counts_and_a_fact_on_the_way_asks_again(
     cx: &mut TestAppContext,
 ) {
