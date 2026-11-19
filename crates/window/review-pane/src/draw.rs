@@ -14,7 +14,7 @@ use yaar_diff::{Hunk, Row, Side};
 use yaar_frame::SetBase;
 use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
 
-use crate::{KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
+use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
 use yaar_link::{CommentId, ThreadId};
 
 /// The height of every row. The list lays its rows out by the height of one of them, so
@@ -87,6 +87,9 @@ impl UniformListDecoration for InView {
 impl Render for ReviewPane {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
+        // Above the files, and in the pane's column outside the element that holds the
+        // pane's key context: the keys of the tree are not the keys of the rows.
+        let tree = self.tree_view(cx);
         let pane = div()
             .size_full()
             .flex()
@@ -143,6 +146,7 @@ impl Render for ReviewPane {
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
             return pane
+                .children(tree)
                 .child(self.with_keys(idle, cx))
                 .children(notice)
                 .children(comment_box)
@@ -174,7 +178,8 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(refused)
+        pane.children(tree)
+            .children(refused)
             .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
             .children(notice)
             .children(comment_box)
@@ -189,6 +194,7 @@ impl ReviewPane {
         element
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
+            .on_action(cx.listener(Self::focus_history))
             .on_action(cx.listener(Self::line_down))
             .on_action(cx.listener(Self::line_up))
             .on_action(cx.listener(Self::toggle_layout))
@@ -284,6 +290,9 @@ impl ReviewPane {
                 let viewed = self
                     .reviews()
                     .is_some_and(|reviews| reviews.viewed.contains(path));
+                // A change no agent made is marked where the uncommitted changes are shown.
+                let no_agent =
+                    self.tree.shown == ChangeShown::Uncommitted && self.no_agent_made(path);
                 row.px_2()
                     .gap_3()
                     .bg(theme.secondary)
@@ -295,6 +304,13 @@ impl ReviewPane {
                             .text_color(theme.muted_foreground)
                             .child(status_words(status)),
                     )
+                    .children(no_agent.then(|| {
+                        div()
+                            .debug_selector(|| format!("review-no-agent-{index}"))
+                            .flex_none()
+                            .text_color(theme.warning)
+                            .child("no agent")
+                    }))
                     .children(viewed.then(|| {
                         div()
                             .debug_selector(|| format!("review-viewed-{index}"))

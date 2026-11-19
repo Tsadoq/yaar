@@ -15,13 +15,13 @@ use gpui_kit::{
     VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
-use yaar_frame::SetBase;
+use yaar_frame::{Place, SetBase};
 use yaar_link::{
     Changes, Comparison, Content, Fact, FileSides, FileStatus, NoComparison, Refusal, Reply,
     Request, RequestKind,
 };
 use yaar_review_pane::{
-    FILES_ON_THEIR_WAY, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
+    FILES_ON_THEIR_WAY, KEY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown, controls,
 };
 
 use common::{
@@ -679,7 +679,8 @@ fn effect_of(keystroke: &str) -> Effect {
         "j" | "down" | "k" | "up" | "s" => Effect::Moves,
         "c" => Effect::Box,
         "shift-c" => Effect::Field,
-        "i" | "o" | "d d" | "m" | "shift-m" => Effect::Notice,
+        // The pane has no history here to take the focus to.
+        "i" | "o" | "d d" | "m" | "shift-m" | "tab" => Effect::Notice,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -781,7 +782,13 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     };
     // After each of them every line of every file reads as it did: a key that changed
     // one would not pass because a later key changed it back.
-    for control in controls() {
+    // The keys of the tree of Changes work in the tree, beside the rows; with the focus in
+    // the rows they are the rows' keys or none, so tests/changes.rs presses them where they
+    // work.
+    for control in controls()
+        .into_iter()
+        .filter(|control| control.place == Place::In(KEY_CONTEXT))
+    {
         let effect = effect_of(control.keystroke);
         let at_first = state(&mut cx);
         cx.simulate_keystrokes(control.keystroke);
