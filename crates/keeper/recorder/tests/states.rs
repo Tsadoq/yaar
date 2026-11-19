@@ -110,6 +110,10 @@ struct Seen {
     reflog: String,
     unreachable: Vec<String>,
     counts: String,
+    // Every file and folder of the git folder but the list of files, whose bytes are
+    // compared on their own: a lock or a temporary file left there stops the user's next
+    // `git add`, and no other field sees it.
+    git_folder: Vec<String>,
 }
 
 impl Seen {
@@ -143,8 +147,43 @@ impl Seen {
             reflog: git(repo, &["reflog", "show", "--all", "--format=%gd %H %gs"]),
             unreachable: unreachable_objects(repo),
             counts: git(repo, &["count-objects", "-v"]),
+            git_folder: listing(&repo.join(".git")),
         }
     }
+}
+
+/// Every path under `root`, with its kind, ordered; the list of files, `index`, left out.
+fn listing(root: &Path) -> Vec<String> {
+    fn walk(root: &Path, folder: &Path, found: &mut Vec<String>) {
+        for entry in std::fs::read_dir(folder).expect("read the folder") {
+            let path = entry.expect("an entry").path();
+            let kind = std::fs::symlink_metadata(&path).unwrap().file_type();
+            let relative = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_owned();
+            if relative == "index" {
+                continue;
+            }
+            let kind = if kind.is_dir() {
+                "folder"
+            } else if kind.is_symlink() {
+                "link"
+            } else {
+                "file"
+            };
+            found.push(format!("{kind} {relative}"));
+            if kind == "folder" {
+                walk(root, &path, found);
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(root, root, &mut found);
+    found.sort();
+    found
 }
 
 fn status(repo: &Path) -> Vec<u8> {
@@ -222,6 +261,10 @@ fn recording_three_states_leaves_the_real_repository_as_it_was() {
             after.counts, before.counts,
             "the count of objects, state {round}"
         );
+        assert_eq!(
+            after.git_folder, before.git_folder,
+            "the files of the git folder, state {round}"
+        );
         recorded.push((state, files_of(&repo)));
     }
 
@@ -250,6 +293,14 @@ fn every_state_reads_after_its_commit_is_collected_and_after_the_repository_is_d
     write(&repo, "edited.txt", "base\n");
     commit_all(&repo, "base");
     git(&repo, &["switch", "--quiet", "-c", "agent"]);
+    // Staged and then left alone: its blob is in the real repository and in no commit, and
+    // the worktree's side of git's status shows nothing for it.
+    write(
+        &repo,
+        "staged-only.txt",
+        "only in the user's list of files\n",
+    );
+    git(&repo, &["add", "staged-only.txt"]);
 
     let worktree = open(&repo);
     let folder = scratch.join("app/states/case-b.git");
@@ -265,7 +316,9 @@ fn every_state_reads_after_its_commit_is_collected_and_after_the_repository_is_d
     let second = store.record(&worktree).expect("record");
     let kept_second = files_of(&repo);
 
-    // The agent commits some of it, and goes on.
+    // The agent commits some of it, and goes on. The staged file is gone by then, so that
+    // no commit the store copies holds its blob: only the first two states do.
+    git(&repo, &["rm", "--quiet", "--force", "staged-only.txt"]);
     write(&repo, "by-the-agent.txt", "committed by the agent\n");
     let agent_commit = commit_all(&repo, "the agent's work");
     write(&repo, "edited.txt", "base\nfirst\nsecond\nthird\n");
@@ -307,6 +360,22 @@ fn every_state_reads_after_its_commit_is_collected_and_after_the_repository_is_d
             &held_by(&again, state),
             files,
             "after the repository is gone"
+        );
+    }
+    assert!(kept[0].1.contains_key("staged-only.txt"));
+    assert!(!kept[2].1.contains_key("staged-only.txt"));
+    // The store is a whole repository on its own: git finds nothing missing in it, each
+    // state's history is the state and the commit it was taken on, and no more.
+    git(&folder, &["fsck", "--full", "--no-dangling"]);
+    for (state, _) in &kept {
+        let mut expected = vec![state.id.to_string()];
+        expected.extend(state.on.iter().map(ToString::to_string));
+        assert_eq!(
+            git(&folder, &["log", "--format=%H", state.id.as_str()])
+                .lines()
+                .collect::<Vec<_>>(),
+            expected,
+            "the history of a state"
         );
     }
 }
@@ -719,6 +788,37 @@ fn no_hook_and_no_monitor_of_the_user_runs_when_a_state_is_recorded() {
     store.record(&worktree).expect("record again");
 
     assert!(!ran.exists(), "ran: {:?}", std::fs::read_to_string(&ran));
+}
+
+// A user who asked git to show the stash in `git status` gets a header record of its own
+// in the machine-readable form, which is no file and no reason to fail.
+#[test]
+fn a_repository_set_to_show_its_stash_in_status_records_as_any_other() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "one\n");
+    write(&repo, "b.txt", "bee\n");
+    commit_all(&repo, "start");
+    write(&repo, "b.txt", "bee, put aside\n");
+    git(&repo, &["stash", "push", "--quiet", "-m", "put aside"]);
+    // Written into the file, as a user's own setting is.
+    let config = repo.join(".git/config");
+    let mut text = std::fs::read_to_string(&config).expect("read the configuration");
+    text.push_str("[status]\n\tshowStash = true\n");
+    std::fs::write(&config, text).expect("write the configuration");
+    assert!(
+        git(&repo, &["status", "--porcelain=v2", "--branch"]).contains("# stash 1"),
+        "the premise: git status prints the stash header"
+    );
+    let worktree = open(&repo);
+    let store = store(&scratch);
+
+    write(&repo, "a.txt", "changed\n");
+    write(&repo, "c.txt", "new\n");
+    let state = store.record(&worktree).expect("record");
+
+    assert_eq!(held_by(&store, &state), files_of(&repo));
 }
 
 #[test]

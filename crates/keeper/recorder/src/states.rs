@@ -620,6 +620,9 @@ fn differing_paths(command: &str, printed: &[u8]) -> Result<Vec<Vec<u8>>, GitErr
             b'2' => (9, false, true),
             b'u' => (10, true, false),
             b'?' => (1, true, false),
+            // A header, such as the stash count a user's configuration asks git to print:
+            // it names no file.
+            b'#' => continue,
             _ => (0, false, false),
         };
         let fields: Vec<&[u8]> = record.splitn(before + 1, |byte| *byte == b' ').collect();
