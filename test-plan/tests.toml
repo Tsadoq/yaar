@@ -1030,7 +1030,8 @@ built = [
     "crates/keeper/switchboard/src/lib.rs::a_turn_started_while_the_session_waits_with_no_turn_open_works",
     "crates/keeper/switchboard/src/lib.rs::a_turn_ended_with_no_turn_open_gives_nothing",
     "crates/keeper/switchboard/src/lib.rs::a_session_that_ended_at_a_permission_prompt_does_not_wait_when_it_resumes",
-    "crates/keeper/switchboard/src/lib.rs::a_session_resumed_after_an_unreviewed_turn_is_idle_and_stays_idle",
+    "crates/keeper/switchboard/src/lib.rs::a_session_resumed_after_an_unreviewed_turn_is_unreviewed_until_it_is_marked_reviewed",
+    "crates/keeper/switchboard/src/lib.rs::a_session_resumed_with_nothing_unreviewed_is_idle",
     "crates/keeper/switchboard/src/lib.rs::a_step_heard_with_no_turn_open_ends_the_wait_it_answers",
     "crates/keeper/switchboard/src/lib.rs::a_turn_ended_with_no_turn_open_changes_nothing_not_even_a_wait",
 ]
