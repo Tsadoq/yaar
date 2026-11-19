@@ -8,11 +8,12 @@
 //! process, so each test sets that environment as its first statement, and these tests are
 //! run by `cargo nextest`, which gives each test a process of its own.
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -535,33 +536,60 @@ fn first_step(window: &mut Window) -> (TurnId, u32) {
     })
 }
 
+/// Tells that a recording is held at the gate.
+struct Held(Receiver<()>);
+
+impl Held {
+    /// Waits until a recording is held at the gate: git has named the paths it stages, and a
+    /// file made now is in no state that recording takes. It waits on the channel the filter
+    /// writes into, until the deadline.
+    fn wait(&self) {
+        self.0
+            .recv_timeout(DEADLINE)
+            .expect("no recording was held");
+    }
+}
+
 /// Makes the recording of a state slow until the test says: a file named `slow.txt` goes
-/// through a clean filter that makes the file `held` in the scratch folder and waits for the
-/// file `gate` there, and for as long as the folder is there, so that a filter of a test
-/// that failed does not outlive it.
+/// through a clean filter that writes once into a pipe in the scratch folder, which the
+/// returned [`Held`] hears, and then waits for the file `gate` there, and for as long as
+/// the folder is there, so that a filter of a test that failed does not outlive it.
 /// A state is recorded through the repository's own filters, as `git add` makes it, so the
 /// recording of a turn's end that changed `slow.txt` is held until the test opens the gate:
 /// what must not wait for it is shown to run during it, whatever the machine.
-fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) {
+fn hold_recordings_at_a_gate(scratch: &Scratch, repo: &Path) -> Held {
     let root = scratch.0.display();
+    let pipe = scratch.0.join("held.pipe");
+    let made = Command::new("mkfifo")
+        .arg(&pipe)
+        .status()
+        .expect("start mkfifo");
+    assert!(made.success(), "mkfifo failed");
+    // The filter runs for every file git stages and for each look of git at the folder: it
+    // writes into the pipe the first time only, since nobody reads it after that.
     let filter = format!(
-        "touch {root}/held; while [ -d {root} ] && [ ! -e {root}/gate ]; do sleep 0.05; done; cat"
+        "[ -e {root}/held ] || {{ touch {root}/held; echo > {pipe}; }}; \
+         while [ -d {root} ] && [ ! -e {root}/gate ]; do sleep 0.05; done; cat",
+        pipe = pipe.display()
     );
     git(repo, &["config", "filter.slow.clean", &filter]);
     std::fs::write(repo.join(".gitattributes"), "slow.txt filter=slow\n").expect("write it");
     git(repo, &["add", ".gitattributes"]);
     git(repo, &["commit", "--quiet", "-m", "attributes"]);
-}
 
-/// Waits until a recording is held at the gate: git has named the paths it stages, and a
-/// file made now is in no state that recording takes. Nothing of the Link tells of it, so the
-/// mark the filter makes is looked for until the deadline.
-fn wait_until_a_recording_is_held(scratch: &Scratch) {
-    let deadline = Instant::now() + DEADLINE;
-    while !scratch.0.join("held").exists() {
-        assert!(Instant::now() < deadline, "no recording was held");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    // Opening a pipe waits for the other end: a thread of its own does it, and a filter
+    // that writes finds it reading, whenever it runs.
+    let (told, heard) = mpsc::channel();
+    std::thread::spawn(move || {
+        let Ok(mut reading) = std::fs::File::open(&pipe) else {
+            return;
+        };
+        let mut byte = [0u8; 1];
+        if reading.read(&mut byte).is_ok() {
+            let _ = told.send(());
+        }
+    });
+    Held(heard)
 }
 
 fn open_the_gate(scratch: &Scratch) {
@@ -693,11 +721,40 @@ fn a_turn_that_starts_after_the_turn_before_was_recorded_counts_from_that_turns_
 }
 
 #[test]
+fn a_turn_that_starts_in_the_very_step_that_ends_the_turn_before_counts_from_that_turns_state() {
+    let mut setup = Setup::new();
+    let first = setup.show_and_wait_for_the_first_state();
+    setup.hooks(&SESSION_AND_PROMPT);
+    let one = setup
+        .window
+        .turn_until(&setup.workspace, "the first turn works", |_| true);
+    std::fs::write(setup.repo.join("new.txt"), "hello").expect("write a file");
+
+    // A prompt typed while the turn is open: the Switchboard ends the turn, interrupted,
+    // and starts the next in one go, with no stop between. The recording of the first turn's
+    // state is in flight from that very moment, so the second turn has to wait for it.
+    setup.hooks(&[PROMPT_AGAIN]);
+    let two = setup
+        .window
+        .turn_until(&setup.workspace, "the next turn works", |turn| *turn != one);
+    let state = setup
+        .window
+        .ended(&one)
+        .expect("a state is recorded at the turn's end");
+    assert_ne!(state, first);
+    assert_eq!(
+        setup.window.turn(&two).start.as_deref(),
+        Some(state.as_str())
+    );
+    let _ = setup.finish();
+}
+
+#[test]
 fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_counts_from_it() {
     let scratch = Scratch::new();
     let first = scratch.repository("first");
     let repo = scratch.repository("repo");
-    hold_recordings_at_a_gate(&scratch, &repo);
+    let _held = hold_recordings_at_a_gate(&scratch, &repo);
     let mut setup = Setup::on(scratch, &first, repo);
     setup.show_and_wait_for_the_first_state();
 
@@ -725,8 +782,10 @@ fn a_turn_that_starts_while_the_turn_before_is_recorded_waits_for_its_state_and_
     );
     assert_eq!(setup.window.turn(&two).start, None);
 
-    // The recording ends: before its end is told, the turn that waited has its start,
-    // which is that state, and the Window that reads the turn at that fact finds it.
+    // The recording ends, and the turn that waited has its start, which is that state. That
+    // the Keeper keeps it before it tells the end is not shown here: a read of a turn is
+    // answered without waiting for the Keeper's turn, and a read sent after the fact is
+    // heard nearly always comes after the keeping, in either order of the two.
     open_the_gate(&setup.scratch);
     let state = setup
         .window
@@ -744,7 +803,7 @@ fn a_turn_that_ends_while_it_waits_leaves_the_turn_after_it_the_state_of_its_own
     let scratch = Scratch::new();
     let first = scratch.repository("first");
     let repo = scratch.repository("repo");
-    hold_recordings_at_a_gate(&scratch, &repo);
+    let held = hold_recordings_at_a_gate(&scratch, &repo);
     let mut setup = Setup::on(scratch, &first, repo);
     setup.show_and_wait_for_the_first_state();
 
@@ -756,7 +815,7 @@ fn a_turn_that_ends_while_it_waits_leaves_the_turn_after_it_the_state_of_its_own
         .turn_until(&setup.workspace, "the first turn works", |_| true);
     std::fs::write(setup.repo.join("slow.txt"), "slow\n").expect("write a file");
     setup.hooks(&[STOP]);
-    wait_until_a_recording_is_held(&setup.scratch);
+    held.wait();
     setup.hooks(&[PROMPT_AGAIN]);
     let two = setup
         .window
@@ -834,6 +893,7 @@ impl Settings {
 fn a_new_keeper_lists_no_setting() {
     let mut settings = Settings::new();
     assert_eq!(settings.window.settings(), []);
+    settings.window.stop(settings.keeper);
 }
 
 #[test]
