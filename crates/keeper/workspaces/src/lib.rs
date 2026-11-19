@@ -251,7 +251,8 @@ pub enum WorkspaceError {
     Git(GitError),
     /// The Store failed.
     Store(StoreError),
-    /// The id of a worktree could not be read or written.
+    /// The id of a worktree could not be read or written, or the system would not watch a
+    /// folder of it ([`Workspaces::watch`]).
     Id(PathBuf, std::io::Error),
 }
 
@@ -324,7 +325,8 @@ impl Workspaces {
     /// a thread of the watcher's own, as what it [`Seen`], and the ledger of the workspace
     /// notes when each changed path was seen. Watching a workspace that is watched already
     /// replaces `told`. Refused with [`Refusal::UnknownWorkspace`] for a workspace the
-    /// Store does not hold or whose worktree is gone.
+    /// Store does not hold or whose worktree is gone; a folder the system will not watch
+    /// (it may limit how many it watches) is [`WorkspaceError::Id`] with that folder.
     ///
     /// What git keeps of its own in the worktree's git folder is no change of a file, but
     /// a change of `HEAD`, of the list of files or of a ref is [`Seen::Head`]. Reads are
@@ -337,44 +339,55 @@ impl Workspaces {
         workspace: &WorkspaceId,
         told: Box<dyn Fn(Seen) + Send + Sync>,
     ) -> Result<(), WorkspaceError> {
-        let _ = (workspace, told);
-        todo!("watch the worktree of a workspace")
+        let (_, worktree) = self.workspace(workspace)?;
+        let places = watch::Places {
+            root: worktree.root().to_owned(),
+            git_dir: worktree.git_dir().to_owned(),
+            common_dir: worktree.common_dir().to_owned(),
+        };
+        // Watching asks the system for notices, which no part of the surface has an error
+        // for: the folder it could not watch is named with the system's reason.
+        self.watching
+            .watch(workspace, places, told)
+            .map_err(|(folder, e)| WorkspaceError::Id(folder, e))
     }
 
     /// Stops watching the worktree of `workspace`. Its ledger is kept: a change seen
     /// before is still credited as it was.
     pub fn unwatch(&self, workspace: &WorkspaceId) {
-        let _ = workspace;
-        todo!("stop watching a worktree")
+        self.watching.unwatch(workspace);
     }
 
     /// The workspaces whose worktrees are watched.
     pub fn watched(&self) -> Vec<WorkspaceId> {
-        todo!("the watched workspaces")
+        self.watching.watched()
     }
 
     /// `session` wrote `path` with the agent's own tool, which named it: the change of
     /// that path is credited to that session. `path` is absolute or relative to the folder
     /// of the worktree; one outside the worktree is not noted.
     pub fn agent_wrote(&self, workspace: &WorkspaceId, session: &str, path: &Path) {
-        let _ = (workspace, session, path);
-        todo!("note a write an agent's tool named")
+        let Some(path) = self.inside(workspace, path) else {
+            return;
+        };
+        self.watching
+            .with_ledger(workspace, |ledger| ledger.wrote(session, &path));
     }
 
     /// A shell command of `session` begins in the worktree of `workspace`, at `at`: the
     /// moment the report of it reached the Keeper, taken before the Keeper answered it, so
     /// that a command the CLI runs at once cannot write before its window opens.
     pub fn command_began(&self, workspace: &WorkspaceId, session: &str, at: Instant) {
-        let _ = (workspace, session, at);
-        todo!("note a shell command that begins")
+        self.watching
+            .with_ledger(workspace, |ledger| ledger.began(session, at));
     }
 
     /// The shell command of `session` has ended, at `at`, taken as for
     /// [`Workspaces::command_began`]. Changes seen up to [`SETTLE`] after it still fall
     /// within it: the system tells of a write some milliseconds after it.
     pub fn command_ended(&self, workspace: &WorkspaceId, session: &str, at: Instant) {
-        let _ = (workspace, session, at);
-        todo!("note a shell command that ended")
+        self.watching
+            .with_ledger(workspace, |ledger| ledger.ended(session, at));
     }
 
     /// Every uncommitted change of the worktree, from the commit checked out to the files
@@ -383,8 +396,33 @@ impl Workspaces {
     /// watched when it was made, is one no agent made, unless an agent's own tool named it.
     /// A path committed since it changed leaves the ledger.
     pub fn credits(&self, workspace: &WorkspaceId) -> Result<Vec<CreditedPath>, WorkspaceError> {
-        let _ = workspace;
-        todo!("who made each uncommitted change")
+        let (_, worktree) = self.workspace(workspace)?;
+        let head = match worktree.head()? {
+            Head::Branch { commit, .. } => commit,
+            Head::Detached(commit) => Some(commit),
+        };
+        let changed = worktree.changed_paths(head.as_ref())?;
+        let now = Instant::now();
+        Ok(self.watching.with_ledger(workspace, |ledger| {
+            // What is no longer changed, committed or put back, is forgotten at once: a
+            // later change of the same path is a new one.
+            let gone: Vec<PathBuf> = ledger
+                .paths()
+                .filter(|path| !changed.iter().any(|one| &one.path == path))
+                .map(Path::to_owned)
+                .collect();
+            for path in gone {
+                ledger.forget(&path);
+            }
+            changed
+                .into_iter()
+                .map(|ChangedPath { path, change }| CreditedPath {
+                    by: ledger.credit(&path, now),
+                    path,
+                    change,
+                })
+                .collect()
+        }))
     }
 
     /// The commit the changes of a workspace are counted from and the commits since, as
@@ -395,8 +433,9 @@ impl Workspaces {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<(Option<CommitId>, Vec<Commit>), WorkspaceError> {
-        let _ = workspace;
-        todo!("where the changes are counted from, without the files")
+        let (record, worktree) = self.workspace(workspace)?;
+        let counted = counted(&record, &worktree)?;
+        Ok((counted.counted_from, counted.commits))
     }
 
     /// Opens the repository that `folder` lies in, and with it the workspace of the
@@ -628,62 +667,19 @@ impl Workspaces {
     /// of either, which git would take first, counts for nothing here.
     pub fn changes(&self, workspace: &WorkspaceId) -> Result<Changes, WorkspaceError> {
         let (record, worktree) = self.workspace(workspace)?;
-        let head = worktree.head()?;
-        let refs = worktree.refs()?;
-        let checked_out = match &head {
-            Head::Branch { commit, .. } => commit.clone(),
-            Head::Detached(commit) => Some(commit.clone()),
-        };
-        // In every case but one the files are what is not committed, and no commit is
-        // listed unless the case names some.
-        let uncommitted = |comparison: Comparison, commits: Vec<Commit>| {
-            Ok(Changes {
-                comparison,
-                files: worktree.changed_paths(checked_out.as_ref())?,
-                counted_from: checked_out.clone(),
-                commits,
-            })
-        };
-        let nothing = |base: Option<Base>, why: NoComparison| {
-            uncommitted(Comparison::NothingToCompare { base, why }, Vec::new())
-        };
-
-        let Some(base) = base_of(&record, &head, &refs) else {
-            return nothing(None, NoComparison::NoBase);
-        };
-        let Some(base_commit) = commit_of_base(&worktree, &base.name, &refs)? else {
-            return nothing(Some(base), NoComparison::BaseGone);
-        };
-        if on_base_branch(&head, &base.name, &refs) {
-            let upstream = match &head {
-                Head::Branch { name, .. } => refs
-                    .local
-                    .iter()
-                    .find(|branch| &branch.name == name)
-                    .and_then(|branch| branch.upstream.clone()),
-                Head::Detached(_) => None,
-            };
-            return match upstream {
-                Some(upstream) => {
-                    let commits = worktree.commits(Commits::NotOn(followed(&upstream, &refs)))?;
-                    uncommitted(Comparison::NotOnUpstream { base, upstream }, commits)
-                }
-                None if !refs.remotes.is_empty() => {
-                    let commits = worktree.commits(Commits::OnNoRemoteBranch)?;
-                    uncommitted(Comparison::OnNoRemoteBranch { base }, commits)
-                }
-                None => nothing(Some(base), NoComparison::NoRemote),
-            };
-        }
-        match worktree.fork_point(&base_commit)? {
-            Some(fork) => Ok(Changes {
-                comparison: Comparison::SinceBase { base },
-                commits: worktree.commits(Commits::Since(&fork))?,
-                files: worktree.changed_paths(Some(&fork))?,
-                counted_from: Some(fork),
-            }),
-            None => nothing(Some(base), NoComparison::NoSharedCommit),
-        }
+        let Counted {
+            comparison,
+            counted_from,
+            commits,
+        } = counted(&record, &worktree)?;
+        // In every case the files are what differs from the commit the changes are
+        // counted from, which is the commit checked out where no case names another.
+        Ok(Changes {
+            comparison,
+            files: worktree.changed_paths(counted_from.as_ref())?,
+            counted_from,
+            commits,
+        })
     }
 
     /// The two versions of one file of a workspace: the old one in the commit `since`, at
@@ -801,6 +797,14 @@ impl Workspaces {
         Ok(worktree)
     }
 
+    /// `path`, an absolute path or one relative to the folder of the worktree of
+    /// `workspace`, as relative to that folder; none when it lies outside it, or when the
+    /// workspace has no worktree to lie in.
+    fn inside(&self, workspace: &WorkspaceId, path: &Path) -> Option<PathBuf> {
+        let worktree = self.worktree(workspace).ok().flatten()?;
+        relative_to(worktree.root(), path)
+    }
+
     /// Whether the folder the Store names for a workspace still holds the worktree with
     /// its id.
     fn still_holds(&self, record: &WorkspaceRecord) -> bool {
@@ -810,6 +814,70 @@ impl Workspaces {
                     .is_ok_and(|id| id.as_ref() == Some(&record.id))
         })
     }
+}
+
+/// What [`Workspaces::changes`] knows before it reads a file: everything but the files.
+struct Counted {
+    comparison: Comparison,
+    counted_from: Option<CommitId>,
+    commits: Vec<Commit>,
+}
+
+/// The comparison of a workspace by the five cases of [`Workspaces::changes`], with the
+/// commit the changes are counted from and the commits since. No file is read.
+fn counted(record: &WorkspaceRecord, worktree: &Worktree) -> Result<Counted, WorkspaceError> {
+    let head = worktree.head()?;
+    let refs = worktree.refs()?;
+    let checked_out = match &head {
+        Head::Branch { commit, .. } => commit.clone(),
+        Head::Detached(commit) => Some(commit.clone()),
+    };
+    // In every case but one the changes are counted from the commit checked out, and no
+    // commit is listed unless the case names some.
+    let nothing = |comparison: Comparison, commits: Vec<Commit>| Counted {
+        comparison,
+        counted_from: checked_out.clone(),
+        commits,
+    };
+    let none = |base: Option<Base>, why: NoComparison| {
+        nothing(Comparison::NothingToCompare { base, why }, Vec::new())
+    };
+
+    let Some(base) = base_of(record, &head, &refs) else {
+        return Ok(none(None, NoComparison::NoBase));
+    };
+    let Some(base_commit) = commit_of_base(worktree, &base.name, &refs)? else {
+        return Ok(none(Some(base), NoComparison::BaseGone));
+    };
+    if on_base_branch(&head, &base.name, &refs) {
+        let upstream = match &head {
+            Head::Branch { name, .. } => refs
+                .local
+                .iter()
+                .find(|branch| &branch.name == name)
+                .and_then(|branch| branch.upstream.clone()),
+            Head::Detached(_) => None,
+        };
+        return Ok(match upstream {
+            Some(upstream) => {
+                let commits = worktree.commits(Commits::NotOn(followed(&upstream, &refs)))?;
+                nothing(Comparison::NotOnUpstream { base, upstream }, commits)
+            }
+            None if !refs.remotes.is_empty() => {
+                let commits = worktree.commits(Commits::OnNoRemoteBranch)?;
+                nothing(Comparison::OnNoRemoteBranch { base }, commits)
+            }
+            None => none(Some(base), NoComparison::NoRemote),
+        });
+    }
+    Ok(match worktree.fork_point(&base_commit)? {
+        Some(fork) => Counted {
+            comparison: Comparison::SinceBase { base },
+            commits: worktree.commits(Commits::Since(&fork))?,
+            counted_from: Some(fork),
+        },
+        None => none(Some(base), NoComparison::NoSharedCommit),
+    })
 }
 
 /// Whether a failure is that of one repository and leaves the others as readable as they
@@ -892,6 +960,41 @@ fn branch_named(text: &str, refs: &Refs) -> Option<String> {
         stripped(["refs/remotes/", "remotes/"]).filter(|name| remote(name))?
     };
     Some(name.to_owned())
+}
+
+/// `path` relative to `root`, a folder with every link resolved: a relative path is taken
+/// as it is unless it leads out, an absolute one is compared as it is written and, failing
+/// that, with the links of the folders that exist resolved (macOS keeps `/tmp` behind a
+/// link). None for a path outside.
+fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
+    let inside = if path.is_relative() {
+        path.to_owned()
+    } else if let Ok(inside) = path.strip_prefix(root) {
+        inside.to_owned()
+    } else {
+        // The file may be gone since it was written: resolve its nearest folder that is not.
+        let mut rest = Vec::new();
+        let mut folder = path;
+        let resolved = loop {
+            if let Ok(resolved) = folder.canonicalize() {
+                break resolved;
+            }
+            rest.push(folder.file_name()?);
+            folder = folder.parent()?;
+        };
+        resolved
+            .strip_prefix(root)
+            .ok()?
+            .iter()
+            .chain(rest.into_iter().rev())
+            .collect()
+    };
+    // The ledger holds the path as the watcher and git give it: no `.` in it.
+    let inside: PathBuf = inside
+        .components()
+        .filter(|part| !matches!(part, Component::CurDir))
+        .collect();
+    (!leads_out(&inside)).then_some(inside)
 }
 
 /// Whether a path, meant to be counted from the folder of a worktree, leads out of it

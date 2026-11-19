@@ -8,7 +8,9 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 /// The variables with which a process tells git which repository to use, whatever folder
 /// it runs in.
@@ -256,4 +258,63 @@ pub fn a_clone(scratch: &Scratch) -> PathBuf {
     let clone = scratch.join("clone");
     git(&clone, &["remote", "set-head", "origin", "main"]);
     clone
+}
+
+/// How long a test waits for a fact that has to come from outside it: the system's
+/// notice of a changed file.
+pub const DEADLINE: Duration = Duration::from_secs(20);
+
+/// Waits until `condition` holds, and fails the test when it does not within
+/// [`DEADLINE`].
+pub fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+    let deadline = Instant::now() + DEADLINE;
+    while !condition() {
+        assert!(Instant::now() < deadline, "gave up waiting until {what}");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+/// What a watched worktree told, counted: shared between the function given to
+/// `Workspaces::watch` and the test.
+#[derive(Clone, Default)]
+pub struct Heard {
+    files: Arc<AtomicUsize>,
+    heads: Arc<AtomicUsize>,
+}
+
+impl Heard {
+    /// A function to give to `Workspaces::watch` that counts into this.
+    pub fn told(&self) -> Box<dyn Fn(yaar_workspaces::Seen) + Send + Sync> {
+        let heard = self.clone();
+        Box::new(move |seen| {
+            let count = match seen {
+                yaar_workspaces::Seen::Files => &heard.files,
+                yaar_workspaces::Seen::Head => &heard.heads,
+            };
+            count.fetch_add(1, Ordering::SeqCst);
+        })
+    }
+
+    /// How many times the files were told changed.
+    pub fn files(&self) -> usize {
+        self.files.load(Ordering::SeqCst)
+    }
+
+    /// How many times what is checked out was told changed.
+    pub fn heads(&self) -> usize {
+        self.heads.load(Ordering::SeqCst)
+    }
+
+    /// How many holders of the function of [`Heard::told`] and of this there are: a
+    /// watcher that is gone has let its function go.
+    pub fn holders(&self) -> usize {
+        Arc::strong_count(&self.files)
+    }
+}
+
+/// Moments of the test's own clock, before now, for commands that ran earlier.
+pub fn ago(seconds: u64) -> Instant {
+    Instant::now()
+        .checked_sub(Duration::from_secs(seconds))
+        .expect("the machine has run for longer than the test")
 }
