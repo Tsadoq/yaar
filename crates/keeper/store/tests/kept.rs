@@ -123,7 +123,8 @@ fn after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_w
 
         // Review 1: a thread whose lines were rewritten and which the agent answered
         // (10), a draft (11) that is attached alone, a resolved thread whose lines were
-        // deleted (12), and a thread of round 2 that only moved (13).
+        // deleted (12), and a thread of round 2 that stays on its anchor (13). The draft
+        // (11) is placed with no notice.
         let rewritten = anchor(odd.clone(), Side::Old, 4, 6);
         let plain = anchor(PathBuf::from("src/lib.rs"), Side::New, 3, 3);
         for (n, first, text, anchor) in [

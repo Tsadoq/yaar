@@ -4,7 +4,9 @@
 mod support;
 
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, mpsc};
+use std::time::{Duration, Instant};
 
 use support::Scratch;
 use yaar_store::{
@@ -123,13 +125,18 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
 
         let (typing, typed_once) = mpsc::channel::<()>();
         let (replying, replied) = mpsc::channel::<()>();
+        // How many saves have returned, for the replier to see that the typing went on.
+        let saves = Arc::new(AtomicU32::new(0));
         let typer = {
             let store = store.clone();
+            let saves = Arc::clone(&saves);
             std::thread::spawn(move || {
                 let mut text = String::new();
                 for i in 0_u32.. {
-                    text = format!("draft, saved {i} times");
+                    // One more letter each time, as a draft that is being typed.
+                    text.push('x');
                     store.save_draft(&cid(110), &text).expect("save the draft");
+                    saves.fetch_add(1, Ordering::SeqCst);
                     if i == 0 {
                         typing.send(()).expect("say the first save returned");
                     }
@@ -148,9 +155,21 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
             std::thread::spawn(move || {
                 // Only once the typing is under way, so that the two overlap.
                 typed_once.recv().expect("the typer saved once");
+                let saved_before = saves.load(Ordering::SeqCst);
                 for (k, comment) in replies.iter().enumerate() {
+                    if k == replies.len() - 1 {
+                        // Before the last reply, a save has returned since the first: the
+                        // two overlapped. Looked at again until true, within a deadline.
+                        let deadline = Instant::now() + Duration::from_secs(60);
+                        while saves.load(Ordering::SeqCst) <= saved_before {
+                            assert!(Instant::now() < deadline, "the typer saved no more");
+                            std::thread::yield_now();
+                        }
+                    }
+                    // Even replies mark the thread addressed, so the last one (odd) clears
+                    // the mark: a call that only ever set it would leave it.
                     store
-                        .put_reply(&tid(10), comment, k % 2 == 1)
+                        .put_reply(&tid(10), comment, k % 2 == 0)
                         .expect("put the reply");
                 }
                 replying.send(()).expect("say the replies are done");
@@ -166,8 +185,8 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
     assert_eq!(sent.comments.len(), 1 + replies.len());
     assert_eq!(sent.comments[0].text, "sent");
     assert_eq!(sent.comments[1..], replies[..]);
-    // The last reply, number 399, is odd: it marked the thread addressed.
-    assert!(sent.addressed);
+    // The last reply, number 399, has no mark: it cleared the one reply 398 set.
+    assert!(!sent.addressed);
     assert_eq!(kept.threads[1].comments[0].text, last_draft);
     assert_eq!(kept.threads[1].comments[0].round, None);
 }
