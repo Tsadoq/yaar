@@ -11,11 +11,13 @@ mod common;
 use std::fs;
 use std::path::PathBuf;
 
-use gpui_kit::{TestAppContext, VisualTestContext};
-use yaar_link::{Fact, FlowForm, RequestKind, Setting, Step, TerminalId, TurnId, WorkspaceId};
+use gpui_kit::{Modifiers, TestAppContext, VisualTestContext};
+use yaar_link::{
+    Fact, FlowForm, RequestKind, SessionId, Setting, Step, TerminalId, TurnId, WorkspaceId,
+};
 use yaar_review_pane::{ChangeShown, Following, PaneRow, TimelineEntry, View};
 use yaar_system_tests::standin::{PROMPT, Script};
-use yaar_system_tests::{DEADLINE, World};
+use yaar_system_tests::{Client, DEADLINE, World};
 
 use common::{
     Composed, give_an_identity, key_of, open_another_composed_in, open_composed_in, wait_until,
@@ -60,15 +62,46 @@ fn live_files(window: &Composed, cx: &mut VisualTestContext) -> (Vec<PathBuf>, V
     })
 }
 
+/// The turn end the Keeper tells next: its session, its turn, the state it recorded and the
+/// state last marked reviewed, which the offer counts from.
+struct Ended {
+    session: SessionId,
+    turn: TurnId,
+    state: String,
+    since: Option<String>,
+}
+
+/// Waits for the next end of a turn that the Keeper tells the client.
+fn next_turn_end(client: &mut Client) -> Ended {
+    match client.wait_for_fact(DEADLINE, |fact| matches!(fact, Fact::TurnEnded { .. })) {
+        Fact::TurnEnded {
+            session,
+            turn,
+            state: Some(state),
+            since,
+            ..
+        } => Ended {
+            session,
+            turn,
+            state,
+            since,
+        },
+        other => panic!("a turn ended with no state recorded: {other:?}"),
+    }
+}
+
 // WIN-07.
 #[gpui_kit::test]
 fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut TestAppContext) {
-    // The turn waits at a file of the world, outside the worktree, until the test makes it.
+    // Three turns: the first and the second end at once, so that the third, which the test
+    // reads, starts from a state the second recorded, after a review marked between the two.
+    // The third waits at a file of the world, outside the worktree, until the test makes it.
     let mut world = World::new();
     world.agents_on_path();
     let hold: PathBuf = world.home().with_file_name("hold");
     let script = Script::parse(&format!(
-        "turn\nread notes.txt\nedit notes.txt more\nwrite new.txt hello\n\
+        "turn\nwrite first.txt one\nend\nturn\nwrite second.txt two\nend\nturn\n\
+         read notes.txt\nedit notes.txt more\nwrite new.txt hello\n\
          shell echo x > shell.txt\nhold {}\nend\nturn",
         hold.display()
     ));
@@ -106,6 +139,15 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
         screen_shows(&window, &terminal, PROMPT.trim_end(), cx)
     });
 
+    // A client attached to the Keeper hears the turns end, and types the later messages: the
+    // first is typed in the Window, as a user types it.
+    let workspace: WorkspaceId = window
+        .models
+        .workspaces
+        .read_with(&cx, |list, _| list.selected().cloned())
+        .expect("a workspace is on screen");
+    let mut client = window.world.client();
+
     // The message of the user: the review pane shows Flow by itself, with follow on.
     cx.simulate_input("do the work");
     cx.simulate_keystrokes("enter");
@@ -119,20 +161,55 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
         Following::On
     );
 
+    // The first turn ends, and the reviewer marks what it did reviewed: what changed since
+    // the last review now counts from a state that is neither the commit checked out nor the
+    // first state the Keeper recorded. The second turn then ends too, and its state is the
+    // newest the Keeper holds when the third starts.
+    let first = next_turn_end(&mut client);
+    assert_eq!(
+        first.since, None,
+        "no review was marked before the first turn"
+    );
+    let review = |client: &mut Client| {
+        client
+            .reviews(&workspace)
+            .reviews
+            .into_iter()
+            .find(|review| review.agent.as_ref() == Some(&first.session))
+            .expect("the session has its review")
+    };
+    let marked = review(&mut client).id;
+    client
+        .mark_reviewed(&marked)
+        .expect("the review is marked reviewed");
+    let reviewed = review(&mut client)
+        .reviewed
+        .expect("the mark names the state it reviewed");
+    client.type_line(&terminal, "and the next thing");
+    let second = next_turn_end(&mut client);
+    assert_eq!(second.since.as_deref(), Some(reviewed.as_str()));
+    assert_ne!(second.state, reviewed, "the second turn changed a file");
+    client.type_line(&terminal, "do the work again");
+
     // The timeline: the turn's heading, then its four steps in the order the stand-in did
-    // them, each told as it happened.
+    // them, each told as it happened, after the two turns before it.
     wait_until(&mut cx, "the four steps in the timeline", |cx| {
         window.review.read_with(cx, |pane, _| {
-            pane.timeline()
+            let timeline = pane.timeline();
+            let heading = timeline
                 .iter()
-                .filter(|entry| matches!(entry, TimelineEntry::Step { .. }))
-                .count()
-                == 4
+                .rposition(|entry| matches!(entry, TimelineEntry::Turn { .. }));
+            heading.is_some_and(|heading| timeline.len() - heading == 5)
         })
     });
-    let timeline = window
-        .review
-        .read_with(&cx, |pane, _| pane.timeline().to_vec());
+    let timeline = window.review.read_with(&cx, |pane, _| {
+        let timeline = pane.timeline();
+        let heading = timeline
+            .iter()
+            .rposition(|entry| matches!(entry, TimelineEntry::Turn { .. }))
+            .expect("the timeline holds a turn");
+        timeline[heading..].to_vec()
+    });
     let [
         TimelineEntry::Turn { turn, title, .. },
         TimelineEntry::Step {
@@ -203,11 +280,15 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
         window.review.read_with(&cx, |pane, _| pane.flow_form()),
         FlowForm::LiveDiff
     );
-    let mut client = window.world.client();
     let kept = client
         .turn(&turn)
         .expect("the Keeper holds the running turn");
-    let start = kept.start.clone().expect("the running turn has a start");
+    assert_eq!(
+        kept.start.as_deref(),
+        Some(second.state.as_str()),
+        "the turn starts from the state the turn before recorded, the newest of the world"
+    );
+    let start = second.state.clone();
     assert_eq!(kept.state, None, "the running turn has no state yet");
     // The files, each with the lines of its diff: a heading alone stands for a diff still
     // being read.
@@ -250,23 +331,22 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
     );
 
     // The turn ends: Flow stays, the live diff reaches the state the Keeper recorded, and
-    // the pane offers what changed since the last review.
+    // the pane offers what changed since the last review, which is the one marked after the
+    // first turn, not the history's start.
     fs::write(&hold, "").expect("let the turn go on");
+    let third = next_turn_end(&mut client);
+    assert_eq!(third.turn, turn);
+    assert_eq!(third.since.as_deref(), Some(reviewed.as_str()));
+    let state = third.state;
+    let offer = ChangeShown::Since {
+        from: Some(reviewed.clone()),
+        to: state.clone(),
+    };
     wait_until(&mut cx, "the offer at the turn's end", |cx| {
         window
             .review
-            .read_with(cx, |pane, _| pane.flow_offer().is_some())
+            .read_with(cx, |pane, _| pane.flow_offer() == Some(&offer))
     });
-    let ended = window.review.read_with(&cx, |pane, _| {
-        (
-            pane.view(),
-            pane.live_change().cloned(),
-            pane.flow_offer().cloned(),
-        )
-    });
-    assert_eq!(ended.0, View::Flow, "Flow stays when the turn ends");
-    let kept = client.turn(&turn).expect("the Keeper holds the turn");
-    let state = kept.state.clone().expect("the turn's end recorded a state");
     wait_until(&mut cx, "the live diff to reach the turn's state", |cx| {
         window.review.read_with(cx, |pane, _| {
             pane.live_change()
@@ -278,22 +358,12 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
         .read_with(&cx, |pane, _| pane.live_change().cloned())
         .expect("the live diff names the turn");
     assert_eq!(change.from.as_deref(), Some(start.as_str()));
-    // Still Flow, now that the live diff has taken the turn's state too: a view that was
-    // to switch away at the turn's end has done it by then.
+    // Still Flow, with the live diff on the turn's state too: a view that was to switch
+    // away at the turn's end has done it by then.
     assert_eq!(
         window.review.read_with(&cx, |pane, _| pane.view()),
-        View::Flow
-    );
-    let offer = ended.2.expect("the turn's end offers something");
-    // No review was marked, so the change counts from the history's start: the commit
-    // checked out.
-    assert_eq!(
-        offer,
-        ChangeShown::Since {
-            from: Some(repo.git(&["rev-parse", "HEAD"])),
-            to: state.clone()
-        },
-        "the offer is what changed since the reviewer's last review, of whom there was none"
+        View::Flow,
+        "Flow stays when the turn ends"
     );
 
     // The key of the offer shows Changes with that change.
@@ -303,15 +373,49 @@ fn a_turn_of_the_agent_shows_in_flow_step_by_step_and_as_a_live_diff(cx: &mut Te
             pane.view() == View::Changes && pane.change_shown() == offer
         })
     });
+    // What changed since the review, the second turn's file among them and the first turn's
+    // not: the change counts from the state marked reviewed.
+    let files = ["new.txt", "notes.txt", "second.txt", "shell.txt"].map(PathBuf::from);
     wait_until(&mut cx, "the files of the change in Changes", |cx| {
         window.review.read_with(cx, |pane, _| {
-            ["new.txt", "notes.txt", "shell.txt"].iter().all(|file| {
-                pane.rows().iter().any(
-                    |row| matches!(row, PaneRow::File { path, .. } if path == &PathBuf::from(file)),
-                )
+            files.iter().all(|file| {
+                pane.rows()
+                    .iter()
+                    .any(|row| matches!(row, PaneRow::File { path, .. } if path == file))
             })
         })
     });
+    let mut shown: Vec<PathBuf> = window.review.read_with(&cx, |pane, _| {
+        pane.rows()
+            .iter()
+            .filter_map(|row| match row {
+                PaneRow::File { path, .. } => Some(path.clone()),
+                _ => None,
+            })
+            .collect()
+    });
+    shown.sort();
+    assert_eq!(shown, files);
+}
+
+/// Waits until the Keeper tells the client that the form of Flow of `workspace` is `form`,
+/// which it does once its Store holds it.
+fn wait_for_form(client: &mut Client, workspace: &WorkspaceId, form: FlowForm) {
+    let wanted = Fact::SettingChanged(Setting::FlowForm {
+        workspace: workspace.clone(),
+        form,
+    });
+    let told = client.wait_for_fact(DEADLINE, |fact| fact == &wanted);
+    assert_eq!(told, wanted);
+}
+
+/// The workspace on screen.
+fn on_screen(window: &Composed, cx: &mut VisualTestContext) -> WorkspaceId {
+    window
+        .models
+        .workspaces
+        .read_with(cx, |list, _| list.selected().cloned())
+        .expect("a workspace is on screen")
 }
 
 // WIN-08.
@@ -324,9 +428,11 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
     // A client attached to the Keeper, which hears what the Keeper tells every Window.
     let mut client = world.client();
     let (mut window, mut cx) = open_composed_in(world, app, Vec::new());
-    window.open_a_folder(&mut cx);
 
-    // Flow, and in it the other form. The key acts in Flow only.
+    // Workspace A: the live diff chosen, and then the timeline again. The key acts in Flow
+    // only.
+    window.open_a_folder(&mut cx);
+    let a = on_screen(&window, &mut cx);
     window.click_into_the_review_pane(&mut cx);
     cx.simulate_keystrokes("f");
     assert_eq!(
@@ -334,32 +440,43 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
         View::Flow
     );
     cx.simulate_keystrokes("shift-l");
+    wait_for_form(&mut client, &a, FlowForm::LiveDiff);
+    wait_until(&mut cx, "the live diff shown", |cx| {
+        window
+            .review
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+    });
+    cx.simulate_keystrokes("shift-l");
+    wait_for_form(&mut client, &a, FlowForm::Timeline);
+    wait_until(&mut cx, "the timeline shown", |cx| {
+        window
+            .review
+            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
+    });
+
+    // Workspace B, after A's choices: the live diff. Changes first, since a folder is
+    // opened with its first row drawn.
+    cx.simulate_keystrokes("f");
+    assert_eq!(
+        window.review.read_with(&cx, |pane, _| pane.view()),
+        View::Changes
+    );
+    window.open_a_folder(&mut cx);
+    let b = on_screen(&window, &mut cx);
+    assert_ne!(a, b);
+    window.click_into_the_review_pane(&mut cx);
+    cx.simulate_keystrokes("f");
+    assert_eq!(
+        window.review.read_with(&cx, |pane, _| pane.view()),
+        View::Flow
+    );
     assert_eq!(
         window.review.read_with(&cx, |pane, _| pane.flow_form()),
-        FlowForm::LiveDiff
+        FlowForm::Timeline,
+        "no form was chosen in B yet"
     );
-    let workspace: WorkspaceId = window
-        .models
-        .workspaces
-        .read_with(&cx, |list, _| list.selected().cloned())
-        .expect("a workspace is on screen");
-    // The Keeper tells the form once its Store holds it.
-    let told = client.wait_for_fact(DEADLINE, |fact| {
-        matches!(
-            fact,
-            Fact::SettingChanged(Setting::FlowForm {
-                form: FlowForm::LiveDiff,
-                ..
-            })
-        )
-    });
-    assert_eq!(
-        told,
-        Fact::SettingChanged(Setting::FlowForm {
-            workspace: workspace.clone(),
-            form: FlowForm::LiveDiff,
-        })
-    );
+    cx.simulate_keystrokes("shift-l");
+    wait_for_form(&mut client, &b, FlowForm::LiveDiff);
 
     // The Keeper ends with no goodbye and starts again on the same folders, and a new Window
     // opens against it. The first Window is left to find its link lost.
@@ -368,28 +485,37 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
     world.kill_keeper();
     world.start_keeper();
     let (window, mut cx) = open_another_composed_in(world, app, Vec::new());
-    wait_until(&mut cx, "the workspace on screen", |cx| {
-        window
-            .models
-            .workspaces
-            .read_with(cx, |list, _| list.selected() == Some(&workspace))
+    wait_until(&mut cx, "both workspaces listed", |cx| {
+        window.models.workspaces.read_with(cx, |list, _| {
+            list.workspace(&a).is_some() && list.workspace(&b).is_some()
+        })
     });
-    window.click_into_the_review_pane(&mut cx);
-    cx.simulate_keystrokes("f");
-    assert_eq!(
-        window.review.read_with(&cx, |pane, _| pane.view()),
-        View::Flow
-    );
-    wait_until(
-        &mut cx,
-        "Flow in the form chosen before the restart",
-        |cx| {
-            window
-                .review
-                .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
-        },
-    );
-    // The form shows: `flow-live` is drawn in Flow's place, which the timeline never draws.
+
+    // A opens Flow as the timeline it was left in, and B as the live diff, whichever the
+    // Keeper's last choice in any workspace was and whichever was chosen first. The form is
+    // known when Flow comes on screen: the settings are asked for with the workspaces.
+    for (workspace, form) in [(&a, FlowForm::Timeline), (&b, FlowForm::LiveDiff)] {
+        let row = window.point_in(&format!("sidebar-workspace-{workspace}"), &mut cx);
+        cx.simulate_click(row, Modifiers::none());
+        wait_until(&mut cx, "the workspace on screen", |cx| {
+            on_screen(&window, cx) == *workspace
+        });
+        window.click_into_the_review_pane(&mut cx);
+        if window.review.read_with(&cx, |pane, _| pane.view()) != View::Flow {
+            cx.simulate_keystrokes("f");
+        }
+        assert_eq!(
+            window.review.read_with(&cx, |pane, _| pane.view()),
+            View::Flow
+        );
+        assert_eq!(
+            window.review.read_with(&cx, |pane, _| pane.flow_form()),
+            form,
+            "the form of Flow in {workspace}"
+        );
+    }
+    // The form shows: `flow-live` is drawn in Flow's place in B, which the timeline never
+    // draws.
     wait_until(&mut cx, "the live diff drawn", |cx| {
         cx.debug_bounds("flow-live").is_some()
     });

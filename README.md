@@ -10,8 +10,7 @@ paste to an agent, and runs terminals beside the diff. It hears Claude Code, whi
 one of those terminals as always: the sidebar shows whether it works, waits for you or has
 finished a turn, Flow shows what it does as it works, and Changes shows what the turn
 changed. It does not deliver comments to the agent by itself yet: you hand it the copied
-review by hand. pi runs in a terminal as any
-program does, and the app does not hear it yet.
+review by hand. pi runs in a terminal as any program does, and the app does not hear it yet.
 
 ## What it does now
 
@@ -71,13 +70,13 @@ program does, and the app does not hear it yet.
   the bar at its top names both, and `f` switches between them. Flow has two forms, which
   Shift-L switches between. The *timeline* lists each read, edit, new file and shell command
   of the turn in order, as the agent does it. The *live diff* shows the files the running
-  turn has changed so far, against the state the worktree was in when the turn started
-  (and, once the turn ended, against the state recorded at its end), and grows as the agent
-  writes; a file a shell command writes shows once the watcher sees it. After the files it
-  changed come the files the turn read and left as they were, each marked as read, with its
-  path and no lines; a file leaves that group when the turn changes it. Flow opens as the
-  timeline the first time, and afterwards in the form you chose last in that worktree, which
-  the Keeper keeps.
+  turn has changed so far, from the state the worktree was in when the turn started up to
+  the files on disk (once the turn ended, up to the state recorded at its end), and grows as
+  the agent writes; a file a shell command writes shows once the watcher sees it. After the
+  files it changed come the files the turn read and left as they were, each marked as read,
+  with its path and no lines; a file leaves that group when the turn changes it. Flow opens
+  as the timeline the first time, and afterwards in the form you chose last in that
+  worktree, which the Keeper keeps.
 - **Follows the agent.** Follow is on in every new window and stays on until you turn it off
   with its control in the bar or with Shift-F. While it is on and the agent works, Flow
   moves to each step as it happens, to a file the agent reads as to a file it writes. When
@@ -344,10 +343,11 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 
 Built so far: the Link and the diff; in the Keeper, the reading of git, the recording of
 states and the commit, the database, the workspaces with their watcher, the review engine,
-the terminals (the Dock), the Switchboard that follows each agent session with the steps it takes, and the adapter
-and the companion of Claude Code; in the Window, the frame with its sidebar and its settings,
-the review pane with Changes and Flow, and the terminal pane. Every other crate is still a shell that says in its `lib.rs` which
-part of the app it will hold.
+the terminals (the Dock), the Switchboard that follows each agent session with the steps it
+takes, and the adapter and the companion of Claude Code; in the Window, the frame with its
+sidebar and its settings, the review pane with Changes and Flow, and the terminal pane.
+Every other crate is still a shell that says in its `lib.rs` which part of the app it will
+hold.
 
 Tests come at three levels. Unit tests sit in a crate's source. Component tests sit in its
 `tests/` folder and use only what other crates may use; those of the Window run on GPUI's

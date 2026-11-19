@@ -715,7 +715,17 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     // in the field for a base or for a commit message. So each key must also leave the
     // dialog and both fields closed. A key that asked in a way
     // the walk does not know of, and sent after an answer there, would pass.
+    // Resume Follow acts in Flow and sends nothing in Changes either: the walk presses it
+    // in both views, the second time after the first one, with Changes shown.
+    let resume = yaar_review_pane::ResumeFollow.name();
+    let mut steps: Vec<(Control, bool)> = Vec::new();
     for control in silent {
+        steps.push((control, false));
+        if (control.action)().name() == resume {
+            steps.push((control, true));
+        }
+    }
+    for (step, (control, in_changes)) in steps.into_iter().enumerate() {
         assert_eq!(
             control.asks,
             Asks::Nothing,
@@ -723,6 +733,9 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
             control.title
         );
         let before = window.tap.requests().len();
+        if in_changes {
+            window.show_changes(&mut cx);
+        }
         window.press(&control, &mut cx);
         // Checked before the step is closed: the closing types into the field for the
         // base, and would hand a field this key had opened its line all the same.
@@ -746,7 +759,8 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         // The stop frame is no request, so the loop below does not see it. A key that
         // sent it would end the Keeper, and the request that closes the step would never
         // pass: the step is closed on that frame as well, and it is told apart here.
-        let Some(closed) = window.set_base(&format!("after-{}", control.key()), &mut cx) else {
+        let Some(closed) = window.set_base(&format!("after-{}-{step}", control.key()), &mut cx)
+        else {
             panic!(
                 "the key {} of {} names no message and sent the stop-everything frame",
                 control.key(),
