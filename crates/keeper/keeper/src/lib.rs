@@ -530,6 +530,15 @@ fn serve_window(stream: UnixStream, shared: &Arc<Shared>, version: &str) -> Resu
         converse(&window, speaks, shared)
     };
     shared.forget(&window);
+    // It is shown no terminal and no workspace any more.
+    if let Some(parts) = shared
+        .parts
+        .read()
+        .unwrap_or_else(PoisonError::into_inner)
+        .as_ref()
+    {
+        parts.window_gone(&window);
+    }
     // What is owed to the Window is still written, if it can take it.
     window.finish();
     {
