@@ -1244,6 +1244,9 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
         "kept",
         "a link was followed"
     );
+    // "As it was" is read as: no path of the data folder is gone, and the file the test
+    // wrote has its content. The Keeper writes to the folder until the kill, so no other
+    // content can be compared with a look taken before it.
     let data_after = permanent(tree_of(&world.data_dir()));
     let lost: Vec<_> = data_before
         .iter()

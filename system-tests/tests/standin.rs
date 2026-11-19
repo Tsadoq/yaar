@@ -606,7 +606,8 @@ done
 
 /// The review a canned hook answers with: an instruction, then a heading and a comment for
 /// each thread. The words `Thread` and `##` also stand in the instruction, away from the
-/// start of a line, as in the app's own.
+/// start of a line, as in the app's own, and each thread's code, fenced as the engine fences
+/// it, holds a line that looks like the next heading.
 fn review_of(ids: &[&str]) -> String {
     let mut text = String::from(
         "This is a review. For each thread, reply to the id written after \"Thread\" \
@@ -614,7 +615,7 @@ fn review_of(ids: &[&str]) -> String {
     );
     for id in ids {
         text.push_str(&format!(
-            "## Thread {id}\n\nsrc/lib.rs, line 3\n\nComment:\nwhy this?\n\n"
+            "## Thread {id}\n\nsrc/lib.rs, line 3\n\n```\n## Thread in-code-of-{id}\n```\n\nComment:\nwhy this?\n\n"
         ));
     }
     text
@@ -1594,15 +1595,20 @@ fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_duri
         Step::Hold(go.clone()),
         Step::SelfTurn,
         Step::End,
+        Step::Turn,
+        Step::End,
         Step::Exit,
     ]);
     let mut run = Start::new(place, "claude", script)
         .recording(&["UserPromptSubmit"], &events)
         .start();
     run.pty.wait_for("● Hold ".as_bytes(), 0);
-    // Keys with no Enter, and an Esc: with no turn open the Esc interrupts nothing.
+    // Keys with no Enter, and an Esc: with no turn open the Esc interrupts nothing. Each
+    // is read before the next is typed, so the Esc is a read of its own, as a key is.
     run.pty.send(b"abc");
+    run.wait_log("abc", |log| log.received.ends_with(b"abc"));
     run.pty.send(b"\x1b");
+    run.wait_log("the Esc", |log| log.received.ends_with(b"abc\x1b"));
     run.pty.send(b"k");
     let log = run.wait_log("the keys", |log| log.received.ends_with(b"abc\x1bk"));
     // Read in the hold, which has not ended: the hook of the step after it has not run,
@@ -1616,14 +1622,61 @@ fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_duri
     );
     assert!(!events.exists());
     fs::write(&go, "").expect("make the file");
+    // The turn the stand-in started itself ended, and asks for a message: the keys are
+    // still its own, so that the Enter typed now ends the line they began.
+    let prompt = run.pty.wait_for(PROMPT.as_bytes(), 0);
+    run.pty.send(b"\r");
     assert!(run.wait_exit().success());
-    let notice = prompts_in(&events);
-    assert_eq!(notice.len(), 1);
-    assert!(notice[0].starts_with("<task-notification>"));
-    // They are still the stand-in's: no step took them.
-    assert_eq!(run.log().received, b"abc\x1bk");
+    let prompts = prompts_in(&events);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(prompts[0].starts_with("<task-notification>"));
+    assert_eq!(prompts[1], "abck");
+    // The Esc read in the hold interrupted neither the turn the stand-in started nor
+    // anything else.
+    let log = run.log();
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Interrupted { .. })),
+        "{:?}",
+        story(&log)
+    );
     run.pty.drain();
     assert!(find(&run.pty.output, INTERRUPT_MARK).is_none());
+    assert!(find(&run.pty.output, WORKING).is_some_and(|at| at < prompt));
+}
+
+#[test]
+fn a_line_typed_before_a_self_started_turn_is_the_next_turns_message_and_the_self_turn_takes_none_of_it()
+ {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let script = Script(vec![
+        Step::Hold(go.clone()),
+        Step::SelfTurn,
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .start();
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    run.pty.send(b"typed\r");
+    run.wait_log("the line", |log| log.received == b"typed\r");
+    assert!(!events.exists());
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    // The notice is the self-started turn's message, and the line is the next turn's, which
+    // had it at hand and asked for nothing.
+    let prompts = prompts_in(&events);
+    assert_eq!(prompts.len(), 2, "{prompts:?}");
+    assert!(prompts[0].starts_with("<task-notification>"));
+    assert_eq!(prompts[1], "typed");
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 0);
 }
 
 #[test]

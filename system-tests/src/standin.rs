@@ -621,6 +621,12 @@ impl Input {
         }
     }
 
+    /// Forgets the Esc keys read and not used. An Esc typed while no turn runs interrupts
+    /// nothing, and must not interrupt the turn that starts after it.
+    fn forget_esc(&mut self) {
+        self.pending.retain(|key| *key != Key::Esc);
+    }
+
     /// Takes the keys up to and with the first Enter as a line, without the Esc among
     /// them, when a whole line has been read.
     fn take_line(&mut self) -> Option<String> {
@@ -909,6 +915,7 @@ impl Standin {
             }
         };
         out(b"\r\n");
+        self.input.forget_esc();
         self.in_turn = true;
         self.submit(&line);
         out(WORKING);
@@ -918,6 +925,7 @@ impl Standin {
     /// Starts a turn as Claude Code does when a background task ends: no prompt, no key
     /// read, and a message that is the task's notice.
     fn self_turn(&mut self) {
+        self.input.forget_esc();
         self.in_turn = true;
         self.submit(TASK_NOTIFICATION);
         out(WORKING);
@@ -1366,14 +1374,39 @@ fn review_in(answer: &[u8]) -> Option<String> {
 }
 
 /// The ids of the threads a review names, in order: the word after `## Thread ` at the
-/// start of a line.
+/// start of a line that is not inside a fenced block, where the review puts the code it
+/// is about and may hold a line that looks like a heading.
 fn thread_ids(review: &str) -> Vec<String> {
-    review
-        .lines()
-        .filter_map(|line| line.strip_prefix("## Thread "))
-        .filter_map(|rest| rest.split_whitespace().next())
-        .map(str::to_owned)
-        .collect()
+    let mut ids = Vec::new();
+    // The length of the run of backticks that opened the fence we are in, if any.
+    let mut fence: Option<usize> = None;
+    for line in review.lines() {
+        let ticks = line.len() - line.trim_start_matches('`').len();
+        if ticks >= 3 {
+            match fence {
+                None => {
+                    fence = Some(ticks);
+                    continue;
+                }
+                // Only a run as long as the opening one, with nothing after it, closes.
+                Some(open) if ticks >= open && line.trim_end().len() == ticks => {
+                    fence = None;
+                    continue;
+                }
+                Some(_) => {}
+            }
+        }
+        if fence.is_some() {
+            continue;
+        }
+        if let Some(id) = line
+            .strip_prefix("## Thread ")
+            .and_then(|rest| rest.split_whitespace().next())
+        {
+            ids.push(id.to_owned());
+        }
+    }
+    ids
 }
 
 /// The tool server a plugin's `.mcp.json` names, as Claude Code starts it: a child of the
