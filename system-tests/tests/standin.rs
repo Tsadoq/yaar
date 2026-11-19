@@ -272,6 +272,9 @@ struct Start<'a> {
     /// the test fails.
     gates: Vec<PathBuf>,
     sleepers: Vec<PathBuf>,
+    /// Whether a plugin folder with a tool server of the test's own (`TOOL_SERVER`) is
+    /// among the plugins.
+    server: bool,
 }
 
 impl<'a> Start<'a> {
@@ -287,7 +290,14 @@ impl<'a> Start<'a> {
             controlling: false,
             gates: Vec::new(),
             sleepers: Vec::new(),
+            server: false,
         }
+    }
+
+    /// A last plugin folder whose `.mcp.json` names a tool server of the test's own.
+    fn with_tool_server(mut self) -> Self {
+        self.server = true;
+        self
     }
 
     fn plugin(mut self, groups: Vec<Group>) -> Self {
@@ -358,6 +368,18 @@ impl<'a> Start<'a> {
                 json!({"hooks": hooks}).to_string(),
             )
             .expect("write the hooks");
+            dirs.push(folder.display().to_string());
+        }
+        if self.server {
+            let folder = root.join("plugin-server");
+            fs::create_dir_all(&folder).expect("create the plugin of the tool server");
+            let script = folder.join("server.sh");
+            fs::write(&script, tool_server_script(&root)).expect("write the tool server");
+            let server = json!({"mcpServers": {"yaar": {
+                "command": "/bin/sh",
+                "args": [script],
+            }}});
+            fs::write(folder.join(".mcp.json"), server.to_string()).expect("write .mcp.json");
             dirs.push(folder.display().to_string());
         }
         let pty = Pty::open();
@@ -549,6 +571,85 @@ fn free_hooks(gates: &[PathBuf], sleepers: &[PathBuf]) {
         }
     }
 }
+
+/// The tool server of the tests of a reply: a `sh` script that answers the messages of MCP
+/// one line at a time, as the app's own server does, and writes down what it was started
+/// with and every line it read (`server.started`, `server.read` of the run's folder). A call
+/// whose line holds `REFUSE` is answered with an error result.
+fn tool_server_script(root: &Path) -> String {
+    format!(
+        r#"echo "$$ $PPID $CLAUDE_CODE_SESSION_ID $(pwd -P)" >> '{started}'
+n=0
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> '{read}'
+  id=$(printf '%s' "$line" | sed -n 's/^{{[^{{}}]*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-11-25","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"yaar","version":"0"}}}}}}\n' "$id" ;;
+    *'"method":"tools/list"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[]}}}}\n' "$id" ;;
+    *'"method":"tools/call"'*)
+      n=$((n + 1))
+      case "$line" in
+        *REFUSE*)
+          printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"refused: no such thread"}}],"isError":true}}}}\n' "$id" ;;
+        *)
+          printf '{{"jsonrpc":"2.0","id":%s,"result":{{"content":[{{"type":"text","text":"recorded %s"}}]}}}}\n' "$id" "$n" ;;
+      esac ;;
+  esac
+done
+"#,
+        started = root.join("server.started").display(),
+        read = root.join("server.read").display(),
+    )
+}
+
+/// The review a canned hook answers with: an instruction, then a heading and a comment for
+/// each thread. The words `Thread` and `##` also stand in the instruction, away from the
+/// start of a line, as in the app's own.
+fn review_of(ids: &[&str]) -> String {
+    let mut text = String::from(
+        "This is a review. For each thread, reply to the id written after \"Thread\" \
+         in its heading, as in ## Thread x.\n\n",
+    );
+    for id in ids {
+        text.push_str(&format!(
+            "## Thread {id}\n\nsrc/lib.rs, line 3\n\nComment:\nwhy this?\n\n"
+        ));
+    }
+    text
+}
+
+/// A hook command that answers `UserPromptSubmit` as the app's does when a review rides with
+/// the message: with `additionalContext` and the line shown under the prompt; for a prompt
+/// holding `only_for` when one is given, with nothing for any other.
+fn review_hook(review: &str, only_for: Option<&str>) -> String {
+    let answer = json!({
+        "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": review},
+        "systemMessage": "yaar: review round 1 attached",
+    })
+    .to_string()
+    .replace('\'', r"'\''");
+    match only_for {
+        None => format!("cat > /dev/null; printf '%s' '{answer}'"),
+        Some(words) => format!("case \"$(cat)\" in *'{words}'*) printf '%s' '{answer}' ;; esac"),
+    }
+}
+
+/// The lines the tool server read, each a JSON message.
+fn server_read(root: &Path) -> Vec<Value> {
+    events_in(&root.join("server.read"))
+}
+
+/// The tools/call messages among what the tool server read.
+fn calls(read: &[Value]) -> Vec<&Value> {
+    read.iter()
+        .filter(|message| message["method"] == "tools/call")
+        .collect()
+}
+
+/// The reply tool as Claude Code lists it to the agent.
+const LISTED_REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
 
 // The script's text.
 
@@ -1213,16 +1314,33 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
     assert!(run.wait_exit().success());
 }
 
+/// The prompts the `UserPromptSubmit` hooks were given, in order.
+fn prompts_in(events: &Path) -> Vec<String> {
+    events_in(events)
+        .iter()
+        .filter(|event| event["hook_event_name"] == "UserPromptSubmit")
+        .map(|event| event["prompt"].as_str().expect("a prompt").to_owned())
+        .collect()
+}
+
+/// How many times `needle` is in `haystack`.
+fn count_of(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
 #[test]
-fn a_line_typed_during_a_turn_is_the_next_turns_message_and_no_prompt_is_printed_for_it() {
+fn a_line_typed_during_a_hold_is_submitted_at_once_as_claude_code_queues_it() {
     let place = Place::new();
     let root = root_of(&place);
     let (events, go) = (root.join("events"), root.join("go"));
+    // No second `turn`: the queued message starts none, so a stand-in that held it for
+    // one would wait at it for ever.
     let script = Script(vec![
         Step::Turn,
         Step::Hold(go.clone()),
-        Step::End,
-        Step::Turn,
         Step::End,
         Step::Exit,
     ]);
@@ -1232,22 +1350,632 @@ fn a_line_typed_during_a_turn_is_the_next_turns_message_and_no_prompt_is_printed
     let at = run.say(0, "first");
     run.pty.wait_for("● Hold ".as_bytes(), at);
     run.pty.send(b"second\r");
-    run.wait_log("the queued line", |log| log.received == b"first\rsecond\r");
+    // The hook runs for the line while the hold goes on: a repeated look at a fact that
+    // only becomes true.
+    let log = run.wait_log("the hook run for the queued line", |log| {
+        log.did
+            .iter()
+            .filter(|did| matches!(did, Did::Hook { event, .. } if event == "UserPromptSubmit"))
+            .count()
+            == 2
+    });
+    assert!(!go.exists());
+    assert_eq!(log.received, b"first\rsecond\r");
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Done { step: 1, .. })),
+        "the hold was over before the queued line was submitted: {:?}",
+        story(&log)
+    );
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
-    let prompts: Vec<String> = events_in(&events)
-        .iter()
-        .map(|event| event["prompt"].as_str().expect("a prompt").to_owned())
-        .collect();
-    assert_eq!(prompts, ["first", "second"]);
+    assert_eq!(prompts_in(&events), ["first", "second"]);
+    // One turn: the progress mark of a turn that works was printed once, and so was the
+    // prompt; the queued line was neither asked for nor echoed.
     run.pty.drain();
-    let shown = run
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
+    assert_eq!(count_of(&run.pty.output, WORKING), 1);
+    assert_eq!(count_of(&run.pty.output, b"second"), 0);
+}
+
+#[test]
+fn a_line_typed_between_the_steps_of_a_turn_is_held_for_the_next_turn() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let (started, gate) = (root.join("started"), root.join("gate"));
+    make_fifo(&gate);
+    let script = Script(vec![
+        Step::Turn,
+        Step::Read(path("a.txt")),
+        Step::Hold(go.clone()),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .plugin(vec![group(
+            "PreToolUse",
+            Some("Read"),
+            gated(&started, &gate),
+        )])
+        .gate(&gate)
+        .start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    let at = run.say(0, "first");
+    assert!(
+        wait_until(DEADLINE, || started.exists()),
+        "the hook never ran"
+    );
+    // Typed while the read tool's hook runs: no hold is open, so it is no queued message.
+    run.pty.send(b"second\r");
+    open_gate(&gate);
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    // The line was read before the hold began, and the hold is not given what came
+    // before it. A key typed in the hold is the barrier: a hold that took the line as
+    // queued would have run its hook before it read this key.
+    run.pty.send(b"k");
+    let log = run.wait_log("the probe key", |log| log.received.ends_with(b"k"));
+    assert!(log.did.contains(&Did::Began {
+        step: 2,
+        received: 13
+    }));
+    assert_eq!(prompts_in(&events), ["first"]);
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    // It is the next turn's message, taken once the first turn ended, and no prompt was
+    // asked for for it.
+    assert_eq!(prompts_in(&events), ["first", "second"]);
+    let story = story(&run.log());
+    let held = story.iter().position(|did| did == "done 2 at 14");
+    let submitted = story.iter().rposition(|did| did == "hook UserPromptSubmit");
+    assert!(
+        held.is_some() && held < submitted,
+        "the message was submitted before the hold ended: {story:?}"
+    );
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
+}
+
+#[test]
+fn a_message_queued_before_a_dialog_is_up_does_not_answer_it() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(go.clone()),
+        Step::Ask(path("p.txt"), "content".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .start();
+    let at = run.say(0, "first");
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    // A message with an `n` in it, which would deny the dialog if the dialog read it.
+    run.pty.send(b"nope\r");
+    run.wait_log("the queued line", |log| log.received == b"first\rnope\r");
+    fs::write(&go, "").expect("make the file");
+    run.pty
+        .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
+    // A key typed after the dialog is the barrier: it is read after anything the program
+    // made of the bytes before it.
+    run.pty.send(b"q");
+    let log = run.wait_log("the key after the dialog", |log| {
+        log.received.ends_with(b"nope\rq")
+    });
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Interrupted { .. })),
+        "the queued line answered the dialog: {:?}",
+        story(&log)
+    );
+    assert!(!run.work.join("p.txt").exists());
+    run.pty.send(b"y");
+    assert!(run.wait_exit().success());
+    assert_eq!(
+        fs::read_to_string(run.work.join("p.txt")).unwrap(),
+        "content"
+    );
+    assert_eq!(prompts_in(&events), ["first", "nope"]);
+}
+
+#[test]
+fn a_line_held_for_the_next_turn_does_not_answer_a_dialog_either() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let (started, gate) = (root.join("started"), root.join("gate"));
+    make_fifo(&gate);
+    let script = Script(vec![
+        Step::Turn,
+        Step::Read(path("a.txt")),
+        Step::Hold(go.clone()),
+        Step::Ask(path("p.txt"), "content".into()),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .plugin(vec![group(
+            "PreToolUse",
+            Some("Read"),
+            gated(&started, &gate),
+        )])
+        .gate(&gate)
+        .start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    let at = run.say(0, "first");
+    assert!(
+        wait_until(DEADLINE, || started.exists()),
+        "the hook never ran"
+    );
+    // For the next turn: it holds an `n`, which would deny the dialog if it were read as
+    // an answer.
+    run.pty.send(b"any\r");
+    open_gate(&gate);
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    fs::write(&go, "").expect("make the file");
+    let asked = run
         .pty
-        .output
-        .windows(PROMPT.len())
-        .filter(|window| *window == PROMPT.as_bytes())
-        .count();
-    assert_eq!(shown, 1, "only the first message was asked for");
+        .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
+    run.pty.send(b"q");
+    let log = run.wait_log("the key after the dialog", |log| {
+        log.received.ends_with(b"any\rq")
+    });
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Interrupted { .. })),
+        "the held line answered the dialog: {:?}",
+        story(&log)
+    );
+    assert!(!run.work.join("p.txt").exists());
+    run.pty.send(b"y");
+    assert!(run.wait_exit().success());
+    assert_eq!(
+        fs::read_to_string(run.work.join("p.txt")).unwrap(),
+        "content"
+    );
+    assert_eq!(prompts_in(&events), ["first", "any"]);
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output[asked..], PROMPT.as_bytes()), 0);
+}
+
+#[test]
+fn a_self_started_turn_runs_the_hook_with_a_task_notice_and_reads_no_byte() {
+    let place = Place::new();
+    let events = root_of(&place).join("events");
+    let script = Script(vec![
+        Step::SelfTurn,
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit", "Stop"], &events)
+        .start();
+    // The prompt is for the next turn, and comes after the first one ended.
+    let prompt = run.pty.wait_for(PROMPT.as_bytes(), 0);
+    let log = run.log();
+    assert!(log.received.is_empty(), "it read {:?}", log.received);
+    let seen = events_in(&events);
+    assert_eq!(names(&seen), ["UserPromptSubmit", "Stop"]);
+    let notice = seen[0]["prompt"].as_str().expect("a prompt");
+    assert!(notice.starts_with("<task-notification>"), "{notice:?}");
+    // The turn that works came with it, and was shown to have ended; no prompt was
+    // printed before that.
+    assert_eq!(find(&run.pty.output, WORKING), Some(0));
+    assert!(find(&run.pty.output, NO_PROGRESS).is_some_and(|at| at < prompt));
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
+
+    // The message the user types after it is a message of its own.
+    run.pty.send(b"typed\r");
+    assert!(run.wait_exit().success());
+    assert_eq!(prompts_in(&events)[1], "typed");
+    assert_eq!(run.log().received, b"typed\r");
+}
+
+#[test]
+fn a_hold_outside_a_turn_gates_the_steps_after_it_and_leaves_the_keys_typed_during_it() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let script = Script(vec![
+        Step::Hold(go.clone()),
+        Step::SelfTurn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .start();
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    // Keys with no Enter, and an Esc: with no turn open the Esc interrupts nothing.
+    run.pty.send(b"abc");
+    run.pty.send(b"\x1b");
+    run.pty.send(b"k");
+    let log = run.wait_log("the keys", |log| log.received.ends_with(b"abc\x1bk"));
+    // Read in the hold, which has not ended: the hook of the step after it has not run,
+    // and nothing printed the mark of an interrupt.
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Done { step: 0, .. } | Did::Interrupted { .. })),
+        "{:?}",
+        story(&log)
+    );
+    assert!(!events.exists());
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    let notice = prompts_in(&events);
+    assert_eq!(notice.len(), 1);
+    assert!(notice[0].starts_with("<task-notification>"));
+    // They are still the stand-in's: no step took them.
+    assert_eq!(run.log().received, b"abc\x1bk");
+    run.pty.drain();
+    assert!(find(&run.pty.output, INTERRUPT_MARK).is_none());
+}
+
+#[test]
+fn a_dialog_after_a_hold_outside_a_turn_sets_aside_what_was_typed_during_it() {
+    let place = Place::new();
+    let go = root_of(&place).join("go");
+    let script = Script(vec![
+        Step::Hold(go.clone()),
+        Step::Ask(path("p.txt"), "content".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script).start();
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    // With an `n`, which would deny the dialog if it were read as an answer to it.
+    run.pty.send(b"abcn");
+    run.wait_log("the keys", |log| log.received == b"abcn");
+    fs::write(&go, "").expect("make the file");
+    run.pty
+        .wait_for(b"Do you want to create p.txt? (y/n)\r\n", 0);
+    run.pty.send(b"q");
+    let log = run.wait_log("the key after the dialog", |log| {
+        log.received.ends_with(b"abcnq")
+    });
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Interrupted { .. })),
+        "what was typed in the hold answered the dialog: {:?}",
+        story(&log)
+    );
+    assert!(!run.work.join("p.txt").exists());
+    run.pty.send(b"y");
+    assert!(run.wait_exit().success());
+    assert_eq!(
+        fs::read_to_string(run.work.join("p.txt")).unwrap(),
+        "content"
+    );
+}
+
+// A reply through the plugin's tool server.
+
+/// A run of a turn that gets the review `review` makes, given the run's folder, with its
+/// message, for a prompt holding `only_for` when one is given, and replies as `script` says,
+/// through a tool server of the test's own. Gives the run, its folder and the file its hooks
+/// record their inputs in.
+fn replying(
+    review: impl FnOnce(&Path) -> String,
+    only_for: Option<&str>,
+    script: Script,
+) -> (Run, PathBuf, PathBuf) {
+    let place = Place::new();
+    let root = root_of(&place);
+    let review = review(&root);
+    let events = root.join("events");
+    let run = Start::new(place, "claude", script)
+        .plugin(vec![group(
+            "UserPromptSubmit",
+            None,
+            review_hook(&review, only_for),
+        )])
+        .recording(
+            &[
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "PostToolUseFailure",
+            ],
+            &events,
+        )
+        .with_tool_server()
+        .start();
+    (run, root, events)
+}
+
+/// Bodies a reply may carry: quotes, backticks, line ends, shell syntax, a backslash, a
+/// line that looks like a message of the protocol, and what is no ASCII.
+const AWKWARD_BODY: &str = "one \"quoted\" and `ticked` and $(echo hi); rm -rf / && \\ done\n\
+    {\"id\":7,\"method\":\"tools/list\"}\n\tTabbed \u{fc}ber \u{2713}\n";
+
+#[test]
+fn a_reply_goes_to_the_thread_of_the_review_through_a_tool_server_started_once() {
+    let review = review_of(&["t-aaa", "t-bbb", "t-ccc"]);
+    let script = Script(vec![
+        Step::Turn,
+        Step::Reply {
+            thread: 2,
+            addressed: true,
+            body: AWKWARD_BODY.into(),
+        },
+        Step::Reply {
+            thread: 1,
+            addressed: false,
+            body: "short".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    let (mut run, root, events) = replying(|_| review, None, script);
+    let at = run.say(0, "please do it");
+    run.pty.wait_for("● Reply t-bbb\r\n".as_bytes(), at);
+    assert!(run.wait_exit().success());
+
+    // What the server read: what Claude Code says before it calls a tool, and the calls.
+    let read = server_read(&root);
+    let methods: Vec<&str> = read
+        .iter()
+        .map(|message| message["method"].as_str().expect("a method"))
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "initialize",
+            "notifications/initialized",
+            "tools/list",
+            "tools/call",
+            "tools/call"
+        ]
+    );
+    assert!(read[1].get("id").is_none(), "a notification has no id");
+    let ids: Vec<u64> = [0, 2, 3, 4]
+        .iter()
+        .map(|at| read[*at]["id"].as_u64().expect("an id"))
+        .collect();
+    assert_eq!(ids, [0, 1, 2, 3]);
+    let sent = calls(&read);
+    assert_eq!(sent[0]["params"]["name"], "reply_to_thread");
+    // The second heading's id, the body byte for byte, addressed; then the first's, open.
+    let arguments = |call: &Value| call["params"]["arguments"].clone();
+    assert_eq!(
+        arguments(sent[0]),
+        json!({"thread": "t-bbb", "body": AWKWARD_BODY, "addressed": true})
+    );
+    assert_eq!(
+        arguments(sent[1]),
+        json!({"thread": "t-aaa", "body": "short", "addressed": false})
+    );
+
+    // One server, a child of the stand-in, in its folder, told the session the stand-in
+    // gave itself.
+    let log = run.log();
+    let started = fs::read_to_string(root.join("server.started")).expect("the server started");
+    let started: Vec<&str> = started.lines().collect();
+    assert_eq!(started.len(), 1, "started more than once: {started:?}");
+    let fields: Vec<&str> = started[0].splitn(4, ' ').collect();
+    assert_eq!(fields[1], log.pid.to_string(), "its parent");
+    assert_eq!(fields[2], log.session);
+    assert_eq!(fields[3], run.work.display().to_string());
+
+    // What the stand-in wrote down: the call and the answer, between the hooks around it,
+    // and the line in its terminal.
+    let tools: Vec<&Did> = log
+        .did
+        .iter()
+        .filter(|did| matches!(did, Did::Tool { .. }))
+        .collect();
+    assert_eq!(tools.len(), 2);
+    let Did::Tool {
+        arguments: logged,
+        answer,
+        ..
+    } = tools[0]
+    else {
+        unreachable!()
+    };
+    assert_eq!(*logged, arguments(sent[0]));
+    assert_eq!(
+        *answer,
+        json!({"content": [{"type": "text", "text": "recorded 1"}]})
+    );
+    let story = story(&log);
+    let first = story
+        .iter()
+        .position(|did| did.starts_with("tool"))
+        .expect("a tool");
+    assert_eq!(story[first - 1], "hook PreToolUse");
+    assert!(story[first + 1..].starts_with(&["hook PostToolUse".to_owned()]));
+
+    let seen = events_in(&events);
+    let tool_events: Vec<&Value> = seen
+        .iter()
+        .filter(|event| event["tool_name"] == LISTED_REPLY_TOOL)
+        .collect();
+    assert_eq!(tool_events.len(), 4);
+    assert_eq!(tool_events[0]["hook_event_name"], "PreToolUse");
+    assert_eq!(tool_events[0]["tool_input"], arguments(sent[0]));
+    assert_eq!(
+        tool_events[0]["mcp_server"]["name"],
+        "plugin:yaar-review:yaar"
+    );
+    assert_eq!(tool_events[1]["hook_event_name"], "PostToolUse");
+    assert_eq!(
+        tool_events[1]["tool_response"],
+        json!([{"type": "text", "text": "recorded 1"}])
+    );
+
+    // The server is the stand-in's own: it is gone with it.
+    let server: u32 = fields[0].parse().expect("the server's id");
+    assert!(
+        wait_until(DEADLINE, || !is_alive(server)),
+        "the tool server outlived the stand-in"
+    );
+}
+
+#[test]
+fn a_review_delivered_as_a_file_names_its_threads_in_that_file() {
+    let script = Script(vec![
+        Step::Turn,
+        Step::Reply {
+            thread: 3,
+            addressed: true,
+            body: "done".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    let (mut run, root, _) = replying(
+        |root| {
+            let folder = root.join("reviews");
+            fs::create_dir_all(&folder).expect("make the folder of reviews");
+            let file = folder.join("r-1.md");
+            fs::write(&file, review_of(&["f-one", "f-two", "f-three"])).expect("write the review");
+            // The pointer names a folder and a file that is not there as well as the file,
+            // and ends its sentence on the path.
+            format!(
+                "Your review is long. Read all of {} first, not {}/missing.md, and answer: {}.",
+                folder.display(),
+                folder.display(),
+                file.display()
+            )
+        },
+        None,
+        script,
+    );
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    let read = server_read(&root);
+    assert_eq!(
+        calls(&read)[0]["params"]["arguments"],
+        json!({"thread": "f-three", "body": "done", "addressed": true})
+    );
+}
+
+#[test]
+fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names() {
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(path("go")),
+        Step::Reply {
+            thread: 2,
+            addressed: true,
+            body: "queued".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    // Only the second message gets a review: the first has none to reply to.
+    let (mut run, root, _) = replying(
+        |_| review_of(&["q-one", "q-two"]),
+        Some("with a review"),
+        script,
+    );
+    let at = run.say(0, "first");
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    run.pty.send(b"with a review\r");
+    run.wait_log("the review in the answer to the queued message", |log| {
+        log.did.iter().any(
+            |did| matches!(did, Did::Hook { event, answer, .. } if event == "UserPromptSubmit" && !answer.is_empty()),
+        )
+    });
+    assert!(!root.join("server.started").exists());
+    fs::write(run.work.join("go"), "").expect("make the file");
+    assert!(run.wait_exit().success());
+    let read = server_read(&root);
+    assert_eq!(
+        calls(&read)[0]["params"]["arguments"],
+        json!({"thread": "q-two", "body": "queued", "addressed": true})
+    );
+}
+
+#[test]
+fn a_reply_the_server_refuses_is_a_failed_tool_with_the_servers_reason() {
+    let script = Script(vec![
+        Step::Turn,
+        Step::Reply {
+            thread: 1,
+            addressed: true,
+            body: "REFUSE".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    let (mut run, _, events) = replying(|_| review_of(&["r-one"]), None, script);
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    let log = run.log();
+    let answer = log.did.iter().find_map(|did| match did {
+        Did::Tool { answer, .. } => Some(answer.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        answer,
+        Some(json!({
+            "content": [{"type": "text", "text": "refused: no such thread"}],
+            "isError": true
+        }))
+    );
+    let after: Vec<Value> = events_in(&events)
+        .into_iter()
+        .filter(|event| event["tool_name"] == LISTED_REPLY_TOOL)
+        .collect();
+    assert_eq!(names(&after), ["PreToolUse", "PostToolUseFailure"]);
+    assert_eq!(after[1]["error"], "refused: no such thread");
+    assert!(after[1].get("tool_response").is_none());
+}
+
+#[test]
+fn a_reply_to_a_thread_the_review_does_not_have_stops_the_stand_in_and_says_which() {
+    let reply = |thread| {
+        Script(vec![
+            Step::Turn,
+            Step::Reply {
+                thread,
+                addressed: true,
+                body: "x".into(),
+            },
+            Step::End,
+            Step::Exit,
+        ])
+    };
+    // Past the last thread of the review it got.
+    let (mut run, root, _) = replying(|_| review_of(&["only"]), None, reply(2));
+    run.say(0, "go");
+    assert!(!run.wait_exit().success());
+    run.pty.drain();
+    let shown = String::from_utf8_lossy(&run.pty.output).into_owned();
+    assert!(
+        shown.contains("no thread 2") && shown.contains("only"),
+        "{shown:?}"
+    );
+    assert!(
+        !root.join("server.started").exists(),
+        "the server was started"
+    );
+
+    // And with no review at all: the hook answers nothing for any prompt.
+    let (mut run, _, _) = replying(|_| review_of(&["only"]), Some("never typed"), reply(1));
+    run.say(0, "go");
+    assert!(!run.wait_exit().success());
+    run.pty.drain();
+    let shown = String::from_utf8_lossy(&run.pty.output).into_owned();
+    assert!(shown.contains("no thread 1"), "{shown:?}");
 }
 
 #[test]
@@ -1300,67 +2028,6 @@ fn ask_ignores_any_byte_but_y_n_and_esc_and_y_writes_the_file() {
         _ => None,
     });
     assert_eq!(post, Some(3 + 6 + 1));
-}
-
-#[test]
-fn a_dialog_is_answered_by_keys_typed_after_it_and_a_line_typed_before_it_waits_for_its_turn() {
-    let place = Place::new();
-    let root = root_of(&place);
-    let (events, go) = (root.join("events"), root.join("go"));
-    let script = Script(vec![
-        Step::Turn,
-        Step::Hold(go.clone()),
-        Step::Ask(path("p.txt"), "content".into()),
-        Step::End,
-        Step::Turn,
-        Step::End,
-        Step::Exit,
-    ]);
-    let mut run = Start::new(place, "claude", script)
-        .recording(&["UserPromptSubmit"], &events)
-        .start();
-    let at = run.say(0, "first");
-    run.pty.wait_for("● Hold ".as_bytes(), at);
-    // A message for the next turn, typed while this one works: it holds an `n` and no
-    // `y`, and is read before the dialog is up.
-    run.pty.send(b"any\r");
-    run.wait_log("the queued line", |log| log.received == b"first\rany\r");
-    fs::write(&go, "").expect("make the file");
-    let asked = run
-        .pty
-        .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
-    // A key typed after the dialog is the barrier: it is read after anything the program
-    // made of the bytes before it.
-    run.pty.send(b"q");
-    let log = run.wait_log("the key after the dialog", |log| {
-        log.received.ends_with(b"any\rq")
-    });
-    assert!(
-        log.did
-            .iter()
-            .all(|did| !matches!(did, Did::Interrupted { .. })),
-        "the queued line answered the dialog: {:?}",
-        story(&log)
-    );
-    assert!(!run.work.join("p.txt").exists());
-    run.pty.send(b"y");
-    assert!(run.wait_exit().success());
-    assert_eq!(
-        fs::read_to_string(run.work.join("p.txt")).unwrap(),
-        "content"
-    );
-    // The queued line is the next turn's message, and no prompt was printed for it.
-    let prompts: Vec<String> = events_in(&events)
-        .iter()
-        .map(|event| event["prompt"].as_str().expect("a prompt").to_owned())
-        .collect();
-    assert_eq!(prompts, ["first", "any"]);
-    run.pty.drain();
-    let shown = run.pty.output[asked..]
-        .windows(PROMPT.len())
-        .filter(|window| *window == PROMPT.as_bytes())
-        .count();
-    assert_eq!(shown, 0, "a prompt was printed for the queued line");
 }
 
 /// A dialog denied with this key: the mark, no event after the request, no file, the turn

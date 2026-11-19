@@ -37,16 +37,29 @@
 //! line starts at the left and the bytes it writes, [`INTERRUPT_MARK`] among them, are the
 //! bytes the terminal passes on. Every step writes a line of its own in the terminal, after the
 //! hooks before it and before the hooks after it: `● Read <path>`, `● Edit <path>`,
-//! `● Write <path>`, `● Bash <command>`, `● Hold <path>`, and `● Done` at the end of a
-//! turn. A test that reads the screen looks for those lines and for [`PROMPT`].
+//! `● Write <path>`, `● Bash <command>`, `● Hold <path>`, `● Reply <thread id>`, and
+//! `● Done` at the end of a turn. A test that reads the screen looks for those lines and
+//! for [`PROMPT`].
+//!
+//! A message typed while a turn runs goes the way Claude Code takes it. During a
+//! [`Step::Hold`], which stands for a tool that runs, the line is queued: its
+//! `UserPromptSubmit` runs when Enter is read, the hook's review among it, and the message
+//! goes with the turn that runs. A line read at any other moment is held for the next
+//! [`Step::Turn`].
+//!
+//! It stands in for the reply tool too. The first [`Step::Reply`] starts the tool server
+//! the plugins' `.mcp.json` names, `yaar`, as a child with its standard input and output
+//! piped, and keeps it for the session; each reply is a `tools/call` to it, between the
+//! `PreToolUse` and `PostToolUse` of the tool as Claude Code lists it. The thread a reply
+//! names is counted in the last review a `UserPromptSubmit` hook answered with.
 
 use std::collections::VecDeque;
 use std::fs::File;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Write};
 use std::mem::MaybeUninit;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
@@ -477,6 +490,25 @@ const KEY_POLL_MS: i32 = 20;
 const WORKING: &[u8] = b"\x1b]9;4;3;\x07";
 const NO_PROGRESS: &[u8] = b"\x1b]9;4;0;\x07";
 
+/// The reply tool as Claude Code lists it to the agent, and as the tool server names it.
+const LISTED_REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
+const REPLY_TOOL: &str = "reply_to_thread";
+
+/// The name the plugin's `.mcp.json` gives its tool server, and the name Claude Code gives
+/// that server in a hook's input.
+const TOOL_SERVER_NAME: &str = "yaar";
+const TOOL_SERVER_LISTED: &str = "plugin:yaar-review:yaar";
+
+/// How long the stand-in waits for one answer of the tool server. Claude Code waits for a
+/// tool as long as it takes; the app's own server answers within ten seconds, so a server
+/// that has said nothing by then is stuck, and the stand-in writes that down.
+const TOOL_WAIT: Duration = Duration::from_secs(15);
+
+/// The prompt of a turn Claude Code starts itself when a background task ends.
+const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>standin-task</task-id>\n\
+<status>completed</status>\n<summary>The background task has ended.</summary>\n\
+</task-notification>";
+
 /// The stand-in's program: what `standin-agent` runs, given its name as it was started,
 /// its arguments, and its environment through the process. Gives its exit status.
 ///
@@ -660,6 +692,14 @@ struct Standin {
     transcript: PathBuf,
     /// Whether a turn is open: a message was taken and `end` has not come.
     in_turn: bool,
+    /// The plugin folders `CLAUDE_CODE_PLUGIN_DIRS` names, in order; none when the app's
+    /// pieces are left out.
+    plugin_dirs: Vec<PathBuf>,
+    /// What the last `UserPromptSubmit` hook that answered with a review gave: the text of
+    /// the answer, then the contents of each file the text names by an absolute path.
+    review: Option<String>,
+    /// The plugin's tool server, once a [`Step::Reply`] started it.
+    server: Option<ToolServer>,
 }
 
 impl Standin {
@@ -686,7 +726,8 @@ impl Standin {
         log.line(&json!({"pid": std::process::id()}));
         log.line(&json!({"args": args}));
         log.line(&json!({"session": session}));
-        let plugins = if pieces { read_plugins() } else { Vec::new() };
+        let plugin_dirs = if pieces { plugin_dirs() } else { Vec::new() };
+        let plugins = read_plugins(&plugin_dirs);
         Standin {
             log,
             input: Input::default(),
@@ -697,6 +738,9 @@ impl Standin {
             cwd,
             transcript,
             in_turn: false,
+            plugin_dirs,
+            review: None,
+            server: None,
         }
     }
 
@@ -831,9 +875,18 @@ impl Standin {
                 self.restore();
                 Ended::Exit
             }
-            // Built by the package "the stand-in and the world" of slice 6.
-            Step::SelfTurn => todo!(),
-            Step::Reply { .. } => todo!(),
+            Step::SelfTurn => {
+                self.self_turn();
+                Ended::Done
+            }
+            Step::Reply {
+                thread,
+                addressed,
+                body,
+            } => {
+                self.reply(*thread, *addressed, body);
+                Ended::Done
+            }
         }
     }
 
@@ -856,9 +909,81 @@ impl Standin {
         };
         out(b"\r\n");
         self.in_turn = true;
-        self.hook("UserPromptSubmit", None, json!({"prompt": line}));
+        self.submit(&line);
         out(WORKING);
         Ended::Done
+    }
+
+    /// Starts a turn as Claude Code does when a background task ends: no prompt, no key
+    /// read, and a message that is the task's notice.
+    fn self_turn(&mut self) {
+        self.in_turn = true;
+        self.submit(TASK_NOTIFICATION);
+        out(WORKING);
+    }
+
+    /// Runs `UserPromptSubmit` for a message, and keeps the review its answer carries, as
+    /// Claude Code adds the hook's `additionalContext` to the message.
+    fn submit(&mut self, message: &str) {
+        for answer in self.hook("UserPromptSubmit", None, json!({"prompt": message})) {
+            if let Some(review) = review_in(&answer) {
+                self.review = Some(review);
+            }
+        }
+    }
+
+    /// Replies to a thread of the last review received through the plugin's tool server, as
+    /// Claude Code calls a tool: `PreToolUse`, its line, the call, what the server
+    /// answered written down as [`Did::Tool`], and `PostToolUse` of the answer, or
+    /// `PostToolUseFailure` when the server refused or said nothing. The server is started
+    /// at the first reply and kept.
+    fn reply(&mut self, thread: u32, addressed: bool, body: &str) {
+        let ids = self.review.as_deref().map(thread_ids).unwrap_or_default();
+        let Some(id) = thread
+            .checked_sub(1)
+            .and_then(|index| ids.get(index as usize))
+        else {
+            panic!("no thread {thread} in the last review received, which names {ids:?}");
+        };
+        let arguments = json!({"thread": id, "body": body, "addressed": addressed});
+        let mut fields = json!({
+            "tool_name": LISTED_REPLY_TOOL,
+            "mcp_server": {"name": TOOL_SERVER_LISTED, "source": "plugin"},
+            "tool_input": arguments,
+        });
+        self.hook("PreToolUse", Some(LISTED_REPLY_TOOL), fields.clone());
+        out(format!("● Reply {id}\r\n").as_bytes());
+        let server = self
+            .server
+            .get_or_insert_with(|| ToolServer::start(&self.plugin_dirs, &self.cwd, &self.session));
+        let call = json!({"name": REPLY_TOOL, "arguments": arguments});
+        let (answer, failed) = match server.request("tools/call", call) {
+            Ok(message) => match message.get("error") {
+                Some(error) => (error.clone(), true),
+                None => {
+                    let result = message["result"].clone();
+                    let failed = result["isError"] == true;
+                    (result, failed)
+                }
+            },
+            Err(why) => (json!({"message": why}), true),
+        };
+        self.log.did(
+            "tool",
+            json!({"arguments": arguments, "answer": answer, "received": self.input.received}),
+        );
+        let event = if failed {
+            let why = answer["content"][0]["text"]
+                .as_str()
+                .or_else(|| answer["message"].as_str())
+                .map_or_else(|| answer.to_string(), str::to_owned);
+            fields["error"] = json!(why);
+            "PostToolUseFailure"
+        } else {
+            fields["tool_response"] = answer["content"].clone();
+            "PostToolUse"
+        };
+        self.hook(event, Some(LISTED_REPLY_TOOL), fields);
     }
 
     /// A tool of the agent: `PreToolUse`, its line, the action, and `PostToolUse` of what
@@ -988,21 +1113,45 @@ impl Standin {
         }
     }
 
-    /// Holds the turn open until the file is there, with Esc to interrupt.
+    /// Holds until the file is there. Inside a turn it stands for a tool that runs: Esc
+    /// interrupts, and a line typed during it, ended by Enter, is a message Claude Code
+    /// queues, so `UserPromptSubmit` runs for it at once and it goes with the turn that
+    /// runs. What was typed before the hold began is for the next `turn` and stays, as
+    /// does what is typed during it with no Enter. Outside a turn it is only a gate:
+    /// nothing is taken from the keys, and Esc interrupts nothing.
     fn hold(&mut self, at: usize, path: &Path) -> Ended {
         out(format!("● Hold {}\r\n", path.display()).as_bytes());
         let file = self.absolute(path);
-        while !file.exists() {
-            if self.input.take_esc() {
-                self.interrupt(at);
-                return Ended::Interrupted;
+        let in_turn = self.in_turn;
+        let earlier = if in_turn {
+            std::mem::take(&mut self.input.pending)
+        } else {
+            VecDeque::new()
+        };
+        let ended = loop {
+            if file.exists() {
+                break Ended::Done;
+            }
+            if in_turn {
+                if self.input.take_esc() {
+                    self.interrupt(at);
+                    break Ended::Interrupted;
+                }
+                if let Some(line) = self.input.take_line() {
+                    self.submit(&line);
+                    continue;
+                }
             }
             if self.input.closed {
-                return Ended::Closed;
+                break Ended::Closed;
             }
             self.input.fill(&self.log, KEY_POLL_MS);
+        };
+        if in_turn {
+            let later = std::mem::replace(&mut self.input.pending, earlier);
+            self.input.pending.extend(later);
         }
-        Ended::Done
+        ended
     }
 
     /// Writes numbered lines as fast as the terminal takes them.
@@ -1025,10 +1174,12 @@ impl Standin {
 
     /// Runs every command the plugins give for the event, each to its end, and writes
     /// down what each printed. `tool` is the tool's name for an event that has one.
-    fn hook(&self, event: &str, tool: Option<&str>, fields: Value) {
+    /// Gives what each command printed, in order.
+    fn hook(&self, event: &str, tool: Option<&str>, fields: Value) -> Vec<Vec<u8>> {
         let commands = self.commands(event, tool);
+        let mut answers = Vec::new();
         if commands.is_empty() {
-            return;
+            return answers;
         }
         let mut input = json!({
             "session_id": self.session,
@@ -1051,7 +1202,9 @@ impl Standin {
                     "received": self.input.received,
                 }),
             );
+            answers.push(answer);
         }
+        answers
     }
 
     /// The commands the plugins give for an event, in the order of the folders. A group
@@ -1154,16 +1307,24 @@ fn new_session_id() -> String {
     )
 }
 
-/// The `hooks` object of `hooks/hooks.json` of each folder `CLAUDE_CODE_PLUGIN_DIRS`
-/// names, in order. A folder with no such file has no hooks.
-fn read_plugins() -> Vec<Value> {
+/// The folders `CLAUDE_CODE_PLUGIN_DIRS` names, in order.
+fn plugin_dirs() -> Vec<PathBuf> {
     let Some(dirs) = std::env::var_os("CLAUDE_CODE_PLUGIN_DIRS") else {
         return Vec::new();
     };
-    let dirs = dirs.to_string_lossy().into_owned();
+    dirs.to_string_lossy()
+        .split(':')
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
+        .collect()
+}
+
+/// The `hooks` object of `hooks/hooks.json` of each plugin folder, in order. A folder with
+/// no such file has no hooks.
+fn read_plugins(dirs: &[PathBuf]) -> Vec<Value> {
     let mut plugins = Vec::new();
-    for dir in dirs.split(':').filter(|dir| !dir.is_empty()) {
-        let file = Path::new(dir).join("hooks/hooks.json");
+    for dir in dirs {
+        let file = dir.join("hooks/hooks.json");
         let Ok(text) = std::fs::read_to_string(&file) else {
             continue;
         };
@@ -1172,6 +1333,183 @@ fn read_plugins() -> Vec<Value> {
         plugins.push(parsed["hooks"].clone());
     }
     plugins
+}
+
+/// The review a `UserPromptSubmit` hook's answer adds to the message, as Claude Code reads
+/// it: the answer's `hookSpecificOutput.additionalContext`, then the contents of each file
+/// that text names, a file being a word of it, white space apart, that is an absolute path
+/// to a file that exists (the delivery of a long review). What a hook prints that is no
+/// such JSON adds nothing.
+fn review_in(answer: &[u8]) -> Option<String> {
+    let answer: Value = serde_json::from_slice(answer).ok()?;
+    let output = &answer["hookSpecificOutput"];
+    if output["hookEventName"] != "UserPromptSubmit" {
+        return None;
+    }
+    let mut text = output["additionalContext"].as_str()?.to_owned();
+    let delivered = text.clone();
+    for word in delivered.split_whitespace() {
+        // A sentence may end on the path, or put it in quotes.
+        let bare = word.trim_matches(|c: char| ".,;:!?)(\"'`".contains(c));
+        for candidate in [word, bare] {
+            if Path::new(candidate).is_absolute()
+                && let Ok(content) = std::fs::read_to_string(candidate)
+            {
+                text.push('\n');
+                text.push_str(&content);
+                break;
+            }
+        }
+    }
+    Some(text)
+}
+
+/// The ids of the threads a review names, in order: the word after `## Thread ` at the
+/// start of a line.
+fn thread_ids(review: &str) -> Vec<String> {
+    review
+        .lines()
+        .filter_map(|line| line.strip_prefix("## Thread "))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .map(str::to_owned)
+        .collect()
+}
+
+/// The tool server a plugin's `.mcp.json` names, as Claude Code starts it: a child of the
+/// stand-in with its standard input and output piped, speaking MCP one JSON-RPC message to
+/// a line. It lasts as long as the stand-in does.
+struct ToolServer {
+    child: Child,
+    input: ChildStdin,
+    /// What the server wrote, a message to a value, read on a thread of its own so that a
+    /// wait for an answer is a wait on this channel and has a deadline.
+    messages: mpsc::Receiver<Value>,
+    next_id: u64,
+}
+
+impl ToolServer {
+    /// Starts the server `.mcp.json` of the first plugin folder that names one gives, in
+    /// `cwd`, with `session` as its `CLAUDE_CODE_SESSION_ID`, and goes through what Claude
+    /// Code says to a server before it calls a tool: `initialize`, `initialized`, and
+    /// `tools/list`. Panics when no plugin names the server or it does not answer.
+    fn start(dirs: &[PathBuf], cwd: &Path, session: &str) -> ToolServer {
+        let (dir, command, args) = dirs
+            .iter()
+            .find_map(|dir| {
+                let text = std::fs::read_to_string(dir.join(".mcp.json")).ok()?;
+                let file: Value = serde_json::from_str(&text).ok()?;
+                let server = &file["mcpServers"][TOOL_SERVER_NAME];
+                let args = server["args"].as_array().into_iter().flatten();
+                Some((
+                    dir,
+                    server["command"].as_str()?.to_owned(),
+                    args.filter_map(|arg| arg.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>(),
+                ))
+            })
+            .unwrap_or_else(|| {
+                panic!("no plugin folder of {dirs:?} has a .mcp.json naming a server `{TOOL_SERVER_NAME}`")
+            });
+        // Claude Code puts a plugin's own folder where `${CLAUDE_PLUGIN_ROOT}` stands.
+        let root = dir.to_string_lossy();
+        let expand = |text: &str| text.replace("${CLAUDE_PLUGIN_ROOT}", &root);
+        let mut server = Command::new(expand(&command));
+        server
+            .args(args.iter().map(|arg| expand(arg)))
+            .current_dir(cwd)
+            .env("CLAUDE_CODE_SESSION_ID", session)
+            .env("CLAUDECODE", "1")
+            .env("CLAUDE_PROJECT_DIR", cwd)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        // As for a hook: an ignored signal stays ignored across `exec`.
+        // SAFETY: `signal` is async-signal-safe, and this runs between `fork` and `exec`.
+        unsafe {
+            server.pre_exec(|| {
+                libc::signal(libc::SIGHUP, libc::SIG_DFL);
+                Ok(())
+            })
+        };
+        let mut child = server
+            .spawn()
+            .unwrap_or_else(|why| panic!("start the tool server {command:?}: {why}"));
+        let input = child.stdin.take().expect("a piped standard input");
+        let output = child.stdout.take().expect("a piped standard output");
+        let (sender, messages) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(output).lines() {
+                let Ok(line) = line else { return };
+                if let Ok(message) = serde_json::from_str::<Value>(&line)
+                    && sender.send(message).is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let mut server = ToolServer {
+            child,
+            input,
+            messages,
+            next_id: 0,
+        };
+        let initialize = json!({
+            "protocolVersion": "2025-11-25",
+            "capabilities": {"roots": {"listChanged": true}},
+            "clientInfo": {"name": "claude-code", "title": "Claude Code", "version": "0"},
+        });
+        for (method, params) in [("initialize", initialize), ("tools/list", json!({}))] {
+            let answer = server
+                .request(method, params)
+                .unwrap_or_else(|why| panic!("the tool server did not answer `{method}`: {why}"));
+            assert!(
+                answer.get("error").is_none(),
+                "the tool server refused `{method}`: {answer}"
+            );
+            if method == "initialize" {
+                server.notify("notifications/initialized");
+            }
+        }
+        server
+    }
+
+    fn send(&mut self, message: &Value) -> Result<(), String> {
+        writeln!(self.input, "{message}")
+            .and_then(|()| self.input.flush())
+            .map_err(|why| format!("the tool server takes no message: {why}"))
+    }
+
+    fn notify(&mut self, method: &str) {
+        let _ = self.send(&json!({"jsonrpc": "2.0", "method": method}));
+    }
+
+    /// Sends a request and waits, at most [`TOOL_WAIT`], for the message that answers it,
+    /// whole; or says why none came.
+    fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}))?;
+        let deadline = Instant::now() + TOOL_WAIT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            let message = self.messages.recv_timeout(left).map_err(|why| match why {
+                mpsc::RecvTimeoutError::Timeout => {
+                    format!("the tool server said nothing in {TOOL_WAIT:?}")
+                }
+                mpsc::RecvTimeoutError::Disconnected => "the tool server ended".to_owned(),
+            })?;
+            if message["id"] == id {
+                return Ok(message);
+            }
+        }
+    }
+}
+
+impl Drop for ToolServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
 }
 
 /// A command run through `/bin/sh -c`, with the hangup signal back at its default in the
