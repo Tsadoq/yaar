@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use yaar_recorder::{
-    ChangedPath, CommitId, Git, GitError, RecordError, StateId, StateStore, Worktree,
+    ChangedPath, CommitId, Git, GitError, RecordError, RecordedState, StateId, StateStore, Worktree,
 };
 use yaar_store::{
     Anchor, CommentId, ReviewId, SentBy, SessionId, SessionRecord, Side, Store, StoreError,
@@ -15,6 +15,7 @@ use yaar_store::{
 };
 
 use crate::review::{Review, ReviewError, Scope};
+use crate::takeover::{Takeover, takeover};
 use crate::text::{COPY_INSTRUCTION, as_text};
 use crate::viewed::{ViewedFiles, fingerprint};
 use crate::workspace::with_review_of_no_agent;
@@ -111,6 +112,9 @@ pub enum EngineError {
     Git(GitError),
     /// The system gave no random number for the id of a new review.
     Random(std::io::Error),
+    /// The Store holds no review of this session: it holds no such session, or the
+    /// session was never told to the engine as started.
+    NoReviewOfSession(SessionId),
 }
 
 impl fmt::Display for EngineError {
@@ -124,6 +128,9 @@ impl fmt::Display for EngineError {
             Self::Record(e) => e.fmt(f),
             Self::Git(e) => e.fmt(f),
             Self::Random(e) => write!(f, "no random number for an id: {e}"),
+            Self::NoReviewOfSession(session) => {
+                write!(f, "there is no review of the session {session}")
+            }
         }
     }
 }
@@ -227,8 +234,9 @@ impl Reviews {
     /// new thread on the files on disk then records a state only when they did, and every
     /// state the engine takes is told to `watch`.
     pub fn watching(self, watch: Arc<dyn StateWatch>) -> Reviews {
-        let _ = watch;
-        todo!("an engine that records only when files changed")
+        let mut engine = self;
+        engine.watch = Some(watch);
+        engine
     }
 
     /// `session` starts: it keeps its review, takes one over, or gets a new one, by
@@ -237,21 +245,83 @@ impl Reviews {
     /// the session's review. The session itself is the caller's to keep in the Store
     /// before.
     pub fn session_started(&self, session: &SessionRecord) -> Result<ReviewId, EngineError> {
-        let _ = session;
-        todo!("the review a session that starts takes")
+        let _turn = self.turn();
+        let reviews: Vec<Review> = self
+            .store
+            .reviews_of(&session.workspace)?
+            .into_iter()
+            .map(Review::from_record)
+            .collect();
+        let sessions = self.store.sessions_of(&session.workspace)?;
+        match takeover(&reviews, &sessions, session) {
+            Takeover::Keeps(review) => Ok(review),
+            Takeover::TakesOver(review) => {
+                self.store.set_review_agent(&review, Some(&session.id))?;
+                Ok(review)
+            }
+            Takeover::New => {
+                let review = Review::new(
+                    ReviewId::new(random_id()?),
+                    session.workspace.clone(),
+                    Some(session.id.as_str().to_owned()),
+                );
+                self.store.put_review(review.record())?;
+                Ok(review.id().clone())
+            }
+        }
     }
 
     /// A turn of `session` ended in `worktree`: records the state of the worktree, and
     /// gives it with what changed since the last review of the session's review, counted
     /// from `start` before the first mark. The turn's record is the caller's to keep.
+    /// Refused with [`EngineError::NoReviewOfSession`] for a session that has no review,
+    /// and then nothing is recorded.
     pub fn turn_ended(
         &self,
         worktree: &Worktree,
         session: &SessionId,
         start: Option<&CommitId>,
     ) -> Result<TurnEnded, EngineError> {
-        let _ = (worktree, session, start);
-        todo!("the state at a turn's end and what changed since the last review")
+        let (workspace, review) = {
+            let _turn = self.turn();
+            let kept = self
+                .store
+                .session(session)?
+                .ok_or_else(|| EngineError::NoReviewOfSession(session.clone()))?;
+            let review = self
+                .store
+                .reviews_of(&kept.workspace)?
+                .into_iter()
+                .find(|review| review.agent.as_deref() == Some(session.as_str()))
+                .ok_or_else(|| EngineError::NoReviewOfSession(session.clone()))?;
+            (kept.workspace, review.id)
+        };
+        // The recording can take a second: no turn is held while it runs.
+        let state = self.record_state(&workspace, worktree)?.id;
+
+        // What the review marked reviewed is read after the recording, so that a mark made
+        // while it ran counts.
+        let since = self.review(&review)?.reviewed().map(str::to_owned);
+        let states = self.states_of(&workspace)?;
+        let from = match (&since, start) {
+            (Some(reviewed), _) => Some(reviewed.clone()),
+            (None, Some(start)) => {
+                // The commit of the real repository is copied into the state store, so
+                // that it can be compared with a state.
+                states.keep_commit(worktree, start)?;
+                Some(start.as_str().to_owned())
+            }
+            (None, None) => None,
+        };
+        let changed = match from {
+            Some(from) => Some(states.changed_paths(&from, state.as_str())?),
+            None => None,
+        };
+        Ok(TurnEnded {
+            state,
+            since,
+            changed,
+        })
     }
 
     /// The reviews of a workspace, whole, and its files marked viewed. A workspace with no
@@ -396,7 +466,7 @@ impl Reviews {
         if before.unsent(Scope::Everything).is_empty() {
             return Err(ReviewError::NothingToSend.into());
         }
-        let state = self.states_of(before.workspace())?.record(worktree)?;
+        let state = self.record_state(before.workspace(), worktree)?;
 
         let _turn = self.turn();
         let mut current = self.review(review)?;
@@ -421,7 +491,7 @@ impl Reviews {
         review: &ReviewId,
     ) -> Result<StateId, EngineError> {
         let before = self.review(review)?;
-        let state = self.states_of(before.workspace())?.record(worktree)?;
+        let state = self.record_state(before.workspace(), worktree)?;
 
         let _turn = self.turn();
         let mut current = self.review(review)?;
@@ -444,7 +514,7 @@ impl Reviews {
             return Ok(None);
         };
         let states = self.states_of(current.workspace())?;
-        let now = states.record(worktree)?;
+        let now = self.record_state(current.workspace(), worktree)?;
         Ok(Some(states.changed_paths(reviewed, now.id.as_str())?))
     }
 
@@ -489,6 +559,20 @@ impl Reviews {
         Ok(store)
     }
 
+    // Records the state of `worktree` in the state store of `workspace` and tells the watch
+    // of it: every state the engine takes goes through here.
+    fn record_state(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: &Worktree,
+    ) -> Result<RecordedState, EngineError> {
+        let state = self.states_of(workspace)?.record(worktree)?;
+        if let Some(watch) = &self.watch {
+            watch.state_taken(workspace, &state.id);
+        }
+        Ok(state)
+    }
+
     // The turn: held while a call reads what it changes and keeps the change.
     fn turn(&self) -> MutexGuard<'_, ()> {
         self.writing.lock().unwrap_or_else(PoisonError::into_inner)
@@ -505,12 +589,22 @@ impl Reviews {
     ) -> Result<String, EngineError> {
         match (&at.tree, worktree) {
             (None, None) => Err(EngineError::NoWorktree),
-            (None, Some(worktree)) => Ok(self
-                .states_of(workspace)?
-                .record(worktree)?
-                .id
-                .as_str()
-                .to_owned()),
+            (None, Some(worktree)) => {
+                // Files nobody changed since the newest state are that state: a thread
+                // goes on it, and nothing is recorded, unless there is no state yet.
+                let unchanged = self
+                    .watch
+                    .as_ref()
+                    .is_some_and(|watch| !watch.changed_since_state(workspace));
+                if unchanged && let Some(newest) = self.states_of(workspace)?.states()?.pop() {
+                    return Ok(newest.id.as_str().to_owned());
+                }
+                Ok(self
+                    .record_state(workspace, worktree)?
+                    .id
+                    .as_str()
+                    .to_owned())
+            }
             (Some(commit), Some(worktree)) => {
                 self.states_of(workspace)?
                     .keep_commit(worktree, &CommitId::new(commit))?;
