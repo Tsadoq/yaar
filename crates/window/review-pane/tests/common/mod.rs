@@ -55,11 +55,21 @@ struct Reviews {
     holding: AtomicBool,
     /// The requests kept while `holding`.
     held: Mutex<Vec<(RequestId, WorkspaceId)>>,
+    /// What every `GetReviews` is refused with, when a test says so.
+    refusal: Mutex<Option<Refusal>>,
 }
 
 impl Reviews {
     /// What a `GetReviews` of `workspace` is answered with now.
-    fn answer(&self, workspace: &WorkspaceId) -> WorkspaceReviews {
+    fn answer(&self, workspace: &WorkspaceId) -> Result<Reply, Refusal> {
+        if let Some(refusal) = self.refusal.lock().expect("not poisoned").clone() {
+            return Err(refusal);
+        }
+        Ok(Reply::Reviews(self.reviews_of(workspace)))
+    }
+
+    /// The reviews of `workspace` as a test set them.
+    fn reviews_of(&self, workspace: &WorkspaceId) -> WorkspaceReviews {
         self.set
             .lock()
             .expect("the reviews are not poisoned")
@@ -121,7 +131,7 @@ impl KeeperEnd {
                                     &stream,
                                     &Message::Reply {
                                         to: id,
-                                        reply: Ok(Reply::Reviews(answer)),
+                                        reply: answer,
                                     },
                                 );
                             }
@@ -204,6 +214,12 @@ impl KeeperEnd {
             .insert(reviews.workspace.clone(), reviews);
     }
 
+    /// From now on refuses every request for reviews with this, as the Keeper of the
+    /// contract does; none to answer them again.
+    pub fn refuse_reviews(&self, refusal: Option<Refusal>) {
+        *self.reviews.refusal.lock().expect("not poisoned") = refusal;
+    }
+
     /// How many times the Window asked for reviews so far.
     pub fn reviews_asked(&self) -> usize {
         self.reviews.heard.load(Ordering::SeqCst)
@@ -221,14 +237,8 @@ impl KeeperEnd {
         let mut held = self.reviews.held.lock().expect("not poisoned");
         self.reviews.holding.store(false, Ordering::SeqCst);
         for (id, workspace) in held.drain(..) {
-            let answer = self.reviews.answer(&workspace);
-            write(
-                &self.stream,
-                &Message::Reply {
-                    to: id,
-                    reply: Ok(Reply::Reviews(answer)),
-                },
-            );
+            let reply = self.reviews.answer(&workspace);
+            write(&self.stream, &Message::Reply { to: id, reply });
         }
     }
 

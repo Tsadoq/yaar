@@ -9,13 +9,12 @@ mod common;
 use std::path::PathBuf;
 
 use gpui_kit::{
-    Bounds, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
-    point, px,
+    Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
 use yaar_link::{
-    Anchor, Author, Changes, Comment, CommentId, DraftOn, Fact, FileStatus, Lines, Reply, Request,
-    RequestId, Review, Round, SentBy, Side as LinkSide, Thread, ThreadId, WorkspaceReviews,
+    Anchor, Author, Changes, Comment, CommentId, DraftOn, Fact, FileStatus, Lines, Refusal, Reply,
+    Request, Review, Round, SentBy, Side as LinkSide, Thread, ThreadId, WorkspaceReviews,
 };
 use yaar_review_pane::{CommentBox, PaneRow, Position, ReviewPane};
 
@@ -54,7 +53,15 @@ fn long_path() -> PathBuf {
 /// Opens the pane on the two files and waits until every file is shown. The pane has the
 /// focus, as after a click on the first line of the diff.
 fn open_on_two_files(cx: &mut TestAppContext) -> (Stage, Changes, VisualTestContext) {
-    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    open_on_two_files_of(vec![workspace('1', "feature")], cx)
+}
+
+/// As [`open_on_two_files`], for the first of these workspaces, which is on screen.
+fn open_on_two_files_of(
+    workspaces: Vec<yaar_link::Workspace>,
+    cx: &mut TestAppContext,
+) -> (Stage, Changes, VisualTestContext) {
+    let (mut stage, mut cx) = open(workspaces, cx);
     let changes = since_main(
         Vec::new(),
         vec![
@@ -382,4 +389,884 @@ fn text_typed_in_a_comment_box_is_saved_while_the_reviewer_types_without_leaving
     cx.simulate_keystrokes("escape");
     assert_eq!(comment_box(&pane, &mut cx), None);
     assert_eq!(the_draft_of_the_pane(&pane, &mut cx).text, "hey!\nzx");
+}
+
+/// The id with this digit repeated, as the tests of the threads name them.
+fn thread_id(digit: char) -> ThreadId {
+    ThreadId::new(digit.to_string().repeat(32))
+}
+
+fn comment_id(digit: char) -> CommentId {
+    CommentId::new(digit.to_string().repeat(32))
+}
+
+/// A comment of the reviewer that was sent in this round.
+fn sent(digit: char, text: &str, round: u32) -> Comment {
+    Comment {
+        id: comment_id(digit),
+        author: Author::Reviewer,
+        text: text.to_owned(),
+        round: Some(round),
+    }
+}
+
+/// A draft of the reviewer.
+fn draft(digit: char, text: &str) -> Comment {
+    Comment {
+        id: comment_id(digit),
+        author: Author::Reviewer,
+        text: text.to_owned(),
+        round: None,
+    }
+}
+
+/// A thread as the Keeper holds it, in the version the changes are counted from, on the
+/// line `line` of `path` counted from 1.
+fn thread(digit: char, path: &str, side: LinkSide, line: u32, comments: Vec<Comment>) -> Thread {
+    Thread {
+        id: thread_id(digit),
+        anchor: Anchor {
+            tree: Some(COMMIT.to_owned()),
+            path: path.into(),
+            side,
+            lines: Lines {
+                first: line,
+                last: line,
+            },
+            text: "the code".to_owned(),
+        },
+        resolved: false,
+        addressed: false,
+        comments,
+    }
+}
+
+/// The reviews of workspace `1` with these threads in its one review.
+fn reviews_with(threads: Vec<Thread>) -> WorkspaceReviews {
+    let any_sent = threads
+        .iter()
+        .flat_map(|thread| &thread.comments)
+        .any(|comment| comment.round.is_some());
+    WorkspaceReviews {
+        workspace: id('1'),
+        reviews: vec![Review {
+            threads,
+            rounds: if any_sent {
+                vec![Round {
+                    number: 1,
+                    state: "5".repeat(40),
+                    sent_by: SentBy::Copied,
+                }]
+            } else {
+                Vec::new()
+            },
+            ..no_agent_review()
+        }],
+        viewed: Vec::new(),
+    }
+}
+
+/// Makes the Keeper hold these reviews and tell it, and waits until the pane shows them.
+fn give(stage: &mut Stage, reviews: &WorkspaceReviews, cx: &mut VisualTestContext) {
+    stage.keeper.set_reviews(reviews.clone());
+    stage.keeper.tell(Fact::ReviewsChanged {
+        workspace: reviews.workspace.clone(),
+    });
+    wait_until(cx, "the reviews the Keeper holds", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.reviews() == Some(reviews))
+    });
+}
+
+/// The selector of the row of a thread, and of a comment of it.
+fn drawn_thread(thread: char, cx: &mut VisualTestContext) -> bool {
+    drawn(&format!("review-thread-{}", thread_id(thread)), cx).is_some()
+}
+
+fn drawn_comment(comment: char, state: &str, cx: &mut VisualTestContext) -> bool {
+    drawn(
+        &format!("review-comment-{}:{state}", comment_id(comment)),
+        cx,
+    )
+    .is_some()
+}
+
+fn notice(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) -> Option<String> {
+    pane.read_with(cx, |pane, _| pane.notice())
+}
+
+#[gpui_kit::test]
+fn the_pane_reads_the_reviews_of_the_workspace_on_screen_and_again_when_the_keeper_tells_they_changed(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    // Asked once the changes were here, and answered with a review of no agent.
+    wait_until(&mut cx, "the first reviews", |cx| {
+        stage.pane.read_with(cx, |pane, _| pane.reviews().is_some())
+    });
+    assert_eq!(stage.keeper.reviews_asked(), 1);
+    let first = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.reviews().cloned())
+        .expect("reviews");
+    assert_eq!(first.workspace, id('1'));
+    assert_eq!(first.reviews, [no_agent_review()]);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.review().cloned()),
+        Some(no_agent_review())
+    );
+
+    // The Keeper tells of a change of the reviews of another workspace: nothing is asked.
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('9') });
+    cx.run_until_parked();
+    assert_eq!(stage.keeper.reviews_asked(), 1);
+
+    // Of this one: the reviews are read again and shown.
+    let threads = reviews_with(vec![thread(
+        'a',
+        "src/lib.rs",
+        LinkSide::Old,
+        5,
+        vec![sent('b', "why remove this", 1)],
+    )]);
+    give(&mut stage, &threads, &mut cx);
+    assert_eq!(stage.keeper.reviews_asked(), 2);
+}
+
+#[gpui_kit::test]
+fn a_keeper_that_refuses_the_reviews_leaves_the_pane_with_no_review_and_no_notice_and_working(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    stage.keeper.refuse_reviews(Some(Refusal::Failed {
+        reason: "not wired".to_owned(),
+    }));
+    let changes = since_main(Vec::new(), vec![file("src/lib.rs", FileStatus::Modified)]);
+    stage
+        .keeper
+        .show(&changes, |_| texts(LIB_OLD, LIB_NEW), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    let first_line = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(first_line, Modifiers::none());
+    wait_until(&mut cx, "the refusal", |_| {
+        stage.keeper.reviews_asked() == 1
+    });
+    cx.run_until_parked();
+    let (reviews, review, notice_now) = stage.pane.read_with(&cx, |pane, _| {
+        (
+            pane.reviews().cloned(),
+            pane.review().cloned(),
+            pane.notice(),
+        )
+    });
+    assert_eq!((reviews, review, notice_now), (None, None, None));
+
+    // The pane goes on: the reviewer walks the lines, and a comment is refused for want of
+    // a review, which the notice says.
+    let before = position(&stage.pane, &mut cx);
+    cx.simulate_keystrokes("j");
+    assert_ne!(position(&stage.pane, &mut cx), before);
+    cx.simulate_keystrokes("c");
+    assert_eq!(comment_box(&stage.pane, &mut cx), None);
+    assert!(notice(&stage.pane, &mut cx).is_some());
+    assert!(drawn("review-notice", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn a_thread_is_drawn_after_the_row_that_shows_its_last_line_with_a_row_for_each_comment(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // A thread on a removed line, one on an added line with a reply, and one on a line no
+    // row shows: line 1 of `src/lib.rs` is among the unchanged lines left out.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![sent('1', "why remove this", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('2', "is this needed", 1), draft('3', "my reply")],
+        ),
+        thread(
+            'c',
+            "src/lib.rs",
+            LinkSide::New,
+            1,
+            vec![sent('4', "an old remark", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+
+    let all = rows(&pane, &mut cx);
+    let removed = row_of(&pane, &lib(), Row::Removed { old: 4 }, &mut cx);
+    let added = row_of(&pane, &lib(), Row::Added { new: 10 }, &mut cx);
+    assert_eq!(
+        all[removed + 1..removed + 3],
+        [
+            PaneRow::Thread {
+                thread: thread_id('a')
+            },
+            PaneRow::Comment {
+                thread: thread_id('a'),
+                comment: comment_id('1')
+            },
+        ]
+    );
+    assert_eq!(
+        all[added + 1..added + 4],
+        [
+            PaneRow::Thread {
+                thread: thread_id('b')
+            },
+            PaneRow::Comment {
+                thread: thread_id('b'),
+                comment: comment_id('2')
+            },
+            PaneRow::Comment {
+                thread: thread_id('b'),
+                comment: comment_id('3')
+            },
+        ]
+    );
+    // The thread that no row shows is after the last file, under a heading.
+    let end = all.len();
+    assert_eq!(
+        all[end - 3..],
+        [
+            PaneRow::ThreadsElsewhere,
+            PaneRow::Thread {
+                thread: thread_id('c')
+            },
+            PaneRow::Comment {
+                thread: thread_id('c'),
+                comment: comment_id('4')
+            },
+        ]
+    );
+    assert_eq!(
+        all.iter()
+            .filter(|row| matches!(row, PaneRow::Thread { .. }))
+            .count(),
+        3,
+        "a thread is shown once"
+    );
+
+    // What is in view is drawn under the selectors that name it.
+    assert!(drawn_thread('a', &mut cx));
+    assert!(drawn_comment('1', "round-1", &mut cx));
+    assert!(drawn_thread('b', &mut cx));
+    assert!(drawn_comment('2', "round-1", &mut cx));
+    assert!(drawn_comment('3', "draft", &mut cx));
+    assert!(!drawn_thread('c', &mut cx), "it is below the rows in view");
+
+    // The rows of a thread are no stops of `j` and `k`: from the removed line the next
+    // line is the next row of the diff, as it is with no thread, and back.
+    let on_removed = bounds_of_row(removed, &mut cx).center();
+    cx.simulate_click(on_removed, Modifiers::none());
+    cx.simulate_keystrokes("j");
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::New,
+            line: 4
+        }
+    );
+    cx.simulate_keystrokes("k");
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::Old,
+            line: 4
+        }
+    );
+
+    let over_the_rows = bounds_of_row(5, &mut cx).center();
+    cx.simulate_event(ScrollEvent {
+        position: over_the_rows,
+        delta: ScrollDelta::Pixels(point(px(0.), px(-2000.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert!(drawn("review-threads-elsewhere", &mut cx).is_some());
+    assert!(drawn_thread('c', &mut cx));
+    assert!(drawn_comment('4', "round-1", &mut cx));
+}
+
+#[gpui_kit::test]
+fn a_reply_opens_on_a_thread_whose_last_comment_was_sent_and_on_no_other(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // A thread with a comment that was sent, on the added line; one with nothing sent
+    // yet, on the removed line.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('1', "is this needed", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![draft('2', "still writing")],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    cx.simulate_keystrokes("o");
+    let opened = comment_box(&pane, &mut cx).expect("a reply box");
+    assert_eq!(opened.thread, thread_id('a'));
+    assert_ne!(opened.comment, comment_id('1'));
+    assert!(is_an_id(opened.comment.as_str()));
+    assert_eq!(opened.anchor, None);
+    assert_eq!(opened.review, review_id());
+    assert_eq!(opened.text, "");
+
+    // Its first key is saved as a draft of a thread that exists, and the pane holds the
+    // reply after the comment that was sent.
+    cx.simulate_input("x");
+    let asked = stage.keeper.expect(
+        Request::SaveDraft {
+            review: review_id(),
+            thread: thread_id('a'),
+            comment: opened.comment.clone(),
+            on: DraftOn::Thread,
+            text: "x".to_owned(),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    let held = pane
+        .read_with(&cx, |pane, _| pane.review().cloned())
+        .expect("a review");
+    assert_eq!(
+        held.threads[0].comments,
+        [
+            sent('1', "is this needed", 1),
+            draft_with(&opened.comment, "x")
+        ]
+    );
+    // The box takes room from the rows: they are drawn once it is closed.
+    cx.simulate_keystrokes("escape");
+    assert!(drawn_comment('1', "round-1", &mut cx));
+    assert!(drawn(&format!("review-comment-{}:draft", opened.comment), &mut cx).is_some());
+
+    // A thread that holds a draft takes no second one: the draft is edited.
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("o");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert!(notice(&pane, &mut cx).is_some());
+    assert!(drawn("review-notice", &mut cx).is_some());
+    // The next action of the reviewer takes the notice away.
+    cx.simulate_keystrokes("k");
+    assert_eq!(notice(&pane, &mut cx), None);
+    assert_eq!(drawn("review-notice", &mut cx), None);
+
+    // A thread with nothing sent has nothing to reply to.
+    let removed = Position {
+        path: lib(),
+        side: Side::Old,
+        line: 4,
+    };
+    walk_to(&removed, "k", &pane, &mut cx);
+    cx.simulate_keystrokes("o");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert!(drawn("review-notice", &mut cx).is_some());
+
+    // And a line with no thread has none.
+    cx.simulate_keystrokes("j");
+    cx.simulate_keystrokes("o");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert!(drawn("review-notice", &mut cx).is_some());
+}
+
+/// A draft of the reviewer under this id.
+fn draft_with(id: &CommentId, text: &str) -> Comment {
+    Comment {
+        id: id.clone(),
+        author: Author::Reviewer,
+        text: text.to_owned(),
+        round: None,
+    }
+}
+
+#[gpui_kit::test]
+fn m_and_shift_m_walk_the_threads_in_the_order_of_the_rows_and_say_where_there_is_none(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // Threads on two lines of one file and one on another file; a fourth that no row
+    // shows, which has no line to stand on.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![sent('1', "one", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            9,
+            vec![sent('2', "two", 1)],
+        ),
+        thread(
+            'c',
+            "src/long.rs",
+            LinkSide::New,
+            200,
+            vec![sent('3', "three", 1)],
+        ),
+        thread(
+            'd',
+            "src/lib.rs",
+            LinkSide::New,
+            1,
+            vec![sent('4', "four", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    let at = |path: PathBuf, side, line| Position { path, side, line };
+
+    // The reviewer starts on the removed line, where the first thread is: the next is the
+    // one on the new side of the changed pair, then the one in the other file.
+    assert_eq!(position(&pane, &mut cx), at(lib(), Side::Old, 4));
+    cx.simulate_keystrokes("m");
+    assert_eq!(position(&pane, &mut cx), at(lib(), Side::New, 8));
+    cx.simulate_keystrokes("m");
+    assert_eq!(position(&pane, &mut cx), at(long_path(), Side::New, 199));
+    // The view follows the reviewer to a line far below.
+    let row = pane
+        .read_with(&cx, |pane, _| pane.position_row())
+        .expect("a row");
+    assert!(pane.read_with(&cx, |pane, _| pane.rows_in_view().contains(&row)));
+
+    // Past the last thread that stands on a line, nothing moves and the notice says so.
+    cx.simulate_keystrokes("m");
+    assert_eq!(position(&pane, &mut cx), at(long_path(), Side::New, 199));
+    assert!(notice(&pane, &mut cx).is_some());
+    assert!(drawn("review-notice", &mut cx).is_some());
+
+    // And back.
+    cx.simulate_keystrokes("shift-m");
+    assert_eq!(notice(&pane, &mut cx), None);
+    assert_eq!(position(&pane, &mut cx), at(lib(), Side::New, 8));
+    cx.simulate_keystrokes("shift-m");
+    assert_eq!(position(&pane, &mut cx), at(lib(), Side::Old, 4));
+    cx.simulate_keystrokes("shift-m");
+    assert_eq!(position(&pane, &mut cx), at(lib(), Side::Old, 4));
+    assert!(drawn("review-notice", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn m_with_no_thread_at_all_moves_nothing_and_says_so(cx: &mut TestAppContext) {
+    let (stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = &stage.pane;
+    let before = position(pane, &mut cx);
+    cx.simulate_keystrokes("m");
+    assert_eq!(position(pane, &mut cx), before);
+    assert!(drawn("review-notice", &mut cx).is_some());
+    cx.simulate_keystrokes("shift-m");
+    assert_eq!(position(pane, &mut cx), before);
+    assert!(drawn("review-notice", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn a_comment_on_a_renamed_file_names_the_old_side_by_the_old_path_in_the_version_counted_from(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![file(
+            "src/new_name.rs",
+            FileStatus::Renamed {
+                from: "src/old_name.rs".into(),
+            },
+        )],
+    );
+    stage.keeper.show(
+        &changes,
+        |_| texts("keep\nold\nend\n", "keep\nnew\nend\n"),
+        &mut cx,
+    );
+    wait_for_files(&stage.pane, &mut cx);
+    let pane = stage.pane.clone();
+    let first_line = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(first_line, Modifiers::none());
+    let renamed = PathBuf::from("src/new_name.rs");
+    let at = |side, line| Position {
+        path: renamed.clone(),
+        side,
+        line,
+    };
+
+    // The old side: the file as it was named in the version the changes are counted from.
+    let old = at(Side::Old, 1);
+    walk_to(&old, "j", &pane, &mut cx);
+    cx.simulate_keystrokes("c");
+    let opened = comment_box(&pane, &mut cx).expect("a box on the old side");
+    let anchor = opened.anchor.expect("an anchor");
+    assert_eq!(anchor.path, PathBuf::from("src/old_name.rs"));
+    assert_eq!(anchor.tree, Some(COMMIT.to_owned()));
+    assert_eq!(anchor.side, LinkSide::Old);
+    assert_eq!(anchor.text, "old");
+    cx.simulate_keystrokes("escape");
+
+    // The new side: the file as it is, which the Keeper records.
+    let new = at(Side::New, 1);
+    walk_to(&new, "j", &pane, &mut cx);
+    cx.simulate_keystrokes("c");
+    let opened = comment_box(&pane, &mut cx).expect("a box on the new side");
+    let anchor = opened.anchor.expect("an anchor");
+    assert_eq!(anchor.path, renamed);
+    assert_eq!(anchor.tree, None);
+    assert_eq!(anchor.side, LinkSide::New);
+    assert_eq!(anchor.text, "new");
+    cx.simulate_keystrokes("escape");
+
+    // A thread of the old side that the Keeper holds under the old path sits on the
+    // removed line, and a thread of the new side under the new path on the added one.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/old_name.rs",
+            LinkSide::Old,
+            2,
+            vec![sent('1', "why", 1)],
+        ),
+        thread(
+            'b',
+            "src/new_name.rs",
+            LinkSide::New,
+            2,
+            vec![sent('2', "ok", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    let all = rows(&pane, &mut cx);
+    let removed = row_of(&pane, &renamed, Row::Removed { old: 1 }, &mut cx);
+    let added = row_of(&pane, &renamed, Row::Added { new: 1 }, &mut cx);
+    assert_eq!(
+        all[removed + 1],
+        PaneRow::Thread {
+            thread: thread_id('a')
+        }
+    );
+    assert_eq!(
+        all[added + 1],
+        PaneRow::Thread {
+            thread: thread_id('b')
+        }
+    );
+    // And the reviewer on the old line has that thread under their keys.
+    walk_to(&old, "k", &pane, &mut cx);
+    cx.simulate_keystrokes("m");
+    assert_eq!(position(&pane, &mut cx), new);
+    cx.simulate_keystrokes("shift-m");
+    assert_eq!(position(&pane, &mut cx), old);
+}
+
+#[gpui_kit::test]
+fn the_keys_of_the_pane_typed_in_the_box_are_text_and_run_no_action(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    let opened = comment_on(&added, &pane, &mut cx);
+
+    // `c` would open a box, `d d` delete a draft, `j` move: in the box they are letters.
+    for keys in ["c", "d d", "j"] {
+        cx.simulate_keystrokes(keys);
+    }
+    let shown = comment_box(&pane, &mut cx).expect("the box is open");
+    assert_eq!(shown.text, "cddj");
+    assert_eq!(shown.comment, opened.comment);
+    assert_eq!(position(&pane, &mut cx), added);
+    // Each letter was a save of this draft, and no other request was made.
+    for text in ["c", "cd", "cdd", "cddj"] {
+        let asked = stage.keeper.expect(new_thread_save(&opened, text), &mut cx);
+        stage.keeper.reply(asked, Ok(Reply::Done));
+    }
+}
+
+#[gpui_kit::test]
+fn a_draft_typed_while_the_reviews_are_on_their_way_is_still_there_when_they_come(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    let opened = comment_on(&added, &pane, &mut cx);
+    wait_until(&mut cx, "the first reviews", |_| {
+        stage.keeper.reviews_asked() == 1
+    });
+
+    // The Keeper is slow: it was asked for the reviews, and two keys follow before it
+    // answers. Its answer, which holds no draft, is of what it knew when it was asked.
+    stage.keeper.hold_reviews();
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('1') });
+    wait_until(&mut cx, "the question", |_| {
+        stage.keeper.reviews_asked() == 2
+    });
+    cx.simulate_input("h");
+    cx.simulate_input("i");
+    for text in ["h", "hi"] {
+        let asked = stage.keeper.expect(new_thread_save(&opened, text), &mut cx);
+        stage.keeper.reply(asked, Ok(Reply::Done));
+    }
+    let mut answer = reviews_with(Vec::new());
+    answer.viewed = vec![PathBuf::from("src/lib.rs")];
+    stage.keeper.set_reviews(answer);
+    stage.keeper.release_reviews();
+    wait_until(&mut cx, "the late answer", |cx| {
+        pane.read_with(cx, |pane, _| {
+            pane.reviews().is_some_and(|r| !r.viewed.is_empty())
+        })
+    });
+    // The answer is shown, and the text typed since it was asked for is over it.
+    let held = pane
+        .read_with(&cx, |pane, _| pane.review().cloned())
+        .expect("a review");
+    assert_eq!(held.threads.len(), 1);
+    assert_eq!(held.threads[0].id, opened.thread);
+    assert_eq!(
+        held.threads[0].comments,
+        [draft_with(&opened.comment, "hi")]
+    );
+
+    // A question asked after the saves has them in its answer: the Keeper's text counts
+    // then, and the pane does not make the draft twice. The box is not touched by it.
+    let kept = reviews_with(vec![Thread {
+        comments: vec![draft_with(&opened.comment, "h")],
+        id: opened.thread.clone(),
+        anchor: Anchor {
+            tree: Some(COMMIT.to_owned()),
+            ..opened.anchor.clone().expect("an anchor")
+        },
+        resolved: false,
+        addressed: false,
+    }]);
+    give(&mut stage, &kept, &mut cx);
+    assert_eq!(
+        comment_box(&pane, &mut cx).map(|shown| shown.text),
+        Some("hi".to_owned())
+    );
+    // The next key is saved whole, and the pane holds it over the answer.
+    cx.simulate_input("!");
+    let asked = stage
+        .keeper
+        .expect(new_thread_save(&opened, "hi!"), &mut cx);
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    let held = pane
+        .read_with(&cx, |pane, _| pane.review().cloned())
+        .expect("a review");
+    assert_eq!(held.threads.len(), 1);
+    assert_eq!(
+        held.threads[0].comments,
+        [draft_with(&opened.comment, "hi!")]
+    );
+}
+
+#[gpui_kit::test]
+fn d_d_deletes_the_draft_on_the_reviewers_line_and_does_nothing_where_there_is_none(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![draft('1', "to delete")],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('2', "sent", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+
+    // On the line of the draft: the request, and the Keeper's refusal is said.
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::Old,
+            line: 4
+        }
+    );
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('1'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::NotADraft {
+            comment: comment_id('1'),
+        }),
+    );
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(drawn("review-notice", &mut cx).is_some());
+
+    // The Keeper deletes it and tells: the thread leaves the rows.
+    let gone = reviews_with(vec![reviews.reviews[0].threads[1].clone()]);
+    give(&mut stage, &gone, &mut cx);
+    assert!(!drawn_thread('a', &mut cx));
+
+    // On a line with a sent comment only, and on one with no thread, nothing is asked.
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    cx.simulate_keystrokes("d d");
+    assert!(notice(&pane, &mut cx).is_some());
+    cx.simulate_keystrokes("k");
+    cx.simulate_keystrokes("d d");
+    assert!(notice(&pane, &mut cx).is_some());
+    // The next request of the Window is the first save of a comment, not a deletion.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("a");
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert!(matches!(next, Request::SaveDraft { .. }), "{next:?}");
+}
+
+#[gpui_kit::test]
+fn a_save_the_keeper_refuses_is_said_in_the_notice(cx: &mut TestAppContext) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+    let opened = comment_on(&added, &pane, &mut cx);
+    cx.simulate_input("a");
+    let asked = stage.keeper.expect(new_thread_save(&opened, "a"), &mut cx);
+    stage.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "the drive is full".to_owned(),
+        }),
+    );
+    wait_until(&mut cx, "the notice", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice().is_some())
+    });
+    assert!(
+        notice(&pane, &mut cx)
+            .expect("a notice")
+            .contains("the drive is full")
+    );
+    // The box stays open, with the text typed, and the pane works on.
+    assert_eq!(
+        comment_box(&pane, &mut cx).map(|shown| shown.text),
+        Some("a".to_owned())
+    );
+}
+
+#[gpui_kit::test]
+fn another_workspace_on_screen_shows_its_own_reviews_and_closes_the_box_of_the_one_before(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) =
+        open_on_two_files_of(vec![workspace('1', "feature"), workspace('2', "other")], cx);
+    let pane = stage.pane.clone();
+    let reviews = reviews_with(vec![thread(
+        'a',
+        "src/lib.rs",
+        LinkSide::Old,
+        5,
+        vec![sent('1', "of workspace one", 1)],
+    )]);
+    give(&mut stage, &reviews, &mut cx);
+    let removed = Position {
+        path: lib(),
+        side: Side::Old,
+        line: 4,
+    };
+    assert_eq!(position(&pane, &mut cx), removed);
+    cx.simulate_keystrokes("o");
+    assert!(comment_box(&pane, &mut cx).is_some());
+
+    // Workspace 2 comes on screen: nothing of workspace 1 stays, the box included, until
+    // the Keeper answers for 2.
+    stage
+        .models
+        .workspaces
+        .update(&mut cx, |list, cx| list.select(&id('2'), cx));
+    cx.run_until_parked();
+    let (shown, held, boxed) = pane.read_with(&cx, |pane, _| {
+        (
+            pane.reviews().cloned(),
+            pane.review().cloned(),
+            pane.comment_box(),
+        )
+    });
+    assert_eq!((shown, held, boxed), (None, None, None));
+    assert!(!drawn_thread('a', &mut cx));
+
+    let mut changes = since_main(Vec::new(), vec![file("src/lib.rs", FileStatus::Modified)]);
+    changes.workspace = id('2');
+    stage
+        .keeper
+        .show(&changes, |_| texts(LIB_OLD, LIB_NEW), &mut cx);
+    wait_until(&mut cx, "the reviews of workspace 2", |cx| {
+        pane.read_with(cx, |pane, _| {
+            pane.reviews().is_some_and(|r| r.workspace == id('2'))
+        })
+    });
+    let held = pane
+        .read_with(&cx, |pane, _| pane.review().cloned())
+        .expect("a review");
+    assert!(held.threads.is_empty());
 }
