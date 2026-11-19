@@ -224,8 +224,8 @@ fn the_first_commit_of_a_repository_is_made_too() {
 }
 
 /// A repository with `staged.txt` staged with a change, `unstaged.txt` changed and not
-/// staged and `new.txt` untracked, and a hook that refuses every commit.
-fn with_a_partial_staging_and_a_hook_that_refuses(scratch: &Scratch) -> std::path::PathBuf {
+/// staged and `new.txt` untracked.
+fn with_a_partial_staging(scratch: &Scratch) -> std::path::PathBuf {
     let repo = scratch.join("repo");
     init(&repo);
     write(&repo, "staged.txt", "one\n");
@@ -235,6 +235,12 @@ fn with_a_partial_staging_and_a_hook_that_refuses(scratch: &Scratch) -> std::pat
     git(&repo, &["add", "staged.txt"]);
     write(&repo, "unstaged.txt", "one\ntwo\n");
     write(&repo, "new.txt", "new\n");
+    repo
+}
+
+/// The same, and a hook that refuses every commit.
+fn with_a_partial_staging_and_a_hook_that_refuses(scratch: &Scratch) -> std::path::PathBuf {
+    let repo = with_a_partial_staging(scratch);
     program(
         &repo.join(".git/hooks/pre-commit"),
         "echo refused >&2\nexit 1",
@@ -365,4 +371,101 @@ fn a_commit_refused_in_a_linked_worktree_puts_back_the_list_of_that_worktree() {
     assert_eq!(list_after, list, "the bytes of the list of files");
     assert_eq!(status_after, status, "what git status says");
     assert_eq!(git(&linked, &["diff", "--cached", "--name-only"]), "a.txt");
+}
+
+// A refusal that git itself makes, not a hook: `git add --all` has rewritten the list by
+// then, and the empty message is refused after it.
+#[test]
+fn a_commit_git_itself_refuses_puts_the_list_of_files_back_as_it_was() {
+    let scratch = Scratch::new();
+    let repo = with_a_partial_staging(&scratch);
+    let (list, status) = settled(&repo);
+    let head = git(&repo, &["rev-parse", "HEAD"]);
+
+    let error = open(&repo).commit_all("").expect_err("no commit");
+
+    assert!(matches!(error, CommitError::Refused { .. }), "{error:?}");
+    let (list_after, status_after) = list_and_status(&repo);
+    assert_eq!(list_after, list, "the bytes of the list of files");
+    assert_eq!(status_after, status, "what git status says");
+    assert_eq!(
+        git(&repo, &["diff", "--cached", "--name-only"]),
+        "staged.txt"
+    );
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
+}
+
+// `git add --all` itself fails where a repository inside the worktree has no commit.
+#[test]
+fn a_commit_where_git_cannot_add_the_files_leaves_the_list_of_files_as_it_was() {
+    let scratch = Scratch::new();
+    let repo = with_a_partial_staging(&scratch);
+    init(&repo.join("inner"));
+    write(&repo.join("inner"), "i.txt", "inside\n");
+    let (list, status) = settled(&repo);
+
+    let error = open(&repo).commit_all("try").expect_err("no commit");
+
+    assert!(matches!(error, CommitError::Refused { .. }), "{error:?}");
+    let (list_after, status_after) = list_and_status(&repo);
+    assert_eq!(list_after, list, "the bytes of the list of files");
+    assert_eq!(status_after, status, "what git status says");
+    assert_eq!(
+        git(&repo, &["diff", "--cached", "--name-only"]),
+        "staged.txt"
+    );
+}
+
+// Another git that holds the lock of the list is writing it: what it writes is not ours
+// to overwrite with the bytes taken before, and the words of the refusal say that the
+// list was not put back.
+#[test]
+fn a_list_of_files_that_another_git_is_writing_is_not_overwritten_by_the_putting_back() {
+    let scratch = Scratch::new();
+    let repo = with_a_partial_staging(&scratch);
+    // The hook is the other git: it takes the lock, then the commit is refused.
+    program(
+        &repo.join(".git/hooks/pre-commit"),
+        "echo 'the other git' > \"$(git rev-parse --git-dir)/index.lock\"\nexit 1",
+    );
+    let (list, _) = settled(&repo);
+
+    let error = open(&repo).commit_all("try").expect_err("no commit");
+
+    match error {
+        CommitError::Refused { stderr } => {
+            assert!(stderr.contains("could not be put back"), "{stderr:?}")
+        }
+        other => panic!("{other:?}"),
+    }
+    let (list_after, _) = list_and_status(&repo);
+    assert_ne!(list_after, list, "the list was overwritten");
+    assert_eq!(
+        std::fs::read_to_string(repo.join(".git/index.lock")).expect("the lock is still there"),
+        "the other git\n"
+    );
+}
+
+// The same lock held before the call: `git add --all` fails, and it changed nothing, so
+// there is nothing to put back and nothing to complain of but git's own words.
+#[test]
+fn a_commit_where_another_git_holds_the_lock_of_the_list_changes_nothing() {
+    let scratch = Scratch::new();
+    let repo = with_a_partial_staging(&scratch);
+    let (list, status) = settled(&repo);
+    std::fs::write(repo.join(".git/index.lock"), "the other git\n").expect("take the lock");
+
+    let error = open(&repo).commit_all("try").expect_err("no commit");
+
+    match error {
+        CommitError::Refused { stderr } => {
+            assert!(stderr.contains("index.lock"), "{stderr:?}");
+            assert!(!stderr.contains("could not be put back"), "{stderr:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    std::fs::remove_file(repo.join(".git/index.lock")).expect("the lock is still there");
+    let (list_after, status_after) = list_and_status(&repo);
+    assert_eq!(list_after, list, "the bytes of the list of files");
+    assert_eq!(status_after, status, "what git status says");
 }

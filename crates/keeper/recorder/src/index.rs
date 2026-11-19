@@ -6,7 +6,7 @@
 //! on a copy, in a folder nobody else can enter, that is gone when the read is over.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -75,28 +75,51 @@ impl IndexBackup {
         })
     }
 
-    /// Puts the list back as it was, byte for byte: written to a file of its own in the
-    /// same folder and renamed over the list, so that no one reads half of it. A list
-    /// that did not exist is removed.
+    /// Puts the list back as it was, byte for byte, through git's own lock: the bytes go
+    /// to `index.lock`, created where none is, and that is renamed over the list, which
+    /// is how git writes it, so that no one reads half of it and another git that is
+    /// writing the list at the moment is not overwritten. Where the lock is held, the
+    /// list is left as it is and the error says so. A list that is as it was already is
+    /// not touched, and one that did not exist is removed.
     pub(crate) fn restore(self) -> io::Result<()> {
-        let Some(bytes) = self.bytes else {
-            return match fs::remove_file(&self.file) {
+        let now = match fs::read(&self.file) {
+            Ok(now) => Some(now),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        if now == self.bytes {
+            return Ok(());
+        }
+        let mut name = self.file.file_name().unwrap_or_default().to_owned();
+        name.push(".lock");
+        let lock = self.file.with_file_name(name);
+        let mut held = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::AlreadyExists {
+                    io::Error::new(e.kind(), format!("another git holds {}", lock.display()))
+                } else {
+                    e
+                }
+            })?;
+        let put_back = match &self.bytes {
+            Some(bytes) => held.write_all(bytes).and_then(|()| {
+                // The mode git gave the list, if there is one still.
+                if let Ok(old) = fs::metadata(&self.file) {
+                    held.set_permissions(old.permissions())?;
+                }
+                fs::rename(&lock, &self.file)
+            }),
+            // A list that did not exist is not there to be renamed over.
+            None => match fs::remove_file(&self.file) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
                 _ => Ok(()),
-            };
+            },
         };
-        let mut name = self.file.file_name().unwrap_or_default().to_owned();
-        name.push(format!(".yaar-restore-{}", std::process::id()));
-        let temporary = self.file.with_file_name(name);
-        let put_back = fs::write(&temporary, bytes).and_then(|()| {
-            // The mode git gave the list, if there is one still.
-            if let Ok(old) = fs::metadata(&self.file) {
-                fs::set_permissions(&temporary, old.permissions())?;
-            }
-            fs::rename(&temporary, &self.file)
-        });
-        if put_back.is_err() {
-            let _ = fs::remove_file(&temporary);
+        if self.bytes.is_none() || put_back.is_err() {
+            let _ = fs::remove_file(&lock);
         }
         put_back
     }
