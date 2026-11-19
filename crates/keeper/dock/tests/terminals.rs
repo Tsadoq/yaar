@@ -1062,6 +1062,13 @@ const EDITOR_VARIABLES: [&str; 6] = [
     "ZED_TERM",
 ];
 
+/// Whether the system takes the variable out of the environment of a program it runs
+/// itself: macOS drops those of the dynamic loader before `env` starts. Elsewhere nothing
+/// is dropped, so a variable of that kind that the app added would show.
+fn dropped_by_the_system(name: &str) -> bool {
+    cfg!(target_os = "macos") && name.starts_with("DYLD_")
+}
+
 #[test]
 fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the_app_adds() {
     // SAFETY: changing the environment is sound only while no other thread reads it, as
@@ -1088,7 +1095,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
     // What the user's own environment is, less what a system program drops by itself:
     // macOS removes the variables of the dynamic loader before it runs `env`.
     let users: BTreeMap<String, String> = std::env::vars()
-        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .filter(|(name, _)| !dropped_by_the_system(name))
         .collect();
 
     // `env` itself is the program, so that no shell adds `SHLVL`, `PWD` or `_`.
@@ -1115,7 +1122,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
         .iter()
         .filter_map(|line| line.split_once('='))
         .map(|(name, value)| (name.to_owned(), value.to_owned()))
-        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .filter(|(name, _)| !dropped_by_the_system(name))
         .collect();
 
     // Where their environment differs from the user's, name by name: what the user had
@@ -1314,7 +1321,13 @@ fn output_written_while_attaching_is_told_after_the_ring_and_none_is_lost_or_tol
     // what was told before it, in a terminal that wrote less than the ring holds.
     let mut attaches = 0;
     let mut last = None;
+    let deadline = Instant::now() + DEADLINE;
     while let Ok(attached) = attach(&dock, &id, &watch) {
+        assert!(
+            Instant::now() < deadline,
+            "the program did not write up to {LAST} within {DEADLINE:?}; the last ring held {} bytes",
+            attached.ring.len()
+        );
         assert!(!attached.cut);
         assert_eq!(
             attached.ring,
@@ -1439,34 +1452,106 @@ fn a_program_asked_to_redraw_gets_the_signal_of_a_changed_size_also_when_the_siz
 }
 
 #[test]
-fn a_redraw_reaches_the_foreground_process_group_and_not_a_job_in_the_background() {
+fn a_redraw_reaches_the_foreground_process_group_and_not_the_shell_or_a_job_in_the_background() {
     let scratch = Scratch::new();
     let dock = Dock::new();
-    // With job control the background job has a group of its own, which is not in front
-    // of the terminal. The shell is, and says so when it gets the signal.
-    let script = scratch.script(
-        "groups",
-        "set -m\n\
-         trap 'echo front' WINCH\n\
-         sh -c \"trap 'echo behind' WINCH; echo job; while :; do sleep 100 & wait \\$!; done\" &\n\
-         job=$!\n\
-         echo ready\n\
+    // With job control each job has a process group of its own, and the one in front of
+    // the terminal is the foreground job's, not the shell's that started the program:
+    // what a command typed into a shell of the app is. The shell waits for that job and
+    // would say so when it gets the signal, which it runs once the job has ended; the job
+    // in the background says so at once. Each job says its process number, and the
+    // signals the test sends them are what it waits on, since none of them can be told
+    // from the lack of a line.
+    let background = scratch.script(
+        "background",
+        "trap 'echo behind' WINCH\n\
+         trap 'echo usr1' USR1\n\
+         echo bg $$\n\
          while :; do sleep 100 & wait $!; done\n",
     );
+    // The shell hands the terminal to a job after it has started it: the job says its
+    // number when it is in front, which is when its process group is the terminal's.
+    let foreground = scratch.script(
+        "foreground",
+        "trap 'echo front' WINCH\n\
+         trap 'exit 0' USR2\n\
+         while :; do\n\
+           if [ -r /proc/$$/stat ]; then\n\
+             set -- $(sed 's/.*) //' /proc/$$/stat); group=$3; front=$6\n\
+           else\n\
+             set -- $(ps -o pgid=,tpgid= -p $$); group=$1; front=$2\n\
+           fi\n\
+           [ \"$group\" = \"$front\" ] && break\n\
+           sleep 0.05\n\
+         done\n\
+         echo fg $$\n\
+         while :; do sleep 100 & wait $!; done\n",
+    );
+    let script = scratch.script(
+        "groups",
+        &format!(
+            "set -m\n\
+             trap 'echo shell' WINCH\n\
+             {background} &\n\
+             {foreground}\n\
+             echo end\n\
+             read line\n",
+            background = background.display(),
+            foreground = foreground.display(),
+        ),
+    );
     let (id, watch) = open(&dock, scratch.start(script));
-    watch.wait_for_line("ready");
-    watch.wait_for_line("job");
+    let events = watch.wait_until("both jobs", |events| {
+        let seen = lines(events);
+        ["bg ", "fg "]
+            .iter()
+            .all(|prefix| seen.iter().any(|line| line.starts_with(prefix)))
+    });
+    let (behind, front) = (number_after(&events, "bg "), number_after(&events, "fg "));
 
     dock.redraw(&id).expect("redraw");
     watch.wait_for_line("front");
-    // The echo of a typed line comes through the same path as everything before it.
-    dock.write(&id, b"barrier\n").expect("write");
-    let events = watch.wait_for_line("barrier");
-    assert!(
-        !lines(&events).iter().any(|line| line == "behind"),
-        "the job in the background got the signal: {:?}",
-        lines(&events)
+
+    // The job in the background answers a signal sent after the redraw. A signal it had
+    // got before the first answer is run by then, or in the pass that runs the first
+    // answer, and the order of those two is the shell's: a signal sent after the first
+    // answer is answered after both. A shell can lose a signal that comes while it runs a
+    // trap, so a signal not answered for a while is sent again.
+    let answers = |events: &[Event]| lines(events).iter().filter(|line| *line == "usr1").count();
+    let deadline = Instant::now() + DEADLINE;
+    for _ in 0..2 {
+        let before = answers(&watch.events());
+        while answers(&watch.events()) == before {
+            assert!(
+                Instant::now() < deadline,
+                "the job in the background did not answer within {DEADLINE:?}: {:?}",
+                lines(&watch.events())
+            );
+            // SAFETY: `kill` only sends a signal, to a process of this test's own terminal.
+            unsafe { libc::kill(behind, libc::SIGUSR1) };
+            let resend = Instant::now() + Duration::from_millis(500);
+            while answers(&watch.events()) == before && Instant::now() < resend {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
+    }
+    // The shell tells what it got when the job in front ends, and then says it has.
+    // SAFETY: as above.
+    unsafe { libc::kill(front, libc::SIGUSR2) };
+    let events = watch.wait_for_line("end");
+
+    let seen = lines(&events);
+    assert_eq!(
+        seen.iter().filter(|line| *line == "front").count(),
+        1,
+        "{seen:?}"
     );
+    for line in ["behind", "shell"] {
+        assert!(
+            !seen.iter().any(|seen| seen == line),
+            "{line:?} got the signal: {seen:?}"
+        );
+    }
 }
 
 #[test]

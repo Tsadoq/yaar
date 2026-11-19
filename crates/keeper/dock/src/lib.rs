@@ -766,9 +766,12 @@ impl Dock {
     /// follows, as adding a Window to those it goes to, gets every byte after the kept
     /// ones, and none twice. The kept output may begin in the middle of a character or of
     /// an escape sequence. The terminal's output waits while `attach` runs, so it should
-    /// add the Window where the events go and return, and call nothing of the Dock.
-    /// Refused with [`DockError::UnknownTerminal`] for a terminal whose
-    /// program has ended, or that the Dock never opened.
+    /// add the Window where the events go and return, and call nothing of the Dock. Nor
+    /// should the caller hold, while it calls `attach`, a lock that the terminal's
+    /// [`Events`] takes: the output is told under the lock `attach` waits for, so the
+    /// two would wait for each other.
+    /// Refused with [`DockError::UnknownTerminal`] for a terminal whose program has ended,
+    /// or that the Dock never opened.
     pub fn attach(
         &self,
         terminal: &TerminalId,
