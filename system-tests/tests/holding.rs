@@ -31,6 +31,10 @@ const RING: usize = 1 << 20;
 /// the flood that are cut away from it.
 const SLACK: usize = 4096;
 
+/// The most bytes one part writes: `LINES` lines of `part 50 line 4000` and a carriage
+/// return and a line feed, 19 bytes each at the widest.
+const PART_BYTES: usize = LINES as usize * 19;
+
 /// How long the control client waits for the whole flood to be over: 200,000 lines through
 /// a shell's loop and a terminal, twice at once, on a machine that builds other things. A
 /// bound on that one wait, which spans the fifty rounds of the test, and not a measure:
@@ -284,9 +288,14 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
     // is as long as the ring the Dock keeps for each terminal: `RING_BYTES`, 1 MiB. A
     // Keeper that kept less would not give the last client a whole ring.
     assert!(cut, "the Keeper did not say its kept output was cut");
+    // The last client attaches just after the last part began, and nothing says the shell
+    // is done writing it: it may hear the ring and, live after it, the rest of that part.
+    // So above the ring there is room for one part and no more: a ring of 2 MiB still
+    // fails, and so does one of 600 KiB below.
     assert!(
-        (RING - SLACK..=RING).contains(&heard.len()),
-        "the last client heard {} bytes, and the ring holds {RING}",
+        (RING - SLACK..=RING + PART_BYTES).contains(&heard.len()),
+        "the last client heard {} bytes, and the ring holds {RING}, with a part of at most \
+         {PART_BYTES} live after it",
         heard.len()
     );
     assert!(
