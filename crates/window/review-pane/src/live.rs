@@ -107,8 +107,6 @@ pub(crate) struct Live {
     /// The line the reviewer is on, and the row that shows it.
     position: Option<Position>,
     position_row: Option<usize>,
-    /// The step Flow is at while it has no row, as last looked at.
-    activity: Option<FlowAt>,
     /// The step the list was last scrolled to for follow.
     scrolled_to: Option<FlowAt>,
     /// Whether the live diff was on screen when it last looked.
@@ -148,7 +146,6 @@ impl Live {
             group: Vec::new(),
             position: None,
             position_row: None,
-            activity: None,
             scrolled_to: None,
             on_screen: false,
             epoch: 0,
@@ -201,12 +198,6 @@ impl Live {
             .iter()
             .find(|held| held.file.path == path)
             .map(|held| &held.file)
-    }
-
-    /// The step named in the line above the files, while it has no row: a command, or an
-    /// edit or a write whose file the list does not hold yet. A read always has one.
-    pub(crate) fn activity(&self) -> Option<&FlowAt> {
-        self.activity.as_ref()
     }
 
     /// The rows in view, as last laid out.
@@ -298,7 +289,6 @@ impl Live {
         self.group.clear();
         self.position = None;
         self.position_row = None;
-        self.activity = None;
         self.scrolled_to = None;
         self.stale = true;
         self.everything = false;
@@ -359,7 +349,6 @@ impl ReviewPane {
             self.live.on_screen = on;
             self.live.scrolled_to = None;
         }
-        self.live_note_at();
         if on {
             self.live_ask(cx);
             // What a list brought while the live diff was hidden waits for it here.
@@ -403,7 +392,6 @@ impl ReviewPane {
             Fact::Step {
                 workspace,
                 turn,
-                number,
                 step,
                 ..
             } if *workspace == shown.workspace && *turn == shown.turn => {
@@ -412,15 +400,6 @@ impl ReviewPane {
                     self.live.stale = true;
                 }
                 self.live_look(cx);
-                // Follow moves to this step next, when it is on: what has no row is named
-                // above the files.
-                if self.following == Following::On {
-                    let at = FlowAt {
-                        turn: turn.clone(),
-                        number: *number,
-                    };
-                    self.live.activity = self.live_row_of(&at).is_none().then_some(at);
-                }
             }
             // A change counted to a recorded state does not move with the files: only one
             // that is counted to the files on disk needs the fact.
@@ -518,7 +497,6 @@ impl ReviewPane {
             .scroll
             .scroll_to_item(row, ScrollStrategy::Nearest);
         self.live.scrolled_to = self.at.clone();
-        self.live_note_at();
     }
 
     /// What the live diff is the diff of, as things are now: the newest turn of the
@@ -632,7 +610,6 @@ impl ReviewPane {
         if self.live.rows.is_empty() {
             *self.live.in_view.borrow_mut() = 0..0;
         }
-        self.live_note_at();
         cx.notify();
     }
 
@@ -660,15 +637,6 @@ impl ReviewPane {
         if let Some(row) = self.live_row_of(&at) {
             self.scroll_live_to(row);
         }
-    }
-
-    /// The step Flow is at, when the live diff has no row for it.
-    fn live_note_at(&mut self) {
-        let shown = self.live.change.as_ref().map(|held| held.turn.clone());
-        self.live.activity = self
-            .at
-            .clone()
-            .filter(|at| Some(&at.turn) == shown.as_ref() && self.live_row_of(at).is_none());
     }
 
     /// Asks for the list while the live diff is on screen and what it holds is stale: one

@@ -627,6 +627,56 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
 }
 
 #[gpui_kit::test]
+fn the_line_above_the_live_diff_names_the_step_flow_is_at_the_moment_shift_g_puts_it_there(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = at_work_in_flow(Vec::new(), cx);
+    let activity = |stage: &Stage, cx: &VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| pane.activity().cloned())
+    };
+    press("shift-l", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
+        FlowForm::LiveDiff
+    );
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+    tell_the_step(&mut stage, &t, 1, read("z.txt"), &mut cx);
+    wait_for_at(&stage, &t, 1, &mut cx);
+    assert_eq!(activity(&stage, &cx), None);
+
+    // Paused, a command comes: Flow stays at the read, which has a row, so nothing is named.
+    press("j", &mut cx);
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
+    tell_the_step(&mut stage, &t, 2, command("make"), &mut cx);
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 1)));
+    assert_eq!(activity(&stage, &cx), None);
+    assert!(drawn("flow-activity", &mut cx).is_none());
+
+    // `shift-g` puts Flow at the command, and the line names it at once: no list was asked
+    // or answered since the command came.
+    press("shift-g", &mut cx);
+    assert_eq!(following(&stage, &cx), Following::On);
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 2)));
+    assert_eq!(activity(&stage, &cx), Some(at(&t, 2)));
+    assert!(drawn("flow-activity", &mut cx).is_some());
+
+    // The same the other way: paused at the command, a read comes, and `shift-g` takes Flow
+    // to the row of its file, so that nothing is named.
+    press("j", &mut cx);
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
+    tell_the_step(&mut stage, &t, 3, read("y.txt"), &mut cx);
+    assert_eq!(activity(&stage, &cx), Some(at(&t, 2)));
+    press("shift-g", &mut cx);
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 3)));
+    assert_eq!(activity(&stage, &cx), None);
+    assert!(drawn("flow-activity", &mut cx).is_none());
+    assert!(live(&stage, &cx).1.is_some());
+    nothing_more_was_asked(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
 fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_offer_resumes_it(
     cx: &mut TestAppContext,
 ) {

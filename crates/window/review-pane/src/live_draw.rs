@@ -74,7 +74,7 @@ impl ReviewPane {
                 .child("No turn of the agent to show yet")
                 .into_any_element();
         }
-        let activity = self.live.activity().map(|at| {
+        let activity = self.activity().map(|at| {
             let words = match self.flow.step(at) {
                 Some(Step::Command { command }) => {
                     format!("Run {}", command.lines().next().unwrap_or_default())

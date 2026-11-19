@@ -1051,7 +1051,10 @@ impl ReviewPane {
     /// has no row for it: a command, or an edit or a write whose file the live diff's list
     /// does not hold yet. A read always has a row.
     pub fn activity(&self) -> Option<&FlowAt> {
-        self.live.activity()
+        let shown = self.live.change()?;
+        self.at
+            .as_ref()
+            .filter(|at| at.turn == shown.turn && self.live_row_of(at).is_none())
     }
 
     /// The comment box, while one is open.
