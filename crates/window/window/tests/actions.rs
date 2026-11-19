@@ -18,6 +18,7 @@ use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{
     CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting, Workspace,
 };
+use yaar_review_pane::View;
 use yaar_system_tests::{DEADLINE, Repo, descendants_of, is_alive};
 
 mod common;
@@ -204,9 +205,12 @@ impl Composed {
 
     /// Writes a draft on the line the reviewer is on, as a user does: into the review pane,
     /// `c`, the text, Escape. A click on the first row puts the reviewer on the first line
-    /// of the file, which is unchanged context: a comment may sit on any line. Returns the
-    /// review and the draft once the pane's model shows the draft with its whole text.
+    /// of the file, which is unchanged context: a comment may sit on any line. The pane
+    /// shows Changes first, whichever view an earlier step left it in, since Flow draws no
+    /// such row. Returns the review and the draft once the pane's model shows the draft
+    /// with its whole text.
     fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
+        self.show_changes(cx);
         // The reviewer waits for the pane to show the reviews and a line to be on.
         self.review_shown(cx);
         wait_until(cx, "the reviewer on a line", |cx| {
@@ -237,6 +241,27 @@ impl Composed {
         found.expect("the pane holds the draft")
     }
 
+    /// Shows Changes in the review pane by a click on its name in the bar, which pauses no
+    /// follow, and waits until it is on screen with its first row drawn.
+    fn show_changes(&mut self, cx: &mut VisualTestContext) {
+        self.click_into(cx, "review-view-changes");
+        wait_until(cx, "Changes on screen", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.view() == View::Changes)
+                && cx.debug_bounds("review-row-0").is_some()
+        });
+    }
+
+    /// Shows Flow in the review pane by a click on its name in the bar, and waits until it
+    /// is on screen.
+    fn show_flow(&mut self, cx: &mut VisualTestContext) {
+        self.click_into(cx, "review-view-flow");
+        wait_until(cx, "Flow on screen", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.view() == View::Flow)
+        });
+    }
+
     /// Puts the focus where the key of `control` works. A key that works anywhere is
     /// pressed where the focus happens to be, unless that is inside a terminal: off macOS
     /// such a key does nothing there, so the focus is first put in the review pane, which
@@ -254,18 +279,20 @@ impl Composed {
                         .iter()
                         .any(|context| context.contains(PROGRAM_CONTEXT))
                 }) {
-                    self.click_into(cx, "review-row-0");
+                    self.click_into(cx, "review-bar");
                 }
             }
-            // The first row of the Review pane, at its left end: an offer to set a base,
-            // where the row holds one, lies further right.
-            Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-row-0"),
+            // The bar of the review pane, drawn in both views, at its left end: a click
+            // there puts the focus in the pane and pauses no follow.
+            Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-bar"),
             // The tree of Changes: Tab from the rows moves the focus into it, as a user
             // gets there by keys.
             Place::In(yaar_review_pane::HISTORY_CONTEXT) => {
                 if !self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx) {
                     // The Keeper answers for the history after the rows are drawn, and
                     // Tab does nothing before the tree is there.
+                    // Flow has no tree: a step before left it on screen, perhaps.
+                    self.show_changes(cx);
                     wait_until(cx, "the tree of Changes", |cx| {
                         cx.debug_bounds("review-history-uncommitted").is_some()
                     });
@@ -469,6 +496,8 @@ impl Composed {
                 RequestKind::SetSetting => {
                     // The workspace on screen shows Flow as the timeline, which nobody chose:
                     // the key switches it to the live diff and keeps that for the workspace.
+                    // The key acts in Flow only, so Flow is shown first, as a user does.
+                    self.show_flow(cx);
                     let on_screen = self
                         .on_screen(cx)
                         .expect("a workspace is on screen before the walk sets a form of Flow");
@@ -625,11 +654,7 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
     // without one there is nothing to set a base for.
     window.walk(RequestKind::OpenFolder, &mut cx);
 
-    // Until the review pane's first package of slice 5 gives the switch of Flow's form its
-    // work, its key sends nothing, and the walk leaves `SetSetting` out. The package of the
-    // composed Window takes this filter away: the walk is weakened for the length of the
-    // build only.
-    for kind in RequestKind::started_by_user().filter(|kind| *kind != RequestKind::SetSetting) {
+    for kind in RequestKind::started_by_user() {
         window.walk(kind, &mut cx);
     }
 

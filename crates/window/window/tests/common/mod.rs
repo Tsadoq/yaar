@@ -102,9 +102,28 @@ pub fn open_composed(
 /// [`open_composed`] in a world the test made and started a Keeper in, which holds what
 /// the test put there: a Window started against a Keeper that already holds state.
 pub fn open_composed_in(
+    world: World,
+    cx: &mut TestAppContext,
+    extra: Vec<BuildPane>,
+) -> (Composed, VisualTestContext) {
+    open_composed_with(world, cx, extra, true)
+}
+
+/// [`open_composed_in`] for a second Window of the same test, after the Keeper of the world
+/// was started again: the app was prepared by the first, and its keys are not bound twice.
+pub fn open_another_composed_in(
+    world: World,
+    cx: &mut TestAppContext,
+    extra: Vec<BuildPane>,
+) -> (Composed, VisualTestContext) {
+    open_composed_with(world, cx, extra, false)
+}
+
+fn open_composed_with(
     mut world: World,
     cx: &mut TestAppContext,
     extra: Vec<BuildPane>,
+    prepare_the_app: bool,
 ) -> (Composed, VisualTestContext) {
     let keeper = world.keeper_pid().expect("the world's Keeper runs");
     let tap = world.tap();
@@ -114,7 +133,9 @@ pub fn open_composed_in(
     cx.executor().allow_parking();
     let ran: Rc<RefCell<Vec<&'static str>>> = Rc::default();
     let watching = cx.update(|cx| {
-        yaar_window::init(cx);
+        if prepare_the_app {
+            yaar_window::init(cx);
+        }
         let ran = ran.clone();
         cx.observe_keystrokes(move |event: &KeystrokeEvent, _, _| {
             if let Some(action) = &event.action {
@@ -269,9 +290,10 @@ impl Composed {
         point(bounds.left() + px(2.), bounds.center().y)
     }
 
-    /// Clicks into the first row of the review pane, which puts the focus there.
+    /// Clicks on the bar of the review pane, which puts the focus in the pane whichever view
+    /// it shows (Flow draws no first row) and pauses no follow.
     pub fn click_into_the_review_pane(&self, cx: &mut VisualTestContext) {
-        let at = self.point_in("review-row-0", cx);
+        let at = self.point_in("review-bar", cx);
         cx.simulate_click(at, Modifiers::none());
     }
 
