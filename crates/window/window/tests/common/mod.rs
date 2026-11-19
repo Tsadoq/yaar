@@ -189,6 +189,15 @@ pub fn open_composed(
     )
 }
 
+/// Gives the repository the identity of a user, in its own configuration. The Keeper commits
+/// with whatever identity git finds, and in a world git reads no global configuration: where
+/// git guesses one from the machine's names (macOS) a commit goes through, and where it does
+/// not (Linux) git refuses it.
+pub fn give_an_identity(repository: &Repo) {
+    repository.git(&["config", "user.name", "A Test"]);
+    repository.git(&["config", "user.email", "test@example.invalid"]);
+}
+
 /// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
 pub fn wait_until(
     cx: &mut VisualTestContext,
@@ -204,6 +213,15 @@ pub fn wait_until(
         assert!(Instant::now() < deadline, "waited in vain for {what}");
         std::thread::park_timeout(PAUSE);
     }
+}
+
+/// Where the element drawn under `selector` was laid out in the last frame, if one was.
+pub fn drawn(
+    selector: &str,
+    cx: &mut VisualTestContext,
+) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+    // The test context takes a text that lives as long as the program.
+    cx.debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
 }
 
 /// The key, as the table binds it on this system, of the control of the Window titled
@@ -228,12 +246,12 @@ impl Composed {
     /// right of its left edge, in the middle of its height.
     pub fn point_in(
         &self,
-        selector: &'static str,
+        selector: &str,
         cx: &mut VisualTestContext,
     ) -> gpui_kit::Point<gpui_kit::Pixels> {
         let mut found = None;
         wait_until(cx, selector, |cx| {
-            found = cx.debug_bounds(selector);
+            found = drawn(selector, cx);
             found.is_some()
         });
         let bounds = found.expect("the element is drawn");
@@ -268,6 +286,7 @@ impl Composed {
     pub fn open_a_folder(&mut self, cx: &mut VisualTestContext) -> PathBuf {
         let name = format!("opened-{}", self.next());
         let repository = self.world.repository(&name);
+        give_an_identity(&repository);
         repository.git(&["checkout", "--quiet", "-b", "work"]);
         repository.write("notes.txt", "one\ntwo\nthree\n");
         repository.commit("Add the notes");

@@ -6,10 +6,10 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use yaar_link::{
-    Hello, LinkError, Message, Request, RequestId, RequestKind, handshake, read_message,
+    Hello, LinkError, Message, Refusal, Request, RequestId, RequestKind, handshake, read_message,
     write_message,
 };
-use yaar_system_tests::{Client, DEADLINE, World, attach};
+use yaar_system_tests::{Client, DEADLINE, Place, World, attach};
 
 #[test]
 fn the_same_steps_in_two_worlds_give_the_same_commits_on_main() {
@@ -69,6 +69,45 @@ fn a_program_of_the_world_sees_the_worlds_environment_and_nothing_of_this_proces
         assert!(place.starts_with(&root), "{name}={place:?}");
     }
     assert!(world.data_dir().starts_with(&root));
+}
+
+#[test]
+fn a_program_of_the_world_is_told_a_temporary_folder_that_lies_in_the_world_and_exists() {
+    let world = World::new();
+    let printed = world
+        .command(Path::new("/usr/bin/env"))
+        .output()
+        .expect("run env");
+    let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+    let temporary = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("TMPDIR="))
+        .map(PathBuf::from)
+        .expect("the world names a temporary folder");
+    let root = world.home().with_file_name("");
+    assert!(temporary.starts_with(&root), "TMPDIR={temporary:?}");
+    assert!(temporary.is_dir(), "{temporary:?} is made by the world");
+    // The folder is the world's own: it goes with the world.
+    drop(world);
+    assert!(!temporary.exists(), "{temporary:?} outlived its world");
+}
+
+#[test]
+fn a_program_of_a_bare_place_is_told_a_temporary_folder_of_the_place_too() {
+    let place = Place::new();
+    let printed = place
+        .command(Path::new("/usr/bin/env"))
+        .output()
+        .expect("run env");
+    let printed = String::from_utf8_lossy(&printed.stdout).into_owned();
+    let temporary = printed
+        .lines()
+        .find_map(|line| line.strip_prefix("TMPDIR="))
+        .map(PathBuf::from)
+        .expect("the place names a temporary folder");
+    let root = place.socket().with_file_name("");
+    assert!(temporary.starts_with(&root), "TMPDIR={temporary:?}");
+    assert!(temporary.is_dir(), "{temporary:?} is made with the place");
 }
 
 fn opens(path: &str) -> Request {
@@ -216,4 +255,51 @@ fn a_tap_lists_a_request_before_it_hands_it_to_the_keeper() {
         other => panic!("the Keeper did not refuse the folder: {other:?}"),
     }
     assert_eq!(tap.requests(), vec![large]);
+}
+
+#[test]
+fn a_killed_keeper_is_gone_at_once_and_the_next_starts_on_the_same_folders_and_finds_what_was_kept()
+{
+    let mut world = World::new();
+    let first = world.start_keeper();
+    let repo = world.repository("app");
+    let mut client = world.client();
+    let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
+
+    world.kill_keeper();
+    assert!(!yaar_system_tests::is_alive(first));
+    assert_eq!(world.keeper_pid(), None);
+    drop(client);
+
+    let second = world.start_keeper();
+    assert_ne!(second, first);
+    let list = world.client().workspaces();
+    assert_eq!(list[0].workspaces[0].id, workspace);
+}
+
+#[test]
+#[should_panic(expected = "no Keeper of this world runs")]
+fn a_world_with_no_keeper_cannot_kill_one() {
+    World::new().kill_keeper();
+}
+
+#[test]
+fn a_reply_that_comes_while_another_is_waited_for_is_kept_for_the_request_that_sent_it() {
+    let mut world = World::new();
+    world.start_keeper();
+    let mut client = world.client();
+
+    // The Keeper answers in the order it was asked: the replies of the two sent requests
+    // are read, in turn, while the one that is waited for is not there yet.
+    let first = client.send(opens("/nowhere/first"));
+    let second = client.send(opens("/nowhere/second"));
+    assert_eq!(client.workspaces(), vec![]);
+    assert!(matches!(
+        client.wait_for_reply(second, DEADLINE),
+        Err(Refusal::NoSuchFolder { path }) if path.ends_with("second")
+    ));
+    assert!(matches!(
+        client.wait_for_reply(first, DEADLINE),
+        Err(Refusal::NoSuchFolder { path }) if path.ends_with("first")
+    ));
 }

@@ -43,7 +43,9 @@ impl Scratch {
             .canonicalize()
             .expect("the temporary folder")
             .join(format!("yaar-keeper-terminals-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(root.join("home")).expect("make the test's folder");
+        for folder in ["home", "tmp"] {
+            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
+        }
         let settings = [
             ("GIT_CONFIG_GLOBAL", "/dev/null"),
             ("GIT_CONFIG_NOSYSTEM", "1"),
@@ -64,7 +66,19 @@ impl Scratch {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            for name in ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "ENV", "PS1"] {
+            // Where the Keeper's copies of git's lists of files go, and a program of a
+            // terminal's too: a folder that goes with the test.
+            std::env::set_var("TMPDIR", root.join("tmp"));
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+                "GIT_CONFIG",
+                "ENV",
+                "PS1",
+            ] {
                 std::env::remove_var(name);
             }
         }
@@ -276,6 +290,35 @@ fn shell_in(heard: &[u8]) -> Option<u32> {
 
 fn contains(bytes: &[u8], text: &str) -> bool {
     String::from_utf8_lossy(bytes).contains(text)
+}
+
+#[test]
+fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
+    // SAFETY: changing the environment is sound only while no other thread reads it.
+    // This is the first statement of a test, and these tests are run by `cargo
+    // nextest`, which gives each test a process of its own.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "log");
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'alias.status'='log'");
+        std::env::set_var("GIT_CONFIG", "/nonexistent/config");
+    }
+    let _scratch = Scratch::new();
+    for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"] {
+        assert_eq!(std::env::var_os(name), None, "{name} is still set");
+    }
+}
+
+#[test]
+fn the_temporary_files_of_the_keeper_of_a_test_go_in_a_folder_of_the_test() {
+    let scratch = Scratch::new();
+    let temporary = std::env::temp_dir();
+    assert!(temporary.starts_with(&scratch.0), "{temporary:?}");
+    assert!(
+        temporary.is_dir(),
+        "{temporary:?} is made with the test's folder"
+    );
 }
 
 #[test]

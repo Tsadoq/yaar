@@ -11,11 +11,12 @@ use yaar_workspaces::{
     Head, ID_FILE, Opened, Refusal, Repository, Workspace, WorkspaceError, Workspaces,
 };
 
-fn branch(name: &str, commit: &str) -> Head {
-    Head::Branch {
+/// What a listed worktree with this branch checked out has as its head.
+fn branch(name: &str, commit: &str) -> Option<Head> {
+    Some(Head::Branch {
         name: name.to_owned(),
         commit: Some(yaar_workspaces::CommitId::new(commit)),
-    }
+    })
 }
 
 fn refused(result: Result<impl std::fmt::Debug, WorkspaceError>) -> Refusal {
@@ -62,6 +63,24 @@ fn id_in(git_dir: &Path) -> String {
 }
 
 // WS-07.
+#[test]
+fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
+    // SAFETY: changing the environment is sound only while no other thread reads it.
+    // This is the first statement of a test, and these tests are run by `cargo
+    // nextest`, which gives each test a process of its own.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "alias.status");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "log");
+        std::env::set_var("GIT_CONFIG_PARAMETERS", "'alias.status'='log'");
+        std::env::set_var("GIT_CONFIG", "/nonexistent/config");
+    }
+    let _scratch = Scratch::new();
+    for name in ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"] {
+        assert_eq!(std::env::var_os(name), None, "{name} is still set");
+    }
+}
+
 #[test]
 fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch() {
     let scratch = Scratch::new();
@@ -260,7 +279,7 @@ fn a_worktree_made_or_removed_outside_the_app_shows_at_the_next_listing() {
     assert_eq!(with_a_third.workspaces[2].path, scratch.join("third"));
     assert_eq!(
         with_a_third.workspaces[2].head,
-        Head::Detached(yaar_workspaces::CommitId::new(&first))
+        Some(Head::Detached(yaar_workspaces::CommitId::new(&first)))
     );
 
     // One removed through git, one whose folder was deleted: neither is listed, and

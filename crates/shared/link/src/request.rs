@@ -8,6 +8,10 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::LinkError;
+use crate::review::{
+    CommentId, DraftOn, ReviewId, ThreadId, WorkspaceReviews, read_draft_on,
+    read_workspace_reviews, write_draft_on, write_workspace_reviews,
+};
 use crate::terminal::{
     Ending, Program, TerminalId, TerminalSize, read_ending, read_program, read_size, write_ending,
     write_program, write_size,
@@ -96,6 +100,20 @@ request_kinds! {
     OpenTerminal = 6, User;
     /// See [`Request::ResizeTerminal`].
     ResizeTerminal = 7, Window;
+    /// See [`Request::GetReviews`].
+    GetReviews = 8, Window;
+    /// See [`Request::SaveDraft`].
+    SaveDraft = 9, Window;
+    /// See [`Request::DeleteDraft`].
+    DeleteDraft = 10, User;
+    /// See [`Request::CopyReview`].
+    CopyReview = 11, User;
+    /// See [`Request::MarkReviewed`].
+    MarkReviewed = 12, User;
+    /// See [`Request::SetViewed`].
+    SetViewed = 13, User;
+    /// See [`Request::Commit`].
+    Commit = 14, User;
 }
 
 impl RequestKind {
@@ -181,6 +199,97 @@ pub enum Request {
         /// Its new size.
         size: TerminalSize,
     },
+    /// The reviews of a workspace, with their threads, comments and rounds, and its files
+    /// marked viewed. Answered by [`Reply::Reviews`]; refused with
+    /// [`Refusal::UnknownWorkspace`] when the Keeper knows no such workspace.
+    ///
+    /// A workspace whose worktree is gone still has its reviews, and no file viewed. A
+    /// workspace with no review of an agent session has one review, of no agent, which the
+    /// Keeper makes when it is first asked for.
+    GetReviews {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
+    /// Keep the text of a draft as it is now. The Window sends it whenever the text in a
+    /// comment box changes, with the whole text each time, and by itself: the user types,
+    /// and no control stands for the save. Answered by [`Reply::Done`] once the text is in
+    /// the Keeper's database, where a killed Keeper finds it again; the drive is flushed
+    /// after a pause in the typing, not at each save.
+    ///
+    /// The first save of a comment makes it, as a draft: the first comment of a new
+    /// thread, which sits where `on` says, or a reply in a thread that has a sent comment
+    /// and no draft. A later save of the same comment changes its text, also of a draft
+    /// that a reply made. Refused with [`Refusal::NotADraft`] when the comment was sent,
+    /// [`Refusal::UnknownReview`] or [`Refusal::UnknownThread`] for what the Keeper does
+    /// not hold, and [`Refusal::Failed`] when the ids contradict what is kept, as a
+    /// thread id taken by another thread or a reply in a thread with nothing sent.
+    ///
+    /// A save that made a comment is told to every Window as [`Fact::ReviewsChanged`]; a
+    /// save that only changed a text is told to nobody, so that typing does not make every
+    /// Window read the reviews again. The Window that typed puts each text it saves into
+    /// the reviews it shows itself.
+    SaveDraft {
+        /// The review.
+        review: ReviewId,
+        /// The thread: new, when `on` starts one.
+        thread: ThreadId,
+        /// The comment.
+        comment: CommentId,
+        /// What the draft belongs to.
+        on: DraftOn,
+        /// The whole text of the draft.
+        text: String,
+    },
+    /// Delete a draft. A thread left with no comment goes with it. Answered by
+    /// [`Reply::Done`]; refused with [`Refusal::NotADraft`] for a comment that was sent,
+    /// and [`Refusal::UnknownReview`] or [`Refusal::UnknownComment`] for what the Keeper
+    /// does not hold.
+    DeleteDraft {
+        /// The review.
+        review: ReviewId,
+        /// The draft.
+        comment: CommentId,
+    },
+    /// Copy a review as text, to paste by hand to an agent the app cannot deliver to.
+    /// Every unsent comment on an unresolved thread is rendered as text, with its path, its
+    /// lines and the code it sits on, and is then sent: the state of the worktree is
+    /// recorded and a new round starts, as when a message carries the review. Answered by
+    /// [`Reply::Copied`], which the Window puts on the clipboard; refused with
+    /// [`Refusal::NothingToSend`] when there is no such comment, and nothing is recorded.
+    CopyReview {
+        /// The review.
+        review: ReviewId,
+    },
+    /// Mark the change reviewed: the state of the worktree as it is now is recorded and
+    /// becomes the reviewed state of the review, from which the next review starts. No
+    /// commit is made. Answered by [`Reply::Done`].
+    MarkReviewed {
+        /// The review.
+        review: ReviewId,
+    },
+    /// Mark one file of a workspace viewed, or take the mark away. A mark holds for the
+    /// content the file has now: when the file changes, the mark is gone. Answered by
+    /// [`Reply::Done`]; refused when the path leads out of the worktree.
+    SetViewed {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The file, relative to the folder of the worktree.
+        path: PathBuf,
+        /// Whether it is to be marked viewed.
+        viewed: bool,
+    },
+    /// Make an ordinary git commit of every uncommitted change of the worktree, with this
+    /// message, as the user's own git makes it: with the user's hooks, identity and
+    /// signing. Nothing is marked reviewed, and what counts as changed since the last
+    /// review stays as it was. Answered by [`Reply::Committed`]; refused with
+    /// [`Refusal::NothingToCommit`] when nothing is uncommitted, and with
+    /// [`Refusal::Failed`] and git's own words when git refuses, as a hook may.
+    Commit {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The message, as the user wrote it.
+        message: String,
+    },
 }
 
 impl Request {
@@ -194,6 +303,13 @@ impl Request {
             Self::ReadFile { .. } => RequestKind::ReadFile,
             Self::OpenTerminal { .. } => RequestKind::OpenTerminal,
             Self::ResizeTerminal { .. } => RequestKind::ResizeTerminal,
+            Self::GetReviews { .. } => RequestKind::GetReviews,
+            Self::SaveDraft { .. } => RequestKind::SaveDraft,
+            Self::DeleteDraft { .. } => RequestKind::DeleteDraft,
+            Self::CopyReview { .. } => RequestKind::CopyReview,
+            Self::MarkReviewed { .. } => RequestKind::MarkReviewed,
+            Self::SetViewed { .. } => RequestKind::SetViewed,
+            Self::Commit { .. } => RequestKind::Commit,
         }
     }
 }
@@ -220,6 +336,20 @@ pub enum Reply {
     TerminalOpened {
         /// The name of the new terminal.
         terminal: TerminalId,
+    },
+    /// The reviews of the workspace asked about.
+    Reviews(WorkspaceReviews),
+    /// The review as text, and the round its comments were sent in.
+    Copied {
+        /// The text to put on the clipboard.
+        text: String,
+        /// The number of the round that started.
+        round: u32,
+    },
+    /// The commit is made.
+    Committed {
+        /// Its full id.
+        commit: String,
     },
 }
 
@@ -269,6 +399,38 @@ pub enum Refusal {
         /// The id that was given.
         terminal: TerminalId,
     },
+    /// The Keeper holds no review by this id.
+    UnknownReview {
+        /// The id that was given.
+        review: ReviewId,
+    },
+    /// The review holds no thread by this id.
+    UnknownThread {
+        /// The id that was given.
+        thread: ThreadId,
+    },
+    /// The review holds no comment by this id.
+    UnknownComment {
+        /// The id that was given.
+        comment: CommentId,
+    },
+    /// The comment was sent: it carries its round and cannot be changed or deleted. A
+    /// follow-up is a reply.
+    NotADraft {
+        /// The comment.
+        comment: CommentId,
+    },
+    /// The review holds no unsent comment on an unresolved thread: there is nothing to
+    /// send.
+    NothingToSend {
+        /// The review.
+        review: ReviewId,
+    },
+    /// The worktree holds no uncommitted change: there is nothing to commit.
+    NothingToCommit {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
     /// Something the user cannot mend from here went wrong: git is missing or failed, the
     /// database could not be written, or a program could not be started.
     Failed {
@@ -310,6 +472,20 @@ impl fmt::Display for Refusal {
             Self::UnknownTerminal { terminal } => {
                 write!(f, "there is no terminal {terminal}")
             }
+            Self::UnknownReview { review } => write!(f, "there is no review {review}"),
+            Self::UnknownThread { thread } => write!(f, "there is no thread {thread}"),
+            Self::UnknownComment { comment } => write!(f, "there is no comment {comment}"),
+            Self::NotADraft { comment } => write!(
+                f,
+                "the comment {comment} was sent and can no longer be changed; reply to it instead"
+            ),
+            Self::NothingToSend { review } => write!(
+                f,
+                "the review {review} holds no unsent comment on an unresolved thread"
+            ),
+            Self::NothingToCommit { workspace } => {
+                write!(f, "the workspace {workspace} has nothing uncommitted")
+            }
             Self::Failed { reason } => f.write_str(reason),
         }
     }
@@ -339,6 +515,15 @@ pub enum Fact {
         terminal: TerminalId,
         /// How its program ended.
         ending: Ending,
+    },
+    /// The reviews of this workspace, or its files marked viewed, are no longer what the
+    /// Keeper last answered: a thread or a comment was made or deleted, a round started,
+    /// the change was marked reviewed, or a file was marked viewed or unmarked. A Window
+    /// that shows them asks again. A save that only changed the text of a draft is not
+    /// told.
+    ReviewsChanged {
+        /// The workspace.
+        workspace: WorkspaceId,
     },
 }
 
@@ -377,6 +562,40 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(terminal.as_str());
             write_size(out, *size);
         }
+        Request::GetReviews { workspace } => out.text(workspace.as_str()),
+        Request::SaveDraft {
+            review,
+            thread,
+            comment,
+            on,
+            text,
+        } => {
+            out.text(review.as_str());
+            out.text(thread.as_str());
+            out.text(comment.as_str());
+            write_draft_on(out, on);
+            out.text(text);
+        }
+        Request::DeleteDraft { review, comment } => {
+            out.text(review.as_str());
+            out.text(comment.as_str());
+        }
+        Request::CopyReview { review } | Request::MarkReviewed { review } => {
+            out.text(review.as_str())
+        }
+        Request::SetViewed {
+            workspace,
+            path,
+            viewed,
+        } => {
+            out.text(workspace.as_str());
+            out.path(path);
+            out.u8(u8::from(*viewed));
+        }
+        Request::Commit { workspace, message } => {
+            out.text(workspace.as_str());
+            out.text(message);
+        }
     }
 }
 
@@ -410,6 +629,39 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::ResizeTerminal => Request::ResizeTerminal {
             terminal: TerminalId::new(input.text()?),
             size: read_size(input)?,
+        },
+        RequestKind::GetReviews => Request::GetReviews {
+            workspace: WorkspaceId::new(input.text()?),
+        },
+        RequestKind::SaveDraft => Request::SaveDraft {
+            review: ReviewId::new(input.text()?),
+            thread: ThreadId::new(input.text()?),
+            comment: CommentId::new(input.text()?),
+            on: read_draft_on(input)?,
+            text: input.text()?,
+        },
+        RequestKind::DeleteDraft => Request::DeleteDraft {
+            review: ReviewId::new(input.text()?),
+            comment: CommentId::new(input.text()?),
+        },
+        RequestKind::CopyReview => Request::CopyReview {
+            review: ReviewId::new(input.text()?),
+        },
+        RequestKind::MarkReviewed => Request::MarkReviewed {
+            review: ReviewId::new(input.text()?),
+        },
+        RequestKind::SetViewed => Request::SetViewed {
+            workspace: WorkspaceId::new(input.text()?),
+            path: input.path()?,
+            viewed: match input.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+            },
+        },
+        RequestKind::Commit => Request::Commit {
+            workspace: WorkspaceId::new(input.text()?),
+            message: input.text()?,
         },
     };
     Ok((id, request))
@@ -445,6 +697,19 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::TerminalOpened { terminal } => {
                     out.u16(5);
                     out.text(terminal.as_str());
+                }
+                Reply::Reviews(reviews) => {
+                    out.u16(6);
+                    write_workspace_reviews(out, reviews);
+                }
+                Reply::Copied { text, round } => {
+                    out.u16(7);
+                    out.text(text);
+                    out.u32(*round);
+                }
+                Reply::Committed { commit } => {
+                    out.u16(8);
+                    out.text(commit);
                 }
             }
         }
@@ -487,6 +752,30 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                     out.u16(9);
                     out.text(terminal.as_str());
                 }
+                Refusal::UnknownReview { review } => {
+                    out.u16(10);
+                    out.text(review.as_str());
+                }
+                Refusal::UnknownThread { thread } => {
+                    out.u16(11);
+                    out.text(thread.as_str());
+                }
+                Refusal::UnknownComment { comment } => {
+                    out.u16(12);
+                    out.text(comment.as_str());
+                }
+                Refusal::NotADraft { comment } => {
+                    out.u16(13);
+                    out.text(comment.as_str());
+                }
+                Refusal::NothingToSend { review } => {
+                    out.u16(14);
+                    out.text(review.as_str());
+                }
+                Refusal::NothingToCommit { workspace } => {
+                    out.u16(15);
+                    out.text(workspace.as_str());
+                }
             }
         }
     }
@@ -508,6 +797,14 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             4 => Reply::File(read_sides(input)?),
             5 => Reply::TerminalOpened {
                 terminal: TerminalId::new(input.text()?),
+            },
+            6 => Reply::Reviews(read_workspace_reviews(input)?),
+            7 => Reply::Copied {
+                text: input.text()?,
+                round: input.u32()?,
+            },
+            8 => Reply::Committed {
+                commit: input.text()?,
             },
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
@@ -539,6 +836,24 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             9 => Refusal::UnknownTerminal {
                 terminal: TerminalId::new(input.text()?),
             },
+            10 => Refusal::UnknownReview {
+                review: ReviewId::new(input.text()?),
+            },
+            11 => Refusal::UnknownThread {
+                thread: ThreadId::new(input.text()?),
+            },
+            12 => Refusal::UnknownComment {
+                comment: CommentId::new(input.text()?),
+            },
+            13 => Refusal::NotADraft {
+                comment: CommentId::new(input.text()?),
+            },
+            14 => Refusal::NothingToSend {
+                review: ReviewId::new(input.text()?),
+            },
+            15 => Refusal::NothingToCommit {
+                workspace: WorkspaceId::new(input.text()?),
+            },
             _ => return Err(LinkError::Malformed("unknown kind of refusal")),
         }),
         _ => return Err(LinkError::Malformed("a reply is neither done nor refused")),
@@ -561,6 +876,10 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.text(terminal.as_str());
             write_ending(out, *ending);
         }
+        Fact::ReviewsChanged { workspace } => {
+            out.u16(4);
+            out.text(workspace.as_str());
+        }
     }
 }
 
@@ -573,6 +892,9 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
         3 => Fact::TerminalEnded {
             terminal: TerminalId::new(input.text()?),
             ending: read_ending(input)?,
+        },
+        4 => Fact::ReviewsChanged {
+            workspace: WorkspaceId::new(input.text()?),
         },
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })

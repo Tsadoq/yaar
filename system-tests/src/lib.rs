@@ -83,7 +83,7 @@ impl Place {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!("/tmp/yaar-st-{}-{n}", std::process::id()));
-        for folder in ["home", "run"] {
+        for folder in ["home", "run", "tmp"] {
             std::fs::create_dir_all(path.join(folder)).expect("create the test's folder");
         }
         Self(path)
@@ -95,10 +95,10 @@ impl Place {
     }
 
     /// A command that runs `program` as a user of this folder alone: with the environment
-    /// of this process cleared but for the search path, and the home, data and runtime
-    /// folders of the user inside the folder. A program that keeps files in the user's
-    /// folders, as the Keeper does with its database, then keeps them here, and no test
-    /// touches the folders of whoever runs it.
+    /// of this process cleared but for the search path, and the home, data, runtime and
+    /// temporary folders of the user inside the folder. A program that keeps files in the
+    /// user's folders, as the Keeper does with its database, then keeps them here, and no
+    /// test touches the folders of whoever runs it.
     pub fn command(&self, program: &Path) -> Command {
         let mut command = Command::new(program);
         command.env_clear();
@@ -108,7 +108,8 @@ impl Place {
         command
             .env("HOME", self.0.join("home"))
             .env("XDG_DATA_HOME", self.0.join("data"))
-            .env("XDG_RUNTIME_DIR", self.0.join("run"));
+            .env("XDG_RUNTIME_DIR", self.0.join("run"))
+            .env("TMPDIR", self.0.join("tmp"));
         command
     }
 }

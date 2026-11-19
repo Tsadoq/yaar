@@ -14,6 +14,26 @@
 //! | `ReadFile` | `Workspaces::file` | none |
 //! | `OpenTerminal` | `Dock::open`, in the folder of the workspace | none; later `TerminalEnded` |
 //! | `ResizeTerminal` | `Dock::resize` | none |
+//! | `GetReviews` | `Reviews::of_workspace`, with the worktree when it is there | none |
+//! | `SaveDraft` | `Reviews::save_draft` | `ReviewsChanged` of its workspace when it made a comment |
+//! | `DeleteDraft` | `Reviews::delete_draft` | `ReviewsChanged` of its workspace |
+//! | `CopyReview` | `Reviews::copy_as_text` | `ReviewsChanged` of its workspace |
+//! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
+//! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
+//! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
+//!
+//! The worktree of a request of reviews is found with `Workspaces::worktree`, which reads
+//! the Store and the folder and runs no git: never through the list of every repository,
+//! which runs git in each. A save that changes a draft's text needs no worktree at all.
+//!
+//! A copy of a review and a mark of reviewed need the worktree of the review's workspace,
+//! and are refused with the words "the worktree is gone" when there is none. So is a
+//! commit, and so is the mark of a viewed file. Reading the reviews of a gone worktree
+//! works, and so does the save of a draft's text.
+//!
+//! The commit is not answered by [`Parts::answer`] itself: that gives the work, which the
+//! Keeper runs once it has let its parts go, so that the user's hooks, which may run for
+//! minutes, hold up nothing.
 //!
 //! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
 //! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
@@ -37,8 +57,10 @@
 //! reason in its place, so that no request stays without an answer. That is done where
 //! the reply is written, in the serve loop.
 //!
-//! Requests that change what the Keeper keeps, and the one whose reply carries what a
-//! fact carries, are answered one at a time: see [`waits_its_turn`].
+//! Requests that change the list of workspaces, and the one whose reply carries that
+//! list, are answered one at a time: see [`waits_its_turn`]. The Review engine keeps its
+//! own changes one at a time. Where each request is answered, so that what takes long
+//! holds up nothing else of its Window, is [`answerer`]'s to say.
 //!
 //! Nothing is watched yet. The list of workspaces is read from git when a Window asks
 //! for it, and no fact tells of a worktree or a branch that changed outside the app.
@@ -49,7 +71,8 @@ use yaar_dock::{Dock, DockError, Event, Start};
 use yaar_link::{
     Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, TerminalSize,
 };
-use yaar_recorder::{CommitId, Git};
+use yaar_recorder::{CommitError, CommitId, Git, Worktree};
+use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
@@ -63,12 +86,20 @@ const OUTPUT_FRAME: usize = 64 * 1024;
 
 /// The parts of the Keeper, started and connected.
 pub(crate) struct Parts {
-    // Workspaces on git and the Store, or the sentence that says why there is none.
-    workspaces: Result<Workspaces, String>,
+    // Workspaces and the reviews, both on git and the Store, or the sentence that says
+    // why there are none.
+    kept: Result<Kept, String>,
     // The terminals and their programs. Dropped with the parts, which ends every program.
     dock: Dock,
     // What the programs of the Dock tell the Windows goes through here.
     shared: Weak<Shared>,
+}
+
+/// What the Keeper keeps for its Windows: the workspaces, and the reviews of their
+/// worktrees.
+struct Kept {
+    workspaces: Workspaces,
+    reviews: Reviews,
 }
 
 /// A step that waits for a reply to be queued, and runs after it.
@@ -97,6 +128,58 @@ impl Outcome {
     }
 }
 
+/// Where a request is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answerer {
+    /// On the thread that reads the Window's connection, before its next message is read.
+    Here,
+    /// By the Window's one thread for reviews, one after the other in the order they came.
+    InOrder,
+    /// On a thread of its own, started for this request.
+    Apart,
+}
+
+/// Where requests of this kind are answered.
+pub(crate) fn answerer(kind: RequestKind) -> Answerer {
+    // No arm for "the rest": a new kind of request has to say which it is.
+    match kind {
+        // Quick, or ordered with the Window's other requests of slices 1 and 2.
+        RequestKind::ListWorkspaces
+        | RequestKind::OpenFolder
+        | RequestKind::SetBase
+        | RequestKind::GetChanges
+        | RequestKind::ReadFile
+        | RequestKind::OpenTerminal
+        | RequestKind::ResizeTerminal => Answerer::Here,
+        // The saves of a draft must be kept in the order they were typed, and a reading
+        // that follows a save must find it. A copy or a mark of reviewed records a state,
+        // up to a second or more on a large repository: the Window's typing into its
+        // terminals, read on the connection's thread, must not wait for it.
+        RequestKind::GetReviews
+        | RequestKind::SaveDraft
+        | RequestKind::DeleteDraft
+        | RequestKind::CopyReview
+        | RequestKind::MarkReviewed
+        | RequestKind::SetViewed => Answerer::InOrder,
+        // The user's own git, with their hooks, which may run for minutes: neither the
+        // Window's typing nor its saves may wait for it.
+        RequestKind::Commit => Answerer::Apart,
+    }
+}
+
+/// What [`Parts::answer`] gives.
+pub(crate) enum Answered {
+    /// The outcome, ready.
+    Now(Outcome),
+    /// Work to run once the parts are let go, which gives the outcome: what may take as
+    /// long as the user's own git takes, and must hold up neither the Keeper's stop nor
+    /// anything else that waits for the parts.
+    Later(Job),
+}
+
+/// Work that gives the outcome of a request, run after the parts are let go.
+pub(crate) type Job = Box<dyn FnOnce() -> Outcome + Send>;
+
 /// Whether requests of this kind are answered one at a time, each with its reply and its
 /// facts sent before the next is begun.
 pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
@@ -114,25 +197,43 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // They lead to no fact, and a program that takes its time to start must not hold
         // up the Windows' other questions.
         RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
+        // Each may change what the Keeper keeps, `GetReviews` included: it keeps the review
+        // of no agent of a workspace that has none, and takes away the marks of files that
+        // changed. The Review engine makes those changes one at a time itself. The facts
+        // they lead to carry no more than the workspace's id, and a Window told one asks
+        // again and reads the newest: their order does not matter, and none of them may
+        // wait behind a recording or the user's git.
+        RequestKind::GetReviews
+        | RequestKind::SaveDraft
+        | RequestKind::DeleteDraft
+        | RequestKind::CopyReview
+        | RequestKind::MarkReviewed
+        | RequestKind::SetViewed
+        | RequestKind::Commit => false,
     }
 }
 
 impl Parts {
     /// Starts the parts: finds git, opens the database `yaar_store::FILE_NAME` in the
-    /// folder of `options.data_dir`, and puts Workspaces on both; and makes the Dock, whose
-    /// programs tell what they do to the Windows of `shared`.
+    /// folder of `options.data_dir`, and puts Workspaces and the Review engine on both,
+    /// the engine recording the states of worktrees in `states` beside the database; and
+    /// makes the Dock, whose programs tell what they do to the Windows of `shared`.
     ///
     /// A Keeper with no git, or with a database it cannot open, still starts and answers
     /// the hello, so that a Window can say what is wrong; each request is then refused
     /// with the reason.
     pub(crate) fn start(options: &Options, shared: Weak<Shared>) -> Parts {
-        let workspaces = Git::find().map_err(|e| e.to_string()).and_then(|git| {
+        let kept = Git::find().map_err(|e| e.to_string()).and_then(|git| {
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
-            Ok(Workspaces::new(git, store))
+            let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"));
+            Ok(Kept {
+                workspaces: Workspaces::new(git, store),
+                reviews,
+            })
         });
         Parts {
-            workspaces,
+            kept,
             dock: Dock::new(),
             shared,
         }
@@ -143,11 +244,15 @@ impl Parts {
         self.dock.running()
     }
 
-    /// Answers one request of `window`.
-    pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Outcome {
-        let workspaces = match &self.workspaces {
-            Ok(workspaces) => workspaces,
-            Err(reason) => return Outcome::failed(reason.clone()),
+    /// Answers one request of `window`, or gives the work that answers it once the parts
+    /// are let go.
+    pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
+        let Kept {
+            workspaces,
+            reviews,
+        } = match &self.kept {
+            Ok(kept) => kept,
+            Err(reason) => return Answered::Now(Outcome::failed(reason.clone())),
         };
         let mut facts = Vec::new();
         let mut then = None;
@@ -204,8 +309,63 @@ impl Parts {
                         reason: other.to_string(),
                     },
                 }),
+            Request::GetReviews { workspace } => {
+                get_reviews(workspaces, reviews, workspace).map(Reply::Reviews)
+            }
+            Request::SaveDraft {
+                review,
+                thread,
+                comment,
+                on,
+                text,
+            } => save_draft(
+                workspaces,
+                reviews,
+                &review,
+                &draft_save(&thread, &comment, on, text),
+                &mut facts,
+            ),
+            Request::DeleteDraft { review, comment } => {
+                let review = ReviewId::new(review.as_str());
+                reviews
+                    .review(&review)
+                    .and_then(|found| {
+                        reviews.delete_draft(
+                            &review,
+                            &yaar_review_engine::CommentId::new(comment.as_str()),
+                        )?;
+                        Ok(found.workspace().clone())
+                    })
+                    .map(|workspace| {
+                        facts.push(reviews_changed(&workspace));
+                        Reply::Done
+                    })
+                    .map_err(engine_refusal)
+            }
+            Request::CopyReview { review } => copy_review(workspaces, reviews, &review, &mut facts),
+            Request::MarkReviewed { review } => {
+                mark_reviewed(workspaces, reviews, &review, &mut facts)
+            }
+            Request::SetViewed {
+                workspace,
+                path,
+                viewed,
+            } => set_viewed(workspaces, reviews, &workspace, &path, viewed, &mut facts),
+            Request::Commit { workspace, message } => {
+                return match worktree_of(workspaces, &workspace) {
+                    Ok(Some(worktree)) => {
+                        Answered::Later(Box::new(move || commit(&worktree, &workspace, &message)))
+                    }
+                    Ok(None) => Answered::Now(Outcome::failed(EngineError::NoWorktree.to_string())),
+                    Err(refused) => Answered::Now(Outcome {
+                        reply: Err(refused),
+                        facts: Vec::new(),
+                        then: None,
+                    }),
+                };
+            }
         };
-        Outcome { reply, facts, then }
+        Answered::Now(Outcome { reply, facts, then })
     }
 
     /// Starts `program` in the folder of `workspace`, in a terminal of the Dock. The
@@ -394,6 +554,197 @@ fn ending(ending: yaar_dock::Ending) -> Ending {
     }
 }
 
+/// The worktree of a workspace: none when the worktree is gone, refused with
+/// `UnknownWorkspace` when the Keeper does not hold the workspace. It reads the Store and
+/// the folder and runs no git: a save of a draft may ask at every key.
+fn worktree_of(
+    workspaces: &Workspaces,
+    workspace: &yaar_link::WorkspaceId,
+) -> Result<Option<Arc<Worktree>>, Refusal> {
+    workspaces
+        .worktree(&WorkspaceId::new(workspace.as_str()))
+        .map_err(refusal)
+}
+
+/// The worktree a request of reviews needs, which is refused in the words of "the
+/// worktree is gone" when it is not there.
+fn worktree_needed(
+    workspaces: &Workspaces,
+    workspace: &yaar_link::WorkspaceId,
+) -> Result<Arc<Worktree>, Refusal> {
+    worktree_of(workspaces, workspace)?.ok_or_else(|| Refusal::Failed {
+        reason: EngineError::NoWorktree.to_string(),
+    })
+}
+
+/// The workspace of a review as the Store holds it, and the worktree of that workspace,
+/// none when it is gone. A review whose workspace the Store does not hold has no worktree
+/// either.
+fn worktree_of_review(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &ReviewId,
+) -> Result<(WorkspaceId, Option<Arc<Worktree>>), Refusal> {
+    let workspace = reviews.review(review).map_err(engine_refusal)?;
+    let workspace = workspace.workspace().clone();
+    match workspaces.worktree(&workspace) {
+        Ok(worktree) => Ok((workspace, worktree)),
+        Err(WorkspaceError::Refused(yaar_workspaces::Refusal::UnknownWorkspace(_))) => {
+            Ok((workspace, None))
+        }
+        Err(other) => Err(refusal(other)),
+    }
+}
+
+/// The same, for the requests that cannot go on without the worktree.
+fn worktree_of_review_needed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &ReviewId,
+) -> Result<(WorkspaceId, Arc<Worktree>), Refusal> {
+    match worktree_of_review(workspaces, reviews, review)? {
+        (workspace, Some(worktree)) => Ok((workspace, worktree)),
+        (_, None) => Err(Refusal::Failed {
+            reason: EngineError::NoWorktree.to_string(),
+        }),
+    }
+}
+
+/// What every Window is told when the reviews of a workspace changed.
+fn reviews_changed(workspace: &WorkspaceId) -> Fact {
+    Fact::ReviewsChanged {
+        workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
+    }
+}
+
+/// The reviews of a workspace, with its files marked viewed when the worktree is there.
+fn get_reviews(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    workspace: yaar_link::WorkspaceId,
+) -> Result<yaar_link::WorkspaceReviews, Refusal> {
+    let worktree = worktree_of(workspaces, &workspace)?;
+    let view = reviews
+        .of_workspace(&WorkspaceId::new(workspace.as_str()), worktree.as_deref())
+        .map_err(engine_refusal)?;
+    Ok(workspace_reviews(workspace, view))
+}
+
+/// Keeps one save of a draft. A text that changes a comment of the review is kept with no
+/// lookup of a worktree and told to nobody; one that makes a comment is told to every
+/// Window.
+fn save_draft(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    save: &yaar_review_engine::DraftSave,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let review = ReviewId::new(review.as_str());
+    // Only a thread that starts here is put on the files of the worktree, and needs it.
+    let worktree = match save.on {
+        yaar_review_engine::DraftOn::NewThread(_) => {
+            worktree_of_review(workspaces, reviews, &review)?.1
+        }
+        yaar_review_engine::DraftOn::Thread => None,
+    };
+    let saved = reviews
+        .save_draft(worktree.as_deref(), &review, save)
+        .map_err(engine_refusal)?;
+    if saved == Saved::Made
+        && let Ok(found) = reviews.review(&review)
+    {
+        facts.push(reviews_changed(found.workspace()));
+    }
+    Ok(Reply::Done)
+}
+
+/// Copies a review as text, and sends what was copied.
+fn copy_review(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let id = ReviewId::new(review.as_str());
+    let (workspace, worktree) = worktree_of_review_needed(workspaces, reviews, &id)?;
+    match reviews.copy_as_text(&worktree, &id) {
+        Ok(copied) => {
+            facts.push(reviews_changed(&workspace));
+            Ok(Reply::Copied {
+                text: copied.text,
+                round: copied.round,
+            })
+        }
+        // The error does not carry the review that has nothing to send; the request does.
+        Err(EngineError::Refused(ReviewError::NothingToSend)) => Err(Refusal::NothingToSend {
+            review: review.clone(),
+        }),
+        Err(other) => Err(engine_refusal(other)),
+    }
+}
+
+/// Marks the change of a review reviewed.
+fn mark_reviewed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    review: &yaar_link::ReviewId,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let id = ReviewId::new(review.as_str());
+    let (workspace, worktree) = worktree_of_review_needed(workspaces, reviews, &id)?;
+    reviews
+        .mark_reviewed(&worktree, &id)
+        .map_err(engine_refusal)?;
+    facts.push(reviews_changed(&workspace));
+    Ok(Reply::Done)
+}
+
+/// Marks a file of a workspace viewed, or takes the mark away.
+fn set_viewed(
+    workspaces: &Workspaces,
+    reviews: &Reviews,
+    workspace: &yaar_link::WorkspaceId,
+    path: &std::path::Path,
+    viewed: bool,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let worktree = worktree_needed(workspaces, workspace)?;
+    let id = WorkspaceId::new(workspace.as_str());
+    reviews
+        .set_viewed(&id, &worktree, path, viewed)
+        .map_err(engine_refusal)?;
+    facts.push(reviews_changed(&id));
+    Ok(Reply::Done)
+}
+
+/// The commit: the user's own git, run once the parts are let go. Every Window is told
+/// that the changes of the workspace changed when a commit was made.
+fn commit(worktree: &Worktree, workspace: &yaar_link::WorkspaceId, message: &str) -> Outcome {
+    let mut facts = Vec::new();
+    let reply = match worktree.commit_all(message) {
+        Ok(commit) => {
+            facts.push(Fact::ChangesChanged {
+                workspace: workspace.clone(),
+            });
+            Ok(Reply::Committed {
+                commit: commit.to_string(),
+            })
+        }
+        Err(CommitError::NothingToCommit) => Err(Refusal::NothingToCommit {
+            workspace: workspace.clone(),
+        }),
+        Err(other) => Err(Refusal::Failed {
+            reason: other.to_string(),
+        }),
+    };
+    Outcome {
+        reply,
+        facts,
+        then: None,
+    }
+}
+
 /// Opens a folder, and tells the list of repositories as it is then.
 fn open_folder(
     workspaces: &Workspaces,
@@ -431,7 +782,7 @@ fn list(workspaces: &Workspaces) -> Result<Vec<yaar_link::Repository>, Refusal> 
                 .map(|workspace| yaar_link::Workspace {
                     id: yaar_link::WorkspaceId::new(workspace.id.as_str()),
                     path: workspace.path,
-                    head: head(workspace.head),
+                    head: workspace.head.map(head),
                 })
                 .collect(),
         })
@@ -532,6 +883,146 @@ fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
         yaar_link::Content::TooLarge { size }
     } else {
         yaar_link::Content::Text(bytes)
+    }
+}
+
+/// The reviews of a workspace, in the words of the Link.
+fn workspace_reviews(
+    workspace: yaar_link::WorkspaceId,
+    view: yaar_review_engine::WorkspaceView,
+) -> yaar_link::WorkspaceReviews {
+    yaar_link::WorkspaceReviews {
+        workspace,
+        reviews: view.reviews.iter().map(review).collect(),
+        viewed: view.viewed,
+    }
+}
+
+/// One review, in the words of the Link.
+fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
+    use yaar_review_engine::{Attachment, Author, SentBy};
+
+    yaar_link::Review {
+        id: yaar_link::ReviewId::new(review.id().as_str()),
+        agent: review.agent().map(yaar_link::SessionId::new),
+        reviewed: review.reviewed().map(str::to_owned),
+        attached: review.attached().map(|attached| match attached {
+            Attachment::Review => yaar_link::Attachment::Review,
+            Attachment::Thread(thread) => {
+                yaar_link::Attachment::Thread(yaar_link::ThreadId::new(thread.as_str()))
+            }
+        }),
+        threads: review
+            .threads()
+            .iter()
+            .map(|thread| yaar_link::Thread {
+                id: yaar_link::ThreadId::new(thread.id.as_str()),
+                anchor: yaar_link::Anchor {
+                    tree: Some(thread.anchor.tree.clone()),
+                    path: thread.anchor.path.clone(),
+                    side: side(thread.anchor.side),
+                    lines: yaar_link::Lines {
+                        first: thread.anchor.first,
+                        last: thread.anchor.last,
+                    },
+                    text: thread.anchor.text.clone(),
+                },
+                resolved: thread.resolved,
+                addressed: thread.addressed,
+                comments: thread
+                    .comments
+                    .iter()
+                    .map(|comment| yaar_link::Comment {
+                        id: yaar_link::CommentId::new(comment.id.as_str()),
+                        author: match comment.author {
+                            Author::Reviewer => yaar_link::Author::Reviewer,
+                            Author::Agent => yaar_link::Author::Agent,
+                        },
+                        text: comment.text.clone(),
+                        round: comment.round,
+                    })
+                    .collect(),
+            })
+            .collect(),
+        rounds: review
+            .rounds()
+            .iter()
+            .map(|round| yaar_link::Round {
+                number: round.number,
+                state: round.state.clone(),
+                sent_by: match round.sent_by {
+                    SentBy::Copied => yaar_link::SentBy::Copied,
+                    SentBy::Delivered => yaar_link::SentBy::Delivered,
+                },
+            })
+            .collect(),
+    }
+}
+
+/// A side of a diff, in the words of the Link.
+fn side(side: yaar_review_engine::Side) -> yaar_link::Side {
+    match side {
+        yaar_review_engine::Side::Old => yaar_link::Side::Old,
+        yaar_review_engine::Side::New => yaar_link::Side::New,
+    }
+}
+
+/// One save of a draft, in the words of the engine.
+fn draft_save(
+    thread: &yaar_link::ThreadId,
+    comment: &yaar_link::CommentId,
+    on: yaar_link::DraftOn,
+    text: String,
+) -> yaar_review_engine::DraftSave {
+    use yaar_review_engine::{DraftOn, NewAnchor};
+
+    yaar_review_engine::DraftSave {
+        thread: yaar_review_engine::ThreadId::new(thread.as_str()),
+        comment: yaar_review_engine::CommentId::new(comment.as_str()),
+        on: match on {
+            yaar_link::DraftOn::NewThread { anchor } => DraftOn::NewThread(NewAnchor {
+                tree: anchor.tree,
+                path: anchor.path,
+                side: match anchor.side {
+                    yaar_link::Side::Old => yaar_review_engine::Side::Old,
+                    yaar_link::Side::New => yaar_review_engine::Side::New,
+                },
+                first: anchor.lines.first,
+                last: anchor.lines.last,
+                text: anchor.text,
+            }),
+            yaar_link::DraftOn::Thread => DraftOn::Thread,
+        },
+        text,
+    }
+}
+
+/// Puts a failure of the Review engine into the words of the Link: what names something
+/// the Keeper does not hold, a sent comment, and a path out of the worktree keep their
+/// kind; the rest becomes `Refusal::Failed` with the sentence of the error. An empty send,
+/// `ReviewError::NothingToSend`, is not mapped here: its refusal names the review, which
+/// the error does not carry, so the caller that copies a review maps it to
+/// `Refusal::NothingToSend` before it calls this.
+fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
+    use yaar_review_engine::{EngineError, ReviewError};
+
+    match error {
+        EngineError::UnknownReview(review) => Refusal::UnknownReview {
+            review: yaar_link::ReviewId::new(review.as_str()),
+        },
+        EngineError::Refused(ReviewError::UnknownThread(thread)) => Refusal::UnknownThread {
+            thread: yaar_link::ThreadId::new(thread.as_str()),
+        },
+        EngineError::Refused(ReviewError::UnknownComment(comment)) => Refusal::UnknownComment {
+            comment: yaar_link::CommentId::new(comment.as_str()),
+        },
+        EngineError::Refused(ReviewError::NotADraft(comment)) => Refusal::NotADraft {
+            comment: yaar_link::CommentId::new(comment.as_str()),
+        },
+        EngineError::OutsideWorktree(path) => Refusal::OutsideWorkspace { path },
+        other => Refusal::Failed {
+            reason: other.to_string(),
+        },
     }
 }
 

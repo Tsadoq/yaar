@@ -2,7 +2,9 @@
 //!
 //! Nothing of one world touches another or the machine's own: a home folder, the app's
 //! folder and a runtime folder of the world's own, and git told to read no configuration
-//! but what the world sets. Tests therefore run side by side.
+//! but what the world sets. Tests therefore run side by side. A program of the world
+//! writes its temporary files in a folder of the world too, so that a program that is
+//! killed leaves nothing in the machine's temporary folder.
 
 use std::fs;
 use std::io::{self, Read, Write};
@@ -45,7 +47,7 @@ impl World {
             .canonicalize()
             .expect("the temporary folder")
             .join(format!("yaar-w-{}-{n}", std::process::id()));
-        for folder in ["home", "run", "repos"] {
+        for folder in ["home", "run", "repos", "tmp"] {
             fs::create_dir_all(root.join(folder)).expect("make the folders of the world");
         }
         World {
@@ -83,10 +85,10 @@ impl World {
 
     /// A command that runs `program` as the world's user: with the environment of this
     /// process cleared but for the search path, and the world's own in its place. That
-    /// names the home, data and runtime folders, the socket and the Keeper program, the
-    /// shell of a terminal (`/bin/sh` unless [`World::keep_descriptors_in_terminals`]
-    /// chose another), and tells git to read neither the machine's
-    /// configuration nor the user's.
+    /// names the home, data, runtime and temporary folders, the socket and the Keeper
+    /// program, the shell of a terminal (`/bin/sh` unless
+    /// [`World::keep_descriptors_in_terminals`] chose another), and tells git to read
+    /// neither the machine's configuration nor the user's.
     pub fn command(&self, program: &Path) -> Command {
         let mut command = Command::new(program);
         command.env_clear();
@@ -99,6 +101,7 @@ impl World {
             .env("HOME", self.home())
             .env("XDG_DATA_HOME", self.data_home())
             .env("XDG_RUNTIME_DIR", self.root.join("run"))
+            .env("TMPDIR", self.root.join("tmp"))
             .env("YAAR_SOCKET", self.socket())
             .env("YAAR_KEEPER", crate::program("yaar-keeper"))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -167,6 +170,20 @@ impl World {
             fs::read_to_string(&errors).unwrap_or_default()
         );
         pid
+    }
+
+    /// Kills the Keeper this world started with the kill signal, as a crash or the system
+    /// does, and returns once it is gone and collected; the world may then start another
+    /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
+    /// database. Panics when no Keeper of this world runs.
+    pub fn kill_keeper(&mut self) {
+        let mut keeper = self
+            .keeper
+            .take()
+            .expect("no Keeper of this world runs to kill");
+        // It may have ended on its own already; the kill then finds nothing to do.
+        let _ = keeper.kill();
+        keeper.wait().expect("collect the killed Keeper");
     }
 
     /// The process id of the Keeper this world started, while it runs.
@@ -268,7 +285,19 @@ impl Drop for World {
             let _ = keeper.kill();
             let _ = keeper.wait();
         }
-        let _ = fs::remove_dir_all(&self.root);
+        // A process the Keeper started, as the user's git of a commit whose Keeper was
+        // killed, may still be finishing and writing into the folder: it is removed
+        // again until it is gone, which is within moments.
+        let deadline = Instant::now() + DEADLINE;
+        while fs::remove_dir_all(&self.root).is_err()
+            && self.root.exists()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if self.root.exists() {
+            eprintln!("the world's folder {} was left behind", self.root.display());
+        }
     }
 }
 
@@ -297,6 +326,7 @@ impl Repo {
             .current_dir(&self.root)
             .args(args)
             .env("HOME", self.world.join("home"))
+            .env("TMPDIR", self.world.join("tmp"))
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("GIT_AUTHOR_NAME", "A Test")

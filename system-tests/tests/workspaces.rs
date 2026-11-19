@@ -72,7 +72,7 @@ fn a_scripted_client_opens_a_folder_and_receives_the_workspace_with_the_changes_
         workspaces: vec![Workspace {
             id: workspace.clone(),
             path: branch.repo.path().to_owned(),
-            head: Head::Branch("feature".to_owned()),
+            head: Some(Head::Branch("feature".to_owned())),
         }],
     }];
     assert_eq!(

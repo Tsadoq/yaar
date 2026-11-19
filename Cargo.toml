@@ -24,6 +24,7 @@ yaar-diff = { path = "crates/shared/diff" }
 yaar-recorder = { path = "crates/keeper/recorder" }
 yaar-store = { path = "crates/keeper/store" }
 yaar-workspaces = { path = "crates/keeper/workspaces" }
+yaar-review-engine = { path = "crates/keeper/review-engine" }
 yaar-dock = { path = "crates/keeper/dock" }
 yaar-frame = { path = "crates/window/frame" }
 yaar-review-pane = { path = "crates/window/review-pane" }

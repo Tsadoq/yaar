@@ -21,6 +21,12 @@ const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_PREFIX",
 ];
 
+/// The variables with which a shell hands git settings that no file holds: a count of
+/// settings with their numbered keys and values (removing the count voids them), the
+/// settings of an outer git, and one file of configuration.
+const CONFIGURATION_VARIABLES: [&str; 3] =
+    ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"];
+
 /// A folder of the test's own, removed when the test ends.
 pub struct Scratch {
     root: PathBuf,
@@ -58,7 +64,10 @@ impl Scratch {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            for name in REPOSITORY_VARIABLES {
+            for name in REPOSITORY_VARIABLES
+                .into_iter()
+                .chain(CONFIGURATION_VARIABLES)
+            {
                 std::env::remove_var(name);
             }
         }

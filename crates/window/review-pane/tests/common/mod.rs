@@ -6,9 +6,12 @@
 // Each test program takes what it needs of this.
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -21,7 +24,8 @@ use yaar_frame::{KeeperLink, Models, bind};
 use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, Fact, FileSides,
     FileStatus, Head, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId,
-    Request, RequestId, Workspace, WorkspaceId, read_message, write_message,
+    Request, RequestId, Review, ReviewId, Workspace, WorkspaceId, WorkspaceReviews, read_message,
+    write_message,
 };
 use yaar_review_pane::{PaneRow, ReviewPane, Unshown};
 
@@ -38,12 +42,61 @@ pub const WINDOW: Size<Pixels> = size(px(900.), px(420.));
 /// The full id of a commit, as the Link carries it.
 pub const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
+/// What the Keeper end answers to `GetReviews` by itself, so that the reviews the pane
+/// asks for at times a test does not choose never reach the test as its next request.
+#[derive(Default)]
+struct Reviews {
+    /// What a test set, by workspace; a workspace with nothing set has one empty review
+    /// of no agent, [`no_agent_review`].
+    set: Mutex<HashMap<WorkspaceId, WorkspaceReviews>>,
+    /// How many `GetReviews` were heard, answered or held.
+    heard: AtomicUsize,
+    /// Whether the answers wait: the requests are kept until [`KeeperEnd::release_reviews`].
+    holding: AtomicBool,
+    /// The requests kept while `holding`.
+    held: Mutex<Vec<(RequestId, WorkspaceId)>>,
+    /// What every `GetReviews` is refused with, when a test says so.
+    refusal: Mutex<Option<Refusal>>,
+}
+
+impl Reviews {
+    /// What a `GetReviews` of `workspace` is answered with now.
+    fn answer(&self, workspace: &WorkspaceId) -> Result<Reply, Refusal> {
+        if let Some(refusal) = self.refusal.lock().expect("not poisoned").clone() {
+            return Err(refusal);
+        }
+        Ok(Reply::Reviews(self.reviews_of(workspace)))
+    }
+
+    /// The reviews of `workspace` as a test set them.
+    fn reviews_of(&self, workspace: &WorkspaceId) -> WorkspaceReviews {
+        self.set
+            .lock()
+            .expect("the reviews are not poisoned")
+            .get(workspace)
+            .cloned()
+            .unwrap_or_else(|| WorkspaceReviews {
+                workspace: workspace.clone(),
+                reviews: vec![no_agent_review()],
+                viewed: Vec::new(),
+            })
+    }
+}
+
+/// Writes a message on the one stream of this end. A lock keeps the frames whole, since
+/// the thread that answers the reviews and the test both write.
+fn write(stream: &Mutex<UnixStream>, message: &Message) {
+    let mut stream = stream.lock().expect("the stream is not poisoned");
+    write_message(&mut *stream, message).expect("write a message");
+}
+
 /// The Keeper, played by the test.
 pub struct KeeperEnd {
-    stream: UnixStream,
+    stream: Arc<Mutex<UnixStream>>,
     // What the Window sent, read by a thread of this end's own: the thread of the test
     // has to keep the app running while it waits.
     heard: Receiver<Message>,
+    reviews: Arc<Reviews>,
 }
 
 impl KeeperEnd {
@@ -53,14 +106,45 @@ impl KeeperEnd {
         cx.executor().allow_parking();
         let (ours, theirs) = UnixStream::pair().expect("a socket pair");
         let mut reading = ours.try_clone().expect("a second handle to the socket");
+        let stream = Arc::new(Mutex::new(ours));
+        let reviews = Arc::new(Reviews::default());
         let (tell, heard) = channel();
-        std::thread::spawn(move || {
-            while let Ok(message) = read_message(&mut reading) {
-                if tell.send(message).is_err() {
-                    break;
+        {
+            let (stream, reviews) = (stream.clone(), reviews.clone());
+            std::thread::spawn(move || {
+                while let Ok(message) = read_message(&mut reading) {
+                    match message {
+                        // The reviews are asked for at times the test does not choose:
+                        // they are answered here, and the test never hears of them.
+                        Message::Request {
+                            id,
+                            request: Request::GetReviews { workspace },
+                        } => {
+                            reviews.heard.fetch_add(1, Ordering::SeqCst);
+                            let mut held = reviews.held.lock().expect("not poisoned");
+                            if reviews.holding.load(Ordering::SeqCst) {
+                                held.push((id, workspace));
+                            } else {
+                                drop(held);
+                                let answer = reviews.answer(&workspace);
+                                write(
+                                    &stream,
+                                    &Message::Reply {
+                                        to: id,
+                                        reply: answer,
+                                    },
+                                );
+                            }
+                        }
+                        message => {
+                            if tell.send(message).is_err() {
+                                break;
+                            }
+                        }
+                    }
                 }
-            }
-        });
+            });
+        }
         let keeper = Hello {
             protocol: PROTOCOL_VERSION,
             pid: 1,
@@ -77,13 +161,15 @@ impl KeeperEnd {
             )
         });
         Self {
-            stream: ours,
+            stream,
             heard,
+            reviews,
         }
     }
 
-    /// The next request of the Window. Fails when none comes, when the Window sends
-    /// anything else, or when it closes the connection.
+    /// The next request of the Window that is not for the reviews, which this end answers
+    /// itself. Fails when none comes, when the Window sends anything else, or when it
+    /// closes the connection.
     pub fn request(&mut self, cx: &mut TestAppContext) -> (RequestId, Request) {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -109,12 +195,51 @@ impl KeeperEnd {
 
     /// Answers a request.
     pub fn reply(&mut self, to: RequestId, reply: Result<Reply, Refusal>) {
-        write_message(&mut self.stream, &Message::Reply { to, reply }).expect("write a reply");
+        write(&self.stream, &Message::Reply { to, reply });
     }
 
     /// Tells the Window a fact.
     pub fn tell(&mut self, fact: Fact) {
-        write_message(&mut self.stream, &Message::Fact(fact)).expect("write a fact");
+        write(&self.stream, &Message::Fact(fact));
+    }
+
+    /// Sets the reviews that every `GetReviews` of this workspace is answered with from
+    /// now on. It tells the Window nothing: a test that wants it to read them tells
+    /// `Fact::ReviewsChanged` after.
+    pub fn set_reviews(&self, reviews: WorkspaceReviews) {
+        self.reviews
+            .set
+            .lock()
+            .expect("the reviews are not poisoned")
+            .insert(reviews.workspace.clone(), reviews);
+    }
+
+    /// From now on refuses every request for reviews with this, as the Keeper of the
+    /// contract does; none to answer them again.
+    pub fn refuse_reviews(&self, refusal: Option<Refusal>) {
+        *self.reviews.refusal.lock().expect("not poisoned") = refusal;
+    }
+
+    /// How many times the Window asked for reviews so far.
+    pub fn reviews_asked(&self) -> usize {
+        self.reviews.heard.load(Ordering::SeqCst)
+    }
+
+    /// From now on keeps the requests for reviews unanswered, until
+    /// [`KeeperEnd::release_reviews`]: a Keeper that is slow.
+    pub fn hold_reviews(&self) {
+        self.reviews.holding.store(true, Ordering::SeqCst);
+    }
+
+    /// Answers the requests for reviews that were kept, in the order they came, with what
+    /// is set now, and answers the ones that follow at once.
+    pub fn release_reviews(&self) {
+        let mut held = self.reviews.held.lock().expect("not poisoned");
+        self.reviews.holding.store(false, Ordering::SeqCst);
+        for (id, workspace) in held.drain(..) {
+            let reply = self.reviews.answer(&workspace);
+            write(&self.stream, &Message::Reply { to: id, reply });
+        }
     }
 
     /// Answers the next request, which has to be the one for the changes of the
@@ -138,6 +263,23 @@ impl KeeperEnd {
             let asked = self.expect(read_file(changes, file), cx);
             self.reply(asked, sides(file).map(Reply::File));
         }
+    }
+}
+
+/// The id of the review of no agent that every workspace has until a test says otherwise.
+pub fn review_id() -> ReviewId {
+    ReviewId::new("e".repeat(32))
+}
+
+/// A review of no agent with nothing in it.
+pub fn no_agent_review() -> Review {
+    Review {
+        id: review_id(),
+        agent: None,
+        reviewed: None,
+        attached: None,
+        threads: Vec::new(),
+        rounds: Vec::new(),
     }
 }
 
@@ -183,7 +325,7 @@ pub fn workspace(digit: char, branch: &str) -> Workspace {
     Workspace {
         id: id(digit),
         path: PathBuf::from(format!("/gits/{branch}")),
-        head: Head::Branch(branch.to_owned()),
+        head: Some(Head::Branch(branch.to_owned())),
     }
 }
 

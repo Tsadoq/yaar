@@ -87,9 +87,21 @@ pub fn one_repository() -> Repository {
         workspaces: vec![Workspace {
             id: workspace_id('1'),
             path: PathBuf::from("/gits/main"),
-            head: Head::Branch("main".to_owned()),
+            head: Some(Head::Branch("main".to_owned())),
         }],
     }
+}
+
+/// A repository `repository-a` with two worktrees, the workspaces `workspace_id('1')` and
+/// `workspace_id('2')`, in that order.
+pub fn two_workspaces() -> Repository {
+    let mut repository = one_repository();
+    repository.workspaces.push(Workspace {
+        id: workspace_id('2'),
+        path: PathBuf::from("/gits/other"),
+        head: Some(Head::Branch("other".to_owned())),
+    });
+    repository
 }
 
 /// What the test keeps of the pane the Frame builds: the pane and its own focus handle.
@@ -397,6 +409,16 @@ pub fn open_panes_tapping(
     cx: &mut TestAppContext,
     tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
 ) -> (Panes, VisualTestContext) {
+    open_panes_listing(cx, &[one_repository()], tap)
+}
+
+/// [`open_panes_tapping`] with the Keeper listing `listed`: the first workspace of the
+/// list comes on screen.
+pub fn open_panes_listing(
+    cx: &mut TestAppContext,
+    listed: &[Repository],
+    tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
+) -> (Panes, VisualTestContext) {
     init_as_the_app_does(cx);
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
@@ -447,7 +469,7 @@ pub fn open_panes_tapping(
 
     let (pane, pane_focus) = built.take().expect("the Frame built the terminal pane");
     let keeper = TestKeeper::attach_tapping(&link, &mut cx, tap);
-    keeper.list(&[one_repository()], &mut cx);
+    keeper.list(listed, &mut cx);
     wait_until(&mut cx, "the workspace on screen", |cx| {
         models
             .workspaces

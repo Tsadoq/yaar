@@ -52,10 +52,12 @@ pub enum SidebarRow {
         /// Its id.
         id: WorkspaceId,
         /// The name it is listed by: its branch, or the commit it sits on when no branch
-        /// is checked out.
+        /// is checked out; for a worktree that is gone, the name of its folder.
         name: String,
         /// Whether it is the workspace on screen.
         selected: bool,
+        /// Whether its worktree is gone: it is listed for its reviews, and marked so.
+        gone: bool,
     },
 }
 
@@ -64,10 +66,14 @@ pub enum SidebarRow {
 /// A click on a workspace puts it on screen. A click on the pin control does what
 /// [`crate::ToggleSidebar`] does.
 ///
-/// For tests, which cannot read what is drawn, four kinds of element carry a selector
+/// A worktree that is gone is listed by the name of its folder, and its row ends in a mark
+/// that says so; it is clicked and selected as any row.
+///
+/// For tests, which cannot read what is drawn, five kinds of element carry a selector
 /// that `debug_bounds` finds: the sidebar as a whole, `sidebar`; each repository row,
-/// `sidebar-repository-<id>`; each workspace row, `sidebar-workspace-<id>`; and the pin
-/// control, `sidebar-pin`.
+/// `sidebar-repository-<id>`; each workspace row, `sidebar-workspace-<id>`; the mark of
+/// each worktree that is gone, `sidebar-gone-<id>`, inside its row; and the pin control,
+/// `sidebar-pin`.
 pub struct Sidebar {
     workspaces: Entity<WorkspaceList>,
     pinned: Option<SidebarForm>,
@@ -125,10 +131,20 @@ impl Sidebar {
                 name: repository.name.clone(),
             });
             for workspace in &repository.workspaces {
+                let name = match &workspace.head {
+                    Some(head) => head.label(),
+                    None => workspace
+                        .path
+                        .file_name()
+                        .unwrap_or(workspace.path.as_os_str())
+                        .to_string_lossy()
+                        .into_owned(),
+                };
                 rows.push(SidebarRow::Workspace {
                     id: workspace.id.clone(),
-                    name: workspace.head.label(),
+                    name,
                     selected: on_screen == Some(&workspace.id),
+                    gone: workspace.head.is_none(),
                 });
             }
         }
@@ -190,8 +206,24 @@ impl Sidebar {
                         .into_any_element()
                 }
             }
-            SidebarRow::Workspace { id, name, selected } => {
+            SidebarRow::Workspace {
+                id,
+                name,
+                selected,
+                gone,
+            } => {
                 let selector = format!("sidebar-workspace-{id}");
+                // After the name, so that a reader sees which row it is and then that it is
+                // gone; in the rail, which has room for no sentence, a cross.
+                let gone_mark = gone.then(|| {
+                    let selector = format!("sidebar-gone-{id}");
+                    div()
+                        .debug_selector(move || selector)
+                        .flex_none()
+                        .text_xs()
+                        .text_color(colors.muted)
+                        .child(if rail { "×" } else { "worktree gone" })
+                });
                 let row = div()
                     .id(SharedString::from(selector.clone()))
                     .debug_selector(move || selector)
@@ -216,13 +248,17 @@ impl Sidebar {
                         .justify_center()
                         .rounded_md()
                         .child(mark(&name))
+                        .children(gone_mark)
                         .into_any_element()
                 } else {
                     row.pl_5()
                         .pr_3()
                         .py_1()
-                        .truncate()
-                        .child(name)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(div().flex_1().min_w_0().truncate().child(name))
+                        .children(gone_mark)
                         .into_any_element()
                 }
             }

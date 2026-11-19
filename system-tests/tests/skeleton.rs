@@ -1,7 +1,7 @@
 //! System tests of the walking skeleton: the two built programs and the Link between
 //! them, with no window on any screen.
 
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::Duration;
 
 use yaar_link::{Message, PROTOCOL_VERSION, write_message};
@@ -11,11 +11,15 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[test]
 fn both_programs_say_their_version() {
+    // As a user of a folder of the test's own, like every other run of the programs: the
+    // environment of the person who runs the tests names where a Keeper would listen.
+    let place = Place::new();
     for (name, expected) in [
         ("yaar-review", format!("yaar-review {VERSION}\n")),
         ("yaar-keeper", format!("yaar-keeper {VERSION}\n")),
     ] {
-        let out = Command::new(program(name))
+        let out = place
+            .command(&program(name))
             .arg("--version")
             .output()
             .expect("run the program");

@@ -11,14 +11,21 @@
 //! - what those take and return: [`Head`], [`CommitId`], [`Commit`], [`Refs`], [`Branch`],
 //!   [`ChangedPath`], [`Listed`].
 //!
-//! The writing side, which records a state of the worktree, is not built yet: nothing
-//! here writes so far.
+//! Surface, the writing side:
+//! - [`StateStore`], the recorded states of one worktree, in a bare repository of the
+//!   app's own: [`StateStore::record`] records the state of the files as they are, and the
+//!   store gives back its [`RecordedState`]s, their files, their contents and the paths
+//!   that differ between two of them, with no need of the real repository;
+//! - [`Worktree::commit_all`], the commit control: an ordinary commit of every
+//!   uncommitted change, made as the user's own git makes it, with [`CommitError`].
 //!
 //! No other crate starts git. Whatever the rest of the Keeper wants to know of a
 //! repository it asks here, in the words above; that a branch is a ref and a version of a
 //! file a blob stays inside this crate.
 //!
-//! Reading leaves the repository as it was. Every call made here
+//! Reading and recording leave the repository as it was. The commit control is the one
+//! call that changes it, as the user asked; it runs the user's git as the user would.
+//! Every other call made here
 //! - runs the user's own git in the user's repository, with the user's configuration, so
 //!   that it sees what the user's git sees;
 //! - turns off every hook: the hooks folder, each hook the configuration defines, and the
@@ -35,10 +42,12 @@
 mod contents;
 mod git;
 mod index;
+mod states;
 mod worktree;
 
 pub use git::{Git, GitError};
+pub use states::{RecordError, RecordedState, StateId, StateStore};
 pub use worktree::{
-    Branch, Change, ChangedPath, Commit, CommitId, Commits, Head, Listed, LocalBranch, OpenError,
-    Refs, RemoteBranch, Worktree,
+    Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head, Listed, LocalBranch,
+    OpenError, Refs, RemoteBranch, Worktree,
 };

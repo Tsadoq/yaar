@@ -14,15 +14,21 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
-use yaar_link::{Origin, Program, Request, RequestKind, Workspace};
-use yaar_system_tests::DEADLINE;
+use yaar_link::{CommentId, Origin, Program, Request, RequestKind, ReviewId, Workspace};
+use yaar_system_tests::{DEADLINE, Repo};
 
 mod common;
 
-use common::{Composed, wait_until};
+use common::{Composed, give_an_identity, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
+
+/// The text of the draft the walk writes for the kinds that act on one.
+const DRAFT: &str = "walked";
+
+/// The message the walk commits with.
+const COMMIT_MESSAGE: &str = "Walked commit";
 
 /// What the walk has to give when a control asks the user for something.
 #[derive(Debug)]
@@ -72,6 +78,7 @@ impl Composed {
     fn new_repository(&mut self) -> PathBuf {
         let name = format!("walked-{}", self.next());
         let repository = self.world.repository(&name);
+        give_an_identity(&repository);
         repository.git(&["checkout", "--quiet", "-b", "work"]);
         repository.write("notes.txt", "one\ntwo\nthree\n");
         repository.commit("Add the notes");
@@ -81,6 +88,17 @@ impl Composed {
         folder
     }
 
+    /// The repository of the workspace on screen, which is one the walk opened.
+    fn repository_on_screen(&self, cx: &mut VisualTestContext) -> &Repo {
+        let on_screen = self
+            .on_screen(cx)
+            .expect("a workspace is on screen before the walk looks at its repository");
+        self.repositories
+            .iter()
+            .find(|repository| repository.path() == on_screen.path)
+            .expect("the workspace on screen is one the walk opened")
+    }
+
     /// Makes a new branch in the repository of the workspace on screen, and returns that
     /// workspace with the name of the branch.
     fn new_branch_on_screen(&mut self, cx: &mut VisualTestContext) -> (Workspace, String) {
@@ -88,12 +106,108 @@ impl Composed {
             .on_screen(cx)
             .expect("a workspace is on screen before the walk sets a base");
         let branch = format!("base-{}", self.next());
-        self.repositories
-            .iter()
-            .find(|repository| repository.path() == on_screen.path)
-            .expect("the workspace on screen is one the walk opened")
-            .git(&["branch", &branch]);
+        self.repository_on_screen(cx).git(&["branch", &branch]);
         (on_screen, branch)
+    }
+
+    /// Waits until the Keeper has done what the request of `kind` asked, as a user sees it:
+    /// the copy on the clipboard, the mark on the review, the file shown viewed, the commit
+    /// in the repository, the focus in the terminal that was opened. The walk ends when the
+    /// last request passes the tap, and the world ends the Keeper with a kill: a Keeper
+    /// still recording a state or running git for its answer leaves the folder of its copy
+    /// of git's list of files in the system's temp folder, outside the world. The requests of the reviews are answered one after
+    /// the other, so waiting for the last of them covers those before it.
+    fn settle(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
+        match kind {
+            RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .is_some_and(|text| text.contains(DRAFT))
+            }),
+            RequestKind::MarkReviewed => wait_until(cx, "the review marked reviewed", |cx| {
+                self.review.read_with(cx, |pane, _| {
+                    pane.review()
+                        .is_some_and(|review| review.reviewed.is_some())
+                })
+            }),
+            RequestKind::SetViewed => wait_until(cx, "the file shown viewed", |cx| {
+                self.review.read_with(cx, |pane, _| {
+                    pane.reviews()
+                        .is_some_and(|reviews| reviews.viewed.contains(&PathBuf::from("notes.txt")))
+                })
+            }),
+            RequestKind::Commit => {
+                let repository = self.repository_on_screen(cx);
+                wait_until(cx, "the commit in the repository", |_| {
+                    repository.git(&["log", "-1", "--format=%s"]) == COMMIT_MESSAGE
+                });
+            }
+            // The pane takes the focus for a terminal when the Keeper's answer is taken, which
+            // is after the request has passed the tap. A step that clicks into another pane
+            // before that would have its click taken from it, and the keys after it typed
+            // into the terminal.
+            RequestKind::OpenTerminal => {
+                wait_until(cx, "the new terminal to take the focus", |cx| {
+                    self.focus_is_in("Program", cx)
+                })
+            }
+            RequestKind::OpenFolder | RequestKind::SetBase | RequestKind::DeleteDraft => {}
+            RequestKind::ListWorkspaces
+            | RequestKind::GetChanges
+            | RequestKind::ReadFile
+            | RequestKind::ResizeTerminal
+            | RequestKind::GetReviews
+            | RequestKind::SaveDraft => {
+                panic!("the Window starts {kind:?} by itself: no user does")
+            }
+        }
+    }
+
+    /// The review the review pane shows, once it holds one.
+    fn review_shown(&self, cx: &mut VisualTestContext) -> ReviewId {
+        let mut found = None;
+        wait_until(cx, "the review pane to hold a review", |cx| {
+            found = self
+                .review
+                .read_with(cx, |pane, _| pane.review().map(|review| review.id.clone()));
+            found.is_some()
+        });
+        found.expect("the pane holds a review")
+    }
+
+    /// Writes a draft on the line the reviewer is on, as a user does: into the review pane,
+    /// `c`, the text, Escape. A click on the first row puts the reviewer on the first line
+    /// of the file, which is unchanged context: a comment may sit on any line. Returns the
+    /// review and the draft once the pane's model shows the draft with its whole text.
+    fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
+        // The reviewer waits for the pane to show the reviews and a line to be on.
+        self.review_shown(cx);
+        wait_until(cx, "the reviewer on a line", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.position().is_some())
+        });
+        self.click_into(cx, "review-row-0");
+        cx.simulate_keystrokes("c");
+        wait_until(cx, "the comment box", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.comment_box().is_some())
+        });
+        cx.simulate_input(DRAFT);
+        cx.simulate_keystrokes("escape");
+        let mut found = None;
+        wait_until(cx, "the draft in the review pane's model", |cx| {
+            found = self.review.read_with(cx, |pane, _| {
+                let review = pane.review()?;
+                review
+                    .threads
+                    .iter()
+                    .flat_map(|thread| &thread.comments)
+                    .find(|comment| comment.text == DRAFT && comment.round.is_none())
+                    .map(|comment| (review.id.clone(), comment.id.clone()))
+            });
+            found.is_some()
+        });
+        found.expect("the pane holds the draft")
     }
 
     /// Puts the focus where the key of `control` works. A key that works anywhere is
@@ -164,8 +278,8 @@ impl Composed {
 
     /// Fails when the Window is asking the user for something after the key of `control`,
     /// which says it asks for nothing. Read where a user meets it: the dialog for a
-    /// folder is the platform's, and the field for a line of text is drawn by the Frame
-    /// under the selector its docs name.
+    /// folder is the platform's, and the fields for a line of text are drawn by the Frame
+    /// and by the review pane under the selectors their docs name.
     fn assert_asks_nothing(&self, control: &Control, cx: &mut VisualTestContext) {
         assert!(
             !cx.did_prompt_for_paths(),
@@ -176,6 +290,12 @@ impl Composed {
         assert!(
             cx.debug_bounds("frame-base-field").is_none(),
             "the key {} of {} says it asks for nothing and opened the field for a line of text",
+            control.key(),
+            control.title
+        );
+        assert!(
+            cx.debug_bounds("review-commit-field").is_none(),
+            "the key {} of {} says it asks for nothing and opened the field for a commit message",
             control.key(),
             control.title
         );
@@ -261,10 +381,54 @@ impl Composed {
                         }),
                     )
                 }
+                RequestKind::DeleteDraft => {
+                    // A draft to delete, written the way a user writes one.
+                    let (review, comment) = self.write_a_draft(cx);
+                    let request = Request::DeleteDraft { review, comment };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::CopyReview => {
+                    // A draft to copy, so that the Keeper has something to send.
+                    let (review, _) = self.write_a_draft(cx);
+                    let request = Request::CopyReview { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::MarkReviewed => {
+                    let request = Request::MarkReviewed {
+                        review: self.review_shown(cx),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::SetViewed => {
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk marks a file viewed");
+                    let request = Request::SetViewed {
+                        workspace: on_screen.id,
+                        path: PathBuf::from("notes.txt"),
+                        viewed: true,
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::Commit => {
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk commits");
+                    let request = Request::Commit {
+                        workspace: on_screen.id,
+                        message: COMMIT_MESSAGE.to_owned(),
+                    };
+                    (
+                        Answer::Text(COMMIT_MESSAGE.to_owned()),
+                        Box::new(move |passed| *passed == request),
+                    )
+                }
                 RequestKind::ListWorkspaces
                 | RequestKind::GetChanges
                 | RequestKind::ReadFile
-                | RequestKind::ResizeTerminal => {
+                | RequestKind::ResizeTerminal
+                | RequestKind::GetReviews
+                | RequestKind::SaveDraft => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
             };
@@ -276,6 +440,7 @@ impl Composed {
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
             self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
+            self.settle(kind, cx);
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
@@ -383,9 +548,10 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     // had the Window send lies before that request on the one connection. What a key
     // would set off only after an answer of the Keeper to something later is not seen.
     //
-    // It sees what a key sends with no further input, and both requests a user starts
-    // so far go out only after the user gave something: a folder in the dialog, a line
-    // in the field. So each key must also leave both closed. A key that asked in a way
+    // It sees what a key sends with no further input, and three of the requests a user
+    // starts go out only after the user gave something: a folder in the dialog, a line
+    // in the field for a base or for a commit message. So each key must also leave the
+    // dialog and both fields closed. A key that asked in a way
     // the walk does not know of, and sent after an answer there, would pass.
     for control in silent {
         assert_eq!(
@@ -399,6 +565,20 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         // Checked before the step is closed: the closing types into the field for the
         // base, and would hand a field this key had opened its line all the same.
         window.assert_asks_nothing(&control, &mut cx);
+        // The keys of Comment, Edit Draft and Reply may open the box, which takes the
+        // focus: the keys of the steps after would be typed into it as text. Nothing was
+        // typed, so no save went out.
+        if window
+            .review
+            .read_with(&cx, |pane, _| pane.comment_box().is_some())
+        {
+            cx.simulate_keystrokes("escape");
+            wait_until(&mut cx, "the comment box to close", |cx| {
+                window
+                    .review
+                    .read_with(cx, |pane, _| pane.comment_box().is_none())
+            });
+        }
         // No such branch exists. The Keeper refuses it, which is all the same here: the
         // request has passed the tap.
         let closed = window.set_base(&format!("after-{}", control.key()), &mut cx);

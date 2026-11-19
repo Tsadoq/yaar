@@ -27,6 +27,7 @@ mod modes;
 mod mouse;
 mod view;
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::theme::ActiveTheme;
@@ -196,6 +197,33 @@ struct Entry {
     _events: Subscription,
 }
 
+/// What a workspace shows of its terminals: the one or two drawn, left to right, and which
+/// of the slots has the focus. A workspace keeps its own while another is on screen.
+#[derive(Default)]
+struct Layout {
+    shown: Vec<TerminalId>,
+    focus_slot: usize,
+}
+
+impl Layout {
+    /// Shows a terminal that was just opened in the slot that has the focus, or in a new
+    /// slot when none is shown, and gives that slot the focus.
+    fn put(&mut self, id: TerminalId) {
+        match self.shown.get_mut(self.focus_slot) {
+            Some(slot) => *slot = id,
+            None => {
+                self.shown.push(id);
+                self.focus_slot = self.shown.len() - 1;
+            }
+        }
+    }
+
+    /// The terminal that has the focus.
+    fn focused(&self) -> Option<&TerminalId> {
+        self.shown.get(self.focus_slot)
+    }
+}
+
 /// The Terminal pane: the terminals the Window opened, the one or two it shows, and the
 /// one that has the focus.
 ///
@@ -203,19 +231,31 @@ struct Entry {
 /// from wherever the focus is in the window, through the Frame's routes. Each terminal
 /// keeps the workspace it was opened for.
 ///
+/// The pane shows the terminals of the workspace on screen and no others. Each workspace
+/// keeps which of its terminals had the focus and whether it was split, and has them again
+/// when it comes on screen again; the terminals of the others go on running, and
+/// [`TerminalPane::terminals`] lists every one the window opened. With no terminal of the
+/// workspace on screen the pane says how to open one, under the selector
+/// `terminal-how-to-open`, and the focus stays on its own handle.
+///
 /// A new terminal is added after the others, shown in the slot that has the focus, and
-/// given the focus. In the split view the pane draws two slots side by side, the
-/// terminal that has the focus and the next one in the list; [`NextTerminal`] and
-/// [`PreviousTerminal`] move the focus to the next or previous terminal of the list, and
-/// from the last to the first: into the other slot when that terminal is shown there,
-/// else into the slot that has the focus, which then shows it. A click in a slot gives
-/// it the focus. A terminal whose program ended stays in the list with its last screen.
+/// given the focus, when its workspace is on screen; one whose answer comes after another
+/// workspace came on screen is shown when its own returns. In the split view the pane
+/// draws two slots side by side, the terminal that has the focus and the next one of the
+/// workspace; [`NextTerminal`] and [`PreviousTerminal`] move the focus to the next or
+/// previous terminal of the workspace on screen, and from the last to the first: into the
+/// other slot when that terminal is shown there, else into the slot that has the focus,
+/// which then shows it. A click in a slot gives it the focus. A terminal whose program
+/// ended stays in the list with its last screen.
 /// Each slot is drawn inside an element with the selector `terminal-slot-<n>`, counted
-/// from 0 from the left, which `debug_bounds` finds while it is drawn.
+/// from 0 from the left, which `debug_bounds` finds while it is drawn; inside it the view
+/// of the terminal is drawn inside an element with the selector `terminal-<id>`.
 ///
 /// When the pane's own focus handle gains the focus, as when the Frame moves the focus
 /// from pane to pane, the pane hands it on to the view of [`TerminalPane::focused`], so
-/// that the keys reach that terminal; with no terminal the focus stays on the pane.
+/// that the keys reach that terminal; with no terminal the focus stays on the pane. When
+/// another workspace comes on screen while the focus is inside the pane, it goes to that
+/// workspace's focused terminal, or to the pane's own handle when it has none.
 ///
 /// After every key typed while the focus is inside the pane, a key that runs an action
 /// included, the pane asks for a frame at every frame for [`FRAMES_AFTER_A_KEY`]. It
@@ -233,10 +273,10 @@ pub struct TerminalPane {
     /// Why the last terminal asked for was not opened, until the next is asked for.
     notice: Option<String>,
     terminals: Vec<Entry>,
-    /// The terminals drawn, left to right: one, or two in the split view.
-    shown: Vec<TerminalId>,
-    /// Which of the slots has the focus.
-    focus_slot: usize,
+    /// The workspace on screen, as the shared list last said.
+    on_screen: Option<WorkspaceId>,
+    /// What each workspace shows of its terminals, once it showed any.
+    layouts: HashMap<WorkspaceId, Layout>,
     /// Until when each frame asks for the next one: the end of the second after the
     /// last key.
     frames_until: Option<Instant>,
@@ -268,6 +308,10 @@ impl TerminalPane {
         let facts = cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| {
             pane.heard(fact, cx);
         });
+        let workspaces = cx.observe_in(&models.workspaces, window, |pane, _, window, cx| {
+            pane.workspace_changed(window, cx);
+        });
+        let on_screen = models.workspaces.read(cx).selected().cloned();
         Self {
             models: models.clone(),
             focus,
@@ -275,11 +319,11 @@ impl TerminalPane {
             size: FIRST_SIZE,
             notice: None,
             terminals: Vec::new(),
-            shown: Vec::new(),
-            focus_slot: 0,
+            on_screen,
+            layouts: HashMap::new(),
             frames_until: None,
             window_title: None,
-            _subscriptions: vec![handed_on, keys, facts],
+            _subscriptions: vec![handed_on, keys, facts, workspaces],
         }
     }
 
@@ -302,19 +346,22 @@ impl TerminalPane {
         self.entry(id).map(|entry| entry.workspace.clone())
     }
 
-    /// The terminals drawn now, left to right: none, one, or two in the split view.
+    /// The terminals drawn now, left to right: none, one, or two in the split view. All
+    /// are terminals of the workspace on screen.
     pub fn shown(&self) -> Vec<TerminalId> {
-        self.shown.clone()
+        self.layout()
+            .map(|layout| layout.shown.clone())
+            .unwrap_or_default()
     }
 
-    /// Whether the split view is on.
+    /// Whether the split view is on, for the workspace on screen.
     pub fn split(&self) -> bool {
-        self.shown.len() == 2
+        self.layout().is_some_and(|layout| layout.shown.len() == 2)
     }
 
     /// The terminal the keys go to while the pane has the focus: one of those shown.
     pub fn focused(&self) -> Option<TerminalId> {
-        self.shown.get(self.focus_slot).cloned()
+        self.layout()?.focused().cloned()
     }
 
     /// Why the last terminal asked for was not opened; none once another is asked for.
@@ -325,6 +372,47 @@ impl TerminalPane {
 
     fn entry(&self, id: &TerminalId) -> Option<&Entry> {
         self.terminals.iter().find(|entry| entry.id == *id)
+    }
+
+    /// What the workspace on screen shows; none before it showed any terminal.
+    fn layout(&self) -> Option<&Layout> {
+        self.layouts.get(self.on_screen.as_ref()?)
+    }
+
+    /// The layout of the workspace on screen, made when it has none. None while no
+    /// workspace is on screen.
+    fn layout_mut(&mut self) -> Option<&mut Layout> {
+        Some(self.layouts.entry(self.on_screen.clone()?).or_default())
+    }
+
+    /// The terminals of the workspace on screen, in the order they were opened.
+    fn terminals_here(&self) -> Vec<TerminalId> {
+        self.terminals
+            .iter()
+            .filter(|entry| Some(&entry.workspace) == self.on_screen.as_ref())
+            .map(|entry| entry.id.clone())
+            .collect()
+    }
+
+    /// Another workspace came on screen, or none: what the pane shows is that one's. When
+    /// the focus was inside the pane it follows, so that the keys do not go to a terminal
+    /// that is no longer drawn.
+    fn workspace_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let now = self.models.workspaces.read(cx).selected().cloned();
+        if now == self.on_screen {
+            return;
+        }
+        // Read before the frame that leaves the old terminal is drawn.
+        let had_the_focus = self.focus.contains_focused(window, cx);
+        self.on_screen = now;
+        if had_the_focus {
+            if self.focused().is_some() {
+                self.focus_terminal(window, cx);
+            } else {
+                self.focus.focus(window, cx);
+            }
+        }
+        cx.notify();
     }
 
     /// Asks the Keeper for a new terminal for the workspace on screen, at the size the
@@ -387,16 +475,15 @@ impl TerminalPane {
         });
         self.terminals.push(Entry {
             id: id.clone(),
-            workspace,
+            workspace: workspace.clone(),
             view: view.clone(),
             _events: events,
         });
-        match self.shown.get_mut(self.focus_slot) {
-            Some(slot) => *slot = id,
-            None => {
-                self.shown.push(id);
-                self.focus_slot = self.shown.len() - 1;
-            }
+        self.layouts.entry(workspace.clone()).or_default().put(id);
+        // A terminal of a workspace that is not on screen takes nothing from the one that
+        // is: it is shown when its own comes back.
+        if self.on_screen.as_ref() != Some(&workspace) {
+            return;
         }
         // There is no window in what answers the Keeper: the focus is given once the
         // answer is taken.
@@ -437,8 +524,11 @@ impl TerminalPane {
 
     /// A click in slot `n`: its terminal has the focus.
     fn click_slot(&mut self, n: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if n < self.shown.len() && self.focus_slot != n {
-            self.focus_slot = n;
+        if let Some(layout) = self.layout_mut()
+            && n < layout.shown.len()
+            && layout.focus_slot != n
+        {
+            layout.focus_slot = n;
             cx.notify();
         }
         self.focus_terminal(window, cx);
@@ -459,11 +549,13 @@ impl TerminalPane {
     /// Shows `target` in the slot that has the focus, or moves the focus to the slot
     /// that shows it, and gives the focus to its view.
     fn show(&mut self, target: TerminalId, window: &mut Window, cx: &mut Context<Self>) {
-        match self.shown.iter().position(|shown| *shown == target) {
-            Some(slot) => self.focus_slot = slot,
-            None => {
-                if let Some(slot) = self.shown.get_mut(self.focus_slot) {
-                    *slot = target;
+        if let Some(layout) = self.layout_mut() {
+            match layout.shown.iter().position(|shown| *shown == target) {
+                Some(slot) => layout.focus_slot = slot,
+                None => {
+                    if let Some(slot) = layout.shown.get_mut(layout.focus_slot) {
+                        *slot = target;
+                    }
                 }
             }
         }
@@ -471,15 +563,13 @@ impl TerminalPane {
         cx.notify();
     }
 
-    /// The terminal `by` places after the focused one in the list, round at the ends.
+    /// The terminal `by` places after the focused one among those of the workspace on
+    /// screen, round at the ends.
     fn neighbour(&self, by: usize) -> Option<TerminalId> {
         let focused = self.focused()?;
-        let at = self
-            .terminals
-            .iter()
-            .position(|entry| entry.id == focused)?;
-        let n = self.terminals.len();
-        Some(self.terminals[(at + by) % n].id.clone())
+        let here = self.terminals_here();
+        let at = here.iter().position(|id| *id == focused)?;
+        Some(here[(at + by) % here.len()].clone())
     }
 
     fn next_terminal(&mut self, _: &NextTerminal, window: &mut Window, cx: &mut Context<Self>) {
@@ -494,26 +584,29 @@ impl TerminalPane {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let last = self.terminals.len().wrapping_sub(1);
+        let last = self.terminals_here().len().wrapping_sub(1);
         if let Some(target) = self.neighbour(last) {
             self.show(target, window, cx);
         }
     }
 
     fn toggle_split(&mut self, _: &ToggleSplit, window: &mut Window, cx: &mut Context<Self>) {
-        if self.terminals.len() < 2 {
+        if self.terminals_here().len() < 2 {
             return;
         }
         let Some(focused) = self.focused() else {
             return;
         };
-        self.shown = if self.split() {
+        let shown = if self.split() {
             vec![focused]
         } else {
             let next = self.neighbour(1).unwrap_or_else(|| focused.clone());
             vec![focused, next]
         };
-        self.focus_slot = 0;
+        if let Some(layout) = self.layout_mut() {
+            layout.shown = shown;
+            layout.focus_slot = 0;
+        }
         self.focus_terminal(window, cx);
         cx.notify();
     }
@@ -561,8 +654,13 @@ impl Render for TerminalPane {
 
         let theme = cx.theme();
         let (border, muted) = (theme.border, theme.muted_foreground);
-        let slots = self.shown.iter().enumerate().filter_map(|(n, id)| {
-            let view = self.entry(id)?.view.clone();
+        let shown = self.shown();
+        let slots = shown.iter().enumerate().filter_map(|(n, id)| {
+            // The name comes from the entry the view is taken from, so that no view is
+            // drawn under the name of another terminal.
+            let entry = self.entry(id)?;
+            let view = entry.view.clone();
+            let name = entry.id.as_str().to_owned();
             // A click in a slot gives it the focus; its view takes the focus itself, and
             // the pane learns which slot has it here, whatever GPUI tells of the focus.
             let slot = div()
@@ -577,13 +675,23 @@ impl Render for TerminalPane {
             // The divider is a sibling of the slot, so the slot's bounds are exactly its
             // view's.
             let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
-            Some((divider, slot.child(view)))
+            // The view sits in an element of its own that names its terminal, so that
+            // what is drawn can be told from what the pane says is shown.
+            let named = div()
+                .debug_selector(move || format!("terminal-{name}"))
+                .size_full()
+                .child(view);
+            Some((divider, slot.child(named)))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
-        let empty = self
-            .shown
-            .is_empty()
-            .then(|| div().p_3().text_sm().text_color(muted).child(how_to_open()));
+        let empty = shown.is_empty().then(|| {
+            div()
+                .debug_selector(|| "terminal-how-to-open".to_owned())
+                .p_3()
+                .text_sm()
+                .text_color(muted)
+                .child(how_to_open())
+        });
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
