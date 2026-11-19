@@ -50,6 +50,9 @@ mod comments;
 mod draw;
 mod saves;
 mod threads;
+mod tree;
+mod turns;
+mod whose;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -69,6 +72,7 @@ use yaar_link::{
 use crate::actions::CommitField;
 use crate::comments::OpenBox;
 use crate::saves::Save;
+use crate::tree::{Source, Tree};
 
 pub use yaar_diff::Layout;
 
@@ -206,8 +210,13 @@ pub fn pane() -> BuildPane {
     })
 }
 
-/// The actions of the pane with their keys, all in [`KEY_CONTEXT`]: `j` and `down` for
-/// [`LineDown`], `k` and `up` for [`LineUp`], `s` for [`ToggleLayout`].
+/// The actions of the pane with their keys, those of the rows in [`KEY_CONTEXT`] and those
+/// of the tree of Changes in [`HISTORY_CONTEXT`]: `j` and `down` for [`LineDown`], `k`
+/// and `up` for [`LineUp`], `s` for [`ToggleLayout`]. While the tree has the focus the
+/// keys of the rows do not work, and its own keys are the same letters moving the cursor
+/// of the tree instead: `j` and `down` for [`HistoryDown`], `k` and `up` for
+/// [`HistoryUp`], `space` for [`MarkChange`], `enter` for [`ShowChange`], and `tab`, which
+/// takes the focus into the tree from the rows ([`FocusHistory`]) and back ([`FocusRows`]).
 ///
 /// The review actions follow vim and tuicr wherever either has a key for the action, and
 /// take a key neither uses for another action of this pane where neither has one:
@@ -223,6 +232,13 @@ pub fn pane() -> BuildPane {
 /// | [`ToggleViewed`] | `r` | tuicr, toggle a file reviewed | `SetViewed` |
 /// | [`MarkReviewed`] | `shift-r` | neither; tuicr's `R` marks a hunk reviewed | `MarkReviewed` |
 /// | [`Commit`] | `shift-c` | neither; git's own tools use `C` for a commit | `Commit`, after a line of text |
+/// | [`FocusHistory`], [`FocusRows`] | `tab` | tuicr, Tab cycles the focus | nothing |
+/// | [`HistoryDown`], [`HistoryUp`] | `j` and `down`, `k` and `up` | tuicr, the commit selector | nothing |
+/// | [`MarkChange`] | `space` | tuicr, the commit selector marks a commit | nothing |
+/// | [`ShowChange`] | `enter` | tuicr, the commit selector confirms | nothing; the files come by `CompareVersions` and `ReadVersions` |
+/// | [`ToggleKeepSelection`] | `shift-t` | neither | nothing |
+/// | [`TakeOffer`] | `shift-o` | neither | nothing; the files come by `CompareVersions` and `ReadVersions` |
+/// | [`NextReview`] | `shift-a` | neither | nothing; the uncommitted changes of the review come by `GetUncommitted` |
 ///
 /// In the comment box the keys type text; `enter` closes the box and `shift-enter` starts
 /// a new line, as in tuicr. `escape` closes it too and keeps the draft, where tuicr's
@@ -240,6 +256,16 @@ pub fn controls() -> Vec<Control> {
             place: Place::In(KEY_CONTEXT),
             sends: None,
             asks: Asks::Nothing,
+        }
+    }
+    fn in_tree(
+        title: &'static str,
+        action: fn() -> Box<dyn Action>,
+        keystroke: &'static str,
+    ) -> Control {
+        Control {
+            place: Place::In(HISTORY_CONTEXT),
+            ..control(title, action, keystroke)
         }
     }
     fn sends(control: Control, kind: RequestKind) -> Control {
@@ -282,6 +308,21 @@ pub fn controls() -> Vec<Control> {
                 RequestKind::Commit,
             )
         },
+        control("History", || Box::new(FocusHistory), "tab"),
+        in_tree("Rows", || Box::new(FocusRows), "tab"),
+        in_tree("History Down", || Box::new(HistoryDown), "j"),
+        in_tree("History Down", || Box::new(HistoryDown), "down"),
+        in_tree("History Up", || Box::new(HistoryUp), "k"),
+        in_tree("History Up", || Box::new(HistoryUp), "up"),
+        in_tree("Mark Change", || Box::new(MarkChange), "space"),
+        in_tree("Show Change", || Box::new(ShowChange), "enter"),
+        control(
+            "Keep Selection",
+            || Box::new(ToggleKeepSelection),
+            "shift-t",
+        ),
+        control("Take Offer", || Box::new(TakeOffer), "shift-o"),
+        control("Next Review", || Box::new(NextReview), "shift-a"),
     ]
 }
 
@@ -461,6 +502,15 @@ struct ShownDiff {
 /// drawn by an element inside its row that carries `review-text-<index>-old:<text>` or
 /// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
 /// system for that line: the line, or of a line of more than 1,024 bytes its start.
+/// The tree of Changes above the rows carries `review-history-<index>` on the entry at
+/// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
+/// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
+/// row>`.
+/// The line above the tree that names the agent sessions whose reviews there are carries
+/// `review-session` for the one session there is, or `review-session-<index>` on each of
+/// several, which a click shows the review of; the line that says the pane keeps the
+/// selection at a turn end carries `review-keeps-selection`, what a turn end offered
+/// `review-offer`, and its control `review-offer-take`.
 /// The control that offers to set a base carries `review-offer-base`. The heading of a
 /// file marked viewed carries `review-viewed-<index>`, with the index of its row, and the
 /// comparison line carries `review-reviewed` while the review has a reviewed state.
@@ -511,6 +561,20 @@ pub struct ReviewPane {
     commit_field: Option<CommitField>,
     /// What is said under the rows, until the reviewer acts again.
     notice: Option<String>,
+    /// The tree of Changes above the files, and which change the files are of.
+    tree: Tree,
+    /// Where the versions of the files in `files` come from; none while there are no
+    /// files.
+    listed: Option<Source>,
+    /// Whether a turn end keeps the selection and offers what changed instead of
+    /// selecting it. It outlasts the workspaces: it is the reviewer's setting.
+    keep: bool,
+    /// The review the reviewer, or a turn end, chose to show; none until one was chosen
+    /// in the workspace on screen.
+    chosen: Option<ReviewId>,
+    /// The sessions of the workspace on screen that a review belongs to, as the agents
+    /// model held them when it last changed.
+    sessions: Vec<Session>,
 }
 
 impl ReviewPane {
@@ -518,10 +582,14 @@ impl ReviewPane {
     /// [`FIRST_LAYOUT`].
     pub fn new(models: &Models, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe_in(&models.changes, window, |pane, _, window, cx| {
+            pane.follow_history(window, cx);
             pane.follow(cx);
             pane.follow_reviews(window, cx);
+            pane.sessions_changed(cx);
         })
         .detach();
+        cx.observe(&models.agents, |pane, _, cx| pane.sessions_changed(cx))
+            .detach();
         cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
             .detach();
         let mut pane = Self {
@@ -546,7 +614,14 @@ impl ReviewPane {
             open_box: None,
             commit_field: None,
             notice: None,
+            tree: Tree::new(cx),
+            listed: None,
+            keep: false,
+            chosen: None,
+            sessions: Vec::new(),
         };
+        pane.sessions_changed(cx);
+        pane.follow_history(window, cx);
         pane.follow(cx);
         pane.follow_reviews(window, cx);
         pane
@@ -602,47 +677,49 @@ impl ReviewPane {
         self.reviews.as_ref()
     }
 
-    /// The review the pane shows and acts on: the first of [`ReviewPane::reviews`]. In this
-    /// slice a workspace has one review.
+    /// The review the pane shows and acts on: the one the reviewer chose, or a turn end
+    /// chose for them, among [`ReviewPane::reviews`]; until one is chosen, the review of
+    /// no agent while there is one, else that of the first session that runs, else the
+    /// first review.
     pub fn review(&self) -> Option<&Review> {
-        self.reviews.as_ref()?.reviews.first()
+        whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions)
     }
 
     /// The history of the workspace on screen, as the Keeper last answered; none before
     /// its first answer and while no workspace is on screen.
     pub fn history(&self) -> Option<&History> {
-        todo!("the history the pane shows")
+        self.tree.history.as_ref()
     }
 
     /// The change whose files the pane shows.
     pub fn change_shown(&self) -> ChangeShown {
-        todo!("the change the pane shows")
+        self.tree.shown.clone()
     }
 
     /// The entry of the tree under the cursor, by its index in the history's entries, with
     /// one more than the last for the uncommitted changes; none before the tree has the
     /// focus once.
     pub fn history_cursor(&self) -> Option<usize> {
-        todo!("the cursor of the tree")
+        self.tree.cursor
     }
 
     /// The entries of the tree marked for a range, by their indices, in order.
     pub fn marked_changes(&self) -> Vec<usize> {
-        todo!("the marked entries of the tree")
+        self.tree.marked.clone()
     }
 
     /// Whether a turn that ends keeps the selection of Changes and offers what changed
     /// since the last review, rather than selecting it. Off until the reviewer sets it; it
     /// lasts as long as the window, until the settings keep it.
     pub fn keeps_selection(&self) -> bool {
-        todo!("whether a turn end keeps the selection")
+        self.keep
     }
 
     /// What a turn end offered while the pane kept the selection, drawn under the selector
     /// `review-offer`, with its control under `review-offer-take`; none when nothing is
     /// offered. Taking it, or selecting anything, takes it away.
     pub fn offer(&self) -> Option<&ChangeShown> {
-        todo!("the change a turn end offered")
+        self.tree.offer.as_ref().map(|offer| &offer.change)
     }
 
     /// The agent sessions of the worktree on screen that a review belongs to, in the
@@ -651,20 +728,23 @@ impl ReviewPane {
     /// names it above the review, under the selector `review-session`; with several, it
     /// names each under `review-session-<index>`, which a click shows the review of.
     pub fn sessions(&self) -> Vec<Session> {
-        todo!("the sessions whose reviews the pane can show")
+        self.sessions.clone()
     }
 
     /// The session whose review the pane shows; none for the review of no agent.
     pub fn review_session(&self) -> Option<&SessionId> {
-        todo!("whose review the pane shows")
+        self.review()?.agent.as_ref()
     }
 
     /// Whether the change of `path` that the pane lists under uncommitted changes was made
     /// by no agent, as the credits of the uncommitted list say; such a file's heading
     /// carries a mark under the selector `review-no-agent-<index of its row>`.
     pub fn made_by_no_agent(&self, path: &Path) -> bool {
-        let _ = path;
-        todo!("whether no agent made a change")
+        self.tree.uncommitted.as_ref().is_some_and(|listed| {
+            listed
+                .iter()
+                .any(|credited| credited.file.path == path && credited.by.is_empty())
+        })
     }
 
     /// The uncommitted changes the review shown lists, as the Keeper last answered
@@ -672,7 +752,7 @@ impl ReviewPane {
     /// first answer. The pane asks again when the review shown changes, at
     /// `ChangesChanged` and at `TurnEnded` of the workspace on screen.
     pub fn uncommitted(&self) -> Option<&[CreditedFile]> {
-        todo!("the uncommitted changes of the review shown")
+        self.tree.uncommitted.as_deref()
     }
 
     /// The comment box, while one is open.
@@ -699,12 +779,17 @@ impl ReviewPane {
         let Some(changes) = model.changes() else {
             // No workspace is on screen, or another one came and has no answer yet.
             self.changes = None;
-            self.files.clear();
-            self.by_path.clear();
-            self.reading.clear();
-            self.unread = 0..0;
-            self.position = None;
-            self.rebuild(cx);
+            // The files of a recorded turn that is shown in the meantime are not the
+            // comparison's to take away.
+            if self.tree.shown == ChangeShown::Comparison {
+                self.files.clear();
+                self.by_path.clear();
+                self.reading.clear();
+                self.unread = 0..0;
+                self.listed = None;
+                self.position = None;
+                self.rebuild(cx);
+            }
             return;
         };
         // The model keeps the last answer while it asks again, and after a refusal:
@@ -716,22 +801,51 @@ impl ReviewPane {
             return;
         }
         let changes = changes.clone();
-        self.show(changes, cx);
+        // The reviewer's selection stays when the comparison is read again; only what
+        // the pane picked itself for want of changes gives way to them.
+        if self.tree.first_picture {
+            self.tree.shown = ChangeShown::Comparison;
+            self.tree.first_picture = false;
+            self.tree.wanted = Source::Comparison;
+            self.tree.listing = None;
+        }
+        if self.tree.shown == ChangeShown::Comparison {
+            self.show(changes, cx);
+        } else {
+            self.changes = Some(changes);
+        }
     }
 
-    /// Shows an answer of the Keeper, and starts to ask for the two versions of each
-    /// file of it.
+    /// Shows an answer of the Keeper for the comparison, and starts to ask for the two
+    /// versions of each file of it.
     ///
     /// An answer for the workspace that is shown already is the same changes read
     /// again, as when the window comes back to the front: each file keeps what is shown
     /// of it until its new versions are here, so the diff does not blink.
-    fn show(&mut self, changes: Changes, cx: &mut Context<Self>) {
+    pub(crate) fn show(&mut self, changes: Changes, cx: &mut Context<Self>) {
         let same_workspace = self
             .changes
             .as_ref()
             .is_some_and(|shown| shown.workspace == changes.workspace);
+        if !same_workspace {
+            self.listed = None;
+        }
+        let files = changes.files.clone();
+        self.changes = Some(changes);
+        self.show_files(files, Source::Comparison, cx);
+    }
+
+    /// Shows these files, read as `source` says, and starts to ask for the two versions of
+    /// each. When the files before were read the same way, each keeps what is shown of it
+    /// until its new versions are here.
+    pub(crate) fn show_files(
+        &mut self,
+        files: Vec<ChangedFile>,
+        source: Source,
+        cx: &mut Context<Self>,
+    ) {
         let mut held: HashMap<PathBuf, FileContent> = HashMap::new();
-        if same_workspace {
+        if self.listed.as_ref() == Some(&source) {
             held.extend(
                 self.files
                     .drain(..)
@@ -741,25 +855,23 @@ impl ReviewPane {
             self.position = None;
             self.to_top();
         }
-        self.files = changes
-            .files
-            .iter()
-            .map(|file| ShownFile {
-                content: held
-                    .remove(&file.path)
-                    .unwrap_or(FileContent::Unshown(Unshown::Loading)),
-                file: file.clone(),
-                rows: 0..0,
-                placed: Vec::new(),
-            })
-            .collect();
-        self.by_path = changes
-            .files
+        self.by_path = files
             .iter()
             .enumerate()
             .map(|(index, file)| (file.path.clone(), index))
             .collect();
-        self.changes = Some(changes);
+        self.files = files
+            .into_iter()
+            .map(|file| ShownFile {
+                content: held
+                    .remove(&file.path)
+                    .unwrap_or(FileContent::Unshown(Unshown::Loading)),
+                file,
+                rows: 0..0,
+                placed: Vec::new(),
+            })
+            .collect();
+        self.listed = Some(source);
         self.rebuild(cx);
         // The files are asked for from the top of the list, and only a few at a time:
         // the rest as the answers come.
@@ -811,16 +923,57 @@ impl ReviewPane {
     fn ask(&mut self, cx: &mut Context<Self>) -> Option<Asked> {
         let index = self.unread.next()?;
         let file = &self.files[index].file;
-        let sides = self
-            .models
-            .changes
-            .update(cx, |changes, cx| changes.file(file, cx));
+        let sides = match &self.listed {
+            Some(Source::Versions { old, new }) => {
+                self.read_versions(file.clone(), old.clone(), new.clone(), cx)
+            }
+            Some(Source::Comparison) | None => self
+                .models
+                .changes
+                .update(cx, |changes, cx| changes.file(file, cx)),
+        };
         Some(Asked { index, sides })
+    }
+
+    /// Asks the Keeper for the two versions of a file of a change between two versions of
+    /// the workspace: the old one in `old`, none where nothing came before, and the new
+    /// one in `new`, none for the file on disk.
+    fn read_versions(
+        &self,
+        file: ChangedFile,
+        old: Option<String>,
+        new: Option<String>,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<FileSides, AskError>> {
+        let Some(workspace) = self.tree.of.clone() else {
+            return Task::ready(Err(AskError::Unexpected));
+        };
+        // A renamed file is read by the path it had in the old version.
+        let old_path = match &file.status {
+            FileStatus::Renamed { from } => from.clone(),
+            _ => file.path.clone(),
+        };
+        let request = yaar_link::Request::ReadVersions {
+            workspace,
+            old,
+            old_path,
+            new,
+            path: file.path,
+        };
+        let asked = self
+            .models
+            .link
+            .update(cx, |link, cx| link.ask(request, cx));
+        cx.spawn(async move |_, _| match asked.await {
+            Ok(yaar_link::Reply::File(sides)) => Ok(sides),
+            Ok(_) => Err(AskError::Unexpected),
+            Err(error) => Err(error),
+        })
     }
 
     /// Puts what came for the file at `index` in the place of what was shown of it.
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
-        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
+        let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let file = &mut self.files[index];
         file.content = content;
         let (rows, placed) = file_rows(file, self.layout, review);
@@ -846,9 +999,11 @@ impl ReviewPane {
 
     /// Makes the rows again from what the pane holds.
     pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
+        let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let mut rows = Vec::new();
-        if let Some(changes) = &self.changes {
+        // Above the files of the comparison goes what it is a comparison with; the files
+        // of an entry of the tree are told by the tree.
+        if let (Some(changes), ChangeShown::Comparison) = (&self.changes, &self.tree.shown) {
             rows.push(PaneRow::Comparison {
                 comparison: changes.comparison.clone(),
                 offers_base: matches!(changes.comparison, Comparison::NothingToCompare { .. }),
@@ -857,13 +1012,13 @@ impl ReviewPane {
                 id: commit.id.clone(),
                 summary: commit.summary.clone(),
             }));
-            for file in &mut self.files {
-                let start = rows.len();
-                let (shown, placed) = file_rows(file, self.layout, review);
-                rows.extend(shown);
-                file.placed = placed;
-                file.rows = start..rows.len();
-            }
+        }
+        for file in &mut self.files {
+            let start = rows.len();
+            let (shown, placed) = file_rows(file, self.layout, review);
+            rows.extend(shown);
+            file.placed = placed;
+            file.rows = start..rows.len();
         }
         rows.extend(threads::elsewhere(&self.files, review));
         self.rows = rows;
@@ -1142,8 +1297,10 @@ mod tests {
     use yaar_link::RequestKind;
 
     use super::{
-        Comment, Commit, CopyReview, DeleteDraft, EditDraft, KEY_CONTEXT, LineDown, LineUp,
-        MarkReviewed, NextThread, PreviousThread, Reply, ToggleLayout, ToggleViewed, controls,
+        Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
+        HISTORY_CONTEXT, HistoryDown, HistoryUp, KEY_CONTEXT, LineDown, LineUp, MarkChange,
+        MarkReviewed, NextReview, NextThread, PreviousThread, Reply, ShowChange, TakeOffer,
+        ToggleKeepSelection, ToggleLayout, ToggleViewed, controls,
     };
 
     #[test]
@@ -1152,9 +1309,23 @@ mod tests {
             .iter()
             .map(|control| {
                 // A plain key that worked anywhere would be taken from a program in a
-                // terminal, and from every field a user types into.
-                assert_eq!(control.place, Place::In(KEY_CONTEXT), "{}", control.title);
-                assert_eq!(control.context(), Some(KEY_CONTEXT), "{}", control.title);
+                // terminal, and from every field a user types into. The keys of the tree
+                // work in the tree, which is beside the rows and not inside them.
+                let context = if [
+                    FocusRows.name(),
+                    HistoryDown.name(),
+                    HistoryUp.name(),
+                    MarkChange.name(),
+                    ShowChange.name(),
+                ]
+                .contains(&(control.action)().name())
+                {
+                    HISTORY_CONTEXT
+                } else {
+                    KEY_CONTEXT
+                };
+                assert_eq!(control.place, Place::In(context), "{}", control.title);
+                assert_eq!(control.context(), Some(context), "{}", control.title);
                 (
                     control.keystroke,
                     (control.action)().name(),
@@ -1207,6 +1378,17 @@ mod tests {
                     request(RequestKind::Commit),
                     Asks::Text
                 ),
+                ("tab", FocusHistory.name(), None, Asks::Nothing),
+                ("tab", FocusRows.name(), None, Asks::Nothing),
+                ("j", HistoryDown.name(), None, Asks::Nothing),
+                ("down", HistoryDown.name(), None, Asks::Nothing),
+                ("k", HistoryUp.name(), None, Asks::Nothing),
+                ("up", HistoryUp.name(), None, Asks::Nothing),
+                ("space", MarkChange.name(), None, Asks::Nothing),
+                ("enter", ShowChange.name(), None, Asks::Nothing),
+                ("shift-t", ToggleKeepSelection.name(), None, Asks::Nothing),
+                ("shift-o", TakeOffer.name(), None, Asks::Nothing),
+                ("shift-a", NextReview.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1230,6 +1412,16 @@ mod tests {
             (PreviousThread.name(), "shift-m", vec![TUICR]),
             (CopyReview.name(), "y", vec![TUICR]),
             (ToggleViewed.name(), "r", vec![TUICR]),
+            // The commit selector of tuicr: Tab cycles the focus, j and k and the arrows
+            // move, space marks a commit and enter shows the marked ones.
+            (FocusHistory.name(), "tab", vec![TUICR]),
+            (FocusRows.name(), "tab", vec![TUICR]),
+            (HistoryDown.name(), "j", vec!["vim", TUICR]),
+            (HistoryDown.name(), "down", vec![TUICR]),
+            (HistoryUp.name(), "k", vec!["vim", TUICR]),
+            (HistoryUp.name(), "up", vec![TUICR]),
+            (MarkChange.name(), "space", vec![TUICR]),
+            (ShowChange.name(), "enter", vec![TUICR]),
         ];
         // The actions that neither has a key for, and why.
         let others: Vec<(&str, &str)> = vec![
@@ -1248,6 +1440,18 @@ mod tests {
             (
                 Commit.name(),
                 "neither has one; tuicr's `C` adds a file comment",
+            ),
+            (
+                ToggleKeepSelection.name(),
+                "neither has one; no turn ends under the selection in either",
+            ),
+            (
+                TakeOffer.name(),
+                "neither has one; neither offers a change to show",
+            ),
+            (
+                NextReview.name(),
+                "neither has one; neither shows the review of another agent session",
             ),
         ];
         let held = controls();

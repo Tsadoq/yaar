@@ -18,7 +18,7 @@ pub(crate) struct CommitField {
 }
 
 /// What the notice says about an answer of the Keeper that is no plain yes.
-fn words(error: &AskError) -> String {
+pub(crate) fn words(error: &AskError) -> String {
     match error {
         // The ids of a review and a workspace say nothing to the reviewer.
         AskError::Refused(Refusal::NothingToSend { .. }) => {

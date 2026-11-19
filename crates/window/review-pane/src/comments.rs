@@ -12,6 +12,7 @@ use yaar_link::{
 
 use crate::saves::{Save, apply, new_id};
 use crate::threads::{link_side, pane_side, path_in};
+use crate::tree::Source;
 use crate::{
     Comment, CommentBox, DeleteDraft, EditDraft, NextThread, PaneRow, Position, PreviousThread,
     ReviewPane,
@@ -50,6 +51,7 @@ impl ReviewPane {
         if workspace != self.reviews_of {
             self.reviews_of = workspace.clone();
             self.reviews = None;
+            self.chosen = None;
             self.saves.clear();
             self.reading_reviews = None;
             self.notice = None;
@@ -70,10 +72,31 @@ impl ReviewPane {
     /// What the pane does with a fact of the Keeper: the reviews of the workspace on
     /// screen changed, and are read again.
     pub(crate) fn told(&mut self, fact: &Fact, cx: &mut Context<Self>) {
-        if let Fact::ReviewsChanged { workspace } = fact
-            && self.reviews_of.as_ref() == Some(workspace)
-        {
-            self.read_reviews(workspace.clone(), cx);
+        match fact {
+            Fact::ReviewsChanged { workspace } if self.reviews_of.as_ref() == Some(workspace) => {
+                self.read_reviews(workspace.clone(), cx);
+            }
+            // The history grows when a commit is made or a branch is switched.
+            Fact::Workspaces(_) => self.read_history(cx),
+            // What is uncommitted changes with the files, and with the turn that ended.
+            Fact::ChangesChanged { workspace } if self.tree.of.as_ref() == Some(workspace) => {
+                self.read_uncommitted(cx);
+            }
+            Fact::TurnEnded {
+                workspace,
+                session,
+                state,
+                since,
+                ..
+            } if self.tree.of.as_ref() == Some(workspace) => {
+                self.read_history(cx);
+                // A turn whose state was not recorded has no change to select.
+                if let Some(state) = state {
+                    self.turn_ended(session, state.clone(), since.clone(), cx);
+                }
+                self.read_uncommitted(cx);
+            }
+            _ => {}
         }
     }
 
@@ -126,6 +149,7 @@ impl ReviewPane {
         }
         self.reviews = Some(shown);
         self.rebuild(cx);
+        self.review_shown(cx);
     }
 
     /// Says something under the rows.
@@ -152,16 +176,22 @@ impl ReviewPane {
         let text = self
             .text(position)
             .ok_or("The text of the line is not here")?;
-        // The old side is read in the commit the changes are counted from, which the
-        // Keeper keeps; the new side is on disk, and the Keeper records it.
-        let tree = match position.side {
-            Side::Old => Some(
+        // The old side is read in the version the change is counted from, which the
+        // Keeper keeps; the new side is in the version the change leads to, or on disk,
+        // and the Keeper records it.
+        let tree = match (position.side, &self.listed) {
+            (Side::Old, Some(Source::Versions { old, .. })) => Some(
+                old.clone()
+                    .ok_or("There is no version the old lines could be counted from")?,
+            ),
+            (Side::New, Some(Source::Versions { new, .. })) => new.clone(),
+            (Side::Old, _) => Some(
                 self.changes
                     .as_ref()
                     .and_then(|changes| changes.counted_from.clone())
                     .ok_or("There is no commit the old lines could be counted from")?,
             ),
-            Side::New => None,
+            (Side::New, _) => None,
         };
         let line = position.line + 1;
         Ok(Anchor {
