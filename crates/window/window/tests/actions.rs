@@ -255,6 +255,11 @@ impl Composed {
             // gets there by keys.
             Place::In(yaar_review_pane::HISTORY_CONTEXT) => {
                 if !self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx) {
+                    // The Keeper answers for the history after the rows are drawn, and
+                    // Tab does nothing before the tree is there.
+                    wait_until(cx, "the tree of Changes", |cx| {
+                        cx.debug_bounds("review-history-uncommitted").is_some()
+                    });
                     self.click_into(cx, "review-row-0");
                     cx.simulate_keystrokes("tab");
                     wait_until(cx, "the focus in the tree of Changes", |cx| {
