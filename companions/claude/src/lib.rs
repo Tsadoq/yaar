@@ -19,8 +19,22 @@
 //! In slice 6 the same program answers the submit hook with the review that rides along,
 //! and the reply tool server and the allow hooks join it.
 
+use std::error::Error;
+use std::io;
+use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use yaar_link::{
+    AgentReport, Hello, Message, Request, RequestId, TERMINAL_VARIABLE, TerminalId, connect,
+    handshake, read_message, socket_path, write_message,
+};
+
+/// The Adapter the reports are for.
+const AGENT: &str = "claude";
+
+/// The only request the program sends, and so the id its reply carries.
+const REQUEST: RequestId = RequestId(0);
 
 /// The longest the hook program waits for the Keeper, from connecting to the reply. Claude
 /// Code waits for the program, and so does the user at a permission prompt.
@@ -42,7 +56,14 @@ pub struct HookPlace {
 impl HookPlace {
     /// What the environment of this process says, and its parent.
     pub fn of_this_process() -> HookPlace {
-        todo!("the socket, the terminal and the parent of this process")
+        HookPlace {
+            socket: socket_path(),
+            // An empty variable is a shell's leftover, not a terminal.
+            terminal: std::env::var(TERMINAL_VARIABLE)
+                .ok()
+                .filter(|terminal| !terminal.is_empty()),
+            parent: std::os::unix::process::parent_id(),
+        }
     }
 }
 
@@ -59,6 +80,56 @@ pub struct HookAnswer {
 /// one report of the Adapter `claude`, and gives the answer for Claude Code. Waits at
 /// most [`DEADLINE`] for the Keeper.
 pub fn run_hook(input: &[u8], place: &HookPlace) -> HookAnswer {
-    let _ = (input, place);
-    todo!("pass the hook's input on and answer with nothing")
+    // Whatever went wrong, Claude Code is better served by a hook that said nothing than
+    // by one that held the user up or failed: the report is a courtesy to the app.
+    let _ = pass_on(input, place, Instant::now() + DEADLINE);
+    HookAnswer {
+        printed: Vec::new(),
+        status: 0,
+    }
+}
+
+/// Sends the report and reads until the Keeper's reply to it, all before `deadline`.
+fn pass_on(input: &[u8], place: &HookPlace, deadline: Instant) -> Result<(), Box<dyn Error>> {
+    let mut stream = connect(&place.socket)?;
+    let hello = Hello::for_this_process(concat!("yaar-claude-hook ", env!("CARGO_PKG_VERSION")));
+    limit(&stream, deadline)?;
+    let keeper = handshake(&mut stream, &hello)?;
+    if !hello.speaks_with(&keeper) {
+        // A Keeper of another version of the app: it would refuse the request, and the
+        // report means nothing to it.
+        return Err("the Keeper speaks another protocol".into());
+    }
+    let report = AgentReport {
+        agent: AGENT.to_owned(),
+        terminal: place.terminal.clone().map(TerminalId::new),
+        pid: place.parent,
+        payload: input.to_vec(),
+    };
+    limit(&stream, deadline)?;
+    write_message(
+        &mut stream,
+        &Message::Request {
+            id: REQUEST,
+            request: Request::Report { report },
+        },
+    )?;
+    loop {
+        // Set again for each frame: a Keeper that keeps telling facts must not stretch
+        // the deadline a read at a time.
+        limit(&stream, deadline)?;
+        if let Message::Reply { to: REQUEST, .. } = read_message(&mut stream)? {
+            return Ok(());
+        }
+    }
+}
+
+/// Makes reading and writing `stream` give up when `deadline` comes.
+fn limit(stream: &UnixStream, deadline: Instant) -> io::Result<()> {
+    let left = deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the deadline is over"))?;
+    stream.set_read_timeout(Some(left))?;
+    stream.set_write_timeout(Some(left))
 }
