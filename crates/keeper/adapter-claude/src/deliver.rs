@@ -340,7 +340,8 @@ mod tests {
     use crate::ClaudeCode;
 
     /// The question what a `UserPromptSubmit` of `prompt` waits for, asked as the Keeper
-    /// does after the report. The folder is one that is not there: a message reads none.
+    /// does after the report. The folder is one no file can be made in, so a regression
+    /// that writes one fails the call instead of leaving a file behind.
     fn asked_of_prompt(prompt: &str) -> Option<Asked> {
         let input = json!({
             "hook_event_name": "UserPromptSubmit",
@@ -357,7 +358,7 @@ mod tests {
         let mut adapter = ClaudeCode::new();
         adapter.report(&report).expect("a report");
         adapter
-            .asked(Path::new("/nowhere/yaar"), &report)
+            .asked(Path::new("/dev/null/yaar"), &report)
             .expect("a question")
     }
 
@@ -427,7 +428,7 @@ mod tests {
         assert_eq!(ClaudeCode::new().instruction(), INSTRUCTION);
         let session = CliSession("s".to_owned());
         let delivery = ToClaudeCode {
-            folder: Path::new("/nowhere/yaar"),
+            folder: Path::new("/dev/null/yaar"),
             session: &session,
         };
         assert_eq!(delivery.instruction(), INSTRUCTION);
@@ -441,7 +442,7 @@ mod tests {
         let text = format!("{INSTRUCTION}\n\n## Thread t1\n\nComment:\nwhy `this`?");
         let session = asked.session.clone();
         let mut delivery = ToClaudeCode {
-            folder: Path::new("/nowhere/yaar"),
+            folder: Path::new("/dev/null/yaar"),
             session: &session,
         };
 
@@ -465,10 +466,6 @@ mod tests {
         assert!(
             !String::from_utf8_lossy(&bytes).contains(prompt),
             "the answer holds the review and not the user's message"
-        );
-        assert!(
-            !Path::new("/nowhere").exists(),
-            "an inline review writes no file"
         );
     }
 
