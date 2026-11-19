@@ -267,11 +267,55 @@ fn a_terminal_whose_answer_comes_after_another_workspace_came_on_screen_is_not_s
     assert_eq!(focused(&panes, &mut cx), Some(late));
 }
 
+#[gpui_kit::test]
+fn a_click_on_another_workspace_with_the_focus_in_a_terminal_moves_the_focus_to_that_workspaces_terminal(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_two(cx);
+    let (one, two) = (workspace_id('1'), workspace_id('2'));
+    let (t1, t2) = (terminal('a'), terminal('b'));
+    panes.open_terminal(&t1, &mut cx);
+    select(&two, &panes, &mut cx);
+    panes.open_terminal(&t2, &mut cx);
+    assert!(has_the_focus(&panes, &t2, &mut cx));
+
+    // The click on the sidebar's row leaves the focus in the terminal that is drawn
+    // until the workspace changes. Then the other workspace's terminal has it, and the
+    // terminal that is no longer drawn takes no key.
+    select(&one, &panes, &mut cx);
+    assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
+    assert!(has_the_focus(&panes, &t1, &mut cx));
+    assert!(!has_the_focus(&panes, &t2, &mut cx));
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_workspace_with_no_terminal_with_the_focus_in_a_terminal_moves_the_focus_to_the_pane(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_two(cx);
+    let t1 = terminal('a');
+    panes.open_terminal(&t1, &mut cx);
+    assert!(has_the_focus(&panes, &t1, &mut cx));
+
+    // The other workspace has no terminal to hand the focus on to: the pane itself has
+    // it, and the terminal of the first, no longer drawn, does not.
+    select(&workspace_id('2'), &panes, &mut cx);
+    assert_eq!(shown(&panes, &mut cx), []);
+    assert!(cx.update(|window, _| panes.pane_focus.is_focused(window)));
+    assert!(!has_the_focus(&panes, &t1, &mut cx));
+
+    // Back, with the focus in the pane: it goes on to the terminal that is shown again.
+    select(&workspace_id('1'), &panes, &mut cx);
+    assert!(has_the_focus(&panes, &t1, &mut cx));
+}
+
 // A key of the app works while a terminal has the focus on macOS only: there the focus is
-// in the terminal when the workspace changes, and has to follow it.
+// in the terminal when the key changes the workspace, and has to follow it.
 #[cfg(target_os = "macos")]
 #[gpui_kit::test]
-fn the_focus_follows_the_workspace_to_its_terminal_or_back_to_the_pane(cx: &mut TestAppContext) {
+fn the_key_for_the_next_workspace_with_the_focus_in_a_terminal_moves_the_focus_with_it(
+    cx: &mut TestAppContext,
+) {
     use yaar_frame::SelectNextWorkspace;
 
     let (mut panes, mut cx) = open_two(cx);
@@ -281,7 +325,6 @@ fn the_focus_follows_the_workspace_to_its_terminal_or_back_to_the_pane(cx: &mut 
     panes.open_terminal(&t2, &mut cx);
     assert!(has_the_focus(&panes, &t2, &mut cx));
 
-    // Next Workspace, with the focus in a terminal: the other workspace's terminal has it.
     cx.simulate_keystrokes(key_of::<SelectNextWorkspace>());
     assert_eq!(shown(&panes, &mut cx), std::slice::from_ref(&t1));
     assert!(has_the_focus(&panes, &t1, &mut cx));

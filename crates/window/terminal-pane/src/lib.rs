@@ -240,12 +240,13 @@ impl Layout {
 ///
 /// A new terminal is added after the others, shown in the slot that has the focus, and
 /// given the focus, when its workspace is on screen; one whose answer comes after another
-/// workspace came on screen is shown when its own returns. In the split view the pane draws two slots side by side, the
-/// terminal that has the focus and the next one of the workspace; [`NextTerminal`] and
-/// [`PreviousTerminal`] move the focus to the next or previous terminal of the workspace
-/// on screen, and from the last to the first: into the other slot when that terminal is shown there,
-/// else into the slot that has the focus, which then shows it. A click in a slot gives
-/// it the focus. A terminal whose program ended stays in the list with its last screen.
+/// workspace came on screen is shown when its own returns. In the split view the pane
+/// draws two slots side by side, the terminal that has the focus and the next one of the
+/// workspace; [`NextTerminal`] and [`PreviousTerminal`] move the focus to the next or
+/// previous terminal of the workspace on screen, and from the last to the first: into the
+/// other slot when that terminal is shown there, else into the slot that has the focus,
+/// which then shows it. A click in a slot gives it the focus. A terminal whose program
+/// ended stays in the list with its last screen.
 /// Each slot is drawn inside an element with the selector `terminal-slot-<n>`, counted
 /// from 0 from the left, which `debug_bounds` finds while it is drawn.
 ///

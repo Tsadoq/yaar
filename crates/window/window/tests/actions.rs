@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{CommentId, Origin, Program, Request, RequestKind, ReviewId, Workspace};
-use yaar_system_tests::DEADLINE;
+use yaar_system_tests::{DEADLINE, Repo};
 
 mod common;
 
@@ -87,6 +87,17 @@ impl Composed {
         folder
     }
 
+    /// The repository of the workspace on screen, which is one the walk opened.
+    fn repository_on_screen(&self, cx: &mut VisualTestContext) -> &Repo {
+        let on_screen = self
+            .on_screen(cx)
+            .expect("a workspace is on screen before the walk looks at its repository");
+        self.repositories
+            .iter()
+            .find(|repository| repository.path() == on_screen.path)
+            .expect("the workspace on screen is one the walk opened")
+    }
+
     /// Makes a new branch in the repository of the workspace on screen, and returns that
     /// workspace with the name of the branch.
     fn new_branch_on_screen(&mut self, cx: &mut VisualTestContext) -> (Workspace, String) {
@@ -94,12 +105,55 @@ impl Composed {
             .on_screen(cx)
             .expect("a workspace is on screen before the walk sets a base");
         let branch = format!("base-{}", self.next());
-        self.repositories
-            .iter()
-            .find(|repository| repository.path() == on_screen.path)
-            .expect("the workspace on screen is one the walk opened")
-            .git(&["branch", &branch]);
+        self.repository_on_screen(cx).git(&["branch", &branch]);
         (on_screen, branch)
+    }
+
+    /// Waits until the Keeper has done what the request of `kind` asked, as a user sees it:
+    /// the copy on the clipboard, the mark on the review, the file shown viewed, the commit
+    /// in the repository. The walk ends when the last request passes the tap, and the
+    /// world ends the Keeper with a kill: a Keeper still recording a state or running git
+    /// for its answer leaves the folder of its copy of git's list of files in the system's
+    /// temp folder, outside the world. The requests of the reviews are answered one after
+    /// the other, so waiting for the last of them covers those before it.
+    fn settle(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
+        match kind {
+            RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .is_some_and(|text| text.contains(DRAFT))
+            }),
+            RequestKind::MarkReviewed => wait_until(cx, "the review marked reviewed", |cx| {
+                self.review.read_with(cx, |pane, _| {
+                    pane.review()
+                        .is_some_and(|review| review.reviewed.is_some())
+                })
+            }),
+            RequestKind::SetViewed => wait_until(cx, "the file shown viewed", |cx| {
+                self.review.read_with(cx, |pane, _| {
+                    pane.reviews()
+                        .is_some_and(|reviews| reviews.viewed.contains(&PathBuf::from("notes.txt")))
+                })
+            }),
+            RequestKind::Commit => {
+                let repository = self.repository_on_screen(cx);
+                wait_until(cx, "the commit in the repository", |_| {
+                    repository.git(&["log", "-1", "--format=%s"]) == COMMIT_MESSAGE
+                });
+            }
+            RequestKind::OpenFolder
+            | RequestKind::SetBase
+            | RequestKind::OpenTerminal
+            | RequestKind::DeleteDraft => {}
+            RequestKind::ListWorkspaces
+            | RequestKind::GetChanges
+            | RequestKind::ReadFile
+            | RequestKind::ResizeTerminal
+            | RequestKind::GetReviews
+            | RequestKind::SaveDraft => {
+                panic!("the Window starts {kind:?} by itself: no user does")
+            }
+        }
     }
 
     /// The review the review pane shows, once it holds one.
@@ -115,7 +169,8 @@ impl Composed {
     }
 
     /// Writes a draft on the line the reviewer is on, as a user does: into the review pane,
-    /// `c`, the text, Escape. Returns the review and the draft once the pane's model shows
+    /// `c`, the text, Escape. A click on the first row puts the reviewer on the first line
+    /// of the file, which is unchanged context: a comment may sit on any line. Returns the review and the draft once the pane's model shows
     /// the draft with its whole text.
     fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
         // The reviewer waits for the pane to show the reviews and a line to be on.
@@ -378,6 +433,7 @@ impl Composed {
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
             self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
+            self.settle(kind, cx);
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
