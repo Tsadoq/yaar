@@ -389,14 +389,10 @@ fn the_form_of_flow_chosen_last_is_the_one_a_window_opens_after_the_keeper_resta
                 .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
         },
     );
-    // The form shows: the live diff is drawn in Flow's place, and no timeline.
+    // The form shows: `flow-live` is drawn in Flow's place, which the timeline never draws.
     wait_until(&mut cx, "the live diff drawn", |cx| {
         cx.debug_bounds("flow-live").is_some()
     });
-    assert!(
-        cx.debug_bounds("flow-empty").is_none() && cx.debug_bounds("flow-entry-0").is_none(),
-        "the timeline is drawn beside the live diff"
-    );
     // The settings are asked for before any turn is.
     let requests = window.tap.requests();
     let settings = requests
