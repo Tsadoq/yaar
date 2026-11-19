@@ -15,7 +15,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::{Bounds, Pixels, TestAppContext, VisualTestContext};
 use yaar_link::{
     Ending, Fact, Program, Refusal, Reply, Request, RequestId, TerminalId, TerminalInfo,
-    TerminalSize, WorkspaceId,
+    TerminalSize, WorkspaceAgents, WorkspaceId,
 };
 use yaar_terminal_pane::{FIRST_SIZE, NextTerminal, ScrollPageUp};
 
@@ -104,10 +104,11 @@ fn a_terminal_the_keeper_holds_at_connect_is_attached_and_shows_what_it_wrote_in
     let t1 = terminal('a');
     let (panes, mut cx) = open_holding(cx, vec![info(&t1, &workspace_id('1'))]);
 
-    // Before any layout the pane shows terminals at the size it opens them at.
+    // The size is the one the pane will show the terminal at, which it learns from the room
+    // it has: not the size it opens terminals at before it was laid out.
     let (id, asked, size) = attach_request(&panes, &mut cx);
     assert_eq!(asked, t1);
-    assert_eq!(size, FIRST_SIZE);
+    assert_ne!(size, FIRST_SIZE);
 
     // What the Keeper kept comes after the reply in frames, then what is written live; all
     // of it may arrive before the pane has looked, and is shown in the order it came.
@@ -139,6 +140,10 @@ fn a_terminal_the_keeper_holds_at_connect_is_attached_and_shows_what_it_wrote_in
     assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
     cx.simulate_input("k");
     assert_eq!(panes.keeper.input(&mut cx), (t1.clone(), b"k".to_vec()));
+    // The size came once, in the request: the view fitted the room to that very grid and
+    // told the Keeper nothing more. The key is the barrier, since the resize of a view
+    // that fitted another grid would have gone out before it.
+    assert!(panes.keeper.resizes(&t1).is_empty());
 }
 
 #[gpui_kit::test]
@@ -267,7 +272,12 @@ fn a_terminal_the_list_gains_is_attached_at_the_size_the_pane_shows_terminals_at
     let (one, two) = (workspace_id('1'), workspace_id('2'));
     let (t1, t2) = (terminal('a'), terminal('b'));
     panes.open_terminal(&t1, &mut cx);
-    // The pane laid its terminal out at a size of its own, which the Keeper was told.
+    // The pane laid its terminal out at a size of its own, which the Keeper was told: the
+    // test waits until the Keeper's end has read it, since the terminal's opening names
+    // another size.
+    wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
+        !panes.keeper.resizes(&t1).is_empty()
+    });
     let shown_at = panes.grid(&t1);
     assert_ne!(shown_at, FIRST_SIZE);
 
@@ -417,4 +427,93 @@ fn an_attached_terminal_whose_program_ends_says_how(cx: &mut TestAppContext) {
         })
     });
     assert!(screen_has(&panes, &t1, "bye", &cx));
+}
+
+#[gpui_kit::test]
+fn an_ending_told_before_the_pane_takes_the_answer_to_its_attach_reaches_its_view(
+    cx: &mut TestAppContext,
+) {
+    let (one, t1) = (workspace_id('1'), terminal('a'));
+    let (panes, mut cx) = open_holding(cx, vec![info(&t1, &one)]);
+    let (id, _, _) = attach_request(&panes, &mut cx);
+
+    // The program writes and ends while the answer to the attach is not yet taken. The fact
+    // after the ending is the barrier: facts are told in the order they came, so when the
+    // agents of the workspace are held, the pane has heard the ending.
+    panes.keeper.output(&t1, b"bye\r\n");
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: t1.clone(),
+        ending: Ending::Exited(3),
+    });
+    panes.keeper.tell(Fact::AgentsChanged(WorkspaceAgents {
+        workspace: one.clone(),
+        shown: None,
+        sessions: Vec::new(),
+    }));
+    let models = panes.models.clone();
+    wait_until(&mut cx, "the agents of the workspace", move |cx| {
+        models
+            .agents
+            .read_with(cx, |agents, _| agents.of(&one).is_some())
+    });
+    assert!(
+        panes
+            .pane
+            .read_with(&cx, |pane, _| pane.terminals())
+            .is_empty()
+    );
+
+    // The answer comes after the ending: the view the pane makes then says how it ended.
+    answer_attach(&panes, id, &t1, false, &[]);
+    wait_until(&mut cx, "the ending in the view", |cx| {
+        let view = panes.pane.read_with(cx, |pane, _| pane.terminal(&t1));
+        view.is_some_and(|view| {
+            view.read_with(cx, |view, _| view.ending()) == Some(Ending::Exited(3))
+        })
+    });
+    assert!(screen_has(&panes, &t1, "bye", &cx));
+}
+
+#[gpui_kit::test]
+fn a_terminal_attached_in_a_workspace_that_shows_one_takes_no_slot_from_it(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes(cx);
+    let one = workspace_id('1');
+    let (t1, t2) = (terminal('a'), terminal('b'));
+    panes.open_terminal(&t1, &mut cx);
+    assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
+
+    // The list gains a terminal of the workspace on screen, which the user looks at one
+    // terminal of.
+    panes
+        .models
+        .terminals
+        .update(&mut cx, |list, cx| list.opened(info(&t2, &one), cx));
+    let (id, asked, _) = attach_request(&panes, &mut cx);
+    assert_eq!(asked, t2);
+    answer_attach(&panes, id, &t2, false, &[b"hello\r\n"]);
+    wait_until(&mut cx, "the attached terminal in the pane", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().len() == 2)
+    });
+
+    // It is listed, and the user's terminal is still the one shown and focused.
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.terminals()),
+        [t1.clone(), t2.clone()]
+    );
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.shown()),
+        std::slice::from_ref(&t1)
+    );
+    assert_eq!(panes.focused_terminal(&mut cx), Some(t1.clone()));
+
+    // And it is reached with Next Terminal.
+    panes.press_in_the_app::<NextTerminal>(&mut cx);
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.shown()),
+        std::slice::from_ref(&t2)
+    );
 }

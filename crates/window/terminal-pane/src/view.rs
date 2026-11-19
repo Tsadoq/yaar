@@ -178,7 +178,7 @@ impl TerminalView {
                 .is_some_and(|cell| cell.style.dim && cell.style.italic);
             styled && text.trim_end() == CUT_TEXT
         })?;
-        let (_, _, cell) = self.metrics(window, cx);
+        let (_, _, cell) = Self::metrics(window, cx);
         Some((cell.height * row as f32, cell.height))
     }
 
@@ -510,7 +510,7 @@ impl TerminalView {
     }
 
     /// The font, its size and the size of one cell.
-    fn metrics(&self, window: &Window, cx: &App) -> (Font, Pixels, Size<Pixels>) {
+    pub(crate) fn metrics(window: &Window, cx: &App) -> (Font, Pixels, Size<Pixels>) {
         let theme = cx.theme();
         let font = font(theme.mono_font_family.clone());
         let font_size = theme.mono_font_size;
@@ -552,7 +552,7 @@ impl Render for TerminalView {
         // output to say so.
         self.emulator.advance(&[]);
 
-        let (font, font_size, cell) = self.metrics(window, cx);
+        let (font, font_size, cell) = Self::metrics(window, cx);
         self.geometry.cell.set(cell);
         let theme = cx.theme();
         let (background, foreground, muted, border) = (
