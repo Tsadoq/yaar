@@ -176,15 +176,25 @@ impl ReviewPane {
         })
     }
 
-    /// The first thread of the review that sits on the line the reviewer is on.
+    /// The first thread of the review that sits on the line the reviewer is on. An
+    /// unchanged line is one row with a line on each side, and a thread of either side
+    /// sits there: the reviewer stands on it by one side whichever the thread is on.
     fn thread_on(&self, position: &Position) -> Option<&Thread> {
         let file = &self.files[*self.by_path.get(&position.path)?].file;
-        let path = path_in(file, position.side);
-        let side = link_side(position.side);
+        let on_both_sides = match self.position_row.and_then(|row| self.rows.get(row)) {
+            Some(PaneRow::Diff { row, .. }) if matches!(row, yaar_diff::Row::Context { .. }) => {
+                Some(row)
+            }
+            _ => None,
+        };
         self.review()?.threads.iter().find(|thread| {
-            thread.anchor.path == path
-                && thread.anchor.side == side
-                && thread.anchor.lines.last == position.line + 1
+            let side = pane_side(thread.anchor.side);
+            let line = match on_both_sides {
+                Some(row) => row.line(side),
+                None => (side == position.side).then_some(position.line),
+            };
+            path_in(file, side) == thread.anchor.path
+                && line.is_some_and(|line| thread.anchor.lines.last == line + 1)
         })
     }
 

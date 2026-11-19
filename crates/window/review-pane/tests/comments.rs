@@ -15,7 +15,7 @@ use gpui_kit::{
 use yaar_diff::{Row, Side};
 use yaar_link::{
     Anchor, Author, Changes, Comment, CommentId, DraftOn, Fact, FileStatus, Lines, Refusal, Reply,
-    Request, Review, Round, SentBy, Side as LinkSide, Thread, ThreadId, WorkspaceReviews,
+    Request, Review, ReviewId, Round, SentBy, Side as LinkSide, Thread, ThreadId, WorkspaceReviews,
 };
 use yaar_review_pane::{CommentBox, PaneRow, Position, ReviewPane};
 
@@ -467,6 +467,18 @@ fn reviews_with(threads: Vec<Thread>) -> WorkspaceReviews {
     }
 }
 
+/// The id of a review of its own, made of this digit.
+fn review_id_of(digit: char) -> ReviewId {
+    ReviewId::new(digit.to_string().repeat(32))
+}
+
+/// As [`reviews_with`], with a review of an id of its own.
+fn reviews_with_id(digit: char, threads: Vec<Thread>) -> WorkspaceReviews {
+    let mut reviews = reviews_with(threads);
+    reviews.reviews[0].id = review_id_of(digit);
+    reviews
+}
+
 /// Makes the Keeper hold these reviews and tell it, and waits until the pane shows them.
 fn give(stage: &mut Stage, reviews: &WorkspaceReviews, cx: &mut VisualTestContext) {
     stage.keeper.set_reviews(reviews.clone());
@@ -885,6 +897,83 @@ fn m_and_shift_m_walk_the_threads_in_the_order_of_the_rows_and_say_where_there_i
 }
 
 #[gpui_kit::test]
+fn a_thread_on_the_old_side_of_an_unchanged_line_is_the_thread_of_the_reviewer_who_stands_on_the_line(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // `keep_d` is the sixth line of the old version and the fifth of the new one, and
+    // stands on one row. A draft is on its old side, a sent comment on the new side of
+    // the next unchanged line.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            6,
+            vec![draft('1', "about the old line")],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            6,
+            vec![sent('2', "about the new line", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+
+    // `m` stands the reviewer on the line by its new side, where the thread is drawn.
+    cx.simulate_keystrokes("m");
+    let there = Position {
+        path: lib(),
+        side: Side::New,
+        line: 4,
+    };
+    assert_eq!(position(&pane, &mut cx), there);
+    assert!(drawn_thread('a', &mut cx));
+
+    // The draft is theirs to edit and to delete, though it is on the other side.
+    cx.simulate_keystrokes("i");
+    let opened = comment_box(&pane, &mut cx).expect("the draft is open");
+    assert_eq!(opened.thread, thread_id('a'));
+    assert_eq!(opened.comment, comment_id('1'));
+    assert_eq!(opened.text, "about the old line");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('1'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+
+    // The thread on the new side of the next unchanged line is found by a click on the
+    // old half of its row in the split view too: the reviewer is on the line by its new
+    // side either way.
+    cx.simulate_keystrokes("s");
+    let next = row_of(&pane, &lib(), Row::Context { old: 6, new: 5 }, &mut cx);
+    let old_half = drawn(&format!("review-row-{next}-old"), &mut cx)
+        .expect("the old half of the row is laid out");
+    cx.simulate_click(old_half.center(), Modifiers::none());
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::New,
+            line: 5
+        }
+    );
+    cx.simulate_keystrokes("o");
+    assert_eq!(
+        comment_box(&pane, &mut cx).expect("a reply box").thread,
+        thread_id('b')
+    );
+}
+
+#[gpui_kit::test]
 fn m_with_no_thread_at_all_moves_nothing_and_says_so(cx: &mut TestAppContext) {
     let (stage, _changes, mut cx) = open_on_two_files(cx);
     let pane = &stage.pane;
@@ -1285,22 +1374,26 @@ fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comm
     let pane = stage.pane.clone();
     // Something of the test's own is on the clipboard: only the copy may replace it.
     cx.write_to_clipboard(ClipboardItem::new_string("before".to_owned()));
-    let drafts = reviews_with(vec![
-        thread(
-            'a',
-            "src/lib.rs",
-            LinkSide::Old,
-            5,
-            vec![draft('1', "why remove this")],
-        ),
-        thread(
-            'b',
-            "src/lib.rs",
-            LinkSide::New,
-            11,
-            vec![draft('2', "and this")],
-        ),
-    ]);
+    // The review has an id of its own, which the one read first has not.
+    let drafts = reviews_with_id(
+        'c',
+        vec![
+            thread(
+                'a',
+                "src/lib.rs",
+                LinkSide::Old,
+                5,
+                vec![draft('1', "why remove this")],
+            ),
+            thread(
+                'b',
+                "src/lib.rs",
+                LinkSide::New,
+                11,
+                vec![draft('2', "and this")],
+            ),
+        ],
+    );
     give(&mut stage, &drafts, &mut cx);
     assert!(drawn_comment('1', "draft", &mut cx) && drawn_comment('2', "draft", &mut cx));
 
@@ -1309,7 +1402,7 @@ fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comm
     cx.simulate_keystrokes("y");
     let asked = stage.keeper.expect(
         Request::CopyReview {
-            review: review_id(),
+            review: review_id_of('c'),
         },
         &mut cx,
     );
@@ -1333,22 +1426,25 @@ fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comm
     assert_eq!(notice(&pane, &mut cx), None);
 
     // The Keeper tells that the reviews changed and holds both comments at round 1.
-    let sent_in_one = reviews_with(vec![
-        thread(
-            'a',
-            "src/lib.rs",
-            LinkSide::Old,
-            5,
-            vec![sent('1', "why remove this", 1)],
-        ),
-        thread(
-            'b',
-            "src/lib.rs",
-            LinkSide::New,
-            11,
-            vec![sent('2', "and this", 1)],
-        ),
-    ]);
+    let sent_in_one = reviews_with_id(
+        'c',
+        vec![
+            thread(
+                'a',
+                "src/lib.rs",
+                LinkSide::Old,
+                5,
+                vec![sent('1', "why remove this", 1)],
+            ),
+            thread(
+                'b',
+                "src/lib.rs",
+                LinkSide::New,
+                11,
+                vec![sent('2', "and this", 1)],
+            ),
+        ],
+    );
     give(&mut stage, &sent_in_one, &mut cx);
     let shown = pane.read_with(&cx, |pane, _| pane.review().cloned());
     assert_eq!(shown, Some(sent_in_one.reviews[0].clone()));
@@ -1362,14 +1458,14 @@ fn the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comm
     cx.simulate_keystrokes("y");
     let asked = stage.keeper.expect(
         Request::CopyReview {
-            review: review_id(),
+            review: review_id_of('c'),
         },
         &mut cx,
     );
     stage.keeper.reply(
         asked,
         Err(Refusal::NothingToSend {
-            review: review_id(),
+            review: review_id_of('c'),
         }),
     );
     wait_until(&mut cx, "the notice", |cx| {
