@@ -200,6 +200,21 @@ impl Window {
         }
     }
 
+    /// Sends a request and expects its reply, whatever facts come before it: a Keeper that
+    /// watches the worktree of a running session tells the changes it sees to every Window.
+    fn ask_past_facts(&mut self, request: Request) -> Result<Reply, Refusal> {
+        let id = RequestId(self.next_id);
+        self.next_id += 1;
+        write_message(&mut self.stream, &Message::Request { id, request }).expect("send");
+        loop {
+            match read_message(&mut self.stream).expect("a frame from the Keeper") {
+                Message::Reply { to, reply } if to == id => return reply,
+                Message::Fact(_) => {}
+                other => panic!("not the reply to {id:?}: {other:?}"),
+            }
+        }
+    }
+
     /// Reads frames until two sessions were told to have written `path` with their own
     /// tool, whatever else comes: the facts of a report are told after what the report did
     /// to the Keeper's records, and the reports were sent one after the other.
@@ -1179,6 +1194,18 @@ fn uncommitted(
     })
 }
 
+/// [`uncommitted`] for a Keeper that tells facts of its own beside the reply.
+fn uncommitted_past_facts(
+    window: &mut Window,
+    workspace: &yaar_store::WorkspaceId,
+    review: Option<&ReviewId>,
+) -> Result<Reply, Refusal> {
+    window.ask_past_facts(Request::GetUncommitted {
+        workspace: link_workspace(workspace),
+        review: review.cloned(),
+    })
+}
+
 #[test]
 fn with_no_agent_credited_with_a_change_every_review_lists_all_of_them_by_path_with_nobody_as_its_maker()
  {
@@ -1382,7 +1409,7 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
     // The barrier: the last file the reports name was written by both, and a step is told
     // after the Keeper noted who wrote the file.
     window.until_written_by_two("both.txt");
-    let Ok(Reply::Agents(agents)) = window.ask(Request::ListAgents) else {
+    let Ok(Reply::Agents(agents)) = window.ask_past_facts(Request::ListAgents) else {
         panic!("no list of agents");
     };
     let sessions = &agents
@@ -1399,7 +1426,7 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
     let (a, b) = (a.id.as_str(), b.id.as_str());
 
     assert_eq!(
-        uncommitted(&mut window, &workspace, Some(&review_a)),
+        uncommitted_past_facts(&mut window, &workspace, Some(&review_a)),
         Ok(Reply::Uncommitted(vec![
             credited("a-only.txt", FileStatus::Added, &[a]),
             credited("both.txt", FileStatus::Added, &[a, b]),
@@ -1407,7 +1434,7 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
         ]))
     );
     assert_eq!(
-        uncommitted(&mut window, &workspace, Some(&review_b)),
+        uncommitted_past_facts(&mut window, &workspace, Some(&review_b)),
         Ok(Reply::Uncommitted(vec![
             credited("b-only.txt", FileStatus::Added, &[b]),
             credited("both.txt", FileStatus::Added, &[a, b]),
@@ -1415,7 +1442,7 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
         ]))
     );
     assert_eq!(
-        uncommitted(&mut window, &workspace, None),
+        uncommitted_past_facts(&mut window, &workspace, None),
         Ok(Reply::Uncommitted(vec![
             credited("a-only.txt", FileStatus::Added, &[a]),
             credited("b-only.txt", FileStatus::Added, &[b]),
