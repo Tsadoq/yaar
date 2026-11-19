@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
-use crate::{Failed, Store, StoreError, WorkspaceId, bytes, path};
+use crate::{Failed, Store, StoreError, WorkspaceId, Writer, bytes, path};
 
 /// How long the writer waits after the last draft save before it flushes the drive.
 pub const FLUSH_AFTER: Duration = Duration::from_secs(1);
@@ -396,7 +396,10 @@ impl Store {
     /// Keeps a new round of a review and marks these comments sent in it, in one
     /// transaction: either all of it is kept or none. The round's number must be the next
     /// of the review, and every comment a draft of the review. Returns when it is on the
-    /// drive and the write-ahead file has been moved into the database file.
+    /// drive and the write-ahead file has been moved into the database file. When that
+    /// move could not be made, because another connection reads the file, the call fails
+    /// though the round is kept: it is then in the write-ahead file only, which the writer
+    /// goes on trying to move.
     pub fn put_round(
         &self,
         review: &ReviewId,
@@ -549,7 +552,7 @@ impl Store {
     /// this by itself after a pause in the typing, and when the last clone of the Store is
     /// dropped, as when the Keeper stops and lets its parts go.
     pub fn flush(&self) -> Result<(), StoreError> {
-        self.with_writer(|writer| Ok(writer.flush()?))
+        self.with_writer(Writer::flush)
     }
 }
 

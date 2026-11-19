@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 
 use support::Scratch;
 use yaar_store::{
-    Anchor, Author, Comment, CommentId, RepositoryId, ReviewId, ReviewRecord, Round, SentBy, Side,
-    Store, StoreError, Thread, ThreadId, ViewedRecord, WorkspaceId,
+    Anchor, Author, Comment, CommentId, FLUSH_AFTER, RepositoryId, ReviewId, ReviewRecord, Round,
+    SentBy, Side, Store, StoreError, Thread, ThreadId, ViewedRecord, WorkspaceId,
 };
 
 /// An id of 32 hexadecimal digits, from a number.
@@ -112,6 +112,16 @@ fn refusal_of<T: std::fmt::Debug>(result: Result<T, StoreError>) -> String {
 /// How many bytes the write-ahead file holds; none when it is not there.
 fn wal_len(scratch: &Scratch) -> u64 {
     std::fs::metadata(scratch.0.join("store.db-wal")).map_or(0, |m| m.len())
+}
+
+/// Shows that a save has not been flushed yet. A runner that stalls for longer than the
+/// writer waits has the writer flush on its own, and that is no fault: the check is
+/// made only while the writer's pause has not run out.
+fn assert_not_flushed_yet(scratch: &Scratch, saved_at: Instant) {
+    let held = wal_len(scratch);
+    if saved_at.elapsed() < FLUSH_AFTER {
+        assert!(held > 0, "a save does not flush by itself");
+    }
 }
 
 #[test]
@@ -626,8 +636,9 @@ fn a_flush_moves_the_saved_drafts_out_of_the_write_ahead_file_at_once() {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     with_one_draft(&store);
+    let saved_at = Instant::now();
     store.save_draft(&cid(100), "typed").expect("save draft");
-    assert!(wal_len(&scratch) > 0, "a save does not flush by itself");
+    assert_not_flushed_yet(&scratch, saved_at);
 
     store.flush().expect("flush");
     assert_eq!(wal_len(&scratch), 0);
@@ -641,8 +652,9 @@ fn the_writer_flushes_by_itself_once_the_typing_pauses() {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     with_one_draft(&store);
+    let saved_at = Instant::now();
     store.save_draft(&cid(100), "typed").expect("save draft");
-    assert!(wal_len(&scratch) > 0, "a save does not flush by itself");
+    assert_not_flushed_yet(&scratch, saved_at);
 
     // Waiting for a fact, with a deadline far past the pause the writer allows itself.
     let deadline = Instant::now() + Duration::from_secs(30);

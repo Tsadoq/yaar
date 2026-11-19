@@ -279,12 +279,35 @@ struct Writer {
 impl Writer {
     /// Moves everything the write-ahead file holds into the database file and empties
     /// the file; with `checkpoint_fullfsync` on, the drive is flushed in full for it.
-    fn flush(&mut self) -> rusqlite::Result<()> {
+    ///
+    /// A checkpoint that a reader of another connection keeps from finishing is not an
+    /// error of the database: it answers with a row whose first column is 1. That is a
+    /// failure here all the same, and the writer keeps waiting for a flush, so that the
+    /// timer tries again.
+    fn flush(&mut self) -> Result<(), Failed> {
         // The statement answers with a row, so it is a query.
-        self.connection
-            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
-        self.unflushed_since = None;
-        Ok(())
+        let blocked = self
+            .connection
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .map(|busy| busy != 0);
+        match blocked {
+            Ok(false) => {
+                self.unflushed_since = None;
+                Ok(())
+            }
+            Ok(true) => {
+                self.unflushed_since.get_or_insert_with(Instant::now);
+                Err(Failed::Refused(
+                    "the write-ahead file could not be moved into the database file".to_owned(),
+                ))
+            }
+            Err(e) => {
+                self.unflushed_since.get_or_insert_with(Instant::now);
+                Err(e.into())
+            }
+        }
     }
 
     /// Runs until the last way to the writer is dropped: each job in turn, and a flush
@@ -789,6 +812,108 @@ mod tests {
         assert_eq!(user_version(&folder.copy()), 1);
         assert_eq!(rows(&folder.copy()).len(), 2);
         assert!(!Path::new(&partial).exists());
+    }
+
+    /// Keeps a review with one thread that holds one draft, and gives the draft's id.
+    fn with_one_draft(store: &Store) -> CommentId {
+        let review = ReviewId::new("1".repeat(32));
+        store
+            .put_review(&ReviewRecord {
+                id: review.clone(),
+                workspace: WorkspaceId::new("2".repeat(32)),
+                agent: None,
+                reviewed: None,
+                threads: vec![],
+                rounds: vec![],
+            })
+            .expect("put review");
+        let draft = CommentId::new("4".repeat(32));
+        store
+            .put_thread(
+                &review,
+                &Thread {
+                    id: ThreadId::new("3".repeat(32)),
+                    anchor: Anchor {
+                        tree: "a".repeat(40),
+                        path: PathBuf::from("a.rs"),
+                        side: Side::New,
+                        first: 1,
+                        last: 1,
+                        text: "x".to_owned(),
+                    },
+                    resolved: false,
+                    addressed: false,
+                    comments: vec![Comment {
+                        id: draft.clone(),
+                        author: Author::Reviewer,
+                        text: "a".to_owned(),
+                        round: None,
+                    }],
+                },
+            )
+            .expect("put thread");
+        draft
+    }
+
+    /// The `synchronous` setting of the writer's connection: 2 is FULL, which every change
+    /// but a draft's save waits for the drive with.
+    fn synchronous(store: &Store) -> i64 {
+        store
+            .with_writer(|writer| {
+                Ok(writer
+                    .connection
+                    .query_row("PRAGMA synchronous", [], |row| row.get(0))?)
+            })
+            .expect("read the setting")
+    }
+
+    // Unit tests that hold a second connection open, because no call of the Store holds
+    // a read open while the writer works.
+    #[test]
+    fn a_flush_the_database_could_not_finish_is_a_failure_and_the_writer_tries_again() {
+        let folder = Folder::new("blocked");
+        let store = Store::open(&folder.file()).expect("open");
+        let draft = with_one_draft(&store);
+
+        // A reader that still sees the file as it was before the save keeps the
+        // write-ahead file from being emptied: the checkpoint answers with a row that says
+        // it was blocked, and not with an error.
+        let reader = Connection::open(folder.file()).expect("open a reader");
+        reader
+            .execute_batch("BEGIN; SELECT count(*) FROM thread;")
+            .expect("hold a read");
+        store.save_draft(&draft, "typed").expect("save draft");
+        assert!(
+            store.flush().is_err(),
+            "a flush that left the draft in the write-ahead file said it was done"
+        );
+        let wal = folder.0.join(format!("{FILE_NAME}-wal"));
+        assert!(std::fs::metadata(&wal).expect("the write-ahead file").len() > 0);
+
+        // The draft still waits for a flush: once the reader lets go the writer empties
+        // the file by itself, with a deadline for the fact.
+        reader.execute_batch("COMMIT").expect("let go");
+        let deadline = Instant::now() + std::time::Duration::from_secs(30);
+        while std::fs::metadata(&wal).expect("the write-ahead file").len() > 0 {
+            assert!(Instant::now() < deadline, "the writer never flushed");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    // A unit test, because the setting is the connection's own and only the writer reads
+    // it; a kill of the process cannot tell the two settings apart.
+    #[test]
+    fn a_draft_save_puts_the_wait_for_the_drive_back_whether_or_not_it_changed_a_row() {
+        let folder = Folder::new("synchronous");
+        let store = Store::open(&folder.file()).expect("open");
+        let draft = with_one_draft(&store);
+        assert_eq!(synchronous(&store), 2);
+
+        store.save_draft(&draft, "typed").expect("save draft");
+        assert_eq!(synchronous(&store), 2, "after a save");
+        let unknown = CommentId::new("5".repeat(32));
+        assert!(store.save_draft(&unknown, "typed").is_err());
+        assert_eq!(synchronous(&store), 2, "after a refused save");
     }
 
     // A unit test that makes a file, because a database of a later version can only be
