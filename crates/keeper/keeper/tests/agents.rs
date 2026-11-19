@@ -624,6 +624,14 @@ fn nothing_waits_for_the_recording_of_a_turns_state() {
         "the hook waited {took:?}: a report is answered before anything it leads to"
     );
     setup.agents_until("the next turn works", is_state(SessionState::Works));
+    // The fact came while the slow filter still ran: the next turn did not wait for the
+    // recording of the one before it, not only for the end of that turn to be told. The
+    // fact comes in a fraction of the filter's time, so the bound has room under load.
+    assert!(
+        stopped.elapsed() < RECORDING,
+        "the next turn worked only {:?} after the stop: it waited for the recording",
+        stopped.elapsed()
+    );
     let listed = Instant::now();
     assert!(!setup.window.agents().is_empty());
     assert!(listed.elapsed() < HOOK_DEADLINE, "the list waited");
