@@ -1103,3 +1103,17 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
     drop(client);
     assert_eq!(keeper.join().expect("the scripted Keeper").len(), 10);
 }
+
+#[test]
+fn every_program_of_the_app_is_built_for_a_test_that_asks_for_it() {
+    // The hook program of Claude Code among them: a test of the Keeper runs it as Claude
+    // Code would, and finds it beside the Keeper.
+    for name in [
+        "yaar-keeper",
+        "yaar-review",
+        "yaar-claude-hook",
+        "standin-agent",
+    ] {
+        assert!(program(name).is_file(), "{name} is not built");
+    }
+}

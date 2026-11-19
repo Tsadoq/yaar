@@ -803,7 +803,7 @@ fn is_known(pid: u32) -> bool {
 fn the_git_process_kept_for_file_contents_has_ended_when_the_keeper_returns() {
     let scratch = Scratch::new();
     let (repo, first) = scratch.repository("repo");
-    assert_eq!(git_children(), vec![], "no git runs yet");
+    assert_eq!(git_children(), Vec::<u32>::new(), "no git runs yet");
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let workspace = window.open(&repo);
