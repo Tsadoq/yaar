@@ -634,17 +634,20 @@ impl Client {
     }
 
     /// Waits until what the terminal's program wrote after its byte number `after` holds
-    /// the stand-in's prompt, [`crate::standin::PROMPT`], and gives how many bytes the
-    /// terminal has written by then: the `after` of the wait for the next prompt. A first
-    /// wait starts at 0. A prompt before `after`, and the shell's own, are not the answer.
+    /// the stand-in's prompt, [`crate::standin::PROMPT`], and gives the number of the byte
+    /// just behind that prompt: the `after` of the wait for the next one. A first wait
+    /// starts at 0. A prompt before `after`, and the shell's own, are not the answer.
     pub fn wait_for_prompt(&mut self, terminal: &TerminalId, after: usize) -> usize {
         let prompt = crate::standin::PROMPT.as_bytes();
-        self.wait_for_output(terminal, DEADLINE, |bytes| {
-            bytes
-                .get(after..)
-                .is_some_and(|new| new.windows(prompt.len()).any(|window| window == prompt))
-        })
-        .len()
+        let found = |bytes: &[u8]| {
+            bytes.get(after..).and_then(|new| {
+                new.windows(prompt.len())
+                    .position(|window| window == prompt)
+                    .map(|at| after + at + prompt.len())
+            })
+        };
+        let run = self.wait_for_output(terminal, DEADLINE, |bytes| found(bytes).is_some());
+        found(&run).expect("the wait accepted a run that holds the prompt")
     }
 
     /// Writes one request and gives the id it went out under.
