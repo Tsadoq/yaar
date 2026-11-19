@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 use crate::contents::{Contents, Read};
-use crate::git::{Answer, Git, GitError, Place, finish, unreadable};
+use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::IndexCopy;
 
 /// Names one commit: its full id, in lowercase hexadecimal digits.
@@ -596,7 +596,7 @@ impl Worktree {
         };
 
         // Keyed by the bytes of the path, which is the order git lists paths in.
-        let mut changes: BTreeMap<OsString, Change> = BTreeMap::new();
+        let mut changes = BTreeMap::new();
         if let Some(since) = since {
             let answer = run(&[
                 "diff",
@@ -609,39 +609,7 @@ impl Worktree {
                 "--",
             ])?;
             let command = answer.command().to_owned();
-            let printed = answer.printed()?;
-            let mut fields = printed.split(|byte| *byte == 0).filter(|f| !f.is_empty());
-            while let Some(status) = fields.next() {
-                let mut path = || {
-                    fields
-                        .next()
-                        .map(os_string)
-                        .ok_or_else(|| unreadable(&command, "a status with no path"))
-                };
-                let (path, change) = match status[0] {
-                    b'A' => (path()?, Change::Added),
-                    b'D' => (path()?, Change::Deleted),
-                    // A file whose kind changed, or that a merge left undecided, is a
-                    // changed file.
-                    b'M' | b'T' | b'U' => (path()?, Change::Modified),
-                    b'R' => {
-                        let from = PathBuf::from(path()?);
-                        (path()?, Change::Renamed { from })
-                    }
-                    // A copy leaves its source where it was: the copy is a new file.
-                    b'C' => {
-                        path()?;
-                        (path()?, Change::Added)
-                    }
-                    _ => {
-                        return Err(unreadable(
-                            &command,
-                            format!("the status {:?}", String::from_utf8_lossy(status)),
-                        ));
-                    }
-                };
-                changes.insert(path, change);
-            }
+            changes = name_status(&command, &answer.printed()?)?;
         }
 
         // With a commit to count from, the files of git's list are in its diff already;
@@ -780,8 +748,47 @@ impl Worktree {
     /// with [`CommitError::Refused`] and git's own words when git ends with an error, as
     /// when a hook rejects the commit or no identity is set.
     pub fn commit_all(&self, message: &str) -> Result<CommitId, CommitError> {
-        let _ = message;
-        todo!()
+        // Asked as reading asks: on a copy of the list of files, so that the question
+        // neither writes nor locks the user's own.
+        let uncommitted = {
+            let index = IndexCopy::of(&self.git_dir.join("index")).map_err(GitError::from)?;
+            let hooks_off = hooks_off(&self.git, Place::Folder(&self.root))?;
+            let mut command = self.git.command(Place::Folder(&self.root), &hooks_off);
+            command.env("GIT_INDEX_FILE", index.file()).args([
+                "status",
+                "--porcelain",
+                "-z",
+                "--untracked-files=all",
+            ]);
+            !finish(command)?.printed()?.is_empty()
+        };
+        if !uncommitted {
+            return Err(CommitError::NothingToCommit);
+        }
+
+        let mut add = self.git.plain(&self.root);
+        add.args(["add", "--all"]);
+        let answer = finish(add)?;
+        if answer.code != Some(0) {
+            return Err(CommitError::Refused {
+                stderr: answer.stderr,
+            });
+        }
+        // The message goes in on the standard input: it may hold any character.
+        let mut commit = self.git.plain(&self.root);
+        commit.args(["commit", "--file=-"]);
+        let answer = finish_with(commit, message.as_bytes())?;
+        if answer.code != Some(0) {
+            return Err(CommitError::Refused {
+                stderr: answer.stderr,
+            });
+        }
+        match self.head_commit()? {
+            Some(id) => Ok(id),
+            None => Err(answer
+                .unreadable("no commit is checked out after the commit")
+                .into()),
+        }
     }
 
     /// One run of git in this worktree.
@@ -795,7 +802,7 @@ impl Worktree {
     }
 
     /// The commit that is checked out; none where nothing is committed yet.
-    fn head_commit(&self) -> Result<Option<CommitId>, GitError> {
+    pub(crate) fn head_commit(&self) -> Result<Option<CommitId>, GitError> {
         let answer = self.run(["rev-parse", "-q", "--verify", "HEAD^{commit}"])?;
         match answer.code {
             Some(0) => Ok(Some(CommitId::new(text(&answer.stdout)))),
@@ -817,9 +824,51 @@ impl Drop for Worktree {
     }
 }
 
+/// Reads what `git diff --name-status -z` printed, the paths keyed by their bytes, which
+/// is the order git lists paths in. `command` is the run, for the words of a failure.
+pub(crate) fn name_status(
+    command: &str,
+    printed: &[u8],
+) -> Result<BTreeMap<OsString, Change>, GitError> {
+    let mut changes = BTreeMap::new();
+    let mut fields = printed.split(|byte| *byte == 0).filter(|f| !f.is_empty());
+    while let Some(status) = fields.next() {
+        let mut path = || {
+            fields
+                .next()
+                .map(os_string)
+                .ok_or_else(|| unreadable(command, "a status with no path"))
+        };
+        let (path, change) = match status[0] {
+            b'A' => (path()?, Change::Added),
+            b'D' => (path()?, Change::Deleted),
+            // A file whose kind changed, or that a merge left undecided, is a changed
+            // file.
+            b'M' | b'T' | b'U' => (path()?, Change::Modified),
+            b'R' => {
+                let from = PathBuf::from(path()?);
+                (path()?, Change::Renamed { from })
+            }
+            // A copy leaves its source where it was: the copy is a new file.
+            b'C' => {
+                path()?;
+                (path()?, Change::Added)
+            }
+            _ => {
+                return Err(unreadable(
+                    command,
+                    format!("the status {:?}", String::from_utf8_lossy(status)),
+                ));
+            }
+        };
+        changes.insert(path, change);
+    }
+    Ok(changes)
+}
+
 /// The setting that turns off each hook the configuration defines, one by one: turning
 /// off the hooks folder does not reach them.
-fn hooks_off(git: &Git, place: Place<'_>) -> Result<Vec<OsString>, GitError> {
+pub(crate) fn hooks_off(git: &Git, place: Place<'_>) -> Result<Vec<OsString>, GitError> {
     let answer = git.run(
         place,
         &[],
@@ -936,7 +985,7 @@ fn git_dir_of(folder: &Path) -> Option<PathBuf> {
 
 /// `path` as a path inside a worktree, or none when it is not one: when it is a full
 /// path, is empty, or climbs with `..`.
-fn inside(path: &Path) -> Option<PathBuf> {
+pub(crate) fn inside(path: &Path) -> Option<PathBuf> {
     let mut inside = PathBuf::new();
     for part in path.components() {
         match part {
@@ -949,7 +998,7 @@ fn inside(path: &Path) -> Option<PathBuf> {
 }
 
 /// Whether this is the full id of a commit, in either of git's two lengths.
-fn is_full_id(id: &str) -> bool {
+pub(crate) fn is_full_id(id: &str) -> bool {
     matches!(id.len(), 40 | 64) && id.bytes().all(|digit| digit.is_ascii_hexdigit())
 }
 
@@ -968,7 +1017,7 @@ fn text(printed: &[u8]) -> String {
     String::from_utf8_lossy(printed).trim_end().to_owned()
 }
 
-fn os_string(bytes: &[u8]) -> OsString {
+pub(crate) fn os_string(bytes: &[u8]) -> OsString {
     OsString::from_vec(bytes.to_vec())
 }
 

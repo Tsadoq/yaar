@@ -3,7 +3,7 @@
 use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read as _, Write};
 use std::path::Path;
-use std::process::{Child, ChildStdin, ChildStdout, Stdio};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 
 use crate::git::{Git, GitError, Place, could_not_start, shown};
 
@@ -33,7 +33,11 @@ impl Contents {
         root: &Path,
         hooks_off: &[OsString],
     ) -> Result<Contents, GitError> {
-        let mut command = git.command(Place::Folder(root), hooks_off);
+        Self::start_in(git.command(Place::Folder(root), hooks_off))
+    }
+
+    /// Starts the process from a run of git that is prepared and not yet started.
+    pub(crate) fn start_in(mut command: Command) -> Result<Contents, GitError> {
         // `-Z` ends every name and every answer with a zero byte, so a path may hold a
         // line feed. What git complains of meanwhile has no reader.
         command

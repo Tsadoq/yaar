@@ -2,7 +2,7 @@
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
-use std::io;
+use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -165,6 +165,20 @@ impl Git {
         command
     }
 
+    /// A run of the user's own git, not yet started, as the user would start it in
+    /// `folder`: none of the settings every read carries, so that the user's hooks,
+    /// identity, signing and language apply. Only the variables that name another
+    /// repository are left out, and nothing is asked at a terminal.
+    pub(crate) fn plain(&self, folder: &Path) -> Command {
+        let mut command = Command::new(&self.program);
+        command.arg("-C").arg(folder);
+        for name in REPOSITORY_VARIABLES {
+            command.env_remove(name);
+        }
+        command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+        command
+    }
+
     /// Runs git to its end and gives what it answered, whatever its exit code.
     pub(crate) fn run<I, S>(
         &self,
@@ -186,6 +200,36 @@ impl Git {
 pub(crate) fn finish(mut command: Command) -> Result<Answer, GitError> {
     let shown = shown(&command);
     let output = command.output().map_err(could_not_start)?;
+    Ok(Answer {
+        command: shown,
+        code: output.status.code(),
+        stdout: output.stdout,
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Runs a prepared command to its end with `input` on its standard input.
+pub(crate) fn finish_with(mut command: Command, input: &[u8]) -> Result<Answer, GitError> {
+    let shown = shown(&command);
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = command.spawn().map_err(could_not_start)?;
+    let Some(mut asks) = child.stdin.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(io::Error::other("git was started without its input").into());
+    };
+    // Written on a thread of its own, so that git can fill its output while it reads:
+    // a pipe that nobody empties would stop both. A write that fails means git ended
+    // before it read all, and its exit code says why.
+    let output = std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let _ = asks.write_all(input);
+        });
+        child.wait_with_output()
+    })?;
     Ok(Answer {
         command: shown,
         code: output.status.code(),
