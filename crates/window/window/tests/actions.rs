@@ -570,14 +570,21 @@ impl Composed {
             _ => false,
         };
         let tap = &self.tap;
-        yaar_system_tests::wait_until(DEADLINE, || {
+        let came = yaar_system_tests::wait_until(DEADLINE, || {
             tap.requests()[from..].iter().any(sets_it) || tap.wait_for_stop(Duration::ZERO)
         });
-        if !self.tap.requests()[from..].iter().any(sets_it)
-            && self.tap.wait_for_stop(Duration::ZERO)
-        {
+        // The stop frame is latched, so it is read after the wait whichever event ended
+        // it: a Keeper on its way out may still let the request through the tap, and
+        // only the key of this step can have sent the frame.
+        if self.tap.wait_for_stop(Duration::ZERO) {
             return None;
         }
+        assert!(
+            came,
+            "neither the request that sets the base {base} nor the stop-everything frame \
+             passed the tap; the requests listed are {:?}",
+            &self.tap.requests()[from..]
+        );
         self.tap.wait_for_request(DEADLINE, sets_it);
         let found = self.tap.requests()[from..]
             .iter()
