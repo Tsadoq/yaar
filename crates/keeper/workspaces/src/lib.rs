@@ -383,7 +383,10 @@ impl Workspaces {
     ///
     /// So is a repository that cannot be read now, because git fails in it or the id of
     /// one of its worktrees can be neither read nor written: the others are listed all
-    /// the same. What is wrong there, a call that names one of its workspaces says.
+    /// the same. What is wrong there, a call that names one of its workspaces says. The
+    /// workspaces of such a repository are all left out, those that are gone and hold a
+    /// thread included, until git reads it again: their reviews stay in the Store, and
+    /// asking for them by workspace still answers.
     ///
     /// A worktree that was opened after its folder was moved without git's knowing is
     /// listed too, after the others, for as long as git has not caught up.

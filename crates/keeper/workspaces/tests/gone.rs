@@ -141,6 +141,14 @@ fn on_branch(workspace: &Workspace, name: &str) {
     );
 }
 
+fn in_its_folder(workspaces: &Workspaces, id: &WorkspaceId, folder: &Path) {
+    let worktree = workspaces
+        .worktree(id)
+        .expect("worktree")
+        .expect("the worktree is found at the new path");
+    assert_eq!(worktree.root(), folder);
+}
+
 // STORE-05.
 #[test]
 fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
@@ -159,6 +167,8 @@ fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
     // review, the thread in it, is as it was.
     let again = workspaces.open_folder(&moved).expect("open the new path");
     assert_eq!(again, opened);
+    // The open alone is enough to use the workspace at its new path, before any listing.
+    in_its_folder(&workspaces, &opened.workspace, &moved);
     let repository = the_repository(&workspaces);
     let at_the_new_path = repository
         .workspaces
@@ -181,6 +191,7 @@ fn after_git_moves_a_worktree_opening_the_new_path_finds_its_review() {
     drop((workspaces, store));
     let (workspaces, store) = keeper(&scratch);
     assert_eq!(workspaces.open_folder(&moved).expect("open"), opened);
+    in_its_folder(&workspaces, &opened.workspace, &moved);
     let listed = the_repository(&workspaces);
     assert!(
         listed
