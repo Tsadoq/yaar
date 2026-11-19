@@ -338,12 +338,10 @@ impl<'a> Replay<'a> {
         self.records.len()
     }
 
-    /// Feeds line `line` of the recording to the Adapter at the pace it was recorded at,
-    /// and gives what the Adapter said to Workspaces: a file written is named, a command
-    /// begins or ends for the session that reported it.
-    fn feed(&mut self, line: usize) {
-        // The gap to the line before is the input's own timing, kept up to a bound, and
-        // counted from when that line was fed: what the test did since is part of it.
+    /// Lets pass the gap the recording has before line `line`, up to a bound, counted from
+    /// when the line before was fed: what the test did since is part of it. This is the
+    /// input's own timing, not a wait for a fact.
+    fn pace(&self, line: usize) {
         if let (Some(fed), Some(before)) = (self.fed, line.checked_sub(1)) {
             let gap = Duration::from_nanos(
                 self.records[line]
@@ -355,10 +353,11 @@ impl<'a> Replay<'a> {
                 std::thread::sleep(left);
             }
         }
-        self.give(line);
     }
 
-    /// The same without the pace: a line fed again after the replay is over.
+    /// Feeds line `line` of the recording to the Adapter, and gives what the Adapter said
+    /// to Workspaces: a file written is named, a command begins or ends for the session
+    /// that reported it. The test paces the lines itself, with [`Replay::pace`].
     fn give(&mut self, line: usize) {
         let record = &self.records[line];
         // The moment the report reached the Keeper, before the Adapter read it.
@@ -405,11 +404,11 @@ impl<'a> Replay<'a> {
         }
     }
 
-    /// Does in the worktree what the tool of line `line`, a `PreToolUse`, does before its
-    /// `PostToolUse`: the write tool writes its content, the edit tool replaces one text
-    /// by another, a read changes nothing, and a shell command runs in the worktree. A
-    /// line that is no tool's start does nothing.
-    fn the_tool_acts(&self, line: usize) {
+    /// Does in the worktree what the tool of line `line`, a `PreToolUse` of the write tool
+    /// or the edit tool, does before its `PostToolUse`: the write tool writes its content
+    /// and the edit tool replaces one text by another. A line that is no such tool's start
+    /// does nothing.
+    fn the_file_tool_acts(&self, line: usize) {
         let record = &self.records[line];
         if record.event != "PreToolUse" {
             return;
@@ -434,16 +433,30 @@ impl<'a> Replay<'a> {
                 };
                 std::fs::write(file, after).expect("write the edited file");
             }
-            Some("Bash") => {
-                let status = Command::new("sh")
-                    .args(["-c", text("command")])
-                    .current_dir(&self.w.root)
-                    .status()
-                    .expect("start the shell");
-                assert!(status.success(), "the command of line {line} succeeds");
-            }
             _ => {}
         }
+    }
+
+    /// Runs, when line `line` is the `PostToolUse` of a shell command, that command in the
+    /// worktree: a command writes when it runs, which is after the hook that told of its
+    /// beginning has returned and the shell has started, so the test runs it at the end
+    /// of the interval the recording has between the two, not at once. Returns whether it
+    /// ran one.
+    fn the_command_runs(&self, line: usize) -> bool {
+        let record = &self.records[line];
+        if record.event != "PostToolUse" || record.input["tool_name"] != "Bash" {
+            return false;
+        }
+        let command = record.input["tool_input"]["command"]
+            .as_str()
+            .unwrap_or_default();
+        let status = Command::new("sh")
+            .args(["-c", command])
+            .current_dir(&self.w.root)
+            .status()
+            .expect("start the shell");
+        assert!(status.success(), "the command of line {line} succeeds");
+        true
     }
 }
 
@@ -480,21 +493,26 @@ fn two_sessions_in_one_worktree_editing_different_files_have_each_write_credited
     assert_eq!(replay.lines(), 49);
 
     for line in 0..replay.lines() {
-        replay.feed(line);
-        replay.the_tool_acts(line);
-        // A shell command writes through the shell, which no tool named: the write is
-        // seen by the watcher and credited by whose command is open, and the next line is
-        // not fed before it is, so that the command is still the one that is open.
-        match line {
-            15 => w.wait_credited_to("a3.txt", A),
-            18 => w.wait_credited_to("b3.txt", B),
-            30 => {
-                w.wait_credited_to("shared.log", A);
-                assert_eq!(w.by("shared.log"), Some(strings(&[A])));
+        replay.pace(line);
+        // A shell command writes through the shell, which no tool named: the write is seen
+        // by the watcher and credited by whose command is open. It falls at the end of the
+        // interval between the command's two reports, as a real command's does, and the
+        // report of its end is not given before the write is credited, so that the command
+        // is still the one that is open.
+        if replay.the_command_runs(line) {
+            match line {
+                16 => w.wait_credited_to("a3.txt", A),
+                19 => w.wait_credited_to("b3.txt", B),
+                31 => {
+                    w.wait_credited_to("shared.log", A);
+                    assert_eq!(w.by("shared.log"), Some(strings(&[A])));
+                }
+                42 => w.wait_credited_to("shared.log", B),
+                _ => panic!("line {line} runs a command the test does not wait for"),
             }
-            41 => w.wait_credited_to("shared.log", B),
-            _ => {}
         }
+        replay.give(line);
+        replay.the_file_tool_acts(line);
     }
 
     // Every change is somebody's, and the one file two sessions wrote with a command each,
@@ -525,27 +543,24 @@ fn two_sessions_running_overlapping_shell_commands_leave_the_files_written_as_ch
     assert_eq!(replay.lines(), 16);
 
     for line in 0..replay.lines() {
-        replay.feed(line);
-        match line {
-            // B's command begins and runs alone: nothing is written yet, whatever the
-            // recording's command does after it sleeps.
-            6 => {}
-            // A's command begins while B's runs. Both commands write after their sleep,
-            // which falls before either ends: the test writes what they would, in the
-            // order of their files, once both run.
-            7 => {
-                let before = w.heard.files();
-                write(&w.root, "overlap_b.txt", "B\n");
-                w.wait_for_a_notice_of_files(before);
-                let before = w.heard.files();
-                write(&w.root, "overlap_a.txt", "A\n");
-                w.wait_for_a_notice_of_files(before);
-                wait_until("both writes are listed", || {
-                    w.by("overlap_a.txt").is_some() && w.by("overlap_b.txt").is_some()
-                });
-            }
-            _ => {}
+        replay.pace(line);
+        // Line 6 begins B's command, which runs alone and writes nothing yet, and line 7
+        // begins A's, while B's runs. Both commands write after their sleep, which falls
+        // before either ends: the test writes what they would, in the order of their
+        // files, when the interval the recording has before line 8 has passed, both
+        // commands having run since line 7.
+        if line == 8 {
+            let before = w.heard.files();
+            write(&w.root, "overlap_b.txt", "B\n");
+            w.wait_for_a_notice_of_files(before);
+            let before = w.heard.files();
+            write(&w.root, "overlap_a.txt", "A\n");
+            w.wait_for_a_notice_of_files(before);
+            wait_until("both writes are listed", || {
+                w.by("overlap_a.txt").is_some() && w.by("overlap_b.txt").is_some()
+            });
         }
+        replay.give(line);
     }
 
     assert_eq!(
@@ -555,8 +570,11 @@ fn two_sessions_running_overlapping_shell_commands_leave_the_files_written_as_ch
     );
 
     // The limit: with exactly one command running, a hand edit is credited to its
-    // session, because nothing tells the two apart. A's command begins again, alone.
+    // session, because nothing tells the two apart. A's command begins again, alone, and
+    // runs for the interval the recording has before its end: far longer than the settle
+    // time, which a command that has not ended does not wait out.
     replay.give(7);
+    replay.pace(8);
     write(&w.root, "README.md", &format!("{README}by hand\n"));
     w.wait_credited_to("README.md", A);
     replay.give(9);
