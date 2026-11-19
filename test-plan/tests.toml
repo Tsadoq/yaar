@@ -1146,6 +1146,7 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["NFR-021", "FR-107"]
+note = "The index is compared by its bytes, taken before the test runs git status, which refreshes it itself. 'Without making a commit' is the refs and the count of objects unchanged."
 
 [[test]]
 id = "STATE-02"
@@ -1300,6 +1301,7 @@ driver = "git"
 runs = "ci"
 proves = []
 slice = 3
+note = "Listed while one of its reviews holds a thread; a worktree that is gone and holds none leaves the list, as in slice 1."
 
 [[test]]
 id = "STORE-08"
@@ -1371,6 +1373,7 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-074", "FR-041", "FR-075"]
+note = "The clause 'the same whether written in Flow or in Changes' is shown when Flow exists (slice 5); slice 3 shows the rest of the row."
 
 [[test]]
 id = "REV-02"
@@ -1411,6 +1414,7 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-088", "FR-046"]
+note = "The resolved thread of the test is resolved through the Store's call: resolving has no request until slice 6."
 
 [[test]]
 id = "REV-06"
@@ -1523,6 +1527,7 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-107", "FR-110"]
+note = "The engine's rule only. No request carries what changed since the last review in slice 3; the view of it comes with turn ends and Changes (slices 4 and 5)."
 
 [[test]]
 id = "REV-17"
@@ -1944,6 +1949,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-079", "FR-088"]
+note = "The comments show as sent once the Keeper tells that the reviews changed and the pane reads them again."
 
 [[test]]
 id = "RP-35"
@@ -2268,6 +2274,7 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-119", "NFR-008"]
+note = "As it was left: the draft's text is that of the last save the Keeper answered, or of one sent after it, which a killed Keeper may or may not have kept."
 
 [[test]]
 id = "CLIENT-03"
@@ -2875,7 +2882,7 @@ built = [
     "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
     "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
 ]
-note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built. Opening a terminal is the user's; telling a terminal's size is the Window's."
+note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built. Opening a terminal is the user's; telling a terminal's size is the Window's. Reading the reviews and saving a draft as it is typed are the Window's; deleting a draft, copying a review, marking it reviewed, marking a file viewed and committing are the user's. The reply is REV-03's and the review pane's own test of its key; the walk shows only that the reply is a control with a key."
 
 [[test]]
 id = "WIN-05"
