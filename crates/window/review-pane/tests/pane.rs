@@ -664,6 +664,9 @@ enum Effect {
     Moves,
     /// Says in the notice why there is nothing to do.
     Notice,
+    /// Sets whether a turn end keeps the selection: on after the key, off again after the
+    /// action.
+    Setting,
     /// Opens a comment box.
     Box,
     /// Opens the field for a commit message.
@@ -680,7 +683,9 @@ fn effect_of(keystroke: &str) -> Effect {
         "c" => Effect::Box,
         "shift-c" => Effect::Field,
         // The pane has no history here to take the focus to.
-        "i" | "o" | "d d" | "m" | "shift-m" | "tab" => Effect::Notice,
+        // And no turn offered anything, and no other session has a review.
+        "i" | "o" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
+        "shift-t" => Effect::Setting,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -699,6 +704,11 @@ impl Effect {
             Effect::Notice => assert!(
                 pane.read_with(cx, |pane, _| pane.notice().is_some()),
                 "{title} by {how} said nothing"
+            ),
+            Effect::Setting => assert_eq!(
+                pane.read_with(cx, |pane, _| pane.keeps_selection()),
+                how == "its key",
+                "{title} by {how} did not set the pane"
             ),
             Effect::Box => assert!(
                 pane.read_with(cx, |pane, _| pane.comment_box().is_some()),
@@ -807,7 +817,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         match effect {
             Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
             Effect::Notice => cx.simulate_keystrokes("s s"),
-            Effect::Moves | Effect::Sends(_) => {}
+            Effect::Moves | Effect::Setting | Effect::Sends(_) => {}
         }
         if matches!(effect, Effect::Notice | Effect::Box | Effect::Field) {
             assert!(

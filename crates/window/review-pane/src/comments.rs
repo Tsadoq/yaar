@@ -51,6 +51,7 @@ impl ReviewPane {
         if workspace != self.reviews_of {
             self.reviews_of = workspace.clone();
             self.reviews = None;
+            self.chosen = None;
             self.saves.clear();
             self.reading_reviews = None;
             self.notice = None;
@@ -81,8 +82,18 @@ impl ReviewPane {
             Fact::ChangesChanged { workspace } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_uncommitted(cx);
             }
-            Fact::TurnEnded { workspace, .. } if self.tree.of.as_ref() == Some(workspace) => {
+            Fact::TurnEnded {
+                workspace,
+                session,
+                state,
+                since,
+                ..
+            } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_history(cx);
+                // A turn whose state was not recorded has no change to select.
+                if let Some(state) = state {
+                    self.turn_ended(session, state.clone(), since.clone(), cx);
+                }
                 self.read_uncommitted(cx);
             }
             _ => {}

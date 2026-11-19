@@ -13,6 +13,7 @@ use yaar_link::{
 
 use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
+use crate::turns::Offer;
 use crate::{
     ChangeShown, FocusHistory, FocusRows, HISTORY_CONTEXT, HistoryDown, HistoryUp, MarkChange,
     ReviewPane, ShowChange,
@@ -64,6 +65,9 @@ pub(crate) struct Tree {
     pub(crate) wanted: Source,
     /// The question for the files of an entry or a range, while one is on its way.
     pub(crate) listing: Option<Task<()>>,
+    /// What a turn end offered while the pane kept the selection; selecting anything
+    /// takes it away.
+    pub(crate) offer: Option<Offer>,
 }
 
 impl Tree {
@@ -83,6 +87,7 @@ impl Tree {
             first_picture: false,
             wanted: Source::Comparison,
             listing: None,
+            offer: None,
         }
     }
 }
@@ -233,7 +238,7 @@ impl ReviewPane {
                         new: None,
                     })
                 {
-                    self.select_uncommitted(false, cx);
+                    self.select_uncommitted(cx);
                 }
             }
             ChangeShown::Comparison => {
@@ -301,14 +306,14 @@ impl ReviewPane {
         // The files on disk are read again with the list: that is what a change of the
         // files is told by.
         if self.tree.shown == ChangeShown::Uncommitted {
-            self.select_uncommitted(false, cx);
+            self.select_uncommitted(cx);
         }
         cx.notify();
     }
 
     /// Selects the entries `first` to `last` of the history, both included, as the change
     /// to show: from the version before `first` to the version of `last`. `by_reviewer`
-    /// says whether the reviewer chose them. False when no such change can be shown: the
+    /// says whether the reviewer chose them, and not the pane for want of changes. False when no such change can be shown: the
     /// history is not here, an entry does not exist, or an end of the range holds no
     /// version.
     pub(crate) fn select_entries(
@@ -331,18 +336,49 @@ impl ReviewPane {
             .map(str::to_owned);
         let old = before(history, first);
         let workspace = history.workspace.clone();
+        self.tree.first_picture = !by_reviewer;
+        self.tree.shown = ChangeShown::Entries { first, last };
+        cx.notify();
+        self.list_change(workspace, old, new, cx);
+        true
+    }
+
+    /// Selects what changed between two versions, `from` to `to`, as the change to show:
+    /// what a turn end selects, counted from the last review.
+    pub(crate) fn select_since(
+        &mut self,
+        from: Option<String>,
+        to: String,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(workspace) = self.tree.of.clone() else {
+            return;
+        };
+        self.tree.first_picture = false;
+        self.tree.marked.clear();
+        self.tree.shown = ChangeShown::Since {
+            from: from.clone(),
+            to: to.clone(),
+        };
+        cx.notify();
+        self.list_change(workspace, from, Some(to), cx);
+    }
+
+    /// Lists the files of the change from `old` to `new`, none for the files on disk, and
+    /// shows them, unless they are shown already.
+    fn list_change(
+        &mut self,
+        workspace: WorkspaceId,
+        old: Option<String>,
+        new: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let source = Source::Versions {
             old: old.clone(),
             new: new.clone(),
         };
-        self.tree.first_picture = !by_reviewer;
-        if by_reviewer {
-            self.tree.marked.clear();
-        }
-        self.tree.shown = ChangeShown::Entries { first, last };
-        cx.notify();
         if self.tree.wanted == source && self.listed.as_ref() == Some(&source) {
-            return true;
+            return;
         }
         self.tree.wanted = source.clone();
         self.tree.listing = None;
@@ -354,7 +390,7 @@ impl ReviewPane {
                 cx,
             );
             self.show_files(Vec::new(), source, cx);
-            return true;
+            return;
         };
         let asked = self.models.link.update(cx, |link, cx| {
             link.ask(
@@ -386,21 +422,17 @@ impl ReviewPane {
             })
             .ok();
         }));
-        true
     }
 
     /// Selects the uncommitted changes of the review shown as the change to show: from the
     /// commit checked out to the files on disk, the files those of the list.
-    pub(crate) fn select_uncommitted(&mut self, by_reviewer: bool, cx: &mut Context<Self>) {
+    pub(crate) fn select_uncommitted(&mut self, cx: &mut Context<Self>) {
         let source = Source::Versions {
             old: self.tree.history.as_ref().and_then(checked_out),
             new: None,
         };
         self.tree.shown = ChangeShown::Uncommitted;
         self.tree.first_picture = false;
-        if by_reviewer {
-            self.tree.marked.clear();
-        }
         self.tree.wanted = source.clone();
         self.tree.listing = None;
         let files: Vec<ChangedFile> = self
@@ -504,6 +536,8 @@ impl ReviewPane {
     pub(crate) fn show_change(&mut self, _: &ShowChange, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         if let (Some(&first), Some(&last)) = (self.tree.marked.first(), self.tree.marked.last()) {
+            self.tree.offer = None;
+            self.tree.marked.clear();
             self.select_entries(first, last, true, cx);
             return;
         }
@@ -517,13 +551,15 @@ impl ReviewPane {
     /// after the last of the history: alone, or, with `extend`, as the range from the
     /// entries shown to it.
     fn select(&mut self, index: usize, extend: bool, cx: &mut Context<Self>) {
+        self.tree.offer = None;
+        self.tree.marked.clear();
         let entries = self
             .tree
             .history
             .as_ref()
             .map_or(0, |history| history.entries.len());
         if index >= entries {
-            return self.select_uncommitted(true, cx);
+            return self.select_uncommitted(cx);
         }
         let (first, last) = match self.tree.shown {
             ChangeShown::Entries { first, last } if extend => (first.min(index), last.max(index)),

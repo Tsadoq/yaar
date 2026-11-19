@@ -24,8 +24,9 @@ use yaar_frame::{KeeperLink, Models, bind};
 use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, CreditedFile, Fact,
     FileSides, FileStatus, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply,
-    Repository, RepositoryId, Request, RequestId, Review, ReviewId, TerminalId, TerminalInfo,
-    Workspace, WorkspaceAgents, WorkspaceId, WorkspaceReviews, read_message, write_message,
+    Repository, RepositoryId, Request, RequestId, Review, ReviewId, Session, SessionId,
+    SessionState, TerminalId, TerminalInfo, Workspace, WorkspaceAgents, WorkspaceId,
+    WorkspaceReviews, read_message, write_message,
 };
 use yaar_review_pane::{PaneRow, ReviewPane, Unshown};
 
@@ -369,6 +370,13 @@ impl KeeperEnd {
         self.standing.lock().agents = agents;
     }
 
+    /// Sets the agents of one workspace as the Keeper holds them, and tells the Window they
+    /// changed, as the Keeper does when a session starts or its state changes.
+    pub fn tell_agents(&mut self, agents: WorkspaceAgents) {
+        self.set_agents(vec![agents.clone()]);
+        self.tell(Fact::AgentsChanged(agents));
+    }
+
     /// Sets the terminals every `ListTerminals` is answered with from now on.
     pub fn set_terminals(&self, terminals: Vec<TerminalInfo>) {
         self.standing.lock().terminals = terminals;
@@ -592,6 +600,53 @@ pub fn no_agent_review() -> Review {
         attached: None,
         threads: Vec::new(),
         rounds: Vec::new(),
+    }
+}
+
+/// The id of a session that is this digit thirty-two times.
+pub fn session_id(digit: char) -> SessionId {
+    SessionId::new(digit.to_string().repeat(32))
+}
+
+/// A session of workspace `1` that holds `review`.
+pub fn session(digit: char, title: &str, state: SessionState, review: Option<ReviewId>) -> Session {
+    Session {
+        id: session_id(digit),
+        agent: "claude".to_owned(),
+        title: title.to_owned(),
+        workspace: id('1'),
+        terminal: None,
+        state,
+        turn: None,
+        review,
+    }
+}
+
+/// The agents of workspace `1`: these sessions, in the order they started.
+pub fn agents_of(sessions: Vec<Session>) -> WorkspaceAgents {
+    WorkspaceAgents {
+        workspace: id('1'),
+        shown: sessions.first().map(|session| session.state),
+        sessions,
+    }
+}
+
+/// A review with nothing in it, of this session or of no agent, with this state reviewed.
+pub fn review_with(review: ReviewId, agent: Option<SessionId>, reviewed: Option<String>) -> Review {
+    Review {
+        id: review,
+        agent,
+        reviewed,
+        ..no_agent_review()
+    }
+}
+
+/// The reviews of workspace `1`.
+pub fn reviews_of(reviews: Vec<Review>) -> WorkspaceReviews {
+    WorkspaceReviews {
+        workspace: id('1'),
+        reviews,
+        viewed: Vec::new(),
     }
 }
 

@@ -89,6 +89,8 @@ impl Render for ReviewPane {
         // Above the files, and in the pane's column outside the element that holds the
         // pane's key context: the keys of the tree are not the keys of the rows.
         let tree = self.tree_view(window, cx);
+        let sessions = self.session_bar(cx);
+        let offer = self.offer_bar(cx);
         let theme = cx.theme();
         let pane = div()
             .size_full()
@@ -146,6 +148,8 @@ impl Render for ReviewPane {
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
             return pane
+                .children(sessions)
+                .children(offer)
                 .children(tree)
                 .child(self.with_keys(idle, cx))
                 .children(notice)
@@ -178,7 +182,9 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(tree)
+        pane.children(sessions)
+            .children(offer)
+            .children(tree)
             .children(refused)
             .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
             .children(notice)
@@ -208,6 +214,9 @@ impl ReviewPane {
             .on_action(cx.listener(Self::toggle_viewed))
             .on_action(cx.listener(Self::mark_reviewed))
             .on_action(cx.listener(Self::commit))
+            .on_action(cx.listener(Self::toggle_keep_selection))
+            .on_action(cx.listener(Self::take_offer))
+            .on_action(cx.listener(Self::next_review))
     }
 
     /// What the pane says while it has no row to show.

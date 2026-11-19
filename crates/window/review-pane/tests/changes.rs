@@ -11,13 +11,14 @@ use std::path::PathBuf;
 use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext};
 use yaar_link::{
     ChangedFile, CreditedFile, Fact, FileStatus, History, HistoryEntry, Reply, Request, RequestId,
-    SessionId, TurnId,
+    ReviewId, SessionId, TurnId, WorkspaceReviews,
 };
 use yaar_review_pane::{ChangeShown, PaneRow, ReviewPane};
 
 use common::{
     COMMIT, Stage, commit, drawn, file, id, link_up, no_agent_review, open_window, read_file,
-    repository, review_id, rows, since_main, texts, wait_for_files, wait_until, workspace,
+    repository, review_id, review_with, reviews_of, rows, since_main, texts, wait_for_files,
+    wait_until, workspace,
 };
 
 /// The id of a commit or a state that is this digit forty times.
@@ -94,8 +95,23 @@ fn open_with_history(
     uncommitted: Vec<CreditedFile>,
     cx: &mut TestAppContext,
 ) -> (Stage, VisualTestContext) {
+    open_with_reviews(history, uncommitted, None, review_id(), cx)
+}
+
+/// As [`open_with_history`], for a Keeper that holds these reviews instead of the one
+/// review of no agent, the first of which, `shown`, the pane shows.
+fn open_with_reviews(
+    history: History,
+    uncommitted: Vec<CreditedFile>,
+    reviews: Option<WorkspaceReviews>,
+    shown: ReviewId,
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
     let (models, keeper) = link_up(vec![workspace('1', "feature")], cx);
     keeper.set_uncommitted(uncommitted);
+    if let Some(reviews) = reviews {
+        keeper.set_reviews(reviews);
+    }
     let (mut stage, mut cx) = open_window(models, keeper, cx);
     let changes = since_main(
         vec![commit('b', "Edit the story")],
@@ -122,7 +138,7 @@ fn open_with_history(
         &mut cx,
         "the uncommitted changes of the review shown",
         |cx| {
-            stage.keeper.uncommitted_review() == Some(review_id())
+            stage.keeper.uncommitted_review() == Some(shown.clone())
                 && stage
                     .pane
                     .read_with(cx, |pane, _| pane.uncommitted().is_some())
@@ -737,7 +753,9 @@ fn the_history_is_asked_for_again_at_workspaces_and_at_a_turn_end_and_the_select
         workspace: id('1'),
         session: session(),
         turn: TurnId::new("b".repeat(32)),
-        state: Some(version('6')),
+        // No state was recorded, so the turn selects nothing: what a turn end with a state
+        // selects is the test of the row about it.
+        state: None,
         since: None,
     });
     wait_until(
@@ -1090,4 +1108,323 @@ fn the_rows_take_the_focus_back_when_the_tree_it_was_in_is_gone(cx: &mut TestApp
     // The rows take the focus when the frame without the tree is drawn.
     cx.run_until_parked();
     cx.update(|window, _| assert!(stage.focus.is_focused(window), "the rows have the focus"));
+}
+
+/// The state recorded at the end of the turns that end in the tests below.
+fn s2() -> String {
+    version('6')
+}
+
+fn s3() -> String {
+    version('7')
+}
+
+/// The review of the session of the history, which the reviewer last marked reviewed at
+/// the state of the turn T1.
+fn review_of_the_session() -> ReviewId {
+    ReviewId::new("7".repeat(32))
+}
+
+/// A window whose Keeper holds that review of the session alone, shown by the pane.
+fn open_with_the_review_of_the_session(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let review = review_with(review_of_the_session(), Some(session()), Some(s1()));
+    open_with_reviews(
+        history(),
+        uncommitted(),
+        Some(reviews_of(vec![review])),
+        review_of_the_session(),
+        cx,
+    )
+}
+
+/// What the Keeper tells when a turn of the session ends in workspace `1`.
+fn turn_ended(state: Option<String>, since: Option<String>) -> Fact {
+    Fact::TurnEnded {
+        workspace: id('1'),
+        session: session(),
+        turn: TurnId::new("c".repeat(32)),
+        state,
+        since,
+    }
+}
+
+/// Keeps the app running until the element with this selector is drawn.
+fn wait_drawn(selector: &str, cx: &mut VisualTestContext) {
+    let deadline = std::time::Instant::now() + common::DEADLINE;
+    while drawn(selector, cx).is_none() {
+        cx.run_until_parked();
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waited in vain for {selector} to be drawn"
+        );
+        std::thread::park_timeout(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Answers the comparison of a turn's change and the read of its one file.
+fn show_the_turn(
+    stage: &mut Stage,
+    from: String,
+    to: String,
+    path: &str,
+    cx: &mut VisualTestContext,
+) {
+    compared(
+        stage,
+        from.clone(),
+        Some(to.clone()),
+        vec![file(path, FileStatus::Added)],
+        cx,
+    );
+    read_versions(
+        stage,
+        versions_of(Some(from), path, Some(to), path),
+        "",
+        "x\n",
+        cx,
+    );
+    wait_for_paths(stage, &[path], cx);
+}
+
+/// Proves that nothing else was asked since the last request the test read: a click on
+/// the first commit is the next request the Window sends.
+fn nothing_else_was_asked(stage: &mut Stage, cx: &mut VisualTestContext) {
+    click_entry(Some(0), Modifiers::none(), cx);
+    compared(stage, start(), Some(c1()), Vec::new(), cx);
+    wait_until(cx, "the first commit shown", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown() == ChangeShown::Entries { first: 0, last: 0 }
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn when_a_turn_ends_changes_selects_what_changed_since_the_last_review(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+
+    // The review was marked reviewed at S1; the turn ended at S2.
+    stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
+    wait_until(&mut cx, "the change since the last review", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown()
+                == ChangeShown::Since {
+                    from: Some(s1()),
+                    to: s2(),
+                }
+        })
+    });
+    show_the_turn(&mut stage, s1(), s2(), "turn.txt", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        None,
+        "nothing is offered where the selection is taken"
+    );
+    assert!(drawn("review-offer", &mut cx).is_none());
+
+    // Before the first review there is no state it counts from: the history's start.
+    stage.keeper.tell(turn_ended(Some(s3()), None));
+    wait_until(&mut cx, "the change since the start", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown()
+                == ChangeShown::Since {
+                    from: Some(start()),
+                    to: s3(),
+                }
+        })
+    });
+    show_the_turn(&mut stage, start(), s3(), "later.txt", &mut cx);
+
+    // A turn whose state was not recorded changes no selection: the Keeper's answers for
+    // the history and the uncommitted changes, which that turn end makes the Window ask
+    // for, are the barrier, and the next request is a click's.
+    let asked = (
+        stage.keeper.history_asked(),
+        stage.keeper.uncommitted_asked(),
+    );
+    stage.keeper.tell(turn_ended(None, Some(s1())));
+    wait_until(
+        &mut cx,
+        "the history and the changes asked for again",
+        |_| stage.keeper.history_asked() > asked.0 && stage.keeper.uncommitted_asked() > asked.1,
+    );
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Since {
+            from: Some(start()),
+            to: s3()
+        }
+    );
+    nothing_else_was_asked(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn a_turn_that_ends_in_a_workspace_not_on_screen_selects_nothing(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    stage.keeper.tell(Fact::TurnEnded {
+        workspace: id('2'),
+        session: session(),
+        turn: TurnId::new("c".repeat(32)),
+        state: Some(s2()),
+        since: Some(s1()),
+    });
+    // The barrier: a turn end of the workspace on screen, which asks for its history.
+    let asked = stage.keeper.history_asked();
+    stage.keeper.tell(turn_ended(None, None));
+    wait_until(&mut cx, "the history asked for again", |_| {
+        stage.keeper.history_asked() > asked
+    });
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    nothing_else_was_asked(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_what_changed_since_the_last_review(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    focus_the_rows(&stage, &mut cx);
+    let keeps = |stage: &Stage, cx: &mut VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
+    };
+    assert!(
+        !keeps(&stage, &mut cx),
+        "the setting is off until it is set"
+    );
+    cx.simulate_keystrokes("shift-t");
+    assert!(keeps(&stage, &mut cx));
+
+    // T1 is selected.
+    click_entry(Some(1), Modifiers::none(), &mut cx);
+    show_the_turn(&mut stage, c1(), s1(), "turn.txt", &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
+
+    // A turn ends: nothing changes but the offer, which is drawn before anything else is
+    // done.
+    stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
+    wait_drawn("review-offer", &mut cx);
+    let since = ChangeShown::Since {
+        from: Some(s1()),
+        to: s2(),
+    };
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        Some(since.clone())
+    );
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
+    assert_eq!(paths(&stage.pane, &mut cx), ["turn.txt"]);
+
+    // The next request of the Window is that of the click that follows: the offer asked
+    // for nothing.
+    click_entry(Some(0), Modifiers::none(), &mut cx);
+    compared(&mut stage, start(), Some(c1()), Vec::new(), &mut cx);
+    wait_until(&mut cx, "the first commit shown", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown() == ChangeShown::Entries { first: 0, last: 0 }
+        })
+    });
+    // Selecting takes the offer away.
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        None
+    );
+    assert!(drawn("review-offer", &mut cx).is_none());
+
+    // The offer made again by a second turn end is taken by its key.
+    stage.keeper.tell(turn_ended(Some(s3()), Some(s2())));
+    wait_drawn("review-offer", &mut cx);
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-o");
+    show_the_turn(&mut stage, s2(), s3(), "second.txt", &mut cx);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Since {
+            from: Some(s2()),
+            to: s3()
+        }
+    );
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        None
+    );
+
+    // And by a click on its control.
+    stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
+    wait_drawn("review-offer-take", &mut cx);
+    let at = drawn("review-offer-take", &mut cx)
+        .expect("the control is drawn")
+        .center();
+    cx.simulate_click(at, Modifiers::none());
+    show_the_turn(&mut stage, s1(), s2(), "third.txt", &mut cx);
+    assert_eq!(shown(&stage.pane, &mut cx), since);
+    assert!(drawn("review-offer", &mut cx).is_none());
+
+    // The key sets the pane back to selecting.
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-t");
+    assert!(!keeps(&stage, &mut cx));
+}
+
+#[gpui_kit::test]
+fn the_offer_is_not_made_for_a_turn_whose_state_was_not_recorded(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-t");
+    let asked = stage.keeper.history_asked();
+    stage.keeper.tell(turn_ended(None, Some(s1())));
+    wait_until(&mut cx, "the history asked for again", |_| {
+        stage.keeper.history_asked() > asked
+    });
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        None
+    );
+    assert!(drawn("review-offer", &mut cx).is_none());
+    nothing_else_was_asked(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn the_marks_of_the_reviewer_stay_when_the_history_is_read_again_under_a_selection(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    click_entry(Some(1), Modifiers::none(), &mut cx);
+    show_the_turn(&mut stage, c1(), s1(), "turn.txt", &mut cx);
+    // The cursor is on the turn: up to the first commit, and a mark on it, not shown yet.
+    cx.simulate_keystrokes("k space");
+    let marked = |stage: &Stage, cx: &mut VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| pane.marked_changes())
+    };
+    assert_eq!(marked(&stage, &mut cx), [0]);
+
+    // A commit joins the history, which the pane reads again: the entries it shows are as
+    // they were, and so are the marks.
+    let mut entries = history().entries;
+    entries.push(HistoryEntry::Commit(commit('3', "Third")));
+    let grown = History {
+        entries,
+        ..history()
+    };
+    stage.keeper.set_history(grown.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(&mut cx, "the longer history", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&grown))
+    });
+    assert_eq!(marked(&stage, &mut cx), [0]);
+    assert_eq!(
+        shown(&stage.pane, &mut cx),
+        ChangeShown::Entries { first: 1, last: 1 }
+    );
 }

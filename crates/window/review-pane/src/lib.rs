@@ -51,6 +51,8 @@ mod draw;
 mod saves;
 mod threads;
 mod tree;
+mod turns;
+mod whose;
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -234,6 +236,9 @@ pub fn pane() -> BuildPane {
 /// | [`HistoryDown`], [`HistoryUp`] | `j` and `down`, `k` and `up` | tuicr, the commit selector | nothing |
 /// | [`MarkChange`] | `space` | tuicr, the commit selector marks a commit | nothing |
 /// | [`ShowChange`] | `enter` | tuicr, the commit selector confirms | nothing; the files come by `CompareVersions` and `ReadVersions` |
+/// | [`ToggleKeepSelection`] | `shift-t` | neither | nothing |
+/// | [`TakeOffer`] | `shift-o` | neither | nothing; the files come by `CompareVersions` and `ReadVersions` |
+/// | [`NextReview`] | `shift-a` | neither | nothing; the uncommitted changes of the review come by `GetUncommitted` |
 ///
 /// In the comment box the keys type text; `enter` closes the box and `shift-enter` starts
 /// a new line, as in tuicr. `escape` closes it too and keeps the draft, where tuicr's
@@ -311,6 +316,13 @@ pub fn controls() -> Vec<Control> {
         in_tree("History Up", || Box::new(HistoryUp), "up"),
         in_tree("Mark Change", || Box::new(MarkChange), "space"),
         in_tree("Show Change", || Box::new(ShowChange), "enter"),
+        control(
+            "Keep Selection",
+            || Box::new(ToggleKeepSelection),
+            "shift-t",
+        ),
+        control("Take Offer", || Box::new(TakeOffer), "shift-o"),
+        control("Next Review", || Box::new(NextReview), "shift-a"),
     ]
 }
 
@@ -494,6 +506,11 @@ struct ShownDiff {
 /// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
 /// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
 /// row>`.
+/// The line above the tree that names the agent sessions whose reviews there are carries
+/// `review-session` for the one session there is, or `review-session-<index>` on each of
+/// several, which a click shows the review of; the line that says the pane keeps the
+/// selection at a turn end carries `review-keeps-selection`, what a turn end offered
+/// `review-offer`, and its control `review-offer-take`.
 /// The control that offers to set a base carries `review-offer-base`. The heading of a
 /// file marked viewed carries `review-viewed-<index>`, with the index of its row, and the
 /// comparison line carries `review-reviewed` while the review has a reviewed state.
@@ -549,6 +566,15 @@ pub struct ReviewPane {
     /// Where the versions of the files in `files` come from; none while there are no
     /// files.
     listed: Option<Source>,
+    /// Whether a turn end keeps the selection and offers what changed instead of
+    /// selecting it. It outlasts the workspaces: it is the reviewer's setting.
+    keep: bool,
+    /// The review the reviewer, or a turn end, chose to show; none until one was chosen
+    /// in the workspace on screen.
+    chosen: Option<ReviewId>,
+    /// The sessions of the workspace on screen that a review belongs to, as the agents
+    /// model held them when it last changed.
+    sessions: Vec<Session>,
 }
 
 impl ReviewPane {
@@ -559,8 +585,11 @@ impl ReviewPane {
             pane.follow_history(window, cx);
             pane.follow(cx);
             pane.follow_reviews(window, cx);
+            pane.sessions_changed(cx);
         })
         .detach();
+        cx.observe(&models.agents, |pane, _, cx| pane.sessions_changed(cx))
+            .detach();
         cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
             .detach();
         let mut pane = Self {
@@ -587,7 +616,11 @@ impl ReviewPane {
             notice: None,
             tree: Tree::new(cx),
             listed: None,
+            keep: false,
+            chosen: None,
+            sessions: Vec::new(),
         };
+        pane.sessions_changed(cx);
         pane.follow_history(window, cx);
         pane.follow(cx);
         pane.follow_reviews(window, cx);
@@ -644,10 +677,12 @@ impl ReviewPane {
         self.reviews.as_ref()
     }
 
-    /// The review the pane shows and acts on: the first of [`ReviewPane::reviews`]. In this
-    /// slice a workspace has one review.
+    /// The review the pane shows and acts on: the one the reviewer chose, or a turn end
+    /// chose for them, among [`ReviewPane::reviews`]; until one is chosen, the review of
+    /// no agent while there is one, else that of the first session that runs, else the
+    /// first review.
     pub fn review(&self) -> Option<&Review> {
-        self.reviews.as_ref()?.reviews.first()
+        whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions)
     }
 
     /// The history of the workspace on screen, as the Keeper last answered; none before
@@ -677,14 +712,14 @@ impl ReviewPane {
     /// since the last review, rather than selecting it. Off until the reviewer sets it; it
     /// lasts as long as the window, until the settings keep it.
     pub fn keeps_selection(&self) -> bool {
-        todo!("whether a turn end keeps the selection")
+        self.keep
     }
 
     /// What a turn end offered while the pane kept the selection, drawn under the selector
     /// `review-offer`, with its control under `review-offer-take`; none when nothing is
     /// offered. Taking it, or selecting anything, takes it away.
     pub fn offer(&self) -> Option<&ChangeShown> {
-        todo!("the change a turn end offered")
+        self.tree.offer.as_ref().map(|offer| &offer.change)
     }
 
     /// The agent sessions of the worktree on screen that a review belongs to, in the
@@ -693,12 +728,12 @@ impl ReviewPane {
     /// names it above the review, under the selector `review-session`; with several, it
     /// names each under `review-session-<index>`, which a click shows the review of.
     pub fn sessions(&self) -> Vec<Session> {
-        todo!("the sessions whose reviews the pane can show")
+        self.sessions.clone()
     }
 
     /// The session whose review the pane shows; none for the review of no agent.
     pub fn review_session(&self) -> Option<&SessionId> {
-        todo!("whose review the pane shows")
+        self.review()?.agent.as_ref()
     }
 
     /// Whether the change of `path` that the pane lists under uncommitted changes was made
@@ -938,7 +973,7 @@ impl ReviewPane {
 
     /// Puts what came for the file at `index` in the place of what was shown of it.
     fn loaded(&mut self, index: usize, content: FileContent, cx: &mut Context<Self>) {
-        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
+        let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let file = &mut self.files[index];
         file.content = content;
         let (rows, placed) = file_rows(file, self.layout, review);
@@ -964,7 +999,7 @@ impl ReviewPane {
 
     /// Makes the rows again from what the pane holds.
     pub(crate) fn rebuild(&mut self, cx: &mut Context<Self>) {
-        let review = self.reviews.as_ref().and_then(|r| r.reviews.first());
+        let review = whose::shown(self.reviews.as_ref(), self.chosen.as_ref(), &self.sessions);
         let mut rows = Vec::new();
         // Above the files of the comparison goes what it is a comparison with; the files
         // of an entry of the tree are told by the tree.
@@ -1264,8 +1299,8 @@ mod tests {
     use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
         HISTORY_CONTEXT, HistoryDown, HistoryUp, KEY_CONTEXT, LineDown, LineUp, MarkChange,
-        MarkReviewed, NextThread, PreviousThread, Reply, ShowChange, ToggleLayout, ToggleViewed,
-        controls,
+        MarkReviewed, NextReview, NextThread, PreviousThread, Reply, ShowChange, TakeOffer,
+        ToggleKeepSelection, ToggleLayout, ToggleViewed, controls,
     };
 
     #[test]
@@ -1351,6 +1386,9 @@ mod tests {
                 ("up", HistoryUp.name(), None, Asks::Nothing),
                 ("space", MarkChange.name(), None, Asks::Nothing),
                 ("enter", ShowChange.name(), None, Asks::Nothing),
+                ("shift-t", ToggleKeepSelection.name(), None, Asks::Nothing),
+                ("shift-o", TakeOffer.name(), None, Asks::Nothing),
+                ("shift-a", NextReview.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1402,6 +1440,18 @@ mod tests {
             (
                 Commit.name(),
                 "neither has one; tuicr's `C` adds a file comment",
+            ),
+            (
+                ToggleKeepSelection.name(),
+                "neither has one; no turn ends under the selection in either",
+            ),
+            (
+                TakeOffer.name(),
+                "neither has one; neither offers a change to show",
+            ),
+            (
+                NextReview.name(),
+                "neither has one; neither shows the review of another agent session",
             ),
         ];
         let held = controls();
