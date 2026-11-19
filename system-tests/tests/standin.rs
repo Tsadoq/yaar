@@ -5,6 +5,7 @@
 
 use std::ffi::CString;
 use std::fs;
+use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
@@ -467,28 +468,43 @@ fn make_fifo(at: &Path) {
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0, "mkfifo");
 }
 
-/// Lets the hook that waits on a gate, a FIFO the test made, end: waits for it to be
-/// reading, and closes the gate on it. A run the gate is named to ([`Start::gate`]) lets
-/// the hook end by itself when the test failed, so that no hook is left behind.
+/// The command of a hook that has the gate open, says it is there by making `started`, and
+/// waits for a line on the gate. The hook opens the gate for reading and writing, so that
+/// its open never waits for the test: a FIFO opened for reading alone waits for a writer,
+/// and a writer that comes and goes before the reader has looked loses it, which left the
+/// hook waiting for ever on a loaded machine.
+fn gated(started: &Path, gate: &Path) -> String {
+    format!(
+        "exec 3<> '{}'; : > '{}'; read line <&3",
+        gate.display(),
+        started.display()
+    )
+}
+
+/// Lets the hook that waits on a gate, a FIFO the test made, end: writes the line it waits
+/// for, once the hook has the gate open (the test has seen its `started` file by then). A
+/// run the gate is named to ([`Start::gate`]) lets the hook end by itself when the test
+/// failed, so that no hook is left behind.
 fn open_gate(at: &Path) {
-    drop(
-        fs::OpenOptions::new()
-            .write(true)
-            .open(at)
-            .expect("open the gate"),
-    );
+    let mut gate = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(at)
+        .expect("open the gate: the hook has it open already");
+    gate.write_all(b"\n").expect("write to the gate");
 }
 
 /// Ends, for a test that failed, what a hook started: the hook waiting at a gate, and the
 /// process a file names.
 fn free_hooks(gates: &[PathBuf], sleepers: &[PathBuf]) {
     for gate in gates {
-        // Opening without waiting fails until the hook is reading: try until it does.
+        // Opening without waiting fails until the hook has the gate open: try until it does.
         let _ = wait_until(Duration::from_secs(3), || {
             fs::OpenOptions::new()
                 .write(true)
                 .custom_flags(libc::O_NONBLOCK)
                 .open(gate)
+                .and_then(|mut gate| gate.write_all(b"\n"))
                 .is_ok()
         });
     }
@@ -1030,11 +1046,7 @@ fn esc_read_between_the_steps_of_a_turn_ends_it_with_the_mark_and_the_script_goe
     make_fifo(&gate);
     // The first read tool waits at its gate, and the key is typed meanwhile: the program
     // reads it when that step is over, between two steps.
-    let block = format!(
-        ": > '{}'; cat '{}' > /dev/null",
-        started.display(),
-        gate.display()
-    );
+    let block = gated(&started, &gate);
     let script = Script(vec![
         Step::Turn,
         Step::Read(path("a.txt")),
@@ -1140,12 +1152,7 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
     let (started, done) = (root.join("started"), root.join("done"));
     let gate = root.join("gate");
     make_fifo(&gate);
-    let hook = format!(
-        ": > '{}'; cat '{}' > /dev/null; : > '{}'",
-        started.display(),
-        gate.display(),
-        done.display()
-    );
+    let hook = format!("{}; : > '{}'", gated(&started, &gate), done.display());
     let mut run = Start::new(
         place,
         "claude",
