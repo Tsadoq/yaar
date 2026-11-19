@@ -965,24 +965,33 @@ fn branch_named(text: &str, refs: &Refs) -> Option<String> {
 /// that, with the links of the folders that exist resolved (macOS keeps `/tmp` behind a
 /// link). None for a path outside.
 fn relative_to(root: &Path, path: &Path) -> Option<PathBuf> {
-    if path.is_relative() {
-        return (!leads_out(path)).then(|| path.to_owned());
-    }
-    if let Ok(inside) = path.strip_prefix(root) {
-        return (!leads_out(inside)).then(|| inside.to_owned());
-    }
-    // The file may be gone since it was written: resolve its nearest folder that is not.
-    let mut rest = Vec::new();
-    let mut folder = path;
-    let resolved = loop {
-        if let Ok(resolved) = folder.canonicalize() {
-            break resolved;
-        }
-        rest.push(folder.file_name()?);
-        folder = folder.parent()?;
+    let inside = if path.is_relative() {
+        path.to_owned()
+    } else if let Ok(inside) = path.strip_prefix(root) {
+        inside.to_owned()
+    } else {
+        // The file may be gone since it was written: resolve its nearest folder that is not.
+        let mut rest = Vec::new();
+        let mut folder = path;
+        let resolved = loop {
+            if let Ok(resolved) = folder.canonicalize() {
+                break resolved;
+            }
+            rest.push(folder.file_name()?);
+            folder = folder.parent()?;
+        };
+        resolved
+            .strip_prefix(root)
+            .ok()?
+            .iter()
+            .chain(rest.into_iter().rev())
+            .collect()
     };
-    let inside = resolved.strip_prefix(root).ok()?;
-    let inside: PathBuf = inside.iter().chain(rest.into_iter().rev()).collect();
+    // The ledger holds the path as the watcher and git give it: no `.` in it.
+    let inside: PathBuf = inside
+        .components()
+        .filter(|part| !matches!(part, Component::CurDir))
+        .collect();
     (!leads_out(&inside)).then_some(inside)
 }
 
