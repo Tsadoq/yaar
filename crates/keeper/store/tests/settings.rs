@@ -219,14 +219,19 @@ fn every_setting_is_still_set_after_the_process_that_set_it_is_killed() {
     // in the one place of the old.
     set_and_kill(&scratch.file(), "2");
     let store = Store::open(&scratch.file()).expect("open after the second kill");
-    let places: Vec<_> = store
-        .settings()
-        .expect("settings")
-        .into_iter()
-        .filter(|setting| matches!(setting, Setting::TerminalPlace(_)))
-        .collect();
-    assert_eq!(places, [Setting::TerminalPlace(TerminalPlace::Left)]);
-    assert_eq!(store.settings().expect("settings").len(), 5);
+    assert_eq!(
+        store.settings().expect("settings"),
+        [
+            Setting::TurnEnd(TurnEndSelects::KeepSelection),
+            Setting::StopAfter { seconds: 90 },
+            Setting::Theme(Theme::Dark),
+            Setting::TerminalPlace(TerminalPlace::Left),
+            Setting::FlowForm {
+                workspace: w1(),
+                form: FlowForm::LiveDiff,
+            },
+        ]
+    );
 }
 
 #[test]
@@ -344,6 +349,16 @@ fn the_form_of_flow_of_a_workspace_the_store_does_not_hold_is_refused_with_its_i
     }));
     assert!(sentence.contains("w-99"), "{sentence}");
     assert_eq!(store.settings().expect("settings"), []);
+    // Nothing was written for it, not even a row that `settings` hides while no such
+    // workspace is kept: once a workspace of that id is kept, no form comes with it.
+    store
+        .put_workspace(
+            &WorkspaceId::new("w-99"),
+            &RepositoryId::new("r-1"),
+            Path::new("/r/w-99"),
+        )
+        .expect("put workspace");
+    assert_eq!(store.settings().expect("settings"), []);
     // The refusal leaves the store as it was: a setting is still kept after it.
     store
         .set_setting(&Setting::Theme(Theme::Dark))
@@ -384,6 +399,8 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
         ("turn_end", "sometimes"),
         ("stop_after", "soon"),
         ("stop_after", "-5"),
+        // Parses as a number, but is not what the Store writes.
+        ("stop_after", "+90"),
         ("stop_after", "4294967296"),
         ("terminal_place", "above"),
         ("colour", "red"),
@@ -419,4 +436,20 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
             "{workspace} {name} = {value} is left out"
         );
     }
+    // A value of the theme this build does not know takes the place of the known theme's
+    // row, so the theme holds its default and only the form of Flow is listed.
+    connection
+        .execute(
+            "UPDATE setting SET value = 'sepia' WHERE name = 'theme'",
+            [],
+        )
+        .expect("write the row");
+    assert_eq!(
+        store.settings().expect("settings"),
+        [Setting::FlowForm {
+            workspace: w2(),
+            form: FlowForm::Timeline,
+        }],
+        "theme = sepia is left out"
+    );
 }
