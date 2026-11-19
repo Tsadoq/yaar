@@ -17,14 +17,15 @@ impl Review {
     }
 
     /// Whether the round shows as sent: it was sent and its agent reported no edit since.
-    /// False for a round the review does not hold, and for one a newer round overtook: an
-    /// edit after the newer send ends only the newer round's wait, so the older one is
-    /// never left showing as sent for good.
+    /// False for a round the review does not hold. An edit is kept on the newest round
+    /// only, and one reported since a round's send is one kept on that round or a later
+    /// one, so a round is shown as sent while no round from it on is edited.
     pub fn shows_sent(&self, round: u32) -> bool {
-        self.record
-            .rounds
-            .last()
-            .is_some_and(|newest| newest.number == round && !newest.edited)
+        let rounds = &self.record.rounds;
+        let Some(at) = rounds.iter().position(|held| held.number == round) else {
+            return false;
+        };
+        rounds[at..].iter().all(|held| !held.edited)
     }
 }
 
@@ -107,7 +108,8 @@ mod tests {
     }
 
     #[test]
-    fn a_round_the_agent_never_edited_after_is_no_longer_shown_as_sent_once_a_newer_one_is() {
+    fn a_round_the_agent_never_edited_after_still_shows_as_sent_when_a_newer_one_is_sent_and_ends_at_the_next_edit()
+     {
         let mut review = review();
         draft(&mut review, 1);
         review
@@ -118,9 +120,11 @@ mod tests {
             .send(Scope::Everything, "S2", SentBy::Delivered)
             .expect("send");
 
-        // The older round was overtaken by the newer send: after the agent's edit neither
-        // is left showing as sent.
-        assert!(!review.shows_sent(1));
+        // No edit was reported yet: both rounds still show as sent.
+        assert!(review.shows_sent(1));
+        assert!(review.shows_sent(2));
+
+        // The edit comes after both sends: it is the first one since either.
         assert_eq!(review.agent_edited(), Some(2));
         assert!(!review.shows_sent(1));
         assert!(!review.shows_sent(2));

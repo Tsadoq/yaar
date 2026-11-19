@@ -41,7 +41,9 @@ impl Reviews {
     /// that differ between the state recorded at that send and the state of `worktree`,
     /// the worktree of the review's workspace, recorded now, renames paired as git pairs
     /// them. Refused with [`crate::ReviewError::UnknownRound`] for a round the review does
-    /// not hold or whose state is not recorded yet.
+    /// not hold or whose state is not recorded yet. The call records a state of the
+    /// worktree, so, as at any recorded state, the threads follow the code to it and their
+    /// placements are kept.
     pub fn changed_since_round(
         &self,
         worktree: &Worktree,
