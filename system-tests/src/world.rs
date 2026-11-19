@@ -282,7 +282,16 @@ impl Drop for World {
             let _ = keeper.kill();
             let _ = keeper.wait();
         }
-        let _ = fs::remove_dir_all(&self.root);
+        // A process the Keeper started, as the user's git of a commit whose Keeper was
+        // killed, may still be finishing and writing into the folder: it is removed
+        // again until it is gone, which is within moments.
+        let deadline = Instant::now() + DEADLINE;
+        while fs::remove_dir_all(&self.root).is_err()
+            && self.root.exists()
+            && Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
