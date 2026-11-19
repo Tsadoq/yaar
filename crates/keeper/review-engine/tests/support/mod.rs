@@ -126,6 +126,9 @@ pub fn git(folder: &Path, args: &[&str]) -> String {
 pub fn init(folder: &Path) {
     std::fs::create_dir_all(folder).expect("make the folder");
     git(folder, &["init", "--quiet", "-b", "main"]);
+    // Git on Linux guesses no identity, so the repository holds its own.
+    git(folder, &["config", "user.name", "A Test"]);
+    git(folder, &["config", "user.email", "test@example.invalid"]);
 }
 
 /// Writes a file of the worktree, making the folders above it.

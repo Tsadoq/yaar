@@ -100,6 +100,19 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     };
     put_all(&store, &[session(1, 1), ended.clone(), elsewhere.clone()]);
 
+    // The calls that change a session: one ends, one that ended runs again in another
+    // terminal, and a review of no agent is given to a session.
+    put_all(&store, &[session(4, 1), session(5, 1)]);
+    store
+        .set_ended(&sid(4), EndedBy::KeeperStopped)
+        .expect("end");
+    store.set_ended(&sid(5), EndedBy::ProcessGone).expect("end");
+    store.set_running(&sid(5), Some("t50")).expect("run again");
+    store.put_review(&review(20, 1, None)).expect("put review");
+    store
+        .set_review_agent(&ReviewId::new(id(20)), Some(&sid(4)))
+        .expect("give the review");
+
     store.put_turn(&turn(10, 1, 1)).expect("put turn");
     store
         .end_turn(&tid(10), TurnEndRecord::Finished, Some(&"a".repeat(40)))
@@ -127,6 +140,24 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     assert_eq!(session_of(&store, 1), session(1, 1));
     assert_eq!(session_of(&store, 2), ended);
     assert_eq!(session_of(&store, 3), elsewhere);
+    // The session that ended as 7 makes the next end 8.
+    assert_eq!(
+        session_of(&store, 4),
+        SessionRecord {
+            running: false,
+            ended: Some(8),
+            ended_by: Some(EndedBy::KeeperStopped),
+            ..session(4, 1)
+        }
+    );
+    assert_eq!(
+        session_of(&store, 5),
+        SessionRecord {
+            terminal: Some("t50".to_owned()),
+            ..session(5, 1)
+        }
+    );
+    assert_eq!(agent_of(&store, 20), Some(id(4)));
     assert_eq!(
         store.session(&sid(99)).expect("read"),
         None,
