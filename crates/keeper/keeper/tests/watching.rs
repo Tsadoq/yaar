@@ -1,0 +1,447 @@
+//! Component tests: the worktrees the Keeper watches for the Windows, through the surface a
+//! Window uses, with real repositories the tests make, the system's own notices of
+//! changed files, and a real database beneath.
+//!
+//! The Keeper runs git as its user does, with the environment of its process. Each test
+//! therefore cleans that environment as its first statement, and these tests are run by
+//! `cargo nextest`, which gives each test a process of its own.
+
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
+
+use yaar_keeper::{Exit, Options, run};
+use yaar_link::{
+    Fact, Hello, Message, Refusal, Reply, Request, RequestId, WorkspaceId, handshake, read_message,
+    write_message,
+};
+
+/// How long a test waits for the Keeper before it fails.
+const DEADLINE: Duration = Duration::from_secs(20);
+
+/// How long without a fact is taken to mean that none is on its way: far more than the
+/// system takes to tell of a change of a file (about 12 ms on macOS) and than the Keeper
+/// waits between two facts of one workspace (250 ms).
+const QUIET: Duration = Duration::from_millis(1200);
+
+/// A folder of the test's own with a short path, removed when the test ends.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    /// Makes the folder and cleans the environment of this process for git: no
+    /// configuration of the user or of the system, a fixed author and date, an empty
+    /// home. It has to be the first statement of a test.
+    fn new() -> Scratch {
+        static NEXT: AtomicU32 = AtomicU32::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
+        let root = Path::new("/tmp")
+            .canonicalize()
+            .expect("the temporary folder")
+            .join(format!("yaar-keeper-watching-{}-{n}", std::process::id()));
+        for folder in ["home", "tmp"] {
+            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
+        }
+        let settings = [
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+            ("GIT_AUTHOR_NAME", "A Test"),
+            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
+            ("GIT_COMMITTER_NAME", "A Test"),
+            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
+        ];
+        // SAFETY: changing the environment is sound only while no other thread reads it,
+        // as a thread that starts a process does. This runs as the first statement of a
+        // test, and these tests are run by `cargo nextest`, which gives each test a
+        // process of its own: no other thread exists yet.
+        unsafe {
+            for (name, value) in settings {
+                std::env::set_var(name, value);
+            }
+            std::env::set_var("HOME", root.join("home"));
+            std::env::set_var("TMPDIR", root.join("tmp"));
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+                "GIT_CONFIG",
+            ] {
+                std::env::remove_var(name);
+            }
+        }
+        Scratch(root)
+    }
+
+    fn socket(&self) -> PathBuf {
+        self.0.join("k.sock")
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        self.0.join("data")
+    }
+
+    /// Starts the Keeper's library on a thread of this test.
+    fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
+        let options = Options {
+            socket: self.socket(),
+            linger: Duration::from_secs(60),
+            app_version: "test-keeper".to_owned(),
+            data_dir: self.data_dir(),
+            companions: None,
+        };
+        std::thread::spawn(move || run(options))
+    }
+
+    /// Attaches as a Window does, waiting for the Keeper to listen.
+    fn window(&self) -> Window {
+        let mine = Hello::for_this_process("test-window");
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            if let Ok(mut stream) = yaar_link::connect(&self.socket())
+                && handshake(&mut stream, &mine).is_ok()
+            {
+                stream
+                    .set_read_timeout(Some(DEADLINE))
+                    .expect("set the deadline of a read");
+                return Window { stream, next_id: 0 };
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no Keeper at {:?}",
+                self.socket()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// A repository in the folder `name` with one commit on `main`.
+    fn repository(&self, name: &str) -> PathBuf {
+        let folder = self.0.join(name);
+        std::fs::create_dir_all(&folder).expect("make the folder");
+        git(&folder, &["init", "--quiet", "-b", "main"]);
+        std::fs::write(folder.join("a.txt"), "one\n").expect("write a file");
+        git(&folder, &["add", "--all"]);
+        git(&folder, &["commit", "--quiet", "-m", "first"]);
+        folder
+    }
+
+    /// How many states of `workspace` the Keeper has recorded, read from the state store
+    /// as git does.
+    fn states_of(&self, workspace: &WorkspaceId) -> usize {
+        let store = self
+            .data_dir()
+            .join("states")
+            .join(format!("{workspace}.git"));
+        if !store.exists() {
+            return 0;
+        }
+        let output = Command::new("git")
+            .arg("--git-dir")
+            .arg(&store)
+            .args(["for-each-ref", "refs/yaar/states"])
+            .stdin(Stdio::null())
+            .output()
+            .expect("start git");
+        String::from_utf8_lossy(&output.stdout).lines().count()
+    }
+
+    /// Waits until the Keeper has recorded at least one state of `workspace`: it does so
+    /// after its watcher runs, so no change made after this is missed.
+    fn wait_until_watched(&self, workspace: &WorkspaceId) {
+        let deadline = Instant::now() + DEADLINE;
+        while self.states_of(workspace) == 0 {
+            assert!(
+                Instant::now() < deadline,
+                "no state of {workspace} was recorded"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn git(folder: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(folder)
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .expect("start git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+/// One end of the Link, as a Window holds it.
+struct Window {
+    stream: UnixStream,
+    next_id: u32,
+}
+
+impl Window {
+    fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
+        let id = RequestId(self.next_id);
+        self.next_id += 1;
+        write_message(&mut self.stream, &Message::Request { id, request }).expect("send");
+        loop {
+            match read_message(&mut self.stream).expect("a frame from the Keeper") {
+                Message::Reply { to, reply } if to == id => return reply,
+                Message::Fact(_) => {}
+                other => panic!("not the reply to {id:?}: {other:?}"),
+            }
+        }
+    }
+
+    /// Opens the folder as a workspace.
+    fn open(&mut self, folder: &Path) -> WorkspaceId {
+        let opened = self.ask(Request::OpenFolder {
+            path: folder.to_owned(),
+        });
+        let Ok(Reply::Opened { workspace, .. }) = opened else {
+            panic!("not opened: {opened:?}");
+        };
+        workspace
+    }
+
+    /// Tells the Keeper which workspace this Window shows.
+    fn show(&mut self, workspace: Option<&WorkspaceId>) -> Result<Reply, Refusal> {
+        self.ask(Request::ShowWorkspace {
+            workspace: workspace.cloned(),
+        })
+    }
+
+    /// The next fact, waiting up to `limit` for it: none when nothing comes by then.
+    fn fact_within(&mut self, limit: Duration) -> Option<Fact> {
+        self.stream
+            .set_read_timeout(Some(limit))
+            .expect("set the deadline of a read");
+        let read = read_message(&mut self.stream);
+        self.stream
+            .set_read_timeout(Some(DEADLINE))
+            .expect("set the deadline of a read");
+        match read {
+            Ok(Message::Fact(fact)) => Some(fact),
+            Ok(other) => panic!("waiting for a fact, got {other:?}"),
+            Err(yaar_link::LinkError::Io(e))
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                None
+            }
+            Err(e) => panic!("no fact: {e}"),
+        }
+    }
+
+    /// Reads facts until one that `wanted` accepts comes, and returns it.
+    fn wait_for(&mut self, wanted: impl Fn(&Fact) -> bool) -> Fact {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match self.fact_within(left.max(Duration::from_millis(1))) {
+                Some(fact) if wanted(&fact) => return fact,
+                Some(_) => {}
+                None => panic!("the fact did not come"),
+            }
+        }
+    }
+
+    /// Every fact that comes until none has come for [`QUIET`], each with when it came.
+    fn facts_until_quiet(&mut self) -> Vec<(Instant, Fact)> {
+        let mut facts = Vec::new();
+        while let Some(fact) = self.fact_within(QUIET) {
+            facts.push((Instant::now(), fact));
+        }
+        facts
+    }
+
+    fn stop(mut self, keeper: JoinHandle<std::io::Result<Exit>>) {
+        write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
+        assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
+    }
+}
+
+fn changes_of(workspace: &WorkspaceId) -> impl Fn(&Fact) -> bool + '_ {
+    move |fact| matches!(fact, Fact::ChangesChanged { workspace: told } if told == workspace)
+}
+
+#[test]
+fn a_workspace_the_keeper_does_not_hold_cannot_be_shown_but_none_can() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+
+    let unknown = WorkspaceId::new("f".repeat(32));
+    assert_eq!(
+        window.show(Some(&unknown)),
+        Err(Refusal::UnknownWorkspace { workspace: unknown })
+    );
+    assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
+    assert_eq!(window.show(None), Ok(Reply::Done));
+    window.stop(keeper);
+}
+
+#[test]
+fn a_change_of_a_file_of_a_shown_worktree_is_told_to_every_window_and_the_first_watching_takes_a_state()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut shows = scratch.window();
+    let workspace = shows.open(&repo);
+    assert_eq!(scratch.states_of(&workspace), 0, "nothing was watched yet");
+
+    assert_eq!(shows.show(Some(&workspace)), Ok(Reply::Done));
+    scratch.wait_until_watched(&workspace);
+    // A Window that shows nothing is told too: facts go to every Window.
+    let mut other = scratch.window();
+    std::fs::write(repo.join("a.txt"), "one\ntwo\n").expect("change a file");
+    other.wait_for(changes_of(&workspace));
+    shows.wait_for(changes_of(&workspace));
+
+    // A second Window that shows it does not take another state: the worktree was
+    // watched already.
+    assert_eq!(other.show(Some(&workspace)), Ok(Reply::Done));
+    assert_eq!(scratch.states_of(&workspace), 1);
+    shows.stop(keeper);
+}
+
+#[test]
+fn a_change_of_what_is_checked_out_is_told_with_the_list_of_workspaces_as_it_is_then() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
+    scratch.wait_until_watched(&workspace);
+
+    // The list is told at the first change git makes, and again at the last: the one that
+    // names the new branch is the one wanted.
+    git(&repo, &["checkout", "--quiet", "-b", "other"]);
+    let on_other = |found: &yaar_link::Workspace| {
+        found.id == workspace && found.head == Some(yaar_link::Head::Branch("other".to_owned()))
+    };
+    window.wait_for(|fact| {
+        matches!(fact, Fact::Workspaces(list)
+            if list.iter().flat_map(|repository| &repository.workspaces).any(on_other))
+    });
+    window.stop(keeper);
+}
+
+#[test]
+fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_each_calm_time_with_the_last_after_the_last_write()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    assert_eq!(window.show(Some(&workspace)), Ok(Reply::Done));
+    scratch.wait_until_watched(&workspace);
+    // The facts the opening and the first watching told are not those of the writes.
+    window.facts_until_quiet();
+
+    // Sixty writes in about 1.2 s: the pace of an agent saving, which is the input here.
+    // They are made on a thread of their own, so that the facts are read as they come.
+    let writing = {
+        let file = repo.join("a.txt");
+        std::thread::spawn(move || {
+            for n in 0..60 {
+                std::fs::write(&file, format!("{n}\n")).expect("write a file");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Instant::now()
+        })
+    };
+    let told: Vec<Instant> = window
+        .facts_until_quiet()
+        .into_iter()
+        .filter(|(_, fact)| changes_of(&workspace)(fact))
+        .map(|(at, _)| at)
+        .collect();
+    let last_write = writing.join().expect("the writes");
+
+    // A fact for each write would be sixty; one for each calm time is five or six at
+    // most, and there is one at least for the start and one for the rest.
+    assert!(
+        (2..=8).contains(&told.len()),
+        "{} facts for sixty writes",
+        told.len()
+    );
+    for pair in told.windows(2) {
+        let gap = pair[1] - pair[0];
+        assert!(
+            gap >= Duration::from_millis(150),
+            "two facts {gap:?} apart, with a calm time of 250 ms"
+        );
+    }
+    assert!(
+        told.last().is_some_and(|last| *last >= last_write),
+        "no fact came after the last write"
+    );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_worktree_is_no_longer_watched_when_the_window_that_showed_it_goes_or_shows_another() {
+    let scratch = Scratch::new();
+    let one = scratch.repository("one");
+    let two = scratch.repository("two");
+    let three = scratch.repository("three");
+    let keeper = scratch.keeper();
+    let mut shows_two = scratch.window();
+    let first = shows_two.open(&one);
+    let second = shows_two.open(&two);
+    let third = shows_two.open(&three);
+    assert_eq!(shows_two.show(Some(&second)), Ok(Reply::Done));
+    scratch.wait_until_watched(&second);
+
+    // `goes` shows the first and then goes; `moves` shows the third and then the second.
+    let mut goes = scratch.window();
+    assert_eq!(goes.show(Some(&first)), Ok(Reply::Done));
+    let mut moves = scratch.window();
+    assert_eq!(moves.show(Some(&third)), Ok(Reply::Done));
+    scratch.wait_until_watched(&first);
+    scratch.wait_until_watched(&third);
+    drop(goes);
+    assert_eq!(moves.show(Some(&second)), Ok(Reply::Done));
+    // The first is let go once its Window is gone, which the Keeper sees on its own
+    // thread: what comes of changing it is read after a change of the second, which is
+    // still watched, has come and a quiet time has passed.
+    shows_two.facts_until_quiet();
+
+    std::fs::write(one.join("a.txt"), "one\nchanged\n").expect("change a file");
+    std::fs::write(three.join("a.txt"), "one\nchanged\n").expect("change a file");
+    std::fs::write(two.join("a.txt"), "one\nchanged\n").expect("change a file");
+    let told = shows_two.facts_until_quiet();
+    assert!(
+        told.iter().any(|(_, fact)| changes_of(&second)(fact)),
+        "the change of the worktree that is shown was not told: {told:?}"
+    );
+    for (_, fact) in &told {
+        assert!(
+            !changes_of(&first)(fact) && !changes_of(&third)(fact),
+            "a worktree that nothing shows was told: {fact:?}"
+        );
+    }
+    shows_two.stop(keeper);
+}
