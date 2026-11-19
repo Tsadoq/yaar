@@ -504,7 +504,10 @@ fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session
 #[test]
 fn an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writes_nothing_to_its_terminal_and_the_keys_of_the_answer_turn_it_off()
  {
-    let asking = script(&["turn", "ask p.txt x", "end", "turn", "exit"]);
+    // The hold after the answer keeps the turn open, so that the state the answer gives
+    // can be seen on its own, apart from the state the turn's end gives. It waits for a
+    // file beside the repository, which the test makes once it has seen that state.
+    let asking = script(&["turn", "ask p.txt x", "hold ../go", "end", "turn", "exit"]);
     let (world, repo) = World::with_standin("default", &asking);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
@@ -522,15 +525,15 @@ fn an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writ
     assert_eq!(shown.shown, Some(SessionState::WaitsForPermission));
     assert!(!repo.path().join("p.txt").exists());
 
-    // The answer, as keys. It turns the state off.
+    // The answer, as keys. It turns the state off while the turn is still open.
     client.type_into(&terminal, b"y");
-    let off = client.wait_for_agents(&workspace, DEADLINE, |agents| {
-        matches!(
-            agents.shown,
-            Some(SessionState::Works | SessionState::Unreviewed)
-        )
+    client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents.shown == Some(SessionState::Works)
     });
-    assert_ne!(off.shown, Some(SessionState::WaitsForPermission));
+    let working = client.agents();
+    let working = working.iter().find(|a| a.workspace == workspace).unwrap();
+    assert_eq!(working.shown, Some(SessionState::Works), "{working:?}");
+    fs::write(repo.path().join("../go"), "").expect("let the turn go on");
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
         agents.shown == Some(SessionState::Unreviewed)
     });
@@ -830,15 +833,21 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
     let path = in_shell.get("PATH").expect("a search path");
     let folders: Vec<&str> = path.split(':').collect();
     assert_eq!(Path::new(folders[0]), agents, "{path}");
-    // Every folder of the user's search path is still on it.
-    for folder in users
-        .get("PATH")
-        .map(String::as_str)
-        .unwrap_or("")
-        .split(':')
-    {
-        assert!(folders.contains(&folder), "{folder} is not in {path}");
-    }
+    // The folders are those a login shell of the world gets without the app: whatever the
+    // system's profile adds to the user's own is not the app's, but a folder the app puts
+    // on the path is. Only the folder of the agents is first, as the app puts it.
+    let login = world
+        .command(Path::new("/bin/sh"))
+        .args(["-l", "-c", "printf %s \"$PATH\""])
+        .output()
+        .expect("a login shell of the world");
+    let baseline = String::from_utf8(login.stdout).expect("a search path");
+    let expected: std::collections::BTreeSet<&str> = baseline.split(':').collect();
+    let found: std::collections::BTreeSet<&str> = folders.iter().copied().collect();
+    assert_eq!(
+        found, expected,
+        "the shell's path is {path}, a login shell's {baseline}"
+    );
     let allowed = [
         // What the world's own Keeper was told, and what macOS's libc gives every program.
         "YAAR_KEEPER_LINGER_MS",
@@ -860,7 +869,9 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         .filter(|name| !users.contains_key(*name) && !allowed.contains(&name.as_str()))
         .collect();
     assert!(extra.is_empty(), "variables nothing explains: {extra:?}");
-    // No editor connection, and nothing of another terminal.
+    // No editor connection, and nothing of another terminal. The world's Keeper starts with
+    // none of these, so this shows only that none is here; DOCK-02 shows that the Dock
+    // leaves them out when the Keeper has them.
     for name in [
         "CLAUDE_CODE_SSE_PORT",
         "ENABLE_IDE_INTEGRATION",
