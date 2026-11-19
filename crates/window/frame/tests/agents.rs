@@ -7,11 +7,13 @@
 
 mod common;
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::{AppContext, Modifiers, TestAppContext, VisualTestContext, px, size};
 use yaar_frame::{KeeperLink, LinkStatus, Models};
 use yaar_link::{
-    Ending, Fact, Hello, PROTOCOL_VERSION, Program, Refusal, Repository, Request, Session,
-    SessionId, SessionState, TerminalId, TerminalInfo, WorkspaceAgents, WorkspaceId,
+    Ending, Fact, Hello, Message, PROTOCOL_VERSION, Program, Refusal, Repository, Request, Session,
+    SessionId, SessionState, TerminalId, TerminalInfo, WorkspaceAgents, WorkspaceId, read_message,
 };
 
 use common::{KeeperEnd, drawn, id, open_frame, repository, wait_until, workspace};
@@ -496,18 +498,30 @@ fn a_keeper_of_another_protocol_is_told_nothing_of_the_workspace_on_screen_but_t
 
 #[gpui_kit::test]
 fn the_stop_frame_reaches_the_keeper_after_everything_given_before_it(cx: &mut TestAppContext) {
+    // So much input that the writing thread is certainly still busy with it when the stop
+    // is given: a stop that did not wait its turn would overtake the input, or cut into a
+    // frame being written.
+    const SIZE: usize = 8 * 1024 * 1024;
     let link = cx.new(|_| KeeperLink::new());
     let mut keeper = KeeperEnd::attach(&link, cx);
     let terminal = terminal_id('t');
+    let typed: Vec<u8> = (0..SIZE).map(|at| (at % 251) as u8).collect();
 
     let asked = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
-    link.update(cx, |link, _| link.send_input(&terminal, b"x".to_vec()));
+    link.update(cx, |link, _| link.send_input(&terminal, typed.clone()));
     link.update(cx, |link, _| link.stop_everything());
 
     assert_eq!(keeper.request(cx).1, Request::ListWorkspaces);
-    assert_eq!(keeper.input(cx), (terminal, b"x".to_vec()));
-    keeper.shutdown(cx);
-    assert_eq!(keeper.stops_heard(), 1);
+    wait_until(cx, "the stop frame", |_| keeper.stops_heard() == 1);
+    // An input frame is counted before the test can read it, and so is the stop frame:
+    // everything given before the stop was read before it.
+    let read: Vec<u8> = keeper.inputs(&terminal).concat();
+    assert_eq!(
+        read.len(),
+        SIZE,
+        "the stop frame came before the input ended"
+    );
+    assert!(read == typed, "the input arrived changed or out of order");
     drop(asked);
 }
 
@@ -529,4 +543,69 @@ fn a_stop_without_a_keeper_to_reach_is_a_stop_of_nothing(cx: &mut TestAppContext
     link.read_with(cx, |link, _| {
         assert!(matches!(link.status(), LinkStatus::Lost(_)))
     });
+}
+
+#[gpui_kit::test]
+fn the_stop_is_written_before_the_quit_goes_on_and_a_keeper_that_takes_nothing_holds_it_up_only_for_the_time_given(
+    cx: &mut TestAppContext,
+) {
+    // A Keeper that reads: the call returns once the frame has left, so the frame is
+    // whole at the Keeper's end by then, with no waiting for it.
+    let link = cx.new(|_| KeeperLink::new());
+    let mut reading = KeeperEnd::attach_deaf(&link, cx);
+    let left = link.update(cx, |link, _| {
+        link.stop_everything_and_wait(Duration::from_secs(5))
+    });
+    assert!(left, "the frame left");
+    reading.set_nonblocking(true).expect("a nonblocking end");
+    match read_message(&mut reading) {
+        Ok(Message::Shutdown) => {}
+        Ok(other) => panic!("the Keeper read {other:?}, and the stop frame was expected"),
+        Err(error) => panic!("the call returned before the frame was at the Keeper: {error}"),
+    }
+
+    // With no connection there is nothing to wait for.
+    let alone = cx.new(|_| KeeperLink::new());
+    let started = Instant::now();
+    assert!(!alone.update(cx, |link, _| {
+        link.stop_everything_and_wait(Duration::from_secs(5))
+    }));
+    assert!(started.elapsed() < Duration::from_secs(2));
+
+    // A Keeper that went before the frame was written: the writing thread reaches the
+    // frame and cannot write it. The call says so, instead of saying it left. The link
+    // has not yet taken in that the Keeper is gone: nothing ran the app since.
+    let link = cx.new(|_| KeeperLink::new());
+    let gone = KeeperEnd::attach_deaf(&link, cx);
+    drop(gone);
+    assert!(
+        !link.update(cx, |link, _| {
+            link.stop_everything_and_wait(Duration::from_secs(5))
+        }),
+        "the frame cannot have left for a Keeper that is gone"
+    );
+
+    // A Keeper that takes nothing: its buffer fills, the writing thread waits for room, and
+    // the call gives up after the time it was given instead of holding the quit up.
+    let link = cx.new(|_| KeeperLink::new());
+    let deaf = KeeperEnd::attach_deaf(&link, cx);
+    let terminal = terminal_id('t');
+    link.update(cx, |link, _| {
+        link.send_input(&terminal, vec![0; 16 * 1024 * 1024])
+    });
+    let started = Instant::now();
+    let left = link.update(cx, |link, _| {
+        link.stop_everything_and_wait(Duration::from_millis(300))
+    });
+    let waited = started.elapsed();
+    assert!(
+        !left,
+        "the frame cannot have left a Keeper that reads nothing"
+    );
+    assert!(
+        waited >= Duration::from_millis(300) && waited < Duration::from_secs(3),
+        "waited {waited:?}"
+    );
+    // Dropping the Keeper's end lets the writing thread go.
+    drop(deaf);
 }
