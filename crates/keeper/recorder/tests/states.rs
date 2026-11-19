@@ -1361,6 +1361,31 @@ fn a_path_whose_folder_became_a_file_when_it_fails_to_be_staged_is_left_out_too(
     );
 }
 
+// The same where the path is there again by the time it is looked at: a file that was
+// deleted and made anew while git failed to stage it, which a look at the path afterwards
+// finds as it was.
+#[test]
+fn a_path_that_is_made_anew_while_it_fails_to_be_staged_is_left_out_too() {
+    let scratch = Scratch::new();
+    let file = scratch.join("repo/again.race");
+    let repo = with_a_file_that_changes_as_it_is_staged(
+        &scratch,
+        "again.race",
+        &format!(
+            "rm -f '{0}'\necho 'made anew, and longer than before' > '{0}'",
+            file.display()
+        ),
+    );
+    let store = store(&scratch);
+
+    let state = store.record(&open(&repo)).expect("record");
+
+    assert_eq!(
+        store.paths(state.id.as_str()).expect("paths"),
+        [PathBuf::from(".gitattributes"), PathBuf::from("kept.txt")]
+    );
+}
+
 // Among many paths the one that changed is found without failing the others.
 #[test]
 fn a_path_that_is_gone_when_it_fails_to_be_staged_among_many_leaves_the_others_in_the_state() {

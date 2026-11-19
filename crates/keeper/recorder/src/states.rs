@@ -430,13 +430,22 @@ impl StateStore {
             // alone: a few runs where one for each path would be tens of thousands. A path
             // that fails alone is either one that a program beside us changed after git
             // named it, which is left out as the worktree has it now, or one that fails
-            // for itself, as a clean filter that errors does, and that is the failure.
+            // for itself, as a clean filter that errors does, and that is the failure. The
+            // two are told apart by the path itself, looked at before the run and after
+            // it: one that is a file again by the time it is looked at after was still
+            // changed in between, which only a look before shows.
             let mut pending: Vec<&[&[u8]]> = vec![&staged];
             while let Some(range) = pending.pop() {
+                let before = match range {
+                    [path] => Some(fingerprint(worktree.root(), path)),
+                    _ => None,
+                };
                 let Err(e) = stage(range) else { continue };
                 match range {
                     [path] => {
-                        if !changed_under_us(worktree.root(), path) {
+                        let touched = before
+                            .is_some_and(|before| before != fingerprint(worktree.root(), path));
+                        if !touched && !changed_under_us(worktree.root(), path) {
                             return Err(e.into());
                         }
                         finish_with(in_worktree(&FORGET), &zero_ended(&[path]))?.printed()?;
@@ -800,6 +809,23 @@ fn zero_ended(paths: &[&[u8]]) -> Vec<u8> {
 fn is_plain_folder(root: &Path, path: &[u8]) -> bool {
     let place = root.join(os_string(path));
     fs::symlink_metadata(&place).is_ok_and(|found| found.is_dir()) && !place.join(".git").exists()
+}
+
+/// What tells one incarnation of the file at `path`, below `root`, from another: its kind,
+/// its inode, its size and its times, or nothing where there is no file. A path that was
+/// deleted and made anew has another one.
+fn fingerprint(root: &Path, path: &[u8]) -> Option<(u32, u64, u64, i64, i64, i64, i64)> {
+    use std::os::unix::fs::MetadataExt;
+    let found = fs::symlink_metadata(root.join(os_string(path))).ok()?;
+    Some((
+        found.mode(),
+        found.ino(),
+        found.size(),
+        found.mtime(),
+        found.mtime_nsec(),
+        found.ctime(),
+        found.ctime_nsec(),
+    ))
 }
 
 /// Whether `path`, below `root`, is gone or is a folder now that is no repository: what a
