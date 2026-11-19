@@ -308,8 +308,9 @@ pub struct TerminalPane {
     window: AnyWindowHandle,
     /// The size the pane last laid a terminal out at, which a new terminal is opened at.
     size: TerminalSize,
-    /// Whether a terminal was laid out yet: until then `size` is a guess, and the room is
-    /// what an attach is sized from.
+    /// Whether a view told the pane of a size it fitted to: until then `size` is a guess,
+    /// and the room is what an attach is sized from. A view that fits the size it was
+    /// started at tells nothing, so this can stay false while terminals are laid out.
     fitted: bool,
     /// The grid the room the pane has holds, as the painter found it; none before the
     /// first frame.
@@ -604,14 +605,19 @@ impl TerminalPane {
         });
     }
 
-    /// The size a terminal is attached at: the size the pane shows its terminals at. Before
-    /// any was laid out that is the grid the room holds, which the first frame finds; with
-    /// no frame yet it is not known, and an attach waits for it.
-    fn attach_size(&self) -> Option<TerminalSize> {
-        if self.fitted {
-            Some(self.size)
-        } else {
-            self.room
+    /// The size a terminal of `workspace` is attached at: the size the pane shows it at.
+    /// A workspace that shows no terminal shows this one alone, which fills the room; for
+    /// the others it is the size the last view fitted, which is what a slot holds. With no
+    /// frame yet the room is not known, and an attach waits for it.
+    fn attach_size(&self, workspace: &WorkspaceId) -> Option<TerminalSize> {
+        let alone = self
+            .layouts
+            .get(workspace)
+            .is_none_or(|layout| layout.shown.is_empty());
+        match self.room {
+            Some(room) if alone || !self.fitted => Some(room),
+            _ if self.fitted => Some(self.size),
+            _ => None,
         }
     }
 
@@ -625,9 +631,6 @@ impl TerminalPane {
     /// Asks the Keeper to attach every terminal the shared list holds that the pane has
     /// none of and is not already attaching, once the size to attach at is known.
     fn attach_missing(&mut self, cx: &mut Context<Self>) {
-        if self.attach_size().is_none() {
-            return;
-        }
         let missing: Vec<TerminalInfo> = self
             .models
             .terminals
@@ -638,8 +641,8 @@ impl TerminalPane {
             .cloned()
             .collect();
         for info in missing {
-            let Some(size) = self.attach_size() else {
-                return;
+            let Some(size) = self.attach_size(&info.workspace) else {
+                continue;
             };
             self.attach(info, size, cx);
         }

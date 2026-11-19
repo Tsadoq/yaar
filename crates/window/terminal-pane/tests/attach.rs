@@ -17,7 +17,7 @@ use yaar_link::{
     Ending, Fact, Program, Refusal, Reply, Request, RequestId, TerminalId, TerminalInfo,
     TerminalSize, WorkspaceAgents, WorkspaceId,
 };
-use yaar_terminal_pane::{FIRST_SIZE, NextTerminal, ScrollPageUp};
+use yaar_terminal_pane::{FIRST_SIZE, NextTerminal, ScrollPageUp, ToggleSplit};
 
 use common::{
     DEADLINE, Panes, click_in, drawn, key_of, one_repository, open_panes, open_panes_staged,
@@ -311,6 +311,45 @@ fn a_terminal_the_list_gains_is_attached_at_the_size_the_pane_shows_terminals_at
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&t1)),
         Some(one)
     );
+}
+
+#[gpui_kit::test]
+fn a_terminal_for_a_workspace_that_shows_none_is_attached_at_the_whole_room_in_the_split_view(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = common::open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let two = workspace_id('2');
+    let (t1, t2, t3) = (terminal('a'), terminal('b'), terminal('c'));
+    panes.open_terminal(&t1, &mut cx);
+    wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
+        !panes.keeper.resizes(&t1).is_empty()
+    });
+    let whole = panes.grid(&t1);
+
+    // The split view puts every terminal of the first workspace at half the room.
+    panes.open_terminal(&t2, &mut cx);
+    panes.press_in_the_app::<ToggleSplit>(&mut cx);
+    wait_until(&mut cx, "the terminals at half the room", |_| {
+        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+    });
+
+    // The second workspace shows none: what the list gains for it fills the room, and
+    // is asked for at that size and not at the half the last view fitted.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    panes
+        .models
+        .terminals
+        .update(&mut cx, |list, cx| list.opened(info(&t3, &two), cx));
+    let (id, asked, size) = attach_request(&panes, &mut cx);
+    assert_eq!((asked, size), (t3.clone(), whole));
+    answer_attach(&panes, id, &t3, false, &[b"hello\r\n"]);
+    wait_drawn(&mut cx, "the terminal of the second workspace", |cx| {
+        drawn("terminal-slot-0", cx).is_some()
+    });
+    panes.click_slot(0, &mut cx);
+    cx.simulate_input("k");
+    assert_eq!(panes.keeper.input(&mut cx), (t3.clone(), b"k".to_vec()));
+    assert!(panes.keeper.resizes(&t3).is_empty());
 }
 
 #[gpui_kit::test]
