@@ -170,8 +170,8 @@ impl Composed {
 
     /// Writes a draft on the line the reviewer is on, as a user does: into the review pane,
     /// `c`, the text, Escape. A click on the first row puts the reviewer on the first line
-    /// of the file, which is unchanged context: a comment may sit on any line. Returns the review and the draft once the pane's model shows
-    /// the draft with its whole text.
+    /// of the file, which is unchanged context: a comment may sit on any line. Returns the
+    /// review and the draft once the pane's model shows the draft with its whole text.
     fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
         // The reviewer waits for the pane to show the reviews and a line to be on.
         self.review_shown(cx);

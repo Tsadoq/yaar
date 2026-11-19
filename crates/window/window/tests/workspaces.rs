@@ -128,6 +128,15 @@ fn assert_shows_only(
         cx.debug_bounds("terminal-slot-1").is_none(),
         "one terminal is on show, not two"
     );
+    // What the slot draws is the terminal's own view, not another's.
+    let (mine, others) = (terminal.as_str(), others_terminal.as_str());
+    wait_until(cx, "the view of the terminal", |cx| {
+        drawn(&format!("terminal-{mine}"), cx).is_some()
+    });
+    assert!(
+        drawn(&format!("terminal-{others}"), cx).is_none(),
+        "the view of the other worktree's terminal is drawn"
+    );
     assert!(
         !shown(window, cx).contains(others_terminal),
         "the terminal of the other worktree is on show"

@@ -248,7 +248,8 @@ impl Layout {
 /// which then shows it. A click in a slot gives it the focus. A terminal whose program
 /// ended stays in the list with its last screen.
 /// Each slot is drawn inside an element with the selector `terminal-slot-<n>`, counted
-/// from 0 from the left, which `debug_bounds` finds while it is drawn.
+/// from 0 from the left, which `debug_bounds` finds while it is drawn; inside it the view
+/// of the terminal is drawn inside an element with the selector `terminal-<id>`.
 ///
 /// When the pane's own focus handle gains the focus, as when the Frame moves the focus
 /// from pane to pane, the pane hands it on to the view of [`TerminalPane::focused`], so
@@ -656,6 +657,7 @@ impl Render for TerminalPane {
         let shown = self.shown();
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             let view = self.entry(id)?.view.clone();
+            let name = id.as_str().to_owned();
             // A click in a slot gives it the focus; its view takes the focus itself, and
             // the pane learns which slot has it here, whatever GPUI tells of the focus.
             let slot = div()
@@ -670,7 +672,13 @@ impl Render for TerminalPane {
             // The divider is a sibling of the slot, so the slot's bounds are exactly its
             // view's.
             let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
-            Some((divider, slot.child(view)))
+            // The view sits in an element of its own that names its terminal, so that
+            // what is drawn can be told from what the pane says is shown.
+            let named = div()
+                .debug_selector(move || format!("terminal-{name}"))
+                .size_full()
+                .child(view);
+            Some((divider, slot.child(named)))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = shown.is_empty().then(|| {
