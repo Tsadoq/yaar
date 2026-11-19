@@ -1022,6 +1022,45 @@ mod tests {
     }
 
     #[test]
+    fn a_step_heard_with_no_turn_open_ends_the_wait_it_answers() {
+        // A prompt heard with no turn open (after an interrupt ended the turn) is answered
+        // by a step all the same: the session is idle again, not waiting until the next
+        // turn starts.
+        let steps = [
+            ("a write", written("p.txt")),
+            ("a read", read("p.txt")),
+            ("a command that began", command(Phase::Began)),
+        ];
+        for (what, step) in steps {
+            let mut desk = Desk::new();
+            desk.hear("a", started());
+            let id = desk.id("a");
+            assert_eq!(
+                desk.hear("a", permission(true)),
+                [now(&id, State::WaitsForPermission)],
+                "{what}: the prompt"
+            );
+            assert_eq!(desk.hear("a", step), [now(&id, State::Idle)], "{what}");
+            assert_eq!(desk.state("a"), State::Idle, "{what}");
+            assert_eq!(desk.known("a").turn, None, "{what}");
+        }
+    }
+
+    #[test]
+    fn a_turn_ended_with_no_turn_open_changes_nothing_not_even_a_wait() {
+        let mut desk = Desk::new();
+        desk.hear("a", started());
+        let id = desk.id("a");
+        desk.hear("a", permission(true));
+        assert_eq!(desk.hear("a", turn_ended(TurnEnd::Finished)), []);
+        assert_eq!(desk.hear("a", turn_ended(TurnEnd::Interrupted)), []);
+        assert_eq!(desk.state("a"), State::WaitsForPermission);
+
+        // It still waits: the answer to the prompt ends the wait, and nothing else did.
+        assert_eq!(desk.hear("a", written("p.txt")), [now(&id, State::Idle)]);
+    }
+
+    #[test]
     fn a_turn_ended_with_no_turn_open_gives_nothing() {
         let mut desk = Desk::new();
         desk.hear("a", started());
