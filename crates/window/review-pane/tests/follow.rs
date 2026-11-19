@@ -241,8 +241,8 @@ fn at_work_in_flow(steps: Vec<Step>, cx: &mut TestAppContext) -> (Stage, VisualT
     show_changes(&mut stage, &mut cx);
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Flow);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(view(&stage, &cx), View::Flow);
+    assert_eq!(following(&stage, &cx), Following::On);
     (stage, cx)
 }
 
@@ -359,18 +359,18 @@ fn follow_is_on_until_the_user_turns_it_off_with_its_control(cx: &mut TestAppCon
     let t = turn_id('t');
     let (mut stage, mut cx) = open(vec![workspace('1', "feature"), workspace('2', "other")], cx);
     show_changes(&mut stage, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // The key and the control in the bar turn it off and on, each as often as asked.
     focus_by_the_bar(&stage, &mut cx);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(following(&stage, &cx), Following::Off);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("flow-follow", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(following(&stage, &cx), Following::Off);
     click("flow-follow", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // Nothing else turns it off: a turn's start, its steps, its end and another workspace
     // on screen and back leave it on. The selection is kept so that the turn end asks
@@ -398,7 +398,7 @@ fn follow_is_on_until_the_user_turns_it_off_with_its_control(cx: &mut TestAppCon
     wait_for_at(&stage, &t, 30, &mut cx);
     stage.keeper.tell(turn_ended(&t, Some(s2()), Some(s1())));
     wait_for_the_offer(&stage, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     stage
         .models
@@ -409,7 +409,7 @@ fn follow_is_on_until_the_user_turns_it_off_with_its_control(cx: &mut TestAppCon
         ..since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)])
     };
     stage.keeper.show(&second, |_| texts("a\n", "b\n"), &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     stage
         .models
         .workspaces
@@ -417,7 +417,7 @@ fn follow_is_on_until_the_user_turns_it_off_with_its_control(cx: &mut TestAppCon
     let first = since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)]);
     stage.keeper.show(&first, |_| texts("a\n", "b\n"), &mut cx);
     cx.run_until_parked();
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 }
 
 #[gpui_kit::test]
@@ -426,7 +426,7 @@ fn with_follow_on_flow_moves_to_each_step_as_it_comes_a_file_read_as_a_file_writ
 ) {
     let t = turn_id('t');
     let (mut stage, mut cx) = at_work_in_flow(Vec::new(), cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     let mut furthest = 0;
     for number in 1..=30 {
         tell_step(&mut stage, &t, number, &mut cx);
@@ -455,11 +455,11 @@ fn with_follow_off_a_step_leaves_flow_where_it_was(cx: &mut TestAppContext) {
     tell_step(&mut stage, &t, 1, &mut cx);
     wait_for_at(&stage, &t, 1, &mut cx);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(following(&stage, &cx), Following::Off);
     // The barrier is the step in the timeline: it was told, and Flow is not at it.
     tell_step(&mut stage, &t, 2, &mut cx);
-    assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 1)));
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 1)));
+    assert_eq!(following(&stage, &cx), Following::Off);
     // Turned on again, follow moves with the next step.
     press("shift-f", &mut cx);
     tell_step(&mut stage, &t, 3, &mut cx);
@@ -507,7 +507,7 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
     let heading = wait_for_its_row_in_view(&stage, &mut cx);
     assert_eq!(
         Some(heading),
-        row_of(&live(&stage, &mut cx).0, "a.txt"),
+        row_of(&live(&stage, &cx).0, "a.txt"),
         "Flow is at the heading of the file the turn wrote"
     );
 
@@ -520,7 +520,7 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
     // files read, with its mark, and the live diff names no activity above its files.
     tell_the_step(&mut stage, &t, 3, read("z.txt"), &mut cx);
     wait_for_at(&stage, &t, 3, &mut cx);
-    let (rows, at_row) = live(&stage, &mut cx);
+    let (rows, at_row) = live(&stage, &cx);
     let z = row_of(&rows, "z.txt").expect("z.txt is a row of the live diff");
     assert_eq!(
         rows.last(),
@@ -567,7 +567,7 @@ fn in_the_live_diff_flow_moves_to_a_file_the_turn_read_as_to_one_it_wrote(cx: &m
     });
     wait_for_at(&stage, &t, 5, &mut cx);
     let b = wait_for_its_row_in_view(&stage, &mut cx);
-    let (rows, _) = live(&stage, &mut cx);
+    let (rows, _) = live(&stage, &cx);
     assert_eq!(Some(b), row_of(&rows, "b.txt"));
     assert_eq!(
         rows.last(),
@@ -620,7 +620,7 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
 
     // A scroll pauses follow, with nothing missed yet, and offers to resume.
     wheel(&stage, 300., &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     assert!(drawn("flow-follow-paused", &mut cx).is_some());
     assert!(drawn("flow-follow-resume", &mut cx).is_some());
 
@@ -628,8 +628,8 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
     for number in 28..=30 {
         tell_step(&mut stage, &t, number, &mut cx);
     }
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 3 });
-    assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 27)));
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 3 });
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 27)));
     // The count is said: three steps.
     assert!(
         drawn(
@@ -641,7 +641,7 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
     );
     // A further turn of the wheel leaves the count as it is.
     wheel(&stage, 50., &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 3 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 3 });
 
     // The offer to resume jumps to the newest step, in view.
     assert!(
@@ -649,8 +649,8 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
         "the newest step is out of view before resuming"
     );
     click("flow-follow-resume", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
-    assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 30)));
+    assert_eq!(following(&stage, &cx), Following::On);
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 30)));
     assert_eq!(
         wait_for_its_row_in_view(&stage, &mut cx),
         entry_of(&stage, &t, 30, &mut cx)
@@ -659,9 +659,9 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
 
     // A click on an entry pauses it; `shift-g` resumes at the newest step.
     click_an_entry(&stage, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 31, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 1 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
     assert!(
         drawn(
             "flow-follow-paused-text:Follow paused: 1 step since",
@@ -671,8 +671,8 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
         "one step is no plural"
     );
     press("shift-g", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
-    assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 31)));
+    assert_eq!(following(&stage, &cx), Following::On);
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 31)));
     assert_eq!(
         wait_for_its_row_in_view(&stage, &mut cx),
         entry_of(&stage, &t, 31, &mut cx)
@@ -680,11 +680,11 @@ fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_
 
     // A key pauses it: the key of an action of the pane.
     press("j", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 32, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 1 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
     press("shift-g", &mut cx);
-    assert_eq!(flow_at(&stage, &mut cx), Some(at(&t, 32)));
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 32)));
     assert_eq!(
         wait_for_its_row_in_view(&stage, &mut cx),
         entry_of(&stage, &t, 32, &mut cx)
@@ -703,11 +703,11 @@ fn the_controls_of_the_views_and_of_follow_do_not_pause_follow_and_nothing_pause
     // The barrier: a step told after the agents, which the timeline holds.
     tell_step(&mut stage, &t, 3, &mut cx);
     click_an_entry(&stage, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("j", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     wheel(&stage, 20., &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // The same turn runs again: not a start (follow met it), so Flow stays as it is.
     stage.keeper.tell_agents(agents_of(vec![session_a_on(&t)]));
@@ -715,32 +715,32 @@ fn the_controls_of_the_views_and_of_follow_do_not_pause_follow_and_nothing_pause
 
     // The controls, by key and by click, in Flow and out of it: follow stays on.
     press("shift-l", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("shift-l", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("review-bar", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("review-view-changes", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("review-view-flow", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("flow-form-live", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("flow-form-timeline", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("shift-g", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(following(&stage, &cx), Following::Off);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("flow-follow", &mut cx);
     click("flow-follow", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 }
 
 #[gpui_kit::test]
@@ -749,9 +749,9 @@ fn a_key_no_action_takes_pauses_follow_too(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = at_work_in_flow(vec![read("a.txt")], cx);
     // `x` is bound to nothing: it reaches the pane as a key, which is the reviewer typing.
     press("x", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 2, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 1 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
 }
 
 #[gpui_kit::test]
@@ -761,7 +761,7 @@ fn a_step_of_another_workspace_is_not_counted_and_a_pause_ends_with_the_workspac
     let t = turn_id('t');
     let (mut stage, mut cx) = at_work_in_flow(vec![read("a.txt")], cx);
     wheel_once(&stage, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     // A step of workspace 2, then one of workspace 1: the barrier is the second.
     let mut elsewhere = step_fact(session_id('a'), t.clone(), 9, read("elsewhere.txt"));
     if let Fact::Step { workspace, .. } = &mut elsewhere {
@@ -769,7 +769,7 @@ fn a_step_of_another_workspace_is_not_counted_and_a_pause_ends_with_the_workspac
     }
     stage.keeper.tell(elsewhere);
     tell_step(&mut stage, &t, 2, &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 1 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 1 });
 
     // Another workspace on screen: what was paused is not paused there.
     stage
@@ -781,7 +781,7 @@ fn a_step_of_another_workspace_is_not_counted_and_a_pause_ends_with_the_workspac
         ..since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)])
     };
     stage.keeper.show(&second, |_| texts("a\n", "b\n"), &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 }
 
 /// A turn of the wheel over the first entry in view.
@@ -795,34 +795,31 @@ fn resuming_says_when_nothing_is_paused_or_follow_is_off_and_turning_it_off_ends
 ) {
     let t = turn_id('t');
     let (mut stage, mut cx) = at_work_in_flow(vec![read("a.txt")], cx);
-    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(notice(&stage, &cx), None);
     press("shift-g", &mut cx);
-    assert_eq!(
-        notice(&stage, &mut cx).as_deref(),
-        Some("Follow is not paused")
-    );
+    assert_eq!(notice(&stage, &cx).as_deref(), Some("Follow is not paused"));
     // The next control that is acted on takes the saying away.
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
-    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(following(&stage, &cx), Following::Off);
+    assert_eq!(notice(&stage, &cx), None);
     press("shift-g", &mut cx);
-    assert_eq!(notice(&stage, &mut cx).as_deref(), Some("Follow is off"));
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(notice(&stage, &cx).as_deref(), Some("Follow is off"));
+    assert_eq!(following(&stage, &cx), Following::Off);
     press("shift-f", &mut cx);
 
     // Turning follow off from a pause turns it off, and on again puts it on.
     press("x", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     tell_step(&mut stage, &t, 2, &mut cx);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(following(&stage, &cx), Following::Off);
     press("shift-f", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // With nothing offered, taking the offer says so.
     press("shift-o", &mut cx);
-    assert!(notice(&stage, &mut cx).is_some());
-    assert_eq!(view(&stage, &mut cx), View::Flow);
+    assert!(notice(&stage, &cx).is_some());
+    assert_eq!(view(&stage, &cx), View::Flow);
 }
 
 #[gpui_kit::test]
@@ -836,8 +833,8 @@ fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_a
         cx,
     );
     show_changes(&mut stage, &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // A message: a turn follow has not met starts, and Flow is shown.
     for turn in [&t1, &t2, &t3] {
@@ -853,35 +850,35 @@ fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_a
     wait_until(&mut cx, "Flow after the message", |cx| {
         view(&stage, cx) == View::Flow
     });
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // Changes again, and a click on a row of it while the turn runs pauses follow. The
     // next message ends the pause, with nothing missed, and shows Flow.
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::On);
     click("review-row-1", &mut cx);
-    assert_eq!(following(&stage, &mut cx), Following::Paused { missed: 0 });
+    assert_eq!(following(&stage, &cx), Following::Paused { missed: 0 });
     stage.keeper.tell_agents(agents_of(vec![session_a_on(&t2)]));
     wait_until(&mut cx, "Flow after the second message", |cx| {
         view(&stage, cx) == View::Flow
     });
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(following(&stage, &cx), Following::On);
 
     // With follow off a message changes nothing: a step of the turn told after it, which
     // the timeline holds, is the barrier.
     press("f", &mut cx);
     press("shift-f", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::Off);
     stage.keeper.tell_agents(agents_of(vec![session_a_on(&t3)]));
     stage
         .keeper
         .tell(step_fact(session_id('a'), t3.clone(), 1, read("x.txt")));
     wait_for_step(&stage, &t3, 1, &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(following(&stage, &mut cx), Following::Off);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::Off);
 }
 
 #[gpui_kit::test]
@@ -915,8 +912,8 @@ fn a_pane_that_connects_while_a_turn_runs_stays_in_changes_and_so_does_a_turn_th
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, read("x.txt")));
     wait_for_step(&stage, &t, 1, &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(following(&stage, &mut cx), Following::On);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(following(&stage, &cx), Following::On);
 }
 
 #[gpui_kit::test]
@@ -964,7 +961,7 @@ fn a_workspace_that_comes_on_screen_with_a_turn_running_starts_nothing(cx: &mut 
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, read("x.txt")));
     wait_for_step(&stage, &t, 1, &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
+    assert_eq!(view(&stage, &cx), View::Changes);
 }
 
 #[gpui_kit::test]
@@ -982,24 +979,24 @@ fn when_a_turn_ends_while_flow_is_on_screen_the_pane_stays_in_flow_and_offers_wh
         to: s2(),
     };
     assert_eq!(wait_for_the_offer(&stage, &mut cx), since);
-    assert_eq!(view(&stage, &mut cx), View::Flow);
+    assert_eq!(view(&stage, &cx), View::Flow);
     assert!(drawn("flow-offer", &mut cx).is_some());
     assert!(drawn("flow-offer-take", &mut cx).is_some());
 
     // The Keeper tells the session idle after the turn: the offer stays.
     stage.keeper.tell_agents(agents_of(vec![session_a_idle()]));
     tell_a_step_after(&mut stage, &t, 2, &mut cx);
-    assert_eq!(flow_offer(&stage, &mut cx), Some(since.clone()));
+    assert_eq!(flow_offer(&stage, &cx), Some(since.clone()));
 
     // Taking it shows Changes with that change, and asks for nothing more: the barrier is
     // the changes of a workspace put on screen after it.
     click("flow-offer-take", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
+    assert_eq!(view(&stage, &cx), View::Changes);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.change_shown()),
         since
     );
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
     nothing_more_was_asked(&mut stage, &mut cx);
 }
 
@@ -1043,15 +1040,15 @@ fn the_offer_is_taken_with_shift_o_and_a_turn_end_with_no_since_counts_from_the_
         to: s2(),
     };
     assert_eq!(wait_for_the_offer(&stage, &mut cx), since);
-    assert_eq!(view(&stage, &mut cx), View::Flow);
+    assert_eq!(view(&stage, &cx), View::Flow);
 
     press("shift-o", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
+    assert_eq!(view(&stage, &cx), View::Changes);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.change_shown()),
         since
     );
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
     nothing_more_was_asked(&mut stage, &mut cx);
 }
 
@@ -1076,7 +1073,7 @@ fn a_pane_that_keeps_the_selection_offers_in_flow_and_asks_for_the_change_when_t
         stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
         Some(since.clone())
     );
-    assert_eq!(view(&stage, &mut cx), View::Flow);
+    assert_eq!(view(&stage, &cx), View::Flow);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.change_shown()),
         ChangeShown::Comparison
@@ -1085,11 +1082,11 @@ fn a_pane_that_keeps_the_selection_offers_in_flow_and_asks_for_the_change_when_t
     // Taking it selects the change, which asks for its files, and shows Changes.
     click("flow-offer-take", &mut cx);
     the_turn_end_selects(&mut stage, &s1(), &s2(), &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
+    assert_eq!(view(&stage, &cx), View::Changes);
     wait_until(&mut cx, "the change selected", |cx| {
         stage.pane.read_with(cx, |pane, _| pane.change_shown()) == since
     });
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
         None
@@ -1114,16 +1111,16 @@ fn with_changes_on_screen_at_a_turn_end_nothing_is_offered_in_flow(cx: &mut Test
         cx,
     );
     show_changes(&mut stage, &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
+    assert_eq!(view(&stage, &cx), View::Changes);
     stage.keeper.tell(turn_ended(&t, Some(s2()), Some(s1())));
     // The barrier is the request Changes makes for the selection it takes.
     the_turn_end_selects(&mut stage, &s1(), &s2(), &mut cx);
     cx.run_until_parked();
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Flow);
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(view(&stage, &cx), View::Flow);
+    assert_eq!(flow_offer(&stage, &cx), None);
     assert!(drawn("flow-offer", &mut cx).is_none());
 }
 
@@ -1141,8 +1138,8 @@ fn a_turn_end_with_no_state_offers_nothing(cx: &mut TestAppContext) {
         })
     });
     tell_a_step_after(&mut stage, &t, 2, &mut cx);
-    assert_eq!(flow_offer(&stage, &mut cx), None);
-    assert_eq!(view(&stage, &mut cx), View::Flow);
+    assert_eq!(flow_offer(&stage, &cx), None);
+    assert_eq!(view(&stage, &cx), View::Flow);
 }
 
 #[gpui_kit::test]
@@ -1159,10 +1156,10 @@ fn the_offer_goes_when_changes_is_shown_when_another_turn_starts_and_when_the_wo
     stage.keeper.tell(turn_ended(&t, Some(s2()), Some(s1())));
     wait_for_the_offer(&stage, &mut cx);
     press("f", &mut cx);
-    assert_eq!(view(&stage, &mut cx), View::Changes);
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(view(&stage, &cx), View::Changes);
+    assert_eq!(flow_offer(&stage, &cx), None);
     press("f", &mut cx);
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
 
     // Another turn starts: the offer of the one before is gone.
     stage.keeper.tell(turn_ended(&t, Some(s2()), Some(s1())));
@@ -1191,7 +1188,7 @@ fn the_offer_goes_when_changes_is_shown_when_another_turn_starts_and_when_the_wo
         ..since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)])
     };
     stage.keeper.show(&second, |_| texts("a\n", "b\n"), &mut cx);
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
     stage
         .models
         .workspaces
@@ -1199,5 +1196,5 @@ fn the_offer_goes_when_changes_is_shown_when_another_turn_starts_and_when_the_wo
     let first = since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)]);
     stage.keeper.show(&first, |_| texts("a\n", "b\n"), &mut cx);
     cx.run_until_parked();
-    assert_eq!(flow_offer(&stage, &mut cx), None);
+    assert_eq!(flow_offer(&stage, &cx), None);
 }
