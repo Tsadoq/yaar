@@ -5,9 +5,8 @@ mod support;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
 
-use support::{Heard, Scratch, commit_all, init, wait_until, workspaces, write};
+use support::{Heard, Scratch, ago, commit_all, init, wait_until, workspaces, write};
 use yaar_workspaces::{Change, CreditedPath, Refusal, WorkspaceError, WorkspaceId, Workspaces};
 
 /// A repository with `edited.txt` and `kept.txt` committed, opened and watched. The
@@ -109,13 +108,6 @@ fn a_file_changed_by_an_editor_outside_the_app_shows_as_a_change_no_agent_made()
     assert_eq!(other.change, Change::Added);
     assert!(other.by.is_empty(), "a shell's change is no agent's");
     assert_eq!(w.by("agent.txt"), Some(strings(&["agent-session"])));
-}
-
-/// Moments of the test's own clock, before now, for commands that ran earlier.
-fn ago(seconds: u64) -> Instant {
-    Instant::now()
-        .checked_sub(Duration::from_secs(seconds))
-        .expect("the machine has run for longer than the test")
 }
 
 #[test]

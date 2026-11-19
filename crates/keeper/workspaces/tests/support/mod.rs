@@ -311,3 +311,10 @@ impl Heard {
         Arc::strong_count(&self.files)
     }
 }
+
+/// Moments of the test's own clock, before now, for commands that ran earlier.
+pub fn ago(seconds: u64) -> Instant {
+    Instant::now()
+        .checked_sub(Duration::from_secs(seconds))
+        .expect("the machine has run for longer than the test")
+}
