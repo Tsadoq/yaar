@@ -67,7 +67,12 @@ fn reading(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
                     }
                     Row::Skipped { old, .. } => read.push(format!("… {}", old.len())),
                 },
-                PaneRow::Comparison { .. } | PaneRow::Commit { .. } | PaneRow::Unshown { .. } => {}
+                PaneRow::Comparison { .. }
+                | PaneRow::Commit { .. }
+                | PaneRow::Unshown { .. }
+                | PaneRow::Thread { .. }
+                | PaneRow::Comment { .. }
+                | PaneRow::ThreadsElsewhere => {}
             }
         }
         read
@@ -698,9 +703,11 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // Something to paste, should a key paste.
     cx.write_to_clipboard(ClipboardItem::new_string("pasted".to_owned()));
 
-    // Every key of the pane's table, and every action of it run without its key. They
-    // do reach the pane: each moves the reviewer or switches the layout, one way or
-    // the other.
+    // Every key of the pane's table, and every action of it run without its key. The
+    // five keys of slice 1 do reach the pane: each moves the reviewer or switches the
+    // layout, one way or the other. The keys of the review actions do their own work,
+    // which the tests of the comments show; here they only must not change a file.
+    let moves = ["j", "down", "k", "up", "s"];
     let state = |cx: &mut VisualTestContext| {
         stage
             .pane
@@ -728,10 +735,19 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             control.title
         );
         assert!(
-            at_first != after_the_key || after_the_key != after_the_action,
+            !moves.contains(&control.keystroke)
+                || at_first != after_the_key
+                || after_the_key != after_the_action,
             "{} did nothing",
             control.title
         );
+        // A comment box that a key opened takes the keys that follow as its text.
+        if stage
+            .pane
+            .read_with(&cx, |pane, _| pane.comment_box().is_some())
+        {
+            cx.simulate_keystrokes("escape");
+        }
     }
     // The keys that would edit a text.
     let letters_and_digits: Vec<String> = ('a'..='z')
@@ -785,11 +801,15 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     let closing = Request::GetChanges { workspace: id('2') };
     loop {
         let (_, request) = stage.keeper.request(&mut cx);
-        // Of the requests of the Link, these two only read.
+        // Of the requests of the Link, these two only read, and the other two keep and
+        // delete the drafts of comments, which are no file of the worktree.
         assert!(
             matches!(
                 request.kind(),
-                RequestKind::GetChanges | RequestKind::ReadFile
+                RequestKind::GetChanges
+                    | RequestKind::ReadFile
+                    | RequestKind::SaveDraft
+                    | RequestKind::DeleteDraft
             ),
             "a key made the Window ask {request:?}"
         );

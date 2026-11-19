@@ -7,13 +7,15 @@ use std::ops::Range;
 use std::path::Path;
 use std::rc::Rc;
 
+use gpui_kit::component::input::Textarea;
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::{Hunk, Row, Side};
 use yaar_frame::SetBase;
-use yaar_link::{Base, BaseSource, Comparison, FileStatus, NoComparison};
+use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
 
 use crate::{KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
+use yaar_link::{CommentId, ThreadId};
 
 /// The height of every row. The list lays its rows out by the height of one of them, so
 /// they all have this one.
@@ -89,21 +91,50 @@ impl Render for ReviewPane {
             .size_full()
             .flex()
             .flex_col()
-            .key_context(KEY_CONTEXT)
-            .track_focus(&self.focus)
-            .on_action(cx.listener(Self::line_down))
-            .on_action(cx.listener(Self::line_up))
-            .on_action(cx.listener(Self::toggle_layout))
             .bg(theme.background)
             .text_color(theme.foreground)
             .font_family(theme.mono_font_family.clone())
             .text_size(theme.mono_font_size);
+        // Under the rows and outside the element that sets the pane's key context, so
+        // that the letters typed in the box are text and not keys of the pane.
+        let notice = self.notice.as_ref().map(|notice| {
+            div()
+                .debug_selector(|| "review-notice".to_owned())
+                .flex_none()
+                .h(ROW_HEIGHT)
+                .px_2()
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .border_t_1()
+                .border_color(theme.border)
+                .text_color(theme.danger)
+                .child(notice.clone())
+        });
+        let comment_box = self.open_box.as_ref().map(|open| {
+            div()
+                .debug_selector(|| "review-comment-box".to_owned())
+                .flex_none()
+                .p_2()
+                .border_t_1()
+                .border_color(theme.border)
+                // The field lets Escape pass once it has nothing of its own to close.
+                .on_action(cx.listener(Self::escape))
+                .child(Textarea::new(&open.input))
+        });
         if self.rows.is_empty() {
-            return pane.items_center().justify_center().child(
-                div()
-                    .text_color(theme.muted_foreground)
-                    .child(self.idle_line(cx)),
-            );
+            let idle = div()
+                .flex_1()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(theme.muted_foreground)
+                .child(self.idle_line(cx));
+            return pane
+                .child(self.with_keys(idle, cx))
+                .children(notice)
+                .children(comment_box);
         }
         // The rows stay while the Keeper refuses to read the changes again, and may
         // then be out of date: the reviewer is told.
@@ -120,23 +151,42 @@ impl Render for ReviewPane {
                 .text_color(theme.danger)
                 .child(format!("The changes could not be read again: {refusal}"))
         });
-        pane.children(refused).child(
-            uniform_list(
-                "review-rows",
-                self.rows.len(),
-                cx.processor(|pane, rows: Range<usize>, _, cx| {
-                    rows.map(|index| pane.draw_row(index, cx))
-                        .collect::<Vec<_>>()
-                }),
-            )
-            .track_scroll(&self.scroll)
-            .with_decoration(InView(self.in_view.clone()))
-            .size_full(),
+        let list = uniform_list(
+            "review-rows",
+            self.rows.len(),
+            cx.processor(|pane, rows: Range<usize>, _, cx| {
+                rows.map(|index| pane.draw_row(index, cx))
+                    .collect::<Vec<_>>()
+            }),
         )
+        .track_scroll(&self.scroll)
+        .with_decoration(InView(self.in_view.clone()))
+        .size_full();
+        pane.children(refused)
+            .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+            .children(notice)
+            .children(comment_box)
     }
 }
 
 impl ReviewPane {
+    /// Gives an element the pane's key context, its focus and its actions: the one that
+    /// holds the rows, and not the box or the field beside it.
+    fn with_keys(&self, element: Div, cx: &Context<Self>) -> Div {
+        element
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::line_down))
+            .on_action(cx.listener(Self::line_up))
+            .on_action(cx.listener(Self::toggle_layout))
+            .on_action(cx.listener(Self::comment))
+            .on_action(cx.listener(Self::edit_draft))
+            .on_action(cx.listener(Self::reply))
+            .on_action(cx.listener(Self::delete_draft))
+            .on_action(cx.listener(Self::next_thread))
+            .on_action(cx.listener(Self::previous_thread))
+    }
+
     /// What the pane says while it has no row to show.
     fn idle_line(&self, cx: &App) -> String {
         let changes = self.models.changes.read(cx);
@@ -219,7 +269,77 @@ impl ReviewPane {
                 .text_color(theme.muted_foreground)
                 .child(unshown_sentence(*why)),
             PaneRow::Diff { path, row: shown } => self.draw_diff(row, index, path, shown, cx),
+            PaneRow::Thread { thread } => self.draw_thread(row, thread, cx),
+            PaneRow::Comment { thread, comment } => self.draw_comment(row, thread, comment),
+            PaneRow::ThreadsElsewhere => row
+                .px_2()
+                .bg(theme.secondary)
+                .text_color(theme.secondary_foreground)
+                .child(
+                    div()
+                        .debug_selector(|| "review-threads-elsewhere".to_owned())
+                        .child("Threads elsewhere: their lines are in no row shown"),
+                ),
         }
+    }
+
+    /// The row of a thread: where it sits, and whether it was resolved.
+    fn draw_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
+        let theme = cx.theme();
+        let Some(thread) = self
+            .review()
+            .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
+        else {
+            return row;
+        };
+        let anchor = &thread.anchor;
+        let side = match anchor.side {
+            yaar_link::Side::Old => "old",
+            yaar_link::Side::New => "new",
+        };
+        let place = match anchor.lines.first == anchor.lines.last {
+            true => anchor.lines.last.to_string(),
+            false => format!("{}-{}", anchor.lines.first, anchor.lines.last),
+        };
+        let id = thread.id.clone();
+        row.pl_6().pr_2().text_color(theme.muted_foreground).child(
+            div()
+                .debug_selector(|| format!("review-thread-{id}"))
+                .child(format!(
+                    "Thread on {}:{place} ({side}){}",
+                    anchor.path.display(),
+                    if thread.resolved { ", resolved" } else { "" }
+                )),
+        )
+    }
+
+    /// The row of a comment of a thread: who wrote it and the first line of its text.
+    fn draw_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
+        let Some(comment) = self
+            .review()
+            .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
+            .and_then(|thread| thread.comments.iter().find(|held| held.id == *comment))
+        else {
+            return row;
+        };
+        let state = match comment.round {
+            Some(round) => format!("round-{round}"),
+            None => "draft".to_owned(),
+        };
+        let who = match (comment.author, comment.round) {
+            (Author::Agent, _) => "Agent".to_owned(),
+            (Author::Reviewer, Some(round)) => format!("You, round {round}"),
+            (Author::Reviewer, None) => "You, draft".to_owned(),
+        };
+        let mut lines = comment.text.lines();
+        let first = lines.next().unwrap_or_default();
+        let more = if lines.next().is_some() { " …" } else { "" };
+        let id = comment.id.clone();
+        row.pl_10().pr_2().child(
+            div()
+                .debug_selector(|| format!("review-comment-{id}:{state}"))
+                .child(format!("{who}: {first}{more}")),
+        )
     }
 
     /// Fills the row at `index` with a row of the diff of the file at `path`.
