@@ -745,6 +745,11 @@ through = "keys and clicks in, with a real Keeper beneath; read back through the
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-011"]
+built = [
+    "crates/window/window/tests/workspaces.rs::selecting_a_workspace_shows_the_reviews_of_its_worktree_and_its_terminals_together",
+    "crates/window/terminal-pane/tests/workspaces.rs::a_click_on_another_workspace_with_the_focus_in_a_terminal_moves_the_focus_to_that_workspaces_terminal",
+    "crates/window/terminal-pane/tests/workspaces.rs::a_click_on_a_workspace_with_no_terminal_with_the_focus_in_a_terminal_moves_the_focus_to_the_pane",
+]
 
 [[test]]
 id = "TERM-04"
@@ -1146,6 +1151,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["NFR-021", "FR-107"]
+built = [
+    "crates/keeper/recorder/tests/states.rs::recording_three_states_leaves_the_real_repository_as_it_was",
+]
 note = "The index is compared by its bytes, taken before the test runs git status, which refreshes it itself. 'Without making a commit' is the refs and the count of objects unchanged."
 
 [[test]]
@@ -1177,6 +1185,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = []
+built = [
+    "crates/keeper/recorder/tests/states.rs::every_state_reads_after_its_commit_is_collected_and_after_the_repository_is_deleted",
+]
 slice = 3
 
 [[test]]
@@ -1238,6 +1249,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-109"]
+built = [
+    "crates/keeper/recorder/tests/commit.rs::the_commit_control_makes_an_ordinary_commit_of_every_uncommitted_change_with_the_message_given",
+]
 
 [[test]]
 id = "REC-04"
@@ -1258,6 +1272,10 @@ through = "its calls, on a real database file"
 driver = "database"
 runs = "ci"
 proves = ["NFR-008"]
+built = [
+    "crates/keeper/store/tests/kills.rs::three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_character",
+    "crates/keeper/store/tests/kills.rs::the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_without_it",
+]
 
 [[test]]
 id = "STORE-02"
@@ -1268,6 +1286,9 @@ through = "its calls, on a real database file"
 driver = "database"
 runs = "ci"
 proves = ["NFR-008"]
+built = [
+    "crates/keeper/store/tests/kills.rs::with_the_write_ahead_file_cut_at_a_random_place_the_database_opens_and_the_sent_comments_are_intact",
+]
 
 [[test]]
 id = "STORE-03"
@@ -1289,6 +1310,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = []
+built = [
+    "crates/keeper/workspaces/tests/gone.rs::after_git_moves_a_worktree_opening_the_new_path_finds_its_review",
+]
 slice = 3
 
 [[test]]
@@ -1300,6 +1324,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = []
+built = [
+    "crates/keeper/workspaces/tests/gone.rs::after_git_removes_a_worktree_its_review_is_still_listed_marked_as_worktree_gone",
+]
 slice = 3
 note = "Listed while one of its reviews holds a thread; a worktree that is gone and holds none leaves the list, as in slice 1."
 
@@ -1373,6 +1400,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-074", "FR-041", "FR-075"]
+built = [
+    "crates/keeper/review-engine/src/review.rs::a_draft_is_tied_to_a_path_a_side_lines_and_their_text_in_a_tree_whatever_the_line",
+    "crates/keeper/review-engine/src/review.rs::lines_that_are_no_range_are_refused_and_leave_the_review_as_it_was",
+    "crates/keeper/review-engine/src/review.rs::an_empty_line_is_a_line_of_its_own",
+    "crates/keeper/review-engine/src/review.rs::an_id_the_review_holds_is_taken_whether_it_names_a_thread_or_a_comment",
+]
 note = "The clause 'the same whether written in Flow or in Changes' is shown when Flow exists (slice 5); slice 3 shows the rest of the row."
 
 [[test]]
@@ -1384,6 +1417,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-076", "FR-077"]
+built = [
+    "crates/keeper/review-engine/src/review.rs::a_comment_is_a_draft_until_sent_and_a_sent_one_refuses_edit_and_delete",
+    "crates/keeper/review-engine/src/review.rs::a_send_carries_the_state_and_the_sender_it_was_given",
+]
 
 [[test]]
 id = "REV-03"
@@ -1394,6 +1431,11 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-078"]
+built = [
+    "crates/keeper/review-engine/src/review.rs::a_follow_up_on_a_sent_comment_is_a_draft_reply_in_the_same_thread",
+    "crates/keeper/review-engine/src/review.rs::a_reply_needs_a_sent_comment_and_no_draft_in_the_thread",
+    "crates/keeper/review-engine/src/review.rs::deleting_a_reply_leaves_its_thread_and_the_comment_sent_before",
+]
 
 [[test]]
 id = "REV-04"
@@ -1404,6 +1446,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-079", "FR-084"]
+built = [
+    "crates/keeper/review-engine/src/text.rs::the_review_as_text_holds_every_unsent_comment_of_an_unresolved_thread_with_its_place_and_code_and_nothing_of_a_resolved_one",
+    "crates/keeper/review-engine/src/text.rs::code_with_backticks_is_fenced_by_more_backticks_than_it_holds",
+]
 
 [[test]]
 id = "REV-05"
@@ -1414,6 +1460,10 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-088", "FR-046"]
+built = [
+    "crates/keeper/review-engine/tests/send.rs::copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_the_state",
+    "crates/keeper/review-engine/tests/send.rs::a_review_with_only_a_resolved_draft_is_refused_and_records_no_state",
+]
 note = "The resolved thread of the test is resolved through the Store's call: resolving has no request until slice 6."
 
 [[test]]
@@ -1435,6 +1485,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-083", "FR-087", "FR-084"]
+built = [
+    "crates/keeper/review-engine/src/review.rs::what_is_attached_is_read_at_the_send_and_one_thread_attached_alone_takes_no_new_draft",
+    "crates/keeper/review-engine/src/review.rs::a_thread_attached_alone_that_is_resolved_stays_attached_and_carries_nothing",
+    "crates/keeper/review-engine/src/review.rs::a_review_detached_keeps_every_draft_it_would_have_carried",
+    "crates/keeper/review-engine/src/review.rs::a_resolved_thread_is_left_out_of_what_is_sent_an_unsent_comment_included",
+]
 
 [[test]]
 id = "REV-08"
@@ -1527,6 +1583,10 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-107", "FR-110"]
+built = [
+    "crates/keeper/review-engine/tests/reviewed.rs::marking_reviewed_records_the_state_as_reviewed_and_a_commit_made_through_the_app_changes_neither",
+    "crates/keeper/review-engine/tests/reviewed.rs::marking_reviewed_twice_on_unchanged_files_is_the_same_state",
+]
 note = "The engine's rule only. No request carries what changed since the last review in slice 3; the view of it comes with turn ends and Changes (slices 4 and 5)."
 
 [[test]]
@@ -1548,6 +1608,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-113"]
+built = [
+    "crates/keeper/review-engine/src/workspace.rs::a_workspace_with_no_review_has_one_of_no_agent_and_one_that_has_it_keeps_it",
+]
 
 [[test]]
 id = "REV-18"
@@ -1558,6 +1621,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-045"]
+built = [
+    "crates/keeper/review-engine/src/viewed.rs::a_file_loses_its_mark_when_its_content_changes_and_keeps_it_when_another_file_changes",
+    "crates/keeper/review-engine/src/viewed.rs::a_file_that_is_deleted_loses_its_mark_and_one_marked_again_for_its_new_content_is_viewed",
+]
 
 [[test]]
 id = "REV-19"
@@ -1929,6 +1996,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-074"]
+built = [
+    "crates/window/review-pane/tests/comments.rs::a_comment_box_opens_on_any_line_of_a_diff_removed_lines_included_in_the_unified_and_the_split_view",
+]
 
 [[test]]
 id = "RP-31"
@@ -1949,6 +2019,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-079", "FR-088"]
+built = [
+    "crates/window/review-pane/tests/comments.rs::the_copy_control_puts_the_review_as_text_on_the_clipboard_and_the_copied_comments_show_as_sent",
+]
 note = "The comments show as sent once the Keeper tells that the reviews changed and the pane reads them again."
 
 [[test]]
@@ -2000,6 +2073,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-123"]
+built = [
+    "crates/window/review-pane/src/lib.rs::for_each_action_that_vim_or_tuicr_has_a_key_for_the_default_key_is_that_key",
+    "crates/window/review-pane/src/lib.rs::the_keys_of_the_pane_work_in_the_pane_only_and_the_review_actions_send_what_they_name",
+]
 
 [[test]]
 id = "RP-44"
@@ -2010,6 +2087,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["NFR-008"]
+built = [
+    "crates/window/review-pane/tests/comments.rs::text_typed_in_a_comment_box_is_saved_while_the_reviewer_types_without_leaving_the_box",
+]
 
 [[test]]
 id = "RP-47"
@@ -2274,6 +2354,10 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-119", "NFR-008"]
+built = [
+    "system-tests/tests/reviews.rs::a_keeper_killed_while_a_draft_is_typed_comes_back_with_every_review_as_it_was_left",
+    "system-tests/tests/reviews.rs::many_saves_of_one_comment_sent_with_no_wait_are_kept_in_the_order_sent",
+]
 note = "As it was left: the draft's text is that of the last save the Keeper answered, or of one sent after it, which a killed Keeper may or may not have kept."
 
 [[test]]
