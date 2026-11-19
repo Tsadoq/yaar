@@ -196,8 +196,19 @@ impl World {
         if let Some(terminal) = terminal {
             command.env(TERMINAL_VARIABLE, terminal);
         }
-        let started = Instant::now();
-        let mut child = command.spawn().expect("start the hook program");
+        // Cargo takes the program out of its place for a moment at every build, and tests
+        // that build run beside this one: a program that is not there is looked for again.
+        let give_up = Instant::now() + Duration::from_secs(5);
+        let (mut child, started) = loop {
+            let started = Instant::now();
+            match command.spawn() {
+                Ok(child) => break (child, started),
+                Err(why) if why.kind() == ErrorKind::NotFound && Instant::now() < give_up => {
+                    thread::sleep(Duration::from_millis(5));
+                }
+                Err(why) => panic!("start the hook program: {why}"),
+            }
+        };
         let mut stdin = child.stdin.take().expect("the program's standard input");
         // The program reads its input whole before anything else; a break of the pipe
         // means it left without, which the test sees from what it sent.
