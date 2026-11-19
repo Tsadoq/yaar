@@ -112,9 +112,10 @@ impl Ledger {
         }
         let mut credited: Vec<String> = Vec::new();
         for &seen in self.seen.get(path).into_iter().flatten() {
-            let mut running = self.commands.iter().filter(|(_, windows)| {
-                windows.iter().any(|window| window.holds(seen, now))
-            });
+            let mut running = self
+                .commands
+                .iter()
+                .filter(|(_, windows)| windows.iter().any(|window| window.holds(seen, now)));
             if let (Some((session, _)), None) = (running.next(), running.next())
                 && !credited.contains(session)
             {
@@ -122,6 +123,20 @@ impl Ledger {
             }
         }
         credited
+    }
+
+    /// The paths the ledger holds something of: those a tool named and those the watcher
+    /// saw, each once.
+    pub fn paths(&self) -> impl Iterator<Item = &Path> {
+        let mut paths: Vec<&Path> = self
+            .named
+            .keys()
+            .chain(self.seen.keys())
+            .map(PathBuf::as_path)
+            .collect();
+        paths.sort_unstable();
+        paths.dedup();
+        paths.into_iter()
     }
 
     /// Forgets what was noted of `path`: it is committed, or no longer changed.
