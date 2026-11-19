@@ -39,15 +39,14 @@ program does, and the app does not hear it yet.
   commit of every uncommitted change of the worktree, with your own git identity and
   hooks. It marks nothing reviewed. Nothing commits unless you press it.
 - **Keeps a review for each agent session.** Each worktree has one review that belongs to
-  no agent. The first Claude Code session started in the worktree takes it over, whether
-  you start it from a shell of the app or typed its name there. When the session ends its
+  no agent. The first Claude Code session started in the worktree takes it over. When the session ends its
   review stays open, and the next Claude Code session in that worktree takes it over. Two
   Claude Code sessions in one worktree have a review each; with several, the line above
   Changes names them and Shift-A, or a click on a name, shows the other's. The app lists a
   worktree that git removed, marked "worktree gone", for as long as its review holds a
   comment.
 - **Hears Claude Code and shows what it is doing.** The sidebar marks each worktree whose
-  agent works, waits for your permission, has finished a turn you have not reviewed yet, or
+  agent waits for your permission, has finished a turn you have not reviewed yet, works, or
   is not running; with several sessions in a worktree it shows the first of these in that
   order. An agent that waits at a permission prompt carries the same mark on its terminal.
   The app never answers a prompt or any other dialog of the agent: you answer in the
