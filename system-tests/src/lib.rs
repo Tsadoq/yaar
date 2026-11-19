@@ -30,9 +30,10 @@ use yaar_link::{Hello, handshake};
 
 pub use client::{Client, DEADLINE};
 pub use processes::{Descriptor, descendants_of, descriptors_of};
-pub use world::{Repo, Tap, World};
+pub use world::{Repo, Tap, World, without_agent_clis};
 
-/// The path of a built program of the workspace, building both programs first. Cargo
+/// The path of a built program of the workspace, building the programs first: the Keeper,
+/// the Window, the hook program of the Claude Code companion and the stand-in agent. Cargo
 /// puts them in the profile folder, `target/debug` or the like; a test program runs from
 /// `build/` or `deps/` somewhere beneath it, depending on the Cargo version.
 ///
@@ -65,6 +66,12 @@ pub fn program(name: &str) -> PathBuf {
             "yaar-keeper",
             "-p",
             "yaar-window",
+            "-p",
+            "yaar-companion-claude",
+            "-p",
+            "yaar-system-tests",
+            "--bin",
+            "standin-agent",
         ]);
         if profile_dir.file_name().is_some_and(|p| p == "release") {
             build.arg("--release");
