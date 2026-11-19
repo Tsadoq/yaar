@@ -148,7 +148,7 @@ fn end(mut world: World, client: Client) {
     );
 }
 
-/// The bytes of a file, or none when it is not there.
+/// The bytes of a file; panics, naming it, when it cannot be read.
 fn bytes_of(file: &Path) -> Vec<u8> {
     fs::read(file).unwrap_or_else(|e| panic!("read {}: {e}", file.display()))
 }
@@ -835,7 +835,8 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
     assert_eq!(Path::new(folders[0]), agents, "{path}");
     // The folders are those a login shell of the world gets without the app: whatever the
     // system's profile adds to the user's own is not the app's, but a folder the app puts
-    // on the path is. Only the folder of the agents is first, as the app puts it.
+    // on the path is. The folder of the agents is first because the world's profile puts it
+    // there: the app adds no folder to the path in this slice, which the equality shows.
     let login = world
         .command(Path::new("/bin/sh"))
         .args(["-l", "-c", "printf %s \"$PATH\""])
