@@ -85,11 +85,11 @@ impl UniformListDecoration for InView {
 }
 
 impl Render for ReviewPane {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = cx.theme();
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Above the files, and in the pane's column outside the element that holds the
         // pane's key context: the keys of the tree are not the keys of the rows.
-        let tree = self.tree_view(cx);
+        let tree = self.tree_view(window, cx);
+        let theme = cx.theme();
         let pane = div()
             .size_full()
             .flex()
@@ -292,7 +292,7 @@ impl ReviewPane {
                     .is_some_and(|reviews| reviews.viewed.contains(path));
                 // A change no agent made is marked where the uncommitted changes are shown.
                 let no_agent =
-                    self.tree.shown == ChangeShown::Uncommitted && self.no_agent_made(path);
+                    self.tree.shown == ChangeShown::Uncommitted && self.made_by_no_agent(path);
                 row.px_2()
                     .gap_3()
                     .bg(theme.secondary)

@@ -1061,3 +1061,33 @@ fn what_the_reviewer_selects_before_the_changes_come_is_not_taken_by_them(cx: &m
         })),
     );
 }
+
+#[gpui_kit::test]
+fn the_rows_take_the_focus_back_when_the_tree_it_was_in_is_gone(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = open_with_history(history(), Vec::new(), cx);
+    click_entry(Some(0), Modifiers::none(), &mut cx);
+    compared(&mut stage, start(), Some(c1()), Vec::new(), &mut cx);
+    cx.update(|window, _| assert!(!stage.focus.is_focused(window), "the tree has the focus"));
+
+    // Every entry leaves the history, and nothing is uncommitted: there is no tree.
+    let empty = History {
+        entries: Vec::new(),
+        ..history()
+    };
+    stage.keeper.set_history(empty.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(&mut cx, "the empty history", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&empty))
+    });
+    assert_eq!(entry_bounds(Some(0), &mut cx), None);
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    // The rows take the focus when the frame without the tree is drawn.
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(stage.focus.is_focused(window), "the rows have the focus"));
+}

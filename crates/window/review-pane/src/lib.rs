@@ -490,6 +490,10 @@ struct ShownDiff {
 /// drawn by an element inside its row that carries `review-text-<index>-old:<text>` or
 /// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
 /// system for that line: the line, or of a line of more than 1,024 bytes its start.
+/// The tree of Changes above the rows carries `review-history-<index>` on the entry at
+/// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
+/// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
+/// row>`.
 /// The control that offers to set a base carries `review-offer-base`. The heading of a
 /// file marked viewed carries `review-viewed-<index>`, with the index of its row, and the
 /// comparison line carries `review-reviewed` while the review has a reviewed state.
@@ -552,7 +556,7 @@ impl ReviewPane {
     /// [`FIRST_LAYOUT`].
     pub fn new(models: &Models, window: &mut Window, cx: &mut Context<Self>) -> Self {
         cx.observe_in(&models.changes, window, |pane, _, window, cx| {
-            pane.follow_history(cx);
+            pane.follow_history(window, cx);
             pane.follow(cx);
             pane.follow_reviews(window, cx);
         })
@@ -584,7 +588,7 @@ impl ReviewPane {
             tree: Tree::new(cx),
             listed: None,
         };
-        pane.follow_history(cx);
+        pane.follow_history(window, cx);
         pane.follow(cx);
         pane.follow_reviews(window, cx);
         pane
@@ -649,7 +653,7 @@ impl ReviewPane {
     /// The history of the workspace on screen, as the Keeper last answered; none before
     /// its first answer and while no workspace is on screen.
     pub fn history(&self) -> Option<&History> {
-        self.history_held()
+        self.tree.history.as_ref()
     }
 
     /// The change whose files the pane shows.
@@ -701,7 +705,11 @@ impl ReviewPane {
     /// by no agent, as the credits of the uncommitted list say; such a file's heading
     /// carries a mark under the selector `review-no-agent-<index of its row>`.
     pub fn made_by_no_agent(&self, path: &Path) -> bool {
-        self.no_agent_made(path)
+        self.tree.uncommitted.as_ref().is_some_and(|listed| {
+            listed
+                .iter()
+                .any(|credited| credited.file.path == path && credited.by.is_empty())
+        })
     }
 
     /// The uncommitted changes the review shown lists, as the Keeper last answered

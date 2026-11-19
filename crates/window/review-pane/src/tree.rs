@@ -122,11 +122,6 @@ fn checked_out(history: &History) -> Option<String> {
 }
 
 impl ReviewPane {
-    /// The history of the workspace on screen, as the Keeper last answered.
-    pub(crate) fn history_held(&self) -> Option<&History> {
-        self.tree.history.as_ref()
-    }
-
     /// How many entries the tree has: those of the history and the uncommitted changes.
     fn tree_len(&self) -> usize {
         self.tree
@@ -161,10 +156,14 @@ impl ReviewPane {
 
     /// Takes up the workspace on screen: when it is another than the one the tree is of,
     /// the tree is let go, and the history of the new one is asked for.
-    pub(crate) fn follow_history(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn follow_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let workspace = self.models.changes.read(cx).workspace().cloned();
         if workspace == self.tree.of {
             return;
+        }
+        // The keys must not be left without a place: the rows take the focus the tree had.
+        if self.tree.focus.is_focused(window) {
+            self.focus.focus(window, cx);
         }
         self.tree = Tree::new(cx);
         self.tree.of = workspace;
@@ -367,13 +366,11 @@ impl ReviewPane {
                 cx,
             )
         });
+        // A selection that takes the place of this one drops the task, and its answer
+        // with it.
         self.tree.listing = Some(cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| {
-                // Another selection has taken the place of this one.
-                if pane.tree.wanted != source {
-                    return;
-                }
                 let files = match answer {
                     Ok(Reply::Compared(files)) => files,
                     Ok(_) => {
@@ -431,16 +428,6 @@ impl ReviewPane {
                 self.listed = None;
             }
         }
-    }
-
-    /// Whether the change of `path` that the pane lists under uncommitted changes was made
-    /// by no agent.
-    pub(crate) fn no_agent_made(&self, path: &std::path::Path) -> bool {
-        self.tree.uncommitted.as_ref().is_some_and(|listed| {
-            listed
-                .iter()
-                .any(|credited| credited.file.path == path && credited.by.is_empty())
-        })
     }
 
     /// What [`FocusHistory`] does: puts the focus on the tree, with the cursor on the
@@ -565,8 +552,13 @@ impl ReviewPane {
     }
 
     /// The tree, drawn above the files; none when there is nothing in it to select.
-    pub(crate) fn tree_view(&self, cx: &Context<Self>) -> Option<Div> {
+    pub(crate) fn tree_view(&self, window: &Window, cx: &mut Context<Self>) -> Option<Div> {
         if !self.has_tree() {
+            if self.tree.focus.is_focused(window) {
+                // The tree is gone, and the keys are left without a place: the rows take
+                // the focus once this frame is drawn.
+                cx.defer_in(window, |pane, window, cx| pane.focus.focus(window, cx));
+            }
             return None;
         }
         let theme = cx.theme();
