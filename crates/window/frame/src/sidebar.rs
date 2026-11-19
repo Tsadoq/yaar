@@ -3,7 +3,7 @@
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use yaar_link::{RepositoryId, SessionState, WorkspaceId};
+use yaar_link::{RepositoryId, SessionState, Workspace, WorkspaceId};
 
 use crate::agents::AgentList;
 use crate::models::WorkspaceList;
@@ -119,8 +119,10 @@ impl Sidebar {
         agents: Entity<AgentList>,
         cx: &mut Context<Self>,
     ) -> Self {
-        let _ = (workspaces, agents, cx);
-        todo!("a sidebar that shows the agents of each workspace")
+        cx.observe(&agents, |_, _, cx| cx.notify()).detach();
+        let mut sidebar = Self::new(workspaces, cx);
+        sidebar.agents = Some(agents);
+        sidebar
     }
 
     /// The form the sidebar has now, at the width the window has now.
@@ -156,21 +158,16 @@ impl Sidebar {
                 name: repository.name.clone(),
             });
             for workspace in &repository.workspaces {
-                let name = match &workspace.head {
-                    Some(head) => head.label(),
-                    None => workspace
-                        .path
-                        .file_name()
-                        .unwrap_or(workspace.path.as_os_str())
-                        .to_string_lossy()
-                        .into_owned(),
-                };
+                let name = workspace_name(workspace);
                 rows.push(SidebarRow::Workspace {
+                    agent: self
+                        .agents
+                        .as_ref()
+                        .and_then(|agents| agents.read(cx).shown(&workspace.id)),
                     id: workspace.id.clone(),
                     name,
                     selected: on_screen == Some(&workspace.id),
                     gone: workspace.head.is_none(),
-                    agent: None,
                 });
             }
         }
@@ -237,9 +234,10 @@ impl Sidebar {
                 name,
                 selected,
                 gone,
-                agent: _,
+                agent,
             } => {
                 let selector = format!("sidebar-workspace-{id}");
+                let agent_mark = agent.and_then(|state| agent_mark(&id, state, rail, colors));
                 // After the name, so that a reader sees which row it is and then that it is
                 // gone; in the rail, which has room for no sentence, a cross.
                 let gone_mark = gone.then(|| {
@@ -274,8 +272,10 @@ impl Sidebar {
                         .items_center()
                         .justify_center()
                         .rounded_md()
+                        .relative()
                         .child(mark(&name))
                         .children(gone_mark)
+                        .children(agent_mark)
                         .into_any_element()
                 } else {
                     row.pl_5()
@@ -286,6 +286,7 @@ impl Sidebar {
                         .gap_2()
                         .child(div().flex_1().min_w_0().truncate().child(name))
                         .children(gone_mark)
+                        .children(agent_mark)
                         .into_any_element()
                 }
             }
@@ -297,9 +298,62 @@ impl Sidebar {
 struct Colors {
     border: Hsla,
     muted: Hsla,
+    waiting: Hsla,
+    unreviewed: Hsla,
+    working: Hsla,
     hover: Hsla,
     selected: Hsla,
     selected_text: Hsla,
+}
+
+/// The name a workspace is listed by, in the sidebar and in the notice of a finished turn:
+/// its branch, or the commit it sits on when no branch is checked out; for a worktree that
+/// is gone, the name of its folder.
+pub(crate) fn workspace_name(workspace: &Workspace) -> String {
+    match &workspace.head {
+        Some(head) => head.label(),
+        None => workspace
+            .path
+            .file_name()
+            .unwrap_or(workspace.path.as_os_str())
+            .to_string_lossy()
+            .into_owned(),
+    }
+}
+
+/// The mark of what the agents of a workspace are doing: a dot of the colour of the state,
+/// and in the full list the state in words beside it. It ends its selector in a word that
+/// names the state, so that a test finds which state is drawn. An idle agent has none.
+fn agent_mark(
+    workspace: &WorkspaceId,
+    state: SessionState,
+    rail: bool,
+    colors: &Colors,
+) -> Option<Div> {
+    let (word, words, colour) = match state {
+        SessionState::WaitsForPermission => ("waiting", "waiting", colors.waiting),
+        SessionState::Unreviewed => ("unreviewed", "to review", colors.unreviewed),
+        SessionState::Works => ("working", "working", colors.working),
+        SessionState::NotRunning => ("not-running", "not running", colors.muted),
+        SessionState::Idle => return None,
+    };
+    let selector = format!("sidebar-agent-{workspace}-{word}");
+    let dot = div().flex_none().size_2().rounded_full().bg(colour);
+    let mark = div()
+        .debug_selector(move || selector)
+        .flex_none()
+        .flex()
+        .items_center();
+    Some(if rail {
+        // Over the corner of the workspace's letter, where the rail has room for no word.
+        mark.absolute().top_0().right_0().child(dot)
+    } else {
+        mark.gap_1()
+            .text_xs()
+            .text_color(colors.muted)
+            .child(dot)
+            .child(words)
+    })
 }
 
 /// What stands for a workspace in the rail: the first character of the last part of its
@@ -321,6 +375,9 @@ impl Render for Sidebar {
         let colors = Colors {
             border: theme.sidebar_border,
             muted: theme.muted_foreground,
+            waiting: theme.warning,
+            unreviewed: theme.info,
+            working: theme.success,
             hover: theme.list_hover,
             selected: theme.sidebar_accent,
             selected_text: theme.sidebar_accent_foreground,
