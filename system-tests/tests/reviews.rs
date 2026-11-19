@@ -281,6 +281,57 @@ fn letters(n: u8) -> String {
         .collect::<String>()
 }
 
+// CLIENT-02.
+#[test]
+fn many_saves_of_one_comment_sent_with_no_wait_are_kept_in_the_order_sent() {
+    let mut world = World::new();
+    world.start_keeper();
+    let (repo, fork) = a_feature_branch(&world, "alpha");
+    let mut client = world.client();
+    let workspace = open(&mut client, &repo);
+    let review = the_review_of_no_agent(&mut client, &workspace);
+    let thread = ThreadId::new(id(1, 1));
+    let comment = CommentId::new(id(2, 1));
+
+    // A Window that types fast sends a save for each change and does not wait for any
+    // reply: 200 saves, each one character longer, the first of them making the thread.
+    let saves: Vec<String> = (1..=200usize)
+        .map(|n| (0..n).map(|i| char::from(b'a' + (i % 26) as u8)).collect())
+        .collect();
+    let sent: Vec<_> = saves
+        .iter()
+        .enumerate()
+        .map(|(n, text)| {
+            let on = if n == 0 {
+                DraftOn::NewThread {
+                    anchor: anchor(Some(&fork), "src/lib.rs", Side::Old, 2, "    1"),
+                }
+            } else {
+                DraftOn::Thread
+            };
+            client.send(Request::SaveDraft {
+                review: review.clone(),
+                thread: thread.clone(),
+                comment: comment.clone(),
+                on,
+                text: text.clone(),
+            })
+        })
+        .collect();
+
+    // The read that follows them finds the last one, and every save was kept.
+    let reviews = client.reviews(&workspace);
+    assert_eq!(draft_text(&reviews, 0), *saves.last().expect("200 saves"));
+    for (id, text) in sent.into_iter().zip(&saves) {
+        assert_eq!(
+            client.wait_for_reply(id, DEADLINE),
+            Ok(Reply::Done),
+            "the save of a text {} characters long",
+            text.len()
+        );
+    }
+}
+
 /// A named pipe the hook of a repository waits on, and the one write that lets it go.
 ///
 /// Held open for reading and writing by the test until it is dropped, so that the line
