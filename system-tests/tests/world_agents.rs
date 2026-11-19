@@ -200,8 +200,8 @@ fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_i
     let world = World::new();
     // Every terminal of the app is a login shell, and the system's profile may add folders
     // to the search path that the process had no part in: macOS's puts `/usr/local/bin`
-    // and the rest of `/etc/paths` in. Where the machine has a `claude` or a `pi` in one of
-    // those, this is what keeps a test from starting it.
+    // and the rest of `/etc/paths` in, in an order of its own. Where the machine has a
+    // `claude` or a `pi` in one of those, this is what keeps a test from starting it.
     let printed = world
         .command(Path::new("/bin/sh"))
         .args([
@@ -211,11 +211,154 @@ fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_i
         ])
         .output()
         .expect("run a login shell");
+    let printed = String::from_utf8_lossy(&printed.stdout);
     let machine = std::env::var_os("PATH").expect("the machine has a search path");
+    let path = printed
+        .strip_prefix("path-")
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .unwrap_or_else(|| {
+            panic!("a login shell found an agent CLI or printed nothing: {printed}")
+        });
+    // The machine's folders are all still there, whichever the order the system chose.
+    let found: Vec<PathBuf> = std::env::split_paths(path).collect();
+    for folder in std::env::split_paths(&without_agent_clis(&machine)) {
+        assert!(
+            found.contains(&folder),
+            "{} is lost from {found:?}",
+            folder.display()
+        );
+    }
+}
+
+/// The search path `profile` of a world leaves a shell that started with `start` as its
+/// path and no more than that: what the profile alone makes of it, whichever system's
+/// profile ran before it.
+fn path_after_the_profile(world: &World, start: &OsString) -> Vec<PathBuf> {
+    let printed = world
+        .command(Path::new("/bin/sh"))
+        .env("PATH", start)
+        .args(["-c", ". \"$HOME/.profile\"; printf %s \"$PATH\""])
+        .output()
+        .expect("run a shell");
+    assert!(printed.status.success());
+    std::env::split_paths(&OsString::from(
+        String::from_utf8_lossy(&printed.stdout).into_owned(),
+    ))
+    .collect()
+}
+
+#[test]
+fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_agent_clis() {
+    let mut world = World::new();
+    let folder = |name: &str, files: &[&str]| {
+        let folder = world.home().join(name);
+        std::fs::create_dir_all(&folder).expect("make the folder");
+        for file in files {
+            let path = folder.join(file);
+            std::fs::write(&path, "#!/bin/sh\n").expect("write the file");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("set the mode");
+        }
+        folder
+    };
+    // The app may put a folder first; a name with a blank and a star must stay one folder.
+    let put_first = folder("put first", &[]);
+    let odd = folder("odd *", &["git"]);
+    // A folder the star would match, were the name globbed, is not in the search path.
+    folder("odd x", &[]);
+    let with_claude = folder("with-claude", &["claude", "git"]);
+    let with_pi = folder("with-pi", &["pi"]);
+    let machine = std::env::var_os("PATH").expect("the machine has a search path");
+    let machine: Vec<PathBuf> = std::env::split_paths(&without_agent_clis(&machine)).collect();
+
+    // Twice a folder, an empty entry, folders of agent CLIs among the others.
+    let start = std::env::join_paths(
+        [
+            &put_first,
+            &with_claude,
+            &odd,
+            &PathBuf::new(),
+            &with_pi,
+            &put_first,
+        ]
+        .into_iter()
+        .chain(&machine),
+    )
+    .expect("join the folders");
+    let path = path_after_the_profile(&world, &start);
     assert_eq!(
-        String::from_utf8_lossy(&printed.stdout),
-        format!("path-{}\n", without_agent_clis(&machine).to_string_lossy())
+        path,
+        [put_first.clone(), odd.clone()]
+            .into_iter()
+            .chain(machine.iter().cloned())
+            .fold(Vec::new(), |mut kept, next| {
+                if !kept.contains(&next) {
+                    kept.push(next);
+                }
+                kept
+            }),
+        "the folders once each, in the order they came, the agent CLIs' folders lost"
     );
+
+    // The folders the machine's own path holds come back where a system's profile
+    // dropped them, after what the shell had.
+    let sparse = std::env::join_paths([&odd]).expect("join the folders");
+    let path = path_after_the_profile(&world, &sparse);
+    assert_eq!(path.first(), Some(&odd));
+    for folder in &machine {
+        assert!(path.contains(folder), "{} is lost", folder.display());
+    }
+
+    // With the stand-ins: their folder first, and the folder the shell started with
+    // next. The shell's own options and variables are not left behind.
+    world.agents_on_path();
+    let agents = world.agents_dir().expect("a folder of stand-ins");
+    let path = path_after_the_profile(&world, &start);
+    assert_eq!(&path[..2], [agents.clone(), put_first.clone()]);
+    assert_eq!(path.iter().filter(|f| **f == agents).count(), 1);
+    let printed = world
+        .command(Path::new("/bin/sh"))
+        .env("PATH", &start)
+        .args([
+            "-c",
+            ". \"$HOME/.profile\"; printf '%s|%s|%s' \"$folder\" \"$new\" \"$-\"",
+        ])
+        .output()
+        .expect("run a shell");
+    let printed = String::from_utf8_lossy(&printed.stdout);
+    let mut parts = printed.split('|');
+    assert_eq!(
+        (parts.next(), parts.next()),
+        (Some(""), Some("")),
+        "{printed}"
+    );
+    assert!(!parts.next().unwrap_or_default().contains('f'), "{printed}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_login_shell_of_a_world_keeps_a_folder_the_program_that_started_it_put_first() {
+    // macOS's system profile only adds to what a shell was started with, so what the
+    // app puts first on the path of a terminal's shell is still there after the login.
+    let world = World::new();
+    let put_first = world.home().join("put-first");
+    std::fs::create_dir_all(&put_first).expect("make the folder");
+    let machine = std::env::var_os("PATH").expect("the machine has a search path");
+    let start = std::env::join_paths(
+        std::iter::once(put_first.clone()).chain(std::env::split_paths(&machine)),
+    )
+    .expect("join the folders");
+    let printed = world
+        .command(Path::new("/bin/sh"))
+        .env("PATH", &start)
+        .args(["-l", "-c", "printf %s \"$PATH\""])
+        .output()
+        .expect("run a login shell");
+    let found: Vec<PathBuf> = std::env::split_paths(&OsString::from(
+        String::from_utf8_lossy(&printed.stdout).into_owned(),
+    ))
+    .collect();
+    assert!(found.contains(&put_first), "{found:?}");
 }
 
 #[test]

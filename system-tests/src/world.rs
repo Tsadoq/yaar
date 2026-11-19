@@ -94,7 +94,7 @@ impl World {
             shell: PathBuf::from("/bin/sh"),
             agents: None,
         };
-        world.write_profile(world.search_path());
+        world.write_profile(&world.profile());
         world
     }
 
@@ -112,20 +112,52 @@ impl World {
         }
     }
 
-    /// Writes the profile of the world's user, which a login shell reads last and which
-    /// sets the search path to `search`: what the system's profile made of it is not what
-    /// a test wants. Both a login `dash` and a login `bash` started as `sh` read it.
-    fn write_profile(&self, search: Option<OsString>) {
-        let Some(search) = search else {
-            return;
-        };
-        // In single quotes, which keep every character but the quote itself.
-        let quoted = search.to_string_lossy().replace('\'', r"'\''");
-        fs::write(
-            self.home().join(".profile"),
-            format!("PATH='{quoted}'; export PATH\n"),
+    /// The profile of the world's user, which a login shell reads after the system's own:
+    /// it keeps what the shell's search path holds and puts the folder of stand-ins, once
+    /// there is one, in front, and the machine's own folders after, which a system's
+    /// profile may have dropped (Ubuntu's sets the path outright). A folder that holds a
+    /// program named `claude` or `pi` is left out whatever put it there, since the system's
+    /// profile may add one too (macOS's adds those of `/etc/paths`). Both a login `dash`
+    /// and a login `bash` started as `sh` read it.
+    ///
+    /// What the app put first on the path of a shell is kept only where the system's
+    /// profile keeps it: a profile that sets the path outright takes it away before this
+    /// one runs, in the world as outside it.
+    fn profile(&self) -> String {
+        let quoted = |text: &OsStr| format!("'{}'", text.to_string_lossy().replace('\'', r"'\''"));
+        let machine = std::env::var_os("PATH").map(|search| without_agent_clis(&search));
+        let agents = self
+            .agents
+            .as_deref()
+            .map(|folder| quoted(folder.as_os_str()));
+        // A subshell, so that its options and variables are not the login shell's. The
+        // opening bracket of the pattern keeps macOS's bash 3 from reading its closing one
+        // as the end of the subshell.
+        format!(
+            "PATH=$(\n\
+             set -f\n\
+             machine={machine}\n\
+             new={first}\n\
+             seen=':'{first}':'\n\
+             IFS=:\n\
+             for folder in $PATH $machine; do\n\
+               [ -n \"$folder\" ] || continue\n\
+               case \"$seen\" in (*\":$folder:\"*) continue ;; esac\n\
+               seen=\"$seen$folder:\"\n\
+               [ -f \"$folder/claude\" ] && [ -x \"$folder/claude\" ] && continue\n\
+               [ -f \"$folder/pi\" ] && [ -x \"$folder/pi\" ] && continue\n\
+               new=\"$new${{new:+:}}$folder\"\n\
+             done\n\
+             printf '%s' \"$new\"\n\
+             ); export PATH\n",
+            machine = machine.as_deref().map_or_else(|| "''".to_owned(), quoted),
+            first = agents.as_deref().unwrap_or("''"),
         )
-        .expect("write the profile of the world's user");
+    }
+
+    fn write_profile(&self, profile: &str) {
+        fs::write(self.home().join(".profile"), profile)
+            .expect("write the profile of the world's user");
     }
 
     /// The home folder of the world's user.
@@ -376,17 +408,16 @@ impl World {
     /// Call it before [`World::start_keeper`].
     ///
     /// Every shell of the app is a login shell, and a login shell reads the system's
-    /// profile, which may put other folders first. So the world's `.profile` sets the
-    /// search path again, with the folder first. Panics unless a login shell finds the
-    /// stand-ins in that folder.
+    /// profile, which may put other folders first. So the world's `.profile` puts the
+    /// folder first again. Panics unless a login shell finds the stand-ins in that folder.
     pub fn agents_on_path(&mut self) {
         self.agents_on_path_with(|search| search);
     }
 
-    /// [`World::agents_on_path`], with the search path the profile sets made of the one it
-    /// would set by `profile_path`: where the check that a login shell finds the stand-ins
-    /// first has to be seen to refuse a shell that does not.
-    fn agents_on_path_with(&mut self, profile_path: impl FnOnce(OsString) -> OsString) {
+    /// [`World::agents_on_path`], with the profile it writes made of its own text by
+    /// `profile`: where the check that a login shell finds the stand-ins first has to be
+    /// seen to refuse a shell that does not.
+    fn agents_on_path_with(&mut self, profile: impl FnOnce(String) -> String) {
         let folder = self.root.join("agents");
         fs::create_dir_all(&folder).expect("make the folder of the stand-ins");
         // A link to a copy of the stand-in that nothing replaces: a link to the file Cargo
@@ -398,8 +429,7 @@ impl World {
             symlink(&standin, &link).expect("link a stand-in");
         }
         self.agents = Some(folder.clone());
-        let search = self.search_path().expect("a search path");
-        self.write_profile(Some(profile_path(search)));
+        self.write_profile(&profile(self.profile()));
         self.check_agents_found(&folder);
     }
 
@@ -822,10 +852,11 @@ mod tests {
         // A profile that puts the other folder in front of the world's own, as a system's
         // profile may.
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            world.agents_on_path_with(|search| {
-                let folders =
-                    std::iter::once(elsewhere.clone()).chain(std::env::split_paths(&search));
-                std::env::join_paths(folders).expect("join the path")
+            world.agents_on_path_with(|profile| {
+                format!(
+                    "{profile}PATH='{}':$PATH; export PATH\n",
+                    elsewhere.display()
+                )
             })
         }))
         .expect_err("another claude first is refused");
