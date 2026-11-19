@@ -1186,9 +1186,14 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
 
     let in_view = |cx: &mut VisualTestContext| pane.read_with(cx, |pane, _| pane.rows_in_view());
     let at_first = in_view(&mut cx);
-    assert_eq!(at_first, 0..21, "a window of 420 px holds 21 rows of 20 px");
-    assert!(drawn("review-row-20", &mut cx).is_some());
-    assert_eq!(drawn("review-row-21", &mut cx), None);
+    // The bar above the pane takes one of the 21 rows the window holds.
+    assert_eq!(
+        at_first,
+        0..20,
+        "a window of 420 px holds 20 rows of 20 px below the bar"
+    );
+    assert!(drawn("review-row-19", &mut cx).is_some());
+    assert_eq!(drawn("review-row-20", &mut cx), None);
     assert_eq!(drawn("review-row-5001", &mut cx), None);
 
     // The wheel moves the rows and leaves the reviewer on their line.
@@ -1200,8 +1205,8 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
         ..ScrollEvent::default()
     });
     cx.run_until_parked();
-    assert_eq!(in_view(&mut cx), 100..121);
-    assert_eq!(drawn("review-row-20", &mut cx), None);
+    assert_eq!(in_view(&mut cx), 100..120);
+    assert_eq!(drawn("review-row-19", &mut cx), None);
     assert!(drawn("review-row-100", &mut cx).is_some());
     assert_eq!(position(pane, &mut cx), on);
     assert_eq!(
@@ -1531,7 +1536,7 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     let on = position(&stage.pane, &mut cx);
     let in_view =
         |cx: &mut VisualTestContext| stage.pane.read_with(cx, |pane, _| pane.rows_in_view());
-    assert_eq!(in_view(&mut cx), 0..21);
+    assert_eq!(in_view(&mut cx), 0..20);
     assert_eq!(drawn("review-refused", &mut cx), None);
 
     // The Keeper tells of a change, is asked for the changes again, and cannot read
@@ -1563,8 +1568,8 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     assert!(said.top() >= px(0.) && said.bottom() <= bounds_of_row(0, &mut cx).top());
     // The rows took the room that is left: one row fewer is laid out, and the last of
     // them ends inside the window.
-    assert_eq!(in_view(&mut cx), 0..20);
-    assert!(bounds_of_row(19, &mut cx).bottom() <= WINDOW.height);
+    assert_eq!(in_view(&mut cx), 0..19);
+    assert!(bounds_of_row(18, &mut cx).bottom() <= WINDOW.height);
 
     // The pane asked for no file meanwhile: there are no new changes to read the
     // files of. The next thing it asks is the changes, when it is told again that
@@ -1585,7 +1590,7 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     // With the answer, the line about the refusal is gone and the rows have its room.
     assert!(!refused(&mut cx));
     assert_eq!(drawn("review-refused", &mut cx), None);
-    assert_eq!(in_view(&mut cx), 0..21);
+    assert_eq!(in_view(&mut cx), 0..20);
 }
 
 #[gpui_kit::test]
