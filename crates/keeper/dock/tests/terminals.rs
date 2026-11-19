@@ -1,7 +1,7 @@
 //! Component tests: the Dock through its calls, with real pseudo-terminals and the
 //! programs of scripts the tests write.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -11,8 +11,8 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use yaar_dock::{
-    Dock, DockError, Ending, Event, Events, LEFT_OUT_VARIABLES, STOP_STEP, Size, Start,
-    TERMINAL_VARIABLES, TerminalId,
+    Dock, DockError, Ending, Entry, Event, Events, LEFT_OUT_VARIABLES, RING_BYTES, STOP_STEP, Size,
+    Start, TERMINAL_VARIABLES, TerminalId,
 };
 
 /// How long a test waits for a fact before it says the fact did not come.
@@ -90,6 +90,23 @@ impl Watch {
         (Watch { told }, events)
     }
 
+    /// How many events have been told, without copying them.
+    fn count(&self) -> usize {
+        self.told.0.lock().expect("the events").len()
+    }
+
+    /// What the program wrote in the first `count` events.
+    fn output_of_first(&self, count: usize) -> Vec<u8> {
+        let told = self.told.0.lock().expect("the events");
+        let mut bytes = Vec::new();
+        for (_, event) in &told[..count] {
+            if let Event::Output(output) = event {
+                bytes.extend_from_slice(output);
+            }
+        }
+        bytes
+    }
+
     fn events(&self) -> Vec<Event> {
         let told = self.told.0.lock().expect("the events");
         told.iter().map(|(_, event)| event.clone()).collect()
@@ -110,6 +127,25 @@ impl Watch {
                 !left.is_zero(),
                 "no {what} within {DEADLINE:?}; the events so far: {:?}",
                 lines(&events)
+            );
+            told = self.told.1.wait_timeout(told, left).expect("the events").0;
+        }
+    }
+
+    /// Like `wait_until`, for a program that writes a lot: `done` looks at the events where
+    /// they are, and they are copied once, when it holds.
+    fn wait_told(&self, what: &str, done: impl Fn(&[(Instant, Event)]) -> bool) -> Vec<Event> {
+        let deadline = Instant::now() + DEADLINE;
+        let mut told = self.told.0.lock().expect("the events");
+        loop {
+            if done(&told) {
+                return told.iter().map(|(_, event)| event.clone()).collect();
+            }
+            let left = deadline.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "no {what} within {DEADLINE:?}; {} events so far",
+                told.len()
             );
             told = self.told.1.wait_timeout(told, left).expect("the events").0;
         }
@@ -1013,4 +1049,455 @@ fn a_program_holds_none_of_the_descriptors_of_the_dock() {
     let (_, watch) = open(&dock, scratch.start(script));
     let events = watch.wait_for_line("checked");
     assert_eq!(lines(&events), alone);
+}
+
+/// The variables of an editor's connection or of another editor's terminal that a Keeper
+/// started from an editor would hold, and that no shell of the app may get.
+const EDITOR_VARIABLES: [&str; 6] = [
+    "CLAUDE_CODE_SSE_PORT",
+    "ENABLE_IDE_INTEGRATION",
+    "VSCODE_INJECTION",
+    "VSCODE_IPC_HOOK_CLI",
+    "VSCODE_GIT_IPC_HANDLE",
+    "ZED_TERM",
+];
+
+#[test]
+fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the_app_adds() {
+    // SAFETY: changing the environment is sound only while no other thread reads it, as
+    // a thread that starts a process does. This is the first statement of a test, and
+    // `cargo nextest` gives each test a process of its own: no other thread exists yet.
+    unsafe {
+        // The user's own: an editor's connection, other terminals, and a plugin folder of
+        // their own that the app's has to come after.
+        for name in LEFT_OUT_VARIABLES.into_iter().chain(EDITOR_VARIABLES) {
+            std::env::set_var(name, "editor-connection-4242");
+        }
+        std::env::set_var("CLAUDE_CODE_PLUGIN_DIRS", "/user/own");
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        // The terminal's own variables, each different from what the app sets.
+        std::env::set_var("TERM", "dumb");
+        std::env::set_var("COLORTERM", "16");
+        std::env::set_var("TERM_PROGRAM", "Apple_Terminal");
+        std::env::set_var("TERM_PROGRAM_VERSION", "0.0");
+        std::env::set_var("YAAR_DOCK_TEST_PASSED_ON", "yes");
+    }
+    let scratch = Scratch::new();
+    let plugin = scratch.path().join("plugin");
+    let first = scratch.path().join("pieces");
+    // What the user's own environment is, less what a system program drops by itself:
+    // macOS removes the variables of the dynamic loader before it runs `env`.
+    let users: BTreeMap<String, String> = std::env::vars()
+        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .collect();
+
+    // `env` itself is the program, so that no shell adds `SHLVL`, `PWD` or `_`.
+    let dock = Dock::new();
+    let start = scratch.start(PathBuf::from("/usr/bin/env")).with(&[
+        Entry::Variable {
+            name: "YAAR_SOCKET".into(),
+            value: "/run/yaar/keeper.sock".into(),
+        },
+        Entry::Variable {
+            name: "YAAR_TERMINAL".into(),
+            value: "00112233445566778899aabbccddeeff".into(),
+        },
+        Entry::PathList {
+            name: "CLAUDE_CODE_PLUGIN_DIRS".into(),
+            path: plugin.clone(),
+        },
+        Entry::SearchFirst(first.clone()),
+    ]);
+    let (_, watch) = open(&dock, start);
+    let events = watch.wait_for_end();
+
+    let theirs: BTreeMap<String, String> = lines(&events)
+        .iter()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .collect();
+
+    // Where their environment differs from the user's, name by name: what the user had
+    // and what the program got. One entry for each clause of the sentence, and nothing
+    // else may be there.
+    let connection = Some("editor-connection-4242".to_owned());
+    let mut differences = BTreeMap::new();
+    for (name, value) in [
+        (
+            "CLAUDE_CODE_PLUGIN_DIRS",
+            format!("/user/own:{}", plugin.display()),
+        ),
+        ("PATH", format!("{}:/usr/bin:/bin", first.display())),
+        ("YAAR_SOCKET", "/run/yaar/keeper.sock".to_owned()),
+        (
+            "YAAR_TERMINAL",
+            "00112233445566778899aabbccddeeff".to_owned(),
+        ),
+        ("TERM", "xterm-256color".to_owned()),
+        ("COLORTERM", "truecolor".to_owned()),
+        ("TERM_PROGRAM", "yaar".to_owned()),
+        ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION").to_owned()),
+    ] {
+        differences.insert(name.to_owned(), (users.get(name).cloned(), Some(value)));
+    }
+    // The variables of other terminals and multiplexers, and of an editor's connection,
+    // are left out.
+    for name in LEFT_OUT_VARIABLES.into_iter().chain(EDITOR_VARIABLES) {
+        differences.insert(name.to_owned(), (connection.clone(), None));
+    }
+    let mut found = BTreeMap::new();
+    for name in users.keys().chain(theirs.keys()) {
+        let (before, after) = (users.get(name), theirs.get(name));
+        if before != after {
+            found.insert(name.clone(), (before.cloned(), after.cloned()));
+        }
+    }
+    assert_eq!(found, differences);
+
+    // Nothing in it names an editor connection, by name or by value.
+    for (name, value) in &theirs {
+        assert!(!EDITOR_VARIABLES.contains(&name.as_str()), "{name} is set");
+        assert_ne!(
+            Some(value),
+            connection.as_ref(),
+            "{name} holds the connection"
+        );
+    }
+}
+
+/// Everything the program wrote, as the bytes the events held.
+fn output(events: &[Event]) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for event in events {
+        if let Event::Output(output) = event {
+            bytes.extend_from_slice(output);
+        }
+    }
+    bytes
+}
+
+/// How many bytes the program wrote, as the events told so far hold them.
+fn output_len(told: &[(Instant, Event)]) -> usize {
+    told.iter()
+        .map(|(_, event)| match event {
+            Event::Output(bytes) => bytes.len(),
+            _ => 0,
+        })
+        .sum()
+}
+
+/// Whether what the program wrote ends with `suffix`, looking at the last events only.
+fn output_ends_with(told: &[(Instant, Event)], suffix: &[u8]) -> bool {
+    let mut tail: Vec<u8> = Vec::new();
+    for (_, event) in told.iter().rev() {
+        if let Event::Output(bytes) = event {
+            tail.splice(0..0, bytes.iter().copied());
+            if tail.len() >= suffix.len() {
+                break;
+            }
+        }
+    }
+    tail.ends_with(suffix)
+}
+
+/// What `attach` handed over, and how many events the terminal had told when it did.
+struct Attached {
+    ring: Vec<u8>,
+    cut: bool,
+    told: usize,
+}
+
+/// Attaches to the terminal and notes, inside the call, how many events `watch` holds: no
+/// event of the terminal may be told while `attach` runs, so the count is the boundary
+/// between what the ring holds and what is told after it.
+fn attach(dock: &Dock, terminal: &TerminalId, watch: &Watch) -> Result<Attached, DockError> {
+    let mut attached = None;
+    dock.attach(terminal, |ring, cut| {
+        attached = Some(Attached {
+            ring: ring.to_vec(),
+            cut,
+            told: watch.count(),
+        });
+    })?;
+    Ok(attached.expect("attach hands the ring over"))
+}
+
+#[test]
+fn a_terminal_that_wrote_less_than_the_ring_holds_is_attached_with_all_of_it_and_not_cut() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    let script = scratch.script("short", "stty -echo\necho hello\necho world\nread line\n");
+    let (id, watch) = open(&dock, scratch.start(script));
+    let events = watch.wait_for_line("world");
+
+    let attached = attach(&dock, &id, &watch).expect("attach");
+    assert!(!attached.cut);
+    assert_eq!(attached.ring, output(&events));
+    assert_eq!(
+        String::from_utf8(attached.ring).expect("text"),
+        "hello\r\nworld\r\n"
+    );
+}
+
+#[test]
+fn a_terminal_that_wrote_more_than_the_ring_holds_is_attached_with_the_newest_bytes_and_cut() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // About 2 MiB of numbered lines, then a line that says it is over.
+    let script = scratch.script("long", "stty -echo\nseq 1 300000\necho over\nread line\n");
+    let (id, watch) = open(&dock, scratch.start(script));
+    let events = watch.wait_told("the last line", |told| output_ends_with(told, b"over\r\n"));
+    let written = output(&events);
+    assert!(written.len() > 2 * RING_BYTES, "{} bytes", written.len());
+
+    let attached = attach(&dock, &id, &watch).expect("attach");
+    assert!(attached.cut);
+    assert_eq!(attached.ring.len(), RING_BYTES);
+    assert_eq!(attached.ring, written[written.len() - RING_BYTES..]);
+}
+
+#[test]
+fn the_ring_is_cut_by_the_byte_after_it_is_full_and_not_before() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // Exactly `RING_BYTES` bytes, then one more when a line is typed. No newline in
+    // either, so the terminal changes none of them.
+    let script = scratch.script(
+        "boundary",
+        "stty -echo\n\
+         head -c 1048576 /dev/zero | tr '\\000' a\n\
+         read line\n\
+         printf b\n\
+         read line\n",
+    );
+    let (id, watch) = open(&dock, scratch.start(script));
+    watch.wait_told("a full ring", |told| output_len(told) >= RING_BYTES);
+
+    let full = attach(&dock, &id, &watch).expect("attach");
+    assert_eq!(full.ring.len(), RING_BYTES);
+    assert!(!full.cut, "nothing has been dropped yet");
+
+    type_line(&dock, &id, "go");
+    watch.wait_told("one byte more", |told| output_len(told) > RING_BYTES);
+    let cut = attach(&dock, &id, &watch).expect("attach");
+    assert!(cut.cut);
+    assert_eq!(cut.ring.len(), RING_BYTES);
+    assert_eq!(cut.ring.last(), Some(&b'b'));
+    assert!(cut.ring[..RING_BYTES - 1].iter().all(|byte| *byte == b'a'));
+}
+
+#[test]
+fn output_written_while_attaching_is_told_after_the_ring_and_none_is_lost_or_told_twice() {
+    const LAST: u32 = 20_000;
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // Many small writes, so that reads and attaches meet at every kind of moment; they
+    // begin when a line is typed, which is when the attaching begins.
+    let script = scratch.script(
+        "numbers",
+        &format!(
+            "stty -echo\n\
+             echo ready\n\
+             read line\n\
+             i=1\n\
+             while [ $i -le {LAST} ]; do echo $i; i=$((i + 1)); done\n\
+             read line\n"
+        ),
+    );
+    let (id, watch) = open(&dock, scratch.start(script));
+    // The program has turned the echo off: the line typed is not part of its output.
+    watch.wait_for_line("ready");
+    type_line(&dock, &id, "go");
+
+    // Attach again and again while the program runs; each time the ring must be exactly
+    // what was told before it, in a terminal that wrote less than the ring holds.
+    let mut attaches = 0;
+    let mut last = None;
+    while let Ok(attached) = attach(&dock, &id, &watch) {
+        assert!(!attached.cut);
+        assert_eq!(
+            attached.ring,
+            watch.output_of_first(attached.told),
+            "attach number {attaches}"
+        );
+        attaches += 1;
+        let done = attached.ring.ends_with(format!("{LAST}\r\n").as_bytes());
+        last = Some(attached);
+        if done {
+            break;
+        }
+    }
+    assert!(attaches > 1, "the program ended before a second attach");
+
+    // The last ring, then what was told after it, is every number once and in order.
+    let last = last.expect("an attach");
+    let events = watch.wait_for_line(&LAST.to_string());
+    let mut whole = last.ring;
+    whole.extend(output(&events[last.told..]));
+    let text = String::from_utf8(whole).expect("text");
+    let numbers: Vec<u32> = text
+        .strip_prefix("ready\r\n")
+        .expect("what the program said first")
+        .lines()
+        .map(|line| line.trim().parse().expect("a number"))
+        .collect();
+    assert_eq!(numbers, (1..=LAST).collect::<Vec<_>>());
+}
+
+#[test]
+fn attaching_to_a_terminal_that_is_not_held_is_refused_and_hands_nothing_over() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    let refused = |dock: &Dock, id: &TerminalId| {
+        let mut called = false;
+        let answer = dock.attach(id, |_, _| called = true);
+        assert!(
+            matches!(answer, Err(DockError::UnknownTerminal(_))),
+            "{answer:?}"
+        );
+        assert!(!called);
+        assert!(matches!(
+            dock.redraw(id),
+            Err(DockError::UnknownTerminal(_))
+        ));
+    };
+    refused(&dock, &TerminalId::random().expect("an id"));
+
+    let (id, watch) = open(&dock, scratch.start(scratch.script("ends", "echo bye\n")));
+    watch.wait_for_end();
+    refused(&dock, &id);
+}
+
+#[test]
+fn a_mark_that_comes_in_two_writes_is_told_once_after_the_output_that_completed_it() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // The first half, then nothing until a line is typed, then the second half.
+    let script = scratch.script(
+        "split",
+        "stty -echo\n\
+         printf 'before \\033]9;4'\n\
+         read line\n\
+         printf ';0;\\007'\n\
+         read line\n\
+         echo done\n\
+         read line\n",
+    );
+    let mut start = scratch.start(script);
+    start.marks = vec![b"\x1b]9;4;0;\x07".to_vec(), b"no such mark".to_vec()];
+    let (id, watch) = open(&dock, start);
+    watch.wait_until("the first half", |events| {
+        output(events).ends_with(b"\x1b]9;4")
+    });
+    // Anything told before the first half is told after it as well, in order: typing a
+    // line makes the program write again, which is the barrier for what came before.
+    type_line(&dock, &id, "go");
+    let events = watch.wait_until("the mark", |events| events.contains(&Event::Mark(0)));
+    let at = events
+        .iter()
+        .position(|event| *event == Event::Mark(0))
+        .expect("the mark");
+    // Told after the output that held its last byte, and not before the output that
+    // completed it.
+    let before = output(&events[..at]);
+    assert!(before.ends_with(b"\x1b]9;4;0;\x07"), "{before:?}");
+    // Nothing is told twice, and no other mark is told: the later events show it.
+    type_line(&dock, &id, "again");
+    let events = watch.wait_until("the end of the program's output", |events| {
+        output(events).ends_with(b"done\r\n")
+    });
+    let marks: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::Mark(_)))
+        .collect();
+    assert_eq!(marks, [&Event::Mark(0)]);
+}
+
+#[test]
+fn a_program_asked_to_redraw_gets_the_signal_of_a_changed_size_also_when_the_size_is_the_same() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // `wait` returns at once when a trapped signal comes, which a read would not.
+    let script = scratch.script(
+        "redraws",
+        "trap 'echo winch' WINCH\n\
+         echo ready\n\
+         while :; do sleep 100 & wait $!; done\n",
+    );
+    let (id, watch) = open(&dock, scratch.start(script));
+    watch.wait_for_line("ready");
+    let winches = |events: &[Event]| lines(events).iter().filter(|line| *line == "winch").count();
+
+    dock.redraw(&id).expect("redraw");
+    watch.wait_until("a winch", |events| winches(events) == 1);
+    dock.resize(&id, SIZE).expect("resize to the size it has");
+    dock.redraw(&id).expect("redraw again");
+    let events = watch.wait_until("a second winch", |events| winches(events) >= 2);
+    // Only the ones asked for: the resize to the size it had changed nothing.
+    assert_eq!(winches(&events), 2, "{:?}", lines(&events));
+}
+
+#[test]
+fn a_redraw_reaches_the_foreground_process_group_and_not_a_job_in_the_background() {
+    let scratch = Scratch::new();
+    let dock = Dock::new();
+    // With job control the background job has a group of its own, which is not in front
+    // of the terminal. The shell is, and says so when it gets the signal.
+    let script = scratch.script(
+        "groups",
+        "set -m\n\
+         trap 'echo front' WINCH\n\
+         sh -c \"trap 'echo behind' WINCH; echo job; while :; do sleep 100 & wait \\$!; done\" &\n\
+         job=$!\n\
+         echo ready\n\
+         while :; do sleep 100 & wait $!; done\n",
+    );
+    let (id, watch) = open(&dock, scratch.start(script));
+    watch.wait_for_line("ready");
+    watch.wait_for_line("job");
+
+    dock.redraw(&id).expect("redraw");
+    watch.wait_for_line("front");
+    // The echo of a typed line comes through the same path as everything before it.
+    dock.write(&id, b"barrier\n").expect("write");
+    let events = watch.wait_for_line("barrier");
+    assert!(
+        !lines(&events).iter().any(|line| line == "behind"),
+        "the job in the background got the signal: {:?}",
+        lines(&events)
+    );
+}
+
+#[test]
+fn a_launcher_runs_one_command_through_the_users_shell_and_the_terminal_ends_with_it() {
+    let scratch = Scratch::new();
+    // SAFETY: changing the environment is sound only while no other thread reads it, as
+    // a thread that starts a process does. This is the first statement of a test, and
+    // `cargo nextest` gives each test a process of its own. A login shell reads the
+    // profile in its home: that is this test's folder, not the user's.
+    unsafe {
+        std::env::set_var("SHELL", "/bin/sh");
+        std::env::set_var("HOME", scratch.path());
+        std::env::remove_var("ENV");
+    }
+    let dock = Dock::new();
+    // A pipe and a variable are the shell's, not the Dock's.
+    let command = "echo \"in $(pwd -P)\" | tr a-z A-Z; exit 7";
+    let (_, watch) = open(
+        &dock,
+        Start::launcher(scratch.path().to_owned(), SIZE, command),
+    );
+    let events = watch.wait_for_end();
+
+    assert_eq!(
+        watch.events().last(),
+        Some(&Event::Ended(Ending::Exited(7)))
+    );
+    let expected = format!("IN {}", scratch.path().display().to_string().to_uppercase());
+    assert!(
+        lines(&events).contains(&expected),
+        "{expected:?} not in {:?}",
+        lines(&events)
+    );
 }
