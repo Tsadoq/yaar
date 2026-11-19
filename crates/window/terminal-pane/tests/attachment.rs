@@ -710,7 +710,7 @@ fn a_launcher_a_pane_wants_for_a_review_is_opened_in_that_workspace_and_gets_the
     });
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.shown()),
-        [t.clone()]
+        std::slice::from_ref(&t)
     );
     wait_drawn(&mut cx, "the focus in the terminal", |cx| {
         panes.focused_terminal(cx) == Some(t.clone())
