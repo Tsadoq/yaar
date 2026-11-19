@@ -195,6 +195,51 @@ fn with_one_agent_session_the_pane_names_it_and_with_several_the_reviewer_choose
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
 }
 
+/// The width of what is drawn for a session's name, which on the test platform is the
+/// number of its characters times the width of one.
+fn name_width(index: usize, title: &str, cx: &mut VisualTestContext) -> f32 {
+    let selector = format!("review-session-name-{index}:{title}");
+    let bounds = drawn(&selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
+    f32::from(bounds.size.width)
+}
+
+#[gpui_kit::test]
+fn the_text_drawn_for_a_session_is_its_title_and_not_the_name_of_its_agent(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_two_reviews(cx);
+    let short = "Short";
+    // No spaces: the test platform measures a space differently from a letter.
+    let long = "LongerTitleOfTheSession";
+    let titled = |title: &str| session('a', title, SessionState::Works, Some(r1()));
+
+    // The selector says what the title is; the width of what is drawn says what text is
+    // in it, since the agent's name has one length whatever the title is. A width is
+    // rounded to a pixel, hence the margin.
+    tell_sessions(&mut stage, vec![titled(short)], &mut cx);
+    let one_short = name_width(0, short, &mut cx);
+    tell_sessions(&mut stage, vec![titled(long)], &mut cx);
+    let one_long = name_width(0, long, &mut cx);
+    assert!(one_short > 0.0, "the title is drawn with a width");
+    let chars = long.chars().count() as f32 / short.chars().count() as f32;
+    assert!(
+        (one_long / one_short - chars).abs() < 0.1,
+        "one session: the text drawn is {chars} times as wide for a title that long: \
+         {one_short} and {one_long}"
+    );
+
+    // With several, each is drawn with its own title.
+    let other = session('b', short, SessionState::Works, Some(r2()));
+    tell_sessions(&mut stage, vec![titled(long), other], &mut cx);
+    let first = name_width(0, long, &mut cx);
+    let second = name_width(1, short, &mut cx);
+    assert!(
+        (first / second - chars).abs() < 0.1,
+        "several sessions: the text drawn is {chars} times as wide for a title that long: \
+         {second} and {first}"
+    );
+}
+
 #[gpui_kit::test]
 fn a_comment_on_a_change_no_agent_made_goes_to_the_review_on_screen(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = open_with_two_reviews(cx);
