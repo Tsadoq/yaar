@@ -14,15 +14,16 @@ use std::time::{Duration, Instant};
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext};
 use yaar_diff::{Row, Side};
 use yaar_link::{
-    ChangedFile, Fact, FileStatus, FlowForm, History, HistoryEntry, Reply, Request,
-    Session, SessionState, Setting, Step, TurnId,
+    Anchor, Author, ChangedFile, Comment, CommentId, Fact, FileStatus, FlowForm, History,
+    HistoryEntry, Lines, Reply, Request, Session, SessionState, Setting, Step, Thread, ThreadId,
+    TurnId,
 };
 use yaar_review_pane::{LiveChange, PaneRow, Position, Unshown, View};
 
 use common::{
-    COMMIT, DEADLINE, Stage, agents_of, drawn, file, id, open_staged, running_turn, session,
-    session_id, since_main, step_fact, texts, turn_id, wait_for_files, working_on,
-    workspace,
+    COMMIT, DEADLINE, Stage, agents_of, drawn, file, id, no_agent_review, open_staged, review_id,
+    reviews_of, running_turn, session, session_id, since_main, step_fact, texts, turn_id,
+    wait_for_files, wait_until, working_on, workspace,
 };
 
 /// The state the turn counts from.
@@ -85,11 +86,15 @@ fn focus_by_the_bar(stage: &Stage, cx: &mut VisualTestContext) {
 }
 
 fn live_rows(stage: &Stage, cx: &mut VisualTestContext) -> Vec<PaneRow> {
-    stage.pane.read_with(cx, |pane, _| pane.live_rows().to_vec())
+    stage
+        .pane
+        .read_with(cx, |pane, _| pane.live_rows().to_vec())
 }
 
 fn live_change(stage: &Stage, cx: &mut VisualTestContext) -> Option<LiveChange> {
-    stage.pane.read_with(cx, |pane, _| pane.live_change().cloned())
+    stage
+        .pane
+        .read_with(cx, |pane, _| pane.live_change().cloned())
 }
 
 /// The paths of the headings of the changed files of the live diff, in order.
@@ -213,7 +218,9 @@ fn answer_reads(
             .position(|(name, ..)| PathBuf::from(name) == path)
             .unwrap_or_else(|| panic!("{path:?} was read, which is not among {left:?}"));
         let (_, before, after) = left.remove(at);
-        stage.keeper.reply(asked, texts(before, after).map(Reply::File));
+        stage
+            .keeper
+            .reply(asked, texts(before, after).map(Reply::File));
     }
 }
 
@@ -268,9 +275,9 @@ fn the_files_changed(
     files: Vec<ChangedFile>,
     cx: &mut VisualTestContext,
 ) {
-    stage.keeper.tell(Fact::ChangesChanged {
-        workspace: id('1'),
-    });
+    stage
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
     let mut compared_yet = false;
     let mut told_yet = false;
     while !(compared_yet && told_yet) {
@@ -287,7 +294,10 @@ fn the_files_changed(
                 from: counted_from,
                 to,
             } => {
-                assert_eq!((workspace, counted_from.as_str(), to), (id('1'), from, None));
+                assert_eq!(
+                    (workspace, counted_from.as_str(), to),
+                    (id('1'), from, None)
+                );
                 compared_yet = true;
                 stage
                     .keeper
@@ -322,7 +332,13 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
 
     // The diff of the running turn: the files it changed so far against the state it
     // started from.
-    answer_reads(&mut stage, &s0(), None, &[("a.txt", "one\n", "one\ntwo\n")], &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("a.txt", "one\n", "one\ntwo\n")],
+        &mut cx,
+    );
     wait_for_live(&stage, &["a.txt"], &[], &mut cx);
     assert_eq!(
         live_change(&stage, &mut cx),
@@ -381,7 +397,13 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
     // Only the file new to the list is read: a.txt is not.
-    answer_reads(&mut stage, &s0(), None, &[("b.txt", "", "new b\n")], &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("b.txt", "", "new b\n")],
+        &mut cx,
+    );
     wait_for_live(&stage, &["a.txt", "b.txt"], &[], &mut cx);
     the_files_changed(
         &mut stage,
@@ -471,8 +493,19 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
             file("r.txt", FileStatus::Modified),
         ])),
     );
-    answer_reads(&mut stage, &s0(), None, &[("r.txt", "old r\n", "new r\n")], &mut cx);
-    wait_for_live(&stage, &["a.txt", "b.txt", "c.txt", "r.txt"], &["q.txt"], &mut cx);
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("r.txt", "old r\n", "new r\n")],
+        &mut cx,
+    );
+    wait_for_live(
+        &stage,
+        &["a.txt", "b.txt", "c.txt", "r.txt"],
+        &["q.txt"],
+        &mut cx,
+    );
     let rows = live_rows(&stage, &mut cx);
     assert_eq!(
         rows.last(),
@@ -485,19 +518,23 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     // for the first is a change the Frame asks the Keeper about, told twice: no question
     // of the live diff comes between the Frame's.
     press("f", &mut cx);
-    assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Changes);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.view()),
+        View::Changes
+    );
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 6, write("d.txt")));
     for _ in 0..2 {
-        stage.keeper.tell(Fact::ChangesChanged {
-            workspace: id('1'),
-        });
-        let (asked, request) = stage.keeper.request(&mut cx);
-        assert_eq!(request, Request::GetChanges { workspace: id('1') });
         stage
             .keeper
-            .reply(asked, Ok(Reply::Changes(since_main(Vec::new(), Vec::new()))));
+            .tell(Fact::ChangesChanged { workspace: id('1') });
+        let (asked, request) = stage.keeper.request(&mut cx);
+        assert_eq!(request, Request::GetChanges { workspace: id('1') });
+        stage.keeper.reply(
+            asked,
+            Ok(Reply::Changes(since_main(Vec::new(), Vec::new()))),
+        );
     }
     press("f", &mut cx);
     assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
@@ -577,10 +614,9 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         None,
         Vec::new(),
     ));
-    stage.keeper.tell_agents(agents_of(vec![
-        session_a_idle(),
-        working_on(b, t2.clone()),
-    ]));
+    stage
+        .keeper
+        .tell_agents(agents_of(vec![session_a_idle(), working_on(b, t2.clone())]));
     compared(&mut stage, COMMIT, None, Vec::new(), &mut cx);
     cx.run_until_parked();
     assert_eq!(
@@ -603,7 +639,12 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         Vec::new(),
     ));
     press("shift-t", &mut cx);
-    let before = stage.keeper.turns_asked().iter().filter(|asked| **asked == t2).count();
+    let before = stage
+        .keeper
+        .turns_asked()
+        .iter()
+        .filter(|asked| **asked == t2)
+        .count();
     stage.keeper.tell(Fact::TurnEnded {
         workspace: id('1'),
         session: session_id('b'),
@@ -613,7 +654,12 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     });
     compared(&mut stage, &s5(), None, Vec::new(), &mut cx);
     assert_eq!(
-        stage.keeper.turns_asked().iter().filter(|asked| **asked == t2).count(),
+        stage
+            .keeper
+            .turns_asked()
+            .iter()
+            .filter(|asked| **asked == t2)
+            .count(),
         before + 1
     );
     assert_eq!(
@@ -674,9 +720,7 @@ fn a_turn_that_ended_before_the_window_opened_is_shown_to_the_state_it_ended_wit
                 let files = vec![file("a.txt", FileStatus::Added)];
                 stage.keeper.reply(asked, Ok(Reply::Compared(files)));
             }
-            Request::ReadVersions {
-                old, new, path, ..
-            } => {
+            Request::ReadVersions { old, new, path, .. } => {
                 assert_eq!(
                     (old, new, path),
                     (Some(s0()), Some(s1()), PathBuf::from("a.txt"))
@@ -730,13 +774,18 @@ fn a_file_read_outside_the_worktree_is_listed_by_its_whole_path_and_a_file_read_
         },
         "a renamed file is read by the path it had before"
     );
-    stage.keeper.reply(asked, texts("x\n", "x\n").map(Reply::File));
+    stage
+        .keeper
+        .reply(asked, texts("x\n", "x\n").map(Reply::File));
     wait_for_live(&stage, &["new name.txt"], &[], &mut cx);
     // Before the list is here nothing is taken out of the group; once it is, the old
     // name of a renamed file is the file that changed.
-    stage
-        .keeper
-        .tell(step_fact(session_id('a'), t.clone(), 1, read("old name.txt")));
+    stage.keeper.tell(step_fact(
+        session_id('a'),
+        t.clone(),
+        1,
+        read("old name.txt"),
+    ));
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 2, read("/etc/hosts")));
@@ -777,21 +826,45 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
         stage
             .pane
             .read_with(cx, |pane, _| pane.live_position().cloned())
-            .map(|position| (position.path.display().to_string(), position.side, position.line))
+            .map(|position| {
+                (
+                    position.path.display().to_string(),
+                    position.side,
+                    position.line,
+                )
+            })
     };
     // The reviewer starts on the first changed line.
-    assert_eq!(at(&stage, &mut cx), Some(("a.txt".to_owned(), Side::Old, 0)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("a.txt".to_owned(), Side::Old, 0))
+    );
     press("j", &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("a.txt".to_owned(), Side::New, 0)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("a.txt".to_owned(), Side::New, 0))
+    );
     press("j", &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("b.txt".to_owned(), Side::New, 0)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("b.txt".to_owned(), Side::New, 0))
+    );
     press("j", &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("b.txt".to_owned(), Side::Old, 1)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("b.txt".to_owned(), Side::Old, 1))
+    );
     // The end: the file read has no line to stand on, so `j` stays on the last line.
     press("j", &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("b.txt".to_owned(), Side::Old, 1)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("b.txt".to_owned(), Side::Old, 1))
+    );
     press("k", &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("b.txt".to_owned(), Side::New, 0)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("b.txt".to_owned(), Side::New, 0))
+    );
     // A click on a line puts the reviewer there.
     let rows = live_rows(&stage, &mut cx);
     let index = rows
@@ -801,5 +874,134 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
         })
         .expect("a.txt has an added line");
     click(&format!("flow-text-{index}-new:uno"), &mut cx);
-    assert_eq!(at(&stage, &mut cx), Some(("a.txt".to_owned(), Side::New, 0)));
+    assert_eq!(
+        at(&stage, &mut cx),
+        Some(("a.txt".to_owned(), Side::New, 0))
+    );
+}
+
+/// A live diff of turn `t` that holds `a.txt`, `one` and then `two` added.
+fn with_a_change(t: &TurnId, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = in_the_live_diff(cx);
+    start_turn(&mut stage, t, &s0(), &mut cx);
+    compared(
+        &mut stage,
+        &s0(),
+        None,
+        vec![file("a.txt", FileStatus::Modified)],
+        &mut cx,
+    );
+    answer_reads(
+        &mut stage,
+        &s0(),
+        None,
+        &[("a.txt", "one\n", "one\ntwo\n")],
+        &mut cx,
+    );
+    wait_for_live(&stage, &["a.txt"], &[], &mut cx);
+    (stage, cx)
+}
+
+#[gpui_kit::test]
+fn the_threads_of_the_review_sit_under_the_lines_of_the_live_diff_they_are_on(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (mut stage, mut cx) = with_a_change(&t, cx);
+    let thread = Thread {
+        id: ThreadId::new("7".repeat(32)),
+        anchor: Anchor {
+            tree: None,
+            path: "a.txt".into(),
+            side: yaar_link::Side::New,
+            // Lines are counted from 1 here: this is the line `two`.
+            lines: Lines { first: 2, last: 2 },
+            text: "two".to_owned(),
+        },
+        resolved: false,
+        addressed: false,
+        comments: vec![Comment {
+            id: CommentId::new("8".repeat(32)),
+            author: Author::Reviewer,
+            text: "why?".to_owned(),
+            round: None,
+        }],
+    };
+    let mut review = no_agent_review();
+    review.threads.push(thread.clone());
+    assert_eq!(review.id, review_id());
+    stage.keeper.set_reviews(reviews_of(vec![review]));
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('1') });
+    wait_until(&mut cx, "the thread under its line", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.live_rows()
+                .iter()
+                .any(|row| matches!(row, PaneRow::Thread { .. }))
+        })
+    });
+    let rows = live_rows(&stage, &mut cx);
+    let at = rows.len() - 2;
+    assert_eq!(
+        rows[at - 1],
+        PaneRow::Diff {
+            path: "a.txt".into(),
+            row: Row::Added { new: 1 },
+        }
+    );
+    assert_eq!(
+        rows[at],
+        PaneRow::Thread {
+            thread: thread.id.clone()
+        }
+    );
+    assert_eq!(
+        rows[at + 1],
+        PaneRow::Comment {
+            thread: thread.id.clone(),
+            comment: thread.comments[0].id.clone(),
+        }
+    );
+    assert!(drawn(&format!("flow-thread-{}", thread.id), &mut cx).is_some());
+    assert!(
+        drawn(
+            &format!("flow-comment-{}:draft", thread.comments[0].id),
+            &mut cx
+        )
+        .is_some()
+    );
+}
+
+#[gpui_kit::test]
+fn the_layout_switch_makes_the_rows_of_the_live_diff_again_in_the_other_layout(
+    cx: &mut TestAppContext,
+) {
+    let t = turn_id('t');
+    let (stage, mut cx) = with_a_change(&t, cx);
+    let unified = live_rows(&stage, &mut cx);
+    assert!(unified.iter().any(|row| matches!(
+        row,
+        PaneRow::Diff {
+            row: Row::Added { .. },
+            ..
+        }
+    )));
+    press("s", &mut cx);
+    let split = live_rows(&stage, &mut cx);
+    assert_ne!(split, unified);
+    assert!(
+        split.iter().any(|row| matches!(
+            row,
+            PaneRow::Diff {
+                row: Row::Changed {
+                    old: None,
+                    new: Some(1)
+                },
+                ..
+            }
+        )),
+        "{split:#?}"
+    );
+    assert!(drawn("flow-row-2-new", &mut cx).is_some());
 }

@@ -81,7 +81,8 @@ use yaar_link::{
 use crate::tree::checked_out;
 use crate::{
     FILES_ON_THEIR_WAY, FileContent, FlowAt, Following, LiveChange, PaneRow, Position, ReviewPane,
-    ShownDiff, ShownFile, TimelineEntry, Unshown, View, file_rows, stops, stops_of, versions, whose,
+    ShownDiff, ShownFile, TimelineEntry, Unshown, View, file_rows, stops, stops_of, versions,
+    whose,
 };
 
 /// What the live diff keeps.
@@ -206,7 +207,12 @@ impl Live {
 
     /// The diff of the file at `path`, when it holds one.
     pub(crate) fn diff_of(&self, path: &Path) -> Option<&ShownDiff> {
-        match &self.files.iter().find(|held| held.file.path == path)?.content {
+        match &self
+            .files
+            .iter()
+            .find(|held| held.file.path == path)?
+            .content
+        {
             FileContent::Diff(shown) => Some(shown),
             FileContent::Unshown(_) => None,
         }
@@ -226,7 +232,10 @@ impl Live {
 
     /// Where the reviewer is, among the rows: the index of the row of that line.
     fn locate(&self, position: &Position) -> Option<usize> {
-        let held = self.files.iter().find(|held| held.file.path == position.path)?;
+        let held = self
+            .files
+            .iter()
+            .find(|held| held.file.path == position.path)?;
         let start = held.rows.start;
         self.rows[held.rows.clone()]
             .iter()
@@ -244,13 +253,15 @@ impl Live {
                 FileContent::Unshown(Unshown::Loading) => return None,
                 FileContent::Unshown(_) => {}
                 FileContent::Diff(_) => {
-                    let changed = self.rows[held.rows.clone()].iter().find_map(|row| match row {
-                        PaneRow::Diff {
-                            row: Row::Context { .. },
-                            ..
-                        } => None,
-                        row => stops_of(row).next(),
-                    });
+                    let changed = self.rows[held.rows.clone()]
+                        .iter()
+                        .find_map(|row| match row {
+                            PaneRow::Diff {
+                                row: Row::Context { .. },
+                                ..
+                            } => None,
+                            row => stops_of(row).next(),
+                        });
                     if let Some((side, line)) = changed {
                         return Some(Position {
                             path: held.file.path.clone(),
@@ -437,12 +448,13 @@ impl ReviewPane {
         let Some(now) = stops.iter().position(|stop| *stop == (row, position.side)) else {
             return;
         };
-        let Some(&(row, side)) = now.checked_add_signed(by).and_then(|next| stops.get(next))
-        else {
+        let Some(&(row, side)) = now.checked_add_signed(by).and_then(|next| stops.get(next)) else {
             return;
         };
         self.live_go_to(row, side, cx);
-        self.live.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        self.live
+            .scroll
+            .scroll_to_item(row, ScrollStrategy::Nearest);
     }
 
     /// Puts the reviewer on a line of the row at `index`: what a click on it does.
@@ -487,7 +499,9 @@ impl ReviewPane {
 
     /// Scrolls the live diff so that row `row` is in view, as follow wants it.
     pub(crate) fn scroll_live_to(&mut self, row: usize) {
-        self.live.scroll.scroll_to_item(row, ScrollStrategy::Nearest);
+        self.live
+            .scroll
+            .scroll_to_item(row, ScrollStrategy::Nearest);
         self.live.scrolled_to = self.at.clone();
         self.live_note_at();
     }
@@ -529,9 +543,9 @@ impl ReviewPane {
             Some((ended, state)) if ended == *turn => state.clone(),
             _ => history.and_then(|history| {
                 history.entries.iter().find_map(|entry| match entry {
-                    HistoryEntry::Turn { turn: held, state, .. } if held == *turn => {
-                        Some(state.clone())
-                    }
+                    HistoryEntry::Turn {
+                        turn: held, state, ..
+                    } if held == *turn => Some(state.clone()),
                     _ => None,
                 })?
             }),
@@ -581,9 +595,11 @@ impl ReviewPane {
         self.live.rows = rows;
         // The group is counted with the list as it is now: a file it holds is no file read.
         let group = self.live_group();
-        self.live
-            .rows
-            .extend(group.iter().map(|path| PaneRow::Read { path: path.clone() }));
+        self.live.rows.extend(
+            group
+                .iter()
+                .map(|path| PaneRow::Read { path: path.clone() }),
+        );
         self.live.group = group;
         self.live.position_row = self
             .live
@@ -742,10 +758,8 @@ impl ReviewPane {
 
     /// Asks the Keeper for the two versions of one file of the list.
     fn live_read(&mut self, path: &Path, cx: &mut Context<Self>) {
-        let (Some(shown), Some(file)) = (
-            self.live.change.clone(),
-            self.live.file(path).cloned(),
-        ) else {
+        let (Some(shown), Some(file)) = (self.live.change.clone(), self.live.file(path).cloned())
+        else {
             return;
         };
         self.live.sequence += 1;
@@ -811,7 +825,11 @@ impl ReviewPane {
         }
         self.live.in_flight = self.live.in_flight.saturating_sub(1);
         if self.live.asked.get(path) == Some(&sequence)
-            && let Some(held) = self.live.files.iter_mut().find(|held| held.file.path == path)
+            && let Some(held) = self
+                .live
+                .files
+                .iter_mut()
+                .find(|held| held.file.path == path)
         {
             held.content = content;
         }
