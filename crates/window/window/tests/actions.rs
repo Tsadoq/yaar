@@ -54,6 +54,14 @@ fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
     (window, cx)
 }
 
+/// The controls of the Window that say they send the stop-everything frame.
+fn controls_that_stop() -> Vec<Control> {
+    yaar_window::controls()
+        .into_iter()
+        .filter(|control| control.sends == Some(Sends::StopEverything))
+        .collect()
+}
+
 /// The controls of the Window that say they send a request of this kind.
 fn controls_that_send(kind: RequestKind) -> Vec<Control> {
     yaar_window::controls()
@@ -243,6 +251,17 @@ impl Composed {
             // The first row of the Review pane, at its left end: an offer to set a base,
             // where the row holds one, lies further right.
             Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-row-0"),
+            // The tree of Changes: Tab from the rows moves the focus into it, as a user
+            // gets there by keys.
+            Place::In(yaar_review_pane::HISTORY_CONTEXT) => {
+                if !self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx) {
+                    self.click_into(cx, "review-row-0");
+                    cx.simulate_keystrokes("tab");
+                    wait_until(cx, "the focus in the tree of Changes", |cx| {
+                        self.focus_is_in(yaar_review_pane::HISTORY_CONTEXT, cx)
+                    });
+                }
+            }
             // The view of the terminal on screen.
             Place::In(PROGRAM_CONTEXT) => self.click_into(cx, "terminal-slot-0"),
             Place::In(other) => panic!(
@@ -472,6 +491,35 @@ impl Composed {
         }
     }
 
+    /// The last step of the walk: every control that says it sends the stop-everything
+    /// frame has its key pressed, where it works, and the frame has to pass the tap. The
+    /// frame ends the Keeper of the world, and a user has nothing left to do after it, so
+    /// this comes after every other step, and the step is over only when the Keeper is gone.
+    fn walk_the_stop(&mut self, cx: &mut VisualTestContext) {
+        let controls = controls_that_stop();
+        assert!(
+            !controls.is_empty(),
+            "no control of the Window sends the stop-everything frame: a user has no way to start it"
+        );
+        for control in controls {
+            self.press(&control, cx);
+            self.give(&control, &Answer::Nothing, cx);
+            assert!(
+                self.tap.wait_for_stop(DEADLINE),
+                "the key {} of {} did not send the stop-everything frame",
+                control.key(),
+                control.title
+            );
+            let world = &mut self.world;
+            assert!(
+                yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none()),
+                "the Keeper still runs after the key {} of {}",
+                control.key(),
+                control.title
+            );
+        }
+    }
+
     fn wait_until_on_screen(&mut self, folder: &Path, cx: &mut VisualTestContext) {
         wait_until(cx, "the opened folder on screen", |cx| {
             self.on_screen(cx)
@@ -516,6 +564,9 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
     for kind in RequestKind::started_by_user() {
         window.walk(kind, &mut cx);
     }
+
+    // The stop frame is no request. It ends the Keeper, so it is pressed last.
+    window.walk_the_stop(&mut cx);
 }
 
 #[gpui_kit::test]
@@ -530,8 +581,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
                 control.title
             ),
             // The stop-everything frame is no request, and has no origin to check. Its
-            // control is pressed by the forward walk, last, once the tap keeps that frame
-            // too: the package of the composed Window teaches the walk.
+            // control is pressed by the forward walk, last, where the tap sees the frame.
             Some(Sends::StopEverything) => {}
             None => {}
         }
