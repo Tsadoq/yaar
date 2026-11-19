@@ -126,6 +126,44 @@ impl Pty {
         end.expect("seen")
     }
 
+    /// Reads, one chunk at a time and no further than it has to, until `needle` is in the
+    /// output after byte `from`. What the program writes after that stays unread, so that it
+    /// soon waits in a write again.
+    fn read_until(&mut self, needle: &[u8], from: usize) {
+        // Only what came in since the last look is searched: the output is a megabyte.
+        let mut looked = from;
+        let seen = wait_until(DEADLINE, || {
+            loop {
+                if find(&self.output[looked..], needle).is_some() {
+                    return true;
+                }
+                looked = self.output.len().saturating_sub(needle.len()).max(from);
+                let mut poll = libc::pollfd {
+                    fd: self.master(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: one valid `pollfd`.
+                if unsafe { libc::poll(&mut poll, 1, 0) } <= 0 || poll.revents & libc::POLLIN == 0 {
+                    return false;
+                }
+                let mut buffer = [0u8; 8192];
+                // SAFETY: the buffer is live and its length is given.
+                let n =
+                    unsafe { libc::read(self.master(), buffer.as_mut_ptr().cast(), buffer.len()) };
+                if n <= 0 {
+                    return false;
+                }
+                self.output.extend_from_slice(&buffer[..n as usize]);
+            }
+        });
+        assert!(
+            seen,
+            "never read as far as {:?}",
+            String::from_utf8_lossy(needle)
+        );
+    }
+
     fn termios(&self) -> libc::termios {
         // SAFETY: an all-zero `termios` is a valid value to be filled in.
         let mut termios: libc::termios = unsafe { std::mem::zeroed() };
@@ -896,6 +934,25 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     assert_eq!(lines, [expected.clone(), expected]);
 }
 
+#[test]
+fn a_hook_and_a_shell_command_do_not_ignore_a_hangup_the_stand_in_ignores() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (from_hook, from_shell) = (root.join("from-hook"), root.join("from-shell"));
+    // A program that ignores a hangup passes that on to what it starts, but Claude Code's
+    // hooks and commands do not ignore it: each one hangs itself up and must not go on.
+    let hook = format!("kill -HUP $$; echo alive >> '{}'", from_hook.display());
+    let shell = format!("kill -HUP $$; echo alive >> '{}'", from_shell.display());
+    let script = Script(vec![Step::Turn, Step::Shell(shell), Step::End, Step::Exit]);
+    let mut run = Start::new(place, "claude", script)
+        .plugin(vec![group("UserPromptSubmit", None, hook)])
+        .start();
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    assert!(!from_hook.exists(), "the hook ignored a hangup");
+    assert!(!from_shell.exists(), "the command ignored a hangup");
+}
+
 // The keys.
 
 #[test]
@@ -1547,8 +1604,9 @@ fn longest_write(log: &StandinLog) -> Duration {
 #[test]
 fn a_flood_into_a_terminal_nobody_reads_writes_down_the_wait_of_its_longest_write() {
     // More lines than any terminal buffers, a megabyte or so: from the start of the flood
-    // the program waits in one write until the test reads. The wait is a span the test
-    // measures itself.
+    // the program waits in one write until the test reads. The test holds the terminal
+    // twice, with a read between that stops half way, and measures both spans itself. The
+    // longest write waited one span; the sum of the waits would be both.
     let lines = 100_000;
     let script = Script(vec![Step::Turn, Step::Flood(lines), Step::End, Step::Exit]);
     let mut run = Start::new(Place::new(), "claude", script).start();
@@ -1558,15 +1616,25 @@ fn a_flood_into_a_terminal_nobody_reads_writes_down_the_wait_of_its_longest_writ
             .iter()
             .any(|did| matches!(did, Did::Began { step: 1, .. }))
     });
-    let held = Instant::now();
-    wait_until(FLOOD_HOLD, || held.elapsed() >= FLOOD_HOLD);
-    let waited = held.elapsed();
+    let first = Instant::now();
+    wait_until(FLOOD_HOLD, || first.elapsed() >= FLOOD_HOLD);
+    let first = first.elapsed();
+    run.pty
+        .read_until(format!("line {}\r\n", lines / 2).as_bytes(), at);
+    let second = Instant::now();
+    wait_until(FLOOD_HOLD, || second.elapsed() >= FLOOD_HOLD);
+    let second = second.elapsed();
     run.pty.wait_for(format!("line {lines}\r\n").as_bytes(), at);
     assert!(run.wait_exit().success());
+    let span = first.max(second);
     let longest = longest_write(&run.log());
     assert!(
-        longest >= waited * 3 / 4,
-        "the longest write waited {longest:?}, the terminal was not read for {waited:?}"
+        longest >= span * 3 / 4,
+        "the longest write waited {longest:?}, the terminal was not read for {span:?} at a time"
+    );
+    assert!(
+        longest < span * 3 / 2,
+        "the longest write waited {longest:?}: the waits of {first:?} and {second:?} were added"
     );
 }
 
@@ -1624,6 +1692,39 @@ fn a_log_read_while_the_program_writes_it_ignores_a_line_not_yet_whole() {
     // A log that is not there yet is an empty one.
     let missing = root_of(&run.place).join("no-such-log");
     assert_eq!(StandinLog::read(&missing), StandinLog::default());
+}
+
+#[test]
+fn a_terminal_that_closes_during_a_tool_stops_the_script_before_its_next_step() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (gate, after) = (root.join("gate"), root.join("after"));
+    // The shell command blocks the program until the test lets it go: the terminal closes
+    // while the program is not reading it, and the step after the command must not run.
+    let wait = format!("while [ ! -e '{}' ]; do sleep 0.05; done", gate.display());
+    let script = Script(vec![
+        Step::Turn,
+        Step::Shell(wait),
+        Step::Write(after.clone(), "late".to_owned()),
+        Step::End,
+    ]);
+    let mut run = Start::new(place, "claude", script).controlling().start();
+    run.say(0, "go");
+    run.wait_log("the command", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 1, .. }))
+    });
+    run.pty.close();
+    fs::write(&gate, "").expect("open the gate");
+    assert!(run.wait_exit().success());
+    assert!(!after.exists(), "a step ran after the terminal closed");
+    let story = story(&run.log());
+    assert!(
+        !story.iter().any(|did| did.starts_with("began 2")),
+        "a step began after the terminal closed: {story:?}"
+    );
+    assert_eq!(story.last().map(String::as_str), Some("exited 0"));
 }
 
 #[test]

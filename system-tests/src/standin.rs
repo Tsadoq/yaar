@@ -648,6 +648,10 @@ impl Standin {
             }
             let step = &steps[at];
             self.input.fill(&self.log, 0);
+            // A hangup read here counts at once: no tool runs after the terminal closed.
+            if self.input.closed {
+                return self.closed();
+            }
             if self.in_turn && self.input.take_esc() {
                 self.interrupt(at);
                 skipping = true;
@@ -847,9 +851,7 @@ impl Standin {
             json!({"command": command}),
             &format!("Bash {command}"),
             || {
-                let status = Command::new("/bin/sh")
-                    .arg("-c")
-                    .arg(command)
+                let status = sh(command)
                     .current_dir(cwd)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
@@ -1096,15 +1098,29 @@ fn read_plugins() -> Vec<Value> {
     plugins
 }
 
+/// A command run through `/bin/sh -c`, with the hangup signal back at its default in the
+/// child: an ignored signal stays ignored across `exec`, and Claude Code's hooks and
+/// commands do not ignore it.
+fn sh(command: &str) -> Command {
+    let mut sh = Command::new("/bin/sh");
+    sh.arg("-c").arg(command);
+    // SAFETY: `signal` is async-signal-safe, and this runs between `fork` and `exec`.
+    unsafe {
+        sh.pre_exec(|| {
+            libc::signal(libc::SIGHUP, libc::SIG_DFL);
+            Ok(())
+        })
+    };
+    sh
+}
+
 /// Runs one hook command as Claude Code does: through `/bin/sh -c` in `cwd`, with the
 /// input on its standard input, its standard output kept. A hook still running after
 /// [`HOOK_LIMIT`] is killed with everything it started. Gives what it printed and whether
 /// it was killed.
 fn run_hook(command: &str, input: &[u8], cwd: &Path) -> (Vec<u8>, bool) {
     use std::io::Read;
-    let mut child = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
+    let mut child = sh(command)
         .current_dir(cwd)
         .env("CLAUDE_PID", std::process::id().to_string())
         .env("CLAUDECODE", "1")
