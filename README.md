@@ -107,8 +107,10 @@ program does, and the app does not hear it yet.
   Keeper only. Build the workspace, which puts `yaar-claude-hook` beside `yaar-keeper`.
 - The state of a session that waits for permission stays on until the tool ends: after you
   approve a long command at its dialog, the mark stays until the command finishes.
-- A workspace with one idle session and one that ended shows "not running", and a session
-  that is idle, with nothing to review, draws no mark.
+- A workspace with one idle session and one that ended shows "not running" while the
+  ended session still holds its review, and no mark once another session has taken that
+  review over, since the ended session is then no longer listed. A session that is idle,
+  with nothing to review, draws no mark.
 - Resolving a thread, and a list of the threads with their states.
 - Comments on a range of lines, and on a line reached through a definition.
 - Two worktrees that share one id at different paths: the app refuses the second.
