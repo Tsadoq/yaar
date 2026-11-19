@@ -34,7 +34,8 @@ use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
-    Fact, Program, Reply, Request, RequestKind, SessionState, TerminalId, TerminalSize, WorkspaceId,
+    Ending, Fact, Program, Reply, Request, RequestKind, SessionState, TerminalId, TerminalInfo,
+    TerminalSize, WorkspaceId,
 };
 
 pub use emulator::{
@@ -196,6 +197,8 @@ struct Entry {
     /// The workspace the terminal was opened for.
     workspace: WorkspaceId,
     view: Entity<TerminalView>,
+    /// Whether the Keeper had dropped part of the output when the pane attached to it.
+    cut: bool,
     _events: Subscription,
 }
 
@@ -220,6 +223,16 @@ impl Layout {
         }
     }
 
+    /// Shows a terminal the pane attached to, unless the workspace shows one already: it
+    /// takes no slot from what the user is looking at. Whether it was shown.
+    fn offer(&mut self, id: TerminalId) -> bool {
+        let empty = self.shown.is_empty();
+        if empty {
+            self.put(id);
+        }
+        empty
+    }
+
     /// The terminal that has the focus.
     fn focused(&self) -> Option<&TerminalId> {
         self.shown.get(self.focus_slot)
@@ -239,6 +252,17 @@ impl Layout {
 /// [`TerminalPane::terminals`] lists every one the window opened. With no terminal of the
 /// workspace on screen the pane says how to open one, under the selector
 /// `terminal-how-to-open`, and the focus stays on its own handle.
+///
+/// A terminal the Keeper holds that the Window did not open, listed by `Models::terminals`
+/// when the link connects or whenever the list gains one, is attached: the pane asks the
+/// Keeper to attach it at the size the pane shows terminals at, and the output that comes
+/// after the answer, the kept output first and then what the program writes, is read as the
+/// output of a terminal the pane opened is. It is listed beside the others, with the
+/// workspace the Keeper says; it is shown when its workspace shows no other terminal, and
+/// never takes a slot from one. A terminal the pane opens joins that list itself, and is
+/// not attached. When the Keeper had dropped the oldest output ([`TerminalPane::attached_cut`])
+/// the first line the view holds says that older output is gone, and the mark under the
+/// selector `terminal-cut-<its slot>` is drawn over that line for as long as it is in view.
 ///
 /// A new terminal is added after the others, shown in the slot that has the focus, and
 /// given the focus, when its workspace is on screen; one whose answer comes after another
@@ -284,6 +308,9 @@ pub struct TerminalPane {
     frames_until: Option<Instant>,
     /// The title the pane last gave the window.
     window_title: Option<String>,
+    /// The terminals the pane asked the Keeper to attach and has no answer for, each with how
+    /// its program ended if the Keeper told that before the answer came.
+    attaching: HashMap<TerminalId, Option<Ending>>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -315,8 +342,10 @@ impl TerminalPane {
         });
         // The waiting mark follows the agents, whatever else changes.
         let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
+        // A terminal the list gains is attached.
+        let terminals = cx.observe(&models.terminals, |pane, _, cx| pane.attach_missing(cx));
         let on_screen = models.workspaces.read(cx).selected().cloned();
-        Self {
+        let mut pane = Self {
             models: models.clone(),
             focus,
             window: window.window_handle(),
@@ -327,8 +356,11 @@ impl TerminalPane {
             layouts: HashMap::new(),
             frames_until: None,
             window_title: None,
-            _subscriptions: vec![handed_on, keys, facts, workspaces, agents],
-        }
+            attaching: HashMap::new(),
+            _subscriptions: vec![handed_on, keys, facts, workspaces, agents, terminals],
+        };
+        pane.attach_missing(cx);
+        pane
     }
 
     /// The terminals of the pane, in the order they were opened, those whose program
@@ -392,8 +424,7 @@ impl TerminalPane {
     /// output is gone, under the selector `terminal-cut-<its slot>`. False for a terminal
     /// this Window opened, and for one the Keeper kept whole.
     pub fn attached_cut(&self, terminal: &TerminalId) -> bool {
-        let _ = terminal;
-        todo!("whether the output of an attached terminal was cut")
+        self.entry(terminal).is_some_and(|entry| entry.cut)
     }
 
     fn entry(&self, id: &TerminalId) -> Option<&Entry> {
@@ -478,34 +509,59 @@ impl TerminalPane {
         cx: &mut Context<Self>,
     ) {
         match answer {
-            Ok(Reply::TerminalOpened { terminal }) => self.add(workspace, terminal, cx),
+            Ok(Reply::TerminalOpened { terminal }) => self.add_opened(workspace, terminal, cx),
             Ok(_) => self.notice = Some(AskError::Unexpected.to_string()),
             Err(error) => self.notice = Some(error.to_string()),
         }
         cx.notify();
     }
 
-    /// Adds a terminal the Keeper opened: it takes the output at once, so that none of
-    /// what the program wrote since the reply is lost, shows in the slot that has the
-    /// focus and takes the focus.
-    fn add(&mut self, workspace: WorkspaceId, id: TerminalId, cx: &mut Context<Self>) {
-        if self.entry(&id).is_some() {
-            return;
-        }
+    /// Makes the entry of a terminal: its view takes the output at once, so that none of
+    /// what the program wrote since the reply is lost. Not yet shown.
+    fn make_entry(
+        &mut self,
+        workspace: WorkspaceId,
+        id: TerminalId,
+        cut: bool,
+        cx: &mut Context<Self>,
+    ) -> Entity<TerminalView> {
         let link = self.models.link.clone();
         let output = link.update(cx, |link, _| link.take_output(&id));
         let size = self.size;
-        let view = cx.new(|cx| TerminalView::new(id.clone(), size, link, output, cx));
+        let view = cx.new(|cx| TerminalView::new(id.clone(), size, link, output, cut, cx));
         let events = cx.subscribe(&view, |pane, _, event: &ViewEvent, _| {
             pane.viewed(event);
         });
         self.terminals.push(Entry {
-            id: id.clone(),
-            workspace: workspace.clone(),
+            id,
+            workspace,
             view: view.clone(),
+            cut,
             _events: events,
         });
-        self.layouts.entry(workspace.clone()).or_default().put(id);
+        view
+    }
+
+    /// Adds a terminal the Keeper opened for this Window: it is shown in the slot that has
+    /// the focus and takes the focus, and joins the shared list of terminals, which does
+    /// not attach to it.
+    fn add_opened(&mut self, workspace: WorkspaceId, id: TerminalId, cx: &mut Context<Self>) {
+        if self.entry(&id).is_some() {
+            return;
+        }
+        let view = self.make_entry(workspace.clone(), id.clone(), false, cx);
+        self.layouts
+            .entry(workspace.clone())
+            .or_default()
+            .put(id.clone());
+        let info = TerminalInfo {
+            id,
+            workspace: workspace.clone(),
+            program: Program::Shell,
+        };
+        self.models
+            .terminals
+            .update(cx, |list, cx| list.opened(info, cx));
         // A terminal of a workspace that is not on screen takes nothing from the one that
         // is: it is shown when its own comes back.
         if self.on_screen.as_ref() != Some(&workspace) {
@@ -523,18 +579,105 @@ impl TerminalPane {
         });
     }
 
+    /// Asks the Keeper to attach every terminal the shared list holds that the pane has
+    /// none of and is not already attaching.
+    fn attach_missing(&mut self, cx: &mut Context<Self>) {
+        let missing: Vec<TerminalInfo> = self
+            .models
+            .terminals
+            .read(cx)
+            .terminals()
+            .iter()
+            .filter(|info| self.entry(&info.id).is_none() && !self.attaching.contains_key(&info.id))
+            .cloned()
+            .collect();
+        for info in missing {
+            self.attach(info, cx);
+        }
+    }
+
+    /// Asks the Keeper to attach one terminal, at the size the pane shows terminals at.
+    /// The size goes once, in the request: the Keeper gives it to the program.
+    fn attach(&mut self, info: TerminalInfo, cx: &mut Context<Self>) {
+        self.attaching.insert(info.id.clone(), None);
+        let request = Request::AttachTerminal {
+            terminal: info.id.clone(),
+            size: self.size,
+        };
+        let asked = self
+            .models
+            .link
+            .update(cx, |link, cx| link.ask(request, cx));
+        // Detached, as the question for a new terminal is: a task that is dropped is
+        // cancelled, and its answer lost.
+        cx.spawn(async move |pane, cx| {
+            let answer = asked.await;
+            pane.update(cx, |pane, cx| pane.attached(info, answer, cx))
+                .ok();
+        })
+        .detach();
+    }
+
+    /// Takes the Keeper's answer to an attach. A refusal, as for a terminal whose program
+    /// ended since it was listed, adds nothing: the shared list drops that terminal when
+    /// it is told of its end, and it is asked for again only if the list changes.
+    fn attached(
+        &mut self,
+        info: TerminalInfo,
+        answer: Result<Reply, AskError>,
+        cx: &mut Context<Self>,
+    ) {
+        let ended = self.attaching.remove(&info.id).flatten();
+        let Ok(Reply::Attached { cut }) = answer else {
+            return;
+        };
+        if self.entry(&info.id).is_some() {
+            return;
+        }
+        let view = self.make_entry(info.workspace.clone(), info.id.clone(), cut, cx);
+        if let Some(ending) = ended {
+            view.update(cx, |view, cx| view.ended(ending, cx));
+        }
+        let shown = self
+            .layouts
+            .entry(info.workspace.clone())
+            .or_default()
+            .offer(info.id);
+        cx.notify();
+        // The user is not looking at this terminal: it takes the focus only from the
+        // pane's own handle, which no terminal has, so that the keys of a Window that
+        // opens on its terminals go to the one it shows.
+        if shown && self.on_screen.as_ref() == Some(&info.workspace) {
+            let (window, own) = (self.window, self.focus.clone());
+            cx.defer(move |cx| {
+                window
+                    .update(cx, |_, window, cx| {
+                        if own.is_focused(window) {
+                            view.read(cx).focus_handle().focus(window, cx);
+                        }
+                    })
+                    .ok();
+            });
+        }
+    }
+
     /// What one of the terminal views tells.
     fn viewed(&mut self, event: &ViewEvent) {
         let ViewEvent::Fitted(size) = event;
         self.size = *size;
     }
 
-    /// What the Keeper tells that the pane shows: a program that ended.
+    /// What the Keeper tells that the pane shows: a program that ended. A program that ends
+    /// between the Keeper's answer to an attach and the pane taking it is remembered for
+    /// the view the pane makes then.
     fn heard(&mut self, fact: &Fact, cx: &mut Context<Self>) {
-        if let Fact::TerminalEnded { terminal, ending } = fact
-            && let Some(view) = self.terminal(terminal)
-        {
+        let Fact::TerminalEnded { terminal, ending } = fact else {
+            return;
+        };
+        if let Some(view) = self.terminal(terminal) {
             view.update(cx, |view, cx| view.ended(*ending, cx));
+        } else if let Some(early) = self.attaching.get_mut(terminal) {
+            *early = Some(*ending);
         }
     }
 
@@ -715,6 +858,22 @@ impl Render for TerminalPane {
                     .text_color(warning_text)
                     .child("Waiting for permission")
             });
+            // Over the line that says older output is gone, a rule under its text.
+            let cut = entry
+                .view
+                .read(cx)
+                .cut_band(window, cx)
+                .map(|(top, height)| {
+                    div()
+                        .debug_selector(move || format!("terminal-cut-{n}"))
+                        .absolute()
+                        .top(top)
+                        .left_0()
+                        .right_0()
+                        .h(height)
+                        .border_b_1()
+                        .border_color(border)
+                });
             // The divider is a sibling of the slot, so the slot's bounds are exactly its
             // view's.
             let divider = (n > 0).then(|| div().flex_none().w_px().h_full().bg(border));
@@ -724,7 +883,10 @@ impl Render for TerminalPane {
                 .debug_selector(move || format!("terminal-{name}"))
                 .size_full()
                 .child(view);
-            Some((divider, slot.relative().child(named).children(mark)))
+            Some((
+                divider,
+                slot.relative().child(named).children(cut).children(mark),
+            ))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));
         let empty = shown.is_empty().then(|| {

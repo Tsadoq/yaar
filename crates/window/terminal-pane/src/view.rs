@@ -44,6 +44,13 @@ use crate::{
 /// mouse reports.
 const LINES_A_STEP: i32 = 3;
 
+/// What the view puts before the kept output of a terminal the Keeper cut, in the style
+/// that [`TerminalView::cut_band`] looks for: faint and italic.
+const CUT_NOTICE: &str = "\x1b[2;3mOlder output is gone.\x1b[0m\r\n";
+
+/// The text of that line.
+const CUT_TEXT: &str = "Older output is gone.";
+
 /// What a view tells the pane that holds it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ViewEvent {
@@ -91,6 +98,8 @@ pub struct TerminalView {
     last_move: Option<Vec<u8>>,
     /// Pixels of the wheel not yet worth a step.
     wheel_rest: f32,
+    /// Whether the screen starts with the line that says older output is gone.
+    cut: bool,
     attached: bool,
     _output: Option<Task<()>>,
     _subscriptions: Vec<Subscription>,
@@ -101,12 +110,15 @@ impl EventEmitter<ViewEvent> for TerminalView {}
 impl TerminalView {
     /// A view of the terminal `id`, whose grid is `size` until the painter fits it to
     /// the room it has. `output` is what the program writes, if the link had a
-    /// connection to take it from: the view reads it as it comes.
+    /// connection to take it from: the view reads it as it comes. When the Keeper dropped
+    /// the oldest of that output, `cut` is true and the screen starts with a line that says
+    /// so, before the first byte of it.
     pub(crate) fn new(
         id: TerminalId,
         size: TerminalSize,
         link: Entity<KeeperLink>,
         output: Option<TerminalOutput>,
+        cut: bool,
         cx: &mut Context<Self>,
     ) -> Self {
         // One task for the terminal: it waits for output, takes everything that has
@@ -126,10 +138,14 @@ impl TerminalView {
                 }
             })
         });
+        let mut emulator = Emulator::new(size);
+        if cut {
+            emulator.advance(CUT_NOTICE.as_bytes());
+        }
         Self {
             id,
             link,
-            emulator: Emulator::new(size),
+            emulator,
             focus: cx.focus_handle(),
             size,
             marked: None,
@@ -141,10 +157,29 @@ impl TerminalView {
             reported: None,
             last_move: None,
             wheel_rest: 0.,
+            cut,
             attached: false,
             _output: output,
             _subscriptions: Vec::new(),
         }
+    }
+
+    /// Where the line that says older output is gone is drawn, as the distance from the
+    /// top of the view and its height, while it is in view: it is part of the output, and
+    /// scrolls with it. None for a terminal the Keeper kept whole.
+    pub(crate) fn cut_band(&self, window: &Window, cx: &App) -> Option<(Pixels, Pixels)> {
+        if !self.cut {
+            return None;
+        }
+        let row = self.emulator.screen().lines.iter().position(|line| {
+            let text: String = line.iter().map(|cell| cell.text.as_str()).collect();
+            let styled = line
+                .first()
+                .is_some_and(|cell| cell.style.dim && cell.style.italic);
+            styled && text.trim_end() == CUT_TEXT
+        })?;
+        let (_, _, cell) = self.metrics(window, cx);
+        Some((cell.height * row as f32, cell.height))
     }
 
     /// The terminal this view shows.
