@@ -47,6 +47,11 @@ const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 const PRINT_THE_MARK: &[u8] = b"printf '\\033]9;4;0;\\007'; printf 'after-%s\\n' mark\r";
 const AFTER_THE_MARK: &str = "after-mark";
 
+/// A second line, typed once the first is seen: its output is read from the terminal after
+/// everything the first line printed.
+const PRINT_THE_NEXT: &[u8] = b"printf 'then-%s\\n' mark\r";
+const THEN: &str = "then-mark";
+
 /// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
@@ -230,6 +235,24 @@ impl Scratch {
 impl Drop for Scratch {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// A process the test started, killed and collected when the test ends, whatever way it
+/// does.
+struct Process(std::process::Child);
+
+impl Process {
+    /// Kills it and collects it.
+    fn end(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        self.end();
     }
 }
 
@@ -440,6 +463,12 @@ impl Setup {
             .hook(Some(&self.terminal), &record.input_bytes())
     }
 
+    /// Runs the hook of `record`, moved into the repository, in `terminal`.
+    fn hook_in(&self, terminal: &TerminalId, record: &HookRecord) -> Duration {
+        let record = record.in_project(&self.repo);
+        self.scratch.hook(Some(terminal), &record.input_bytes())
+    }
+
     /// Runs the hooks of the lines `lines` of `records`, in order.
     fn hooks(&self, records: &[HookRecord], lines: &[usize]) {
         for line in lines {
@@ -455,11 +484,16 @@ impl Setup {
         self.window.agents_until(&self.workspace, what, wanted)
     }
 
-    /// Types the mark of a turn that stopped into the shell, and reads until the shell
-    /// has printed the line after it: the Keeper has been told the mark by then.
+    /// Types the mark of a turn that stopped into the shell, and reads until the shell has
+    /// printed a second line typed after the first was seen. The Keeper is told a mark after
+    /// the output that held its last byte has gone out, so the line that printed it can be
+    /// seen before the Keeper has been told; the output of the second line is read from the
+    /// terminal after all of that, so the Keeper has been told the mark by the time it is seen.
     fn print_the_mark(&mut self) {
         self.window.type_into(&self.terminal, PRINT_THE_MARK);
         self.window.output_until(&self.terminal, AFTER_THE_MARK);
+        self.window.type_into(&self.terminal, PRINT_THE_NEXT);
+        self.window.output_until(&self.terminal, THEN);
     }
 
     /// Stops the Keeper and gives the database it kept.
@@ -849,7 +883,11 @@ fn a_session_in_a_folder_inside_a_worktree_belongs_to_the_deepest_workspace_that
     let inner = setup.window.open(&inner_path);
     let records = recorded::hook_events(TOOLS);
 
-    let record = records[1].in_project(&inner_path);
+    // The CLI works in a folder below the inner worktree's root, as one started in `src`
+    // does, a folder that the first worktree holds as well.
+    let below = inner_path.join("sub");
+    std::fs::create_dir(&below).expect("make the folder");
+    let record = records[1].in_project(&below);
     setup
         .scratch
         .hook(Some(&setup.terminal), &record.input_bytes());
@@ -861,6 +899,78 @@ fn a_session_in_a_folder_inside_a_worktree_belongs_to_the_deepest_workspace_that
     let listed = setup.window.agents();
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].workspace, inner);
+    let _ = setup.finish();
+}
+
+#[test]
+fn a_session_in_a_folder_that_holds_worktrees_but_is_in_none_belongs_to_the_workspace_of_its_terminal()
+ {
+    let mut setup = Setup::new();
+    let inner_path = setup.repo.join("inner");
+    git(
+        &setup.repo,
+        &["worktree", "add", "--quiet", "-b", "inner", "inner"],
+    );
+    setup.window.open(&inner_path);
+    let records = recorded::hook_events(TOOLS);
+
+    // The folder above both worktrees: they lie inside it, it lies inside neither. The
+    // terminal is the outer worktree's, which is not the deepest worktree there.
+    let record = records[1].in_project(&setup.scratch.0);
+    setup
+        .scratch
+        .hook(Some(&setup.terminal), &record.input_bytes());
+    let told = setup.window.agents_until(
+        &setup.workspace,
+        "the session in its terminal's workspace",
+        |agents| !agents.sessions.is_empty(),
+    );
+    assert_eq!(told.sessions[0].terminal, Some(setup.terminal.clone()));
+    let listed = setup.window.agents();
+    assert_eq!(
+        listed.len(),
+        1,
+        "no session in the inner workspace: {listed:?}"
+    );
+    assert_eq!(listed[0].workspace, setup.workspace);
+    let _ = setup.finish();
+}
+
+#[test]
+fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_no_further() {
+    let mut setup = Setup::new();
+    let dialogs = recorded::hook_events(DIALOGS);
+    let records = recorded::hook_events(TOOLS);
+
+    // A terminal the Keeper never opened, in the folder of a worktree it holds.
+    setup.hook_in(&TerminalId::new("not-a-terminal"), &dialogs[0]);
+    // A terminal it opened, whose program has ended and which it holds no more.
+    let ended = setup.window.open_terminal(&setup.workspace);
+    setup.window.type_into(&ended, b"exit\r");
+    setup
+        .window
+        .until("the end of the terminal", |fact| match fact {
+            Fact::TerminalEnded { terminal, .. } if *terminal == ended => Some(()),
+            _ => None,
+        });
+    setup.hook_in(&ended, &dialogs[0]);
+
+    // A report from the terminal that runs, after both: when it is told, they were passed
+    // over.
+    setup.hooks(&records, &[1]);
+    let running = setup.terminal.clone();
+    let told = setup.agents_until("the session of the terminal that runs", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.terminal.as_ref() == Some(&running))
+    });
+    assert_eq!(
+        told.sessions.len(),
+        1,
+        "only the session of the app's terminal"
+    );
+    assert_eq!(setup.window.agents()[0].sessions.len(), 1);
     let _ = setup.finish();
 }
 
@@ -901,6 +1011,64 @@ fn the_next_session_in_a_terminal_takes_over_the_review_of_the_one_that_ended() 
     );
     assert_eq!(second.sessions[0].review, Some(review));
     assert_eq!(second.shown, Some(SessionState::Idle));
+    let _ = setup.finish();
+}
+
+#[test]
+fn the_next_session_in_a_terminal_takes_the_review_of_the_one_that_ended_there_not_of_the_one_that_ended_last()
+ {
+    let mut setup = Setup::new();
+    let dialogs = recorded::hook_events(DIALOGS);
+    let records = recorded::hook_events(TOOLS);
+    let first_terminal = setup.terminal.clone();
+    let second_terminal = setup.window.open_terminal(&setup.workspace);
+
+    // One session runs in each terminal, and each has a review: the first took the review
+    // of no agent, the second got one of its own.
+    setup.hook_in(&first_terminal, &dialogs[0]);
+    let one = setup.agents_until("the first session", is_state(SessionState::Idle));
+    let first_review = one.sessions[0].review.clone().expect("a review");
+    setup.hook_in(&second_terminal, &records[1]);
+    let both = setup.agents_until("the second session", |agents| agents.sessions.len() == 2);
+    let second_review = both.sessions[1].review.clone().expect("a review");
+    assert_ne!(first_review, second_review);
+
+    // The session of the first terminal ends first, the one of the second ends last.
+    setup.hook_in(&first_terminal, &dialogs[13]);
+    setup.agents_until(
+        "the first session ended",
+        is_state(SessionState::NotRunning),
+    );
+    setup.window.type_into(&second_terminal, b"exit\r");
+    setup.agents_until("both ended", |agents| {
+        agents
+            .sessions
+            .iter()
+            .all(|s| s.state == SessionState::NotRunning)
+    });
+
+    // A session that starts in the first terminal takes the review of the session that
+    // ended there, though the other ended after it.
+    setup.hook_in(&first_terminal, &dialogs[14]);
+    let third = setup.agents_until("the third session", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.state == SessionState::Idle && s.title == "Claude Code 3")
+    });
+    let new = third
+        .sessions
+        .iter()
+        .find(|s| s.title == "Claude Code 3")
+        .expect("the third session");
+    assert_eq!(new.review, Some(first_review));
+    assert!(
+        third
+            .sessions
+            .iter()
+            .any(|s| s.review == Some(second_review.clone())),
+        "the review of the session that ended last stays with it"
+    );
     let _ = setup.finish();
 }
 
@@ -959,15 +1127,17 @@ fn a_session_whose_process_is_gone_is_not_running_within_the_watch() {
     let mut setup = Setup::new();
     let records = recorded::hook_events(TOOLS);
     // The report names the process of the CLI: one the test starts, and kills.
-    let mut cli = Command::new("sleep")
-        .arg("600")
-        .stdin(Stdio::null())
-        .spawn()
-        .expect("start a process");
+    let mut cli = Process(
+        Command::new("sleep")
+            .arg("600")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("start a process"),
+    );
     let report = AgentReport {
         agent: "claude".to_owned(),
         terminal: Some(setup.terminal.clone()),
-        pid: cli.id(),
+        pid: cli.0.id(),
         payload: records[1].in_project(&setup.repo).input_bytes(),
     };
     let mut piece = setup.scratch.window();
@@ -983,8 +1153,7 @@ fn a_session_whose_process_is_gone_is_not_running_within_the_watch() {
         "the session did not run for a moment only"
     );
 
-    cli.kill().expect("kill the process");
-    cli.wait().expect("collect it");
+    cli.end();
     setup.agents_until(
         "the session is not running",
         is_state(SessionState::NotRunning),
