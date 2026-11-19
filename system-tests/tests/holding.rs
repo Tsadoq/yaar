@@ -25,20 +25,23 @@ const LINES: u32 = 4_000;
 
 /// How long the control client waits for the whole flood to be over: 200,000 lines through
 /// a shell's loop and a terminal, twice at once, on a machine that builds other things. A
-/// bound on a wait, not a measure: the flood is over as soon as the shell has written it.
+/// bound on that one wait, which spans the fifty rounds of the test, and not a measure:
+/// the flood is over as soon as the shell has written it.
 const FLOOD_DEADLINE: Duration = Duration::from_secs(180);
 
 /// The program of the flood, a script for a POSIX shell: for each part, wait for its gate,
 /// then write its lines; after the last part, say so and wait where it is, so that the
 /// shell does not print its prompt, which comes at its own time, onto the screen that is
 /// compared. A folder of gates is its one argument.
-const FLOOD: &str = "\
+fn flood() -> String {
+    format!(
+        "\
 gates=$1
 i=1
-while [ $i -le 50 ]; do
+while [ $i -le {PARTS} ]; do
   while [ ! -e \"$gates/gate-$i\" ]; do sleep 0.01; done
   j=1
-  while [ $j -le 4000 ]; do
+  while [ $j -le {LINES} ]; do
     echo \"part $i line $j\"
     j=$((j+1))
   done
@@ -46,7 +49,38 @@ while [ $i -le 50 ]; do
 done
 printf 'flood-%s\\n' done
 read line
-";
+"
+    )
+}
+
+/// Ends what a test leaves running when it fails: whatever descends from the Keeper, and
+/// the processes the test was told of, which are not its descendants once the Keeper is
+/// gone. A child that ignores the hang-up and the stop would otherwise run on for good.
+/// Dropped before the world, so that the Keeper is still there to ask.
+struct Leftovers {
+    keeper: u32,
+    known: Vec<u32>,
+}
+
+impl Leftovers {
+    fn of(keeper: u32) -> Leftovers {
+        Leftovers {
+            keeper,
+            known: Vec::new(),
+        }
+    }
+}
+
+impl Drop for Leftovers {
+    fn drop(&mut self) {
+        let mut all = descendants_of(self.keeper);
+        all.append(&mut self.known);
+        for pid in all.into_iter().filter(|pid| is_alive(*pid)) {
+            // SAFETY: a signal to a process the test started or was told of.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
 
 /// A script of the world's own folder, runnable.
 fn script(world: &World, name: &str, text: &str) -> std::path::PathBuf {
@@ -131,8 +165,9 @@ fn start_flood(
 fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_interrupted() {
     let mut world = World::new();
     let keeper = world.start_keeper();
+    let _leftovers = Leftovers::of(keeper);
     let repo = world.repository("app");
-    let program = script(&world, "flood.sh", FLOOD);
+    let program = script(&world, "flood.sh", &flood());
 
     let mut control = world.client();
     let (_, workspace) = control.open_folder(repo.path()).expect("open the folder");
@@ -179,7 +214,15 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
             );
         }
 
-        // Killed while the part is still being written: no goodbye, nothing more read.
+        // The part has only begun: the client has heard a frame that holds its first
+        // lines, which is less than a part, so that the kill falls in the middle of the
+        // flood and of a part, with output on its way.
+        assert!(
+            !newest_holds(&heard, &format!("part {part} line {LINES}")),
+            "part {part} was written whole before client {part} was killed"
+        );
+
+        // No goodbye, nothing more read.
         killed.vanish();
     }
 
@@ -187,9 +230,7 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
     let mut last = world.client();
     last.attach_terminal(&shown, SIZE)
         .expect("attach to the terminal");
-    let heard = last.wait_for_output(&shown, FLOOD_DEADLINE, |bytes| {
-        newest_holds(bytes, "flood-done")
-    });
+    let heard = last.wait_for_output(&shown, DEADLINE, |bytes| newest_holds(bytes, "flood-done"));
     let (uninterrupted_screen, uninterrupted_run) = control.join().expect("the control client");
 
     assert_eq!(
@@ -252,6 +293,7 @@ fn printed_id(output: &[u8], label: &str) -> Option<u32> {
 fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_up() {
     let mut world = World::new();
     let keeper = world.start_keeper();
+    let mut leftovers = Leftovers::of(keeper);
     let repo = world.repository("app");
     let mut client = world.client();
     let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
@@ -274,6 +316,7 @@ fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_
     });
     let child = printed_id(&heard, "child").expect("the child's id");
     let shell = printed_id(&heard, "shell").expect("the shell's id");
+    leftovers.known = vec![shell, child];
     assert!(is_alive(child), "the child that ignores the hang-up runs");
 
     // Every process the Keeper started, the shell, the child and what they run.
