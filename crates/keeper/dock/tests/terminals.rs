@@ -1,7 +1,7 @@
 //! Component tests: the Dock through its calls, with real pseudo-terminals and the
 //! programs of scripts the tests write.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -11,7 +11,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use yaar_dock::{
-    Dock, DockError, Ending, Event, Events, LEFT_OUT_VARIABLES, STOP_STEP, Size, Start,
+    Dock, DockError, Ending, Entry, Event, Events, LEFT_OUT_VARIABLES, STOP_STEP, Size, Start,
     TERMINAL_VARIABLES, TerminalId,
 };
 
@@ -1013,4 +1013,119 @@ fn a_program_holds_none_of_the_descriptors_of_the_dock() {
     let (_, watch) = open(&dock, scratch.start(script));
     let events = watch.wait_for_line("checked");
     assert_eq!(lines(&events), alone);
+}
+
+/// The variables of an editor's connection or of another editor's terminal that a Keeper
+/// started from an editor would hold, and that no shell of the app may get.
+const EDITOR_VARIABLES: [&str; 6] = [
+    "CLAUDE_CODE_SSE_PORT",
+    "ENABLE_IDE_INTEGRATION",
+    "VSCODE_INJECTION",
+    "VSCODE_IPC_HOOK_CLI",
+    "VSCODE_GIT_IPC_HANDLE",
+    "ZED_TERM",
+];
+
+#[test]
+fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the_app_adds() {
+    // SAFETY: changing the environment is sound only while no other thread reads it, as
+    // a thread that starts a process does. This is the first statement of a test, and
+    // `cargo nextest` gives each test a process of its own: no other thread exists yet.
+    unsafe {
+        // The user's own: an editor's connection, other terminals, and a plugin folder of
+        // their own that the app's has to come after.
+        for name in LEFT_OUT_VARIABLES.into_iter().chain(EDITOR_VARIABLES) {
+            std::env::set_var(name, "editor-connection-4242");
+        }
+        std::env::set_var("CLAUDE_CODE_PLUGIN_DIRS", "/user/own");
+        std::env::set_var("PATH", "/usr/bin:/bin");
+        // The terminal's own variables, each different from what the app sets.
+        std::env::set_var("TERM", "dumb");
+        std::env::set_var("COLORTERM", "16");
+        std::env::set_var("TERM_PROGRAM", "Apple_Terminal");
+        std::env::set_var("TERM_PROGRAM_VERSION", "0.0");
+        std::env::set_var("YAAR_DOCK_TEST_PASSED_ON", "yes");
+    }
+    let scratch = Scratch::new();
+    let plugin = scratch.path().join("plugin");
+    let first = scratch.path().join("pieces");
+    // What the user's own environment is, less what a system program drops by itself:
+    // macOS removes the variables of the dynamic loader before it runs `env`.
+    let users: BTreeMap<String, String> = std::env::vars()
+        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .collect();
+
+    // `env` itself is the program, so that no shell adds `SHLVL`, `PWD` or `_`.
+    let dock = Dock::new();
+    let start = scratch.start(PathBuf::from("/usr/bin/env")).with(&[
+        Entry::Variable {
+            name: "YAAR_SOCKET".into(),
+            value: "/run/yaar/keeper.sock".into(),
+        },
+        Entry::Variable {
+            name: "YAAR_TERMINAL".into(),
+            value: "00112233445566778899aabbccddeeff".into(),
+        },
+        Entry::PathList {
+            name: "CLAUDE_CODE_PLUGIN_DIRS".into(),
+            path: plugin.clone(),
+        },
+        Entry::SearchFirst(first.clone()),
+    ]);
+    let (_, watch) = open(&dock, start);
+    let events = watch.wait_for_end();
+
+    let theirs: BTreeMap<String, String> = lines(&events)
+        .iter()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .filter(|(name, _)| !name.starts_with("DYLD_"))
+        .collect();
+
+    // Where their environment differs from the user's, name by name: what the user had
+    // and what the program got. One entry for each clause of the sentence, and nothing
+    // else may be there.
+    let connection = Some("editor-connection-4242".to_owned());
+    let mut differences = BTreeMap::new();
+    for (name, value) in [
+        (
+            "CLAUDE_CODE_PLUGIN_DIRS",
+            format!("/user/own:{}", plugin.display()),
+        ),
+        ("PATH", format!("{}:/usr/bin:/bin", first.display())),
+        ("YAAR_SOCKET", "/run/yaar/keeper.sock".to_owned()),
+        (
+            "YAAR_TERMINAL",
+            "00112233445566778899aabbccddeeff".to_owned(),
+        ),
+        ("TERM", "xterm-256color".to_owned()),
+        ("COLORTERM", "truecolor".to_owned()),
+        ("TERM_PROGRAM", "yaar".to_owned()),
+        ("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION").to_owned()),
+    ] {
+        differences.insert(name.to_owned(), (users.get(name).cloned(), Some(value)));
+    }
+    // The variables of other terminals and multiplexers, and of an editor's connection,
+    // are left out.
+    for name in LEFT_OUT_VARIABLES.into_iter().chain(EDITOR_VARIABLES) {
+        differences.insert(name.to_owned(), (connection.clone(), None));
+    }
+    let mut found = BTreeMap::new();
+    for name in users.keys().chain(theirs.keys()) {
+        let (before, after) = (users.get(name), theirs.get(name));
+        if before != after {
+            found.insert(name.clone(), (before.cloned(), after.cloned()));
+        }
+    }
+    assert_eq!(found, differences);
+
+    // Nothing in it names an editor connection, by name or by value.
+    for (name, value) in &theirs {
+        assert!(!EDITOR_VARIABLES.contains(&name.as_str()), "{name} is set");
+        assert_ne!(
+            Some(value),
+            connection.as_ref(),
+            "{name} holds the connection"
+        );
+    }
 }
