@@ -212,8 +212,11 @@ enum Place {
     /// After the state at this index of the recorder's entries.
     After(usize),
     /// Before the start of the history: its state is kept, on a commit the history does
-    /// not reach.
+    /// not reach. A turn that has this place is left out.
     Before,
+    /// Before the first entry: where a turn with no place of its own goes when the turn it
+    /// follows is left out as before the start.
+    Start,
     /// After the last entry.
     End,
 }
@@ -224,7 +227,9 @@ enum Place {
 ///
 /// A turn with no state, or whose state is not held, has no place of its own: it goes right
 /// after the turn that started before it, or, when none did, before the turn that started
-/// after it, or, with none known, at the end. A turn that has not ended is not listed.
+/// after it, or, with none known, at the end. When that turn is left out as before the
+/// start, the place is the start of the history: the turn ended after it. A turn that has
+/// not ended is not listed.
 fn with_turns(
     recorded: Vec<Recorded>,
     held: &HashSet<String>,
@@ -253,18 +258,31 @@ fn with_turns(
             }
         })
         .collect();
+    // The place of a turn that borrows one: a turn left out is no place to go after.
+    let borrowed = |place: Place| match place {
+        Place::Before => Place::Start,
+        other => other,
+    };
     let mut placed = Vec::with_capacity(turns.len());
     let mut before_it = None;
     for (number, place) in known.iter().enumerate() {
         let place = place
-            .or(before_it)
-            .or_else(|| known[number..].iter().flatten().next().copied())
+            .or(before_it.map(borrowed))
+            .or_else(|| {
+                known[number..]
+                    .iter()
+                    .flatten()
+                    .next()
+                    .copied()
+                    .map(borrowed)
+            })
             .unwrap_or(Place::End);
         before_it = Some(place);
         placed.push(place);
     }
 
     let mut after: HashMap<usize, Vec<HistoryEntry>> = HashMap::new();
+    let mut at_start = Vec::new();
     let mut at_end = Vec::new();
     for (turn, place) in turns.into_iter().zip(placed) {
         let entry = HistoryEntry::Turn {
@@ -275,11 +293,12 @@ fn with_turns(
         match place {
             Place::After(index) => after.entry(index).or_default().push(entry),
             Place::Before => {}
+            Place::Start => at_start.push(entry),
             Place::End => at_end.push(entry),
         }
     }
 
-    let mut entries = Vec::new();
+    let mut entries = at_start;
     for (index, entry) in recorded.into_iter().enumerate() {
         match entry {
             Recorded::Commit(commit) => entries.push(HistoryEntry::Commit(Commit {

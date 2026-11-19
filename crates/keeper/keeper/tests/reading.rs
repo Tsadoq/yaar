@@ -205,7 +205,13 @@ impl Window {
     /// to the Keeper's records, and the reports were sent one after the other.
     fn until_written_by_two(&mut self, path: &str) {
         let mut writers: Vec<SessionId> = Vec::new();
+        // The read timeout is for one frame: unrelated facts must not keep the wait going.
+        let deadline = Instant::now() + DEADLINE;
         while writers.len() < 2 {
+            assert!(
+                Instant::now() < deadline,
+                "two sessions were not told to have written {path} within {DEADLINE:?}"
+            );
             if let Message::Fact(Fact::Step {
                 session,
                 step: Step::Write { path: written },
@@ -515,6 +521,75 @@ fn a_turn_that_runs_one_of_another_workspace_and_one_before_the_start_are_not_li
     let history = history_of(&mut window, &workspace);
 
     assert_eq!(history.entries, [turn_entry(&t3, &a, Some(&now))]);
+    window.stop(keeper);
+}
+
+#[test]
+fn a_turn_with_no_state_and_no_turn_before_it_is_listed_before_the_next_turn_with_a_state() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    git(&repo, &["switch", "--quiet", "-c", "feature"]);
+    let kept = Kept::new(&scratch);
+    let (workspace, worktree) = kept.open(&repo);
+    let a = kept.session(&workspace, 1);
+
+    // The first turn of the workspace has no state; a commit follows, then a turn with one.
+    let t1 = kept.turn(&a, 1, None);
+    write(&repo, "one.txt", "one\n");
+    let c1 = commit_all(&repo, "first of the branch");
+    write(&repo, "two.txt", "two\n");
+    let s2 = kept.state(&workspace, &worktree);
+    let t2 = kept.turn(&a, 2, Some(&s2));
+    drop((kept, worktree));
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+
+    let history = history_of(&mut window, &workspace);
+
+    assert_eq!(
+        history.entries,
+        [
+            commit_entry(&c1, "first of the branch"),
+            turn_entry(&t1, &a, None),
+            turn_entry(&t2, &a, Some(&s2)),
+        ],
+        "not at the end, after every commit"
+    );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_turn_with_no_state_that_follows_one_before_the_start_is_listed() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let kept = Kept::new(&scratch);
+    let (workspace, worktree) = kept.open(&repo);
+    let a = kept.session(&workspace, 1);
+
+    // On main with no remote the changes count from the commit checked out: the first turn
+    // ended before the next commit, so it is before the start of what Changes shows.
+    write(&repo, "one.txt", "one\n");
+    let before = kept.state(&workspace, &worktree);
+    kept.turn(&a, 1, Some(&before));
+    git(&repo, &["switch", "--quiet", "-c", "feature"]);
+    commit_all(&repo, "first of the branch");
+    git(&repo, &["switch", "--quiet", "main"]);
+    git(&repo, &["merge", "--quiet", "--ff-only", "feature"]);
+    // The next turn ended after the start; its recording failed.
+    let t2 = kept.turn(&a, 2, None);
+    write(&repo, "two.txt", "two\n");
+    let now = kept.state(&workspace, &worktree);
+    let t3 = kept.turn(&a, 3, Some(&now));
+    drop((kept, worktree));
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+
+    let history = history_of(&mut window, &workspace);
+
+    assert_eq!(
+        history.entries,
+        [turn_entry(&t2, &a, None), turn_entry(&t3, &a, Some(&now))]
+    );
     window.stop(keeper);
 }
 
@@ -930,6 +1005,10 @@ fn a_side_that_is_not_text_or_too_large_to_travel_is_sent_as_its_size_alone() {
     let mut late = vec![b'y'; 8000];
     late.push(0);
     std::fs::write(v.repo.join("late.bin"), &late).expect("write");
+    // A file that is both too large and not text is said to be not text.
+    let mut huge = vec![0u8];
+    huge.extend(vec![b'x'; too_large]);
+    std::fs::write(v.repo.join("huge.bin"), &huge).expect("write");
 
     assert_eq!(
         read(&mut window, &v.workspace, None, (None, "binary.bin")),
@@ -941,6 +1020,15 @@ fn a_side_that_is_not_text_or_too_large_to_travel_is_sent_as_its_size_alone() {
             Content::Absent,
             Content::TooLarge {
                 size: too_large as u64
+            }
+        )
+    );
+    assert_eq!(
+        read(&mut window, &v.workspace, None, (None, "huge.bin")),
+        sides(
+            Content::Absent,
+            Content::Binary {
+                size: huge.len() as u64
             }
         )
     );
