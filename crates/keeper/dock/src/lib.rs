@@ -8,17 +8,21 @@
 //! - [`TerminalId::random`], the id a caller gives a terminal before it is opened, so
 //!   that the caller can name it in the program's environment;
 //! - [`Start`], what a terminal runs, with [`Start::shell`] for the user's shell and
-//!   [`Start::program`] for any other program, and [`user_shell`];
+//!   [`Start::program`] for any other program, and [`user_shell`]; [`Start::with`], the
+//!   [`Entry`]s of the app a shell of the app gets on top of the user's own environment;
 //! - [`Size`], [`TerminalId`], [`Event`], [`Ending`] and [`DockError`], in the Dock's own
-//!   words: the Keeper program puts them into those of the Link.
+//!   words: the Keeper program puts them into those of the Link;
+//! - [`Dock::attach`], the newest output of a terminal, kept in a ring of [`RING_BYTES`],
+//!   handed to whoever attaches with nothing lost or told twice after it, and
+//!   [`Dock::redraw`], which asks a terminal's program to draw its screen again.
 //!
 //! The Dock knows nothing of the Link, of Windows or of agents. It runs programs on
 //! pseudo-terminals and passes bytes both ways. Of a program's environment it decides
 //! only what says which terminal the program runs in ([`TERMINAL_VARIABLES`],
-//! [`LEFT_OUT_VARIABLES`]); the rest comes from the caller through [`Start::env`]. It
-//! keeps no copy of what a program wrote:
-//! the ring of recent output, for a Window that attaches later, and the watch for the turn
-//! marks come with the slices that need them.
+//! [`LEFT_OUT_VARIABLES`]); the rest comes from the caller through [`Start::env`] and
+//! [`Start::with`]. Of what a program writes it keeps the newest [`RING_BYTES`], and it
+//! looks for the runs of bytes the caller asked it to watch for, [`Start::marks`],
+//! telling each as [`Event::Mark`]: what they mean is the caller's to say.
 //!
 //! No interface code belongs here.
 
@@ -170,9 +174,44 @@ pub enum Ending {
 pub enum Event {
     /// The program wrote these bytes. Never empty.
     Output(Vec<u8>),
+    /// The run of bytes `Start::marks[n]` was found in what the program wrote, also when
+    /// it came in two reads. Told after the [`Event::Output`] that held its last byte,
+    /// once for each time it was found.
+    Mark(usize),
     /// The program has ended and nothing more is told of this terminal. It comes once,
     /// last, after every [`Event::Output`] of the terminal.
     Ended(Ending),
+}
+
+/// How many of the newest bytes a program wrote the Dock keeps for each terminal, for a
+/// Window that attaches later: 1 MiB, which P4's measures found enough to give a screen
+/// and its recent history back whole, and little against the memory limit.
+pub const RING_BYTES: usize = 1024 * 1024;
+
+/// One thing a shell of the app gets on top of the user's own environment, beside what
+/// says which terminal it runs in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Entry {
+    /// A variable set to this value, as the address of the Keeper's socket or the id of
+    /// the terminal.
+    Variable {
+        /// The variable.
+        name: OsString,
+        /// Its value.
+        value: OsString,
+    },
+    /// A variable whose value is a list of paths parted by `:`: `path` is added at its
+    /// end, after what the Keeper's own environment holds, or is its whole value where it
+    /// holds none.
+    PathList {
+        /// The variable.
+        name: OsString,
+        /// The path added.
+        path: PathBuf,
+    },
+    /// A folder put first on the search path, `PATH`, before what the Keeper's own
+    /// environment holds there.
+    SearchFirst(PathBuf),
 }
 
 /// Where the events of one terminal go. Called on a thread of the Dock's own, one event
@@ -195,6 +234,9 @@ pub struct Start {
     /// [`TERMINAL_VARIABLES`]: what the caller adds, as the id of the terminal. Of two
     /// with one name, the later wins.
     pub env: Vec<(OsString, OsString)>,
+    /// The runs of bytes to watch for in what the program writes, each told as
+    /// [`Event::Mark`] by its index here. Empty: none is watched for.
+    pub marks: Vec<Vec<u8>>,
 }
 
 impl Start {
@@ -202,6 +244,15 @@ impl Start {
     /// `folder`.
     pub fn shell(folder: PathBuf, size: Size) -> Start {
         Start::program(user_shell(), vec![OsString::from("-l")], folder, size)
+    }
+
+    /// The user's shell, [`user_shell`], as an interactive login shell told to run
+    /// `command`, with the arguments `-l`, `-i`, `-c` and the command, in `folder`: what
+    /// a launcher of an agent CLI runs, so that the CLI finds what it would find typed in
+    /// a shell of the app. The terminal ends when the command does.
+    pub fn launcher(folder: PathBuf, size: Size, command: &str) -> Start {
+        let _ = (folder, size, command);
+        todo!("the user's shell told to run one command")
     }
 
     /// Any program, with these arguments, in `folder`.
@@ -212,7 +263,19 @@ impl Start {
             folder,
             size,
             env: Vec::new(),
+            marks: Vec::new(),
         }
+    }
+
+    /// This start with the app's `entries` added to [`Start::env`], each worked out from
+    /// the Keeper's own environment: a [`Entry::Variable`] as it is, a [`Entry::PathList`]
+    /// added after that variable's value, a [`Entry::SearchFirst`] put before `PATH`'s.
+    /// Nothing else of the environment changes: the program's environment differs from
+    /// the Keeper's by these entries, by [`TERMINAL_VARIABLES`] and by
+    /// [`LEFT_OUT_VARIABLES`] alone.
+    pub fn with(self, entries: &[Entry]) -> Start {
+        let _ = entries;
+        todo!("the app's entries on top of the Keeper's environment")
     }
 }
 
@@ -628,6 +691,30 @@ impl Dock {
     /// is not 0.
     pub fn running(&self) -> usize {
         self.inner.state().live.len()
+    }
+
+    /// Hands `attach` the newest output of `terminal` the Dock kept, at most
+    /// [`RING_BYTES`], and whether older output was dropped to keep within that, while no
+    /// [`Event`] of the terminal is told: what `attach` arranges for the output that
+    /// follows, as adding a Window to those it goes to, gets every byte after the kept
+    /// ones, and none twice. The kept output may begin in the middle of a character or of
+    /// an escape sequence. Refused with [`DockError::UnknownTerminal`] for a terminal whose
+    /// program has ended, or that the Dock never opened.
+    pub fn attach(
+        &self,
+        terminal: &TerminalId,
+        attach: impl FnOnce(&[u8], bool),
+    ) -> Result<(), DockError> {
+        let _ = (terminal, attach);
+        todo!("the kept output, handed over while no event is told")
+    }
+
+    /// Asks the program of `terminal` to draw its screen again: the signal for a changed
+    /// window size, sent to the terminal's foreground process group, also when the size
+    /// did not change.
+    pub fn redraw(&self, terminal: &TerminalId) -> Result<(), DockError> {
+        let _ = terminal;
+        todo!("ask the program in front to draw again")
     }
 
     /// Stops every program and what it started, and returns when none is left: the

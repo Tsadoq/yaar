@@ -6,5 +6,18 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[dependencies]
+yaar-agent.workspace = true
+# Reads the input of Claude Code's hooks and writes the plugin's files.
+serde_json.workspace = true
+
+[dev-dependencies]
+# The recorded events of Claude Code, which the tests of the mapping replay.
+yaar-system-tests.workspace = true
+
+# Used by the builder of the mapping; the contract has signatures only.
+[package.metadata.cargo-machete]
+ignored = ["serde_json"]
+
 [lints]
 workspace = true

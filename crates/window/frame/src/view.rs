@@ -10,7 +10,8 @@ use yaar_link::{Age, Hello};
 
 use crate::controls::{
     Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
-    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ToggleSidebar, UnpinSidebar,
+    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ShowFinishedTurn, ToggleSidebar,
+    UnpinSidebar,
 };
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
@@ -31,6 +32,18 @@ pub struct Pane {
 
 /// Builds one pane for a window, from the shared models: all the Frame asks of a pane.
 pub type BuildPane = Box<dyn FnOnce(&Models, &mut Window, &mut App) -> Pane>;
+
+/// The notice of a turn that ended in a workspace the window did not show.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnNotice {
+    /// The workspace the turn ended in, which the notice's control puts on screen.
+    pub workspace: yaar_link::WorkspaceId,
+    /// The session whose turn it was.
+    pub session: yaar_link::SessionId,
+    /// What the notice says: the session's title and the workspace's name, as
+    /// `Claude Code 1 finished a turn in feature/login`.
+    pub text: String,
+}
 
 /// One pane, as its crate hands it to the Window program: everything that has to be
 /// registered for the pane to work, as one value. The Window program keeps one list of
@@ -284,6 +297,17 @@ impl Frame {
         ))
     }
 
+    /// The notice of a turn that ended in a workspace the window did not show, drawn under
+    /// the selector `frame-turn-notice` with its control under `frame-turn-notice-show`,
+    /// which does what [`crate::ShowFinishedTurn`] does. None when there is no such
+    /// notice: a turn that ended in the workspace on screen makes none, and putting the
+    /// notice's workspace on screen, by its control or otherwise, takes it away. Of two
+    /// turns that ended elsewhere, the later one's notice is shown.
+    pub fn turn_notice(&self, cx: &App) -> Option<TurnNotice> {
+        let _ = cx;
+        todo!("the notice of a turn that ended elsewhere")
+    }
+
     /// The names of the panes, in the order they are laid out.
     pub fn panes(&self) -> Vec<&'static str> {
         self.composed
@@ -532,6 +556,11 @@ impl Frame {
         composed.panes[to].focus.focus(window, cx);
     }
 
+    /// Puts the workspace of the notice of a finished turn on screen. Taken here so that the
+    /// key is the Frame's from the first; until the notice is built there is none to act
+    /// on, and the action does nothing.
+    fn show_finished_turn(&mut self, _: &ShowFinishedTurn, _: &mut Window, _: &mut Context<Self>) {}
+
     fn move_panes(&mut self, _: &MovePanes, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(composed) = &mut self.composed {
             composed.beside = composed.beside.next();
@@ -720,6 +749,7 @@ impl Render for Frame {
             .on_action(cx.listener(Self::focus_next_pane))
             .on_action(cx.listener(Self::focus_previous_pane))
             .on_action(cx.listener(Self::move_panes))
+            .on_action(cx.listener(Self::show_finished_turn))
             .child(composed.sidebar.clone())
             .child(
                 div()

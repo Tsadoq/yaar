@@ -50,12 +50,20 @@ pub struct TerminalSize {
 
 /// What a new terminal runs.
 ///
-/// One kind so far. A launcher of an agent CLI and the resumption of an agent's session
-/// are further kinds of the same field, each a new variant with a number of its own.
+/// The resumption of an agent's session is a further kind of the same field, a new
+/// variant with a number of its own.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Program {
     /// The user's shell, started as a login shell in the folder of the workspace.
     Shell,
+    /// The launcher of an agent CLI: the user's shell, as for [`Program::Shell`], told to
+    /// run that CLI as when the user types its name, so that it gets everything a CLI
+    /// typed in a shell of the app gets. Refused when the Keeper has no Adapter by that
+    /// name.
+    Agent {
+        /// The Adapter of the CLI, by its name: `claude`.
+        agent: String,
+    },
 }
 
 /// How the program of a terminal ended.
@@ -91,12 +99,19 @@ pub(crate) fn read_size(input: &mut In<'_>) -> Result<TerminalSize, LinkError> {
 pub(crate) fn write_program(out: &mut Out, program: &Program) {
     match program {
         Program::Shell => out.u16(1),
+        Program::Agent { agent } => {
+            out.u16(2);
+            out.text(agent);
+        }
     }
 }
 
 pub(crate) fn read_program(input: &mut In<'_>) -> Result<Program, LinkError> {
     match input.u16()? {
         1 => Ok(Program::Shell),
+        2 => Ok(Program::Agent {
+            agent: input.text()?,
+        }),
         _ => Err(LinkError::Malformed("unknown kind of program")),
     }
 }

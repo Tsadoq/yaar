@@ -36,6 +36,10 @@ use crate::worktree::{
     ChangedPath, CommitId, Worktree, hooks_off, inside, is_full_id, name_status, os_string,
 };
 
+// The comparison of any two versions and the reading of a file in any of them: the
+// history's package's, beside the recording's.
+mod versions;
+
 /// The old value that `git update-ref` takes for "no such ref".
 const NO_REF: &str = "0000000000000000000000000000000000000000";
 
@@ -80,6 +84,17 @@ pub struct RecordedState {
     /// The commit that was checked out in the worktree when it was taken; none where
     /// nothing was committed yet.
     pub on: Option<CommitId>,
+}
+
+/// What [`StateStore::record_reporting`] gives: the state, and what it left out.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Recording {
+    /// The state recorded, or the newest one when the files are those it holds.
+    pub state: RecordedState,
+    /// The folders left out of the state, relative to the folder of the worktree, ordered
+    /// by path: repositories inside the worktree that git does not track and that have no
+    /// commit yet.
+    pub left_out: Vec<PathBuf>,
 }
 
 /// Why a state could not be recorded.
@@ -357,6 +372,20 @@ impl StateStore {
                 change,
             })
             .collect())
+    }
+
+    /// Records the state of `worktree` as [`StateStore::record`] does, and says what it
+    /// left out. A repository inside the worktree that git does not track and that has no
+    /// commit yet cannot be recorded: it is left out of the state, with what is inside it,
+    /// and named in [`Recording::left_out`], where a recording would otherwise fail. A
+    /// repository inside the worktree with a commit is recorded as that commit, as before.
+    ///
+    /// Files that a program creates and deletes beside the recording do not make it fail:
+    /// a path that is gone by the time it is staged is left out of the state, one that
+    /// appeared is in it or not, as the moment found it.
+    pub fn record_reporting(&self, worktree: &Worktree) -> Result<Recording, RecordError> {
+        let _ = worktree;
+        todo!("record, leaving out a nested repository with no commit")
     }
 
     /// A run of git in the store, not yet started; with the objects of a repository

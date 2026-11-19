@@ -10,7 +10,8 @@ use yaar_recorder::{
     ChangedPath, CommitId, Git, GitError, RecordError, StateId, StateStore, Worktree,
 };
 use yaar_store::{
-    Anchor, CommentId, ReviewId, SentBy, Side, Store, StoreError, ThreadId, WorkspaceId,
+    Anchor, CommentId, ReviewId, SentBy, SessionId, SessionRecord, Side, Store, StoreError,
+    ThreadId, WorkspaceId,
 };
 
 use crate::review::{Review, ReviewError, Scope};
@@ -176,6 +177,36 @@ pub struct Reviews {
     opened: Mutex<BTreeMap<WorkspaceId, Arc<StateStore>>>,
     // Held by each call while it reads what it changes and keeps the change.
     writing: Mutex<()>,
+    // What tells whether files changed since the newest state, and hears of each state
+    // taken; none records at every new thread, as slice 3 did.
+    watch: Option<Arc<dyn StateWatch>>,
+}
+
+/// What tells the engine whether the files of a worktree changed since its newest state,
+/// so that a new thread on unchanged files sits on that state and records none; and hears
+/// of every state the engine takes, so that what changed is counted from it.
+pub trait StateWatch: fmt::Debug + Send + Sync {
+    /// Whether the files of `workspace` may have changed since its newest state: true when
+    /// it cannot tell.
+    fn changed_since_state(&self, workspace: &WorkspaceId) -> bool;
+
+    /// A state of `workspace` was taken now.
+    fn state_taken(&self, workspace: &WorkspaceId, state: &StateId);
+}
+
+/// What a turn that ended leaves: the state recorded at its end, and what changed since
+/// the last review.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnEnded {
+    /// The state recorded at the end of the turn.
+    pub state: StateId,
+    /// The state the reviewer last marked reviewed in the session's review; none before
+    /// the first mark.
+    pub since: Option<String>,
+    /// What changed since the last review: the paths that differ from `since` to `state`,
+    /// or, before the first mark, from the start the caller gave to `state`; none with no
+    /// start either, as where nothing was committed.
+    pub changed: Option<Vec<ChangedPath>>,
 }
 
 impl Reviews {
@@ -188,7 +219,39 @@ impl Reviews {
             states,
             opened: Mutex::new(BTreeMap::new()),
             writing: Mutex::new(()),
+            watch: None,
         }
+    }
+
+    /// The same engine, told by `watch` whether files changed since the newest state: a
+    /// new thread on the files on disk then records a state only when they did, and every
+    /// state the engine takes is told to `watch`.
+    pub fn watching(self, watch: Arc<dyn StateWatch>) -> Reviews {
+        let _ = watch;
+        todo!("an engine that records only when files changed")
+    }
+
+    /// `session` starts: it keeps its review, takes one over, or gets a new one, by
+    /// [`crate::takeover`] over the reviews and the sessions the Store holds for its
+    /// workspace, and that is kept, under the engine's turn, before this returns. Gives
+    /// the session's review. The session itself is the caller's to keep in the Store
+    /// before.
+    pub fn session_started(&self, session: &SessionRecord) -> Result<ReviewId, EngineError> {
+        let _ = session;
+        todo!("the review a session that starts takes")
+    }
+
+    /// A turn of `session` ended in `worktree`: records the state of the worktree, and
+    /// gives it with what changed since the last review of the session's review, counted
+    /// from `start` before the first mark. The turn's record is the caller's to keep.
+    pub fn turn_ended(
+        &self,
+        worktree: &Worktree,
+        session: &SessionId,
+        start: Option<&CommitId>,
+    ) -> Result<TurnEnded, EngineError> {
+        let _ = (worktree, session, start);
+        todo!("the state at a turn's end and what changed since the last review")
     }
 
     /// The reviews of a workspace, whole, and its files marked viewed. A workspace with no

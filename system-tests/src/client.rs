@@ -4,7 +4,9 @@
 //!
 //! 1. It uses the public types of `yaar-link` and nothing else of the app. A test that
 //!    needs something the Link cannot say has found a missing message, not a reason for
-//!    a side door.
+//!    a side door. To read a terminal as lines it feeds the bytes that came to the
+//!    terminal core the terminal pane is built on, `alacritty_terminal`, itself: that
+//!    crate is not the app's, and nothing of the pane is used.
 //! 2. A test asserts on what came over the Link and on the world outside the app: git,
 //!    files, processes. Never on what the Keeper holds in memory.
 //! 3. Each test has its own [`crate::World`], and so its own Keeper on its own socket.
@@ -17,9 +19,10 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    ChangedFile, Changes, CommentId, DraftOn, Fact, FileSides, FileStatus, Hello, Message, Program,
-    Refusal, Reply, Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId,
-    TerminalSize, ThreadId, WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
+    ChangedFile, Changes, CommentId, DraftOn, Fact, FileSides, FileStatus, Hello, History, Message,
+    Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId, ReviewId, TerminalId,
+    TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents, WorkspaceId,
+    WorkspaceReviews, handshake, read_message, write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -385,6 +388,101 @@ impl Client {
             Reply::Committed { commit } => Ok(commit),
             other => panic!("asked to commit, the Keeper answered {other:?}"),
         }
+    }
+
+    /// Opens a terminal of a workspace with the launcher of the agent CLI `agent`, at
+    /// `size`, and gives its id.
+    pub fn open_launcher(
+        &mut self,
+        workspace: &WorkspaceId,
+        agent: &str,
+        size: TerminalSize,
+    ) -> Result<TerminalId, Refusal> {
+        let _ = (workspace, agent, size);
+        todo!("open a terminal with an agent's launcher")
+    }
+
+    /// Asks for the agent sessions of every workspace. Panics when the Keeper refuses.
+    pub fn agents(&mut self) -> Vec<WorkspaceAgents> {
+        todo!("the agents of every workspace")
+    }
+
+    /// Waits for a fact `AgentsChanged` of `workspace` that `wanted` accepts, among those
+    /// kept and those still to come, as [`Client::wait_for_fact`] does, and gives it.
+    pub fn wait_for_agents(
+        &mut self,
+        workspace: &WorkspaceId,
+        limit: Duration,
+        wanted: impl FnMut(&WorkspaceAgents) -> bool,
+    ) -> WorkspaceAgents {
+        let _ = (workspace, limit, wanted);
+        todo!("the agents of a workspace, as a fact tells them")
+    }
+
+    /// Asks for the history of a workspace.
+    pub fn history(&mut self, workspace: &WorkspaceId) -> Result<History, Refusal> {
+        let _ = workspace;
+        todo!("the history of a workspace")
+    }
+
+    /// Asks for the files that differ between two versions of a workspace.
+    pub fn compare(
+        &mut self,
+        workspace: &WorkspaceId,
+        from: &str,
+        to: Option<&str>,
+    ) -> Result<Vec<ChangedFile>, Refusal> {
+        let _ = (workspace, from, to);
+        todo!("the files that differ between two versions")
+    }
+
+    /// Asks for one turn with its steps.
+    pub fn turn(&mut self, turn: &TurnId) -> Result<Turn, Refusal> {
+        let _ = turn;
+        todo!("one turn with its steps")
+    }
+
+    /// Tells the Keeper which workspace this client shows, as a Window does.
+    pub fn show_workspace(&mut self, workspace: Option<&WorkspaceId>) -> Result<(), Refusal> {
+        let _ = workspace;
+        todo!("say which workspace is on screen")
+    }
+
+    /// Asks for every terminal the Keeper holds.
+    pub fn terminals(&mut self) -> Vec<TerminalInfo> {
+        todo!("the terminals the Keeper holds")
+    }
+
+    /// Attaches to a terminal the Keeper holds, at `size`: gives whether its kept output
+    /// was cut. The kept output, and what follows, is read as any terminal's output.
+    pub fn attach_terminal(
+        &mut self,
+        terminal: &TerminalId,
+        size: TerminalSize,
+    ) -> Result<bool, Refusal> {
+        let _ = (terminal, size);
+        todo!("attach to a terminal that runs")
+    }
+
+    /// The screen of a terminal as lines of text, top to bottom, as the output that came
+    /// so far draws it at `size` in the terminal core the terminal pane uses,
+    /// `alacritty_terminal`, the trailing blanks of each line dropped. The client feeds
+    /// that core itself; nothing of the pane is used.
+    pub fn screen(&mut self, terminal: &TerminalId, size: TerminalSize) -> Vec<String> {
+        let _ = (terminal, size);
+        todo!("the screen of a terminal as lines")
+    }
+
+    /// Asks the Keeper to stop everything: sends the stop-everything frame, as the second
+    /// way to quit does, and gives no answer, since none comes.
+    pub fn stop_everything(&mut self) {
+        todo!("send the stop-everything frame")
+    }
+
+    /// Goes away with no goodbye, as a killed Window does: the connection is shut both
+    /// ways and dropped, with whatever the Keeper had sent unread.
+    pub fn vanish(self) {
+        todo!("go away as a killed window does")
     }
 
     /// Writes one request and gives the id it went out under.

@@ -18,6 +18,13 @@ yaar-store.workspace = true
 yaar-workspaces.workspace = true
 yaar-dock.workspace = true
 yaar-review-engine.workspace = true
+yaar-agent.workspace = true
+yaar-switchboard.workspace = true
+yaar-adapter-claude.workspace = true
+
+# Used by the builders of slice 4; the contract has signatures only.
+[package.metadata.cargo-machete]
+ignored = ["yaar-adapter-claude", "yaar-agent", "yaar-switchboard"]
 
 [lints]
 workspace = true

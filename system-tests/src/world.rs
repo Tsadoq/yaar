@@ -172,6 +172,15 @@ impl World {
         pid
     }
 
+    /// Starts the built Keeper program as [`World::start_keeper`] does, but as the last
+    /// arguments of `wrapper`: `["strace", "-f", "-o", <file>]` runs it under a tracer
+    /// that follows every process it starts. Gives the process id of the Keeper itself,
+    /// found among the wrapper's children, once it listens.
+    pub fn start_keeper_under(&mut self, wrapper: &[std::ffi::OsString]) -> u32 {
+        let _ = wrapper;
+        todo!("the Keeper started under a wrapper")
+    }
+
     /// Kills the Keeper this world started with the kill signal, as a crash or the system
     /// does, and returns once it is gone and collected; the world may then start another
     /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
@@ -217,6 +226,31 @@ impl World {
         fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
             .expect("make the key recorder runnable");
         script
+    }
+
+    /// Puts the stand-in agent on the search path of the programs this world starts from
+    /// now on, the Keeper and its shells among them: a folder of the world, first on
+    /// `PATH`, holding `claude`, `pi` and `otheragent`, each the built `standin-agent`.
+    /// Call it before [`World::start_keeper`].
+    pub fn agents_on_path(&mut self) {
+        todo!("the stand-in on the search path of the world")
+    }
+
+    /// Writes `script` as the file `<name>.script` of the world and gives its path. A
+    /// stand-in started with [`crate::standin::SCRIPT_VARIABLE`] naming it follows it; the
+    /// script named `default` is the one every stand-in of the world follows when nothing
+    /// else names one, as one started from a launcher.
+    pub fn agent_script(&self, name: &str, script: &crate::standin::Script) -> PathBuf {
+        let _ = (name, script);
+        todo!("a script for the stand-in")
+    }
+
+    /// What reached the stand-in whose log is `<name>.log` of the world, as it wrote it
+    /// down so far; every stand-in of the world writes to `default.log` when nothing else
+    /// names its log.
+    pub fn agent_log(&self, name: &str) -> crate::standin::StandinLog {
+        let _ = name;
+        todo!("the log of a stand-in")
     }
 
     /// A scripted client attached to the Keeper of this world, as a Window would attach.
@@ -410,6 +444,14 @@ impl Tap {
     /// one that the Keeper has answered is never missing from it.
     pub fn requests(&self) -> Vec<Request> {
         self.seen.requests().clone()
+    }
+
+    /// Waits, at most `limit`, until a Window has sent the stop-everything frame through
+    /// the tap, and gives whether it did. The tap keeps that frame as it keeps requests,
+    /// before it hands it on.
+    pub fn wait_for_stop(&self, limit: Duration) -> bool {
+        let _ = limit;
+        todo!("the stop-everything frame, seen by the tap")
     }
 
     /// Waits for a request that `wanted` accepts, at most `limit`, and returns it. Only

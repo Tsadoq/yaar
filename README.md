@@ -78,6 +78,8 @@ does, and you hand it the copied review by hand.
 | Cmd-C, Cmd-V | Ctrl-Shift-C, Ctrl-Shift-V | Copies the selected text of a terminal, pastes into it | in a terminal |
 | Shift-PageUp, Shift-PageDown | the same | Scrolls the history of a terminal | in a terminal |
 | Cmd-Q | Ctrl-Q | Quits | anywhere |
+| Cmd-Alt-Q | Ctrl-Alt-Q | Quits and stops the agents | anywhere |
+| Cmd-Alt-N | Ctrl-Alt-N | Shows the worktree where an agent just finished a turn | anywhere |
 | `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
 | `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
 
@@ -122,7 +124,7 @@ as GPUI writes them.
 | `ctrl-tab`, `ctrl-shift-tab`: the next and the previous pane | the same |
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others

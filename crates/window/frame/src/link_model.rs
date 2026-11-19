@@ -572,6 +572,14 @@ impl KeeperLink {
         &self.status
     }
 
+    /// Asks the Keeper to stop everything: sends the stop-everything frame,
+    /// [`Message::Shutdown`], after every request and input given before, and returns at
+    /// once. It goes to a Keeper of any protocol version, an older one too: the frame never
+    /// changes shape. With no connection, nothing is sent.
+    pub fn stop_everything(&mut self) {
+        todo!("send the stop-everything frame")
+    }
+
     /// Records the outcome of [`crate::keeper::attach`] and tells the observers. With a
     /// Keeper of the same protocol version, the connection is read from here on: answers
     /// go to those who asked, and each fact is emitted to the subscribers.

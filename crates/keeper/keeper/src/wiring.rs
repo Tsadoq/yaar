@@ -21,6 +21,18 @@
 //! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
 //! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
 //! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
+//! | `Report` | `Agents::report`, at once; what it means on the agents' own thread | later `AgentsChanged`, `Step`, `TurnEnded` |
+//! | `ListAgents` | `Agents::list` | none |
+//! | `GetHistory` | `Agents::history` | none |
+//! | `CompareVersions` | `Agents::compare` | none |
+//! | `ReadVersions` | `Agents::read_versions` | none |
+//! | `GetTurn` | `Agents::turn` | none |
+//! | `ShowWorkspace` | the watchers of the worktrees on screen | later `ChangesChanged`, `Workspaces` |
+//! | `ListTerminals` | the terminals the Dock holds, with their workspace and program | none |
+//! | `AttachTerminal` | `Dock::attach`, then `Dock::resize` and `Dock::redraw` | none |
+//!
+//! A piece of the app inside an agent CLI connects as a Window does, sends one request of
+//! the origin `Agent`, and is let go once it is answered.
 //!
 //! The worktree of a request of reviews is found with `Workspaces::worktree`, which reads
 //! the Store and the folder and runs no git: never through the list of every repository,
@@ -62,8 +74,9 @@
 //! own changes one at a time. Where each request is answered, so that what takes long
 //! holds up nothing else of its Window, is [`answerer`]'s to say.
 //!
-//! Nothing is watched yet. The list of workspaces is read from git when a Window asks
-//! for it, and no fact tells of a worktree or a branch that changed outside the app.
+//! The worktrees a Window shows, and those an agent works in, are watched: what changes in
+//! them is told as `ChangesChanged`, and a change of what is checked out as `Workspaces`
+//! too. The list of every repository is read from git when a Window asks for it.
 
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -76,6 +89,8 @@ use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
+use crate::agents::{Agents, not_wired};
+use crate::watching::Watching;
 use crate::{Options, Shared, Window, frame_of};
 
 /// How many of its first bytes say whether a file is text: git's own number.
@@ -89,17 +104,24 @@ pub(crate) struct Parts {
     // Workspaces and the reviews, both on git and the Store, or the sentence that says
     // why there are none.
     kept: Result<Kept, String>,
+    // The agents' side: the Adapters, the Switchboard and what follows from them. Held by
+    // the routes of the terminals too, which tell it the marks they find, so that the
+    // Dock's threads never wait for the parts.
+    agents: Arc<Agents>,
+    // The worktrees watched: those a Window shows, and those an agent runs in.
+    watching: Arc<Watching>,
     // The terminals and their programs. Dropped with the parts, which ends every program.
     dock: Dock,
     // What the programs of the Dock tell the Windows goes through here.
     shared: Weak<Shared>,
 }
 
-/// What the Keeper keeps for its Windows: the workspaces, and the reviews of their
-/// worktrees.
-struct Kept {
-    workspaces: Workspaces,
-    reviews: Reviews,
+/// What the Keeper keeps for its Windows: the workspaces, the reviews of their worktrees,
+/// and the Store both keep their records in.
+pub(crate) struct Kept {
+    pub(crate) workspaces: Workspaces,
+    pub(crate) reviews: Reviews,
+    pub(crate) store: Store,
 }
 
 /// A step that waits for a reply to be queued, and runs after it.
@@ -164,6 +186,23 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // The user's own git, with their hooks, which may run for minutes: neither the
         // Window's typing nor its saves may wait for it.
         RequestKind::Commit => Answerer::Apart,
+        // A CLI waits for its piece, which waits for this answer: it is given at once,
+        // before anything the report leads to.
+        RequestKind::Report => Answerer::Here,
+        // Read from what the Keeper holds and the Store.
+        RequestKind::ListAgents | RequestKind::GetTurn | RequestKind::ListTerminals => {
+            Answerer::Here
+        }
+        // The watcher of a worktree is started on a thread of its own: the request only
+        // says which workspace is on screen. The kept output of a terminal must reach its
+        // Window after the reply, as the output of a terminal opened.
+        RequestKind::ShowWorkspace | RequestKind::AttachTerminal => Answerer::Here,
+        // git in the worktree or in its state store, up to a second on a large repository,
+        // reading the files on disk: the Window's typing into its terminals must not wait
+        // for it, nor its saves.
+        RequestKind::GetHistory | RequestKind::CompareVersions | RequestKind::ReadVersions => {
+            Answerer::Apart
+        }
     }
 }
 
@@ -210,6 +249,21 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::MarkReviewed
         | RequestKind::SetViewed
         | RequestKind::Commit => false,
+        // Its reply carries what `AgentsChanged` carries: read between two changes and
+        // sent after the fact of the second, it would be taken for the newer list. The
+        // agents' side tells its facts under the same turn.
+        RequestKind::ListAgents => true,
+        // It leads to facts only later, from the agents' own thread, which takes the turn
+        // to tell them.
+        RequestKind::Report => false,
+        // What these read, a fact makes a Window read again.
+        RequestKind::GetHistory
+        | RequestKind::CompareVersions
+        | RequestKind::ReadVersions
+        | RequestKind::GetTurn
+        | RequestKind::ListTerminals => false,
+        // They lead to no fact of their own.
+        RequestKind::ShowWorkspace | RequestKind::AttachTerminal => false,
     }
 }
 
@@ -228,12 +282,22 @@ impl Parts {
             let store = Store::open(&file).map_err(|e| e.to_string())?;
             let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"));
             Ok(Kept {
-                workspaces: Workspaces::new(git, store),
+                workspaces: Workspaces::new(git, store.clone()),
                 reviews,
+                store,
             })
         });
+        let watching = Arc::new(Watching::new(shared.clone()));
+        let agents = Arc::new(Agents::start(
+            options,
+            kept.as_ref().ok(),
+            Arc::clone(&watching),
+            shared.clone(),
+        ));
         Parts {
             kept,
+            agents,
+            watching,
             dock: Dock::new(),
             shared,
         }
@@ -247,13 +311,15 @@ impl Parts {
     /// Answers one request of `window`, or gives the work that answers it once the parts
     /// are let go.
     pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
-        let Kept {
-            workspaces,
-            reviews,
-        } = match &self.kept {
+        let kept = match &self.kept {
             Ok(kept) => kept,
             Err(reason) => return Answered::Now(Outcome::failed(reason.clone())),
         };
+        let Kept {
+            workspaces,
+            reviews,
+            ..
+        } = kept;
         let mut facts = Vec::new();
         let mut then = None;
         let reply = match request {
@@ -344,7 +410,12 @@ impl Parts {
             }
             Request::CopyReview { review } => copy_review(workspaces, reviews, &review, &mut facts),
             Request::MarkReviewed { review } => {
-                mark_reviewed(workspaces, reviews, &review, &mut facts)
+                let marked = mark_reviewed(workspaces, reviews, &review, &mut facts);
+                // A session whose review is marked has nothing unreviewed any more.
+                if marked.is_ok() {
+                    self.agents.reviewed(kept, &review);
+                }
+                marked
             }
             Request::SetViewed {
                 workspace,
@@ -364,6 +435,33 @@ impl Parts {
                     }),
                 };
             }
+            Request::Report { report } => return Answered::Now(self.agents.report(kept, report)),
+            Request::ListAgents => self.agents.list(kept),
+            Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
+            Request::CompareVersions {
+                workspace,
+                from,
+                to,
+            } => self.agents.compare(kept, &workspace, &from, to.as_deref()),
+            Request::ReadVersions {
+                workspace,
+                old,
+                old_path,
+                new,
+                path,
+            } => self.agents.read_versions(
+                kept,
+                &workspace,
+                old.as_deref().map(|old| (old, old_path.as_path())),
+                (new.as_deref(), path.as_path()),
+            ),
+            Request::GetTurn { turn } => self.agents.turn(kept, &turn),
+            // The terminals' side of slice 4: the watchers, the list of terminals and
+            // attaching to one.
+            Request::ShowWorkspace { workspace } => {
+                self.watching.show(kept, window, workspace.as_ref())
+            }
+            Request::ListTerminals | Request::AttachTerminal { .. } => Err(not_wired()),
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -391,10 +489,21 @@ impl Parts {
         let id = yaar_dock::TerminalId::random().map_err(|error| Refusal::Failed {
             reason: format!("no name for the terminal could be made: {error}"),
         })?;
-        let start = match program {
+        let mut start = match program {
             Program::Shell => Start::shell(folder, size(at)),
+            Program::Agent { agent } => match self.agents.launcher(agent) {
+                Some(command) => Start::launcher(folder, size(at), command),
+                None => {
+                    return Err(Refusal::Failed {
+                        reason: format!("the app knows no agent CLI named {agent}"),
+                    });
+                }
+            },
         };
-        let route = Arc::new(Route::new(window));
+        // Every terminal is watched for the marks of every agent CLI: a CLI typed in a
+        // shell writes them as one started from its launcher does.
+        start.marks = self.agents.marks();
+        let route = Arc::new(Route::new(window, Arc::clone(&self.agents)));
         let events = {
             let (route, shared, id) = (
                 Arc::clone(&route),
@@ -439,6 +548,8 @@ struct Route {
     // on, and its connection closes with it.
     opener: Weak<Window>,
     state: Mutex<RouteState>,
+    // Told the marks found in the output and the end of the program.
+    agents: Arc<Agents>,
 }
 
 #[derive(Default)]
@@ -452,10 +563,11 @@ struct RouteState {
 }
 
 impl Route {
-    fn new(opener: &Arc<Window>) -> Route {
+    fn new(opener: &Arc<Window>, agents: Arc<Agents>) -> Route {
         Route {
             opener: Arc::downgrade(opener),
             state: Mutex::new(RouteState::default()),
+            agents,
         }
     }
 
@@ -482,7 +594,10 @@ impl Route {
                     state.held.extend(frames);
                 }
             }
+            // After the output that held it: what the mark means is the agents' side's.
+            Event::Mark(mark) => self.agents.marked(terminal, mark),
             Event::Ended(how) => {
+                self.agents.terminal_ended(terminal);
                 let mut state = self.state.lock().unwrap_or_else(PoisonError::into_inner);
                 if state.released {
                     drop(state);

@@ -438,6 +438,20 @@ fn parse_params(params: &[u8]) -> Option<Vec<Option<u32>>> {
         .collect()
 }
 
+/// What a program reports of its progress with the progress sequence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Progress {
+    /// It is this far, in percent from 0 to 100: state 1.
+    Normal(u8),
+    /// It failed, this far: state 2.
+    Error(u8),
+    /// It works, with no measure of how far: state 3, as Claude Code writes when a turn
+    /// starts.
+    Indeterminate,
+    /// It paused, this far: state 4.
+    Paused(u8),
+}
+
 /// A colour as the program asked for it. The painter turns it into the theme's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
@@ -696,6 +710,14 @@ impl Emulator {
                 text.trim_end().to_string()
             })
             .collect()
+    }
+
+    /// The progress the program reports with the progress sequence, `OSC 9 ; 4 ; <state> ;
+    /// <value>`, which the core drops: none before the first, and after one whose state is
+    /// 0, no progress, as Claude Code writes when a turn stops. The scanner reads it before
+    /// the core.
+    pub fn progress(&self) -> Option<Progress> {
+        todo!("the progress the program reported")
     }
 
     /// The title the program gave the terminal last; none before it gave one, and after

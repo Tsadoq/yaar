@@ -346,22 +346,48 @@ pub(crate) fn write_changes(out: &mut Out, changes: &Changes) {
         }
     }
     out.optional(changes.counted_from.as_deref(), Out::text);
-    out.list(&changes.commits, |out, commit| {
-        out.text(&commit.id);
-        out.text(&commit.summary);
-    });
-    out.list(&changes.files, |out, file| {
-        out.path(&file.path);
-        match &file.status {
-            FileStatus::Added => out.u8(0),
-            FileStatus::Modified => out.u8(1),
-            FileStatus::Deleted => out.u8(2),
-            FileStatus::Renamed { from } => {
-                out.u8(3);
-                out.path(from);
-            }
+    out.list(&changes.commits, write_commit);
+    out.list(&changes.files, write_changed_file);
+}
+
+pub(crate) fn write_commit(out: &mut Out, commit: &Commit) {
+    out.text(&commit.id);
+    out.text(&commit.summary);
+}
+
+pub(crate) fn read_commit(input: &mut In<'_>) -> Result<Commit, LinkError> {
+    Ok(Commit {
+        id: input.text()?,
+        summary: input.text()?,
+    })
+}
+
+pub(crate) fn write_changed_file(out: &mut Out, file: &ChangedFile) {
+    out.path(&file.path);
+    match &file.status {
+        FileStatus::Added => out.u8(0),
+        FileStatus::Modified => out.u8(1),
+        FileStatus::Deleted => out.u8(2),
+        FileStatus::Renamed { from } => {
+            out.u8(3);
+            out.path(from);
         }
-    });
+    }
+}
+
+pub(crate) fn read_changed_file(input: &mut In<'_>) -> Result<ChangedFile, LinkError> {
+    Ok(ChangedFile {
+        path: input.path()?,
+        status: match input.u8()? {
+            0 => FileStatus::Added,
+            1 => FileStatus::Modified,
+            2 => FileStatus::Deleted,
+            3 => FileStatus::Renamed {
+                from: input.path()?,
+            },
+            _ => return Err(LinkError::Malformed("unknown status of a file")),
+        },
+    })
 }
 
 pub(crate) fn read_changes(input: &mut In<'_>) -> Result<Changes, LinkError> {
@@ -390,26 +416,8 @@ pub(crate) fn read_changes(input: &mut In<'_>) -> Result<Changes, LinkError> {
         _ => return Err(LinkError::Malformed("unknown kind of comparison")),
     };
     let counted_from = input.optional(In::text)?;
-    let commits = input.list(|input| {
-        Ok(Commit {
-            id: input.text()?,
-            summary: input.text()?,
-        })
-    })?;
-    let files = input.list(|input| {
-        Ok(ChangedFile {
-            path: input.path()?,
-            status: match input.u8()? {
-                0 => FileStatus::Added,
-                1 => FileStatus::Modified,
-                2 => FileStatus::Deleted,
-                3 => FileStatus::Renamed {
-                    from: input.path()?,
-                },
-                _ => return Err(LinkError::Malformed("unknown status of a file")),
-            },
-        })
-    })?;
+    let commits = input.list(read_commit)?;
+    let files = input.list(read_changed_file)?;
     Ok(Changes {
         workspace,
         comparison,

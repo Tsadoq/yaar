@@ -14,11 +14,11 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Anchor, Base, BaseSource, ChangedFile, Changes, CommentId, Commit, Comparison, Content,
-    DraftOn, Fact, FileSides, FileStatus, Head, Hello, Lines, MAX_CONTENT, Message,
+    AgentReport, Anchor, Base, BaseSource, ChangedFile, Changes, CommentId, Commit, Comparison,
+    Content, DraftOn, Fact, FileSides, FileStatus, Head, Hello, Lines, MAX_CONTENT, Message,
     PROTOCOL_VERSION, Program, Refusal, Reply, Repository, Request, RequestId, RequestKind,
-    ReviewId, Side, TerminalId, TerminalSize, ThreadId, Workspace, WorkspaceId, WorkspaceReviews,
-    handshake, read_message, write_message,
+    ReviewId, Side, TerminalId, TerminalSize, ThreadId, TurnId, Workspace, WorkspaceId,
+    WorkspaceReviews, handshake, read_message, write_message,
 };
 
 /// What the one file of a new repository holds.
@@ -565,6 +565,56 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
             RequestKind::Commit => Request::Commit {
                 workspace: workspace.clone(),
                 message: "Commit".to_owned(),
+            },
+            // A piece of an agent CLI asks on a connection of its own, which is let go
+            // once it is answered.
+            RequestKind::Report => {
+                let mut piece = scratch.window();
+                assert_eq!(
+                    piece.ask(Request::Report {
+                        report: AgentReport {
+                            agent: "claude".to_owned(),
+                            terminal: None,
+                            pid: std::process::id(),
+                            payload: b"{}".to_vec(),
+                        },
+                    }),
+                    Err(Refusal::Failed {
+                        reason: "git was not found".to_owned()
+                    }),
+                    "{kind:?}"
+                );
+                continue;
+            }
+            RequestKind::ListAgents => Request::ListAgents,
+            RequestKind::GetHistory => Request::GetHistory {
+                workspace: workspace.clone(),
+            },
+            RequestKind::CompareVersions => Request::CompareVersions {
+                workspace: workspace.clone(),
+                from: "0".repeat(40),
+                to: None,
+            },
+            RequestKind::ReadVersions => Request::ReadVersions {
+                workspace: workspace.clone(),
+                old: None,
+                old_path: PathBuf::from("a.txt"),
+                new: None,
+                path: PathBuf::from("a.txt"),
+            },
+            RequestKind::GetTurn => Request::GetTurn {
+                turn: TurnId::new("0".repeat(32)),
+            },
+            RequestKind::ShowWorkspace => Request::ShowWorkspace {
+                workspace: Some(workspace.clone()),
+            },
+            RequestKind::ListTerminals => Request::ListTerminals,
+            RequestKind::AttachTerminal => Request::AttachTerminal {
+                terminal: TerminalId::new("0".repeat(32)),
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
             },
         };
         assert_eq!(

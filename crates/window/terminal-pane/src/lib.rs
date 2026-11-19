@@ -37,7 +37,9 @@ use yaar_link::{
     Fact, Program, Reply, Request, RequestKind, TerminalId, TerminalSize, WorkspaceId,
 };
 
-pub use emulator::{Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Screen, Style};
+pub use emulator::{
+    Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
+};
 pub use keys::{OptionKey, encode_focus, encode_key, encode_paste, encode_release};
 pub use modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
 pub use mouse::{MouseAction, MouseButton, encode_mouse};
@@ -368,6 +370,25 @@ impl TerminalPane {
     /// The pane draws this very sentence.
     pub fn notice(&self) -> Option<String> {
         self.notice.clone()
+    }
+
+    /// Whether `terminal` carries the waiting mark: an agent session runs in it and waits
+    /// at a permission prompt for the user, as `yaar_frame::AgentList` says. A terminal
+    /// that is drawn and carries it draws the mark under the selector
+    /// `terminal-waiting-<its slot>`, beside `terminal-slot-<its slot>`. The pane sends
+    /// the program nothing for it.
+    pub fn waiting(&self, terminal: &TerminalId, cx: &App) -> bool {
+        let _ = (terminal, cx);
+        todo!("whether an agent waits for permission in this terminal")
+    }
+
+    /// Whether the pane attached to `terminal` after the Keeper had dropped part of its
+    /// output: the view then draws, where the kept output starts, a line that says older
+    /// output is gone, under the selector `terminal-cut-<its slot>`. False for a terminal
+    /// this Window opened, and for one the Keeper kept whole.
+    pub fn attached_cut(&self, terminal: &TerminalId) -> bool {
+        let _ = terminal;
+        todo!("whether the output of an attached terminal was cut")
     }
 
     fn entry(&self, id: &TerminalId) -> Option<&Entry> {

@@ -157,9 +157,18 @@ impl Composed {
             | RequestKind::ReadFile
             | RequestKind::ResizeTerminal
             | RequestKind::GetReviews
-            | RequestKind::SaveDraft => {
+            | RequestKind::SaveDraft
+            | RequestKind::ListAgents
+            | RequestKind::GetHistory
+            | RequestKind::CompareVersions
+            | RequestKind::ReadVersions
+            | RequestKind::GetTurn
+            | RequestKind::ShowWorkspace
+            | RequestKind::ListTerminals
+            | RequestKind::AttachTerminal => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
+            RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
         }
     }
 
@@ -428,8 +437,19 @@ impl Composed {
                 | RequestKind::ReadFile
                 | RequestKind::ResizeTerminal
                 | RequestKind::GetReviews
-                | RequestKind::SaveDraft => {
+                | RequestKind::SaveDraft
+                | RequestKind::ListAgents
+                | RequestKind::GetHistory
+                | RequestKind::CompareVersions
+                | RequestKind::ReadVersions
+                | RequestKind::GetTurn
+                | RequestKind::ShowWorkspace
+                | RequestKind::ListTerminals
+                | RequestKind::AttachTerminal => {
                     panic!("the Window starts {kind:?} by itself: no user does")
+                }
+                RequestKind::Report => {
+                    panic!("a piece of an agent CLI starts {kind:?}: no user does")
                 }
             };
 
@@ -507,13 +527,10 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
                 "{} says it sends {kind:?}",
                 control.title
             ),
-            // No control sends the stop-everything frame yet. It joins the walk when
-            // its control is built, and the tap, which keeps requests, has to keep
-            // that frame too by then.
-            Some(Sends::StopEverything) => panic!(
-                "{} sends the stop-everything frame, which the walk does not follow yet",
-                control.title
-            ),
+            // The stop-everything frame is no request, and has no origin to check. Its
+            // control is pressed by the forward walk, last, once the tap keeps that frame
+            // too: the package of the composed Window teaches the walk.
+            Some(Sends::StopEverything) => {}
             None => {}
         }
     }

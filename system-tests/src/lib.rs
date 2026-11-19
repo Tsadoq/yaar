@@ -7,12 +7,16 @@
 //! - [`descriptors_of`] and [`descendants_of`], which read from outside what a process
 //!   holds open and what it started;
 //! - [`program`], [`is_alive`] and [`wait_until`], and the bare [`attach`] and [`Place`]
-//!   of the tests that need no world.
-//!
-//! The stand-in agent CLI joins it when the Switchboard exists.
+//!   of the tests that need no world;
+//! - [`standin`], the stand-in agent CLI, `standin-agent`, and the script a test hands
+//!   it; [`World::agents_on_path`] puts it in a world's shells;
+//! - [`recorded`], the recorded events of the real agent CLIs, which the tests of the
+//!   Adapters, the Companion and the Workspaces replay, also from crates of their own.
 
 mod client;
 mod processes;
+pub mod recorded;
+pub mod standin;
 mod world;
 
 use std::os::unix::net::UnixStream;

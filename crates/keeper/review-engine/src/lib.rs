@@ -18,8 +18,15 @@
 //!   keeps every change in the Store and records the state of the worktree where a review
 //!   needs one: at a send, at a mark of reviewed, and for a new thread on the files on
 //!   disk;
+//! - [`takeover`], the rule of a review per agent session: which review a session that
+//!   starts keeps, takes over, or gets new, as a [`Takeover`];
+//! - [`uncommitted_of`], the uncommitted changes a review lists: those of its session and
+//!   those no agent made, each a [`Credited`];
+//! - [`Reviews::session_started`] and [`Reviews::turn_ended`], what the Keeper calls when a
+//!   session starts and when a turn ends, with [`TurnEnded`]; [`StateWatch`], by which
+//!   the engine records a state for a new thread only when files changed;
 //! - the records it reads and writes, from the Store: [`Anchor`], [`Thread`], [`Comment`],
-//!   [`Round`] and their ids.
+//!   [`Round`], [`SessionRecord`] and their ids.
 //!
 //! It knows nothing of what kind of change a tree is: a recorded state and a commit are
 //! both a tree, named by an id, and only the Recorder tells them apart. It holds no
@@ -27,18 +34,23 @@
 
 mod engine;
 mod review;
+mod takeover;
 mod text;
+mod uncommitted;
 mod viewed;
 mod workspace;
 
 pub use engine::{
-    Copied, DraftOn, DraftSave, EngineError, NewAnchor, Reviews, Saved, WorkspaceView,
+    Copied, DraftOn, DraftSave, EngineError, NewAnchor, Reviews, Saved, StateWatch, TurnEnded,
+    WorkspaceView,
 };
 pub use review::{Attachment, Review, ReviewError, Scope, Sent, Unsent};
+pub use takeover::{Takeover, takeover};
 pub use text::{COPY_INSTRUCTION, ReviewText, as_text};
+pub use uncommitted::{Credited, uncommitted_of};
 pub use viewed::{ViewedFiles, fingerprint};
 pub use workspace::with_review_of_no_agent;
 pub use yaar_store::{
-    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, Side, Thread,
-    ThreadId, WorkspaceId,
+    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, SessionId,
+    SessionRecord, Side, Thread, ThreadId, WorkspaceId,
 };

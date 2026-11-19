@@ -17,18 +17,14 @@ use std::path::PathBuf;
 
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
-use yaar_frame::{Asks, Control, Opened, PROGRAM_CONTEXT, PaneEntry, Place};
+use yaar_frame::{Control, Opened, PROGRAM_CONTEXT, PaneEntry, Place};
+
+/// Quits the Window, the plain way: the Keeper and what it holds stay. One of the Frame's
+/// two quits, beside `yaar_frame::QuitAndStopAgents`; the Window program says what it does.
+pub use yaar_frame::Quit;
 
 /// The version of the app, as shown to the user and told to the Keeper.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-actions!(
-    yaar,
-    [
-        /// Quits the Window. The Keeper and what it holds stay.
-        Quit
-    ]
-);
 
 /// The panes of the Window, in the order they are laid out. Both [`controls`] and
 /// [`open`] read this list and nothing else about panes.
@@ -53,20 +49,13 @@ pub fn kept_keys() -> Vec<Control> {
         .collect()
 }
 
-/// Every action of the Window that has a key.
+/// Every action of the Window that has a key: the Frame's, the two quits among them, then
+/// each pane's.
 pub fn controls() -> Vec<Control> {
     let mut controls = yaar_frame::controls();
     for pane in panes() {
         controls.extend((pane.controls)());
     }
-    controls.push(Control {
-        title: "Quit",
-        action: || Box::new(Quit),
-        keystroke: "secondary-q",
-        place: Place::Anywhere,
-        sends: None,
-        asks: Asks::Nothing,
-    });
     controls
 }
 
@@ -115,14 +104,17 @@ mod tests {
         for pane in panes() {
             expected.extend((pane.controls)().iter().map(row));
         }
-        // The one key of the Window program's own, written out here so that a change of
-        // it in the table is a change in two places.
-        expected.push(("secondary-q", Quit.name(), Place::Anywhere));
 
         let table = controls();
         assert_eq!(table.iter().map(row).collect::<Vec<_>>(), expected);
 
-        let quit = table.last().expect("the table has rows");
+        // The plain quit, written out here so that a change of its key in the table is a
+        // change in two places.
+        let quit = table
+            .iter()
+            .find(|control| (control.action)().name() == Quit.name())
+            .expect("the table has the plain quit");
+        assert_eq!(row(quit), ("secondary-q", Quit.name(), Place::Anywhere));
         assert_eq!(quit.sends, None, "quitting the Window stops nothing");
         assert_eq!(quit.asks, Asks::Nothing);
     }

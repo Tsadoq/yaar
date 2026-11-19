@@ -49,12 +49,13 @@ jobs:
     container: ubuntu:24.04
     timeout-minutes: 45
     steps:
+      # strace: a system test traces the files the Keeper and the Companion open.
       - name: System packages
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git gcc libc6-dev pkg-config libfontconfig-dev \
-            libxkbcommon-x11-dev fonts-dejavu-core jq
+            libxkbcommon-x11-dev fonts-dejavu-core jq strace
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 

@@ -6,5 +6,21 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "yaar-claude-hook"
+path = "src/main.rs"
+
+[dependencies]
+# The hook program speaks the Link to the Keeper.
+yaar-link.workspace = true
+
+[dev-dependencies]
+# The recorded hook inputs the tests hand the program.
+yaar-system-tests.workspace = true
+
+# Used by the builders of slice 4; the contract has signatures only.
+[package.metadata.cargo-machete]
+ignored = ["yaar-link"]
+
 [lints]
 workspace = true

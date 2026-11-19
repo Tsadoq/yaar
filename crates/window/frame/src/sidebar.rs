@@ -3,8 +3,9 @@
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use yaar_link::{RepositoryId, WorkspaceId};
+use yaar_link::{RepositoryId, SessionState, WorkspaceId};
 
+use crate::agents::AgentList;
 use crate::models::WorkspaceList;
 
 /// The form the sidebar is shown in.
@@ -58,6 +59,10 @@ pub enum SidebarRow {
         selected: bool,
         /// Whether its worktree is gone: it is listed for its reviews, and marked so.
         gone: bool,
+        /// What its agents are doing, as the Keeper told it: none for a workspace in which
+        /// no session of a supported agent CLI ever reported, and in a sidebar made with
+        /// no list of agents.
+        agent: Option<SessionState>,
     },
 }
 
@@ -69,13 +74,21 @@ pub enum SidebarRow {
 /// A worktree that is gone is listed by the name of its folder, and its row ends in a mark
 /// that says so; it is clicked and selected as any row.
 ///
-/// For tests, which cannot read what is drawn, five kinds of element carry a selector
+/// A workspace whose agents the Keeper told ends in a mark of what they are doing:
+/// waiting for permission, finished a turn not yet reviewed, working, or not running; an
+/// idle agent draws no mark.
+///
+/// For tests, which cannot read what is drawn, six kinds of element carry a selector
 /// that `debug_bounds` finds: the sidebar as a whole, `sidebar`; each repository row,
 /// `sidebar-repository-<id>`; each workspace row, `sidebar-workspace-<id>`; the mark of
-/// each worktree that is gone, `sidebar-gone-<id>`, inside its row; and the pin control,
+/// each worktree that is gone, `sidebar-gone-<id>`, inside its row; the mark of a
+/// workspace's agents, `sidebar-agent-<id>-<state>` inside its row, `<state>` one of
+/// `waiting`, `unreviewed`, `working` and `not-running`; and the pin control,
 /// `sidebar-pin`.
 pub struct Sidebar {
     workspaces: Entity<WorkspaceList>,
+    // None in a sidebar made by `new`, which shows no agent.
+    agents: Option<Entity<AgentList>>,
     pinned: Option<SidebarForm>,
     form: SidebarForm,
     /// The width of the window, once a Frame told it.
@@ -92,10 +105,22 @@ impl Sidebar {
         cx.observe(&workspaces, |_, _, cx| cx.notify()).detach();
         Self {
             workspaces,
+            agents: None,
             pinned: None,
             form: SidebarForm::Full,
             window_width: None,
         }
+    }
+
+    /// A sidebar as [`Sidebar::new`] makes it that also shows, at each workspace, what its
+    /// agents are doing, from `agents`, and is drawn again when they change.
+    pub fn with_agents(
+        workspaces: Entity<WorkspaceList>,
+        agents: Entity<AgentList>,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let _ = (workspaces, agents, cx);
+        todo!("a sidebar that shows the agents of each workspace")
     }
 
     /// The form the sidebar has now, at the width the window has now.
@@ -145,6 +170,7 @@ impl Sidebar {
                     name,
                     selected: on_screen == Some(&workspace.id),
                     gone: workspace.head.is_none(),
+                    agent: None,
                 });
             }
         }
@@ -211,6 +237,7 @@ impl Sidebar {
                 name,
                 selected,
                 gone,
+                agent: _,
             } => {
                 let selector = format!("sidebar-workspace-{id}");
                 // After the name, so that a reader sees which row it is and then that it is

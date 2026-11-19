@@ -11,7 +11,20 @@
 //!   functions of what git reports;
 //! - what those return: [`Repository`], [`Workspace`], [`Base`], [`Changes`],
 //!   [`Comparison`] with [`NoComparison`], [`FileSides`], and [`WorkspaceError`] with the
-//!   [`Refusal`] a user can mend.
+//!   [`Refusal`] a user can mend;
+//! - the watcher of a worktree, [`Workspaces::watch`], which tells what it [`Seen`]; and who
+//!   is credited with a changed path: [`Workspaces::agent_wrote`],
+//!   [`Workspaces::command_began`] and [`Workspaces::command_ended`] in, and
+//!   [`Workspaces::credits`] out, by the rule of [`Ledger`], with the [`CreditedPath`]s it
+//!   gives.
+//!
+//! Who is credited with a change. A write made with an agent's own tool names its path
+//! and its session, and is that session's. Any other change is seen by the watcher, which
+//! says what changed and never who: it is credited to a session only when it was seen while
+//! exactly one session of the worktree ran a shell command, and to no agent otherwise. So
+//! two sessions whose shell commands overlap write, both of them, changes no agent made,
+//! and a hand edit made while exactly one session runs a shell command is credited to that
+//! session: the known limit of the rule.
 //!
 //! A workspace is one worktree. It is recognised by an id written once into the git
 //! folder of that worktree, in a file named [`ID_FILE`]: the id stays with the worktree
@@ -24,7 +37,9 @@
 //! This crate starts no git and opens no database: it asks the Recorder and the Store.
 
 mod base;
+mod credit;
 mod identity;
+mod watch;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -35,6 +50,8 @@ use yaar_recorder::{Branch, Commits, Git, GitError, OpenError};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
 
 pub use base::{default_base, on_base_branch};
+pub use credit::{CreditedPath, Ledger, SETTLE};
+pub use watch::Seen;
 pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs, Worktree};
 pub use yaar_store::{RepositoryId, WorkspaceId};
 
@@ -285,6 +302,8 @@ pub struct Workspaces {
     // Held while ids are read, made and kept, so that two Windows that open or list at
     // once do not give one worktree two ids.
     naming: Mutex<()>,
+    // The worktrees watched, with the ledger of who changed what in each.
+    watching: watch::Watching,
 }
 
 impl Workspaces {
@@ -295,7 +314,70 @@ impl Workspaces {
             store,
             worktrees: Mutex::new(BTreeMap::new()),
             naming: Mutex::new(()),
+            watching: watch::Watching::default(),
         }
+    }
+
+    /// Watches the worktree of `workspace`, its files and what is checked out in it,
+    /// until [`Workspaces::unwatch`]: each change the system reports is told to `told` on
+    /// a thread of the watcher's own, as what it [`Seen`], and the ledger of the workspace
+    /// notes when each changed path was seen. Watching a workspace that is watched already
+    /// replaces `told`. Refused with [`Refusal::UnknownWorkspace`] for a workspace the
+    /// Store does not hold or whose worktree is gone.
+    ///
+    /// What git keeps of its own in the worktree's git folder is no change of a file, but
+    /// a change of `HEAD`, of the list of files or of a ref is [`Seen::Head`]. Reads are
+    /// not seen; the system tells nothing of them.
+    pub fn watch(
+        &self,
+        workspace: &WorkspaceId,
+        told: Box<dyn Fn(Seen) + Send + Sync>,
+    ) -> Result<(), WorkspaceError> {
+        let _ = (workspace, told);
+        todo!("watch the worktree of a workspace")
+    }
+
+    /// Stops watching the worktree of `workspace`. Its ledger is kept: a change seen
+    /// before is still credited as it was.
+    pub fn unwatch(&self, workspace: &WorkspaceId) {
+        let _ = workspace;
+        todo!("stop watching a worktree")
+    }
+
+    /// The workspaces whose worktrees are watched.
+    pub fn watched(&self) -> Vec<WorkspaceId> {
+        todo!("the watched workspaces")
+    }
+
+    /// `session` wrote `path` with the agent's own tool, which named it: the change of
+    /// that path is credited to that session. `path` is absolute or relative to the folder
+    /// of the worktree; one outside the worktree is not noted.
+    pub fn agent_wrote(&self, workspace: &WorkspaceId, session: &str, path: &Path) {
+        let _ = (workspace, session, path);
+        todo!("note a write an agent's tool named")
+    }
+
+    /// A shell command of `session` begins in the worktree of `workspace`.
+    pub fn command_began(&self, workspace: &WorkspaceId, session: &str) {
+        let _ = (workspace, session);
+        todo!("note a shell command that begins")
+    }
+
+    /// The shell command of `session` has ended. Changes seen up to [`SETTLE`] after this
+    /// call still fall within it: the system tells of a write some milliseconds after it.
+    pub fn command_ended(&self, workspace: &WorkspaceId, session: &str) {
+        let _ = (workspace, session);
+        todo!("note a shell command that ended")
+    }
+
+    /// Every uncommitted change of the worktree, from the commit checked out to the files
+    /// on disk, ordered by path, each with the sessions it is credited to: none for a
+    /// change no agent made. A change made before the Keeper started, or in a worktree not
+    /// watched when it was made, is one no agent made, unless an agent's own tool named it.
+    /// A path committed since it changed leaves the ledger.
+    pub fn credits(&self, workspace: &WorkspaceId) -> Result<Vec<CreditedPath>, WorkspaceError> {
+        let _ = workspace;
+        todo!("who made each uncommitted change")
     }
 
     /// Opens the repository that `folder` lies in, and with it the workspace of the

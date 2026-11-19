@@ -42,11 +42,13 @@ use std::time::Instant;
 use rusqlite::Connection;
 
 mod reviews;
+mod sessions;
 
 pub use reviews::{
     Anchor, Author, Comment, CommentId, FLUSH_AFTER, ReviewId, ReviewRecord, Round, SentBy, Side,
     Thread, ThreadId, ViewedRecord,
 };
+pub use sessions::{SessionId, SessionRecord, StepRecord, TurnEndRecord, TurnId, TurnRecord};
 
 /// The name of the database file in the app's folder.
 pub const FILE_NAME: &str = "store.db";
@@ -128,6 +130,48 @@ const TABLES_2: &str = "
         PRIMARY KEY (workspace, path)
     ) STRICT;
     PRAGMA user_version = 2;
+";
+
+/// What version 3 adds: the agent sessions, the turns of each and the steps of each turn.
+/// A session names its workspace by id, with no foreign key, as a review does; `ended` is
+/// the order of ends, a number one more than the largest kept. A turn's `ended` and a
+/// step's `kind` are small numbers, in the order their types list them; a step's `what`
+/// is a path, as its bytes, or a command, as its text.
+///
+/// The Store's package applies it as the third step, raises `VERSION` to 3, adds it to
+/// `STEPS`, and removes the `expect` below.
+#[expect(dead_code, reason = "applied by the Store's package of slice 4")]
+const TABLES_3: &str = "
+    CREATE TABLE session (
+        seq INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        workspace TEXT NOT NULL,
+        agent TEXT NOT NULL,
+        cli_session TEXT NOT NULL,
+        terminal TEXT,
+        number INTEGER NOT NULL CHECK (number >= 1),
+        running INTEGER NOT NULL CHECK (running IN (0, 1)),
+        ended INTEGER
+    ) STRICT;
+    CREATE INDEX session_of_workspace ON session (workspace);
+    CREATE UNIQUE INDEX session_of_cli ON session (agent, cli_session);
+    CREATE TABLE turn (
+        seq INTEGER PRIMARY KEY,
+        id TEXT NOT NULL UNIQUE,
+        session TEXT NOT NULL REFERENCES session (id),
+        number INTEGER NOT NULL CHECK (number >= 1),
+        ended INTEGER CHECK (ended IN (0, 1)),
+        state TEXT
+    ) STRICT;
+    CREATE INDEX turn_of_session ON turn (session);
+    CREATE TABLE step (
+        turn TEXT NOT NULL REFERENCES turn (id),
+        number INTEGER NOT NULL CHECK (number >= 1),
+        kind INTEGER NOT NULL CHECK (kind IN (0, 1, 2, 3)),
+        what BLOB NOT NULL,
+        PRIMARY KEY (turn, number)
+    ) STRICT;
+    PRAGMA user_version = 3;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its

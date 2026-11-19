@@ -56,6 +56,17 @@ actions!(
         /// right to below it, from below to its left, from its left to the right. See
         /// [`crate::Beside`].
         MovePanes,
+        /// Quits the Window, the plain way: the Keeper, the agents and every program of
+        /// the terminals go on, and a Window opened again shows them as they are. The
+        /// Window program says what quitting does; the Frame sends nothing for it.
+        Quit,
+        /// Quits the Window and asks the Keeper to stop everything: every program of the
+        /// terminals and what they started, the agents among them, and then itself. It
+        /// sends the stop-everything frame, `yaar_link::Message::Shutdown`.
+        QuitAndStopAgents,
+        /// Puts on screen the workspace of the notice of a turn that ended where the
+        /// Window did not show it, and takes the notice away.
+        ShowFinishedTurn,
     ]
 );
 
@@ -288,6 +299,30 @@ pub fn controls() -> Vec<Control> {
             keystroke: "secondary-alt-p",
             place: Place::Anywhere,
             sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Show Finished Turn",
+            action: || Box::new(ShowFinishedTurn),
+            keystroke: "secondary-alt-n",
+            place: Place::Anywhere,
+            sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Quit",
+            action: || Box::new(Quit),
+            keystroke: "secondary-q",
+            place: Place::Anywhere,
+            sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Quit and Stop Agents",
+            action: || Box::new(QuitAndStopAgents),
+            keystroke: "secondary-alt-q",
+            place: Place::Anywhere,
+            sends: Some(Sends::StopEverything),
             asks: Asks::Nothing,
         },
     ]

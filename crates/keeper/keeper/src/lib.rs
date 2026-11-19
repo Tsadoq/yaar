@@ -10,8 +10,14 @@
 //! `yaar-keeper` is this function behind a command line. Everything else a Window can
 //! reach, it reaches over the Link.
 //!
+//! A piece of the app inside an agent CLI connects to the same socket: it says hello,
+//! sends one request of the origin `yaar_link::Origin::Agent`, and is let go once that is
+//! answered. It is never asked for anything.
+//!
 //! No interface code belongs here or in any crate beside this one.
 
+mod agents;
+mod watching;
 mod wiring;
 
 use std::collections::VecDeque;
@@ -27,7 +33,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    Fact, Hello, LinkError, MAX_FRAME, Message, Refusal, Request, RequestId, read_message,
+    Fact, Hello, LinkError, MAX_FRAME, Message, Origin, Refusal, Request, RequestId, read_message,
     write_message,
 };
 
@@ -550,6 +556,12 @@ fn converse(window: &Arc<Window>, speaks: bool, shared: &Arc<Shared>) -> Result<
                 ));
             }
             Ok(Message::Request { id, request }) => match wiring::answerer(request.kind()) {
+                // A piece of an agent CLI asks one thing and goes: what it was owed is
+                // written, and nothing more is read from it.
+                Answerer::Here if request.kind().origin() == Origin::Agent => {
+                    answer(shared, window, id, request);
+                    return Ok(());
+                }
                 Answerer::Here => {
                     if !answer(shared, window, id, request) {
                         return Ok(());

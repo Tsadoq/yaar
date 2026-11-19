@@ -11,7 +11,25 @@
 //! - [`controls`], the actions of the pane with their keys: [`LineDown`], [`LineUp`],
 //!   [`ToggleLayout`], and the review actions [`Comment`], [`EditDraft`], [`Reply`],
 //!   [`DeleteDraft`], [`NextThread`], [`PreviousThread`], [`CopyReview`],
-//!   [`ToggleViewed`], [`MarkReviewed`] and [`Commit`].
+//!   [`ToggleViewed`], [`MarkReviewed`] and [`Commit`]; and those of Changes and of whose
+//!   review is shown: [`FocusHistory`], [`HistoryDown`], [`HistoryUp`], [`MarkChange`],
+//!   [`ShowChange`], [`FocusRows`], [`ToggleKeepSelection`], [`TakeOffer`] and
+//!   [`NextReview`], which the pane's package of slice 4 gives their keys;
+//! - [`ChangeShown`], the change of the worktree the pane shows the files of, and what a
+//!   turn end offers.
+//!
+//! Changes. Above the files the pane shows the tree of the worktree's history, which it
+//! asks the Keeper for: its commits and the turns of its agents, oldest first, and last
+//! its uncommitted changes, those no agent made marked. The reviewer selects one entry, or
+//! a range of them, by clicks or with the keys tuicr gives its commit selector, and the
+//! files below are the change from the version before the first to the version of the
+//! last. Until the reviewer selects one, the pane shows the changes of the workspace as
+//! slice 1 did. When a turn ends in the workspace on screen the pane selects what changed
+//! since the reviewer's last review, or, set to keep the selection, keeps it and offers
+//! that change instead.
+//!
+//! Whose review. With one agent session in the worktree the pane names it above the
+//! review; with several it names each, and the reviewer chooses whose review it shows.
 //!
 //! The pane shows the changes of the workspace on screen: it observes
 //! `yaar_frame::WorkspaceChanges`, asks through it for the two versions of each changed
@@ -44,7 +62,8 @@ use yaar_diff::{CONTEXT_LINES, Emphasis, FileDiff, Row, Side};
 use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Place, Sends};
 use yaar_link::{
     Anchor, ChangedFile, Changes, CommentId, Comparison, Content, Fact, FileSides, FileStatus,
-    RequestKind, Review, ReviewId, ThreadId, WorkspaceId, WorkspaceReviews,
+    History, RequestKind, Review, ReviewId, Session, SessionId, ThreadId, WorkspaceId,
+    WorkspaceReviews,
 };
 
 use crate::actions::CommitField;
@@ -85,11 +104,67 @@ actions!(
         MarkReviewed,
         /// Asks for a commit message, and commits every uncommitted change with it.
         Commit,
+        /// Moves the focus from the rows of the diff to the tree of Changes.
+        FocusHistory,
+        /// Moves the focus from the tree of Changes back to the rows of the diff.
+        FocusRows,
+        /// Moves the cursor of the tree of Changes one entry down.
+        HistoryDown,
+        /// Moves the cursor of the tree of Changes one entry up.
+        HistoryUp,
+        /// Marks the entry under the cursor of the tree for the range to show, or takes the
+        /// mark away.
+        MarkChange,
+        /// Shows the change of the marked entries of the tree, from the first to the last,
+        /// or of the entry under the cursor when none is marked.
+        ShowChange,
+        /// Sets whether a turn that ends keeps the selection of Changes and offers what
+        /// changed since the last review, or selects it.
+        ToggleKeepSelection,
+        /// Shows the change a turn end offered.
+        TakeOffer,
+        /// Shows the review of the next agent session of the worktree.
+        NextReview,
     ]
 );
 
 /// The key context of the pane: its keys work while it has the focus.
 pub const KEY_CONTEXT: &str = "ReviewPane";
+
+/// The key context of the tree of Changes, inside the pane: its keys work while the tree
+/// has the focus.
+pub const HISTORY_CONTEXT: &str = "ReviewHistory";
+
+/// A change of the worktree the pane shows the files of, or that a turn end offers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ChangeShown {
+    /// The changes of the workspace as `yaar_frame::WorkspaceChanges` holds them: against
+    /// its base, as slice 1 showed them. What the pane shows until the reviewer selects in
+    /// the tree, and after a workspace comes on screen.
+    Comparison,
+    /// The entries `first` to `last`, both included, of the history's entries: from the
+    /// version before `first`, the entry above it or the history's start, to the version
+    /// of `last`. One entry is `first == last`.
+    Entries {
+        /// The first entry, by its index in `History::entries`.
+        first: usize,
+        /// The last entry.
+        last: usize,
+    },
+    /// The uncommitted changes: from the commit checked out to the files on disk, with
+    /// those no agent made marked.
+    Uncommitted,
+    /// From one version to another, as what changed since the last review is: from the
+    /// state the reviewer last marked reviewed, or the history's start before the first
+    /// mark, to the state recorded at a turn's end.
+    Since {
+        /// The version it is counted from, by its full id; none where nothing is
+        /// committed.
+        from: Option<String>,
+        /// The state it leads to.
+        to: String,
+    },
+}
 
 /// The layout a diff is shown in until the reviewer switches it.
 pub const FIRST_LAYOUT: Layout = Layout::Unified;
@@ -530,6 +605,64 @@ impl ReviewPane {
     /// slice a workspace has one review.
     pub fn review(&self) -> Option<&Review> {
         self.reviews.as_ref()?.reviews.first()
+    }
+
+    /// The history of the workspace on screen, as the Keeper last answered; none before
+    /// its first answer and while no workspace is on screen.
+    pub fn history(&self) -> Option<&History> {
+        todo!("the history the pane shows")
+    }
+
+    /// The change whose files the pane shows.
+    pub fn change_shown(&self) -> ChangeShown {
+        todo!("the change the pane shows")
+    }
+
+    /// The entry of the tree under the cursor, by its index in the history's entries, with
+    /// one more than the last for the uncommitted changes; none before the tree has the
+    /// focus once.
+    pub fn history_cursor(&self) -> Option<usize> {
+        todo!("the cursor of the tree")
+    }
+
+    /// The entries of the tree marked for a range, by their indices, in order.
+    pub fn marked_changes(&self) -> Vec<usize> {
+        todo!("the marked entries of the tree")
+    }
+
+    /// Whether a turn that ends keeps the selection of Changes and offers what changed
+    /// since the last review, rather than selecting it. Off until the reviewer sets it; it
+    /// lasts as long as the window, until the settings keep it.
+    pub fn keeps_selection(&self) -> bool {
+        todo!("whether a turn end keeps the selection")
+    }
+
+    /// What a turn end offered while the pane kept the selection, drawn under the selector
+    /// `review-offer`, with its control under `review-offer-take`; none when nothing is
+    /// offered. Taking it, or selecting anything, takes it away.
+    pub fn offer(&self) -> Option<&ChangeShown> {
+        todo!("the change a turn end offered")
+    }
+
+    /// The agent sessions of the worktree on screen that a review belongs to, in the
+    /// order they started, as `yaar_frame::AgentList` holds them. With one, the pane
+    /// names it above the review, under the selector `review-session`; with several, it
+    /// names each under `review-session-<index>`, which a click shows the review of.
+    pub fn sessions(&self) -> Vec<Session> {
+        todo!("the sessions whose reviews the pane can show")
+    }
+
+    /// The session whose review the pane shows; none for the review of no agent.
+    pub fn review_session(&self) -> Option<&SessionId> {
+        todo!("whose review the pane shows")
+    }
+
+    /// Whether the change of `path` that the pane lists under uncommitted changes was made
+    /// by no agent, as the history's credits say; such a file's heading carries a mark under
+    /// the selector `review-no-agent-<index of its row>`.
+    pub fn made_by_no_agent(&self, path: &Path) -> bool {
+        let _ = path;
+        todo!("whether no agent made a change")
     }
 
     /// The comment box, while one is open.
