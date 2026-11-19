@@ -406,6 +406,8 @@ fn a_commit_where_git_cannot_add_the_files_leaves_the_list_of_files_as_it_was() 
     init(&repo.join("inner"));
     write(&repo.join("inner"), "i.txt", "inside\n");
     let (list, status) = settled(&repo);
+    let unstaged = std::fs::read(repo.join("unstaged.txt")).expect("read");
+    let inside = std::fs::read(repo.join("inner/i.txt")).expect("read");
 
     let error = open(&repo).commit_all("try").expect_err("no commit");
 
@@ -416,6 +418,15 @@ fn a_commit_where_git_cannot_add_the_files_leaves_the_list_of_files_as_it_was() 
     assert_eq!(
         git(&repo, &["diff", "--cached", "--name-only"]),
         "staged.txt"
+    );
+    // The worktree is as it was.
+    assert_eq!(
+        std::fs::read(repo.join("unstaged.txt")).expect("read"),
+        unstaged
+    );
+    assert_eq!(
+        std::fs::read(repo.join("inner/i.txt")).expect("read"),
+        inside
     );
 }
 
