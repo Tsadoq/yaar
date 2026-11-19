@@ -1,16 +1,9 @@
-//! A review rendered as text: what is copied by hand, and what a delivery module wraps in
-//! its own words in a later slice.
+//! A review rendered as text: the one text every way of delivering hands out, after that
+//! way's own instruction (`yaar_agent::Delivery::instruction`).
 
 use yaar_store::{Author, CommentId, Side, ThreadId};
 
 use crate::review::{Review, Scope};
-
-/// The instruction that goes first in a review copied as text. An agent the app cannot
-/// deliver to has no reply tool, so it is asked to answer each thread in its own answer,
-/// naming the thread by its id.
-pub const COPY_INSTRUCTION: &str = "This is a code review. Address each thread below. \
-In your answer, reply to each thread on its own, starting with its id as it is written \
-after \"Thread\", and say whether you addressed it.";
 
 /// A review as text, and what it holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -96,6 +89,7 @@ fn longest_run_of_backticks(text: &str) -> usize {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use yaar_agent::COPY_INSTRUCTION;
     use yaar_store::{Anchor, ReviewId, SentBy, Side, WorkspaceId};
 
     fn thread(n: u32) -> ThreadId {

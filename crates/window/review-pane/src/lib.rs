@@ -180,6 +180,13 @@ actions!(
         /// Shows the line a moved thread on the line the reviewer is on was written on,
         /// or hides it again.
         ShowOriginal,
+        /// Shows in Changes what changed since the comments of a round were sent: the
+        /// first press the newest round with a recorded state, each press after it the
+        /// round before, and after the first round the newest again.
+        SinceRound,
+        /// Takes the offer to start an agent with the review attached: starts the first
+        /// CLI offered.
+        StartAgent,
     ]
 );
 
@@ -514,6 +521,8 @@ pub fn controls() -> Vec<Control> {
             RequestKind::ResolveAddressed,
         ),
         control("Original Line", || Box::new(ShowOriginal), "w"),
+        control("Since Round", || Box::new(SinceRound), "shift-s"),
+        control("Start Agent", || Box::new(StartAgent), "shift-n"),
     ]
 }
 
@@ -1692,7 +1701,7 @@ mod tests {
 
     use super::{
         AttachReview, AttachThread, DetachReview, ReopenThread, ResolveAddressed, ResolveThread,
-        ShowOriginal,
+        ShowOriginal, SinceRound, StartAgent,
     };
     use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
@@ -1834,6 +1843,8 @@ mod tests {
                     Asks::Nothing
                 ),
                 ("w", ShowOriginal.name(), None, Asks::Nothing),
+                ("shift-s", SinceRound.name(), None, Asks::Nothing),
+                ("shift-n", StartAgent.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1940,6 +1951,14 @@ mod tests {
             (
                 ShowOriginal.name(),
                 "neither has one; neither keeps the line a comment was written on",
+            ),
+            (
+                SinceRound.name(),
+                "neither has one; neither sends rounds of a review",
+            ),
+            (
+                StartAgent.name(),
+                "neither has one; neither starts an agent",
             ),
         ];
         let held = controls();

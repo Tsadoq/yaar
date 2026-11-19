@@ -21,7 +21,7 @@
 //! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
 //! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
 //! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
-//! | `Report` | `Agents::report`: queued, then answered; what it means on the agents' own thread | later `AgentsChanged`, `Step`, `TurnEnded` |
+//! | `Report` | `Agents::report`: queued, and answered once the agents' own thread has taken it (`Answer` or `Done`) | later `AgentsChanged`, `Step`, `TurnEnded`, `ReviewsChanged` |
 //! | `ListAgents` | `Agents::list` | none |
 //! | `GetHistory` | `Agents::history` | none |
 //! | `GetUncommitted` | `Agents::uncommitted` | none |
@@ -200,8 +200,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // The user's own git, with their hooks, which may run for minutes: neither the
         // Window's typing nor its saves may wait for it.
         RequestKind::Commit => Answerer::Apart,
-        // A CLI waits for its piece, which waits for this answer: it is given at once,
-        // before anything the report leads to.
+        // A CLI waits for its piece, which waits for this answer: it is given on the
+        // piece's own connection as soon as the agents' side has taken the report, and that
+        // connection has nothing else to answer meanwhile.
         RequestKind::Report => Answerer::Here,
         // Read from what the Keeper holds and the Store.
         RequestKind::ListAgents | RequestKind::GetTurn | RequestKind::ListTerminals => {
@@ -280,7 +281,8 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // agents' side tells its facts under the same turn.
         RequestKind::ListAgents => true,
         // It leads to facts only later, from the agents' own thread, which takes the turn
-        // to tell them.
+        // to tell them; and its answer waits for that thread, which the turn held here would
+        // keep waiting for ever.
         RequestKind::Report => false,
         // What these read, a fact makes a Window read again.
         RequestKind::GetHistory
@@ -494,7 +496,9 @@ impl Parts {
                     }),
                 };
             }
-            Request::Report { report } => return Answered::Now(self.agents.report(kept, report)),
+            // Answered once the agents' side has taken it, by work that runs after the
+            // parts are let go: that side takes them to work the report out.
+            Request::Report { report } => return self.agents.report(kept, report),
             Request::ListAgents => self.agents.list(kept),
             Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
             Request::GetUncommitted { workspace, review } => {

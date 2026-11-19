@@ -1,7 +1,7 @@
 //! The agent's replies, the states of a thread, and resolving every addressed thread at
 //! once. Built by the engine's package "replies and the states of a thread" of slice 6.
 
-use yaar_store::{CommentId, ThreadId};
+use yaar_store::{CommentId, SessionId, ThreadId};
 
 use super::{Review, ReviewError};
 
@@ -38,7 +38,7 @@ impl Review {
     /// sent, and [`ReviewError::TakenId`]; nothing changes then.
     pub fn agent_reply(
         &mut self,
-        session: &str,
+        session: &SessionId,
         thread: &ThreadId,
         comment: CommentId,
         text: &str,

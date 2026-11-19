@@ -103,7 +103,11 @@ pub enum Step {
     /// ignored, and the wait goes on.
     Ask(PathBuf, String),
     /// Holds the turn open until the file exists: a test that wants to act while the
-    /// agent works makes the file when it is done.
+    /// agent works makes the file when it is done. It runs outside a turn too, as a gate
+    /// before the steps after it. Keys typed during it with no Enter stay pending, as at
+    /// any step: no `turn` follows to take them, and an `ask` after it sets them aside
+    /// and answers only keys typed once its question is up. A line ended by Enter during
+    /// a hold inside a turn is a queued message (see [`Step::Turn`]).
     Hold(PathBuf),
     /// Writes this many numbered lines into its terminal as fast as it can, and writes
     /// down in its log the longest a single write waited.

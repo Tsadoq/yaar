@@ -10,13 +10,12 @@ use yaar_recorder::{
     ChangedPath, CommitId, Git, GitError, RecordError, RecordedState, StateId, StateStore, Worktree,
 };
 use yaar_store::{
-    Anchor, CommentId, ReviewId, SentBy, SessionId, SessionRecord, Side, Store, StoreError,
-    ThreadId, WorkspaceId,
+    Anchor, CommentId, ReviewId, SessionId, SessionRecord, Side, Store, StoreError, ThreadId,
+    WorkspaceId,
 };
 
-use crate::review::{Review, ReviewError, Scope};
+use crate::review::{Review, ReviewError};
 use crate::takeover::{Takeover, takeover};
-use crate::text::{COPY_INSTRUCTION, as_text};
 use crate::viewed::{ViewedFiles, fingerprint};
 use crate::workspace::with_review_of_no_agent;
 
@@ -453,36 +452,6 @@ impl Reviews {
         current.delete(comment)?;
         self.store.delete_draft(comment)?;
         Ok(())
-    }
-
-    /// Copies a review as text and sends it, as a submit does: the text holds every unsent
-    /// comment on an unresolved thread, after [`crate::COPY_INSTRUCTION`]; the state of
-    /// `worktree`, the worktree of the review's workspace, is recorded; the copied comments
-    /// are sent in a new round, recorded at that state, in one transaction of the Store.
-    /// Refused, with nothing recorded, when there is nothing to send.
-    pub fn copy_as_text(
-        &self,
-        worktree: &Worktree,
-        review: &ReviewId,
-    ) -> Result<Copied, EngineError> {
-        let before = self.review(review)?;
-        if before.unsent(Scope::Everything).is_empty() {
-            return Err(ReviewError::NothingToSend.into());
-        }
-        let state = self.record_state(before.workspace(), worktree)?;
-
-        let _turn = self.turn();
-        let mut current = self.review(review)?;
-        let rendered = as_text(&current, Scope::Everything, COPY_INSTRUCTION);
-        if rendered.comments.is_empty() {
-            return Err(ReviewError::NothingToSend.into());
-        }
-        let sent = current.send(Scope::Everything, state.id.as_str(), SentBy::Copied)?;
-        self.store.put_round(review, &sent.round, &sent.comments)?;
-        Ok(Copied {
-            text: rendered.text,
-            round: sent.round.number,
-        })
     }
 
     /// Marks the change reviewed: records the state of `worktree`, the worktree of the

@@ -8,8 +8,8 @@
 //!   follow-up is a draft reply in the same thread; a resolved thread is sent no more; what
 //!   is attached to the next message, and what a send carries; the reviewed state. It
 //!   holds no file and starts no process;
-//! - [`as_text`], the review rendered as text, with the [`COPY_INSTRUCTION`] that goes with
-//!   a review copied by hand;
+//! - [`as_text`], the review rendered as text after the instruction of a way of
+//!   delivering it (`yaar_agent::Delivery`);
 //! - [`ViewedFiles`], the files marked viewed, each mark holding for the content it was
 //!   given;
 //! - [`with_review_of_no_agent`], the rule that a workspace with no review of an agent
@@ -29,9 +29,12 @@
 //!   [`Round`], [`SessionRecord`] and their ids.
 //!
 //! - what slice 6 adds: attaching a review with the [`Offer`] to start its agent, given
-//!   the [`SessionNow`] of the workspace's sessions; the one general send of what is
-//!   attached, [`Reviews::send_attached`], and its round's state recorded after
-//!   ([`Reviews::record_round`]); the agent's replies ([`ThreadReply`]) and the
+//!   the [`SessionNow`] of the workspace's sessions; the one general send,
+//!   [`Reviews::send`], which renders what a scope carries after a way of delivering's
+//!   instruction and hands it to that way, a `yaar_agent::Delivery`, and its two uses, the
+//!   send of what is attached ([`Reviews::send_attached`]), whose round's state is
+//!   recorded after ([`Reviews::record_round`]), and the copy as text
+//!   ([`Reviews::copy_as_text`]); the agent's replies ([`ThreadReply`]) and the
 //!   [`ThreadState`] of a thread; resolving, reopening, and resolving every addressed
 //!   thread; a round shown as sent until its agent's first edit, and what changed since a
 //!   round; who is credited with each path of a recorded state, and what one review shows
@@ -69,7 +72,7 @@ pub use engine::{
 };
 pub use review::{Attachment, Review, ReviewError, Scope, Sent, Unsent};
 pub use takeover::{Takeover, takeover};
-pub use text::{COPY_INSTRUCTION, ReviewText, as_text};
+pub use text::{ReviewText, as_text};
 pub use uncommitted::{Credited, uncommitted_of};
 pub use viewed::{ViewedFiles, fingerprint};
 pub use workspace::with_review_of_no_agent;

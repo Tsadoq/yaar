@@ -266,6 +266,8 @@ impl ReviewPane {
             .on_action(cx.listener(Self::reopen_thread))
             .on_action(cx.listener(Self::resolve_addressed))
             .on_action(cx.listener(Self::show_original))
+            .on_action(cx.listener(Self::since_round))
+            .on_action(cx.listener(Self::start_agent))
     }
 
     /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches

@@ -72,11 +72,11 @@ pub enum Program {
         /// The review the session takes.
         review: crate::ReviewId,
     },
-    /// The user's shell, as for [`Program::Shell`], told to run the CLI's own command for
-    /// bringing back this session, as `claude --resume <its id>`: the session keeps its
-    /// id and its review. Offered for a session that ran when its Keeper stopped
-    /// ([`crate::Session::resumable`]). Refused when the Keeper holds no such session, or
-    /// one that runs.
+    /// A launcher, as [`Program::Agent`], whose command is the CLI's own for bringing back
+    /// this session, as `claude --resume '<its CLI id>'`, the id quoted for the shell: the
+    /// terminal ends with the CLI, and the session keeps its id and its review. Offered for
+    /// a session that ran when its Keeper stopped ([`crate::Session::resumable`]). Refused
+    /// when the Keeper holds no such session, or one that runs.
     Resume {
         /// The session, by the app's id for it.
         session: crate::SessionId,

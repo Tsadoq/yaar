@@ -6,10 +6,16 @@
 //!
 //! What is attached is the agents model's: `yaar_link::Session::attached` of the session
 //! that runs in the terminal. The text the view shows is the Keeper's answer to
-//! `yaar_link::Request::GetAttachment`, asked when the view opens. Detaching sends
-//! `yaar_link::Request::DetachReview`. The sentence goes to the program as the bytes of
-//! the sentence alone, as keys the user typed would: never a line end, never anything
-//! else; the user presses Enter.
+//! `yaar_link::Request::GetAttachment`, asked when the view opens and asked again at each
+//! `yaar_link::Fact::ReviewsChanged` of the terminal's workspace while it is open, so that
+//! an edited or a new draft shows in what will be sent; it closes when the attachment
+//! goes. Detaching sends `yaar_link::Request::DetachReview`.
+//!
+//! The three keys act on the terminal of `TerminalPane::focused`, the one the keys go to
+//! while the pane has the focus, wherever the focus is now: on Linux a key of the app does
+//! nothing while a terminal has the focus, and the user presses them from another pane.
+//! The sentence goes to the program as the bytes of the sentence alone, as keys the user
+//! typed would: never a line end, never anything else; the user presses Enter.
 //!
 //! Drawn, for slot `n`, under the selectors `terminal-attachment-<n>` (the line),
 //! `terminal-attachment-view-<n>`, `terminal-attachment-detach-<n>` and, while it is

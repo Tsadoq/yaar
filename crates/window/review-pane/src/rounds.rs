@@ -4,13 +4,17 @@
 //!
 //! A line above the tree of Changes, `review-rounds`, names each round under
 //! `review-round-<n>`, with `:sent` while it shows as sent and `:answered` once its agent
-//! edited, and a control `review-round-<n>-since` that shows in Changes what changed since
-//! that round's comments were sent: `ChangeShown::Since` from the round's state to the
-//! newest state of the history after it.
+//! edited, and a control `review-round-<n>-since`, drawn once the round has its state, that
+//! shows in Changes what changed since that round's comments were sent:
+//! `ChangeShown::Since` from the round's state to the newest state of the history after
+//! it, through the selection of the tree of Changes (`select_since` of `tree.rs`).
+//! [`crate::SinceRound`] does the same from the keyboard: the first press for the newest
+//! round with a state, each press after it for the round before, and after the first
+//! round the newest again; with no round that has a state, the notice says so.
 
 use gpui_kit::*;
 
-use crate::ReviewPane;
+use crate::{ReviewPane, SinceRound};
 
 /// One round as the pane shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,5 +38,17 @@ impl ReviewPane {
     pub(crate) fn render_rounds(&self, cx: &Context<Self>) -> Option<AnyElement> {
         let _ = cx;
         None
+    }
+
+    /// [`SinceRound`].
+    pub(crate) fn since_round(
+        &mut self,
+        _: &SinceRound,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let _ = (window, cx);
+        // Does nothing until the package that builds it fills it in, so that the walks
+        // of the keys of slices 1 to 5 can press it.
     }
 }

@@ -691,7 +691,9 @@ enum Effect {
 /// detaching, resolving, reopening, resolving every addressed thread, and the original
 /// line of a thread that moved. The review pane's package "attaching and the states of
 /// threads" of slice 6 takes this filter away and names their effects below.
-const OF_SLICE_6: [&str; 7] = ["a", "t", "shift-d", "x", "u", "shift-x", "w"];
+const OF_SLICE_6: [&str; 9] = [
+    "a", "t", "shift-d", "x", "u", "shift-x", "w", "shift-s", "shift-n",
+];
 
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.

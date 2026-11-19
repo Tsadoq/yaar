@@ -326,13 +326,17 @@ impl World {
         answering.expect("the Keeper answered")
     }
 
-    /// Kills everything a restart of the machine would end: every process the Keeper this
-    /// world started has started, and their descendants, the shells and agents of its
-    /// terminals and every hook among them, and then the Keeper, each with the kill
-    /// signal; returns once all are gone, the Keeper collected. Nothing of theirs runs: no
-    /// stop, no `SessionEnd`, no close of the Keeper's database. The world's folders stay,
-    /// and the world may start another Keeper on them. Panics when no Keeper of this world
-    /// runs.
+    /// Kills everything a restart of the machine would end, and empties what a restart
+    /// empties: every process the Keeper this world started has started, and their
+    /// descendants, the shells and agents of its terminals and every hook among them, and
+    /// then the Keeper, each with the kill signal; returns once all are gone, the Keeper
+    /// collected, and the world's runtime folder (`XDG_RUNTIME_DIR`) and temporary folder
+    /// (`TMPDIR`) emptied, the folders themselves kept. Nothing of theirs runs: no stop, no
+    /// `SessionEnd`, no close of the Keeper's database. What a restart keeps stays: the
+    /// home and the app's data folder (the Store, the state stores, the Adapters' folders),
+    /// the repositories, the stand-ins' scripts and logs, and the Keeper's socket file,
+    /// stale as a killed Keeper leaves it. The world may start another Keeper on them.
+    /// Panics when no Keeper of this world runs.
     pub fn kill_everything(&mut self) {
         todo!()
     }

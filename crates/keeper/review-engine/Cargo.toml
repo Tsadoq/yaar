@@ -7,6 +7,9 @@ license.workspace = true
 publish.workspace = true
 
 [dependencies]
+# The contract of a way of delivering a review, which the one general send takes, and
+# the copy as text, one such way.
+yaar-agent.workspace = true
 yaar-store.workspace = true
 yaar-recorder.workspace = true
 # The one line diff, which the threads follow the code through.

@@ -2,8 +2,17 @@
 //! the code changed or was deleted, and the line it was written on, shown on request.
 //! Built by the review pane's package "rounds and threads that moved" of slice 6.
 //!
-//! The rows of a thread follow `yaar_link::Thread::now` where it is some, else its anchor
-//! (`threads.rs`). A thread with a notice draws it on its row under
+//! Where a thread's rows go depends on the version the pane shows on the new side
+//! (`threads.rs`). `yaar_link::Thread::now` names a version, `now.tree`, and lines in it:
+//! the thread is placed on those lines when the new side shown is `now.tree`, or the files
+//! on disk, which the Keeper carries every thread toward at each state it records. With no
+//! `now`, it is placed on its anchor, as before slice 6. With a `now`, it is placed on its
+//! anchor only when the new side shown is the anchor's own version (`anchor.tree`). In any
+//! other version, an older turn or a commit chosen in the tree of Changes, it is listed
+//! under `ThreadsElsewhere`, as a thread on a file not shown is: it is never drawn on lines
+//! of a version it was not carried to.
+//!
+//! A thread with a notice draws it on its row under
 //! `review-thread-notice-<thread id>:changed` or `:deleted`, with a control
 //! `review-thread-original-<thread id>` that, as [`crate::ShowOriginal`] does on its line,
 //! shows the anchor's text below the row under `review-thread-original-text-<thread id>`,

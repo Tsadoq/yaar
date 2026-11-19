@@ -16,20 +16,26 @@
 //! - [`Adapter`], what one integration module of a CLI supplies: its names, the pieces it
 //!   writes into the app's folder and the entries every shell of the app gets for them,
 //!   the marks of the terminal output it watches for, the reading of its reports, its
-//!   delivery module and its command for bringing a session back; [`ShellEntry`] and
+//!   delivery and its command for bringing a session back; [`ShellEntry`] and
 //!   [`ReportError`];
 //! - what a report waits for the app to answer, [`Asked`] with its [`Asks`] and the
-//!   agent's [`AgentReply`] to a thread; and what the app answers, [`Answer`], which the
-//!   Adapter writes in its CLI's own words.
+//!   agent's [`AgentReply`] to a thread; and what the app answers it, beyond a review,
+//!   [`Answer`], which the Adapter writes in its CLI's own words;
+//! - [`Delivery`], one way of delivering a review, handed the review as [`Rendered`]; and
+//!   [`CopyAsText`], the way of a review copied by hand, with its [`COPY_INSTRUCTION`].
 //!
 //! Every event names its session, and a write made with the CLI's edit tool names its
 //! path and the lines it changed: a marker per agent in Flow, after the first release,
 //! needs all three.
 //!
-//! The delivery module of a CLI (NFR-003) is the part of its Adapter that says how the
-//! agent answers each thread ([`Adapter::instruction`]) and hands a review to the CLI in
-//! the CLI's own way ([`Adapter::answer`] with [`Answer::Deliver`]). The review itself is
-//! rendered by the Review engine; nothing here knows its form.
+//! A way of delivering a review is one delivery module (the seam of NFR-003): a value
+//! that implements [`Delivery`], which says how the agent answers each thread
+//! ([`Delivery::instruction`]) and hands the rendered review out in its own way
+//! ([`Delivery::hand_out`]). Claude Code's hook is one, which its Adapter gives for each
+//! message that carries a review ([`Adapter::delivery`]); pi's extension is another; a
+//! copy as text is the third ([`CopyAsText`]). The review itself is rendered by the Review
+//! engine, which gives every way the same text after that way's instruction and knows no
+//! way by name; nothing here knows the text's form.
 //!
 //! Nothing here knows the Link, the Store or the Window. The Keeper program lists the
 //! Adapters, and no other crate of the app names one.
@@ -218,9 +224,10 @@ pub enum Asks {
     /// with it. A message the CLI starts itself, and the answer to a permission prompt or
     /// any other dialog, are never this.
     Message,
-    /// The agent is about to read a file the Adapter itself wrote for this session, a
-    /// review too long to ride inline: the app allows the read, so that the CLI asks the
-    /// user nothing. Any other read is not this.
+    /// The agent is about to read a file of the Adapter's folder of reviews of this
+    /// session, where its delivery writes a review too long to ride inline: the app allows
+    /// the read, so that the CLI asks the user nothing. Any other read is not this, a read
+    /// of another session's review among them.
     ReadOwnFile,
     /// The agent is about to call the app's own reply tool: the app allows the call, so
     /// that the CLI asks the user nothing.
@@ -256,23 +263,11 @@ pub struct AgentReply {
     pub addressed: bool,
 }
 
-/// What the app answers a report that waits, for the Adapter to hand its piece in the
-/// CLI's own words.
+/// What the app answers a report that waits for something other than a review, for the
+/// Adapter to hand its piece in the CLI's own words. A review rides through the CLI's
+/// [`Delivery`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Answer<'a> {
-    /// The review rides with the message: `text` is everything the agent is to receive,
-    /// as the Review engine rendered it after [`Adapter::instruction`]. The Adapter hands
-    /// it whole, whatever its length: inline where the CLI takes it so, else as a file of
-    /// its own folder that the agent is told to read.
-    Deliver {
-        /// The text.
-        text: &'a str,
-        /// The review, by its id, and the round the send started: what names the file of
-        /// a review handed as one.
-        review: &'a str,
-        /// The round.
-        round: u32,
-    },
     /// The read, or the call of the app's own tool, is allowed.
     Allow,
     /// The reply was kept in the thread.
@@ -281,6 +276,8 @@ pub enum Answer<'a> {
         thread: &'a str,
         /// Whether it was marked addressed.
         addressed: bool,
+        /// How long the reply is, in characters.
+        characters: usize,
     },
     /// The reply was refused, for this reason, as a sentence the agent reads: a thread
     /// the session's review does not hold, or the app not running.
@@ -288,6 +285,58 @@ pub enum Answer<'a> {
         /// Why.
         why: &'a str,
     },
+}
+
+/// A review as the Review engine rendered it for one send, handed to a [`Delivery`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rendered<'a> {
+    /// Everything the agent is to receive: the delivery's own instruction first, as
+    /// [`Delivery::instruction`] gave it, then every unsent comment the send carries.
+    pub text: &'a str,
+    /// The review, by its id.
+    pub review: &'a str,
+    /// The round the send starts.
+    pub round: u32,
+    /// How many threads the text holds.
+    pub threads: usize,
+}
+
+/// One way of delivering a review: a delivery module. It says how the agent is to answer
+/// each thread, and hands the rendered review to wherever it goes. Adding a way is adding
+/// one of these and changing nothing that renders, sends or keeps a review.
+pub trait Delivery {
+    /// What tells the agent how to answer each thread of the review: it goes first in the
+    /// text, whatever the user's message says, and asks for nothing that resolves a
+    /// thread.
+    fn instruction(&self) -> &'static str;
+
+    /// Hands `rendered` out whole, whatever its length, and gives the bytes that go back
+    /// to whoever asked: for Claude Code the output of the hook that carries it, for a
+    /// copy the text itself. The comments count as sent only once this succeeded; a
+    /// failure sends nothing.
+    fn hand_out(&mut self, rendered: &Rendered<'_>) -> io::Result<Vec<u8>>;
+}
+
+/// The instruction that goes first in a review copied as text. An agent the app cannot
+/// deliver to has no reply tool, so it is asked to answer each thread in its own answer,
+/// naming the thread by its id.
+pub const COPY_INSTRUCTION: &str = "This is a code review. Address each thread below. \
+In your answer, reply to each thread on its own, starting with its id as it is written \
+after \"Thread\", and say whether you addressed it.";
+
+/// Copying a review as text, for the user to paste to an agent the app cannot deliver
+/// to: the text, after [`COPY_INSTRUCTION`], is handed back as it is.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CopyAsText;
+
+impl Delivery for CopyAsText {
+    fn instruction(&self) -> &'static str {
+        COPY_INSTRUCTION
+    }
+
+    fn hand_out(&mut self, rendered: &Rendered<'_>) -> io::Result<Vec<u8>> {
+        Ok(rendered.text.as_bytes().to_vec())
+    }
 }
 
 /// One integration module of an agent CLI: everything the app knows of that CLI. Adding
@@ -331,26 +380,53 @@ pub trait Adapter: Send {
 
     /// What the same report [`Adapter::report`] was just given waits for the app to
     /// answer; none for a report that waits for nothing, which is answered with nothing
-    /// for the CLI. A report from the app's reply tool gives no event, only this. It
-    /// changes nothing the Adapter remembers.
-    fn asked(&self, report: &Report<'_>) -> Result<Option<Asked>, ReportError>;
+    /// for the CLI. A report from the app's reply tool gives no event, only this. `folder`
+    /// is the Adapter's own folder of the app, where [`Adapter::install`] wrote its pieces
+    /// and its delivery writes long reviews. It changes nothing the Adapter remembers.
+    fn asked(&self, folder: &Path, report: &Report<'_>) -> Result<Option<Asked>, ReportError>;
 
     /// What tells the agent how to answer each thread of a review it receives: with this
     /// CLI's reply tool, by its name as the CLI lists it to the agent, one call for each
-    /// thread, with the thread's id, the reply and whether the change addressed it. It
-    /// goes first in every review delivered to the CLI, whatever the user's message says,
-    /// and asks for nothing that resolves a thread.
+    /// thread, with the thread's id, the reply and whether the change addressed it. The
+    /// [`Delivery::instruction`] of every delivery [`Adapter::delivery`] gives, and so the
+    /// first thing of every review delivered to the CLI, whatever the user's message says;
+    /// it asks for nothing that resolves a thread.
     fn instruction(&self) -> &'static str;
 
+    /// The delivery of a review that rides with the message `asked` stands for
+    /// ([`Asks::Message`]): what the piece hands its CLI, as bytes. A review too long to
+    /// ride inline is written under `folder`, the Adapter's own folder of the app,
+    /// outside every repository, in a folder of that session's own, whose files the
+    /// Adapter then allows the session to read ([`Asks::ReadOwnFile`]).
+    fn delivery<'a>(&'a self, folder: &'a Path, asked: &'a Asked) -> Box<dyn Delivery + 'a>;
+
     /// What the piece of `asked` hands its CLI for `answer`, as bytes: for Claude Code the
-    /// output of a hook, or the result of a call of the reply tool. A review too long to
-    /// ride inline is written into `folder`, the Adapter's own folder of the app where
-    /// [`Adapter::install`] wrote its pieces, outside every repository, and the Adapter
-    /// then allows the read of that one file in that session ([`Asks::ReadOwnFile`]).
-    fn answer(&mut self, folder: &Path, asked: &Asked, answer: &Answer<'_>) -> io::Result<Vec<u8>>;
+    /// output of a hook that allows, or the result of a call of the reply tool.
+    fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8>;
 
     /// What a terminal runs in the user's shell to bring back `session`, as the user would
     /// type it: the CLI's own command for that, with the session's id quoted for the
     /// shell, as `claude --resume '<id>'`.
     fn resume(&self, session: &CliSession) -> String;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_copy_hands_the_rendered_text_back_as_it_is_after_its_own_instruction() {
+        let text = format!("{COPY_INSTRUCTION}\n\n## Thread t1\n\nComment:\nwhy `this`?");
+        let mut copy = CopyAsText;
+        assert_eq!(copy.instruction(), COPY_INSTRUCTION);
+        let handed = copy
+            .hand_out(&Rendered {
+                text: &text,
+                review: "r1",
+                round: 1,
+                threads: 1,
+            })
+            .expect("a copy cannot fail");
+        assert_eq!(handed, text.as_bytes());
+    }
 }

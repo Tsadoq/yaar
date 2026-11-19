@@ -19,9 +19,14 @@
 //! "session_id": <CLAUDE_CODE_SESSION_ID>, "cwd": <its folder>, "name": <the tool>,
 //! "arguments": <the call's arguments, as Claude Code sent them>}`, so that the reply's
 //! body reaches the Keeper byte for byte. The Keeper's `yaar_link::Reply::Answer` is the
-//! call's `result`, which the server writes back as it came. With no Keeper, a Keeper of
-//! another protocol, a refusal or no answer within [`TOOL_DEADLINE`], the result is an
-//! error the agent reads: `{"isError": true, "content": [{"type": "text", "text": <why>}]}`.
+//! call's `result`, which the server writes back as it came. Any other answer, and none,
+//! is a result that says the reply was not kept, an error the agent reads,
+//! `{"isError": true, "content": [{"type": "text", "text": <why>}]}`, `why` one of: "the
+//! app did not keep the reply" for `yaar_link::Reply::Done`, the Keeper's reason for a
+//! refusal, "the app did not answer in time" past [`TOOL_DEADLINE`], and "the app is not
+//! running" with no Keeper or a Keeper of another protocol. The Keeper answers a call
+//! with `Reply::Done` only when it could not work it out: a report it could not read, or
+//! one that came while it stopped.
 
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;

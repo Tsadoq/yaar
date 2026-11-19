@@ -1,7 +1,7 @@
 //! Attaching a review, with the offer to start its agent, and a send whose state is
 //! recorded after it. Built by the engine's package "attaching and sending" of slice 6.
 
-use yaar_store::SentBy;
+use yaar_store::{SentBy, SessionId};
 
 use super::{Attachment, Review, ReviewError, Scope, Sent};
 
@@ -10,7 +10,7 @@ use super::{Attachment, Review, ReviewError, Scope, Sent};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionNow {
     /// The session, by the app's id for it.
-    pub id: String,
+    pub id: SessionId,
     /// The Adapter of its CLI, by its name: `claude`.
     pub cli: String,
     /// Whether it runs.
@@ -39,8 +39,9 @@ impl Review {
     /// Attaches the review, or one thread alone, as [`Review::attach`] does, whatever the
     /// state of its agent, a permission prompt included, and says what to offer: see
     /// [`Offer`]. `sessions` are the sessions of the review's workspace, those that ended
-    /// among them; the review's own is found among them by its id, and one not among them
-    /// counts as not running, with the CLI of none. Refused with
+    /// among them; the review's own is found among them by its id. A review whose session
+    /// is not among them, whose CLI is then unknown, offers [`Offer::AnyCli`], as the
+    /// review of no agent does. Refused with
     /// [`ReviewError::NothingToSend`], and nothing attached, when what would be attached
     /// holds no unsent comment on an unresolved thread; with
     /// [`ReviewError::UnknownThread`] for a thread the review does not hold.
@@ -66,8 +67,8 @@ impl Review {
     }
 
     /// Gives a round that was started with no state the state recorded for it. Refused
-    /// with [`ReviewError::UnknownRound`] for a round the review does not hold, and for
-    /// one that has a state already.
+    /// with [`ReviewError::UnknownRound`] for a round the review does not hold, and with
+    /// [`ReviewError::RoundHasState`] for one that has a state already.
     pub fn set_round_state(&mut self, round: u32, state: &str) -> Result<(), ReviewError> {
         let _ = (round, state);
         todo!()

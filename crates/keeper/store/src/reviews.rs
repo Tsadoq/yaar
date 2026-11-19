@@ -141,7 +141,7 @@ pub struct Thread {
 }
 
 /// Where a thread sits now, after the code it was written on changed: kept by
-/// [`Store::set_place`], read back with the thread.
+/// [`Store::set_places`], read back with the thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadPlace {
     /// The version it sits in now: the full id of a recorded state.
@@ -176,8 +176,8 @@ pub enum AttachedRecord {
     Thread(ThreadId),
 }
 
-/// Who is credited with one path that changed into a recorded state, as the Store keeps
-/// it with that state: see [`Store::put_credits`].
+/// Who is credited with one uncommitted path at a recorded state, as the Store keeps it
+/// with that state: see [`Store::put_credits`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreditRecord {
     /// The path, relative to the folder of the worktree.
@@ -607,6 +607,21 @@ impl Store {
         })
     }
 
+    /// Keeps a new round of a review as [`Store::put_round`] does, and takes away what of
+    /// the review is attached to the user's next message, all in the same transaction:
+    /// the send of what was attached. Either all of it is kept or none, so that a Keeper
+    /// killed in between never leaves a review attached whose comments were sent. Refused
+    /// as `put_round` is.
+    pub fn put_round_detached(
+        &self,
+        review: &ReviewId,
+        round: &Round,
+        comments: &[CommentId],
+    ) -> Result<(), StoreError> {
+        let _ = (review, round, comments);
+        todo!()
+    }
+
     /// Keeps what of a review is attached to the user's next message, in place of what
     /// was; none takes the attachment away. Returns when it is on the drive. Refused for a
     /// review that is not kept, and for a thread the review does not hold.
@@ -631,13 +646,6 @@ impl Store {
         addressed: bool,
     ) -> Result<(), StoreError> {
         let _ = (thread, reply, addressed);
-        todo!()
-    }
-
-    /// Sets whether the agent's last word on a thread marked it addressed. Returns when it
-    /// is on the drive.
-    pub fn set_addressed(&self, thread: &ThreadId, addressed: bool) -> Result<(), StoreError> {
-        let _ = (thread, addressed);
         todo!()
     }
 
@@ -667,20 +675,20 @@ impl Store {
         todo!()
     }
 
-    /// Keeps where a thread sits now, in place of where it sat; none puts it back on its
-    /// anchor. Returns when it is on the drive. Refused for a thread that is not kept.
-    pub fn set_place(
-        &self,
-        thread: &ThreadId,
-        place: Option<&ThreadPlace>,
-    ) -> Result<(), StoreError> {
-        let _ = (thread, place);
+    /// Keeps where each thread of `places` sits now, in place of where it sat, in one
+    /// transaction: either all are kept or none. None puts a thread back on its anchor.
+    /// Following carries every thread of a workspace to each state it records, so one
+    /// write to the drive serves them all. Returns when it is on the drive. Refused, with
+    /// nothing kept, when one thread is not kept.
+    pub fn set_places(&self, places: &[(ThreadId, Option<ThreadPlace>)]) -> Result<(), StoreError> {
+        let _ = places;
         todo!()
     }
 
     /// Keeps, with the recorded state `state` of `workspace`, who is credited with each
-    /// path that changed into it, in place of what was kept for that state. Returns when
-    /// it is on the drive.
+    /// path of `credits`, in place of what was kept for that state: every uncommitted
+    /// change of the worktree, as Workspaces credited them when the state was recorded.
+    /// Returns when it is on the drive.
     pub fn put_credits(
         &self,
         workspace: &WorkspaceId,
@@ -691,9 +699,8 @@ impl Store {
         todo!()
     }
 
-    /// Who is credited with each path that changed into the recorded state `state` of
-    /// `workspace`, ordered by the bytes of the paths; empty for a state nothing was kept
-    /// with.
+    /// Who is credited with each path kept with the recorded state `state` of `workspace`,
+    /// ordered by the bytes of the paths; empty for a state nothing was kept with.
     pub fn credits_of(
         &self,
         workspace: &WorkspaceId,

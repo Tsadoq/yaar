@@ -98,7 +98,9 @@ use std::io;
 use std::path::Path;
 
 use report::Remembered;
-use yaar_agent::{Adapter, Answer, Asked, CliSession, Report, ReportError, Reported, ShellEntry};
+use yaar_agent::{
+    Adapter, Answer, Asked, CliSession, Delivery, Report, ReportError, Reported, ShellEntry,
+};
 
 /// The name the app knows Claude Code by.
 pub const NAME: &str = "claude";
@@ -198,16 +200,23 @@ impl Adapter for ClaudeCode {
         self.memory.interrupted(terminal)
     }
 
-    fn asked(&self, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
-        self.memory.asked(report)
+    fn asked(&self, folder: &Path, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
+        self.memory.asked(folder, report)
     }
 
     fn instruction(&self) -> &'static str {
         INSTRUCTION
     }
 
-    fn answer(&mut self, folder: &Path, asked: &Asked, answer: &Answer<'_>) -> io::Result<Vec<u8>> {
-        self.memory.answer(folder, asked, answer)
+    fn delivery<'a>(&'a self, folder: &'a Path, asked: &'a Asked) -> Box<dyn Delivery + 'a> {
+        Box::new(deliver::ToClaudeCode {
+            folder,
+            session: &asked.session,
+        })
+    }
+
+    fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
+        self.memory.answer(asked, answer)
     }
 
     fn resume(&self, session: &CliSession) -> String {

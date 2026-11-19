@@ -16,8 +16,8 @@ pub use attaching::{Offer, SessionNow};
 use std::fmt;
 
 use yaar_store::{
-    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, Thread, ThreadId,
-    WorkspaceId,
+    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, SessionId, Thread,
+    ThreadId, WorkspaceId,
 };
 
 /// What of a review goes with the user's next message to its agent.
@@ -88,9 +88,11 @@ pub enum ReviewError {
     /// A send was asked for with nothing to carry.
     NothingToSend,
     /// A reply of an agent came from a session the review does not belong to.
-    OtherSession(String),
-    /// The round is not one of the review's, or it has a state already.
+    OtherSession(SessionId),
+    /// The review holds no round by this number.
     UnknownRound(u32),
+    /// The round has its state already: a round's state is given once.
+    RoundHasState(u32),
 }
 
 impl fmt::Display for ReviewError {
@@ -117,6 +119,7 @@ impl fmt::Display for ReviewError {
                 write!(f, "the review does not belong to the session {session}")
             }
             Self::UnknownRound(round) => write!(f, "there is no round {round} to change"),
+            Self::RoundHasState(round) => write!(f, "round {round} has its state already"),
         }
     }
 }
