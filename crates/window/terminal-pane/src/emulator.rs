@@ -47,6 +47,8 @@ pub struct Emulator {
     // The parser that drives the core, which also holds a synchronized update back.
     parser: Processor<StdSyncHandler>,
     scanner: Scanner,
+    // Reads the progress sequence, which the core drops.
+    progress: ProgressScan,
 }
 
 /// What the core tells while it reads: its answers to the program, the title. Kept
@@ -452,6 +454,96 @@ pub enum Progress {
     Paused(u8),
 }
 
+/// Where the progress scanner is in the bytes it reads.
+#[derive(Default, Clone, Copy, PartialEq, Eq)]
+enum At {
+    /// Outside any escape sequence it follows.
+    #[default]
+    Ground,
+    /// After an ESC.
+    Escape,
+    /// Inside an operating system command, whose text is being kept.
+    Command,
+    /// Inside one too long to be a progress: its text is dropped.
+    TooLong,
+}
+
+/// The longest operating system command kept whole: `9;4;1;100` is nine bytes.
+const MAX_PROGRESS: usize = 32;
+
+/// Reads the progress sequence, `OSC 9 ; 4 ; <state> ; <value>`, from the bytes the program
+/// wrote, beside the scanner and the core, which it leaves the bytes to. It ends a command
+/// where the core's parser does: at the bell, at an ESC (which is the first byte of the
+/// string terminator), and not at all after CAN or SUB, which cancel it.
+#[derive(Default)]
+struct ProgressScan {
+    at: At,
+    command: Vec<u8>,
+    reported: Option<Progress>,
+}
+
+impl ProgressScan {
+    fn feed(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            match (self.at, byte) {
+                (At::Ground, 0x1b) => self.at = At::Escape,
+                (At::Ground, _) => {}
+                (At::Escape, b']') => {
+                    self.command.clear();
+                    self.at = At::Command;
+                }
+                (At::Escape, 0x1b) => {}
+                (At::Escape, _) => self.at = At::Ground,
+                (At::Command | At::TooLong, 0x07) => self.end(),
+                (At::Command | At::TooLong, 0x1b) => {
+                    self.end();
+                    self.at = At::Escape;
+                }
+                (At::Command | At::TooLong, 0x18 | 0x1a) => self.at = At::Ground,
+                (At::Command, _) if self.command.len() < MAX_PROGRESS => self.command.push(byte),
+                (At::Command, _) => self.at = At::TooLong,
+                (At::TooLong, _) => {}
+            }
+        }
+    }
+
+    /// A command ended: when it is a progress, it is what the program reports now.
+    fn end(&mut self) {
+        if self.at == At::Command {
+            let command = std::mem::take(&mut self.command);
+            self.take(&command);
+        }
+        self.at = At::Ground;
+    }
+
+    fn take(&mut self, command: &[u8]) {
+        let mut fields = command.split(|&b| b == b';');
+        if fields.next() != Some(b"9") || fields.next() != Some(b"4") {
+            return;
+        }
+        let number = |field: &[u8]| {
+            field.iter().all(u8::is_ascii_digit).then(|| {
+                field.iter().fold(0u32, |n, digit| {
+                    n.saturating_mul(10).saturating_add(u32::from(digit - b'0'))
+                })
+            })
+        };
+        let Some(Some(state)) = fields.next().map(number) else {
+            return;
+        };
+        // The value is how far, in percent; a program may leave it out.
+        let value = fields.next().and_then(number).unwrap_or(0).min(100) as u8;
+        self.reported = match state {
+            0 => None,
+            1 => Some(Progress::Normal(value)),
+            2 => Some(Progress::Error(value)),
+            3 => Some(Progress::Indeterminate),
+            4 => Some(Progress::Paused(value)),
+            _ => return,
+        };
+    }
+}
+
 /// A colour as the program asked for it. The painter turns it into the theme's colour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Color {
@@ -557,6 +649,7 @@ impl Emulator {
             told,
             parser: Processor::new(),
             scanner: Scanner::default(),
+            progress: ProgressScan::default(),
         }
     }
 
@@ -572,6 +665,7 @@ impl Emulator {
             let kept = self.told.kept();
             (kept.cell_width, kept.cell_height)
         };
+        self.progress.feed(bytes);
         for piece in self.scanner.scan(bytes, cell) {
             match piece {
                 Piece::Pass(bytes) => self.parser.advance(&mut self.core, &bytes),
@@ -717,7 +811,7 @@ impl Emulator {
     /// 0, no progress, as Claude Code writes when a turn stops. The scanner reads it before
     /// the core.
     pub fn progress(&self) -> Option<Progress> {
-        todo!("the progress the program reported")
+        self.progress.reported
     }
 
     /// The title the program gave the terminal last; none before it gave one, and after
@@ -1704,5 +1798,112 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
             emulator.advance(b"");
         }
+    }
+
+    #[test]
+    fn a_program_that_reported_no_progress_has_none() {
+        let mut emulator = emulator();
+        assert_eq!(emulator.progress(), None);
+        emulator.advance(b"plain text");
+        assert_eq!(emulator.progress(), None);
+    }
+
+    #[test]
+    fn the_progress_sequence_gives_each_state_with_its_value() {
+        let cases: [(&str, Progress); 5] = [
+            ("\x1b]9;4;1;42\x07", Progress::Normal(42)),
+            ("\x1b]9;4;2;7\x07", Progress::Error(7)),
+            ("\x1b]9;4;3;\x07", Progress::Indeterminate),
+            ("\x1b]9;4;4;99\x07", Progress::Paused(99)),
+            // The string terminator ends it as the bell does, and the value may be left
+            // out: it is then 0.
+            ("\x1b]9;4;1\x1b\\", Progress::Normal(0)),
+        ];
+        for (text, progress) in cases {
+            let mut emulator = emulator();
+            emulator.advance(text.as_bytes());
+            assert_eq!(emulator.progress(), Some(progress), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn a_progress_of_state_zero_clears_what_was_reported() {
+        let mut emulator = emulator();
+        emulator.advance(b"\x1b]9;4;3;\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Indeterminate));
+        emulator.advance(b"\x1b]9;4;0;\x07");
+        assert_eq!(emulator.progress(), None);
+    }
+
+    #[test]
+    fn the_last_progress_of_one_read_is_the_one_kept() {
+        let mut emulator = emulator();
+        emulator.advance(b"\x1b]9;4;3;\x07work\x1b]9;4;1;50\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Normal(50)));
+    }
+
+    #[test]
+    fn a_progress_sequence_cut_between_two_reads_is_read_as_one() {
+        for cut in 1.."\x1b]9;4;1;42\x07".len() {
+            let text = "\x1b]9;4;1;42\x07";
+            let mut emulator = emulator();
+            emulator.advance(&text.as_bytes()[..cut]);
+            assert_eq!(emulator.progress(), None, "cut at {cut}: nothing yet");
+            emulator.advance(&text.as_bytes()[cut..]);
+            assert_eq!(emulator.progress(), Some(Progress::Normal(42)), "cut at {cut}");
+        }
+    }
+
+    #[test]
+    fn a_progress_value_past_a_hundred_is_a_hundred() {
+        let mut emulator = emulator();
+        emulator.advance(b"\x1b]9;4;1;250\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Normal(100)));
+        emulator.advance(b"\x1b]9;4;1;99999999999999999999\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Normal(100)));
+    }
+
+    #[test]
+    fn sequences_that_are_no_progress_leave_it_as_it_was() {
+        let mut emulator = emulator();
+        emulator.advance(b"\x1b]9;4;3;\x07");
+        for other in [
+            // A title, a notification, a state the sequence does not have, a value that
+            // is no number, another OSC that starts alike, and one cancelled.
+            "\x1b]0;a title\x07",
+            "\x1b]9;a notification\x07",
+            "\x1b]9;4;9;10\x07",
+            "\x1b]9;4;x;10\x07",
+            "\x1b]99;4;1;10\x07",
+            "\x1b]9;4;1;10\x18",
+        ] {
+            emulator.advance(other.as_bytes());
+            assert_eq!(emulator.progress(), Some(Progress::Indeterminate), "{other:?}");
+        }
+        // A string far too long to be a progress is dropped with no harm: the next
+        // sequence is read as ever.
+        let mut long = b"\x1b]9;4;1;".to_vec();
+        long.extend(std::iter::repeat_n(b'1', 100_000));
+        emulator.advance(&long);
+        emulator.advance(b"\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Indeterminate));
+        emulator.advance(b"\x1b]9;4;4;5\x07");
+        assert_eq!(emulator.progress(), Some(Progress::Paused(5)));
+    }
+
+    #[test]
+    fn the_progress_sequence_draws_nothing_and_the_text_around_it_is_drawn() {
+        let mut emulator = emulator();
+        emulator.advance(b"ab\x1b]9;4;3;\x07cd\x1b]9;4;1;5\x1b\\ef");
+        assert_eq!(emulator.lines()[0], "abcdef");
+        assert_eq!(emulator.take_replies(), b"");
+    }
+
+    #[test]
+    fn the_title_still_reaches_the_core_beside_the_progress() {
+        let mut emulator = emulator();
+        emulator.advance(b"\x1b]9;4;3;\x07\x1b]0;shell\x07");
+        assert_eq!(emulator.title().as_deref(), Some("shell"));
+        assert_eq!(emulator.progress(), Some(Progress::Indeterminate));
     }
 }
