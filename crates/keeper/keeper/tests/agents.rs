@@ -1155,6 +1155,11 @@ fn a_session_whose_terminal_ends_is_not_running_and_is_kept_as_gone_with_it() {
 
 #[test]
 fn a_session_whose_process_is_gone_is_not_running_within_the_watch() {
+    // The Keeper looks for processes that are gone every 250 ms, so the fact follows the
+    // end of the process within a few watches. Two seconds is eight of them: room for the
+    // lag of a busy machine, and far under the 20 s deadline, which only keeps the test
+    // from waiting for ever and would let a watch of seconds pass.
+    const WITHIN_THE_WATCH: Duration = Duration::from_secs(2);
     let mut setup = Setup::new();
     let records = recorded::hook_events(TOOLS);
     // The report names the process of the CLI: one the test starts, and kills.
@@ -1185,9 +1190,15 @@ fn a_session_whose_process_is_gone_is_not_running_within_the_watch() {
     );
 
     cli.end();
+    let gone = Instant::now();
     setup.agents_until(
         "the session is not running",
         is_state(SessionState::NotRunning),
+    );
+    assert!(
+        gone.elapsed() < WITHIN_THE_WATCH,
+        "the session was not running {:?} after its process ended",
+        gone.elapsed()
     );
 
     let (store, _scratch) = setup.finish();
