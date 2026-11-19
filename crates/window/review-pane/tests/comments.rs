@@ -1853,3 +1853,105 @@ fn another_workspace_on_screen_closes_the_commit_field_of_the_one_before(cx: &mu
     assert!(!pane.read_with(&cx, |pane, _| pane.commit_field_open()));
     assert!(drawn("review-commit-field", &mut cx).is_none());
 }
+
+#[gpui_kit::test]
+fn two_threads_on_the_reviewers_own_side_of_a_line_leave_the_draft_to_the_second_when_the_first_has_only_sent_comments(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // Two threads on the added line 11 of the new side, both on the side the reviewer
+    // stands on: the first holds only a sent comment, the second a draft.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('1', "sent already", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![draft('2', "still to say")],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    let added = Position {
+        path: lib(),
+        side: Side::New,
+        line: 10,
+    };
+    walk_to(&added, "j", &pane, &mut cx);
+
+    cx.simulate_keystrokes("i");
+    let opened = comment_box(&pane, &mut cx).expect("the draft of the second thread is open");
+    assert_eq!(opened.thread, thread_id('b'));
+    assert_eq!(opened.comment, comment_id('2'));
+    assert_eq!(opened.text, "still to say");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('2'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+}
+
+#[gpui_kit::test]
+fn with_a_draft_in_the_thread_of_each_side_of_an_unchanged_line_the_draft_of_the_side_the_reviewer_stands_on_is_the_one_opened(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    let pane = stage.pane.clone();
+    // `keep_d` stands on one row, the sixth line of the old version and the fifth of
+    // the new one. The Keeper holds the old side's thread first, and the reviewer
+    // stands on the line by its new side.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::Old,
+            6,
+            vec![draft('1', "about the old line")],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::New,
+            5,
+            vec![draft('2', "about the new line")],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    cx.simulate_keystrokes("m");
+    assert_eq!(
+        position(&pane, &mut cx),
+        Position {
+            path: lib(),
+            side: Side::New,
+            line: 4,
+        }
+    );
+
+    cx.simulate_keystrokes("i");
+    let opened = comment_box(&pane, &mut cx).expect("a draft is open");
+    assert_eq!(opened.thread, thread_id('b'));
+    assert_eq!(opened.comment, comment_id('2'));
+    assert_eq!(opened.text, "about the new line");
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('2'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+}
