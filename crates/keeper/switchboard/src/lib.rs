@@ -775,7 +775,7 @@ mod tests {
 
     #[test]
     fn a_session_that_ends_is_not_running() {
-        let (mut desk, id, turn) = in_a_turn("a");
+        let (mut desk, id, _) = in_a_turn("a");
         desk.hear("a", turn_ended(TurnEnd::Finished));
         assert_eq!(
             desk.hear("a", Event::SessionEnded),
@@ -790,7 +790,7 @@ mod tests {
         let mut other = Desk::new();
         other.hear("b", started());
         other.hear("b", Event::TurnStarted);
-        let (id, _) = (other.id("b"), turn);
+        let id = other.id("b");
         assert_eq!(
             other.hear("b", Event::SessionEnded),
             [
@@ -1108,6 +1108,66 @@ mod tests {
     }
 
     #[test]
+    fn a_session_that_ended_at_a_permission_prompt_does_not_wait_when_it_resumes() {
+        // Once by its own end, once by its process being gone.
+        for ended_by_its_process in [false, true] {
+            let (mut desk, id, turn) = in_a_turn("a");
+            desk.hear("a", permission(true));
+            assert_eq!(desk.state("a"), State::WaitsForPermission);
+            let ending = if ended_by_its_process {
+                desk.board.gone(100)
+            } else {
+                desk.hear("a", Event::SessionEnded)
+            };
+            assert_eq!(ending.last(), Some(&now(&id, State::NotRunning)));
+            assert!(ending.contains(&ends(&id, &turn, TurnEnd::Interrupted)));
+
+            // The prompt died with the process: nothing asks for an answer now.
+            assert_eq!(
+                desk.hear("a", started()),
+                [
+                    Change::Started {
+                        session: id.clone(),
+                        agent: "claude".to_string(),
+                        cli: CliSession("a".to_string()),
+                        terminal: Some("terminal-a".to_string()),
+                        folder: Some(PathBuf::from("/work/project")),
+                        resumed: true,
+                    },
+                    now(&id, State::Idle)
+                ]
+            );
+            assert_eq!(desk.board.reviewed(&id), []);
+            assert_eq!(desk.state("a"), State::Idle);
+            // A turn that follows is an ordinary one, not one that waits.
+            let again = desk.hear("a", Event::TurnStarted);
+            assert_eq!(again.last(), Some(&now(&id, State::Works)));
+            assert_eq!(desk.board.reviewed(&id), []);
+            assert_eq!(desk.state("a"), State::Works);
+        }
+    }
+
+    #[test]
+    fn a_session_resumed_after_an_unreviewed_turn_is_idle_and_stays_idle() {
+        let (mut desk, id, _) = in_a_turn("a");
+        desk.hear("a", turn_ended(TurnEnd::Finished));
+        assert_eq!(desk.state("a"), State::Unreviewed);
+        desk.hear("a", Event::SessionEnded);
+        desk.hear("a", started());
+        assert_eq!(desk.state("a"), State::Idle);
+
+        // Nothing but a turn takes it out of idle: a prompt with no turn, asked and
+        // answered, leaves it idle and does not bring the old unreviewed mark back.
+        assert_eq!(
+            desk.hear("a", permission(true)),
+            [now(&id, State::WaitsForPermission)]
+        );
+        assert_eq!(desk.hear("a", permission(false)), [now(&id, State::Idle)]);
+        assert_eq!(desk.board.reviewed(&id), []);
+        assert_eq!(desk.state("a"), State::Idle);
+    }
+
+    #[test]
     fn any_event_of_an_ended_session_resumes_it_before_it_is_taken() {
         let (mut desk, id, _) = in_a_turn("a");
         desk.board.gone(100);
@@ -1214,7 +1274,7 @@ mod tests {
 
     #[test]
     fn a_mark_of_reviewed_changes_nothing_while_a_turn_runs_or_for_a_session_that_is_gone() {
-        let (mut desk, id, turn) = in_a_turn("a");
+        let (mut desk, id, _) = in_a_turn("a");
         desk.hear("a", turn_ended(TurnEnd::Finished));
         desk.hear("a", Event::TurnStarted);
         assert_eq!(desk.board.reviewed(&id), []);
@@ -1228,7 +1288,6 @@ mod tests {
         assert_eq!(desk.board.reviewed(&id), []);
         assert_eq!(desk.state("a"), State::NotRunning);
         assert_eq!(desk.board.reviewed(&SessionId("unknown".to_string())), []);
-        let _ = turn;
     }
 
     #[test]
