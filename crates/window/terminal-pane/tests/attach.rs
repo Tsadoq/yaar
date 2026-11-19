@@ -12,7 +12,7 @@ mod common;
 
 use std::time::{Duration, Instant};
 
-use gpui_kit::{Bounds, Pixels, TestAppContext, VisualTestContext};
+use gpui_kit::{Bounds, Pixels, TestAppContext, VisualTestContext, px, size};
 use yaar_link::{
     Ending, Fact, Program, Refusal, Reply, Request, RequestId, TerminalId, TerminalInfo,
     TerminalSize, WorkspaceAgents, WorkspaceId,
@@ -486,6 +486,74 @@ fn a_terminal_gained_for_a_split_workspace_is_attached_at_a_slot_whatever_anothe
         .update(&mut cx, |list, cx| list.opened(info(&t4, &one), cx));
     let (id, asked, size) = attach_request(&panes, &mut cx);
     assert_eq!((asked, size), (t4.clone(), half));
+    answer_attach(&panes, id, &t4, false, &[b"hello\r\n"]);
+    wait_until(&mut cx, "the attached terminal in the pane", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().contains(&t4))
+    });
+    click_in(&format!("sidebar-workspace-{one}"), &mut cx);
+    panes.press_in_the_app::<NextTerminal>(&mut cx);
+    wait_drawn(&mut cx, "the attached terminal in a slot", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.shown().contains(&t4))
+    });
+    // The size came once, in the request: a key typed after is the barrier, since the
+    // resize of a view that fitted another grid would have gone out before it.
+    cx.simulate_input("k");
+    assert_eq!(panes.keeper.input(&mut cx), (t4.clone(), b"k".to_vec()));
+    assert!(panes.keeper.resizes(&t4).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_terminal_gained_for_a_split_workspace_after_the_window_was_resized_is_attached_at_a_slot_of_the_new_room(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = common::open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let (one, two) = (workspace_id('1'), workspace_id('2'));
+    let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
+
+    // The first workspace is split: its two terminals are at half the room, which is the
+    // slot the pane last saw.
+    panes.open_terminal(&t1, &mut cx);
+    wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
+        !panes.keeper.resizes(&t1).is_empty()
+    });
+    let whole = panes.grid(&t1);
+    panes.open_terminal(&t2, &mut cx);
+    panes.press_in_the_app::<ToggleSplit>(&mut cx);
+    wait_until(&mut cx, "the terminals at half the room", |_| {
+        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+    });
+    let old_slot = panes.grid(&t1);
+
+    // The second workspace, on screen, shows one terminal, and the window gets smaller.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    panes.open_terminal(&t3, &mut cx);
+    wait_until(&mut cx, "the terminal alone at the whole room", |_| {
+        panes.grid(&t3) == whole
+    });
+    cx.simulate_resize(size(px(700.), px(400.)));
+    wait_until(&mut cx, "the terminal alone at the smaller room", |_| {
+        let grid = panes.grid(&t3);
+        grid.columns < whole.columns && grid.rows < whole.rows
+    });
+    let room = panes.grid(&t3);
+    let slot = TerminalSize {
+        columns: room.columns / 2,
+        ..room
+    };
+    assert_ne!(slot, old_slot);
+
+    // What the list gains for the split workspace is shown in a slot of the room as it is
+    // now, and not at the slot the old room held.
+    panes
+        .models
+        .terminals
+        .update(&mut cx, |list, cx| list.opened(info(&t4, &one), cx));
+    let (id, asked, size) = attach_request(&panes, &mut cx);
+    assert_eq!((asked, size), (t4.clone(), slot));
     answer_attach(&panes, id, &t4, false, &[b"hello\r\n"]);
     wait_until(&mut cx, "the attached terminal in the pane", |cx| {
         panes

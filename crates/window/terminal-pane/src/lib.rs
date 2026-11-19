@@ -311,7 +311,8 @@ pub struct TerminalPane {
     size: TerminalSize,
     /// The size the last view fitted while its workspace showed two terminals side by
     /// side: what a slot holds. A view that fits the size it was started at tells nothing,
-    /// so this can stay unknown while terminals are laid out.
+    /// so this can stay unknown while terminals are laid out. Forgotten when the room
+    /// changes, as a slot fitted in another room holds something else.
     slot: Option<TerminalSize>,
     /// The grid the room the pane has holds, as the painter found it; none before the
     /// first frame.
@@ -635,6 +636,11 @@ impl TerminalPane {
     /// The painter found how many columns and rows the room the pane has holds: the
     /// terminals that waited for it are attached.
     fn room_found(&mut self, room: TerminalSize, cx: &mut Context<Self>) {
+        if self.room != Some(room) {
+            // A slot fitted in another room is not what a slot holds now: half the room
+            // answers until a split view fits again.
+            self.slot = None;
+        }
         self.room = Some(room);
         self.attach_missing(cx);
     }
