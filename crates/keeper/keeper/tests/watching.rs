@@ -511,18 +511,21 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     // The facts the opening and the first watching told are not those of the writes.
     window.facts_until_quiet();
 
-    // Sixty writes in about 1.2 s: the pace of an agent saving, which is the input here.
-    // They are made on a thread of their own, so that the facts are read as they come.
+    // Sixty writes with 20 ms between them, which is 1.2 s at the pace of an agent saving
+    // and takes longer on a slow machine: the test measures the span itself. They are made
+    // on a thread of their own, so that the facts are read as they come.
     let writing = {
         let file = repo.join("a.txt");
         std::thread::spawn(move || {
+            let mut first_write = None;
             let mut last_write = Instant::now();
             for n in 0..60 {
                 std::fs::write(&file, format!("{n}\n")).expect("write a file");
                 last_write = Instant::now();
+                first_write.get_or_insert(last_write);
                 std::thread::sleep(Duration::from_millis(20));
             }
-            last_write
+            (first_write.expect("a first write"), last_write)
         })
     };
     let told: Vec<Instant> = window
@@ -531,13 +534,19 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
         .filter(|(_, fact)| changes_of(&workspace)(fact))
         .map(|(at, _)| at)
         .collect();
-    let last_write = writing.join().expect("the writes");
+    let (first_write, last_write) = writing.join().expect("the writes");
 
-    // A fact for each write would be sixty; one for each calm time is five or six at
-    // most, and there is one at least for the start and one for the rest.
+    // A fact for each write would be sixty. One for the start, one for each calm time that
+    // fits in the span of the writes (rounded up, since the writes are timed after they
+    // are made) and one for the rest after the last write is all there may be, and there
+    // is one at least for the start and one for the rest.
+    let span = last_write - first_write;
+    let calm_times = span.as_millis().div_ceil(250) as usize;
+    let most = calm_times + 2;
     assert!(
-        (2..=8).contains(&told.len()),
-        "{} facts for sixty writes",
+        (2..=most).contains(&told.len()),
+        "{} facts for sixty writes spread over {span:?}, where at most {most} are told: \
+         the start, one in each of {calm_times} calm times of 250 ms, and the last",
         told.len()
     );
     for pair in told.windows(2) {
