@@ -31,7 +31,11 @@ impl Review {
             ThreadState::Draft
         } else if held.addressed {
             ThreadState::Addressed
-        } else if held.comments.last().is_some_and(|c| c.author == Author::Agent) {
+        } else if held
+            .comments
+            .last()
+            .is_some_and(|c| c.author == Author::Agent)
+        {
             ThreadState::WaitsForReviewer
         } else {
             ThreadState::Sent
