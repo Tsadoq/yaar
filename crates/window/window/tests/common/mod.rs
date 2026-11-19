@@ -206,6 +206,15 @@ pub fn wait_until(
     }
 }
 
+/// Where the element drawn under `selector` was laid out in the last frame, if one was.
+pub fn drawn(
+    selector: &str,
+    cx: &mut VisualTestContext,
+) -> Option<gpui_kit::Bounds<gpui_kit::Pixels>> {
+    // The test context takes a text that lives as long as the program.
+    cx.debug_bounds(Box::leak(selector.to_owned().into_boxed_str()))
+}
+
 /// The key, as the table binds it on this system, of the control of the Window titled
 /// `title`.
 pub fn key_of(title: &str) -> String {
@@ -228,12 +237,12 @@ impl Composed {
     /// right of its left edge, in the middle of its height.
     pub fn point_in(
         &self,
-        selector: &'static str,
+        selector: &str,
         cx: &mut VisualTestContext,
     ) -> gpui_kit::Point<gpui_kit::Pixels> {
         let mut found = None;
         wait_until(cx, selector, |cx| {
-            found = cx.debug_bounds(selector);
+            found = drawn(selector, cx);
             found.is_some()
         });
         let bounds = found.expect("the element is drawn");
