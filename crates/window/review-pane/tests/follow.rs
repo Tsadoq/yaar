@@ -677,6 +677,56 @@ fn the_line_above_the_live_diff_names_the_step_flow_is_at_the_moment_shift_g_put
 }
 
 #[gpui_kit::test]
+fn a_step_of_the_turn_before_is_not_named_above_the_live_diff_of_the_turn_that_started(
+    cx: &mut TestAppContext,
+) {
+    let (t, u) = (turn_id('t'), turn_id('u'));
+    let (mut stage, mut cx) = at_work_in_flow(Vec::new(), cx);
+    press("shift-l", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
+        FlowForm::LiveDiff
+    );
+    compared(&mut stage, &s0(), None, Vec::new(), &mut cx);
+
+    // The turn ends at a command, which has no row: the line names it.
+    tell_the_step(&mut stage, &t, 1, command("make"), &mut cx);
+    wait_for_at(&stage, &t, 1, &mut cx);
+    let activity = |stage: &Stage, cx: &VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| pane.activity().cloned())
+    };
+    assert_eq!(activity(&stage, &cx), Some(at(&t, 1)));
+    assert!(drawn("flow-activity", &mut cx).is_some());
+
+    // The next turn starts and the live diff shows it before it has told a step. Follow
+    // keeps its place in the turn before, which the new turn's diff has no row for and
+    // which is no step of the turn shown: nothing is named.
+    stage.keeper.set_turn(running_turn(
+        u.clone(),
+        session_id('a'),
+        2,
+        Some(&s1()),
+        Vec::new(),
+    ));
+    stage.keeper.tell_agents(agents_of(vec![session_a_on(&u)]));
+    compared(&mut stage, &s1(), None, Vec::new(), &mut cx);
+    cx.run_until_parked();
+    let shown = stage.pane.read_with(&cx, |pane, _| {
+        pane.live_change().map(|change| change.turn.clone())
+    });
+    assert_eq!(shown, Some(u.clone()));
+    assert_eq!(flow_at(&stage, &cx), Some(at(&t, 1)));
+    assert_eq!(activity(&stage, &cx), None);
+    assert!(drawn("flow-activity", &mut cx).is_none());
+
+    // The first step of the new turn is named as any step is.
+    tell_the_step(&mut stage, &u, 1, command("ls"), &mut cx);
+    wait_for_at(&stage, &u, 1, &mut cx);
+    assert_eq!(activity(&stage, &cx), Some(at(&u, 1)));
+    assert!(drawn("flow-activity", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
 fn a_scroll_a_click_or_a_key_pauses_follow_the_missed_steps_are_counted_and_the_offer_resumes_it(
     cx: &mut TestAppContext,
 ) {
