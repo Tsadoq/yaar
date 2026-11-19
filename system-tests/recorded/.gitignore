@@ -1,4 +1,0 @@
-# The recorded events of the agent CLIs stay out of git until the user has read them and
-# said yes; the folder of the shapes written by hand is the repository's.
-/claude/
-/pi/

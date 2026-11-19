@@ -2,11 +2,10 @@
 //! and the Workspaces replay them.
 //!
 //! The recordings were made on a Mac with Claude Code 2.1.323 and pi 1.1.0, cleaned, and
-//! read by the user before they may enter the repository. They lie in [`FOLDER`] of this
-//! crate, as `claude/<name>.jsonl` and `pi/<name>.jsonl`, each line one event. Until the
-//! user has said yes, the two folders are kept out of git by the `.gitignore` of
-//! [`FOLDER`], and a machine that has none of the files fails every test that reads one,
-//! naming the file it wanted: no test passes or skips silently for lack of its recording.
+//! read by the user, who allowed them into the repository. They lie in [`FOLDER`] of this
+//! crate, as `claude/<name>.jsonl` and `pi/<name>.jsonl`, each line one event. A test
+//! that reads a file that is not there fails, naming the file it wanted: no test passes
+//! or skips silently for lack of its recording.
 //!
 //! Every recording was made in one project folder, [`PROJECT`]: a test that replays one
 //! in a worktree of its own reads it through [`HookRecord::in_project`].
@@ -117,9 +116,8 @@ pub fn path(name: &str) -> PathBuf {
     let path = folder().join(name);
     assert!(
         path.is_file(),
-        "the recording {name} is not at {}: the recorded events of the agent CLIs are kept \
-         out of git until they may enter it, and every test that replays one needs them \
-         there",
+        "the recording {name} is not at {}: every test that replays a recorded event of \
+         the agent CLIs needs its file there",
         path.display()
     );
     path
