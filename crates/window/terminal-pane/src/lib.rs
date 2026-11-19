@@ -264,10 +264,11 @@ impl Layout {
 ///
 /// A terminal the Keeper holds that the Window did not open, listed by `Models::terminals`
 /// when the link connects or whenever the list gains one, is attached: the pane asks the
-/// Keeper to attach it at the size the pane shows terminals at, which before any terminal
-/// was laid out is the grid of the room the pane itself has (so an attach at connect waits
-/// for the pane's first frame), and the view starts at that grid and tells the Keeper
-/// nothing more while it fits. The output that comes after the answer, the kept output
+/// Keeper to attach it at the size its own workspace would show it at: the grid of the
+/// room the pane itself has (so an attach at connect waits for the pane's first frame)
+/// when the workspace shows one terminal or none, a slot's grid when it is split, and
+/// never the size a view of another workspace fitted last. The view starts at that grid
+/// and tells the Keeper nothing more while it fits. The output that comes after the answer, the kept output
 /// first and then what the program writes, is read as the output of a terminal the pane
 /// opened is. It is listed beside the others, with the
 /// workspace the Keeper says; it is shown when its workspace shows no other terminal, and
@@ -308,10 +309,10 @@ pub struct TerminalPane {
     window: AnyWindowHandle,
     /// The size the pane last laid a terminal out at, which a new terminal is opened at.
     size: TerminalSize,
-    /// Whether a view told the pane of a size it fitted to: until then `size` is a guess,
-    /// and the room is what an attach is sized from. A view that fits the size it was
-    /// started at tells nothing, so this can stay false while terminals are laid out.
-    fitted: bool,
+    /// The size the last view fitted while its workspace showed two terminals side by
+    /// side: what a slot holds. A view that fits the size it was started at tells nothing,
+    /// so this can stay unknown while terminals are laid out.
+    slot: Option<TerminalSize>,
     /// The grid the room the pane has holds, as the painter found it; none before the
     /// first frame.
     room: Option<TerminalSize>,
@@ -371,7 +372,7 @@ impl TerminalPane {
             focus,
             window: window.window_handle(),
             size: FIRST_SIZE,
-            fitted: false,
+            slot: None,
             room: None,
             room_seen: Rc::default(),
             notice: None,
@@ -554,8 +555,9 @@ impl TerminalPane {
         let link = self.models.link.clone();
         let output = link.update(cx, |link, _| link.take_output(&id));
         let view = cx.new(|cx| TerminalView::new(id.clone(), size, link, output, cut, cx));
-        let events = cx.subscribe(&view, |pane, _, event: &ViewEvent, _| {
-            pane.viewed(event);
+        let of = workspace.clone();
+        let events = cx.subscribe(&view, move |pane, _, event: &ViewEvent, _| {
+            pane.viewed(&of, event);
         });
         self.terminals.push(Entry {
             id,
@@ -605,20 +607,29 @@ impl TerminalPane {
         });
     }
 
-    /// The size a terminal of `workspace` is attached at: the size the pane shows it at.
-    /// A workspace that shows no terminal shows this one alone, which fills the room; for
-    /// the others it is the size the last view fitted, which is what a slot holds. With no
-    /// frame yet the room is not known, and an attach waits for it.
+    /// The size a terminal of `workspace` is attached at: the size its own workspace
+    /// would show it at, whatever another workspace on screen showed last. A workspace
+    /// that is split shows it in a slot, which is the size the last view fitted in a
+    /// split; any other shows it alone, filling the room. With no frame yet the room is
+    /// not known, and an attach waits for it.
     fn attach_size(&self, workspace: &WorkspaceId) -> Option<TerminalSize> {
-        let alone = self
+        let split = self
             .layouts
             .get(workspace)
-            .is_none_or(|layout| layout.shown.is_empty());
-        match self.room {
-            Some(room) if alone || !self.fitted => Some(room),
-            _ if self.fitted => Some(self.size),
-            _ => None,
+            .is_some_and(|layout| layout.shown.len() == 2);
+        if split && let Some(slot) = self.slot {
+            return Some(slot);
         }
+        let room = self.room?;
+        Some(if split {
+            // No view fitted a slot yet: half the room, which the view corrects once.
+            TerminalSize {
+                columns: room.columns / 2,
+                ..room
+            }
+        } else {
+            room
+        })
     }
 
     /// The painter found how many columns and rows the room the pane has holds: the
@@ -716,11 +727,17 @@ impl TerminalPane {
         }
     }
 
-    /// What one of the terminal views tells.
-    fn viewed(&mut self, event: &ViewEvent) {
+    /// What one of the terminal views tells, a view of a terminal of `workspace`.
+    fn viewed(&mut self, workspace: &WorkspaceId, event: &ViewEvent) {
         let ViewEvent::Fitted(size) = event;
         self.size = *size;
-        self.fitted = true;
+        if self
+            .layouts
+            .get(workspace)
+            .is_some_and(|layout| layout.shown.len() == 2)
+        {
+            self.slot = Some(*size);
+        }
     }
 
     /// What the Keeper tells that the pane shows: a program that ended. A program that ends

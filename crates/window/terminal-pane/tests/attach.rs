@@ -353,6 +353,103 @@ fn a_terminal_for_a_workspace_that_shows_none_is_attached_at_the_whole_room_in_t
 }
 
 #[gpui_kit::test]
+fn a_terminal_gained_for_a_split_workspace_is_attached_at_the_size_of_a_slot(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes(cx);
+    let one = workspace_id('1');
+    let (t1, t2, t3) = (terminal('a'), terminal('b'), terminal('c'));
+    panes.open_terminal(&t1, &mut cx);
+    wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
+        !panes.keeper.resizes(&t1).is_empty()
+    });
+    let whole = panes.grid(&t1);
+
+    // The workspace is split: its terminals are at half the room.
+    panes.open_terminal(&t2, &mut cx);
+    panes.press_in_the_app::<ToggleSplit>(&mut cx);
+    wait_until(&mut cx, "the terminals at half the room", |_| {
+        panes.grid(&t1).columns < whole.columns && panes.grid(&t2).columns < whole.columns
+    });
+    let half = panes.grid(&t1);
+
+    // What the list gains for it is shown in a slot when the user asks for it, so it is
+    // asked for at the size of a slot and not at the whole room.
+    panes
+        .models
+        .terminals
+        .update(&mut cx, |list, cx| list.opened(info(&t3, &one), cx));
+    let (id, asked, size) = attach_request(&panes, &mut cx);
+    assert_eq!((asked, size), (t3.clone(), half));
+    answer_attach(&panes, id, &t3, false, &[b"hello\r\n"]);
+    wait_until(&mut cx, "the attached terminal in the pane", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().contains(&t3))
+    });
+    panes.press_in_the_app::<NextTerminal>(&mut cx);
+    wait_drawn(&mut cx, "the attached terminal in a slot", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.shown().contains(&t3))
+    });
+    // The size came once, in the request: a key typed after is the barrier, since the
+    // resize of a view that fitted another grid would have gone out before it.
+    cx.simulate_input("k");
+    assert_eq!(panes.keeper.input(&mut cx), (t3.clone(), b"k".to_vec()));
+    assert!(panes.keeper.resizes(&t3).is_empty());
+}
+
+#[gpui_kit::test]
+fn a_terminal_gained_for_a_workspace_that_shows_one_is_attached_at_the_whole_room_whatever_another_workspace_fitted(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = common::open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let (one, two) = (workspace_id('1'), workspace_id('2'));
+    let (t1, t2, t3, t4) = (terminal('a'), terminal('b'), terminal('c'), terminal('d'));
+    panes.open_terminal(&t1, &mut cx);
+    wait_until(&mut cx, "the size the pane fitted the terminal to", |_| {
+        !panes.keeper.resizes(&t1).is_empty()
+    });
+    let whole = panes.grid(&t1);
+
+    // The second workspace is split, and its terminals are the last the pane fitted.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    panes.open_terminal(&t2, &mut cx);
+    panes.open_terminal(&t3, &mut cx);
+    panes.press_in_the_app::<ToggleSplit>(&mut cx);
+    wait_until(&mut cx, "the terminals at half the room", |_| {
+        panes.grid(&t2).columns < whole.columns && panes.grid(&t3).columns < whole.columns
+    });
+
+    // What the list gains for the first workspace, which shows one terminal, is asked for
+    // at the whole room that terminal will be shown at, and not at the half the last view
+    // fitted.
+    panes
+        .models
+        .terminals
+        .update(&mut cx, |list, cx| list.opened(info(&t4, &one), cx));
+    let (id, asked, size) = attach_request(&panes, &mut cx);
+    assert_eq!((asked, size), (t4.clone(), whole));
+    answer_attach(&panes, id, &t4, false, &[b"hello\r\n"]);
+    wait_until(&mut cx, "the attached terminal in the pane", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().contains(&t4))
+    });
+    click_in(&format!("sidebar-workspace-{one}"), &mut cx);
+    panes.press_in_the_app::<NextTerminal>(&mut cx);
+    wait_drawn(&mut cx, "the attached terminal in its slot", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.shown() == std::slice::from_ref(&t4))
+    });
+    cx.simulate_input("k");
+    assert_eq!(panes.keeper.input(&mut cx), (t4.clone(), b"k".to_vec()));
+    assert!(panes.keeper.resizes(&t4).is_empty());
+}
+
+#[gpui_kit::test]
 fn a_terminal_being_attached_is_not_attached_again_when_the_list_changes(cx: &mut TestAppContext) {
     let (mut panes, mut cx) = open_panes(cx);
     let one = workspace_id('1');
