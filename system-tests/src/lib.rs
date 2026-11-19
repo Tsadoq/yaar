@@ -70,8 +70,7 @@ pub fn program(name: &str) -> PathBuf {
             "yaar-companion-claude",
             "-p",
             "yaar-system-tests",
-            "--bin",
-            "standin-agent",
+            "--bins",
         ]);
         if profile_dir.file_name().is_some_and(|p| p == "release") {
             build.arg("--release");
