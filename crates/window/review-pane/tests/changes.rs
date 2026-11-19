@@ -320,12 +320,17 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
 
     // The files of the selected change: a turn is the change from the version before it
     // to its state.
+    // The turn changed `outside.txt` too, which is also a change no agent made in the
+    // uncommitted list: the mark is for the uncommitted entry only.
     click_entry(Some(1), Modifiers::none(), &mut cx);
     compared(
         &mut stage,
         c1(),
         Some(s1()),
-        vec![file("turn.txt", FileStatus::Modified)],
+        vec![
+            file("turn.txt", FileStatus::Modified),
+            file("outside.txt", FileStatus::Added),
+        ],
         &mut cx,
     );
     read_versions(
@@ -335,10 +340,30 @@ fn changes_shows_the_tree_of_commits_and_turns_the_uncommitted_changes_with_thos
         "after\n",
         &mut cx,
     );
-    wait_for_paths(&stage, &["turn.txt"], &mut cx);
+    read_versions(
+        &mut stage,
+        versions_of(Some(c1()), "outside.txt", Some(s1()), "outside.txt"),
+        "",
+        "new\n",
+        &mut cx,
+    );
+    wait_for_paths(&stage, &["turn.txt", "outside.txt"], &mut cx);
     assert_eq!(
         shown(&stage.pane, &mut cx),
         ChangeShown::Entries { first: 1, last: 1 }
+    );
+    assert!(
+        stage.pane.read_with(&cx, |pane, _| pane
+            .made_by_no_agent(&PathBuf::from("outside.txt"))),
+        "the premise: the path is one no agent made in the uncommitted list"
+    );
+    let outside = rows(&stage.pane, &mut cx)
+        .iter()
+        .position(|row| matches!(row, PaneRow::File { path, .. } if path == &PathBuf::from("outside.txt")))
+        .expect("the heading of outside.txt");
+    assert!(
+        drawn(&format!("review-no-agent-{outside}"), &mut cx).is_none(),
+        "the heading of a file of a turn is marked as no agent's"
     );
     let marked = (0..rows(&stage.pane, &mut cx).len())
         .any(|row| drawn(&format!("review-no-agent-{row}"), &mut cx).is_some());
