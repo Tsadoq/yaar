@@ -52,3 +52,52 @@ impl Drop for IndexCopy {
         let _ = fs::remove_dir_all(&self.folder);
     }
 }
+
+/// The bytes of a worktree's own list of files, taken before a command of the user's own
+/// git changes it, so that a command that is refused can put them back.
+pub(crate) struct IndexBackup {
+    file: PathBuf,
+    // None where the list did not exist yet.
+    bytes: Option<Vec<u8>>,
+}
+
+impl IndexBackup {
+    /// Reads the list at `index`; a list that is not there yet is remembered as none.
+    pub(crate) fn take(index: &Path) -> io::Result<IndexBackup> {
+        let bytes = match fs::read(index) {
+            Ok(bytes) => Some(bytes),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e),
+        };
+        Ok(IndexBackup {
+            file: index.to_owned(),
+            bytes,
+        })
+    }
+
+    /// Puts the list back as it was, byte for byte: written to a file of its own in the
+    /// same folder and renamed over the list, so that no one reads half of it. A list
+    /// that did not exist is removed.
+    pub(crate) fn restore(self) -> io::Result<()> {
+        let Some(bytes) = self.bytes else {
+            return match fs::remove_file(&self.file) {
+                Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
+                _ => Ok(()),
+            };
+        };
+        let mut name = self.file.file_name().unwrap_or_default().to_owned();
+        name.push(format!(".yaar-restore-{}", std::process::id()));
+        let temporary = self.file.with_file_name(name);
+        let put_back = fs::write(&temporary, bytes).and_then(|()| {
+            // The mode git gave the list, if there is one still.
+            if let Ok(old) = fs::metadata(&self.file) {
+                fs::set_permissions(&temporary, old.permissions())?;
+            }
+            fs::rename(&temporary, &self.file)
+        });
+        if put_back.is_err() {
+            let _ = fs::remove_file(&temporary);
+        }
+        put_back
+    }
+}

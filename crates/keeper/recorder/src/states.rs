@@ -189,93 +189,7 @@ impl StateStore {
     /// commit yet is left out of the state, as [`StateStore::record_reporting`] says,
     /// which gives the same state and names what it left out.
     pub fn record(&self, worktree: &Worktree) -> Result<RecordedState, RecordError> {
-        let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
-        let head = worktree.head_commit()?;
-        let real_objects = worktree.common_dir().join("objects");
-
-        let (tree, commit, number) = {
-            // The copy is gone at the end of this block, whatever happens: a git that was
-            // killed leaves its lock in the copy's folder, and that goes with it.
-            let index = IndexCopy::of(&worktree.git_dir().join("index")).map_err(GitError::from)?;
-            let hooks_off = hooks_off(&self.git, Place::Folder(worktree.root()))?;
-            // Every run in the real worktree works on the copy, and writes what it makes
-            // into the store: the objects of the real repository are only read.
-            let in_worktree = |args: &[&str]| {
-                let mut command = self.git.command(Place::Folder(worktree.root()), &hooks_off);
-                command
-                    .env("GIT_INDEX_FILE", index.file())
-                    .env("GIT_OBJECT_DIRECTORY", self.folder.join("objects"))
-                    .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &real_objects)
-                    .args(args);
-                command
-            };
-            let paths = finish(in_worktree(&[
-                "-c",
-                "status.showUntrackedFiles=all",
-                "status",
-                "--porcelain=v2",
-                "-z",
-                "--no-renames",
-                "--untracked-files=all",
-            ]))?;
-            let command = paths.command().to_owned();
-            let paths = differing_paths(&command, &paths.printed()?)?;
-            if !paths.is_empty() {
-                let mut input = Vec::new();
-                for path in &paths {
-                    input.extend_from_slice(path);
-                    input.push(0);
-                }
-                finish_with(
-                    in_worktree(&[
-                        "update-index",
-                        "--add",
-                        "--remove",
-                        "--ignore-skip-worktree-entries",
-                        "-z",
-                        "--stdin",
-                    ]),
-                    &input,
-                )?
-                .printed()?;
-            }
-            let tree = line(finish(in_worktree(&["write-tree"]))?.printed()?);
-
-            let numbered = self.numbered()?;
-            if let Some((_, newest)) = numbered.last()
-                && newest.tree == tree
-            {
-                return Ok(newest.clone());
-            }
-            let number = numbered.last().map_or(1, |(n, _)| n + 1);
-            let message = format!("YAAR state {number}");
-            let mut args = vec!["commit-tree", &tree];
-            if let Some(head) = &head {
-                args.extend(["-p", head.as_str()]);
-            }
-            args.extend(["-m", &message]);
-            let mut command = in_worktree(&args);
-            // The app's own identity, so that `user.useConfigOnly` cannot stop it.
-            for who in ["AUTHOR", "COMMITTER"] {
-                command
-                    .env(format!("GIT_{who}_NAME"), "YAAR")
-                    .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid");
-            }
-            (tree, line(finish(command)?.printed()?), number)
-        };
-
-        self.complete(&real_objects, head.as_ref().map(CommitId::as_str), &tree)?;
-        let name = format!("{STATES}{number:010}");
-        // Written only where no ref has this number: all-zero is git's "nothing is there
-        // yet". Another handle on the store that took the number first makes this fail
-        // with git's words, and the state it wrote stays as it is.
-        self.run(None, ["update-ref", &name, &commit, NO_REF])?
-            .printed()?;
-        Ok(RecordedState {
-            id: StateId(commit),
-            tree,
-            on: head,
-        })
+        Ok(self.record_reporting(worktree)?.state)
     }
 
     /// Copies a commit of the real repository into the store, with its tree, so that its
@@ -384,8 +298,52 @@ impl StateStore {
     /// a path that is gone by the time it is staged is left out of the state, one that
     /// appeared is in it or not, as the moment found it.
     pub fn record_reporting(&self, worktree: &Worktree) -> Result<Recording, RecordError> {
-        let _ = worktree;
-        todo!("record, leaving out a nested repository with no commit")
+        let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let head = worktree.head_commit()?;
+        let real_objects = worktree.common_dir().join("objects");
+        let (tree, left_out) = self.tree_on_disk(worktree)?;
+
+        let numbered = self.numbered()?;
+        if let Some((_, newest)) = numbered.last()
+            && newest.tree == tree
+        {
+            return Ok(Recording {
+                state: newest.clone(),
+                left_out,
+            });
+        }
+        let number = numbered.last().map_or(1, |(n, _)| n + 1);
+        let message = format!("YAAR state {number}");
+        let mut args = vec!["commit-tree", &tree];
+        if let Some(head) = &head {
+            args.extend(["-p", head.as_str()]);
+        }
+        args.extend(["-m", &message]);
+        let mut command = self.command(Some(&real_objects));
+        command.args(args);
+        // The app's own identity, so that `user.useConfigOnly` cannot stop it.
+        for who in ["AUTHOR", "COMMITTER"] {
+            command
+                .env(format!("GIT_{who}_NAME"), "YAAR")
+                .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid");
+        }
+        let commit = line(finish(command)?.printed()?);
+
+        self.complete(&real_objects, head.as_ref().map(CommitId::as_str), &tree)?;
+        let name = format!("{STATES}{number:010}");
+        // Written only where no ref has this number: all-zero is git's "nothing is there
+        // yet". Another handle on the store that took the number first makes this fail
+        // with git's words, and the state it wrote stays as it is.
+        self.run(None, ["update-ref", &name, &commit, NO_REF])?
+            .printed()?;
+        Ok(Recording {
+            state: RecordedState {
+                id: StateId(commit),
+                tree,
+                on: head,
+            },
+            left_out,
+        })
     }
 
     /// The tree of the files of `worktree` on disk as a recording reads them, written into
@@ -394,13 +352,108 @@ impl StateStore {
     /// a copy of the worktree's list of files, the store's objects written and the real
     /// repository's only read. [`StateStore::record_reporting`] makes its state of this
     /// tree; [`StateStore::compare`] compares a version with it, recording nothing.
-    #[expect(dead_code, reason = "written by the recording's package of slice 4")]
     pub(crate) fn tree_on_disk(
         &self,
         worktree: &Worktree,
     ) -> Result<(String, Vec<PathBuf>), RecordError> {
-        let _ = worktree;
-        todo!("the tree of the files on disk, as a recording reads them")
+        let real_objects = worktree.common_dir().join("objects");
+        // The copy is gone at the end of this function, whatever happens: a git that was
+        // killed leaves its lock in the copy's folder, and that goes with it.
+        let index = IndexCopy::of(&worktree.git_dir().join("index")).map_err(GitError::from)?;
+        let hooks_off = hooks_off(&self.git, Place::Folder(worktree.root()))?;
+        // Every run in the real worktree works on the copy, and writes what it makes into
+        // the store: the objects of the real repository are only read.
+        let in_worktree = |args: &[&str]| {
+            let mut command = self.git.command(Place::Folder(worktree.root()), &hooks_off);
+            command
+                .env("GIT_INDEX_FILE", index.file())
+                .env("GIT_OBJECT_DIRECTORY", self.folder.join("objects"))
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", &real_objects)
+                .args(args);
+            command
+        };
+        let paths = finish(in_worktree(&[
+            "-c",
+            "status.showUntrackedFiles=all",
+            "status",
+            "--porcelain=v2",
+            "-z",
+            "--no-renames",
+            "--untracked-files=all",
+        ]))?;
+        let command = paths.command().to_owned();
+        let mut paths = differing_paths(&command, &paths.printed()?)?;
+        let mut left_out = Vec::new();
+        // A repository inside the worktree is staged as the commit it is on, which a
+        // repository with no commit has none of: git would refuse the whole list.
+        paths.retain(|differing| {
+            if differing.folder && self.has_no_commit(worktree.root(), &differing.path) {
+                left_out.push(PathBuf::from(os_string(&differing.path)));
+                false
+            } else {
+                true
+            }
+        });
+        left_out.sort();
+        // A program that works beside the recording changes the worktree between the
+        // moment git named a path and the moment it is staged: such a path is not a
+        // failure, it is what the worktree looks like by then.
+        let (staged, unstaged): (Vec<_>, Vec<_>) = paths
+            .iter()
+            .map(|differing| differing.path.as_slice())
+            .partition(|path| !is_plain_folder(worktree.root(), path));
+        // A path git named as a file that is a folder now: its files, if they appeared
+        // before git looked, were named on their own. What the index held of it goes
+        // first, so that those files do not clash with it.
+        if !unstaged.is_empty() {
+            finish_with(in_worktree(&FORGET), &zero_ended(&unstaged))?.printed()?;
+        }
+        if !staged.is_empty() {
+            let stage = |paths: &[&[u8]]| {
+                finish_with(
+                    in_worktree(&[
+                        "update-index",
+                        "--add",
+                        "--remove",
+                        "--replace",
+                        "--ignore-skip-worktree-entries",
+                        "-z",
+                        "--stdin",
+                    ]),
+                    &zero_ended(paths),
+                )?
+                .printed()
+            };
+            if stage(&staged).is_err() {
+                // One path at a time, to tell a path that failed for what the program
+                // beside us did to it from one that fails for itself, as a clean filter
+                // that errors does: only that one is a failure.
+                for path in &staged {
+                    if let Err(e) = stage(&[path]) {
+                        if !changed_under_us(worktree.root(), path) {
+                            return Err(e.into());
+                        }
+                        finish_with(in_worktree(&FORGET), &zero_ended(&[path]))?.printed()?;
+                    }
+                }
+            }
+        }
+        let tree = line(finish(in_worktree(&["write-tree"]))?.printed()?);
+        Ok((tree, left_out))
+    }
+
+    /// Whether `folder`, a path below `root` that git names as a folder of its own, is a
+    /// repository that has no commit to be recorded as. Anything git cannot read a commit
+    /// of counts as none: a recording that failed for it would fail for as long as the
+    /// folder is there.
+    fn has_no_commit(&self, root: &Path, folder: &[u8]) -> bool {
+        let folder = root.join(os_string(folder));
+        if !folder.join(".git").exists() {
+            return false;
+        }
+        let mut command = self.git.command(Place::Folder(&folder), &[]);
+        command.args(["rev-parse", "--verify", "--quiet", "HEAD^{commit}"]);
+        !matches!(finish(command), Ok(answer) if answer.code == Some(0))
     }
 
     /// A run of git in the store, not yet started; with the objects of a repository
@@ -657,11 +710,19 @@ impl StateStore {
     }
 }
 
+/// One path `git status` named that git has to be told of.
+struct Differing {
+    /// The path, relative to the worktree, without a slash at its end.
+    path: Vec<u8>,
+    /// Whether git named it with a slash: a repository inside the worktree.
+    folder: bool,
+}
+
 /// The paths of the records of `git status --porcelain=v2 -z --no-renames` that git has
 /// to be told of for its list of files to hold what `git add --all` would make it hold:
 /// those the worktree's side differs in, and the untracked ones. A path that is staged
 /// and the same on disk is in the list already.
-fn differing_paths(command: &str, printed: &[u8]) -> Result<Vec<Vec<u8>>, GitError> {
+fn differing_paths(command: &str, printed: &[u8]) -> Result<Vec<Differing>, GitError> {
     let mut paths = Vec::new();
     let mut records = printed.split(|byte| *byte == 0).filter(|r| !r.is_empty());
     while let Some(record) = records.next() {
@@ -693,10 +754,50 @@ fn differing_paths(command: &str, printed: &[u8]) -> Result<Vec<Vec<u8>>, GitErr
         if always || fields[1].get(1) != Some(&b'.') {
             let path = fields[before];
             // A repository inside the worktree is listed as its folder, with a slash.
-            paths.push(path.strip_suffix(b"/").unwrap_or(path).to_vec());
+            paths.push(match path.strip_suffix(b"/") {
+                Some(folder) => Differing {
+                    path: folder.to_vec(),
+                    folder: true,
+                },
+                None => Differing {
+                    path: path.to_vec(),
+                    folder: false,
+                },
+            });
         }
     }
     Ok(paths)
+}
+
+/// The arguments of the run that takes paths out of a list of files whatever is on disk.
+const FORGET: [&str; 4] = ["update-index", "--force-remove", "-z", "--stdin"];
+
+/// `paths`, each followed by a zero byte, as `git update-index -z --stdin` reads them.
+fn zero_ended(paths: &[&[u8]]) -> Vec<u8> {
+    let mut input = Vec::new();
+    for path in paths {
+        input.extend_from_slice(path);
+        input.push(0);
+    }
+    input
+}
+
+/// Whether `path`, below `root`, is a folder now that is no repository: git cannot be
+/// told to add one, only the files in it.
+fn is_plain_folder(root: &Path, path: &[u8]) -> bool {
+    let place = root.join(os_string(path));
+    fs::symlink_metadata(&place).is_ok_and(|found| found.is_dir()) && !place.join(".git").exists()
+}
+
+/// Whether `path`, below `root`, is gone or is a folder now that is no repository: what a
+/// path that failed to stage looks like when a program beside the recording changed it
+/// after git named it.
+fn changed_under_us(root: &Path, path: &[u8]) -> bool {
+    let place = root.join(os_string(path));
+    match fs::symlink_metadata(&place) {
+        Err(e) => e.kind() == std::io::ErrorKind::NotFound,
+        Ok(found) => found.is_dir() && !place.join(".git").exists(),
+    }
 }
 
 /// The first line git printed, without its line end.
@@ -710,4 +811,42 @@ fn not_a_commit(given: &str) -> GitError {
         "a read of the state store",
         format!("{given:?} is not the full id of a commit"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_path_git_names_with_a_slash_is_a_folder_and_loses_its_slash() {
+        let printed = b"? nested/\0? plain.txt\0? with space/\0";
+
+        let paths = differing_paths("git status", printed).expect("read");
+
+        let seen: Vec<(&[u8], bool)> = paths
+            .iter()
+            .map(|differing| (differing.path.as_slice(), differing.folder))
+            .collect();
+        assert_eq!(
+            seen,
+            vec![
+                (&b"nested"[..], true),
+                (&b"plain.txt"[..], false),
+                (&b"with space"[..], true)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_staged_path_that_is_the_same_on_disk_is_not_named_again() {
+        // `1 XY sub mH mI mW hH hI path`: the worktree's side is a dot where it is the same.
+        let printed = b"1 M. N... 100644 100644 100644 aa bb staged.txt\0\
+                        1 .M N... 100644 100644 100644 aa bb edited.txt\0\
+                        # stash 1\0";
+
+        let paths = differing_paths("git status", printed).expect("read");
+
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0].path, b"edited.txt");
+    }
 }
