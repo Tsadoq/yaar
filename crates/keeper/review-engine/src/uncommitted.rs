@@ -89,7 +89,10 @@ mod tests {
     fn a_change_is_listed_only_while_it_is_uncommitted() {
         // The list is made from the changes the worktree has now: once `n` is committed
         // it is not among them, and no review lists it.
-        let after: Vec<Credited> = changes().into_iter().filter(|c| c.path.as_os_str() != "n").collect();
+        let after: Vec<Credited> = changes()
+            .into_iter()
+            .filter(|c| c.path.as_os_str() != "n")
+            .collect();
         for review in [
             review_of("ra", Some("A")),
             review_of("rb", Some("B")),

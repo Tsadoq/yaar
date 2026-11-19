@@ -16,8 +16,8 @@
 //!   session has one review, of no agent;
 //! - [`Reviews`], the engine over the Store and the Recorder: what the Keeper calls. It
 //!   keeps every change in the Store and records the state of the worktree where a review
-//!   needs one: at a send, at a mark of reviewed, and for a new thread on the files on
-//!   disk;
+//!   needs one: at a send, at a mark of reviewed, at a turn's end, and for a new thread
+//!   on the files on disk;
 //! - [`takeover`], the rule of a review per agent session: which review a session that
 //!   starts keeps, takes over, or gets new, as a [`Takeover`];
 //! - [`uncommitted_of`], the uncommitted changes a review lists: those of its session and

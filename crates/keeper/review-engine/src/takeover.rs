@@ -120,7 +120,7 @@ mod tests {
         let first = session("s1", "claude", "t1", None);
         let none = review("r0", None);
         assert_eq!(
-            takeover(&[none], &[first.clone()], &first),
+            takeover(&[none], std::slice::from_ref(&first), &first),
             Takeover::TakesOver(id("r0"))
         );
 
@@ -230,7 +230,7 @@ mod tests {
         let resumed = session("s1", "claude", "t9", None);
         let reviews = [review("r0", None), review("r1", Some("s1"))];
         assert_eq!(
-            takeover(&reviews, &[resumed.clone()], &resumed),
+            takeover(&reviews, std::slice::from_ref(&resumed), &resumed),
             Takeover::Keeps(id("r1"))
         );
 
@@ -260,7 +260,11 @@ mod tests {
     fn a_review_whose_session_the_store_does_not_hold_is_left_alone() {
         let next = session("s2", "claude", "t1", None);
         assert_eq!(
-            takeover(&[review("r1", Some("gone"))], &[next.clone()], &next),
+            takeover(
+                &[review("r1", Some("gone"))],
+                std::slice::from_ref(&next),
+                &next
+            ),
             Takeover::New
         );
     }
