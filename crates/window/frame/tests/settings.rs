@@ -6,7 +6,9 @@
 
 mod common;
 
+use std::io::{Cursor, ErrorKind, Read};
 use std::net::Shutdown;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{AppContext, Entity, TestAppContext};
 use yaar_frame::{KeeperLink, Models, SettingList};
@@ -196,19 +198,86 @@ fn a_setting_the_keeper_refuses_shows_at_once_and_goes_when_the_list_is_asked_ag
 }
 
 /// The next request of the Window on a stream the test reads itself.
+///
+/// The Window's tasks run while the test waits: the wait is a read that gives up after a
+/// moment, so that the app runs again between two looks, up to the deadline.
 fn next_request(
     keeper: &mut std::os::unix::net::UnixStream,
     cx: &mut TestAppContext,
 ) -> (RequestId, Request) {
-    // What the Window sends is queued by the task that asks; run it first.
-    cx.run_until_parked();
+    let deadline = Instant::now() + common::DEADLINE;
+    let mut first = [0u8; 1];
+    loop {
+        // What the Window sends is queued by the task that asks; run it first.
+        cx.run_until_parked();
+        keeper
+            .set_read_timeout(Some(Duration::from_millis(1)))
+            .expect("a read timeout");
+        match keeper.read(&mut first) {
+            Ok(0) => panic!("the Window closed the connection, and a request was expected"),
+            Ok(_) => break,
+            Err(error) if matches!(error.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {
+                assert!(Instant::now() < deadline, "the Window asked nothing");
+            }
+            Err(error) => panic!("a message of the Window: {error}"),
+        }
+    }
+    // The rest of the frame follows at once.
     keeper
         .set_read_timeout(Some(common::DEADLINE))
         .expect("a read timeout");
-    match read_message(keeper).expect("a message of the Window") {
+    match read_message(&mut Cursor::new(first).chain(&mut *keeper))
+        .expect("a message of the Window")
+    {
         Message::Request { id, request } => (id, request),
         other => panic!("the Window sent {other:?}, which is no request"),
     }
+}
+
+#[gpui_kit::test]
+fn a_set_the_keeper_answers_with_a_reply_of_another_kind_has_the_list_asked_again(
+    cx: &mut TestAppContext,
+) {
+    let link = cx.new(|_| KeeperLink::new());
+    let list: Entity<SettingList> = cx.new(|cx| SettingList::new(link.clone(), cx));
+    let mut keeper = KeeperEnd::attach_deaf(&link, cx);
+    let (first, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings);
+    let kept = vec![form('2', FlowForm::LiveDiff)];
+    let answered = Message::Reply {
+        to: first,
+        reply: Ok(Reply::Settings(kept.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the first question");
+    wait_until(cx, "the first settings", |cx| {
+        list.read_with(cx, |list, _| list.all() == kept)
+    });
+
+    list.update(cx, |list, cx| list.set(form('1', FlowForm::LiveDiff), cx));
+    let (set, request) = next_request(&mut keeper, cx);
+    assert_eq!(
+        request,
+        Request::SetSetting {
+            setting: form('1', FlowForm::LiveDiff)
+        }
+    );
+    // Not the `Done` that was asked for: what the Window shows may not be what is kept.
+    let odd = Message::Reply {
+        to: set,
+        reply: Ok(Reply::Workspaces(Vec::new())),
+    };
+    write_message(&mut keeper, &odd).expect("answer with another kind of reply");
+    let (second, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings, "asked again");
+    let answered = Message::Reply {
+        to: second,
+        reply: Ok(Reply::Settings(kept.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the second question");
+    wait_until(cx, "what the Keeper keeps", |cx| {
+        list.read_with(cx, |list, _| list.all() == kept)
+    });
+    keeper.shutdown(Shutdown::Both).ok();
 }
 
 #[gpui_kit::test]

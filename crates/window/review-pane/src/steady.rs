@@ -8,10 +8,10 @@
 //! read with `GetReviews` after `Fact::ReviewsChanged`; and another review shown when a
 //! session starts or stops running and so moves the review the pane picks
 //! (`ReviewPane::review_moved`, after `Fact::AgentsChanged`).
-//! [`ReviewPane::rebuild_steady`] makes the rows again so that the row at the top of the
-//! view, and the line the reviewer is on,
-//! stay where they were on screen: when rows come or go above the first row in view, the
-//! view moves by as many, as a file that arrives above it does (`ReviewPane::loaded`).
+//! [`ReviewPane::rebuild_steady`] makes the rows again so that the diff the reviewer reads,
+//! and the line they are on, stay where they were on screen: when rows come or go above
+//! it, the view moves by as many, as a file that arrives above it does
+//! (`ReviewPane::loaded`).
 
 use gpui_kit::*;
 
@@ -21,11 +21,13 @@ impl ReviewPane {
     /// Makes the rows of Changes again for reviews read anew, or for another review shown,
     /// keeping what is in view where it was.
     ///
-    /// The row at the top of the view is found again among the new rows, and the view moves
-    /// by as many rows as it moved in the list. A row is the same row when it is equal to
-    /// the one before: a thread and its comments are told by their ids, a line of a diff
-    /// by its path and its line numbers. When the top row is itself gone (a thread that was
-    /// deleted), the next row in view that is still there takes its place.
+    /// The first row in view that is not a thread or a comment is found again among the new
+    /// rows, and the view moves by as many rows as it moved in the list, so that the diff
+    /// the reviewer reads stays where it is on screen whichever thread rows come, go or
+    /// move. A row is the same row when it is equal to the one before: a thread and its
+    /// comments are told by their ids, a line of a diff by its path and its line numbers.
+    /// When that row is gone, the next one in view that is still there takes its place;
+    /// when only threads and comments are in view, the first of them that is still there.
     pub(crate) fn rebuild_steady(&mut self, cx: &mut Context<Self>) {
         let in_view = self.rows_in_view();
         let top: Vec<(usize, PaneRow)> = self
@@ -37,7 +39,16 @@ impl ReviewPane {
             .map(|(index, row)| (index, row.clone()))
             .collect();
         self.rebuild(cx);
-        let moved = top.iter().find_map(|(was, row)| {
+        // A row of the diff is what the reviewer reads; a thread or a comment is what the
+        // view is kept by only when no other row is in view, so that a thread that moves
+        // does not scroll the diff after it.
+        let diff_first = top
+            .iter()
+            .filter(|(_, row)| !matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
+        let thread_first = top
+            .iter()
+            .filter(|(_, row)| matches!(row, PaneRow::Thread { .. } | PaneRow::Comment { .. }));
+        let moved = diff_first.chain(thread_first).find_map(|(was, row)| {
             let now = self.rows.iter().position(|held| held == row)?;
             Some(now as f32 - *was as f32)
         });

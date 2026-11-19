@@ -153,10 +153,14 @@ impl SettingList {
             .link
             .update(cx, |link, cx| link.ask(Request::SetSetting { setting }, cx));
         cx.spawn(async move |list, cx| {
-            // A Keeper that refuses leaves the list showing a setting it does not keep:
-            // ask for what it does keep. A link that is gone has nothing to ask.
-            if let Err(AskError::Refused(_) | AskError::Unexpected) = asked.await {
-                list.update(cx, |list, cx| list.refresh(cx)).ok();
+            // A Keeper that refuses, or answers with anything but `Done`, leaves the list
+            // showing a setting it may not keep: ask for what it does keep. A link that is
+            // gone has nothing to ask.
+            match asked.await {
+                Ok(Reply::Done) | Err(AskError::NotLinked) => {}
+                _ => {
+                    list.update(cx, |list, cx| list.refresh(cx)).ok();
+                }
             }
         })
         .detach();
