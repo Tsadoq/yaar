@@ -11,6 +11,7 @@ use libc::pid_t;
 
 use crate::pty;
 use crate::queue::Input;
+use crate::ring::Ring;
 use crate::{Ending, Event, Events, Inner, MAX_WAITING_INPUT, TerminalId};
 
 /// How long after the program was collected the Dock waits for the terminal to close:
@@ -42,6 +43,9 @@ pub(crate) struct Terminal {
     pid: pid_t,
     input: Mutex<Input>,
     input_ready: Condvar,
+    /// The newest output, and the scan for marks. Held while an event of the output is
+    /// told, and while `attach` hands the ring over: see [`Terminal::attach`].
+    ring: Mutex<Ring>,
     collected: Mutex<Option<Collected>>,
     collected_ready: Condvar,
     /// A byte is written to the pipe once the program was collected, and stays there:
@@ -57,12 +61,18 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Terminal {
-    pub(crate) fn new(master: OwnedFd, pid: pid_t, wake: (OwnedFd, OwnedFd)) -> Terminal {
+    pub(crate) fn new(
+        master: OwnedFd,
+        pid: pid_t,
+        wake: (OwnedFd, OwnedFd),
+        marks: Vec<Vec<u8>>,
+    ) -> Terminal {
         Terminal {
             master,
             pid,
             input: Mutex::new(Input::new(MAX_WAITING_INPUT)),
             input_ready: Condvar::new(),
+            ring: Mutex::new(Ring::new(marks)),
             collected: Mutex::new(None),
             collected_ready: Condvar::new(),
             wake_read: wake.0,
@@ -217,12 +227,33 @@ impl Terminal {
             match pty::read(master, &mut buffer) {
                 // The end of the terminal, as macOS tells it.
                 Ok(Some(0)) => return,
-                Ok(Some(count)) => events(Event::Output(buffer[..count].to_vec())),
+                Ok(Some(count)) => self.tell_output(events, &buffer[..count]),
                 Ok(None) => {}
                 // The end of the terminal, as Linux tells it.
                 Err(_) => return,
             }
         }
+    }
+
+    /// Keeps what the program wrote and tells it, then each mark it completed, all under
+    /// the lock `attach` takes: an attach runs before this read is kept and told, or after,
+    /// never between.
+    fn tell_output(&self, events: &mut Events, bytes: &[u8]) {
+        let mut ring = locked(&self.ring);
+        let marks = ring.push(bytes);
+        events(Event::Output(bytes.to_vec()));
+        for mark in marks {
+            events(Event::Mark(mark));
+        }
+    }
+
+    /// Hands `attach` the kept output while no event of this terminal is told: the events
+    /// told before are in the ring, those told after are not, and the caller, which adds
+    /// itself to where the events go inside `attach`, gets each byte once.
+    pub(crate) fn attach(&self, attach: impl FnOnce(&[u8], bool)) {
+        let mut ring = locked(&self.ring);
+        let (kept, dropped) = ring.kept();
+        attach(kept, dropped);
     }
 
     /// Reads what the terminal holds now, and no more than a bounded amount: a process the
@@ -240,7 +271,7 @@ impl Terminal {
             match pty::read(master, buffer) {
                 Ok(Some(count)) if count > 0 => {
                     read += count;
-                    events(Event::Output(buffer[..count].to_vec()));
+                    self.tell_output(events, &buffer[..count]);
                 }
                 _ => return,
             }

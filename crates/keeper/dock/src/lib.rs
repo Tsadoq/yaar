@@ -26,8 +26,10 @@
 //!
 //! No interface code belongs here.
 
+mod marks;
 mod pty;
 mod queue;
+mod ring;
 mod session;
 mod terminal;
 
@@ -278,6 +280,7 @@ impl Start {
     /// This start with the app's `entries` added to [`Start::env`], each worked out from
     /// the Keeper's own environment: a [`Entry::Variable`] as it is, a [`Entry::PathList`]
     /// added after that variable's value, a [`Entry::SearchFirst`] put before `PATH`'s.
+    /// Two entries of one call that name one variable build on each other.
     /// Nothing else of the environment changes: the program's environment differs from
     /// the Keeper's by these entries, by [`TERMINAL_VARIABLES`] and by
     /// [`LEFT_OUT_VARIABLES`] alone.
@@ -638,7 +641,12 @@ impl Dock {
         drop(slave);
         let child = spawned?;
 
-        let terminal = Arc::new(Terminal::new(master, child.id() as libc::pid_t, wake));
+        let terminal = Arc::new(Terminal::new(
+            master,
+            child.id() as libc::pid_t,
+            wake,
+            start.marks.clone(),
+        ));
         let mut started = Vec::with_capacity(3);
         let served = self.serve(id, &terminal, child, events, &mut started);
         if served.is_err() && !started.is_empty() {
@@ -757,23 +765,34 @@ impl Dock {
     /// [`Event`] of the terminal is told: what `attach` arranges for the output that
     /// follows, as adding a Window to those it goes to, gets every byte after the kept
     /// ones, and none twice. The kept output may begin in the middle of a character or of
-    /// an escape sequence. Refused with [`DockError::UnknownTerminal`] for a terminal whose
+    /// an escape sequence. The terminal's output waits while `attach` runs, so it should
+    /// add the Window where the events go and return, and call nothing of the Dock.
+    /// Refused with [`DockError::UnknownTerminal`] for a terminal whose
     /// program has ended, or that the Dock never opened.
     pub fn attach(
         &self,
         terminal: &TerminalId,
         attach: impl FnOnce(&[u8], bool),
     ) -> Result<(), DockError> {
-        let _ = (terminal, attach);
-        todo!("the kept output, handed over while no event is told")
+        self.inner.live(terminal)?.attach(attach);
+        Ok(())
     }
 
     /// Asks the program of `terminal` to draw its screen again: the signal for a changed
     /// window size, sent to the terminal's foreground process group, also when the size
     /// did not change.
-    pub fn redraw(&self, terminal: &TerminalId) -> Result<(), DockError> {
-        let _ = terminal;
-        todo!("ask the program in front to draw again")
+    pub fn redraw(&self, id: &TerminalId) -> Result<(), DockError> {
+        let terminal = self.inner.live(id)?;
+        // SAFETY: `tcgetpgrp` only reads, from a descriptor the terminal keeps open.
+        let group = unsafe { libc::tcgetpgrp(terminal.master()) };
+        if group <= 0 {
+            // The system refuses only when the terminal has been closed under the Dock.
+            return Err(DockError::UnknownTerminal(id.clone()));
+        }
+        // SAFETY: `kill` only sends; a group that went since the look answers `ESRCH`,
+        // which means there is no program left to ask.
+        unsafe { libc::kill(-group, libc::SIGWINCH) };
+        Ok(())
     }
 
     /// Stops every program and what it started, and returns when none is left: the
