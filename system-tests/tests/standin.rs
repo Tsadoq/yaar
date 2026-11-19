@@ -6,11 +6,11 @@
 use std::ffi::CString;
 use std::fs;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yaar_system_tests::standin::{
@@ -185,6 +185,8 @@ struct Run {
     log: PathBuf,
     pty: Pty,
     child: Child,
+    gates: Vec<PathBuf>,
+    sleepers: Vec<PathBuf>,
 }
 
 /// What a run is started with.
@@ -198,6 +200,13 @@ struct Start<'a> {
     before: Vec<PathBuf>,
     args: Vec<String>,
     env: Vec<(&'a str, String)>,
+    /// Whether the terminal is the program's controlling terminal, as it is in a shell of
+    /// the app: closing it then sends the program a hangup.
+    controlling: bool,
+    /// Gates (FIFOs) hooks wait on, and files naming processes hooks start: ended when
+    /// the test fails.
+    gates: Vec<PathBuf>,
+    sleepers: Vec<PathBuf>,
 }
 
 impl<'a> Start<'a> {
@@ -210,6 +219,9 @@ impl<'a> Start<'a> {
             before: Vec::new(),
             args: Vec::new(),
             env: Vec::new(),
+            controlling: false,
+            gates: Vec::new(),
+            sleepers: Vec::new(),
         }
     }
 
@@ -226,6 +238,24 @@ impl<'a> Start<'a> {
                 .map(|event| group(event, None, record(file)))
                 .collect(),
         )
+    }
+
+    /// The terminal is the program's controlling terminal.
+    fn controlling(mut self) -> Self {
+        self.controlling = true;
+        self
+    }
+
+    /// A gate a hook waits on, to be opened when the test fails.
+    fn gate(mut self, at: &Path) -> Self {
+        self.gates.push(at.to_owned());
+        self
+    }
+
+    /// A file a hook writes a process id in, to be ended when the test fails.
+    fn sleeper(mut self, at: &Path) -> Self {
+        self.sleepers.push(at.to_owned());
+        self
     }
 
     fn start(self) -> Run {
@@ -284,6 +314,18 @@ impl<'a> Start<'a> {
         for (name, value) in &self.env {
             command.env(name, value);
         }
+        if self.controlling {
+            // SAFETY: only async-signal-safe calls between the fork and the exec. The
+            // standard input is already the terminal by then.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        }
         let child = command.spawn().expect("start the stand-in");
         drop(command);
         Run {
@@ -292,6 +334,8 @@ impl<'a> Start<'a> {
             log,
             pty,
             child,
+            gates: self.gates,
+            sleepers: self.sleepers,
         }
     }
 }
@@ -338,7 +382,11 @@ impl Run {
 
 impl Drop for Run {
     fn drop(&mut self) {
-        // A test that failed leaves the program running: end it and collect it.
+        // A test that failed leaves the program running, and the hooks it started: end
+        // them and collect the program.
+        if std::thread::panicking() {
+            free_hooks(&self.gates, &self.sleepers);
+        }
         if self.child.try_wait().ok().flatten().is_none() {
             let _ = self.child.kill();
             let _ = self.child.wait();
@@ -381,6 +429,42 @@ fn make_fifo(at: &Path) {
     assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o600) }, 0, "mkfifo");
 }
 
+/// Lets the hook that waits on a gate, a FIFO the test made, end: waits for it to be
+/// reading, and closes the gate on it. A run the gate is named to ([`Start::gate`]) lets
+/// the hook end by itself when the test failed, so that no hook is left behind.
+fn open_gate(at: &Path) {
+    drop(
+        fs::OpenOptions::new()
+            .write(true)
+            .open(at)
+            .expect("open the gate"),
+    );
+}
+
+/// Ends, for a test that failed, what a hook started: the hook waiting at a gate, and the
+/// process a file names.
+fn free_hooks(gates: &[PathBuf], sleepers: &[PathBuf]) {
+    for gate in gates {
+        // Opening without waiting fails until the hook is reading: try until it does.
+        let _ = wait_until(Duration::from_secs(3), || {
+            fs::OpenOptions::new()
+                .write(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(gate)
+                .is_ok()
+        });
+    }
+    for file in sleepers {
+        let pid = fs::read_to_string(file)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        if let Some(pid) = pid.filter(|pid| is_alive(*pid)) {
+            // SAFETY: a process the test's own hook started and that is still running.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
 // The script's text.
 
 #[test]
@@ -409,6 +493,19 @@ fn a_script_comes_back_from_its_text_as_it_was() {
     assert_eq!(lines[2], "edit dir/b.txt two words\\nsecond line");
     assert_eq!(lines[5], r#"shell echo 'x'; echo "y"\nexit 1"#);
     assert_eq!(lines[8], "flood 7");
+}
+
+#[test]
+fn a_text_with_a_carriage_return_comes_back_from_the_script_as_it_was() {
+    let script = Script(vec![
+        Step::Write(path("a.txt"), "ends in one\r".into()),
+        Step::Shell("printf 'x\\r\\n'\r\r".into()),
+        Step::Edit(path("b.txt"), "\r\nand\\r".into()),
+    ]);
+    let text = script.text();
+    assert_eq!(text.lines().count(), 3, "a carriage return made a line");
+    assert!(!text.contains('\r'), "a carriage return is written raw");
+    assert_eq!(Script::parse(&text), script);
 }
 
 #[test]
@@ -670,6 +767,8 @@ fn a_shell_command_that_fails_gives_post_tool_use_failure() {
         seen[1]["tool_input"],
         json!({"command": "touch ran.txt; exit 3"})
     );
+    assert_eq!(seen[1]["tool_response"], json!({}));
+    assert_eq!(seen[1]["error"], "Exit code 3");
     assert!(
         run.work.join("ran.txt").exists(),
         "the command ran in the worktree"
@@ -680,9 +779,10 @@ fn a_shell_command_that_fails_gives_post_tool_use_failure() {
 fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_order() {
     let place = Place::new();
     let root = root_of(&place);
-    let (all, edits, stops, order) = (
+    let (all, edits, longer, stops, order) = (
         root.join("all"),
         root.join("edits"),
+        root.join("longer"),
         root.join("stops"),
         root.join("order"),
     );
@@ -701,6 +801,9 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
         .plugin(vec![
             group("PreToolUse", None, record(&all)),
             group("PreToolUse", Some("Edit|Write"), record(&edits)),
+            // A matcher is the tool's name or one of its alternatives, not a text that
+            // holds the name.
+            group("PreToolUse", Some("Reader|Writer|Bashful"), record(&longer)),
             // An event that has no tool has nothing for a matcher to match: it runs.
             group("Stop", Some("Bash"), record(&stops)),
             group("SessionStart", None, "echo hello-answer".into()),
@@ -729,6 +832,10 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
     };
     assert_eq!(tool(&all), ["Read", "Edit", "Write", "Bash"]);
     assert_eq!(tool(&edits), ["Edit", "Write"]);
+    assert!(
+        !longer.exists(),
+        "a matcher that only holds a tool's name ran"
+    );
     assert_eq!(tool(&stops), ["-"]);
     assert_eq!(fs::read_to_string(&order).expect("both ran"), "one\ntwo\n");
     let answer = run.log().did.iter().find_map(|did| match did {
@@ -736,6 +843,13 @@ fn a_group_with_a_matcher_runs_for_its_tools_and_every_plugin_folder_runs_in_ord
         _ => None,
     });
     assert_eq!(answer, Some(b"hello-answer\n".to_vec()));
+    // The answer is kept, not shown: the program ended, so what it wrote is all here.
+    run.pty.drain();
+    assert!(
+        find(&run.pty.output, b"hello-answer").is_none(),
+        "a hook's answer reached the terminal: {:?}",
+        String::from_utf8_lossy(&run.pty.output)
+    );
 }
 
 #[test]
@@ -749,14 +863,14 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     fs::write(
         &hook,
         format!(
-            "#!/bin/sh\ncat > /dev/null\necho \"$PPID $CLAUDE_PID $CLAUDECODE $CLAUDE_PROJECT_DIR $(pwd -P)\" >> '{}'\n",
+            "#!/bin/sh\ncat > /dev/null\necho \"$PPID $CLAUDE_PID $CLAUDECODE $CLAUDE_PROJECT_DIR $(pwd -P) $YAAR_TERMINAL\" >> '{}'\n",
             out.display()
         ),
     )
     .expect("write the hook");
     fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("make it run");
     let command = format!("'{}'", hook.display());
-    let mut run = Start::new(
+    let mut start = Start::new(
         place,
         "claude",
         Script(vec![Step::Turn, Step::End, Step::Exit]),
@@ -764,8 +878,11 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
     .plugin(vec![
         group("SessionStart", None, command.clone()),
         group("Stop", None, command),
-    ])
-    .start();
+    ]);
+    // What the shell of the app gives the agent reaches its hooks: they run with the
+    // agent's own environment.
+    start.env.push(("YAAR_TERMINAL", "probe-7".to_owned()));
+    let mut run = start.start();
     run.say(0, "go");
     assert!(run.wait_exit().success());
     let pid = run.log().pid.to_string();
@@ -775,7 +892,7 @@ fn a_hooks_parent_is_the_stand_in_and_it_runs_in_the_folder_the_stand_in_started
         .lines()
         .map(str::to_owned)
         .collect();
-    let expected = format!("{pid} {pid} 1 {work} {work}");
+    let expected = format!("{pid} {pid} 1 {work} {work} probe-7");
     assert_eq!(lines, [expected.clone(), expected]);
 }
 
@@ -849,6 +966,86 @@ fn esc_during_a_hold_prints_the_mark_and_runs_no_hook_and_the_script_goes_on_aft
 }
 
 #[test]
+fn esc_read_between_the_steps_of_a_turn_ends_it_with_the_mark_and_the_script_goes_on_after_end() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, started, gate) = (root.join("events"), root.join("started"), root.join("gate"));
+    make_fifo(&gate);
+    // The first read tool waits at its gate, and the key is typed meanwhile: the program
+    // reads it when that step is over, between two steps.
+    let block = format!(
+        ": > '{}'; cat '{}' > /dev/null",
+        started.display(),
+        gate.display()
+    );
+    let script = Script(vec![
+        Step::Turn,
+        Step::Read(path("a.txt")),
+        Step::Edit(path("a.txt"), "never".into()),
+        Step::End,
+        Step::Turn,
+        Step::Edit(path("a.txt"), "after".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(
+            &[
+                "UserPromptSubmit",
+                "PreToolUse",
+                "PostToolUse",
+                "Stop",
+                "SessionEnd",
+            ],
+            &events,
+        )
+        .plugin(vec![group("PreToolUse", Some("Read"), block)])
+        .gate(&gate)
+        .start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    let at = run.say(0, "first");
+    assert!(
+        wait_until(DEADLINE, || started.exists()),
+        "the read tool never began"
+    );
+    run.pty.send(b"\x1b");
+    open_gate(&gate);
+    let marked = run.pty.wait_for(INTERRUPT_MARK, at);
+    run.say(marked, "second");
+    assert!(run.wait_exit().success());
+
+    // The tool that was running ended as it would; then nothing: no edit, no stop.
+    let seen = events_in(&events);
+    assert_eq!(
+        names(&seen),
+        [
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "UserPromptSubmit",
+            "PreToolUse",
+            "PostToolUse",
+            "Stop",
+            "SessionEnd"
+        ]
+    );
+    assert_eq!(seen[3]["prompt"], "second");
+    assert_eq!(seen[1]["tool_name"], "Read");
+    assert_eq!(seen[4]["tool_name"], "Edit");
+    assert_eq!(
+        fs::read_to_string(run.work.join("a.txt")).unwrap(),
+        "seed\nafter\n"
+    );
+    let story = story(&run.log());
+    let interrupted = story
+        .iter()
+        .position(|did| did.starts_with("interrupted"))
+        .expect("the interrupt is written down");
+    assert_eq!(story[interrupted], "interrupted 2 at 7");
+    assert_eq!(story[interrupted + 1], "began 4 at 7");
+}
+
+#[test]
 fn a_hold_waits_for_its_file_and_the_turn_goes_on_when_it_is_there() {
     let place = Place::new();
     let root = root_of(&place);
@@ -883,7 +1080,8 @@ fn a_hold_waits_for_its_file_and_the_turn_goes_on_when_it_is_there() {
 fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
     let place = Place::new();
     let root = root_of(&place);
-    let (started, done, gate) = (root.join("started"), root.join("done"), root.join("gate"));
+    let (started, done) = (root.join("started"), root.join("done"));
+    let gate = root.join("gate");
     make_fifo(&gate);
     let hook = format!(
         ": > '{}'; cat '{}' > /dev/null; : > '{}'",
@@ -897,6 +1095,7 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
         Script(vec![Step::Turn, Step::End, Step::Exit]),
     )
     .plugin(vec![group("Stop", None, hook)])
+    .gate(&gate)
     .start();
     run.say(0, "go");
     assert!(
@@ -910,12 +1109,7 @@ fn end_runs_the_stop_hooks_and_waits_for_them_before_it_prints_the_mark() {
     assert!(find(&run.pty.output, NO_PROGRESS).is_none());
     assert!(!done.exists());
     // Opening the gate lets the hook end.
-    drop(
-        fs::OpenOptions::new()
-            .write(true)
-            .open(&gate)
-            .expect("open the gate"),
-    );
+    open_gate(&gate);
     run.pty.wait_for(NO_PROGRESS, 0);
     assert!(
         done.exists(),
@@ -1001,6 +1195,77 @@ fn ask_ignores_any_byte_but_y_n_and_esc_and_y_writes_the_file() {
     assert_eq!(seen[1]["tool_name"], "Write");
     assert_eq!(seen[1]["tool_input"], input);
     assert_eq!(seen[2]["tool_response"]["type"], "create");
+    assert!(seen[1].get("tool_response").is_none());
+    // The file came after the `y`, and not after a byte before it: the post hook saw
+    // `go\r`, the six ignored bytes and the `y`.
+    let post = run.log().did.iter().find_map(|did| match did {
+        Did::Hook {
+            event, received, ..
+        } if event == "PostToolUse" => Some(*received),
+        _ => None,
+    });
+    assert_eq!(post, Some(3 + 6 + 1));
+}
+
+#[test]
+fn a_dialog_is_answered_by_keys_typed_after_it_and_a_line_typed_before_it_waits_for_its_turn() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(go.clone()),
+        Step::Ask(path("p.txt"), "content".into()),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .start();
+    let at = run.say(0, "first");
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    // A message for the next turn, typed while this one works: it holds an `n` and no
+    // `y`, and is read before the dialog is up.
+    run.pty.send(b"any\r");
+    run.wait_log("the queued line", |log| log.received == b"first\rany\r");
+    fs::write(&go, "").expect("make the file");
+    let asked = run
+        .pty
+        .wait_for(b"Do you want to create p.txt? (y/n)\r\n", at);
+    // A key typed after the dialog is the barrier: it is read after anything the program
+    // made of the bytes before it.
+    run.pty.send(b"q");
+    let log = run.wait_log("the key after the dialog", |log| {
+        log.received.ends_with(b"any\rq")
+    });
+    assert!(
+        log.did
+            .iter()
+            .all(|did| !matches!(did, Did::Interrupted { .. })),
+        "the queued line answered the dialog: {:?}",
+        story(&log)
+    );
+    assert!(!run.work.join("p.txt").exists());
+    run.pty.send(b"y");
+    assert!(run.wait_exit().success());
+    assert_eq!(
+        fs::read_to_string(run.work.join("p.txt")).unwrap(),
+        "content"
+    );
+    // The queued line is the next turn's message, and no prompt was printed for it.
+    let prompts: Vec<String> = events_in(&events)
+        .iter()
+        .map(|event| event["prompt"].as_str().expect("a prompt").to_owned())
+        .collect();
+    assert_eq!(prompts, ["first", "any"]);
+    run.pty.drain();
+    let shown = run.pty.output[asked..]
+        .windows(PROMPT.len())
+        .filter(|window| *window == PROMPT.as_bytes())
+        .count();
+    assert_eq!(shown, 0, "a prompt was printed for the queued line");
 }
 
 /// A dialog denied with this key: the mark, no event after the request, no file, the turn
@@ -1070,6 +1335,7 @@ fn a_script_run_out_reads_on_until_the_terminal_closes_then_ends_with_no_session
             &["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"],
             &events,
         )
+        .controlling()
         .start();
     run.say(0, "go");
     run.wait_log("the end of the script", |log| {
@@ -1255,6 +1521,53 @@ fn a_flood_writes_its_numbered_lines_in_order_and_writes_down_its_longest_write(
         story[began..began + 3],
         ["began 1 at 3", "flooded 1", "done 1 at 3"]
     );
+    // The terminal was read all the while: no write waited anywhere near the time the next
+    // test holds the terminal for.
+    let longest = longest_write(&run.log());
+    assert!(
+        longest < FLOOD_HOLD / 2,
+        "a write waited {longest:?} though the terminal was read all the time"
+    );
+}
+
+/// How long the test that does not read a flood holds its terminal.
+const FLOOD_HOLD: Duration = Duration::from_millis(1200);
+
+/// The longest write the log says a flood made.
+fn longest_write(log: &StandinLog) -> Duration {
+    log.did
+        .iter()
+        .find_map(|did| match did {
+            Did::Flooded { longest_us, .. } => Some(Duration::from_micros(*longest_us)),
+            _ => None,
+        })
+        .expect("the flood is written down")
+}
+
+#[test]
+fn a_flood_into_a_terminal_nobody_reads_writes_down_the_wait_of_its_longest_write() {
+    // More lines than any terminal buffers, a megabyte or so: from the start of the flood
+    // the program waits in one write until the test reads. The wait is a span the test
+    // measures itself.
+    let lines = 100_000;
+    let script = Script(vec![Step::Turn, Step::Flood(lines), Step::End, Step::Exit]);
+    let mut run = Start::new(Place::new(), "claude", script).start();
+    let at = run.say(0, "go");
+    run.wait_log("the flood", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 1, .. }))
+    });
+    let held = Instant::now();
+    wait_until(FLOOD_HOLD, || held.elapsed() >= FLOOD_HOLD);
+    let waited = held.elapsed();
+    run.pty.wait_for(format!("line {lines}\r\n").as_bytes(), at);
+    assert!(run.wait_exit().success());
+    let longest = longest_write(&run.log());
+    assert!(
+        longest >= waited * 3 / 4,
+        "the longest write waited {longest:?}, the terminal was not read for {waited:?}"
+    );
 }
 
 #[test]
@@ -1269,13 +1582,21 @@ fn a_hook_that_does_not_end_is_killed_with_what_it_started_after_ten_seconds() {
         sleeper.display(),
         late.display()
     );
+    let began = Instant::now();
     let mut run = Start::new(place, "claude", Script(vec![Step::Exit]))
         .plugin(vec![group("SessionStart", None, hook)])
+        .sleeper(&sleeper)
         .start();
     let ended = wait_until(HOOK_LIMIT_AND_ROOM, || {
         run.child.try_wait().expect("poll").is_some()
     });
     assert!(ended, "the stand-in waited on the hook for ever");
+    // The hook got its ten seconds: the program started it after `began`, and waited for it.
+    assert!(
+        began.elapsed() >= Duration::from_secs(10),
+        "the hook was killed after {:?}",
+        began.elapsed()
+    );
     assert_eq!(story(&run.log())[0], "hook SessionStart killed");
     let pid: u32 = fs::read_to_string(&sleeper)
         .expect("the hook started a child")
@@ -1315,6 +1636,7 @@ fn a_terminal_that_closes_at_the_prompt_or_during_a_hold_ends_the_stand_in_with_
         let events = root_of(&place).join("events");
         let mut run = Start::new(place, "claude", Script(steps))
             .recording(&["SessionEnd"], &events)
+            .controlling()
             .start();
         let at = run.pty.wait_for(PROMPT.as_bytes(), 0);
         if waits_for != PROMPT {

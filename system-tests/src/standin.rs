@@ -224,9 +224,12 @@ impl Step {
     }
 }
 
-/// A text as one line of a script: `\` for a backslash and `\n` for a line end.
+/// A text as one line of a script: `\` for a backslash, `\n` for a line end and `\r` for
+/// a carriage return, which reading a file by lines would otherwise take for a line end.
 fn escape(text: &str) -> String {
-    text.replace('\\', "\\\\").replace('\n', "\\n")
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 /// The text a line of a script holds, undoing [`escape`].
@@ -241,6 +244,7 @@ fn unescape(line: &str) -> Result<String, String> {
         match chars.next() {
             Some('\\') => text.push('\\'),
             Some('n') => text.push('\n'),
+            Some('r') => text.push('\r'),
             other => return Err(format!("`\\` followed by {other:?}")),
         }
     }
@@ -411,6 +415,10 @@ const NO_PROGRESS: &[u8] = b"\x1b]9;4;0;\x07";
 /// A name other than `pi` and `otheragent` acts as `claude`: the stand-in is run under that
 /// name where a test does not say.
 pub fn run(name: &str, args: &[String]) -> i32 {
+    // In a shell of the app the terminal is the stand-in's controlling terminal, and its
+    // closing sends a hangup: that is a close to read and end on, not a death.
+    // SAFETY: ignoring a signal is always allowed.
+    unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
     if name == "pi" {
         eprintln!("the pi dialect of the stand-in comes with slice 7");
         return 2;
@@ -555,6 +563,14 @@ enum Ended {
     Closed,
     /// The session was ended by the script.
     Exit,
+}
+
+/// What the user answered to a dialog.
+enum Answer {
+    Yes,
+    No,
+    /// The terminal closed with no answer.
+    Closed,
 }
 
 /// A stand-in agent in the middle of its script.
@@ -855,19 +871,20 @@ impl Standin {
         self.hook("PreToolUse", Some("Write"), fields.clone());
         self.hook("PermissionRequest", Some("Write"), fields);
         out(format!("Do you want to create {}? (y/n)\r\n", path.display()).as_bytes());
-        loop {
-            match self.input.pending.pop_front() {
-                Some(Key::Byte(b'y')) => break,
-                Some(Key::Byte(b'n') | Key::Esc) => {
-                    self.interrupt(at);
-                    return Ended::Interrupted;
-                }
-                Some(Key::Byte(_)) => {}
-                None if self.input.closed => return Ended::Closed,
-                None => {
-                    self.input.fill(&self.log, -1);
-                }
+        // Only keys read after the dialog is up answer it. What was typed before is not an
+        // answer to a question not yet asked: a line typed during the turn is the next
+        // turn's message, and it stays for it.
+        let earlier = std::mem::take(&mut self.input.pending);
+        let answer = self.answer();
+        let later = std::mem::replace(&mut self.input.pending, earlier);
+        self.input.pending.extend(later);
+        match answer {
+            Answer::Yes => {}
+            Answer::No => {
+                self.interrupt(at);
+                return Ended::Interrupted;
             }
+            Answer::Closed => return Ended::Closed,
         }
         let response = write_whole(&file, text);
         self.hook(
@@ -876,6 +893,21 @@ impl Standin {
             json!({"tool_name": "Write", "tool_input": input, "tool_response": response}),
         );
         Ended::Done
+    }
+
+    /// Reads keys until `y`, `n` or Esc; any other byte is ignored.
+    fn answer(&mut self) -> Answer {
+        loop {
+            match self.input.pending.pop_front() {
+                Some(Key::Byte(b'y')) => return Answer::Yes,
+                Some(Key::Byte(b'n') | Key::Esc) => return Answer::No,
+                Some(Key::Byte(_)) => {}
+                None if self.input.closed => return Answer::Closed,
+                None => {
+                    self.input.fill(&self.log, -1);
+                }
+            }
+        }
     }
 
     /// Holds the turn open until the file is there, with Esc to interrupt.
