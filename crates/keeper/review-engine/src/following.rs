@@ -115,7 +115,8 @@ impl Reviews {
     /// state newer than `to`, is left: two recordings of one workspace can run at once (a
     /// turn's end and a new thread's first save, say), and their calls of this may come in
     /// the other order. A thread that sits on its anchor, in a commit, is carried to any
-    /// state.
+    /// state, a thread that has no place yet only to the newest state the list holds, so
+    /// that one that was not moved there cannot be carried back to an older one afterwards.
     ///
     /// The engine's turn is not held while the trees are read and diffed, which may take
     /// long with many threads: a report of the agent, which waits for the engine's turn,
@@ -176,6 +177,13 @@ impl Reviews {
                 // Forward only: a tree that is a state is carried from when it is older
                 // than `to`; a tree that is not one is a commit, carried from to any state.
                 if from == to.as_str() || order.get(&from).is_some_and(|&n| n >= newest) {
+                    continue;
+                }
+                // A thread with no place yet that sits where it was written is not written
+                // down when it has not moved, so nothing would say it was carried to `to`:
+                // a later call for an older state would carry it back. It waits for the
+                // newest state, whose own call carries it.
+                if thread.now.is_none() && newest + 1 < order.len() {
                     continue;
                 }
                 candidates.push(Candidate {
@@ -346,10 +354,10 @@ mod tests {
     #[test]
     fn a_thread_on_a_removed_line_stays_put_through_three_rounds_of_changes_to_the_new_side() {
         let mut version: Vec<String> = (1..=10).map(|n| format!("line {n}")).collect();
+        // Carried alone, as the row says, and carried in one call with a thread on the new
+        // side, as the engine carries all the threads of a file: both must stay.
         let mut removed = on(Side::Old, 4);
-        // A thread on the new side, on the line that stands where the removed one stood,
-        // as the control: the same changes do move and notice a thread on the new side.
-        let mut control = on(Side::New, 4);
+        let mut together = vec![on(Side::Old, 4), on(Side::New, 4)];
 
         let rounds: [fn(&mut Vec<String>); 3] = [
             |v| v[3] = "rewritten in the first round".to_string(),
@@ -371,13 +379,45 @@ mod tests {
                 after: &after,
             };
             removed = carry(&removed, Side::New, step);
-            control = carry(&control, Side::New, step);
+            together = carry_file(&together, Side::New, step);
 
             assert_eq!(removed, on(Side::Old, 4), "after round {}", round + 1);
+            assert_eq!(
+                together[0],
+                on(Side::Old, 4),
+                "after round {}, carried with a thread of the new side",
+                round + 1
+            );
         }
+        // The thread on the new side, the control, is what the changes do touch.
         assert!(
-            control.notice.is_some(),
-            "the changes did touch the new side: {control:?}"
+            together[1].notice.is_some(),
+            "the changes did touch the new side: {:?}",
+            together[1]
+        );
+
+        // The file is then renamed, and then deleted, on the new side: the thread of the
+        // old side is as it was after each.
+        let content = text(&version);
+        let renamed = FileStep::Renamed {
+            to: Path::new("b.rs"),
+            before: &content,
+            after: &content,
+        };
+        for step in [renamed, FileStep::Deleted] {
+            removed = carry(&removed, Side::New, step);
+            together = carry_file(&together, Side::New, step);
+            assert_eq!(removed, on(Side::Old, 4), "after {step:?}");
+            assert_eq!(
+                together[0],
+                on(Side::Old, 4),
+                "after {step:?}, with another"
+            );
+        }
+        assert_eq!(
+            together[1].notice,
+            Some(Notice::Deleted),
+            "the file is gone on the new side"
         );
     }
 }

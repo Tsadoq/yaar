@@ -42,6 +42,11 @@ struct Case {
     lines: (u32, u32),
     /// Where it sits in the new one, and its notice.
     expected: (u32, u32, Option<Notice>),
+    /// A version between the two, the path it has and its content, when the change can be
+    /// cut in two parts that each give a place of their own and the two together the
+    /// expected one: the range of commits is cut there. None for a change in one piece (a
+    /// rewrite, a move of a block), which no cut leaves whole.
+    between: Option<(&'static str, String)>,
 }
 
 fn cases() -> Vec<Case> {
@@ -53,6 +58,7 @@ fn cases() -> Vec<Case> {
         new: text(new),
         lines,
         expected,
+        between: None,
     };
     let mut cases = Vec::new();
 
@@ -63,13 +69,19 @@ fn cases() -> Vec<Case> {
         "new 3".to_string(),
     ];
     new.extend(numbered(10));
-    cases.push(case(
-        "unchanged lines below an insertion",
-        &numbered(10),
-        &new,
-        (6, 7),
-        (9, 10, None),
-    ));
+    // Cut: one line first, the other two after.
+    let mut one = vec!["new 1".to_string()];
+    one.extend(numbered(10));
+    cases.push(Case {
+        between: Some(("a.rs", text(&one))),
+        ..case(
+            "unchanged lines below an insertion",
+            &numbered(10),
+            &new,
+            (6, 7),
+            (9, 10, None),
+        )
+    });
 
     // THREAD-02: a block of twenty letters and digits moved within the file.
     let mut old = numbered(20);
@@ -83,6 +95,21 @@ fn cases() -> Vec<Case> {
         &new,
         (3, 3),
         (15, 15, None),
+    ));
+
+    // THREAD-02, the floor: a moved line of fewer than twenty letters and digits is not
+    // followed, and its thread stays where it was with a notice.
+    let mut old = numbered(20);
+    old[2] = "});".to_string();
+    let mut new = numbered(20);
+    new.remove(2);
+    new.insert(14, "});".to_string());
+    cases.push(case(
+        "a moved line of fewer than twenty letters and digits",
+        &old,
+        &new,
+        (3, 3),
+        (3, 3, Some(Notice::Deleted)),
     ));
 
     // THREAD-03: a rewritten line.
@@ -102,13 +129,33 @@ fn cases() -> Vec<Case> {
     // THREAD-04: a deleted line.
     let mut new = numbered(8);
     new.drain(3..5);
-    cases.push(case(
-        "deleted lines",
-        &numbered(8),
-        &new,
-        (4, 5),
-        (4, 4, Some(Notice::Deleted)),
-    ));
+    // Cut: line 4 first, which leaves the thread on what is left of its range, and then
+    // the old line 5, which takes the rest.
+    let mut one = numbered(8);
+    one.remove(3);
+    cases.push(Case {
+        between: Some(("a.rs", text(&one))),
+        ..case(
+            "deleted lines",
+            &numbered(8),
+            &new,
+            (4, 5),
+            (4, 4, Some(Notice::Deleted)),
+        )
+    });
+
+    // THREAD-04, the end of the file: the thread goes to the last line the file has.
+    // Cut: the last line first, then the one before it.
+    cases.push(Case {
+        between: Some(("a.rs", text(&numbered(4)))),
+        ..case(
+            "deleted lines at the end of the file",
+            &numbered(5),
+            &numbered(3),
+            (4, 5),
+            (3, 3, Some(Notice::Deleted)),
+        )
+    });
 
     // THREAD-05: a line inserted inside a commented range.
     let mut new = numbered(8);
@@ -125,9 +172,13 @@ fn cases() -> Vec<Case> {
     let mut new = numbered(12);
     new[10] = "edited far below".to_string();
     new.insert(2, "inserted above".to_string());
+    // Cut: the rename with the insertion above first, the edit far below after.
+    let mut renamed = numbered(12);
+    renamed.insert(2, "inserted above".to_string());
     cases.push(Case {
         before: "src/old name.rs",
         after: "src/new name.rs",
+        between: Some(("src/new name.rs", text(&renamed))),
         ..case(
             "a file renamed with small edits",
             &numbered(12),
@@ -325,24 +376,43 @@ fn the_thread_cases_give_the_same_placement_from_a_commit_to_a_recorded_state() 
 // REV-23
 #[test]
 fn the_thread_cases_give_the_same_placement_over_a_range_of_commits_cut_in_two_either_way() {
-    // The change of a case is cut from a line added at the end of the file, which no
-    // thread of the cases sits near: the change comes first or last, the other half is
-    // the added line. The first version is the commit `A`, the last `C`, `B` between.
+    // The first version is the commit `A`, the last `C`, `B` between. A case that can be
+    // cut has a version between: its change is cut there, in two parts. One that cannot
+    // (a rewrite, a move of a block) is cut from a line added at the end of the file,
+    // which no thread of the cases sits near: the change comes first or last, and the
+    // other half is the added line.
     for change_first in [false, true] {
         every_case_gives_its_placement(|run, case| {
-            let tail = |content: &str| format!("{content}added at the end\n");
             run.set(&[(case.before, &case.old)]);
             let a = run.commit("A");
-            if change_first {
-                run.set(&[(case.after, &case.new)]);
-            } else {
-                run.set(&[(case.before, &tail(&case.old))]);
-            }
+            let c_content = match &case.between {
+                Some((path, content)) => {
+                    run.set(&[(path, content)]);
+                    case.new.clone()
+                }
+                None => {
+                    let tail = |content: &str| format!("{content}added at the end\n");
+                    if change_first {
+                        run.set(&[(case.after, &case.new)]);
+                    } else {
+                        run.set(&[(case.before, &tail(&case.old))]);
+                    }
+                    tail(&case.new)
+                }
+            };
             let b = run.commit("B");
-            run.set(&[(case.after, &tail(&case.new))]);
+            run.set(&[(case.after, &c_content)]);
             let c = run.commit("C");
 
             let at_b = run.carry(&placed_in_the_old_version(case), &a, &b);
+            if case.between.is_some() {
+                assert_ne!(
+                    at_b,
+                    placed_in_the_old_version(case),
+                    "{}: the first half changes the place",
+                    case.name
+                );
+            }
             run.carry(&at_b, &b, &c)
         });
     }
@@ -519,6 +589,39 @@ fn a_state_followed_after_a_newer_one_leaves_the_threads_in_the_newer() {
     assert_eq!(second, vec![], "nothing is carried back");
     let thread = thread_of(&world.second_engine(), &world.review, 1);
     assert_eq!(thread.now, Some(place(&newer, "a.txt", 7, 7)));
+}
+
+#[test]
+fn a_thread_that_sits_where_its_anchor_says_is_not_carried_to_a_state_older_than_the_newest() {
+    let world = World::new(10);
+    world.thread_on(1, 5);
+    // The line is rewritten in the older state and put back in the newer, which follows
+    // first: it leaves the thread where its anchor says, and writes no place to record it.
+    let mut lines = numbered(10);
+    lines[4] = "rewritten for a while".to_string();
+    world.rewrite(&lines);
+    let older = world.record();
+    let mut lines = numbered(10);
+    lines.push("added at the end".to_string());
+    world.rewrite(&lines);
+    let newer = world.record();
+
+    let first = world
+        .reviews
+        .follow(&workspace(), &newer)
+        .expect("follow the newer");
+    let second = world
+        .reviews
+        .follow(&workspace(), &older)
+        .expect("follow the older");
+
+    assert_eq!(first, vec![]);
+    assert_eq!(second, vec![], "nothing is carried back");
+    assert_eq!(
+        thread_of(&world.second_engine(), &world.review, 1).now,
+        None,
+        "the thread was not placed in a state older than one already followed"
+    );
 }
 
 #[test]
