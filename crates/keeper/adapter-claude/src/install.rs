@@ -28,7 +28,7 @@ fn manifest() -> Value {
     json!({
         "name": PLUGIN,
         "version": env!("CARGO_PKG_VERSION"),
-        "description": "Tells the app what Claude Code does, so that the app can show the \\
+        "description": "Tells the app what Claude Code does, so that the app can show the \
                         changes of a turn for review.",
     })
 }

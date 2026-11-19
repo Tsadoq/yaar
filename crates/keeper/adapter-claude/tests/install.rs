@@ -77,10 +77,15 @@ fn the_manifest_names_the_plugin_and_the_version_of_the_crate() {
     );
     assert_eq!(manifest["name"], PLUGIN);
     assert_eq!(manifest["version"], env!("CARGO_PKG_VERSION"));
+    // One plain sentence: a stray backslash or a line break is what a broken line
+    // continuation in the source leaves behind, and Claude Code shows the text as is.
     assert!(
         manifest["description"]
             .as_str()
-            .is_some_and(|text| !text.is_empty())
+            .is_some_and(|text| !text.is_empty()
+                && !text.contains(['\\', '\n'])
+                && !text.contains("  ")
+                && text.ends_with('.'))
     );
 }
 
