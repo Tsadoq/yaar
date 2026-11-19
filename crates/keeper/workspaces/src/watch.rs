@@ -214,3 +214,114 @@ impl Watching {
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn main_worktree() -> Places {
+        Places {
+            root: PathBuf::from("/w/repo"),
+            git_dir: PathBuf::from("/w/repo/.git"),
+            common_dir: PathBuf::from("/w/repo/.git"),
+        }
+    }
+
+    fn linked_worktree() -> Places {
+        Places {
+            root: PathBuf::from("/w/linked"),
+            git_dir: PathBuf::from("/w/repo/.git/worktrees/linked"),
+            common_dir: PathBuf::from("/w/repo/.git"),
+        }
+    }
+
+    fn file(path: &str) -> Option<Item> {
+        Some(Item::File(PathBuf::from(path)))
+    }
+
+    #[test]
+    fn a_path_in_the_worktree_is_a_file_by_its_path_relative_to_the_worktree() {
+        let places = main_worktree();
+        assert_eq!(places.classify(Path::new("/w/repo/a.txt")), file("a.txt"));
+        assert_eq!(
+            places.classify(Path::new("/w/repo/src/deep/b.rs")),
+            file("src/deep/b.rs")
+        );
+        // A name that only starts with `.git` is a file like any other.
+        assert_eq!(
+            places.classify(Path::new("/w/repo/.gitignore")),
+            file(".gitignore")
+        );
+    }
+
+    #[test]
+    fn the_folder_of_the_worktree_and_paths_outside_it_are_nothing() {
+        let places = main_worktree();
+        assert_eq!(places.classify(Path::new("/w/repo")), None);
+        assert_eq!(places.classify(Path::new("/w/repo-two/a.txt")), None);
+        assert_eq!(places.classify(Path::new("/elsewhere/a.txt")), None);
+    }
+
+    #[test]
+    fn in_the_git_folder_the_head_the_list_of_files_and_the_refs_are_the_head_and_the_rest_is_nothing()
+     {
+        let places = main_worktree();
+        for told in [
+            "/w/repo/.git/HEAD",
+            "/w/repo/.git/index",
+            "/w/repo/.git/packed-refs",
+            "/w/repo/.git/refs/heads/main",
+            "/w/repo/.git/refs/remotes/origin/main",
+            "/w/repo/.git/refs/tags/v1",
+        ] {
+            assert_eq!(places.classify(Path::new(told)), Some(Item::Head), "{told}");
+        }
+        for not_told in [
+            "/w/repo/.git",
+            "/w/repo/.git/refs",
+            "/w/repo/.git/index.lock",
+            "/w/repo/.git/objects/ab/cdef",
+            "/w/repo/.git/ORIG_HEAD",
+            "/w/repo/.git/FETCH_HEAD",
+            "/w/repo/.git/config",
+            "/w/repo/.git/logs/HEAD",
+        ] {
+            assert_eq!(places.classify(Path::new(not_told)), None, "{not_told}");
+        }
+    }
+
+    #[test]
+    fn a_git_folder_inside_the_worktree_is_no_file_whatever_it_holds() {
+        let places = main_worktree();
+        assert_eq!(places.classify(Path::new("/w/repo/vendor/lib/.git")), None);
+        assert_eq!(
+            places.classify(Path::new("/w/repo/vendor/lib/.git/index")),
+            None
+        );
+    }
+
+    #[test]
+    fn a_linked_worktree_has_its_own_head_and_list_and_shares_the_refs() {
+        let places = linked_worktree();
+        for told in [
+            "/w/repo/.git/worktrees/linked/HEAD",
+            "/w/repo/.git/worktrees/linked/index",
+            "/w/repo/.git/refs/heads/main",
+            "/w/repo/.git/packed-refs",
+        ] {
+            assert_eq!(places.classify(Path::new(told)), Some(Item::Head), "{told}");
+        }
+        for not_told in [
+            // The main worktree's own head and list are its own.
+            "/w/repo/.git/HEAD",
+            "/w/repo/.git/index",
+            "/w/repo/.git/worktrees/linked/index.lock",
+            "/w/repo/.git/objects/ab/cdef",
+            // The link to the git folder, a file of the linked worktree.
+            "/w/linked/.git",
+        ] {
+            assert_eq!(places.classify(Path::new(not_told)), None, "{not_told}");
+        }
+        assert_eq!(places.classify(Path::new("/w/linked/a.txt")), file("a.txt"));
+    }
+}
