@@ -41,7 +41,7 @@ mod credit;
 mod identity;
 mod watch;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -262,7 +262,8 @@ impl fmt::Display for WorkspaceError {
             Self::Refused(refusal) => refusal.fmt(f),
             Self::Git(e) => e.fmt(f),
             Self::Store(e) => e.fmt(f),
-            Self::Id(path, e) => write!(f, "the id file {}: {e}", path.display()),
+            // The path is the id file, or the folder the system would not watch.
+            Self::Id(path, e) => write!(f, "{}: {e}", path.display()),
         }
     }
 }
@@ -332,6 +333,10 @@ impl Workspaces {
     /// a change of `HEAD`, of the list of files or of a ref is [`Seen::Head`]. Reads are
     /// not seen; the system tells nothing of them.
     ///
+    /// When the system says it lost notices, after a burst of writes that overflowed its
+    /// queue, or fails to give them, `told` hears both [`Seen::Files`] and [`Seen::Head`]:
+    /// nothing says what changed, and what was lost is a change no agent made.
+    ///
     /// The ledger notes the moment a path was seen before `told` hears of it: once `told`
     /// has heard [`Seen::Files`] after a write, [`Workspaces::credits`] judges that write.
     pub fn watch(
@@ -370,8 +375,9 @@ impl Workspaces {
         let Some(path) = self.inside(workspace, path) else {
             return;
         };
-        self.watching
-            .with_ledger(workspace, |ledger| ledger.wrote(session, &path));
+        self.watching.with_ledger(workspace, |ledger| {
+            ledger.wrote(session, &path, Instant::now());
+        });
     }
 
     /// A shell command of `session` begins in the worktree of `workspace`, at `at`: the
@@ -401,27 +407,26 @@ impl Workspaces {
             Head::Branch { commit, .. } => commit,
             Head::Detached(commit) => Some(commit),
         };
+        // Taken before git is asked: a write noted while git reads the files is not in
+        // what it says, and must not be forgotten for that.
+        let asked = Instant::now();
         let changed = worktree.changed_paths(head.as_ref())?;
         let now = Instant::now();
         Ok(self.watching.with_ledger(workspace, |ledger| {
             // What is no longer changed, committed or put back, is forgotten at once: a
             // later change of the same path is a new one.
-            let gone: Vec<PathBuf> = ledger
-                .paths()
-                .filter(|path| !changed.iter().any(|one| &one.path == path))
-                .map(Path::to_owned)
-                .collect();
-            for path in gone {
-                ledger.forget(&path);
-            }
-            changed
+            let listed: BTreeSet<&Path> = changed.iter().map(|one| one.path.as_path()).collect();
+            ledger.forget_unchanged(&listed, asked);
+            let credits = changed
                 .into_iter()
                 .map(|ChangedPath { path, change }| CreditedPath {
                     by: ledger.credit(&path, now),
                     path,
                     change,
                 })
-                .collect()
+                .collect();
+            ledger.compact(now);
+            credits
         }))
     }
 

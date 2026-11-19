@@ -256,6 +256,58 @@ fn a_change_seen_while_two_sessions_run_shell_commands_is_no_agents() {
 }
 
 #[test]
+fn a_file_written_in_a_folder_made_by_a_command_is_credited_to_its_session() {
+    let scratch = Scratch::new();
+    let w = watched(&scratch);
+    w.workspaces.command_began(&w.workspace, "a", ago(1));
+    // The folder and the file come at once, as a command makes them: the system may not
+    // be watching the folder yet when the file is written.
+    let before = w.heard.files();
+    let status = Command::new("sh")
+        .args(["-c", "mkdir -p out/deep && echo x > out/deep/f.txt"])
+        .current_dir(&w.root)
+        .status()
+        .expect("start the shell");
+    assert!(status.success());
+    w.wait_for_a_notice_of_files(before);
+    wait_until("the file is credited", || {
+        w.by("out/deep/f.txt") == Some(strings(&["a"]))
+    });
+}
+
+#[test]
+fn a_folder_with_files_moved_into_the_worktree_is_credited_to_the_session_whose_command_runs() {
+    let scratch = Scratch::new();
+    let w = watched(&scratch);
+    write(scratch.path(), "outside/moved/inner/f.txt", "x\n");
+    write(scratch.path(), "outside/moved-by-hand/f.txt", "x\n");
+
+    // Nobody's command runs: a folder moved in by hand is no agent's.
+    let before = w.heard.files();
+    std::fs::rename(
+        scratch.join("outside/moved-by-hand"),
+        w.root.join("moved-by-hand"),
+    )
+    .expect("move the folder in");
+    w.wait_for_a_notice_of_files(before);
+    wait_until("the file is listed", || {
+        w.by("moved-by-hand/f.txt").is_some()
+    });
+    assert_eq!(w.by("moved-by-hand/f.txt"), Some(Vec::new()));
+
+    // A command of a session, begun since, moves one in: what it brings is its change.
+    w.workspaces
+        .command_began(&w.workspace, "a", Instant::now());
+    let before = w.heard.files();
+    std::fs::rename(scratch.join("outside/moved"), w.root.join("moved")).expect("move in");
+    w.wait_for_a_notice_of_files(before);
+    wait_until("the file is credited", || {
+        w.by("moved/inner/f.txt") == Some(strings(&["a"]))
+    });
+    assert_eq!(w.by("moved-by-hand/f.txt"), Some(Vec::new()));
+}
+
+#[test]
 fn a_workspace_that_is_not_watched_credits_only_what_a_tool_named() {
     let scratch = Scratch::new();
     let root = scratch.join("repo");

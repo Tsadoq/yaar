@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
 
+use notify::event::{CreateKind, ModifyKind};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use yaar_store::WorkspaceId;
 
@@ -70,6 +71,81 @@ impl Places {
     }
 }
 
+/// What one notice of the system came to, to the worktree it came from.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Notice {
+    /// The files that changed, by their paths relative to the folder of the worktree.
+    pub(crate) files: Vec<PathBuf>,
+    /// The folders that appeared, made there or moved in, by the same kind of path.
+    pub(crate) folders: Vec<PathBuf>,
+    /// What is checked out, the list of files or a ref changed.
+    pub(crate) head: bool,
+    /// The system lost notices, or says it could not give them: anything may have changed.
+    /// What was lost cannot be credited to a session, and is a change no agent made.
+    pub(crate) lost: bool,
+}
+
+impl Notice {
+    /// What `result` of the system is, to the worktree at `places`. `is_folder` says
+    /// whether a path that came into being, or was renamed, is a folder: a notice does not
+    /// always say.
+    pub(crate) fn of(
+        places: &Places,
+        result: &notify::Result<notify::Event>,
+        is_folder: impl Fn(&Path) -> bool,
+    ) -> Notice {
+        let event = match result {
+            Ok(event) => event,
+            Err(_) => {
+                return Notice {
+                    lost: true,
+                    ..Notice::default()
+                };
+            }
+        };
+        let mut notice = Notice {
+            lost: event.need_rescan(),
+            ..Notice::default()
+        };
+        // Reads are not changes.
+        if matches!(event.kind, EventKind::Access(_)) {
+            return notice;
+        }
+        for path in &event.paths {
+            match places.classify(path) {
+                Some(Item::File(file)) => {
+                    let folder = match event.kind {
+                        EventKind::Create(CreateKind::Folder) => true,
+                        EventKind::Create(CreateKind::File) => false,
+                        EventKind::Create(_) | EventKind::Modify(ModifyKind::Name(_)) => {
+                            is_folder(path)
+                        }
+                        _ => false,
+                    };
+                    if folder {
+                        notice.folders.push(file);
+                    } else {
+                        notice.files.push(file);
+                    }
+                }
+                Some(Item::Head) => notice.head = true,
+                None => {}
+            }
+        }
+        notice
+    }
+
+    /// Whether what is uncommitted may have changed.
+    pub(crate) fn tells_files(&self) -> bool {
+        self.lost || !self.files.is_empty() || !self.folders.is_empty()
+    }
+
+    /// Whether what is checked out may have changed.
+    pub(crate) fn tells_head(&self) -> bool {
+        self.lost || self.head
+    }
+}
+
 /// Whether a path inside a git folder is a ref: under `refs/`, or `packed-refs`.
 fn is_ref(inside: &Path) -> bool {
     inside == Path::new("packed-refs")
@@ -110,33 +186,26 @@ impl Watching {
             let places = places.clone();
             let ledger = Arc::clone(&ledger);
             notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
-                let Ok(event) = result else { return };
-                if matches!(event.kind, EventKind::Access(_)) {
-                    return;
-                }
-                let mut files = false;
-                let mut head = false;
+                let notice = Notice::of(&places, &result, |path| {
+                    path.symlink_metadata().is_ok_and(|meta| meta.is_dir())
+                });
                 {
                     let mut ledger = lock(&ledger);
                     // One moment for every path of the notice: it is when it arrived.
                     let now = Instant::now();
-                    for path in &event.paths {
-                        match places.classify(path) {
-                            Some(Item::File(file)) => {
-                                ledger.seen(&file, now);
-                                files = true;
-                            }
-                            Some(Item::Head) => head = true,
-                            None => {}
-                        }
+                    for file in &notice.files {
+                        ledger.seen(file, now);
+                    }
+                    for folder in &notice.folders {
+                        ledger.appeared(folder, now);
                     }
                 }
                 // The ledger is let go of before anyone is told, and has noted the paths
                 // first: whoever hears of a file can ask who made the change.
-                if files {
+                if notice.tells_files() {
                     told(Seen::Files);
                 }
-                if head {
+                if notice.tells_head() {
                     told(Seen::Head);
                 }
             })
@@ -323,5 +392,95 @@ mod tests {
             assert_eq!(places.classify(Path::new(not_told)), None, "{not_told}");
         }
         assert_eq!(places.classify(Path::new("/w/linked/a.txt")), file("a.txt"));
+    }
+
+    fn event(kind: EventKind, paths: &[&str]) -> notify::Result<notify::Event> {
+        let mut event = notify::Event::new(kind);
+        for path in paths {
+            event = event.add_path(PathBuf::from(path));
+        }
+        Ok(event)
+    }
+
+    fn notice(result: &notify::Result<notify::Event>) -> Notice {
+        // Nothing is a folder unless the notice says so.
+        Notice::of(&main_worktree(), result, |_| false)
+    }
+
+    #[test]
+    fn a_change_of_files_tells_the_files_and_of_the_git_folder_tells_the_head() {
+        let seen = notice(&event(
+            EventKind::Modify(ModifyKind::Any),
+            &["/w/repo/a.txt", "/w/repo/.git/index", "/w/repo/.git/config"],
+        ));
+        assert_eq!(seen.files, [PathBuf::from("a.txt")]);
+        assert!(seen.folders.is_empty());
+        assert!(seen.tells_files() && seen.tells_head());
+        assert!(!seen.lost);
+
+        let only_head = notice(&event(EventKind::Any, &["/w/repo/.git/refs/heads/main"]));
+        assert!(only_head.tells_head() && !only_head.tells_files());
+
+        let nothing = notice(&event(EventKind::Any, &["/w/repo/.git/objects/ab/cd"]));
+        assert!(!nothing.tells_head() && !nothing.tells_files());
+    }
+
+    #[test]
+    fn a_read_tells_nothing() {
+        let read = notice(&event(
+            EventKind::Access(notify::event::AccessKind::Any),
+            &["/w/repo/a.txt"],
+        ));
+        assert_eq!(read, Notice::default());
+    }
+
+    #[test]
+    fn a_folder_that_appears_is_told_as_a_folder_by_the_notice_or_by_looking() {
+        let made = notice(&event(
+            EventKind::Create(CreateKind::Folder),
+            &["/w/repo/out"],
+        ));
+        assert_eq!(made.folders, [PathBuf::from("out")]);
+        assert!(made.files.is_empty() && made.tells_files());
+
+        let made_a_file = notice(&event(
+            EventKind::Create(CreateKind::File),
+            &["/w/repo/out/f"],
+        ));
+        assert_eq!(made_a_file.files, [PathBuf::from("out/f")]);
+
+        // A notice that says only that something appeared, or was renamed, is asked about.
+        for kind in [
+            EventKind::Create(CreateKind::Any),
+            EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)),
+        ] {
+            let result = event(kind, &["/w/repo/moved-in", "/w/repo/file"]);
+            let moved = Notice::of(&main_worktree(), &result, |path| {
+                path == Path::new("/w/repo/moved-in")
+            });
+            assert_eq!(moved.folders, [PathBuf::from("moved-in")], "{kind:?}");
+            assert_eq!(moved.files, [PathBuf::from("file")], "{kind:?}");
+        }
+
+        // A change of what a folder holds is no folder appearing.
+        let result = event(EventKind::Modify(ModifyKind::Any), &["/w/repo/out"]);
+        let changed = Notice::of(&main_worktree(), &result, |_| true);
+        assert_eq!(changed.files, [PathBuf::from("out")]);
+        assert!(changed.folders.is_empty());
+    }
+
+    #[test]
+    fn notices_the_system_lost_tell_the_files_and_the_head_with_no_path_to_note() {
+        // The system's queue overflowed, or it says it could not watch: after a burst of
+        // writes, nothing says what changed, and whoever shows the changes must look.
+        let overflow =
+            Ok(notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan));
+        let lost = notice(&overflow);
+        assert!(lost.lost && lost.tells_files() && lost.tells_head());
+        assert!(lost.files.is_empty() && lost.folders.is_empty());
+
+        let failed = Err(notify::Error::generic("the system gave up"));
+        let lost = notice(&failed);
+        assert!(lost.lost && lost.tells_files() && lost.tells_head());
     }
 }

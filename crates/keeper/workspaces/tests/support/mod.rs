@@ -262,7 +262,7 @@ pub fn a_clone(scratch: &Scratch) -> PathBuf {
 
 /// How long a test waits for a fact that has to come from outside it: the system's
 /// notice of a changed file.
-pub const DEADLINE: Duration = Duration::from_secs(20);
+pub const DEADLINE: Duration = Duration::from_secs(10);
 
 /// Waits until `condition` holds, and fails the test when it does not within
 /// [`DEADLINE`].
