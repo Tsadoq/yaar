@@ -331,3 +331,156 @@ fn invalid(why: String) -> io::Error {
 pub(crate) fn resume(session: &CliSession) -> String {
     format!("{COMMAND} --resume '{}'", session.0.replace('\'', r"'\''"))
 }
+
+#[cfg(test)]
+mod tests {
+    use yaar_agent::Adapter;
+
+    use super::*;
+    use crate::ClaudeCode;
+
+    /// The question what a `UserPromptSubmit` of `prompt` waits for, asked as the Keeper
+    /// does after the report. The folder is one that is not there: a message reads none.
+    fn asked_of_prompt(prompt: &str) -> Option<Asked> {
+        let input = json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "s",
+            "cwd": "/w",
+            "prompt": prompt,
+        });
+        let payload = serde_json::to_vec(&input).expect("JSON is written");
+        let report = Report {
+            terminal: Some("t"),
+            pid: 7,
+            payload: &payload,
+        };
+        let mut adapter = ClaudeCode::new();
+        adapter.report(&report).expect("a report");
+        adapter
+            .asked(Path::new("/nowhere/yaar"), &report)
+            .expect("a question")
+    }
+
+    #[test]
+    fn every_message_of_the_user_is_one_a_review_rides_with_whatever_it_says() {
+        let long = "a".repeat(5_000);
+        for prompt in [
+            "ok",
+            "",
+            "   ",
+            long.as_str(),
+            "Do not answer the threads, just fix the code.",
+            "  please <task-notification> later",
+        ] {
+            let asked = asked_of_prompt(prompt).expect("a message asks");
+
+            assert_eq!(asked.asks, Asks::Message, "{prompt:?}");
+            assert_eq!(asked.session, CliSession("s".to_owned()));
+            assert_eq!(asked.terminal.as_deref(), Some("t"));
+            assert_eq!(asked.folder, Some(PathBuf::from("/w")));
+        }
+    }
+
+    #[test]
+    fn only_a_prompt_that_opens_with_the_tag_after_white_space_is_one_claude_code_started() {
+        for prompt in [
+            "<task-notification>\n<task-id>b1</task-id>\n</task-notification>",
+            "  \n\t<task-notification>x",
+        ] {
+            assert_eq!(asked_of_prompt(prompt), None, "{prompt:?}");
+        }
+    }
+
+    #[test]
+    fn a_prompt_with_no_text_is_still_a_message() {
+        let input = json!({"hook_event_name": "UserPromptSubmit", "session_id": "s"});
+        let payload = serde_json::to_vec(&input).expect("JSON is written");
+        let report = Report {
+            terminal: None,
+            pid: 1,
+            payload: &payload,
+        };
+
+        let asked = ClaudeCode::new().asked(Path::new("/x"), &report);
+
+        assert_eq!(
+            asked.expect("read").map(|asked| asked.asks),
+            Some(Asks::Message)
+        );
+    }
+
+    #[test]
+    fn the_instruction_names_the_reply_tool_its_three_arguments_and_each_thread() {
+        for word in [
+            LISTED_REPLY_TOOL,
+            "`thread`",
+            "`body`",
+            "`addressed`",
+            "each thread",
+        ] {
+            assert!(INSTRUCTION.contains(word), "{word}");
+        }
+        assert!(
+            INSTRUCTION.contains("Only the reviewer resolves a thread"),
+            "it says who resolves, and asks for nothing that does"
+        );
+        assert_eq!(ClaudeCode::new().instruction(), INSTRUCTION);
+        let session = CliSession("s".to_owned());
+        let delivery = ToClaudeCode {
+            folder: Path::new("/nowhere/yaar"),
+            session: &session,
+        };
+        assert_eq!(delivery.instruction(), INSTRUCTION);
+    }
+
+    #[test]
+    fn the_review_that_starts_with_the_instruction_goes_out_unchanged_and_the_users_words_are_not_in_it()
+     {
+        let prompt = "Do not answer the threads, just fix the code.";
+        let asked = asked_of_prompt(prompt).expect("a message asks");
+        let text = format!("{INSTRUCTION}\n\n## Thread t1\n\nComment:\nwhy `this`?");
+        let session = asked.session.clone();
+        let mut delivery = ToClaudeCode {
+            folder: Path::new("/nowhere/yaar"),
+            session: &session,
+        };
+
+        let bytes = delivery
+            .hand_out(&Rendered {
+                text: &text,
+                review: "R",
+                round: 3,
+                threads: 1,
+            })
+            .expect("a delivery");
+
+        let answer: Value = serde_json::from_slice(&bytes).expect("JSON");
+        assert_eq!(answer["hookSpecificOutput"]["additionalContext"], text);
+        assert!(
+            answer["hookSpecificOutput"]["additionalContext"]
+                .as_str()
+                .is_some_and(|context| context.starts_with(INSTRUCTION)),
+            "the instruction comes first, whatever the user wrote"
+        );
+        assert!(
+            !String::from_utf8_lossy(&bytes).contains(prompt),
+            "the answer holds the review and not the user's message"
+        );
+        assert!(
+            !Path::new("/nowhere").exists(),
+            "an inline review writes no file"
+        );
+    }
+
+    #[test]
+    fn the_resume_command_quotes_the_id_for_sh() {
+        assert_eq!(
+            resume(&CliSession("0f1e-2d".to_owned())),
+            "claude --resume '0f1e-2d'"
+        );
+        assert_eq!(
+            resume(&CliSession("a'b; rm -rf ~".to_owned())),
+            r"claude --resume 'a'\''b; rm -rf ~'"
+        );
+    }
+}

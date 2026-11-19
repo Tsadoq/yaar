@@ -7,15 +7,17 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use yaar_agent::ShellEntry;
 
-use crate::{HOOK_EVENTS, HOOK_PROGRAM, PLUGIN, PLUGIN_DIRS};
+use crate::{HOOK_EVENTS, HOOK_PROGRAM, PLUGIN, PLUGIN_DIRS, TOOL_SERVER, TOOL_SERVER_NAME};
 
 /// Writes `folder/plugin` and names it for the shells of the app.
 pub(crate) fn write(folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
     let plugin = folder.join("plugin");
     let hook = hook_program(companions)?;
+    let tools = program_path(companions, TOOL_SERVER)?;
 
     write_json(&plugin.join(".claude-plugin"), "plugin.json", &manifest())?;
     write_json(&plugin.join("hooks"), "hooks.json", &hooks(&hook))?;
+    write_json(&plugin, ".mcp.json", &tool_servers(&tools))?;
 
     Ok(vec![ShellEntry::PathList {
         name: OsString::from(PLUGIN_DIRS),
@@ -43,22 +45,34 @@ fn hooks(command: &str) -> Value {
     json!({ "hooks": hooks })
 }
 
+/// What `.mcp.json` says: the tool server, started by Claude Code as `command` itself, with
+/// no shell and so no quoting.
+fn tool_servers(command: &str) -> Value {
+    json!({"mcpServers": {TOOL_SERVER_NAME: {"command": command, "args": []}}})
+}
+
 /// The command that runs the hook program: `exec` and its absolute path, which holds
 /// spaces on a Mac, quoted for `sh` as one word and nothing more. `exec` makes every `sh`
 /// run the program in its own place: a plain command is left in a `sh` of its own by dash,
 /// the `sh` of Ubuntu, and that short-lived parent would be taken for the agent.
 fn hook_program(companions: &Path) -> io::Result<String> {
-    let path: PathBuf = std::path::absolute(companions.join(HOOK_PROGRAM))?;
-    let text = path.to_str().ok_or_else(|| {
+    let text = program_path(companions, HOOK_PROGRAM)?;
+    Ok(format!("exec '{}'", text.replace('\'', r"'\''")))
+}
+
+/// The absolute path of the program `name` in the folder of the app's programs, as text,
+/// which the plugin's files are made of.
+fn program_path(companions: &Path, name: &str) -> io::Result<String> {
+    let path: PathBuf = std::path::absolute(companions.join(name))?;
+    path.to_str().map(str::to_owned).ok_or_else(|| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "the path {} is not text, which `sh` is told it by",
+                "the path {} is not text, which the plugin's files are made of",
                 path.display()
             ),
         )
-    })?;
-    Ok(format!("exec '{}'", text.replace('\'', r"'\''")))
+    })
 }
 
 /// Writes `value` as `folder/name`, through a temporary file of the folder that is renamed

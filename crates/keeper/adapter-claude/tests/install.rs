@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::{Value, json};
-use yaar_adapter_claude::{ClaudeCode, HOOK_EVENTS, HOOK_PROGRAM, PLUGIN, PLUGIN_DIRS};
+use yaar_adapter_claude::{
+    ClaudeCode, HOOK_EVENTS, HOOK_PROGRAM, PLUGIN, PLUGIN_DIRS, TOOL_SERVER, TOOL_SERVER_NAME,
+};
 use yaar_agent::{Adapter, ShellEntry};
 
 use support::Scratch;
@@ -46,7 +48,7 @@ fn install(scratch: &Scratch, companions: &Path) -> (PathBuf, Vec<ShellEntry>) {
 }
 
 #[test]
-fn install_writes_the_two_files_of_the_plugin_and_nothing_else() {
+fn install_writes_the_three_files_of_the_plugin_and_nothing_else() {
     let scratch = Scratch::new();
     let (folder, _) = install(&scratch, Path::new("/opt/yaar/programs"));
 
@@ -55,6 +57,7 @@ fn install_writes_the_two_files_of_the_plugin_and_nothing_else() {
         BTreeSet::from([
             PathBuf::from("plugin/.claude-plugin/plugin.json"),
             PathBuf::from("plugin/hooks/hooks.json"),
+            PathBuf::from("plugin/.mcp.json"),
         ])
     );
 }
@@ -108,6 +111,40 @@ fn every_hook_runs_the_quoted_path_of_the_hook_program_for_every_tool() {
 }
 
 #[test]
+fn the_plugin_names_the_tool_server_by_its_absolute_path_with_no_quoting_and_no_argument() {
+    let scratch = Scratch::new();
+    // No shell runs the command, so a space or a quote in the path is the path.
+    let companions = scratch.path().join("Application Support").join("it's here");
+
+    let (folder, _) = install(&scratch, &companions);
+
+    assert_eq!(
+        json_at(&folder.join("plugin/.mcp.json")),
+        json!({"mcpServers": {TOOL_SERVER_NAME: {
+            "command": companions.join(TOOL_SERVER).to_str().expect("text"),
+            "args": [],
+        }}})
+    );
+}
+
+#[test]
+fn a_folder_of_programs_given_as_a_relative_path_names_the_tool_server_by_an_absolute_one() {
+    let scratch = Scratch::new();
+    let (folder, _) = install(&scratch, Path::new("programs"));
+
+    let servers = json_at(&folder.join("plugin/.mcp.json"));
+
+    let command = servers["mcpServers"]["yaar"]["command"]
+        .as_str()
+        .expect("a command");
+    assert!(Path::new(command).is_absolute(), "{command}");
+    assert!(
+        command.ends_with(&format!("/programs/{TOOL_SERVER}")),
+        "{command}"
+    );
+}
+
+#[test]
 fn the_shells_of_the_app_get_the_plugin_folder_under_the_variable_claude_code_reads() {
     let scratch = Scratch::new();
     let (folder, entries) = install(&scratch, Path::new("/opt/yaar/programs"));
@@ -143,7 +180,7 @@ fn installing_again_writes_the_same_files_over_whatever_was_there() {
         ),
         before
     );
-    assert_eq!(files_under(&folder).len(), 2, "no temporary file is left");
+    assert_eq!(files_under(&folder).len(), 3, "no temporary file is left");
 }
 
 #[test]
