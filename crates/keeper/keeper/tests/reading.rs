@@ -501,6 +501,46 @@ fn a_turn_whose_state_is_none_or_no_longer_kept_is_listed_with_no_state_after_th
 }
 
 #[test]
+fn turns_with_no_state_and_no_turn_with_one_are_listed_after_the_last_commit_in_store_order() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    git(&repo, &["switch", "--quiet", "-c", "feature"]);
+    let kept = Kept::new(&scratch);
+    let (workspace, worktree) = kept.open(&repo);
+    let a = kept.session(&workspace, 1);
+
+    // Two commits of the branch, then only turns with no state: nothing places them among
+    // the commits, and a turn is not listed before a commit it may well have followed.
+    write(&repo, "one.txt", "one\n");
+    let c1 = commit_all(&repo, "first of the branch");
+    write(&repo, "two.txt", "two\n");
+    let c2 = commit_all(&repo, "second of the branch");
+    let t1 = kept.turn(&a, 1, None);
+    // A state the store never held, as one it has lost.
+    let lost = "0".repeat(40);
+    let t2 = kept.turn(&a, 2, Some(&lost));
+    let t3 = kept.turn(&a, 3, None);
+    drop((kept, worktree));
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+
+    let history = history_of(&mut window, &workspace);
+
+    assert_eq!(
+        history.entries,
+        [
+            commit_entry(&c1, "first of the branch"),
+            commit_entry(&c2, "second of the branch"),
+            turn_entry(&t1, &a, None),
+            turn_entry(&t2, &a, None),
+            turn_entry(&t3, &a, None),
+        ],
+        "after the last commit, not before the first"
+    );
+    window.stop(keeper);
+}
+
+#[test]
 fn a_turn_that_runs_one_of_another_workspace_and_one_before_the_start_are_not_listed() {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
