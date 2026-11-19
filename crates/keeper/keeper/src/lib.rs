@@ -22,7 +22,8 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, mpsc};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
@@ -30,7 +31,7 @@ use yaar_link::{
     write_message,
 };
 
-use wiring::{Outcome, Parts};
+use wiring::{Answered, Answerer, Outcome, Parts};
 
 /// How long a Window may take to say who it is.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);
@@ -487,7 +488,7 @@ fn accept_windows(listener: UnixListener, shared: Arc<Shared>, options: Options)
     }
 }
 
-fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<(), LinkError> {
+fn serve_window(stream: UnixStream, shared: &Arc<Shared>, version: &str) -> Result<(), LinkError> {
     stream.set_read_timeout(Some(HELLO_TIMEOUT))?;
     stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let Message::Hello(theirs) = read_message(&mut &stream)? else {
@@ -529,7 +530,13 @@ fn serve_window(stream: UnixStream, shared: &Shared, version: &str) -> Result<()
 
 /// Reads what one Window sends, until it goes away or asks for the stop. `speaks` says
 /// whether it speaks the protocol version of this Keeper.
-fn converse(window: &Arc<Window>, speaks: bool, shared: &Shared) -> Result<(), LinkError> {
+///
+/// A request is answered where [`wiring::answerer`] says: most here, before the next
+/// message is read; those of reviews by the Window's own thread for them, in the order
+/// they came; the rest on a thread of their own. Whatever was handed to the Window's
+/// thread for reviews is answered before this returns.
+fn converse(window: &Arc<Window>, speaks: bool, shared: &Arc<Shared>) -> Result<(), LinkError> {
+    let mut in_order = InOrder::default();
     loop {
         match read_message(&mut &window.stream) {
             Ok(Message::Shutdown) => {
@@ -542,11 +549,24 @@ fn converse(window: &Arc<Window>, speaks: bool, shared: &Shared) -> Result<(), L
                     "a Window of another version asked for more than the stop",
                 ));
             }
-            Ok(Message::Request { id, request }) => {
-                if !answer(shared, window, id, request) {
-                    return Ok(());
+            Ok(Message::Request { id, request }) => match wiring::answerer(request.kind()) {
+                Answerer::Here => {
+                    if !answer(shared, window, id, request) {
+                        return Ok(());
+                    }
                 }
-            }
+                Answerer::InOrder => {
+                    if !in_order.hand(shared, window, id, request) {
+                        return Ok(());
+                    }
+                }
+                Answerer::Apart => {
+                    let (shared, window) = (Arc::clone(shared), Arc::clone(window));
+                    // Its answer is queued like any other. A Window let go meanwhile
+                    // takes nothing, and its reading thread finds the connection closed.
+                    std::thread::spawn(move || answer(&shared, &window, id, request));
+                }
+            },
             Ok(Message::Input { .. }) if !speaks => {
                 return Err(LinkError::Malformed(
                     "a Window of another version asked for more than the stop",
@@ -574,6 +594,54 @@ fn converse(window: &Arc<Window>, speaks: bool, shared: &Shared) -> Result<(), L
     }
 }
 
+/// The thread that answers one Window's requests of reviews, one after the other in the
+/// order they came, so that the saves of a draft are kept in the order typed while the
+/// Window's other requests and its typing into terminals go on being read. Started at the
+/// first such request; waited for when dropped, so that every request handed to it is
+/// answered before the Window is finished.
+#[derive(Default)]
+struct InOrder {
+    lane: Option<(mpsc::Sender<Handed>, JoinHandle<()>)>,
+}
+
+/// A request handed to a Window's thread for reviews, with the id it is answered by.
+type Handed = (RequestId, Request);
+
+impl InOrder {
+    /// Hands one request to the thread. False when the thread has stopped, as it does
+    /// once the Window was let go.
+    fn hand(
+        &mut self,
+        shared: &Arc<Shared>,
+        window: &Arc<Window>,
+        id: RequestId,
+        request: Request,
+    ) -> bool {
+        let (sender, _) = self.lane.get_or_insert_with(|| {
+            let (sender, received) = mpsc::channel::<Handed>();
+            let (shared, window) = (Arc::clone(shared), Arc::clone(window));
+            let thread = std::thread::spawn(move || {
+                for (id, request) in received {
+                    if !answer(&shared, &window, id, request) {
+                        return;
+                    }
+                }
+            });
+            (sender, thread)
+        });
+        sender.send((id, request)).is_ok()
+    }
+}
+
+impl Drop for InOrder {
+    fn drop(&mut self) {
+        if let Some((sender, thread)) = self.lane.take() {
+            drop(sender);
+            let _ = thread.join();
+        }
+    }
+}
+
 /// Answers one request: the reply to the Window that asked, then the facts the request
 /// led to, to every Window. False when the Window that asked could not be answered and
 /// was let go.
@@ -581,14 +649,20 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
     // Held until the facts are out, so that they reach the Windows in the order in which
     // the requests were answered.
     let _turn = wiring::waits_its_turn(request.kind()).then(|| lock(&shared.turn));
-    let Outcome { reply, facts, then } = match shared
+    let answered = match shared
         .parts
         .read()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
     {
         Some(parts) => parts.answer(window, request),
-        None => Outcome::failed("the Keeper is leaving"),
+        None => Answered::Now(Outcome::failed("the Keeper is leaving")),
+    };
+    // The parts are let go by now: work left for later, as the user's own git, holds up
+    // neither the Keeper's stop nor anything else that waits for the parts.
+    let Outcome { reply, facts, then } = match answered {
+        Answered::Now(outcome) => outcome,
+        Answered::Later(job) => job(),
     };
     // No request stays without an answer: what does not fit in a frame is answered with
     // the reason.

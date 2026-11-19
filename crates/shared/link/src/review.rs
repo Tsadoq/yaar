@@ -91,12 +91,15 @@ pub struct Lines {
 /// Where a thread sits: lines of one version of one file, and their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
-    /// The version the lines are read in: a recorded state of the worktree or a commit,
-    /// by its full id. In a [`crate::Request::SaveDraft`] that starts a thread it is none
-    /// for lines of the files on disk: the Keeper records the state of the worktree then
-    /// and puts the thread on it. In what the Keeper sends it is always some.
+    /// The version the lines are read in: the full id of a commit, a recorded state of the
+    /// worktree or a commit of the repository, never the id of a git tree object. In a
+    /// [`crate::Request::SaveDraft`] that starts a thread it is none for lines of the files
+    /// on disk: the Keeper records the state of the worktree then and puts the thread on
+    /// it. In what the Keeper sends it is always some.
     pub tree: Option<String>,
-    /// The path of the file, relative to the folder of the worktree.
+    /// The path of the file in that version, relative to the folder of the worktree. On
+    /// the old side of a renamed file it is the old path, where the file lies in the
+    /// version the lines are read in; on the new side it is the path now.
     pub path: PathBuf,
     /// The side of the diff the lines were on where the comment was written.
     pub side: Side,
@@ -149,7 +152,8 @@ pub struct Comment {
 pub struct Thread {
     /// Its id.
     pub id: ThreadId,
-    /// Where it sits.
+    /// Where its first comment was written, in the version it was written in. It is kept
+    /// as written when the code changes later.
     pub anchor: Anchor,
     /// Whether the reviewer resolved it. A resolved thread is sent no more, an unsent
     /// comment on it included.
@@ -217,7 +221,7 @@ pub struct WorkspaceReviews {
     /// Its reviews: at least one, the review of no agent when no agent session has one.
     pub reviews: Vec<Review>,
     /// The paths of the files marked viewed whose content has not changed since, relative
-    /// to the folder of the worktree, ordered by their bytes. None while the worktree is
+    /// to the folder of the worktree, ordered by their bytes. Empty while the worktree is
     /// gone.
     pub viewed: Vec<PathBuf>,
 }

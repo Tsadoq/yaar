@@ -88,6 +88,7 @@ const TABLES_2: &str = "
         reviewed TEXT
     ) STRICT;
     CREATE INDEX review_of_workspace ON review (workspace);
+    CREATE UNIQUE INDEX review_of_no_agent ON review (workspace) WHERE agent IS NULL;
     CREATE TABLE thread (
         seq INTEGER PRIMARY KEY,
         id TEXT NOT NULL UNIQUE,

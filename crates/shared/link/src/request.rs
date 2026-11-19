@@ -226,7 +226,8 @@ pub enum Request {
     ///
     /// A save that made a comment is told to every Window as [`Fact::ReviewsChanged`]; a
     /// save that only changed a text is told to nobody, so that typing does not make every
-    /// Window read the reviews again.
+    /// Window read the reviews again. The Window that typed puts each text it saves into
+    /// the reviews it shows itself.
     SaveDraft {
         /// The review.
         review: ReviewId,

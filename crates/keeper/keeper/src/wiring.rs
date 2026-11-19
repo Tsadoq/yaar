@@ -22,6 +22,10 @@
 //! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
 //! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
 //!
+//! The worktree of a request of reviews is found with `Workspaces::worktree`, which reads
+//! the Store and the folder and runs no git: never through the list of every repository,
+//! which runs git in each. A save that changes a draft's text needs no worktree at all.
+//!
 //! The requests of reviews are not wired yet: until they are, each is refused with
 //! [`NOT_WIRED`], so that a Window that asks them keeps its connection.
 //!
@@ -47,8 +51,10 @@
 //! reason in its place, so that no request stays without an answer. That is done where
 //! the reply is written, in the serve loop.
 //!
-//! Requests that change what the Keeper keeps, and the one whose reply carries what a
-//! fact carries, are answered one at a time: see [`waits_its_turn`].
+//! Requests that change the list of workspaces, and the one whose reply carries that
+//! list, are answered one at a time: see [`waits_its_turn`]. The Review engine keeps its
+//! own changes one at a time. Where each request is answered, so that what takes long
+//! holds up nothing else of its Window, is [`answerer`]'s to say.
 //!
 //! Nothing is watched yet. The list of workspaces is read from git when a Window asks
 //! for it, and no fact tells of a worktree or a branch that changed outside the app.
@@ -110,6 +116,58 @@ impl Outcome {
     }
 }
 
+/// Where a request is answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Answerer {
+    /// On the thread that reads the Window's connection, before its next message is read.
+    Here,
+    /// By the Window's one thread for reviews, one after the other in the order they came.
+    InOrder,
+    /// On a thread of its own, started for this request.
+    Apart,
+}
+
+/// Where requests of this kind are answered.
+pub(crate) fn answerer(kind: RequestKind) -> Answerer {
+    // No arm for "the rest": a new kind of request has to say which it is.
+    match kind {
+        // Quick, or ordered with the Window's other requests of slices 1 and 2.
+        RequestKind::ListWorkspaces
+        | RequestKind::OpenFolder
+        | RequestKind::SetBase
+        | RequestKind::GetChanges
+        | RequestKind::ReadFile
+        | RequestKind::OpenTerminal
+        | RequestKind::ResizeTerminal => Answerer::Here,
+        // The saves of a draft must be kept in the order they were typed, and a reading
+        // that follows a save must find it. A copy or a mark of reviewed records a state,
+        // up to a second or more on a large repository: the Window's typing into its
+        // terminals, read on the connection's thread, must not wait for it.
+        RequestKind::GetReviews
+        | RequestKind::SaveDraft
+        | RequestKind::DeleteDraft
+        | RequestKind::CopyReview
+        | RequestKind::MarkReviewed
+        | RequestKind::SetViewed => Answerer::InOrder,
+        // The user's own git, with their hooks, which may run for minutes: neither the
+        // Window's typing nor its saves may wait for it.
+        RequestKind::Commit => Answerer::Apart,
+    }
+}
+
+/// What [`Parts::answer`] gives.
+pub(crate) enum Answered {
+    /// The outcome, ready.
+    Now(Outcome),
+    /// Work to run once the parts are let go, which gives the outcome: what may take as
+    /// long as the user's own git takes, and must hold up neither the Keeper's stop nor
+    /// anything else that waits for the parts.
+    Later(Job),
+}
+
+/// Work that gives the outcome of a request, run after the parts are let go.
+pub(crate) type Job = Box<dyn FnOnce() -> Outcome + Send>;
+
 /// Whether requests of this kind are answered one at a time, each with its reply and its
 /// facts sent before the next is begun.
 pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
@@ -127,16 +185,19 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // They lead to no fact, and a program that takes its time to start must not hold
         // up the Windows' other questions.
         RequestKind::OpenTerminal | RequestKind::ResizeTerminal => false,
-        // Each changes what the Keeper keeps, and each but a save of a draft's text is told
-        // as a fact: in the order the changes were made.
-        RequestKind::SaveDraft
+        // Each may change what the Keeper keeps, `GetReviews` included: it keeps the review
+        // of no agent of a workspace that has none, and takes away the marks of files that
+        // changed. The Review engine makes those changes one at a time itself. The facts
+        // they lead to carry no more than the workspace's id, and a Window told one asks
+        // again and reads the newest: their order does not matter, and none of them may
+        // wait behind a recording or the user's git.
+        RequestKind::GetReviews
+        | RequestKind::SaveDraft
         | RequestKind::DeleteDraft
         | RequestKind::CopyReview
         | RequestKind::MarkReviewed
         | RequestKind::SetViewed
-        | RequestKind::Commit => true,
-        // What it reads, no fact carries: a Window that is told of a change asks again.
-        RequestKind::GetReviews => false,
+        | RequestKind::Commit => false,
     }
 }
 
@@ -166,11 +227,12 @@ impl Parts {
         self.dock.running()
     }
 
-    /// Answers one request of `window`.
-    pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Outcome {
+    /// Answers one request of `window`, or gives the work that answers it once the parts
+    /// are let go.
+    pub(crate) fn answer(&self, window: &Arc<Window>, request: Request) -> Answered {
         let workspaces = match &self.workspaces {
             Ok(workspaces) => workspaces,
-            Err(reason) => return Outcome::failed(reason.clone()),
+            Err(reason) => return Answered::Now(Outcome::failed(reason.clone())),
         };
         let mut facts = Vec::new();
         let mut then = None;
@@ -233,9 +295,9 @@ impl Parts {
             | Request::CopyReview { .. }
             | Request::MarkReviewed { .. }
             | Request::SetViewed { .. }
-            | Request::Commit { .. } => return Outcome::failed(NOT_WIRED),
+            | Request::Commit { .. } => return Answered::Now(Outcome::failed(NOT_WIRED)),
         };
-        Outcome { reply, facts, then }
+        Answered::Now(Outcome { reply, facts, then })
     }
 
     /// Starts `program` in the folder of `workspace`, in a terminal of the Dock. The
@@ -677,8 +739,11 @@ fn draft_save(
 }
 
 /// Puts a failure of the Review engine into the words of the Link: what names something
-/// the Keeper does not hold, a sent comment, and an empty send keep their kind; the rest
-/// becomes `Refusal::Failed` with the sentence of the error.
+/// the Keeper does not hold, a sent comment, and a path out of the worktree keep their
+/// kind; the rest becomes `Refusal::Failed` with the sentence of the error. An empty send,
+/// `ReviewError::NothingToSend`, is not mapped here: its refusal names the review, which
+/// the error does not carry, so the caller that copies a review maps it to
+/// `Refusal::NothingToSend` before it calls this.
 fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
     use yaar_review_engine::{EngineError, ReviewError};
 

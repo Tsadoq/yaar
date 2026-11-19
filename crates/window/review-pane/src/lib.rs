@@ -140,9 +140,9 @@ pub fn pane() -> BuildPane {
 /// | [`MarkReviewed`] | `shift-r` | neither; tuicr's `R` marks a hunk reviewed | `MarkReviewed` |
 /// | [`Commit`] | `shift-c` | neither; git's own tools use `C` for a commit | `Commit`, after a line of text |
 ///
-/// In the comment box the keys type text; `enter` closes the box, `shift-enter` starts a new
-/// line, and `escape` closes it too, as in tuicr. Closing the box keeps the draft: it was
-/// saved as it was typed.
+/// In the comment box the keys type text; `enter` closes the box and `shift-enter` starts
+/// a new line, as in tuicr. `escape` closes it too and keeps the draft, where tuicr's
+/// throws the edit away: the draft was saved as it was typed, and `d d` deletes it.
 pub fn controls() -> Vec<Control> {
     fn control(
         title: &'static str,

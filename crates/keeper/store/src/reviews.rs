@@ -77,10 +77,12 @@ pub enum Side {
 /// Where a thread sits: lines of one version of one file, and their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
-    /// The version the lines are read in: the full id of a recorded state or of a commit,
-    /// as the Recorder names it.
+    /// The version the lines are read in: the full id of a commit, a recorded state's or
+    /// one of the real repository's, as the Recorder names it; never the id of a git tree
+    /// object.
     pub tree: String,
-    /// The path of the file, relative to the folder of the worktree. Kept as its bytes.
+    /// The path of the file in that version, relative to the folder of the worktree: on
+    /// the old side of a renamed file its old path. Kept as its bytes.
     pub path: PathBuf,
     /// The side of the diff the lines were on where the comment was written.
     pub side: Side,
@@ -110,7 +112,9 @@ pub struct Comment {
     pub author: Author,
     /// Its text.
     pub text: String,
-    /// The number of the round it was sent in; none while it is a draft.
+    /// The number of the round it was sent in; none while it is a draft. A draft is a
+    /// comment of the reviewer with no round: the calls that edit, delete and send drafts
+    /// touch no comment of the agent, whatever its round.
     pub round: Option<u32>,
 }
 
@@ -119,7 +123,8 @@ pub struct Comment {
 pub struct Thread {
     /// Its id.
     pub id: ThreadId,
-    /// Where it sits.
+    /// Where its first comment was written, in the version it was written in. It is not
+    /// moved when the code changes: where the thread sits now is worked out from it.
     pub anchor: Anchor,
     /// Whether the reviewer resolved it.
     pub resolved: bool,
@@ -193,7 +198,8 @@ impl Store {
 
     /// Keeps a new review, with no thread and no round: its id, its workspace, its agent
     /// and its reviewed state are taken from `record`, and its threads and rounds must be
-    /// empty. An id the Store holds already is refused. Returns when it is on the drive.
+    /// empty. An id the Store holds already is refused, and so is a second review of no
+    /// agent for one workspace. Returns when it is on the drive.
     pub fn put_review(&self, record: &ReviewRecord) -> Result<(), StoreError> {
         let _ = record;
         todo!()
@@ -208,8 +214,8 @@ impl Store {
     }
 
     /// Keeps a new comment at the end of a thread: a draft reply of the reviewer, or, in a
-    /// later slice, a reply of the agent. An id the Store holds already is refused.
-    /// Returns when it is on the drive.
+    /// later slice, a reply of the agent, whose round that slice settles. An id the Store
+    /// holds already is refused. Returns when it is on the drive.
     pub fn put_comment(&self, thread: &ThreadId, comment: &Comment) -> Result<(), StoreError> {
         let _ = (thread, comment);
         todo!()
@@ -284,8 +290,8 @@ impl Store {
     }
 
     /// Flushes the drive now: every draft saved so far is then on it. The writer does
-    /// this by itself after a pause in the typing and when the Store closes; the Keeper
-    /// calls it when it is asked to stop.
+    /// this by itself after a pause in the typing, and when the last clone of the Store is
+    /// dropped, as when the Keeper stops and lets its parts go.
     pub fn flush(&self) -> Result<(), StoreError> {
         todo!()
     }

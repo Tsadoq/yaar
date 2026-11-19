@@ -53,8 +53,9 @@ impl fmt::Display for StateId {
 pub struct RecordedState {
     /// Its id.
     pub id: StateId,
-    /// The full id of its tree: two states hold the same files when their trees are the
-    /// same.
+    /// The full id of its git tree object: two states hold the same files when their
+    /// trees are the same. A tree is not a state: it is never given where a state or a
+    /// commit is asked for, as to [`StateStore::paths`].
     pub tree: String,
     /// The commit that was checked out in the worktree when it was taken; none where
     /// nothing was committed yet.
@@ -119,13 +120,18 @@ impl StateStore {
     }
 
     /// Records the state of `worktree` as its files are now, and returns it. When the
-    /// tree is that of the newest state, that state is returned and nothing is written:
-    /// a state is the files, and the same files are the same state.
+    /// tree is that of the newest state, that state is returned and no new state is made,
+    /// though objects of the files may have been written into the store: a state is the
+    /// files, and the same files are the same state.
+    ///
+    /// A new state is named by the ref `refs/yaar/states/<n>`, `n` the highest number of
+    /// the store's states plus 1, written with 10 digits.
     ///
     /// The real repository is left as it was: its list of files, refs, stash, reflog,
     /// objects and working files. No hook of the user runs and none can stop it. A
-    /// repository inside the worktree is recorded as the commit it is on, or left out when
-    /// it has none.
+    /// repository inside the worktree is recorded as the commit it is on; one with no
+    /// commit yet makes the recording fail with git's words, [`RecordError::Git`], until a
+    /// later version handles it.
     pub fn record(&self, worktree: &Worktree) -> Result<RecordedState, RecordError> {
         let _ = (worktree, &self.git);
         todo!()
@@ -133,7 +139,9 @@ impl StateStore {
 
     /// Copies a commit of the real repository into the store, with its tree, so that its
     /// files read with the real repository gone, as a thread on the old side of a diff
-    /// needs. A commit the store holds already costs nothing.
+    /// needs, and names it by the ref `refs/yaar/kept/<commit id>`, so that nothing that
+    /// cleans the store up takes it away while it is named. A commit the store holds
+    /// already costs nothing.
     pub fn keep_commit(&self, worktree: &Worktree, commit: &CommitId) -> Result<(), RecordError> {
         let _ = (worktree, commit);
         todo!()
@@ -145,24 +153,25 @@ impl StateStore {
     }
 
     /// Every file of a state or of a kept commit, ordered by the bytes of its path, as
-    /// git orders paths. `tree` is a [`StateId`], or the full id of a commit given to
-    /// [`StateStore::keep_commit`].
-    pub fn paths(&self, tree: &str) -> Result<Vec<PathBuf>, GitError> {
-        let _ = tree;
+    /// git orders paths. `commit` is the full id of a commit: a [`StateId`]'s, or one given
+    /// to [`StateStore::keep_commit`]; never that of a git tree object.
+    pub fn paths(&self, commit: &str) -> Result<Vec<PathBuf>, GitError> {
+        let _ = commit;
         todo!()
     }
 
-    /// The content of one file of a state or of a kept commit; none when it has no file
-    /// there, or when the store holds no such state or commit. A link is given as the path
-    /// it points at, as git stores it.
-    pub fn content(&self, tree: &str, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
-        let _ = (tree, path);
+    /// The content of one file of a state or of a kept commit, `commit` named as for
+    /// [`StateStore::paths`]; none when it has no file there, or when the store holds no
+    /// such state or commit. A link is given as the path it points at, as git stores it.
+    pub fn content(&self, commit: &str, path: &Path) -> Result<Option<Vec<u8>>, GitError> {
+        let _ = (commit, path);
         todo!()
     }
 
-    /// The paths that differ between two states, or kept commits, of the store, ordered by
-    /// path, each with what happened to it on the way from `from` to `to`, renames paired
-    /// by git's rule.
+    /// The paths that differ between two states, or kept commits, of the store, each named
+    /// by the full id of its commit as for [`StateStore::paths`], ordered by path, each
+    /// with what happened to it on the way from `from` to `to`, renames paired by git's
+    /// rule.
     pub fn changed_paths(&self, from: &str, to: &str) -> Result<Vec<ChangedPath>, GitError> {
         let _ = (from, to);
         todo!()

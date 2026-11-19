@@ -610,9 +610,17 @@ impl Workspaces {
     /// The worktree of a workspace, as the Recorder reads and records it: what the other
     /// parts of the Keeper are handed to read, record and commit in it. The one kept from
     /// an earlier call, with its running git process, when it is still the worktree at
-    /// that folder. Refused with [`Refusal::UnknownWorkspace`] for an id the Store does
-    /// not hold, and for a workspace whose worktree is gone.
-    pub fn worktree(&self, workspace: &WorkspaceId) -> Result<Arc<Worktree>, WorkspaceError> {
+    /// that folder. None for a workspace the Store holds whose worktree is gone: its
+    /// folder is gone or holds another worktree. Refused with
+    /// [`Refusal::UnknownWorkspace`] for an id the Store does not hold.
+    ///
+    /// It reads the Store, the folder and the worktree's id file, and starts no git
+    /// beyond what opening a worktree not seen before takes: a request may call it every
+    /// time, where [`Workspaces::repositories`] runs git in every repository.
+    pub fn worktree(
+        &self,
+        workspace: &WorkspaceId,
+    ) -> Result<Option<Arc<Worktree>>, WorkspaceError> {
         let _ = workspace;
         todo!()
     }
