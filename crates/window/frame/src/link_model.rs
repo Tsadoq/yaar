@@ -124,7 +124,21 @@ struct Reading {
     shared: Arc<Shared>,
     /// Whole frames, for the thread that writes them. When this is dropped that thread
     /// ends.
-    writing: mpsc::Sender<Vec<u8>>,
+    writing: mpsc::Sender<Outgoing>,
+}
+
+/// A whole frame for the thread that writes, and, for a frame whose leaving somebody waits
+/// for, where to say that it has left.
+struct Outgoing {
+    bytes: Vec<u8>,
+    /// Told once the frame is out; dropped without a word when it could not be written.
+    left: Option<mpsc::Sender<()>>,
+}
+
+impl From<Vec<u8>> for Outgoing {
+    fn from(bytes: Vec<u8>) -> Self {
+        Self { bytes, left: None }
+    }
 }
 
 /// What the reading thread tells the thread that draws.
@@ -262,13 +276,16 @@ impl Shared {
 ///
 /// A Keeper that takes none of a frame for [`WRITE_TIMEOUT`] is let go. The socket is
 /// shut down both ways, which ends the reading thread and so tells the Window.
-fn write(mut stream: UnixStream, frames: &mpsc::Receiver<Vec<u8>>, shared: &Shared) {
+fn write(mut stream: UnixStream, frames: &mpsc::Receiver<Outgoing>, shared: &Shared) {
     while let Ok(frame) = frames.recv() {
-        if let Err(why) = write_frame(&mut stream, &frame) {
+        if let Err(why) = write_frame(&mut stream, &frame.bytes) {
             shared.lose(why);
             // Part of a frame may be out: nothing after it would be understood.
             let _ = stream.shutdown(Shutdown::Both);
             return;
+        }
+        if let Some(left) = frame.left {
+            let _ = left.send(());
         }
     }
 }
@@ -487,7 +504,7 @@ impl KeeperLink {
             let reason = format!("the request cannot be sent: {error}");
             return Task::ready(Err(AskError::Refused(Refusal::Failed { reason })));
         }
-        if reading.writing.send(frame).is_err() {
+        if reading.writing.send(frame.into()).is_err() {
             // The writing thread let the Keeper go.
             reading.shared.waiting().askers.remove(&id);
             return Task::ready(Err(AskError::NotLinked));
@@ -524,7 +541,8 @@ impl KeeperLink {
                 bytes: piece.to_vec(),
             };
             // A piece of 64 KiB is always a frame the Link accepts.
-            if write_message(&mut frame, &message).is_err() || reading.writing.send(frame).is_err()
+            if write_message(&mut frame, &message).is_err()
+                || reading.writing.send(frame.into()).is_err()
             {
                 // The writing thread let the Keeper go: the status follows.
                 return;
@@ -577,7 +595,55 @@ impl KeeperLink {
     /// once. It goes to a Keeper of any protocol version, an older one too: the frame never
     /// changes shape. With no connection, nothing is sent.
     pub fn stop_everything(&mut self) {
-        todo!("send the stop-everything frame")
+        drop(self.send_stop());
+    }
+
+    /// As [`KeeperLink::stop_everything`], and then waits, for at most `within`, until the
+    /// frame has left the Window: a Window that quits as soon as it has queued the frame
+    /// could take it down with it. Gives whether the frame left. It did not when there is
+    /// no connection to send it on, when the Keeper was let go, and when it took nothing
+    /// for `within`, which is as long as the caller is held up. The one exception is a
+    /// Keeper of another protocol that takes none of the few bytes: it holds the caller up
+    /// for [`WRITE_TIMEOUT`] at most.
+    pub fn stop_everything_and_wait(&mut self, within: Duration) -> bool {
+        self.send_stop()
+            .is_some_and(|left| left.recv_timeout(within).is_ok())
+    }
+
+    /// Queues the stop frame and gives the receiver that hears of its leaving; none when
+    /// there is no connection to queue it on.
+    fn send_stop(&mut self) -> Option<mpsc::Receiver<()>> {
+        let mut bytes = Vec::new();
+        write_message(&mut bytes, &Message::Shutdown).ok()?;
+        let (left, hears) = mpsc::channel();
+        match &self.connection {
+            Some(Connection {
+                reading: Some(reading),
+                ..
+            }) => {
+                // The writing thread let the Keeper go when this fails: it is gone.
+                reading
+                    .writing
+                    .send(Outgoing {
+                        bytes,
+                        left: Some(left),
+                    })
+                    .ok()?;
+            }
+            // A Keeper of another protocol is neither asked nor listened to, and nothing
+            // else was written to it, so these few bytes fit its buffer. The timeout is
+            // for a Keeper that does not read at all.
+            Some(Connection {
+                stream,
+                reading: None,
+            }) => {
+                let _ = stream.set_write_timeout(Some(WRITE_TIMEOUT));
+                (&*stream).write_all(&bytes).ok()?;
+                let _ = left.send(());
+            }
+            None => return None,
+        }
+        Some(hears)
     }
 
     /// Records the outcome of [`crate::keeper::attach`] and tells the observers. With a

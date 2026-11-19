@@ -22,12 +22,12 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -38,8 +38,9 @@ use gpui_kit::{
 use yaar_frame::keeper::Attached;
 use yaar_frame::{BuildPane, Frame, KeeperLink, Models, Pane, bind, controls};
 use yaar_link::{
-    Head, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId, Request,
-    RequestId, TerminalId, TerminalSize, Workspace, WorkspaceId, read_message, write_message,
+    CreditedFile, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply, Repository,
+    RepositoryId, Request, RequestId, ReviewId, TerminalId, TerminalInfo, TerminalSize, Workspace,
+    WorkspaceAgents, WorkspaceId, read_message, write_message,
 };
 use yaar_terminal_pane::TerminalPane;
 
@@ -107,20 +108,144 @@ pub fn two_workspaces() -> Repository {
 /// What the test keeps of the pane the Frame builds: the pane and its own focus handle.
 type Built = (Entity<TerminalPane>, FocusHandle);
 
+/// What the Window asks at times a test does not choose, besides the resizes and the
+/// changes, and the Keeper answers itself, so that the question never reaches the test as
+/// its next request: the agents and the terminals at each connect, the workspace on screen
+/// at each change of it, the history and the uncommitted changes of a pane. Each is
+/// answered from what a test set, and counted.
+#[derive(Default)]
+struct Standing {
+    inner: Mutex<Inner>,
+}
+
+#[derive(Default)]
+struct Inner {
+    agents: Vec<WorkspaceAgents>,
+    terminals: Vec<TerminalInfo>,
+    /// By workspace; a workspace with none set has a history with no entry.
+    histories: HashMap<WorkspaceId, History>,
+    uncommitted: Vec<CreditedFile>,
+    /// What each `ShowWorkspace` named, in the order they were heard.
+    shown: Vec<Option<WorkspaceId>>,
+    /// The review the last `GetUncommitted` named.
+    uncommitted_review: Option<ReviewId>,
+    /// What every `ShowWorkspace` is refused with, as the Keeper of the contract does.
+    show_refusal: Option<Refusal>,
+    asked: Asked,
+    agents_held: Held,
+    terminals_held: Held,
+    /// Every frame of input, in the order it was read.
+    inputs: Vec<(TerminalId, Vec<u8>)>,
+    /// How many stop frames were read.
+    stops: usize,
+}
+
+/// How many times each question was heard.
+#[derive(Default, Clone, Copy)]
+struct Asked {
+    agents: usize,
+    terminals: usize,
+    history: usize,
+    uncommitted: usize,
+}
+
+/// The answers to one kind of question that a test keeps back: a Keeper that is slow.
+/// Each is made when the question is heard, as a Keeper makes it, and sent when released.
+#[derive(Default)]
+struct Held {
+    holding: bool,
+    held: VecDeque<(RequestId, Reply)>,
+}
+
+/// What the reading thread does with a request it reads.
+enum Heard {
+    /// It is the test's to read.
+    Elsewhere,
+    /// Answer it at once.
+    Answer(Result<Reply, Refusal>),
+    /// Its answer is kept back.
+    Kept,
+}
+
+impl Held {
+    fn release(&mut self, count: usize) -> Vec<(RequestId, Reply)> {
+        let count = count.min(self.held.len());
+        self.held.drain(..count).collect()
+    }
+
+    fn offer(&mut self, id: RequestId, reply: Reply) -> Heard {
+        if self.holding {
+            self.held.push_back((id, reply));
+            Heard::Kept
+        } else {
+            Heard::Answer(Ok(reply))
+        }
+    }
+}
+
+impl Standing {
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn hear(&self, id: RequestId, request: &Request) -> Heard {
+        let mut inner = self.lock();
+        match request {
+            Request::ListAgents => {
+                inner.asked.agents += 1;
+                let reply = Reply::Agents(inner.agents.clone());
+                inner.agents_held.offer(id, reply)
+            }
+            Request::ListTerminals => {
+                inner.asked.terminals += 1;
+                let reply = Reply::Terminals(inner.terminals.clone());
+                inner.terminals_held.offer(id, reply)
+            }
+            Request::ShowWorkspace { workspace } => {
+                inner.shown.push(workspace.clone());
+                Heard::Answer(match inner.show_refusal.clone() {
+                    Some(refusal) => Err(refusal),
+                    None => Ok(Reply::Done),
+                })
+            }
+            Request::GetHistory { workspace } => {
+                inner.asked.history += 1;
+                let history = inner.histories.get(workspace).cloned();
+                Heard::Answer(Ok(Reply::History(history.unwrap_or_else(|| History {
+                    workspace: workspace.clone(),
+                    start: None,
+                    entries: Vec::new(),
+                }))))
+            }
+            Request::GetUncommitted { review, .. } => {
+                inner.asked.uncommitted += 1;
+                inner.uncommitted_review = review.clone();
+                Heard::Answer(Ok(Reply::Uncommitted(inner.uncommitted.clone())))
+            }
+            _ => Heard::Elsewhere,
+        }
+    }
+}
+
 /// The Keeper, played by the test: the other end of the Window's connection.
 ///
 /// A thread of its own reads what the Window sends, since the thread of the test has to
 /// keep the app running while it waits. Of what it reads, the thread answers every
 /// [`Request::ResizeTerminal`] with `Done` itself and keeps its size, so that the test
-/// never has to, and refuses the question for the changes of a workspace, which the
-/// models ask whenever one comes on screen and no pane here shows; every other request
-/// waits for [`TestKeeper::request`], and every `Input` frame for [`TestKeeper::input`].
-/// The two are read apart, each in the order the Window sent it.
+/// never has to, refuses the question for the changes of a workspace, which the models ask
+/// whenever one comes on screen and no pane here shows, and answers by itself what the
+/// models ask at times a test does not choose (the agents, the terminals, the workspace on
+/// screen, a history, uncommitted changes); every other request waits for
+/// [`TestKeeper::request`], every `Input` frame for [`TestKeeper::input`], and the stop
+/// frame for [`TestKeeper::shutdown`]. The three are read apart, each in the order the
+/// Window sent it.
 pub struct TestKeeper {
     writer: Arc<Mutex<UnixStream>>,
     requests: Receiver<(RequestId, Request)>,
     inputs: Receiver<(TerminalId, Vec<u8>)>,
+    stops: Receiver<()>,
     sizes: Arc<Mutex<Vec<(TerminalId, TerminalSize)>>>,
+    standing: Arc<Standing>,
 }
 
 impl TestKeeper {
@@ -136,6 +261,18 @@ impl TestKeeper {
     pub fn attach_tapping(
         link: &Entity<KeeperLink>,
         cx: &mut TestAppContext,
+        tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
+    ) -> Self {
+        Self::attach_staged(link, cx, |_| {}, tap)
+    }
+
+    /// [`TestKeeper::attach_tapping`], with what the Keeper knows set by `stage` before
+    /// the Window is linked to it: the Window asks for the agents and the terminals the
+    /// moment it is, so what the first answers hold has to be set before.
+    pub fn attach_staged(
+        link: &Entity<KeeperLink>,
+        cx: &mut TestAppContext,
+        stage: impl FnOnce(&TestKeeper),
         mut tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
     ) -> Self {
         // The connection is read by a real thread, which the test executor cannot see.
@@ -144,11 +281,14 @@ impl TestKeeper {
         let mut reading = ours.try_clone().expect("a second handle to the socket");
         let writer = Arc::new(Mutex::new(ours));
         let sizes = Arc::new(Mutex::new(Vec::new()));
+        let standing = Arc::new(Standing::default());
         let (tell_request, requests) = channel();
         let (tell_input, inputs) = channel();
+        let (tell_stop, stops) = channel();
         std::thread::spawn({
             let writer = writer.clone();
             let sizes = sizes.clone();
+            let standing = standing.clone();
             move || {
                 while let Ok(message) = read_message(&mut reading) {
                     match message {
@@ -184,14 +324,36 @@ impl TestKeeper {
                                 break;
                             }
                         }
-                        Message::Request { id, request } => {
-                            if tell_request.send((id, request)).is_err() {
+                        Message::Request { id, request } => match standing.hear(id, &request) {
+                            Heard::Elsewhere => {
+                                if tell_request.send((id, request)).is_err() {
+                                    break;
+                                }
+                            }
+                            Heard::Answer(reply) => {
+                                let answer = Message::Reply { to: id, reply };
+                                let mut writer = writer.lock().expect("the writer");
+                                if write_message(&mut *writer, &answer).is_err() {
+                                    break;
+                                }
+                            }
+                            Heard::Kept => {}
+                        },
+                        Message::Input { terminal, bytes } => {
+                            tap(&terminal, &bytes);
+                            // Kept before the test can read the frame, so that what a
+                            // test finds kept is never later than what it read.
+                            standing
+                                .lock()
+                                .inputs
+                                .push((terminal.clone(), bytes.clone()));
+                            if tell_input.send((terminal, bytes)).is_err() {
                                 break;
                             }
                         }
-                        Message::Input { terminal, bytes } => {
-                            tap(&terminal, &bytes);
-                            if tell_input.send((terminal, bytes)).is_err() {
+                        Message::Shutdown => {
+                            standing.lock().stops += 1;
+                            if tell_stop.send(()).is_err() {
                                 break;
                             }
                         }
@@ -205,6 +367,15 @@ impl TestKeeper {
             pid: 1,
             app_version: "9.9.9".to_owned(),
         };
+        let end = Self {
+            writer,
+            requests,
+            inputs,
+            stops,
+            sizes,
+            standing,
+        };
+        stage(&end);
         link.update(cx, |link, cx| {
             link.attached(
                 Ok(Attached {
@@ -215,12 +386,7 @@ impl TestKeeper {
                 cx,
             )
         });
-        Self {
-            writer,
-            requests,
-            inputs,
-            sizes,
-        }
+        end
     }
 
     /// Waits, with the app running, for the next message on `channel`. Fails at the
@@ -285,6 +451,138 @@ impl TestKeeper {
             .iter()
             .filter(|(id, _)| id == terminal)
             .map(|(_, size)| *size)
+            .collect()
+    }
+
+    /// Sets the agents every `ListAgents` is answered with from now on. It tells the
+    /// Window nothing: a test that wants it to read them tells `Fact::AgentsChanged`.
+    pub fn set_agents(&self, agents: Vec<WorkspaceAgents>) {
+        self.standing.lock().agents = agents;
+    }
+
+    /// Sets the terminals every `ListTerminals` is answered with from now on.
+    pub fn set_terminals(&self, terminals: Vec<TerminalInfo>) {
+        self.standing.lock().terminals = terminals;
+    }
+
+    /// Sets the history every `GetHistory` of its workspace is answered with from now on.
+    pub fn set_history(&self, history: History) {
+        let mut inner = self.standing.lock();
+        inner.histories.insert(history.workspace.clone(), history);
+    }
+
+    /// Sets the changes every `GetUncommitted` is answered with from now on, whatever
+    /// workspace and review it names.
+    pub fn set_uncommitted(&self, uncommitted: Vec<CreditedFile>) {
+        self.standing.lock().uncommitted = uncommitted;
+    }
+
+    /// From now on refuses every `ShowWorkspace` with this, as the Keeper of the contract
+    /// does; none to answer them again.
+    pub fn refuse_show(&self, refusal: Option<Refusal>) {
+        self.standing.lock().show_refusal = refusal;
+    }
+
+    /// What each `ShowWorkspace` the Window sent named, in the order it sent them.
+    pub fn shown_told(&self) -> Vec<Option<WorkspaceId>> {
+        self.standing.lock().shown.clone()
+    }
+
+    /// The workspace the last `ShowWorkspace` named; none before one was heard, and when
+    /// the last named none.
+    pub fn shown_workspace(&self) -> Option<WorkspaceId> {
+        self.standing.lock().shown.last().cloned().flatten()
+    }
+
+    /// The review the last `GetUncommitted` named; none before one was heard, and when
+    /// the last named none.
+    pub fn uncommitted_review(&self) -> Option<ReviewId> {
+        self.standing.lock().uncommitted_review.clone()
+    }
+
+    /// How many times the Window asked for the agents so far.
+    pub fn agents_asked(&self) -> usize {
+        self.standing.lock().asked.agents
+    }
+
+    /// How many times the Window asked for the terminals so far.
+    pub fn terminals_asked(&self) -> usize {
+        self.standing.lock().asked.terminals
+    }
+
+    /// How many times the Window asked for a history so far.
+    pub fn history_asked(&self) -> usize {
+        self.standing.lock().asked.history
+    }
+
+    /// How many times the Window asked for uncommitted changes so far.
+    pub fn uncommitted_asked(&self) -> usize {
+        self.standing.lock().asked.uncommitted
+    }
+
+    /// From now on keeps the questions for the agents unanswered until
+    /// [`TestKeeper::release_agents`]: a Keeper that is slow. Each answer is made when the
+    /// question is heard, from what is set then.
+    pub fn hold_agents(&self) {
+        self.standing.lock().agents_held.holding = true;
+    }
+
+    /// How many answers for the agents are kept back.
+    pub fn held_agents(&self) -> usize {
+        self.standing.lock().agents_held.held.len()
+    }
+
+    /// Sends the `count` oldest kept answers for the agents, in the order they were asked.
+    pub fn release_agents(&self, count: usize) {
+        let released = self.standing.lock().agents_held.release(count);
+        self.send_replies(released);
+    }
+
+    /// As [`TestKeeper::hold_agents`], for the terminals.
+    pub fn hold_terminals(&self) {
+        self.standing.lock().terminals_held.holding = true;
+    }
+
+    /// How many answers for the terminals are kept back.
+    pub fn held_terminals(&self) -> usize {
+        self.standing.lock().terminals_held.held.len()
+    }
+
+    /// Sends the `count` oldest kept answers for the terminals, in the order they were
+    /// asked.
+    pub fn release_terminals(&self, count: usize) {
+        let released = self.standing.lock().terminals_held.release(count);
+        self.send_replies(released);
+    }
+
+    fn send_replies(&self, replies: Vec<(RequestId, Reply)>) {
+        for (to, reply) in replies {
+            self.reply(to, Ok(reply));
+        }
+    }
+
+    /// How many stop frames the Window sent so far. A frame is counted before the test
+    /// can read it, so a count of none is read after a barrier: something the Window sent
+    /// after, which this end heard.
+    pub fn stops_heard(&self) -> usize {
+        self.standing.lock().stops
+    }
+
+    /// Waits, with the app running, for the stop frame the Window sends. Fails when none
+    /// comes.
+    pub fn shutdown(&self, cx: &mut TestAppContext) {
+        self.next(&self.stops, "the stop frame", cx);
+    }
+
+    /// The frames of input the Window sent to `terminal` so far, in the order it sent
+    /// them, whether or not the test read them with [`TestKeeper::input`].
+    pub fn inputs(&self, terminal: &TerminalId) -> Vec<Vec<u8>> {
+        self.standing
+            .lock()
+            .inputs
+            .iter()
+            .filter(|(from, _)| from == terminal)
+            .map(|(_, bytes)| bytes.clone())
             .collect()
     }
 
@@ -419,6 +717,17 @@ pub fn open_panes_listing(
     listed: &[Repository],
     tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
 ) -> (Panes, VisualTestContext) {
+    open_panes_staged(cx, listed, |_| {}, tap)
+}
+
+/// [`open_panes_listing`], with what the Keeper knows set by `stage` before the window is
+/// linked to it: see [`TestKeeper::attach_staged`].
+pub fn open_panes_staged(
+    cx: &mut TestAppContext,
+    listed: &[Repository],
+    stage: impl FnOnce(&TestKeeper),
+    tap: impl FnMut(&TerminalId, &[u8]) + Send + 'static,
+) -> (Panes, VisualTestContext) {
     init_as_the_app_does(cx);
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
@@ -468,7 +777,7 @@ pub fn open_panes_listing(
     cx.run_until_parked();
 
     let (pane, pane_focus) = built.take().expect("the Frame built the terminal pane");
-    let keeper = TestKeeper::attach_tapping(&link, &mut cx, tap);
+    let keeper = TestKeeper::attach_staged(&link, &mut cx, stage, tap);
     keeper.list(listed, &mut cx);
     wait_until(&mut cx, "the workspace on screen", |cx| {
         models

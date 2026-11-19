@@ -90,6 +90,8 @@ pub struct WorkspaceList {
     /// Counts what the user asked here, so that a refusal can tell whether it still
     /// answers the last of it.
     asked_by_user: u64,
+    /// What the Keeper was last told is on screen; none while it was told nothing.
+    told_shown: Option<Option<WorkspaceId>>,
 }
 
 impl WorkspaceList {
@@ -100,6 +102,8 @@ impl WorkspaceList {
         cx.observe(&link, |list, link, cx| {
             if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
                 list.refresh(cx);
+                // A Keeper just reached knows nothing of what is on screen.
+                list.tell_shown(true, cx);
             }
         })
         .detach();
@@ -126,9 +130,11 @@ impl WorkspaceList {
             listing: None,
             awaits_list: false,
             asked_by_user: 0,
+            told_shown: None,
         };
         if connected {
             list.refresh(cx);
+            list.tell_shown(true, cx);
         }
         list
     }
@@ -158,6 +164,7 @@ impl WorkspaceList {
         self.wanted = None;
         if self.selected.as_ref() != Some(workspace) {
             self.selected = Some(workspace.clone());
+            self.tell_shown(false, cx);
             cx.notify();
         }
     }
@@ -265,8 +272,29 @@ impl WorkspaceList {
         if repositories != self.repositories || selected != self.selected {
             self.repositories = repositories;
             self.selected = selected;
+            self.tell_shown(false, cx);
             cx.notify();
         }
+    }
+
+    /// Tells the Keeper which workspace is on screen, so that it watches that worktree:
+    /// when it is not what the Keeper was last told, or always with `force`, as to a
+    /// Keeper just reached. The answer is not waited for. A Keeper that refuses, as the
+    /// one of the contract does, is told again only at the next change.
+    fn tell_shown(&mut self, force: bool, cx: &mut Context<Self>) {
+        if !matches!(self.link.read(cx).status(), LinkStatus::Connected(_)) {
+            return;
+        }
+        if !force && self.told_shown.as_ref() == Some(&self.selected) {
+            return;
+        }
+        self.told_shown = Some(self.selected.clone());
+        let workspace = self.selected.clone();
+        self.link
+            .update(cx, |link, cx| {
+                link.ask(Request::ShowWorkspace { workspace }, cx)
+            })
+            .detach();
     }
 
     /// Moves the workspace on screen by `by` places in the order of the list, around

@@ -6,17 +6,19 @@ use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 
-use yaar_link::{Age, Hello};
+use std::time::Duration;
+
+use yaar_link::{Age, Fact, Hello, SessionId, WorkspaceId};
 
 use crate::controls::{
     Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
-    SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ShowFinishedTurn, ToggleSidebar,
-    UnpinSidebar,
+    QuitAndStopAgents, SelectNextWorkspace, SelectPreviousWorkspace, SetBase, ShowFinishedTurn,
+    ToggleSidebar, UnpinSidebar,
 };
 use crate::keeper;
 use crate::link_model::{KeeperLink, LinkStatus};
 use crate::models::Models;
-use crate::sidebar::Sidebar;
+use crate::sidebar::{Sidebar, workspace_name};
 use crate::trace;
 
 /// A pane, as the Frame holds it. The Frame knows nothing else of a pane: it lays the
@@ -32,6 +34,10 @@ pub struct Pane {
 
 /// Builds one pane for a window, from the shared models: all the Frame asks of a pane.
 pub type BuildPane = Box<dyn FnOnce(&Models, &mut Window, &mut App) -> Pane>;
+
+/// How long the quit that stops everything waits for the stop frame to leave before it quits
+/// all the same: a Keeper that takes nothing must not hold the window open.
+const STOP_WAIT: Duration = Duration::from_secs(1);
 
 /// The notice of a turn that ended in a workspace the window did not show.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -99,7 +105,11 @@ impl Beside {
 /// - [`crate::FocusNextPane`] and [`crate::FocusPreviousPane`] move the focus from pane
 ///   to pane, in the order they are laid out, round from the last to the first;
 /// - [`crate::MovePanes`] moves the panes after the first to the next place of
-///   [`Beside`].
+///   [`Beside`];
+/// - [`crate::ShowFinishedTurn`] puts on screen the workspace of the notice of a finished
+///   turn, see [`Frame::turn_notice`];
+/// - [`crate::QuitAndStopAgents`] sends the stop frame, waits a moment for it to leave, and
+///   quits the app. Nothing in the Frame handles [`crate::Quit`]: the Window program does.
 ///
 /// The first pane fills half the room beside the sidebar; the panes after it share the
 /// other half, one above the other when they lie to the right or the left of the first,
@@ -125,8 +135,10 @@ impl Beside {
 ///
 /// For tests, which cannot read what is drawn, some elements carry a selector that
 /// `debug_bounds` finds while they are drawn: the notice, `frame-notice`, the note about
-/// an older Keeper, `frame-keeper-note`, the field for the base, `frame-base-field`, and
-/// each pane's place, `frame-pane-<name>`.
+/// an older Keeper, `frame-keeper-note`, with its offer of the quit that stops everything,
+/// `frame-keeper-note-stop`, the notice of a finished turn, `frame-turn-notice`, with its
+/// control, `frame-turn-notice-show`, the field for the base, `frame-base-field`, and each
+/// pane's place, `frame-pane-<name>`.
 pub struct Frame {
     link: Entity<KeeperLink>,
     first_frame_marked: bool,
@@ -148,6 +160,9 @@ struct Composed {
     beside: Beside,
     /// Why the dialog for a folder could not be shown, the last time it was asked for.
     no_dialog: Option<String>,
+    /// The workspace and the session of the last turn that ended where the window did not
+    /// look, until its workspace comes on screen.
+    finished_elsewhere: Option<(WorkspaceId, SessionId)>,
 }
 
 /// The one-line field the user types a base into.
@@ -180,11 +195,33 @@ impl Frame {
     ) -> Self {
         let link = models.link.clone();
         cx.observe(&link, |_, _, cx| cx.notify()).detach();
-        // The notice is the refusal the list holds.
-        cx.observe(&models.workspaces, |_, _, cx| cx.notify())
-            .detach();
+        // The notice is the refusal the list holds; and the notice of a finished turn goes
+        // once its workspace is on screen, whatever put it there, and does not come back
+        // when the workspace is left.
+        cx.observe(&models.workspaces, |frame, workspaces, cx| {
+            if let Some(composed) = &mut frame.composed
+                && let Some((workspace, _)) = &composed.finished_elsewhere
+                && workspaces.read(cx).selected() == Some(workspace)
+            {
+                composed.finished_elsewhere = None;
+            }
+            cx.notify();
+        })
+        .detach();
+        // The notice names the session by its title.
+        cx.observe(&models.agents, |_, _, cx| cx.notify()).detach();
+        cx.subscribe(&link, |frame, _, fact: &Fact, cx| {
+            if let Fact::TurnEnded {
+                workspace, session, ..
+            } = fact
+            {
+                frame.turn_ended(workspace, session, cx);
+            }
+        })
+        .detach();
 
-        let sidebar = cx.new(|cx| Sidebar::new(models.workspaces.clone(), cx));
+        let sidebar =
+            cx.new(|cx| Sidebar::with_agents(models.workspaces.clone(), models.agents.clone(), cx));
         let width = window.viewport_size().width;
         sidebar.update(cx, |sidebar, cx| sidebar.set_window_width(width, cx));
         cx.observe_window_bounds(window, |frame, window, cx| {
@@ -246,6 +283,7 @@ impl Frame {
                 base_field: None,
                 beside: Beside::default(),
                 no_dialog: None,
+                finished_elsewhere: None,
             }),
         }
     }
@@ -304,8 +342,40 @@ impl Frame {
     /// notice's workspace on screen, by its control or otherwise, takes it away. Of two
     /// turns that ended elsewhere, the later one's notice is shown.
     pub fn turn_notice(&self, cx: &App) -> Option<TurnNotice> {
-        let _ = cx;
-        todo!("the notice of a turn that ended elsewhere")
+        let composed = self.composed.as_ref()?;
+        let (workspace, session) = composed.finished_elsewhere.as_ref()?;
+        let list = composed.models.workspaces.read(cx);
+        // The notice goes with the workspace's coming on screen, and is not asked to wait
+        // for the observer that drops it.
+        if list.selected() == Some(workspace) {
+            return None;
+        }
+        let name = workspace_name(list.workspace(workspace)?);
+        // The list of agents may not hold the session yet: the notice says what it can.
+        let title = composed
+            .models
+            .agents
+            .read(cx)
+            .session(session)
+            .map_or("An agent", |session| session.title.as_str());
+        Some(TurnNotice {
+            workspace: workspace.clone(),
+            session: session.clone(),
+            text: format!("{title} finished a turn in {name}"),
+        })
+    }
+
+    /// The Keeper told that a turn ended: unless the workspace is on screen, it is the one
+    /// the notice is about now, in place of the notice before it.
+    fn turn_ended(&mut self, workspace: &WorkspaceId, session: &SessionId, cx: &mut Context<Self>) {
+        let Some(composed) = &mut self.composed else {
+            return;
+        };
+        if composed.models.workspaces.read(cx).selected() == Some(workspace) {
+            return;
+        }
+        composed.finished_elsewhere = Some((workspace.clone(), session.clone()));
+        cx.notify();
     }
 
     /// The names of the panes, in the order they are laid out.
@@ -556,10 +626,37 @@ impl Frame {
         composed.panes[to].focus.focus(window, cx);
     }
 
-    /// Puts the workspace of the notice of a finished turn on screen. Taken here so that the
-    /// key is the Frame's from the first; until the notice is built there is none to act
-    /// on, and the action does nothing.
-    fn show_finished_turn(&mut self, _: &ShowFinishedTurn, _: &mut Window, _: &mut Context<Self>) {}
+    /// Puts the workspace of the notice of a finished turn on screen; with no notice, it
+    /// does nothing. The notice goes once its workspace is on screen.
+    fn show_finished_turn(&mut self, _: &ShowFinishedTurn, _: &mut Window, cx: &mut Context<Self>) {
+        let Some(notice) = self.turn_notice(cx) else {
+            return;
+        };
+        if let Some(composed) = &self.composed {
+            composed
+                .models
+                .workspaces
+                .update(cx, |list, cx| list.select(&notice.workspace, cx));
+        }
+    }
+
+    /// Quits the Window and stops what the Keeper holds: the stop frame goes first, and
+    /// the Window waits a moment for it to leave, since an app that quits at once could
+    /// take the frame down with it.
+    fn quit_and_stop_agents(
+        &mut self,
+        _: &QuitAndStopAgents,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.stop_everything_and_quit(cx);
+    }
+
+    fn stop_everything_and_quit(&mut self, cx: &mut Context<Self>) {
+        self.link
+            .update(cx, |link, _| link.stop_everything_and_wait(STOP_WAIT));
+        cx.quit();
+    }
 
     fn move_panes(&mut self, _: &MovePanes, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(composed) = &mut self.composed {
@@ -568,21 +665,40 @@ impl Frame {
         }
     }
 
-    /// The note about an older Keeper, as the element that shows it.
-    fn keeper_note_line(&self, cx: &App) -> Option<Div> {
+    /// The note about an older Keeper, as the element that shows it, with the offer of the
+    /// quit that stops everything: the one way out the window has from a Keeper it cannot
+    /// replace by itself.
+    fn keeper_note_line(&self, cx: &Context<Self>) -> Option<Div> {
         let note = self.keeper_note(cx)?;
         let theme = cx.theme();
+        let offer = div()
+            .id("frame-keeper-note-stop")
+            .debug_selector(|| "frame-keeper-note-stop".to_owned())
+            .flex_none()
+            .px_2()
+            .rounded_md()
+            .border_1()
+            .border_color(theme.border)
+            .text_color(theme.foreground)
+            .cursor_pointer()
+            .hover(|offer| offer.bg(theme.list_hover))
+            .on_click(cx.listener(|frame, _, _, cx| frame.stop_everything_and_quit(cx)))
+            .child("Quit and stop agents");
         Some(
             div()
                 .debug_selector(|| "frame-keeper-note".to_owned())
                 .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
                 .px_3()
                 .py_1()
                 .text_sm()
                 .text_color(theme.muted_foreground)
                 .border_b_1()
                 .border_color(theme.border)
-                .child(note),
+                .child(div().flex_1().min_w_0().child(note))
+                .child(offer),
         )
     }
 
@@ -630,7 +746,7 @@ impl Frame {
 
     /// The name of the app and the line about the Keeper, in the middle of the room
     /// they are given: what a window shows that has nothing else to show.
-    fn empty(&self, cx: &App) -> Div {
+    fn empty(&self, cx: &Context<Self>) -> Div {
         div()
             .size_full()
             .flex()
@@ -696,6 +812,35 @@ impl Render for Frame {
                 .border_color(border)
                 .child(notice)
         });
+        let turn_notice = self.turn_notice(cx).map(|notice| {
+            div()
+                .debug_selector(|| "frame-turn-notice".to_owned())
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .border_b_1()
+                .border_color(border)
+                .child(div().flex_1().min_w_0().truncate().child(notice.text))
+                .child(
+                    div()
+                        .id("frame-turn-notice-show")
+                        .debug_selector(|| "frame-turn-notice-show".to_owned())
+                        .flex_none()
+                        .px_2()
+                        .rounded_md()
+                        .border_1()
+                        .border_color(border)
+                        .cursor_pointer()
+                        .on_click(cx.listener(|frame, _, window, cx| {
+                            frame.show_finished_turn(&ShowFinishedTurn, window, cx);
+                        }))
+                        .child("Show"),
+                )
+        });
         let base_field = composed.base_field.as_ref().map(|field| {
             div()
                 .debug_selector(|| "frame-base-field".to_owned())
@@ -750,6 +895,7 @@ impl Render for Frame {
             .on_action(cx.listener(Self::focus_previous_pane))
             .on_action(cx.listener(Self::move_panes))
             .on_action(cx.listener(Self::show_finished_turn))
+            .on_action(cx.listener(Self::quit_and_stop_agents))
             .child(composed.sidebar.clone())
             .child(
                 div()
@@ -759,6 +905,7 @@ impl Render for Frame {
                     .flex()
                     .flex_col()
                     .children(notice)
+                    .children(turn_notice)
                     .children(self.keeper_note_line(cx))
                     .children(base_field)
                     .child(panes)
