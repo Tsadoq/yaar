@@ -337,6 +337,28 @@ mod tests {
     }
 
     #[test]
+    fn a_thread_waits_for_the_reviewer_only_while_the_agent_replied_last() {
+        let mut review = sent("A", 1);
+        reply(&mut review, 1, 201, false);
+        assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
+
+        // The reviewer's follow-up is a draft, and once sent the thread is sent again: the
+        // agent's earlier reply no longer makes it wait.
+        review
+            .reply(&thread(1), comment(150), "not quite")
+            .expect("a follow-up");
+        assert_eq!(state(&review, 1), ThreadState::Draft);
+        review
+            .send(Scope::Everything, "S2", SentBy::Delivered)
+            .expect("send the follow-up");
+        assert_eq!(state(&review, 1), ThreadState::Sent);
+
+        // The agent replies again, and the thread waits again.
+        reply(&mut review, 1, 202, false);
+        assert_eq!(state(&review, 1), ThreadState::WaitsForReviewer);
+    }
+
+    #[test]
     fn a_thread_that_holds_only_a_draft_is_a_draft() {
         let review = review_of("A", 1);
         assert_eq!(state(&review, 1), ThreadState::Draft);
