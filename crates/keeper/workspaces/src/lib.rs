@@ -358,7 +358,8 @@ impl Workspaces {
     }
 
     /// Stops watching the worktree of `workspace`. Its ledger is kept: a change seen
-    /// before is still credited as it was.
+    /// before is still credited as it was. A file written from now on, below a folder
+    /// that a command made, is no agent's: nothing saw it written.
     pub fn unwatch(&self, workspace: &WorkspaceId) {
         self.watching.unwatch(workspace);
     }

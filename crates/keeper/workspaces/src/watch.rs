@@ -177,11 +177,16 @@ impl Watching {
         places: Places,
         told: Box<dyn Fn(Seen) + Send + Sync>,
     ) -> Result<(), (PathBuf, io::Error)> {
-        let ledger = lock(&self.entries)
-            .entry(workspace.clone())
-            .or_default()
-            .ledger
-            .clone();
+        let (ledger, was_watched) = {
+            let mut entries = lock(&self.entries);
+            let entry = entries.entry(workspace.clone()).or_default();
+            (Arc::clone(&entry.ledger), entry.watcher.is_some())
+        };
+        if !was_watched {
+            // Nothing watched since the folders were noted, or since the last watcher: a
+            // late notice of the one that was dropped may have noted one more.
+            lock(&ledger).forget_folders();
+        }
         let made = {
             let places = places.clone();
             let ledger = Arc::clone(&ledger);
@@ -243,14 +248,23 @@ impl Watching {
         Ok(())
     }
 
-    /// Stops the watcher of `workspace`; its ledger is kept.
+    /// Stops the watcher of `workspace`; its ledger is kept, but for the folders that
+    /// appeared: a file written below one from now on is not seen, and is not theirs.
     pub(crate) fn unwatch(&self, workspace: &WorkspaceId) {
         // Dropped after the lock is let go of: the watcher's own thread may be waiting
         // for the ledger, never for this.
-        let stopped = lock(&self.entries)
-            .get_mut(workspace)
-            .and_then(|entry| entry.watcher.take());
+        let (stopped, ledger) = {
+            let mut entries = lock(&self.entries);
+            let Some(entry) = entries.get_mut(workspace) else {
+                return;
+            };
+            (entry.watcher.take(), Arc::clone(&entry.ledger))
+        };
+        let was_watched = stopped.is_some();
         drop(stopped);
+        if was_watched {
+            lock(&ledger).forget_folders();
+        }
     }
 
     /// The workspaces that have a watcher.

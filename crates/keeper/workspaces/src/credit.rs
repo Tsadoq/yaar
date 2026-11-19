@@ -172,8 +172,8 @@ impl Ledger {
     /// shell command ran then, the command counted from its beginning to [`SETTLE`] after
     /// its end, and none when no command or more than one ran then. A command that has
     /// not ended runs until `now`. A path the watcher never saw change is judged by the
-    /// folders it lies in that the watcher saw appear, the same way. Empty: no agent made
-    /// it.
+    /// nearest folder it lies in that the watcher saw appear, the same way. Empty: no
+    /// agent made it.
     pub fn credit(&self, path: &Path, now: Instant) -> Vec<String> {
         if let Some(noted) = self.files.get(path) {
             return if noted.named.is_empty() {
@@ -182,13 +182,14 @@ impl Ledger {
                 noted.named.clone()
             };
         }
-        let mut credited = Vec::new();
-        for folder in path.ancestors().skip(1) {
-            if let Some(noted) = self.folders.get(folder) {
-                join(&mut credited, self.judge(noted, now));
-            }
-        }
-        credited
+        // The nearest folder that appeared speaks for the file: one that appeared under a
+        // folder a command made, with no command running, is no command's, and what lies
+        // in it is not the command's either.
+        path.ancestors()
+            .skip(1)
+            .find_map(|folder| self.folders.get(folder))
+            .map(|noted| self.judge(noted, now))
+            .unwrap_or_default()
     }
 
     /// The sessions the moments of `noted` credit, those judged for good first.
@@ -213,10 +214,10 @@ impl Ledger {
         running.next().is_none().then_some(session.as_str())
     }
 
-    /// The paths the ledger holds something of: those a tool named and those the watcher
-    /// saw, each once.
-    pub fn paths(&self) -> impl Iterator<Item = &Path> {
-        self.files.keys().map(PathBuf::as_path)
+    /// Forgets every folder that appeared. The watcher is gone, and a file written below
+    /// one while nothing watched was not seen written: it is no folder's.
+    pub fn forget_folders(&mut self) {
+        self.folders.clear();
     }
 
     /// Forgets what was noted of `path`: it is committed, or no longer changed.
@@ -268,7 +269,16 @@ impl Ledger {
         let empty = |noted: &Noted| {
             noted.named.is_empty() && noted.judged.is_empty() && noted.pending.is_empty()
         };
-        folders.retain(|_, noted| !empty(noted));
+        // A folder with nothing credited stays under one that credits: without its own
+        // entry, what lies in it would be judged by the folder above.
+        let crediting: BTreeSet<PathBuf> = folders
+            .iter()
+            .filter(|(_, noted)| !empty(noted))
+            .map(|(path, _)| path.clone())
+            .collect();
+        folders.retain(|path, noted| {
+            !empty(noted) || path.ancestors().skip(1).any(|up| crediting.contains(up))
+        });
         // A file under a folder that is kept stays, whatever it holds: without its own
         // entry it would be judged by the folder.
         files.retain(|path, noted| {
@@ -475,9 +485,11 @@ mod tests {
         assert!(by(&ledger, "y.txt", at(start, 20)).is_empty());
     }
 
+    /// The paths the ledger holds something of.
     fn paths_of(ledger: &Ledger) -> Vec<String> {
         ledger
-            .paths()
+            .files
+            .keys()
             .map(|path| path.to_string_lossy().into_owned())
             .collect()
     }
@@ -566,6 +578,45 @@ mod tests {
         assert!(by(&ledger, "out/f.txt", at(start, 20)).is_empty());
     }
 
+    #[test]
+    fn a_file_the_watcher_never_saw_is_judged_by_the_nearest_folder_that_appeared_only() {
+        // A command made `docs`; later a folder was moved into it by hand. What the
+        // watcher never saw of the moved folder is not the command's.
+        let start = Instant::now();
+        let mut ledger = Ledger::new();
+        ledger.began("a", at(start, 0));
+        ledger.appeared(Path::new("docs"), at(start, 10));
+        ledger.ended("a", at(start, 30));
+        ledger.appeared(Path::new("docs/assets"), at(start, 4000));
+        let now = at(start, 5000);
+        assert!(by(&ledger, "docs/assets/f.txt", now).is_empty());
+        assert!(by(&ledger, "docs/assets/deep/f.txt", now).is_empty());
+        assert_eq!(by(&ledger, "docs/other.txt", now), ["a"]);
+        // Letting go of what is judged keeps the nearest folder in the way, though it
+        // credits nobody.
+        ledger.compact(at(start, 20_000));
+        let now = at(start, 21_000);
+        assert!(by(&ledger, "docs/assets/f.txt", now).is_empty());
+        assert_eq!(by(&ledger, "docs/other.txt", now), ["a"]);
+    }
+
+    #[test]
+    fn once_the_folders_are_forgotten_a_file_the_watcher_never_saw_is_no_agents() {
+        let start = Instant::now();
+        let mut ledger = Ledger::new();
+        ledger.began("a", at(start, 0));
+        ledger.appeared(Path::new("out"), at(start, 10));
+        ledger.seen(Path::new("out/seen.txt"), at(start, 20));
+        ledger.wrote("a", Path::new("out/named.txt"), at(start, 21));
+        assert_eq!(by(&ledger, "out/f.txt", at(start, 30)), ["a"]);
+        ledger.forget_folders();
+        let now = at(start, 40);
+        assert!(by(&ledger, "out/f.txt", now).is_empty());
+        // What the watcher saw of a file, and what a tool named, is kept.
+        assert_eq!(by(&ledger, "out/seen.txt", now), ["a"]);
+        assert_eq!(by(&ledger, "out/named.txt", now), ["a"]);
+    }
+
     /// Everything `credit` says of the paths of `ledger`, to compare before and after.
     fn credits_of(ledger: &Ledger, paths: &[&str], now: Instant) -> Vec<Vec<String>> {
         paths.iter().map(|path| by(ledger, path, now)).collect()
@@ -638,7 +689,7 @@ mod tests {
         for n in 0..NOTES_PER_COMPACTION - 1 {
             ledger.seen(Path::new(&format!("target/{n}.o")), at(start, n as u64));
         }
-        assert_eq!(ledger.paths().count(), NOTES_PER_COMPACTION - 1);
+        assert_eq!(paths_of(&ledger).len(), NOTES_PER_COMPACTION - 1);
         ledger.seen(Path::new("late.txt"), at(start, 60_000));
         assert_eq!(paths_of(&ledger), ["late.txt"]);
     }
@@ -688,7 +739,7 @@ mod tests {
         ledger.began("b", at(start, 30));
         ledger.ended("b", at(start, 40));
         ledger.began("c", at(start, 50));
-        let held = |ledger: &Ledger| format!("{ledger:?}").matches("Window").count();
+        let held = |ledger: &Ledger| ledger.commands.values().map(Vec::len).sum::<usize>();
         assert_eq!(held(&ledger), 3);
         ledger.compact(at(start, 4000));
         assert_eq!(

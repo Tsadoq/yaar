@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-use support::{Heard, Scratch, ago, commit_all, init, wait_until, workspaces, write};
+use support::{
+    Heard, Scratch, ago, commit_all, git, init, program, touch, wait_until, workspaces, write,
+};
 use yaar_adapter_claude::ClaudeCode;
 use yaar_agent::{Adapter, Event, Phase, Report};
 use yaar_system_tests::recorded::{self, HookRecord};
@@ -305,6 +307,74 @@ fn a_folder_with_files_moved_into_the_worktree_is_credited_to_the_session_whose_
         w.by("moved/inner/f.txt") == Some(strings(&["a"]))
     });
     assert_eq!(w.by("moved-by-hand/f.txt"), Some(Vec::new()));
+}
+
+#[test]
+fn a_file_written_while_the_worktree_was_not_watched_is_no_agents_in_a_folder_a_command_made() {
+    let scratch = Scratch::new();
+    let w = watched(&scratch);
+    // A command of a session makes a folder, and ends.
+    w.workspaces
+        .command_began(&w.workspace, "a", Instant::now());
+    let before = w.heard.files();
+    std::fs::create_dir(w.root.join("out")).expect("make the folder");
+    w.wait_for_a_notice_of_files(before);
+    w.workspaces
+        .command_ended(&w.workspace, "a", Instant::now());
+
+    // Nothing watches while the user writes a file in it by hand: nothing saw it written,
+    // and the folder's credit is not the file's.
+    w.workspaces.unwatch(&w.workspace);
+    write(&w.root, "out/by-hand.txt", "x\n");
+    assert_eq!(w.by("out/by-hand.txt"), Some(Vec::new()));
+    w.workspaces
+        .watch(&w.workspace, w.heard.told())
+        .expect("watch again");
+    assert_eq!(w.by("out/by-hand.txt"), Some(Vec::new()));
+}
+
+#[test]
+fn a_write_noted_while_git_reads_the_files_is_credited_though_the_list_git_gave_lacks_it() {
+    let scratch = Scratch::new();
+    let w = watched_with(
+        &scratch,
+        &[
+            ("a.txt", "a\n"),
+            ("slow.txt", "slow\n"),
+            (".gitattributes", "slow.txt filter=hold\n"),
+        ],
+    );
+    // A filter that makes git wait over `slow.txt`, which it reads after `a.txt`, until
+    // the test lets it go.
+    let started = scratch.join("started");
+    let go = scratch.join("go");
+    let filter = scratch.join("bin/hold");
+    program(
+        &filter,
+        &format!(
+            "touch '{}'\nn=0\nwhile [ ! -e '{}' ] && [ $n -lt 400 ]; do sleep 0.05; n=$((n+1)); done\ncat",
+            started.display(),
+            go.display()
+        ),
+    );
+    git(
+        &w.root,
+        &["config", "filter.hold.clean", &filter.to_string_lossy()],
+    );
+    // Its time of change is not the list's, so git has to read it, through the filter.
+    touch(&w.root, "slow.txt");
+
+    std::thread::scope(|scope| {
+        let asking = scope.spawn(|| w.workspaces.credits(&w.workspace));
+        wait_until("git is reading the files", || started.exists());
+        // `a.txt` is written, and named by the agent's tool, after git looked at it.
+        write(&w.root, "a.txt", "a, written while git reads\n");
+        w.workspaces
+            .agent_wrote(&w.workspace, "agent-session", Path::new("a.txt"));
+        std::fs::write(&go, "").expect("let git go on");
+        asking.join().expect("credits ran").expect("credits");
+    });
+    assert_eq!(w.by("a.txt"), Some(strings(&["agent-session"])));
 }
 
 #[test]
