@@ -30,7 +30,7 @@ fn nothing_is_watched_until_a_workspace_is_asked_for_and_it_stays_so_after_unwat
 
     let heard = Heard::default();
     workspaces.watch(&workspace, heard.told()).expect("watch");
-    assert_eq!(workspaces.watched(), [workspace.clone()]);
+    assert_eq!(workspaces.watched(), std::slice::from_ref(&workspace));
     workspaces.unwatch(&workspace);
     assert!(workspaces.watched().is_empty());
     // Unwatching what is not watched is nothing.

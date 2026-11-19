@@ -251,7 +251,8 @@ pub enum WorkspaceError {
     Git(GitError),
     /// The Store failed.
     Store(StoreError),
-    /// The id of a worktree could not be read or written.
+    /// The id of a worktree could not be read or written, or the system would not watch a
+    /// folder of it ([`Workspaces::watch`]).
     Id(PathBuf, std::io::Error),
 }
 
@@ -324,7 +325,8 @@ impl Workspaces {
     /// a thread of the watcher's own, as what it [`Seen`], and the ledger of the workspace
     /// notes when each changed path was seen. Watching a workspace that is watched already
     /// replaces `told`. Refused with [`Refusal::UnknownWorkspace`] for a workspace the
-    /// Store does not hold or whose worktree is gone.
+    /// Store does not hold or whose worktree is gone; a folder the system will not watch
+    /// (it may limit how many it watches) is [`WorkspaceError::Id`] with that folder.
     ///
     /// What git keeps of its own in the worktree's git folder is no change of a file, but
     /// a change of `HEAD`, of the list of files or of a ref is [`Seen::Head`]. Reads are
