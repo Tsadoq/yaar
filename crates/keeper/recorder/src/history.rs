@@ -1,6 +1,8 @@
 //! The history of a worktree: its commits and its recorded states, in the order they
 //! happened.
 
+use std::collections::HashMap;
+
 use crate::states::{RecordError, RecordedState, StateStore};
 use crate::worktree::{Commit, CommitId, Worktree};
 
@@ -31,6 +33,30 @@ pub fn history(
     store: &StateStore,
     since: Option<&CommitId>,
 ) -> Result<Vec<Entry>, RecordError> {
-    let _ = (worktree, store, since);
-    todo!("the commits and the states, in the order they happened")
+    let commits = store.first_parent_commits(worktree, since)?;
+    let mut taken_on: HashMap<Option<CommitId>, Vec<RecordedState>> = HashMap::new();
+    for state in store.states()? {
+        taken_on.entry(state.on.clone()).or_default().push(state);
+    }
+    let mut entries = Vec::new();
+    let mut put_states_on = |commit: Option<CommitId>, entries: &mut Vec<Entry>| {
+        // Taken out, so that a state is listed once and one that is taken on a commit
+        // that is not listed is never reached.
+        entries.extend(
+            taken_on
+                .remove(&commit)
+                .into_iter()
+                .flatten()
+                .map(Entry::State),
+        );
+    };
+    // Before the first commit listed: what was taken on `since`, or, from the root, what
+    // was taken before anything was committed.
+    put_states_on(since.cloned(), &mut entries);
+    for commit in commits {
+        let id = commit.id.clone();
+        entries.push(Entry::Commit(commit));
+        put_states_on(Some(id), &mut entries);
+    }
+    Ok(entries)
 }
