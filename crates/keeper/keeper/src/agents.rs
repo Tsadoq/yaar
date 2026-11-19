@@ -50,9 +50,6 @@ use crate::watching::Watching;
 use crate::wiring::{Kept, Outcome, Parts};
 use crate::{Options, Shared, lock};
 
-/// The reason given for a request this side does not answer yet.
-pub(crate) const NOT_WIRED: &str = "the Keeper does not answer this yet";
-
 /// How often the processes of the CLIs that run are looked at, to see that they are not
 /// gone.
 const PID_WATCH: Duration = Duration::from_millis(250);
@@ -1142,13 +1139,6 @@ fn keep<E: std::fmt::Display>(result: Result<(), E>) {
 fn failed(error: impl std::fmt::Display) -> Refusal {
     Refusal::Failed {
         reason: error.to_string(),
-    }
-}
-
-/// The refusal of a request this side does not answer yet.
-pub(crate) fn not_wired() -> Refusal {
-    Refusal::Failed {
-        reason: NOT_WIRED.to_owned(),
     }
 }
 
