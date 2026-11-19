@@ -2,13 +2,21 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::io::Read;
+use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use yaar_recorder::{ChangedPath, Git, GitError, RecordError, StateId, StateStore, Worktree};
-use yaar_store::{CommentId, ReviewId, Side, Store, StoreError, ThreadId, WorkspaceId};
+use yaar_recorder::{
+    ChangedPath, CommitId, Git, GitError, RecordError, StateId, StateStore, Worktree,
+};
+use yaar_store::{
+    Anchor, CommentId, ReviewId, SentBy, Side, Store, StoreError, ThreadId, WorkspaceId,
+};
 
-use crate::review::{Review, ReviewError};
+use crate::review::{Review, ReviewError, Scope};
+use crate::text::{COPY_INSTRUCTION, as_text};
+use crate::viewed::{ViewedFiles, fingerprint};
+use crate::workspace::with_review_of_no_agent;
 
 /// Where a new thread sits, as the Window names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +108,8 @@ pub enum EngineError {
     Record(RecordError),
     /// git failed while a state was read.
     Git(GitError),
+    /// The system gave no random number for the id of a new review.
+    Random(std::io::Error),
 }
 
 impl fmt::Display for EngineError {
@@ -112,6 +122,7 @@ impl fmt::Display for EngineError {
             Self::Store(e) => e.fmt(f),
             Self::Record(e) => e.fmt(f),
             Self::Git(e) => e.fmt(f),
+            Self::Random(e) => write!(f, "no random number for an id: {e}"),
         }
     }
 }
@@ -189,14 +200,47 @@ impl Reviews {
         workspace: &WorkspaceId,
         worktree: Option<&Worktree>,
     ) -> Result<WorkspaceView, EngineError> {
-        let _ = (workspace, worktree);
-        todo!()
+        let _turn = self.turn();
+        let mut reviews: Vec<Review> = self
+            .store
+            .reviews_of(workspace)?
+            .into_iter()
+            .map(Review::from_record)
+            .collect();
+        let fresh = ReviewId::new(random_id()?);
+        let known = reviews.len();
+        reviews = with_review_of_no_agent(workspace, reviews, || fresh);
+        if reviews.len() > known {
+            // The review is kept before it is given, so that its id is the same at the
+            // next reading.
+            let added = reviews.last().expect("a review was added");
+            self.store.put_review(added.record())?;
+        }
+
+        let mut viewed = Vec::new();
+        if let Some(worktree) = worktree {
+            let mut marks = ViewedFiles::from_marks(
+                self.store
+                    .viewed(workspace)?
+                    .into_iter()
+                    .map(|record| (record.path, record.content)),
+            );
+            // A file that cannot be read counts as no file.
+            let cleared = marks.settle(|path| worktree.content_on_disk(path).ok().flatten());
+            for path in cleared {
+                self.store.set_viewed(workspace, &path, None)?;
+            }
+            viewed = marks.viewed();
+        }
+        Ok(WorkspaceView { reviews, viewed })
     }
 
     /// One review, whole, as kept.
     pub fn review(&self, review: &ReviewId) -> Result<Review, EngineError> {
-        let _ = review;
-        todo!()
+        self.store
+            .review(review)?
+            .map(Review::from_record)
+            .ok_or_else(|| EngineError::UnknownReview(review.clone()))
     }
 
     /// Keeps one save of a draft of `review`.
@@ -219,14 +263,59 @@ impl Reviews {
         review: &ReviewId,
         save: &DraftSave,
     ) -> Result<Saved, EngineError> {
-        let _ = (worktree, review, save);
-        todo!()
+        // The version of a new thread is found without the turn, since recording a state
+        // takes long; it is only looked for once the turn has shown that it is needed.
+        let mut version: Option<String> = None;
+        loop {
+            let turn = self.turn();
+            let mut current = self.review(review)?;
+            if current.comment(&save.comment).is_some() {
+                current.edit(&save.comment, &save.text)?;
+                self.store.save_draft(&save.comment, &save.text)?;
+                return Ok(Saved::Text);
+            }
+            match &save.on {
+                DraftOn::Thread => {
+                    current.reply(&save.thread, save.comment.clone(), &save.text)?;
+                    let (_, made) = current.comment(&save.comment).expect("the reply was made");
+                    self.store.put_comment(&save.thread, made)?;
+                    return Ok(Saved::Made);
+                }
+                DraftOn::NewThread(at) => {
+                    let Some(version) = version.take() else {
+                        drop(turn);
+                        version = Some(self.version_of(worktree, current.workspace(), at)?);
+                        continue;
+                    };
+                    let anchor = Anchor {
+                        tree: version,
+                        path: at.path.clone(),
+                        side: at.side,
+                        first: at.first,
+                        last: at.last,
+                        text: at.text.clone(),
+                    };
+                    current.start_thread(
+                        save.thread.clone(),
+                        save.comment.clone(),
+                        anchor,
+                        &save.text,
+                    )?;
+                    let made = current.thread(&save.thread).expect("the thread was made");
+                    self.store.put_thread(review, made)?;
+                    return Ok(Saved::Made);
+                }
+            }
+        }
     }
 
     /// Deletes a draft of a review, and its thread when nothing is left of it.
     pub fn delete_draft(&self, review: &ReviewId, comment: &CommentId) -> Result<(), EngineError> {
-        let _ = (review, comment);
-        todo!()
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        current.delete(comment)?;
+        self.store.delete_draft(comment)?;
+        Ok(())
     }
 
     /// Copies a review as text and sends it, as a submit does: the text holds every unsent
@@ -239,8 +328,24 @@ impl Reviews {
         worktree: &Worktree,
         review: &ReviewId,
     ) -> Result<Copied, EngineError> {
-        let _ = (worktree, review);
-        todo!()
+        let before = self.review(review)?;
+        if before.unsent(Scope::Everything).is_empty() {
+            return Err(ReviewError::NothingToSend.into());
+        }
+        let state = self.states_of(before.workspace())?.record(worktree)?;
+
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        let rendered = as_text(&current, Scope::Everything, COPY_INSTRUCTION);
+        if rendered.comments.is_empty() {
+            return Err(ReviewError::NothingToSend.into());
+        }
+        let sent = current.send(Scope::Everything, state.id.as_str(), SentBy::Copied)?;
+        self.store.put_round(review, &sent.round, &sent.comments)?;
+        Ok(Copied {
+            text: rendered.text,
+            round: sent.round.number,
+        })
     }
 
     /// Marks the change reviewed: records the state of `worktree`, the worktree of the
@@ -251,8 +356,14 @@ impl Reviews {
         worktree: &Worktree,
         review: &ReviewId,
     ) -> Result<StateId, EngineError> {
-        let _ = (worktree, review);
-        todo!()
+        let before = self.review(review)?;
+        let state = self.states_of(before.workspace())?.record(worktree)?;
+
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        current.mark_reviewed(state.id.as_str());
+        self.store.set_reviewed(review, state.id.as_str())?;
+        Ok(state.id)
     }
 
     /// What counts as changed since the last review: the paths that differ between the
@@ -264,8 +375,13 @@ impl Reviews {
         worktree: &Worktree,
         review: &ReviewId,
     ) -> Result<Option<Vec<ChangedPath>>, EngineError> {
-        let _ = (worktree, review);
-        todo!()
+        let current = self.review(review)?;
+        let Some(reviewed) = current.reviewed() else {
+            return Ok(None);
+        };
+        let states = self.states_of(current.workspace())?;
+        let now = states.record(worktree)?;
+        Ok(Some(states.changed_paths(reviewed, now.id.as_str())?))
     }
 
     /// Marks a file of a workspace viewed for its content now, or takes the mark away.
@@ -278,21 +394,74 @@ impl Reviews {
         path: &Path,
         viewed: bool,
     ) -> Result<(), EngineError> {
-        let _ = (workspace, worktree, path, viewed);
-        todo!()
+        let leads_out = path.as_os_str().is_empty()
+            || path
+                .components()
+                .any(|part| !matches!(part, Component::Normal(_)));
+        if leads_out {
+            return Err(EngineError::OutsideWorktree(path.to_owned()));
+        }
+        let _turn = self.turn();
+        if viewed {
+            let content = worktree.content_on_disk(path)?;
+            let mark = fingerprint(content.as_deref());
+            self.store.set_viewed(workspace, path, Some(&mark))?;
+        } else {
+            self.store.set_viewed(workspace, path, None)?;
+        }
+        Ok(())
     }
 
     /// The state store of a workspace, where its states are recorded: what reads a state
     /// back.
     pub fn states_of(&self, workspace: &WorkspaceId) -> Result<Arc<StateStore>, EngineError> {
-        let _ = (
-            workspace,
-            &self.store,
-            &self.git,
-            &self.states,
-            &self.opened,
-            &self.writing,
-        );
-        todo!()
+        let mut opened = self.opened.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(found) = opened.get(workspace) {
+            return Ok(Arc::clone(found));
+        }
+        let folder = self.states.join(format!("{workspace}.git"));
+        let store = Arc::new(StateStore::open(&self.git, &folder)?);
+        opened.insert(workspace.clone(), Arc::clone(&store));
+        Ok(store)
     }
+
+    // The turn: held while a call reads what it changes and keeps the change.
+    fn turn(&self) -> MutexGuard<'_, ()> {
+        self.writing.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    // The version a new thread's lines are read in: the commit the window named, kept in
+    // the state store so that it reads with the repository gone, or the state of the
+    // files on disk, recorded now.
+    fn version_of(
+        &self,
+        worktree: Option<&Worktree>,
+        workspace: &WorkspaceId,
+        at: &NewAnchor,
+    ) -> Result<String, EngineError> {
+        match (&at.tree, worktree) {
+            (None, None) => Err(EngineError::NoWorktree),
+            (None, Some(worktree)) => Ok(self
+                .states_of(workspace)?
+                .record(worktree)?
+                .id
+                .as_str()
+                .to_owned()),
+            (Some(commit), Some(worktree)) => {
+                self.states_of(workspace)?
+                    .keep_commit(worktree, &CommitId::new(commit))?;
+                Ok(commit.clone())
+            }
+            (Some(commit), None) => Ok(commit.clone()),
+        }
+    }
+}
+
+// 32 lowercase hexadecimal digits from the random numbers of the system.
+fn random_id() -> Result<String, EngineError> {
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")
+        .and_then(|mut from| from.read_exact(&mut bytes))
+        .map_err(EngineError::Random)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
