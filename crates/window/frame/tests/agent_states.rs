@@ -14,10 +14,12 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui_kit::{
-    Action, Keystroke, Modifiers, Pixels, Size, TestAppContext, VisualTestContext, px, size,
+    Action, KeyContext, Keystroke, Modifiers, Pixels, Size, TestAppContext, VisualTestContext, px,
+    size,
 };
 use yaar_frame::{
-    Quit, QuitAndStopAgents, RAIL_BELOW, RAIL_WIDTH, Sends, ShowFinishedTurn, SidebarRow, controls,
+    KEY_CONTEXT, Quit, QuitAndStopAgents, RAIL_BELOW, RAIL_WIDTH, Sends, ShowFinishedTurn,
+    SidebarRow, controls,
 };
 use yaar_link::{
     Fact, Hello, PROTOCOL_VERSION, Session, SessionId, SessionState, TurnId, WorkspaceAgents,
@@ -531,7 +533,11 @@ fn there_are_two_ways_to_quit_the_plain_one_is_what_the_usual_key_runs_and_asks_
     // The key the table gives is bound to the plain quit.
     // The parser takes a text that lives as long as the program.
     let usual = Keystroke::parse(Box::leak(pressed::<Quit>().into_boxed_str())).expect("a key");
-    let bound = cx.update(|window, _| window.bindings_for_action(&Quit));
+    // Asked in the context of the Frame, where the keys of the table work on every system:
+    // off macOS the key is bound in that context, and the window's own answer depends on a
+    // stack of contexts the last frame left.
+    let context = KeyContext::parse(KEY_CONTEXT).expect("the context of the Frame");
+    let bound = cx.update(|window, _| window.bindings_for_action_in_context(&Quit, context));
     assert!(
         bound.iter().any(|binding| {
             let keys = binding.keystrokes();
