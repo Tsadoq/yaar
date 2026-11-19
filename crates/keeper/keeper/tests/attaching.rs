@@ -449,6 +449,64 @@ fn a_window_that_attaches_in_the_middle_of_a_flood_hears_one_unbroken_run_with_n
 }
 
 #[test]
+fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_run_each_time() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut opener = scratch.window();
+    let workspace = opener.open(&repo);
+    let terminal = opener.open_terminal(&workspace, SIZE);
+    opener.type_into(
+        &terminal,
+        b"i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
+    );
+    let mut heard_by_opener = Vec::new();
+    opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
+        contains(heard, "\r\n500\r\n")
+    });
+    // The Window that opened it keeps reading, as a Window does.
+    let reading = {
+        let terminal = terminal.clone();
+        std::thread::spawn(move || {
+            opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
+                tail_holds(heard, "\r\n400000\r\n")
+            });
+            opener
+        })
+    };
+
+    // Windows that come one after the other, each hearing the kept output and then some
+    // of what the program writes live, as many as the flood leaves time for: the places
+    // where the kept output ends and the live output begins differ at each.
+    let mut joins = 0;
+    for _ in 0..25 {
+        let mut window = scratch.window();
+        let Ok(Reply::Attached { .. }) = window.attach(&terminal, SIZE) else {
+            panic!("not attached");
+        };
+        // More than the Keeper keeps, so that some of it came live, unless the run ended.
+        let mut heard = Vec::new();
+        window.hear_until(&terminal, &mut heard, |heard| {
+            heard.len() > (1 << 20) + 50_000 || tail_holds(heard, "\r\n400000\r\n")
+        });
+        let numbers = numbers_in(&heard);
+        assert!(
+            numbers.windows(2).all(|pair| pair[1] == pair[0] + 1),
+            "a run that breaks where the kept output ends and the live output begins"
+        );
+        joins += usize::from(!tail_holds(&heard, "\r\n400000\r\n"));
+        // Gone with no goodbye, and the program writes on.
+        drop(window);
+    }
+    assert!(
+        joins > 0,
+        "the flood was over before a Window attached to it"
+    );
+    let opener = reading.join().expect("the Window that opened it");
+    opener.stop(keeper);
+}
+
+#[test]
 fn a_terminal_that_is_not_held_or_has_ended_cannot_be_attached() {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");

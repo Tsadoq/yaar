@@ -30,7 +30,7 @@
 //! | `GetTurn` | `Agents::turn` | none |
 //! | `ShowWorkspace` | the watchers of the worktrees on screen | later `ChangesChanged`, `Workspaces` |
 //! | `ListTerminals` | the terminals the Dock holds, with their workspace and program | none |
-//! | `AttachTerminal` | `Dock::attach`, then `Dock::resize` and `Dock::redraw` | none |
+//! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -49,9 +49,12 @@
 //! minutes, hold up nothing.
 //!
 //! A terminal's bytes are no request. What a Window sends as `Message::Input` is handed
-//! to `Dock::write`; what the program writes goes, as `Message::Output`, to the Window
-//! that opened the terminal, and only after the reply that named it. When the program
-//! ends, every Window is told `Fact::TerminalEnded`, after the last output.
+//! to `Dock::write`; what the program writes goes, as `Message::Output`, to every Window
+//! the terminal is shown to: the one that opened it, and each that attached to it later.
+//! A Window gets it only after the reply that named the terminal or attached it, and an
+//! attached Window first gets the kept output of the terminal, so that nothing is lost or
+//! sent twice where that ends. When the program ends, every Window is told
+//! `Fact::TerminalEnded`, after the last output of each that was sent any.
 //!
 //! The reply goes out before the facts. A Window that opened a folder therefore learns
 //! the id of the new workspace before the list that holds it.

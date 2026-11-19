@@ -365,11 +365,13 @@ fn writes_that_follow_each_other_are_told_once_at_the_start_and_then_once_in_eac
     let writing = {
         let file = repo.join("a.txt");
         std::thread::spawn(move || {
+            let mut last_write = Instant::now();
             for n in 0..60 {
                 std::fs::write(&file, format!("{n}\n")).expect("write a file");
+                last_write = Instant::now();
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Instant::now()
+            last_write
         })
     };
     let told: Vec<Instant> = window
