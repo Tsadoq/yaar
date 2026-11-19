@@ -33,9 +33,14 @@ const FLOOD_DEADLINE: Duration = Duration::from_secs(180);
 /// then write its lines; after the last part, say so and wait where it is, so that the
 /// shell does not print its prompt, which comes at its own time, onto the screen that is
 /// compared. A folder of gates is its one argument.
+///
+/// It names `/bin/sh` and so does not run in the user's own shell: zsh writes a carriage
+/// return of its own when it is told the window changed, which every attach does, and that
+/// would put a byte into the run of one terminal that the other's does not hold.
 fn flood() -> String {
     format!(
         "\
+#!/bin/sh
 gates=$1
 i=1
 while [ $i -le {PARTS} ]; do
