@@ -38,22 +38,30 @@ const FLOOD_DEADLINE: Duration = Duration::from_secs(180);
 /// in a fork of itself, and that fork writes a carriage return of its own when it is told
 /// the window changed, which every attach does: a byte in the run of one terminal that the
 /// other's does not hold. With it the script is a new shell that writes nothing of its own.
+///
+/// It turns the terminal's change of a line feed into a carriage return and a line feed
+/// off and writes both itself. A terminal that makes the change has been seen to write the
+/// carriage return twice for a line, on macOS, when whoever reads the terminal falls
+/// behind: a byte in the run of one terminal that the other's does not hold, which no
+/// Keeper put there. Written as they are, the bytes of the two runs are the same whatever
+/// the pace of the readers.
 fn flood() -> String {
     format!(
         "\
 #!/bin/sh
+stty -onlcr
 gates=$1
 i=1
 while [ $i -le {PARTS} ]; do
   while [ ! -e \"$gates/gate-$i\" ]; do sleep 0.01; done
   j=1
   while [ $j -le {LINES} ]; do
-    echo \"part $i line $j\"
+    printf 'part %s line %s\\r\\n' \"$i\" \"$j\"
     j=$((j+1))
   done
   i=$((i+1))
 done
-printf 'flood-%s\\n' done
+printf 'flood-%s\\r\\n' done
 read line
 "
     )
