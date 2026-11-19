@@ -26,13 +26,15 @@
 //!
 //! No interface code belongs here.
 
+mod marks;
 mod pty;
 mod queue;
+mod ring;
 mod session;
 mod terminal;
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::os::fd::AsRawFd;
@@ -85,10 +87,10 @@ pub const TERMINAL_VARIABLES: [(&str, &str); 4] = [
 ];
 
 /// Variables of the Keeper's own environment that no program of a terminal gets: each
-/// names another terminal, or a multiplexer, that the Keeper was started from. A program
-/// that found them beside [`TERMINAL_VARIABLES`] would take the app's terminal for that
-/// one, and send it what only that one understands.
-pub const LEFT_OUT_VARIABLES: [&str; 22] = [
+/// names another terminal, a multiplexer or an editor's connection that the Keeper was
+/// started from. A program that found them beside [`TERMINAL_VARIABLES`] would take the
+/// app's terminal for that one, and send it what only that one understands.
+pub const LEFT_OUT_VARIABLES: [&str; 28] = [
     "TERM_SESSION_ID",
     "ITERM_SESSION_ID",
     "ITERM_PROFILE",
@@ -111,6 +113,14 @@ pub const LEFT_OUT_VARIABLES: [&str; 22] = [
     "TMUX",
     "TMUX_PANE",
     "STY",
+    // An editor's connection, or another editor's terminal: a Keeper started from an
+    // editor must not hand it on, and the app uses no editor connection.
+    "CLAUDE_CODE_SSE_PORT",
+    "ENABLE_IDE_INTEGRATION",
+    "VSCODE_INJECTION",
+    "VSCODE_IPC_HOOK_CLI",
+    "VSCODE_GIT_IPC_HANDLE",
+    "ZED_TERM",
 ];
 
 /// The most bytes that wait for one program to read them; see [`Dock::write`].
@@ -251,8 +261,8 @@ impl Start {
     /// a launcher of an agent CLI runs, so that the CLI finds what it would find typed in
     /// a shell of the app. The terminal ends when the command does.
     pub fn launcher(folder: PathBuf, size: Size, command: &str) -> Start {
-        let _ = (folder, size, command);
-        todo!("the user's shell told to run one command")
+        let args = ["-l", "-i", "-c", command].map(OsString::from).to_vec();
+        Start::program(user_shell(), args, folder, size)
     }
 
     /// Any program, with these arguments, in `folder`.
@@ -270,13 +280,65 @@ impl Start {
     /// This start with the app's `entries` added to [`Start::env`], each worked out from
     /// the Keeper's own environment: a [`Entry::Variable`] as it is, a [`Entry::PathList`]
     /// added after that variable's value, a [`Entry::SearchFirst`] put before `PATH`'s.
+    /// Two entries of one call that name one variable build on each other.
     /// Nothing else of the environment changes: the program's environment differs from
     /// the Keeper's by these entries, by [`TERMINAL_VARIABLES`] and by
     /// [`LEFT_OUT_VARIABLES`] alone.
     pub fn with(self, entries: &[Entry]) -> Start {
-        let _ = entries;
-        todo!("the app's entries on top of the Keeper's environment")
+        self.with_environment(entries, |name| std::env::var_os(name))
     }
+
+    /// [`Start::with`], with the look at the Keeper's environment handed in. Entries of
+    /// one call that name one variable build on each other, so that two folders put
+    /// first on `PATH` are both there; what the Keeper holds is the base of the first.
+    fn with_environment(
+        mut self,
+        entries: &[Entry],
+        keeper: impl Fn(&OsStr) -> Option<OsString>,
+    ) -> Start {
+        let mut added: HashMap<OsString, OsString> = HashMap::new();
+        for entry in entries {
+            let (name, value) = match entry {
+                Entry::Variable { name, value } => (name.clone(), value.clone()),
+                Entry::PathList { name, path } => {
+                    let held = held_value(&added, &keeper, name);
+                    let mut value = held;
+                    if !value.is_empty() {
+                        value.push(":");
+                    }
+                    value.push(path);
+                    (name.clone(), value)
+                }
+                Entry::SearchFirst(path) => {
+                    let name = OsString::from("PATH");
+                    let mut value = path.as_os_str().to_owned();
+                    let held = held_value(&added, &keeper, &name);
+                    if !held.is_empty() {
+                        value.push(":");
+                        value.push(held);
+                    }
+                    (name, value)
+                }
+            };
+            added.insert(name.clone(), value.clone());
+            self.env.push((name, value));
+        }
+        self
+    }
+}
+
+/// What `name` holds for the entries of one call of [`Start::with`]: what an earlier
+/// entry of the call gave it, else what the Keeper's environment holds, else nothing.
+fn held_value(
+    added: &HashMap<OsString, OsString>,
+    keeper: &impl Fn(&OsStr) -> Option<OsString>,
+    name: &OsStr,
+) -> OsString {
+    added
+        .get(name)
+        .cloned()
+        .or_else(|| keeper(name))
+        .unwrap_or_default()
 }
 
 /// The user's shell: `SHELL` from the Keeper's environment when it names, by an absolute
@@ -579,7 +641,12 @@ impl Dock {
         drop(slave);
         let child = spawned?;
 
-        let terminal = Arc::new(Terminal::new(master, child.id() as libc::pid_t, wake));
+        let terminal = Arc::new(Terminal::new(
+            master,
+            child.id() as libc::pid_t,
+            wake,
+            start.marks.clone(),
+        ));
         let mut started = Vec::with_capacity(3);
         let served = self.serve(id, &terminal, child, events, &mut started);
         if served.is_err() && !started.is_empty() {
@@ -698,23 +765,37 @@ impl Dock {
     /// [`Event`] of the terminal is told: what `attach` arranges for the output that
     /// follows, as adding a Window to those it goes to, gets every byte after the kept
     /// ones, and none twice. The kept output may begin in the middle of a character or of
-    /// an escape sequence. Refused with [`DockError::UnknownTerminal`] for a terminal whose
-    /// program has ended, or that the Dock never opened.
+    /// an escape sequence. The terminal's output waits while `attach` runs, so it should
+    /// add the Window where the events go and return, and call nothing of the Dock. Nor
+    /// should the caller hold, while it calls `attach`, a lock that the terminal's
+    /// [`Events`] takes: the output is told under the lock `attach` waits for, so the
+    /// two would wait for each other.
+    /// Refused with [`DockError::UnknownTerminal`] for a terminal whose program has ended,
+    /// or that the Dock never opened.
     pub fn attach(
         &self,
         terminal: &TerminalId,
         attach: impl FnOnce(&[u8], bool),
     ) -> Result<(), DockError> {
-        let _ = (terminal, attach);
-        todo!("the kept output, handed over while no event is told")
+        self.inner.live(terminal)?.attach(attach);
+        Ok(())
     }
 
     /// Asks the program of `terminal` to draw its screen again: the signal for a changed
     /// window size, sent to the terminal's foreground process group, also when the size
     /// did not change.
-    pub fn redraw(&self, terminal: &TerminalId) -> Result<(), DockError> {
-        let _ = terminal;
-        todo!("ask the program in front to draw again")
+    pub fn redraw(&self, id: &TerminalId) -> Result<(), DockError> {
+        let terminal = self.inner.live(id)?;
+        // SAFETY: `tcgetpgrp` only reads, from a descriptor the terminal keeps open.
+        let group = unsafe { libc::tcgetpgrp(terminal.master()) };
+        if group <= 0 {
+            // The system refuses only when the terminal has been closed under the Dock.
+            return Err(DockError::UnknownTerminal(id.clone()));
+        }
+        // SAFETY: `kill` only sends; a group that went since the look answers `ESRCH`,
+        // which means there is no program left to ask.
+        unsafe { libc::kill(-group, libc::SIGWINCH) };
+        Ok(())
     }
 
     /// Stops every program and what it started, and returns when none is left: the
@@ -933,6 +1014,127 @@ mod tests {
         leader.0.kill().expect("kill the leader");
         leader.0.wait().expect("collect the leader");
         assert!(dock.inner.left_behind_sessions().is_empty());
+    }
+
+    fn start() -> Start {
+        Start::program(
+            PathBuf::from("/bin/true"),
+            Vec::new(),
+            PathBuf::from("/"),
+            Size {
+                columns: 80,
+                rows: 24,
+            },
+        )
+    }
+
+    fn env_of(start: &Start) -> Vec<(String, String)> {
+        start
+            .env
+            .iter()
+            .map(|(name, value)| {
+                (
+                    name.to_string_lossy().into_owned(),
+                    value.to_string_lossy().into_owned(),
+                )
+            })
+            .collect()
+    }
+
+    fn pair(name: &str, value: &str) -> (String, String) {
+        (name.to_owned(), value.to_owned())
+    }
+
+    #[test]
+    fn a_list_variable_gets_the_path_after_the_keepers_value_or_alone_where_it_holds_none() {
+        let entry = [Entry::PathList {
+            name: "DIRS".into(),
+            path: PathBuf::from("/app/plugin"),
+        }];
+        for (held, value) in [
+            (Some("/user/own"), "/user/own:/app/plugin"),
+            (Some("/a:/b"), "/a:/b:/app/plugin"),
+            // An empty value would put the current folder first on the list.
+            (Some(""), "/app/plugin"),
+            (None, "/app/plugin"),
+        ] {
+            let start = start().with_environment(&entry, |name| {
+                assert_eq!(name, "DIRS");
+                held.map(OsString::from)
+            });
+            assert_eq!(env_of(&start), [pair("DIRS", value)], "{held:?}");
+        }
+    }
+
+    #[test]
+    fn a_folder_put_first_comes_before_the_keepers_search_path_and_is_alone_where_it_has_none() {
+        let entry = [Entry::SearchFirst(PathBuf::from("/app/pieces"))];
+        for (held, value) in [
+            (Some("/usr/bin:/bin"), "/app/pieces:/usr/bin:/bin"),
+            (Some(""), "/app/pieces"),
+            (None, "/app/pieces"),
+        ] {
+            let start = start().with_environment(&entry, |name| {
+                assert_eq!(name, "PATH");
+                held.map(OsString::from)
+            });
+            assert_eq!(env_of(&start), [pair("PATH", value)], "{held:?}");
+        }
+    }
+
+    #[test]
+    fn entries_come_after_what_the_start_holds_and_two_for_one_variable_build_on_each_other() {
+        let mut before = start();
+        before.env.push(("KEPT".into(), "1".into()));
+        let with = before.with_environment(
+            &[
+                Entry::Variable {
+                    name: "YAAR_TERMINAL".into(),
+                    value: "abc".into(),
+                },
+                Entry::SearchFirst(PathBuf::from("/one")),
+                Entry::SearchFirst(PathBuf::from("/two")),
+                Entry::PathList {
+                    name: "DIRS".into(),
+                    path: PathBuf::from("/x"),
+                },
+                Entry::PathList {
+                    name: "DIRS".into(),
+                    path: PathBuf::from("/y"),
+                },
+            ],
+            |name| (name == "PATH").then(|| OsString::from("/usr/bin")),
+        );
+        assert_eq!(
+            env_of(&with),
+            [
+                pair("KEPT", "1"),
+                pair("YAAR_TERMINAL", "abc"),
+                pair("PATH", "/one:/usr/bin"),
+                pair("PATH", "/two:/one:/usr/bin"),
+                pair("DIRS", "/x"),
+                pair("DIRS", "/x:/y"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_launcher_runs_the_users_shell_as_an_interactive_login_shell_told_one_command() {
+        let launcher = Start::launcher(
+            PathBuf::from("/work"),
+            Size {
+                columns: 100,
+                rows: 30,
+            },
+            "claude --flag 'a b'",
+        );
+        assert_eq!(launcher.program, user_shell());
+        assert_eq!(
+            launcher.args,
+            ["-l", "-i", "-c", "claude --flag 'a b'"].map(OsString::from)
+        );
+        assert_eq!(launcher.folder, PathBuf::from("/work"));
+        assert_eq!((launcher.size.columns, launcher.size.rows), (100, 30));
     }
 
     #[test]
