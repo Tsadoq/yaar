@@ -569,7 +569,7 @@ part = "workspaces"
 through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
-proves = []
+proves = ["FR-111"]
 slice = 4
 
 [[test]]
@@ -678,6 +678,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-116", "FR-118"]
+note = "The menu comes with slice 9; the row reads the table of controls the menu will be built from, and the key."
 
 [[test]]
 id = "FRAME-11"
@@ -831,6 +832,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "TP-01"
@@ -1119,6 +1121,7 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-028"]
+note = "The test plays the Keeper's end of the socket only to read what the hook sent and printed, as the pane tests' test-Keeper does."
 
 [[test]]
 id = "REPLY-02"
@@ -1165,6 +1168,7 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+note = "The large-file pointer is made by a clean filter of the test standing in for Git LFS, which the CI machine does not have."
 
 [[test]]
 id = "STATE-03"
@@ -1175,6 +1179,7 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-046"]
+note = "git 2.43 and Apple's git ignore hooks in configuration; the test checks, in a copy, which hook places the installed git runs, and the clause on configuration holds where git runs them."
 
 [[test]]
 id = "STATE-05"
@@ -1657,6 +1662,18 @@ runs = "ci"
 proves = ["NFR-004"]
 
 [[test]]
+id = "REV-24"
+what = "A recorded state keeps who is credited with each path; a path two sessions changed shows whole in both reviews, marked."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = []
+slice = 6
+note = "Added in slice 4 for the rest of ADR-007 point 8: slice 4 lists the uncommitted changes per review and keeps credits in memory only. The contract of slice 6 moves the row if the mark is the pane's to draw."
+
+[[test]]
 id = "THREAD-01"
 what = "Unchanged lines below an insertion: the thread shifts, with no notice."
 level = "unit"
@@ -1903,6 +1920,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-048"]
+note = "The setting is the review pane's control (shift-t) until the settings of slice 9 keep it (FR-124)."
 
 [[test]]
 id = "RP-21"
@@ -2056,13 +2074,13 @@ proves = ["FR-105"]
 
 [[test]]
 id = "RP-41"
-what = "With one agent session in the worktree the pane names it; with several it lets the reviewer choose whose review to show."
+what = "With one agent session in the worktree the pane names it; with several it lets the reviewer choose whose review to show. A comment on a change no agent made goes to the review on screen."
 level = "component"
 part = "review-pane"
 through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
-proves = ["FR-112"]
+proves = ["FR-112", "FR-050"]
 
 [[test]]
 id = "RP-43"
@@ -2383,6 +2401,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-116", "FR-117"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "HOLD-02"
@@ -2393,6 +2412,7 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["FR-117"]
+note = "The client is the test's own: it is killed by dropping its connection with no goodbye and nothing more read, which is what the Keeper sees of a killed Window."
 
 [[test]]
 id = "HOLD-03"
@@ -2414,6 +2434,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-116"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "UITEST-04"
@@ -2434,6 +2455,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007", "FR-030", "FR-046"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-02"
@@ -2454,6 +2476,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-025", "FR-026", "FR-022"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. The offer to attach exists from slice 6; its absence is checked from then on."
 
 [[test]]
 id = "AGENT-08"
@@ -2474,6 +2497,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-114", "FR-115", "FR-022"]
+note = "The clause on a session of the other agent is shown when the stand-in speaks pi (slice 7); slice 4 shows the rest with Claude Code. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-12"
@@ -2484,6 +2508,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-020", "NFR-023"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-13"
@@ -2494,6 +2519,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-023"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. Built and run on Linux only; macOS has no tracer short of lifting the system's protection."
 
 [[test]]
 id = "AGENT-15"
@@ -2514,6 +2540,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-027", "FR-028"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-17"
@@ -2546,6 +2573,17 @@ runs = "ci"
 proves = ["NFR-026"]
 
 [[test]]
+id = "AGENT-20"
+what = "Two sessions of an agent CLI in one worktree, each started in a shell of the app, have a review each."
+level = "system"
+part = "app"
+through = "the Link on one side, the agent's side on the other"
+driver = "agent"
+runs = "ci"
+proves = ["FR-111"]
+note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+
+[[test]]
 id = "DELIVER-04"
 what = "Two sessions in one worktree, a review attached to one: only that session receives it."
 level = "system"
@@ -2553,7 +2591,8 @@ part = "app"
 through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
-proves = ["FR-092", "FR-111"]
+proves = ["FR-092"]
+note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4."
 
 [[test]]
 id = "STORE-04"
@@ -2574,6 +2613,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-007"]
+note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "LOAD-01"
