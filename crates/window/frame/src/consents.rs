@@ -2,8 +2,8 @@
 //! settings of its CLI only with the user's yes, and how that stands.
 //!
 //! The Keeper tells a Window `Fact::ConsentsChanged` when the Window first asks it something,
-//! before it answers that request, if a question waits for an answer, and every Window after
-//! each answer. The model asks nothing when the link connects: a Window told nothing has
+//! before it answers that request, if a question waits for an answer or an Adapter could
+//! not change its CLI's settings, and every Window after each answer. The model asks nothing when the link connects: a Window told nothing has
 //! nothing to ask. The terminal pane draws the questions and sends the user's answers
 //! through it; it names no CLI, and shows each question in the Adapter's own words.
 

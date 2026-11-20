@@ -930,9 +930,9 @@ pub enum Fact {
     /// the order the settings were kept.
     SettingChanged(Setting),
     /// How the Adapters that need the user's leave stand now: told to every Window after
-    /// an answer, and to one Window alone as it connects when a question waits for an
-    /// answer or a CLI's settings could not be changed. A Window that is told none at its
-    /// connect has nothing to ask.
+    /// an answer, and to one Window alone at its first request, before that request is
+    /// answered, when a question waits for an answer or a CLI's settings could not be
+    /// changed. A Window that is told none then has nothing to ask.
     ConsentsChanged(Vec<Consent>),
 }
 
