@@ -4,9 +4,14 @@
 mod support;
 
 use std::path::PathBuf;
+use std::sync::mpsc::RecvTimeoutError;
+use std::time::{Duration, Instant};
 
 use support::{Scratch, write};
 use yaar_text_search::{Found, SearchError, TextSearch, is_ignored};
+
+/// How long a test waits for a fact before it fails.
+const DEADLINE: Duration = Duration::from_secs(10);
 
 /// The search the app runs: on half the cores.
 fn search() -> TextSearch {
@@ -349,9 +354,24 @@ fn the_channel_gives_every_match_and_closes_when_every_file_was_searched() {
         write(&root, &format!("f{file}.txt"), b"needle\n");
     }
     let receiver = search().search(&root, "needle").expect("a search");
-    // The loop ends only when the channel is closed: a search that never closed it would
-    // fail this test by the harness's timeout, with no wait of ours.
-    let mut list: Vec<Found> = receiver.iter().collect();
+    // Drained until the channel says it is closed, which is the clause: every file was
+    // searched, then no sender is left. A search that held one open fails here with a
+    // sentence, at the deadline.
+    let deadline = Instant::now() + DEADLINE;
+    let mut list: Vec<Found> = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(left) {
+            Ok(found) => list.push(found),
+            Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!(
+                    "the channel was not closed within {DEADLINE:?}; {} matches came",
+                    list.len()
+                )
+            }
+        }
+    }
     list.sort_by(|a, b| a.path.cmp(&b.path));
     assert_eq!(list, search().all(&root, "needle").expect("a search"));
     assert_eq!(list.len(), 40);
@@ -469,5 +489,106 @@ fn is_ignored_agrees_with_what_the_search_finds_in_every_file() {
     assert!(
         searched.len() > 2 && searched.len() < files.len(),
         "the files hold both kinds"
+    );
+}
+
+#[test]
+fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_repository() {
+    let scratch = Scratch::new();
+    let main = scratch.repository();
+    scratch.init(&main);
+    write(&main, "a.rs", b"fn tracked_name() {}\n");
+    scratch.git(&main, &["add", "a.rs"]);
+    scratch.git(&main, &["commit", "--quiet", "-m", "first"]);
+    // The main repository's private exclude file, which a linked worktree shares: its own
+    // `.git` is a file that points at the main one.
+    write(&main, ".git/info/exclude", b"secret.txt\n");
+    let linked = scratch.path().join("linked");
+    scratch.git(
+        &main,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "-b",
+            "other",
+            linked.to_str().expect("a path"),
+        ],
+    );
+    assert!(
+        linked.join(".git").is_file(),
+        "a linked worktree's .git is a file"
+    );
+    // A repository inside the folder searched has an exclude file of its own, which counts
+    // for the files below it and for no other.
+    let inner = linked.join("vendor/inner");
+    write(&linked, "vendor/inner/placeholder", b"");
+    scratch.init(&inner);
+    write(&inner, ".git/info/exclude", b"hid.txt\n");
+    let files = [
+        "a.rs",
+        "secret.txt",
+        "src/secret.txt",
+        "hid.txt",
+        "vendor/inner/hid.txt",
+        "vendor/inner/deep/hid.txt",
+        "vendor/inner/secret.txt",
+        "vendor/inner/code.txt",
+    ];
+    for file in files {
+        write(&linked, file, b"needle\n");
+    }
+
+    // Git is the authority on what a repository leaves out; a name it lists is no guess.
+    let untracked = scratch.git(&linked, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(
+        !untracked.contains("secret.txt") && untracked.contains("?? hid.txt"),
+        "git leaves the shared exclude's name out of the worktree: {untracked}"
+    );
+
+    let searched = files_with(&linked, "needle");
+    for file in files {
+        assert_eq!(
+            is_ignored(&linked, &linked.join(file)),
+            !searched.iter().any(|s| s == file),
+            "{file}: ignored exactly when the search does not find it ({searched:?})"
+        );
+    }
+    for left_out in [
+        "secret.txt",
+        "src/secret.txt",
+        "vendor/inner/hid.txt",
+        "vendor/inner/deep/hid.txt",
+    ] {
+        assert!(is_ignored(&linked, &linked.join(left_out)), "{left_out}");
+    }
+    for kept in ["a.rs", "hid.txt", "vendor/inner/code.txt"] {
+        assert!(!is_ignored(&linked, &linked.join(kept)), "{kept}");
+    }
+}
+
+#[test]
+fn a_relative_folder_gives_matches_by_absolute_paths() {
+    let scratch = Scratch::new();
+    let root = scratch.repository();
+    scratch.init(&root);
+    write(&root, "file.txt", b"needle\n");
+    // The same folder, spelled relative to the folder the test runs in.
+    let here = std::env::current_dir().expect("the working folder");
+    let up = here.components().count() - 1;
+    let relative: PathBuf = std::iter::repeat_n("..", up)
+        .map(PathBuf::from)
+        .chain([root
+            .strip_prefix("/")
+            .expect("an absolute folder")
+            .to_path_buf()])
+        .collect();
+    assert!(relative.is_relative());
+    let list = search().all(&relative, "needle").expect("a search");
+    assert_eq!(list.len(), 1);
+    assert!(list[0].path.is_absolute(), "{:?}", list[0].path);
+    assert_eq!(
+        list[0].path.canonicalize().expect("the file"),
+        root.join("file.txt")
     );
 }

@@ -105,10 +105,18 @@ impl Drop for Scratch {
     fn drop(&mut self) {
         // A folder of thousands of files, removed on a machine held at background priority,
         // can come back "not empty" from the first pass on macOS; the second finds the rest.
+        let mut last = Ok(());
         for _ in 0..3 {
-            if std::fs::remove_dir_all(&self.root).is_ok() {
+            last = std::fs::remove_dir_all(&self.root);
+            if last.is_ok() {
                 break;
             }
+        }
+        if let Err(error) = last {
+            eprintln!(
+                "the scratch folder {:?} was not removed: {error}",
+                self.root
+            );
         }
     }
 }

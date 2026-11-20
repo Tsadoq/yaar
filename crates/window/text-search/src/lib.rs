@@ -43,8 +43,8 @@ use ignore::{WalkBuilder, WalkState};
 /// One match.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
-    /// The file, by its absolute path: the folder searched joined with the file's path in
-    /// it.
+    /// The file, by its absolute path: the folder searched, made absolute if it was given
+    /// relative, joined with the file's path in it.
     pub path: PathBuf,
     /// The line, counted from 1.
     pub line: u32,
@@ -119,7 +119,9 @@ impl TextSearch {
             return Err(SearchError::Folder("it is not a folder".to_owned()));
         }
 
-        let walker = walker(folder, self.threads);
+        // The folder as an absolute path, so that every match says where its file is.
+        let folder = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+        let walker = walker(&folder, self.threads);
         let (sender, receiver) = channel();
         std::thread::spawn(move || {
             walker.run(|| {
@@ -169,14 +171,12 @@ pub fn is_ignored(folder: &Path, path: &Path) -> bool {
         return true;
     }
 
-    // The rules in the order git and the walk weigh them: the `.gitignore` of the deepest
-    // folder first, then the repository's own exclude file, then the user's global file.
-    let mut exclude = GitignoreBuilder::new(folder);
-    // No such file is the usual case; it holds no rules then.
-    let _ = exclude.add(folder.join(GIT_FOLDER).join("info").join("exclude"));
-    let exclude = exclude.build().unwrap_or_else(|_| Gitignore::empty());
+    // The rules in the order the walk weighs them: every `.gitignore`, the deepest folder's
+    // first, then every repository's own exclude file, the deepest first, then the user's
+    // global file.
     let (global, _) = Gitignore::global();
     let mut gitignores: Vec<Gitignore> = Vec::new();
+    let mut excludes: Vec<Gitignore> = Vec::new();
 
     // A file is out when it is, or when a folder above it is: the first folder that is
     // decides, as the walk never goes below it.
@@ -185,6 +185,14 @@ pub fn is_ignored(folder: &Path, path: &Path) -> bool {
         let mut builder = GitignoreBuilder::new(&folder_now);
         let _ = builder.add(folder_now.join(".gitignore"));
         gitignores.push(builder.build().unwrap_or_else(|_| Gitignore::empty()));
+        // The folder searched and any folder below it may be a repository of its own, and
+        // its exclude file counts for what lies below it.
+        if let Some(file) = exclude_file(&folder_now) {
+            let mut builder = GitignoreBuilder::new(&folder_now);
+            // No such file is the usual case; it holds no rules then.
+            let _ = builder.add(file);
+            excludes.push(builder.build().unwrap_or_else(|_| Gitignore::empty()));
+        }
 
         let here = folder_now.join(part);
         let is_folder = depth + 1 < components.len() || here.is_dir();
@@ -192,10 +200,13 @@ pub fn is_ignored(folder: &Path, path: &Path) -> bool {
             .iter()
             .rev()
             .map(|rules| rules.matched(&here, is_folder))
-            .chain([
-                exclude.matched(&here, is_folder),
-                global.matched(&here, is_folder),
-            ])
+            .chain(
+                excludes
+                    .iter()
+                    .rev()
+                    .map(|rules| rules.matched(&here, is_folder)),
+            )
+            .chain([global.matched(&here, is_folder)])
             .find(|verdict| !verdict.is_none());
         if verdict.is_some_and(|verdict| verdict.is_ignore()) {
             return true;
@@ -203,6 +214,34 @@ pub fn is_ignored(folder: &Path, path: &Path) -> bool {
         folder_now = here;
     }
     false
+}
+
+/// The exclude file of the repository whose `.git` is in `dir`, found as the walk finds it.
+/// A `.git` folder holds it; a `.git` that is a file, as a linked worktree's is, names the
+/// folder git keeps the worktree in (`gitdir:`), and the exclude file is the one of the
+/// repository that folder belongs to (its `commondir`). No such `.git` gives none, and a
+/// `.git` file the walk cannot follow gives none either: the walk then applies no exclude
+/// rules there.
+fn exclude_file(dir: &Path) -> Option<PathBuf> {
+    let dot_git = dir.join(GIT_FOLDER);
+    let kind = dot_git.metadata().ok()?;
+    if !kind.is_file() {
+        return Some(dot_git.join("info").join("exclude"));
+    }
+    // The walk reads the path as written, which is absolute where git wrote it.
+    let first_line = |file: &Path| -> Option<String> {
+        let text = std::fs::read_to_string(file).ok()?;
+        text.lines().next().map(str::to_owned)
+    };
+    let line = first_line(&dot_git)?;
+    let git_dir = PathBuf::from(line.strip_prefix("gitdir: ")?);
+    let common = first_line(&git_dir.join("commondir"))?;
+    let common = if common.starts_with('.') {
+        git_dir.join(common)
+    } else {
+        PathBuf::from(common)
+    };
+    Some(common.join("info").join("exclude"))
 }
 
 /// The name of git's own folder, which is never searched.
@@ -311,7 +350,14 @@ mod tests {
 
     #[test]
     fn the_threads_are_half_the_cores_and_at_least_one() {
-        assert!(TextSearch::half_the_cores() >= 1);
+        // At most half the cores, rounded down, and never below one: the number is that of
+        // the machine the test runs on, so the rule is stated, not a figure.
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(
+            TextSearch::half_the_cores(),
+            (cores / 2).max(1),
+            "half of {cores} cores, rounded down, at least one"
+        );
         assert_eq!(TextSearch::new(0).threads(), 1);
         assert_eq!(TextSearch::new(5).threads(), 5);
     }
