@@ -6,7 +6,8 @@
 //! too; it is kept with the workspace, by `Store::set_base`, and read with
 //! `Store::workspaces`.
 //!
-//! How each is kept, in the tables of version 4: a setting of the whole app is one row of
+//! How each is kept, in the tables of version 4, and from version 7 in one for a
+//! repository: a setting of the whole app is one row of
 //! `setting`, by its name; a setting of one workspace is one row of `workspace_setting`,
 //! by the workspace and its name. Names and values are text:
 //!

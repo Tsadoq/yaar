@@ -1502,6 +1502,84 @@ mod tests {
             .query_row("SELECT cli_record FROM session", [], |row| row.get(0))
             .expect("the copy holds the record of version 6");
         assert_eq!(record, b"/s/one.jsonl");
+
+        // Every table the copy holds has in the upgraded file the rows it has in the
+        // copy, none lost and none changed, and the tables that hold something are the
+        // ones the file was filled with, so that the comparison is not of empty tables.
+        let upgraded = Connection::open(folder.file()).expect("open the upgraded file");
+        let names = tables(&copy);
+        assert_eq!(
+            names,
+            [
+                "comment",
+                "repository",
+                "review",
+                "round",
+                "session",
+                "setting",
+                "state_credit",
+                "state_kept",
+                "step",
+                "thread",
+                "turn",
+                "viewed",
+                "workspace",
+                "workspace_setting"
+            ]
+        );
+        let mut filled = Vec::new();
+        for name in &names {
+            let before = rows_of(&copied, name);
+            if !before.is_empty() {
+                filled.push(name.as_str());
+            }
+            assert_eq!(rows_of(&upgraded, name), before, "the rows of {name}");
+        }
+        assert_eq!(
+            filled,
+            [
+                "comment",
+                "repository",
+                "review",
+                "round",
+                "session",
+                "setting",
+                "state_credit",
+                "state_kept",
+                "step",
+                "thread",
+                "turn",
+                "workspace",
+                "workspace_setting"
+            ],
+            "the tables version 6 holds rows of, `viewed` having none"
+        );
+    }
+
+    /// Every row of a table as one line of its quoted values, in a fixed order, so that
+    /// two files can be compared row for row whatever the columns hold.
+    fn rows_of(connection: &Connection, table: &str) -> Vec<String> {
+        let columns: Vec<String> = connection
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .expect("the columns")
+            .query_map([], |row| row.get(0))
+            .expect("read the columns")
+            .collect::<Result<_, _>>()
+            .expect("the names");
+        let line = columns
+            .iter()
+            .map(|column| format!("quote(\"{column}\")"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        let mut rows: Vec<String> = connection
+            .prepare(&format!("SELECT {line} FROM \"{table}\""))
+            .expect("the rows")
+            .query_map([], |row| row.get(0))
+            .expect("read the rows")
+            .collect::<Result<_, _>>()
+            .expect("the lines");
+        rows.sort();
+        rows
     }
 
     #[test]

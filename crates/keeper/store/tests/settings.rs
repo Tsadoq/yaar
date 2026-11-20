@@ -476,15 +476,17 @@ fn the_answer_on_a_repository_is_listed_after_the_settings_of_the_workspaces_in_
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     keep_workspaces(&store, &["w-1"]);
-    keep_repository(&store, "r-2");
+    // Kept r-3 before r-2, so that the order they were kept in is not the order of their
+    // ids: a list sorted by id would show it.
     keep_repository(&store, "r-3");
+    keep_repository(&store, "r-2");
     // Set in the opposite order to the one the repositories were kept in, and the
     // settings of the other kinds after it, so that where the answers come in the list
     // is the Store's doing and not the order of the calls.
     for setting in [
+        answer("r-2", true),
         answer("r-3", false),
         answer("r-1", true),
-        answer("r-2", true),
         Setting::FlowForm {
             workspace: w1(),
             form: FlowForm::LiveDiff,
@@ -502,8 +504,8 @@ fn the_answer_on_a_repository_is_listed_after_the_settings_of_the_workspaces_in_
                 form: FlowForm::LiveDiff,
             },
             answer("r-1", true),
-            answer("r-2", true),
             answer("r-3", false),
+            answer("r-2", true),
         ]
     );
 }
