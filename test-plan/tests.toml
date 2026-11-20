@@ -916,6 +916,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-081"]
+built = [
+    "crates/window/terminal-pane/tests/attachment.rs::an_attached_review_shows_at_the_agents_terminal_with_a_control_to_view_what_will_be_sent_and_one_to_detach_it",
+]
 
 [[test]]
 id = "TP-06"
@@ -926,6 +929,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-091", "FR-089"]
+built = [
+    "crates/window/terminal-pane/tests/attachment.rs::with_a_review_attached_and_no_prompt_reported_the_pane_offers_the_one_control_that_types_the_sentence_and_with_a_permission_prompt_or_no_review_it_does_not",
+]
 
 [[test]]
 id = "TP-07"
@@ -1134,6 +1140,12 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-082"]
+built = [
+    "crates/keeper/adapter-claude/tests/deliver.rs::a_message_of_the_user_is_what_a_delivery_waits_for_and_a_short_review_rides_inline",
+    "crates/keeper/adapter-claude/tests/deliver.rs::a_review_over_the_limit_is_a_file_outside_the_repository_with_a_pointer_to_read_it_whole",
+    "crates/keeper/adapter-claude/tests/deliver.rs::the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is",
+    "crates/keeper/adapter-claude/tests/deliver.rs::a_session_id_that_is_no_folder_name_gets_no_file_and_no_delivery",
+]
 
 [[test]]
 id = "ADP-04"
@@ -1144,6 +1156,11 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-090"]
+built = [
+    "crates/keeper/adapter-claude/src/deliver.rs::every_message_of_the_user_is_one_a_review_rides_with_whatever_it_says",
+    "crates/keeper/adapter-claude/src/deliver.rs::the_instruction_names_the_reply_tool_its_three_arguments_and_each_thread",
+    "crates/keeper/adapter-claude/src/deliver.rs::the_review_that_starts_with_the_instruction_goes_out_unchanged_and_the_users_words_are_not_in_it",
+]
 
 [[test]]
 id = "ADP-05"
@@ -1154,6 +1171,9 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-096"]
+built = [
+    "crates/keeper/adapter-claude/tests/deliver.rs::the_answer_to_a_permission_prompt_asks_nothing_and_the_users_next_message_asks",
+]
 
 [[test]]
 id = "DELIVER-03"
@@ -1164,6 +1184,9 @@ through = "what a CLI reports in, the app's events out"
 driver = "recorded-events"
 runs = "ci"
 proves = ["FR-080"]
+built = [
+    "crates/keeper/adapter-claude/tests/deliver.rs::a_message_claude_code_starts_itself_asks_nothing_and_the_next_one_the_user_types_asks",
+]
 
 [[test]]
 id = "ADP-08"
@@ -1212,6 +1235,12 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-097", "FR-098"]
+built = [
+    "companions/claude/tests/tools.rs::the_server_answers_claude_codes_opening_messages_and_lists_one_tool_that_cannot_resolve",
+    "companions/claude/tests/tools.rs::reply_bodies_with_quotes_backticks_line_breaks_and_shell_syntax_arrive_byte_for_byte",
+    "companions/claude/tests/tools.rs::the_result_the_keeper_hands_back_reaches_the_agent_whole_an_error_result_too",
+    "companions/claude/tests/tools.rs::with_no_keeper_listening_a_call_is_an_error_the_agent_reads",
+]
 note = "Claude Code's tool server only; pi's registered tool is PIX-01, slice 7. The agent's side is the recorded MCP trace, written to the server by the test."
 
 [[test]]
@@ -1416,6 +1445,9 @@ driver = "database"
 runs = "ci"
 proves = []
 slice = 6
+built = [
+    "crates/keeper/store/tests/replies.rs::four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_are_there",
+]
 
 [[test]]
 id = "STORE-05"
@@ -1455,6 +1487,9 @@ through = "its calls, on a real database file"
 driver = "database"
 runs = "ci"
 proves = ["FR-119"]
+built = [
+    "crates/keeper/store/tests/kept.rs::after_the_database_is_closed_and_opened_again_every_review_reads_back_equal_with_its_turns",
+]
 
 [[test]]
 id = "STORE-09"
@@ -1596,6 +1631,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-080", "FR-081"]
+built = [
+    "crates/keeper/review-engine/src/review/attaching.rs::attaching_a_review_attaches_every_unsent_comment_on_an_unresolved_thread_and_after_a_detach_each_is_a_draft_and_the_next_message_carries_nothing",
+]
 
 [[test]]
 id = "REV-07"
@@ -1623,6 +1661,9 @@ driver = "git"
 runs = "ci"
 proves = ["FR-086", "FR-046"]
 slice = 6
+built = [
+    "crates/keeper/review-engine/tests/sending.rs::when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_round_starts_and_the_state_of_the_worktree_is_recorded",
+]
 
 [[test]]
 id = "REPLY-04"
@@ -1634,6 +1675,9 @@ driver = "call"
 runs = "ci"
 proves = []
 slice = 6
+built = [
+    "crates/keeper/review-engine/src/review/answers.rs::a_reply_that_names_a_thread_of_another_sessions_review_is_refused_and_changes_nothing",
+]
 
 [[test]]
 id = "REV-10"
@@ -1644,6 +1688,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-094", "FR-095"]
+built = [
+    "crates/keeper/review-engine/src/review/attaching.rs::attaching_a_review_whose_agent_does_not_run_offers_that_cli_even_while_another_agent_runs_and_the_review_of_no_agent_offers_any",
+]
 
 [[test]]
 id = "REV-11"
@@ -1654,6 +1701,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-096"]
+built = [
+    "crates/keeper/review-engine/src/review/attaching.rs::a_review_can_be_attached_while_its_agent_waits_at_a_permission_prompt_and_stays_attached_until_a_message_of_the_user_carries_it",
+]
 
 [[test]]
 id = "REPLY-03"
@@ -1664,6 +1714,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-099", "FR-098"]
+built = [
+    "crates/keeper/review-engine/src/review/answers.rs::a_reply_without_the_mark_waits_for_the_reviewer_and_with_it_is_addressed_and_only_the_reviewer_resolves",
+]
 
 [[test]]
 id = "REV-13"
@@ -1674,6 +1727,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-101"]
+built = [
+    "crates/keeper/review-engine/src/review/answers.rs::a_resolved_thread_can_be_reopened_and_one_action_resolves_every_addressed_thread",
+]
 
 [[test]]
 id = "REV-14"
@@ -1684,6 +1740,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-102"]
+built = [
+    "crates/keeper/review-engine/src/review/rounds.rs::a_round_shows_as_sent_until_the_first_edit_its_agent_reports_and_the_edit_is_reported_once",
+    "crates/keeper/review-engine/src/review/rounds.rs::a_second_round_shows_as_sent_whatever_the_first_did_and_an_edit_ends_only_the_newest",
+    "crates/keeper/review-engine/src/review/rounds.rs::a_round_the_agent_never_edited_after_still_shows_as_sent_when_a_newer_one_is_sent_and_ends_at_the_next_edit",
+    "crates/keeper/review-engine/tests/rounds.rs::an_edit_of_a_session_is_kept_on_the_newest_round_of_its_review_and_on_no_other",
+]
 
 [[test]]
 id = "REV-15"
@@ -1694,6 +1756,10 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-103"]
+built = [
+    "crates/keeper/review-engine/tests/rounds.rs::what_changed_since_a_round_is_the_diff_from_the_state_recorded_at_its_send",
+    "crates/keeper/review-engine/tests/rounds.rs::a_round_with_no_state_or_none_at_all_is_unknown_and_nothing_is_recorded_for_it",
+]
 
 [[test]]
 id = "REV-16"
@@ -1796,6 +1862,15 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["NFR-004"]
+built = [
+    "crates/keeper/review-engine/tests/following.rs::the_thread_cases_give_the_same_placement_between_two_commits",
+    "crates/keeper/review-engine/tests/following.rs::the_thread_cases_give_the_same_placement_between_two_recorded_states",
+    "crates/keeper/review-engine/tests/following.rs::the_thread_cases_give_the_same_placement_over_a_range_of_commits_cut_in_two_either_way",
+    "crates/keeper/review-engine/tests/following.rs::the_thread_cases_give_the_same_placement_from_a_commit_to_a_recorded_state",
+    "crates/keeper/review-engine/tests/following.rs::the_table_of_cases_is_what_the_follower_gives_on_the_bytes",
+    "crates/keeper/review-engine/tests/following.rs::a_thread_on_a_rewritten_line_is_kept_with_its_notice_and_the_line_it_was_written_on",
+    "crates/keeper/review-engine/tests/following.rs::threads_followed_to_one_state_by_calls_at_once_are_given_by_one_call_each",
+]
 
 [[test]]
 id = "REV-24"
@@ -1807,6 +1882,9 @@ driver = "git"
 runs = "ci"
 proves = []
 slice = 6
+built = [
+    "crates/keeper/review-engine/tests/credits.rs::a_recorded_state_keeps_who_is_credited_with_each_path_and_a_path_two_sessions_changed_shows_whole_in_both_reviews_marked",
+]
 note = "The engine lists what a review shows of a change, with the mark on a path two sessions changed; drawing the mark and narrowing a turn end's selection to a session's paths are WIN-09, slice 7."
 
 [[test]]
@@ -1818,6 +1896,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-106"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::unchanged_lines_below_an_insertion_shift_with_no_notice",
+]
 
 [[test]]
 id = "THREAD-02"
@@ -1828,6 +1909,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-106"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::a_block_of_twenty_letters_and_digits_moved_within_the_file_is_followed_with_no_notice",
+    "crates/keeper/review-engine/src/follow.rs::a_moved_line_of_fewer_than_twenty_letters_and_digits_gets_a_notice",
+]
 
 [[test]]
 id = "THREAD-03"
@@ -1838,6 +1923,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::a_rewritten_line_sits_on_the_lines_that_replaced_it_and_says_the_code_changed",
+]
 note = "Its clause on the original text is shown by REV-23 (the engine keeps the anchor and its text with a moved thread) and RP-39 (the pane shows it on request): at this unit's level the follower is given no text."
 
 [[test]]
@@ -1849,6 +1937,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::deleted_lines_leave_the_thread_on_the_line_at_the_point_of_deletion",
+    "crates/keeper/review-engine/src/follow.rs::deleted_lines_at_the_end_of_the_file_leave_the_thread_on_its_last_line",
+]
 
 [[test]]
 id = "THREAD-05"
@@ -1859,6 +1951,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::a_line_inserted_inside_a_commented_range_keeps_the_range_whole_with_a_notice",
+]
 
 [[test]]
 id = "THREAD-06"
@@ -1870,6 +1965,9 @@ driver = "call"
 runs = "ci"
 proves = ["FR-074"]
 slice = 6
+built = [
+    "crates/keeper/review-engine/src/following.rs::a_thread_on_a_removed_line_stays_put_through_three_rounds_of_changes_to_the_new_side",
+]
 
 [[test]]
 id = "THREAD-07"
@@ -1880,17 +1978,23 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-106"]
+built = [
+    "crates/keeper/review-engine/src/follow.rs::a_file_renamed_with_small_edits_takes_its_threads_to_the_new_path",
+]
 
 [[test]]
 id = "THREAD-08"
-what = "Over the recorded corpus of 569 real changes, each followed in one round and in three, every thread whose code survived sits where the corpus says in the last state with no notice, and every thread whose code changed or was deleted carries a notice; the few that differ are named in the test with what the engine gives."
+what = "Over the recorded corpus of 569 real changes, with 5,536 anchors each followed in one round and in three, every thread whose code survived sits where the corpus says in the last state with no notice, and every thread whose code changed or was deleted carries a notice, on all but 17 anchors in one round and 28 in three; those are named in the test with what the engine gives."
 level = "unit"
 part = "review-engine"
 through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-105", "FR-106"]
-note = "The truth is phase 4's blame, repaired and corrected by hand (crates/keeper/review-engine/corpus/NOTICE.md), for the first and the last version only; SPLIT and EXCLUDE anchors are left out. The three rounds cut each change's n hunks at the ceilings of n/3 and 2n/3, a change of one or two hunks having empty rounds. One round differs on at most 17 anchors; three rounds differ further only on moved code a round cut in two. The sentence gets the counted numbers when the slice closes, as DIFF-02 has them."
+built = [
+    "crates/keeper/review-engine/src/follow/corpus.rs::over_the_corpus_of_real_changes_each_followed_in_one_round_and_in_three_the_anchors_that_differ_from_the_truth_are_named",
+]
+note = "The truth is phase 4's blame, repaired and corrected by hand (crates/keeper/review-engine/corpus/NOTICE.md), for the first and the last version only; SPLIT and EXCLUDE anchors are left out. The three rounds cut each change's n hunks at the ceilings of n/3 and 2n/3, a change of one or two hunks having empty rounds. Three rounds differ from one round only on moved code a round cut in two."
 
 [[test]]
 id = "RP-01"
@@ -2265,6 +2369,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-100"]
+built = [
+    "crates/window/review-pane/tests/attaching.rs::the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves_reopens_and_resolves_every_addressed_one",
+]
 
 [[test]]
 id = "RP-38"
@@ -2275,6 +2382,15 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-102", "FR-103"]
+built = [
+    "crates/window/review-pane/tests/rounds.rs::a_round_shows_as_sent_until_the_agents_first_edit_and_each_round_shows_what_changed_since_its_comments_were_sent",
+    "crates/window/review-pane/tests/rounds.rs::a_round_with_no_recorded_state_of_the_worktree_to_count_to_says_so_and_selects_nothing",
+    "crates/window/review-pane/tests/rounds.rs::a_round_whose_state_is_the_newest_recorded_shows_no_change_and_a_state_the_history_does_not_hold_is_counted_to_its_newest",
+    "crates/window/review-pane/tests/steady.rs::the_first_round_of_a_review_leaves_the_diff_where_it_is_on_screen",
+    "crates/window/review-pane/tests/steady.rs::the_first_thread_of_a_review_told_by_the_keeper_leaves_the_diff_where_it_is_on_screen",
+    "crates/window/review-pane/tests/steady.rs::the_reviewers_own_first_comment_leaves_what_is_above_it_where_it_is_on_screen",
+    "crates/window/review-pane/tests/steady.rs::another_review_shown_leaves_the_diff_where_it_is_on_screen_whether_or_not_it_has_a_thread",
+]
 
 [[test]]
 id = "RP-39"
@@ -2285,6 +2401,9 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-105"]
+built = [
+    "crates/window/review-pane/tests/rounds.rs::a_thread_that_moved_to_rewritten_code_says_that_the_code_changed_and_shows_on_request_the_line_the_comment_was_written_on",
+]
 
 [[test]]
 id = "RP-41"
@@ -2337,6 +2456,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-094", "FR-095"]
+built = [
+    "crates/window/review-pane/tests/attaching.rs::attaching_a_review_whose_agent_is_not_running_shows_the_offer_to_start_it_and_attaching_that_of_no_agent_shows_each_supported_cli",
+    "crates/window/review-pane/tests/attaching.rs::attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_takes_the_first",
+    "crates/window/review-pane/tests/attaching.rs::attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_when_nothing_is_attached_any_more",
+    "crates/window/review-pane/tests/attaching.rs::an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_answer_naming_no_cli_replaces_it",
+]
 
 [[test]]
 id = "NAV-06"
@@ -2676,6 +2801,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-080", "FR-086", "FR-097", "FR-081", "FR-108"]
+built = [
+    "system-tests/tests/delivery.rs::a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter",
+]
 note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2725,6 +2853,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-093"]
+built = [
+    "system-tests/tests/delivery.rs::a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it",
+]
 note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2786,6 +2917,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-120", "FR-119"]
+built = [
+    "system-tests/tests/rounds.rs::everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id",
+]
 note = "The resume control is the Link's offer (Session::resumable) and Program::Resume, shown at this level; the Window's control, and pi, come with slice 7 (SWB-06, CLI-05). With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2811,6 +2945,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-102", "FR-103", "FR-105", "FR-097", "FR-098", "FR-099", "FR-108"]
+built = [
+    "system-tests/tests/rounds.rs::a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved",
+]
 note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2822,6 +2959,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-094", "FR-095"]
+built = [
+    "system-tests/tests/rounds.rs::accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message",
+]
 note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2833,6 +2973,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-026"]
+built = [
+    "system-tests/tests/delivery.rs::an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads",
+]
 note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -2858,6 +3001,9 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-092"]
+built = [
+    "system-tests/tests/delivery.rs::a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only",
+]
 note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
@@ -3287,6 +3433,9 @@ driver = "test-platform"
 runs = "ci"
 proves = ["FR-019", "FR-028", "FR-085", "FR-089"]
 slice = 6
+built = [
+    "crates/window/window/tests/round.rs::the_program_in_a_terminal_receives_the_keys_typed_and_the_one_sentence_and_no_line_end_over_an_attach_a_view_a_detach_a_turn_end_a_notice_and_a_permission_prompt",
+]
 note = "The turn end and the permission prompt come from turns the stand-in starts itself, each behind a gate the test opens (hold), so that no line end is typed; the notice is the Frame's notice of a turn that ended in a workspace not on screen."
 
 [[test]]
