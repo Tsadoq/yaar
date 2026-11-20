@@ -868,11 +868,7 @@ fn a_round_whose_state_is_the_newest_recorded_shows_no_change_and_a_state_the_hi
     );
 }
 
-// Fails until `threads_on` of `comments.rs`, which the contract owns, finds a thread where the
-// pane draws it (`threads::place_of`) and not by its anchor: the change waits for the
-// orchestrator.
 #[gpui_kit::test]
-#[ignore = "waits for the change of threads_on in comments.rs"]
 fn a_reply_opens_on_a_thread_that_moved_from_the_line_it_sits_on_now_and_not_from_the_line_it_was_written_on(
     cx: &mut TestAppContext,
 ) {
@@ -941,4 +937,112 @@ fn a_reply_opens_on_a_thread_that_moved_from_the_line_it_sits_on_now_and_not_fro
         .read_with(&cx, |pane, _| pane.notice())
         .expect("the notice says there is no thread on the line");
     assert!(said.contains("no thread"), "{said}");
+}
+
+/// Stands the reviewer on the row that shows new line `line` (counted from 1) of
+/// `story.txt`, by a click, as a reviewer does.
+fn go_to_new_line(line: u32, stage: &Stage, cx: &mut VisualTestContext) {
+    let row = stage
+        .pane
+        .read_with(cx, |pane, _| {
+            pane.rows().iter().position(
+                |row| matches!(row, PaneRow::Diff { row, .. } if row.line(Side::New) == Some(line - 1)),
+            )
+        })
+        .unwrap_or_else(|| panic!("no row shows new line {line}"));
+    let at = bounds_of_row(row, cx).center();
+    cx.simulate_click(at, Modifiers::none());
+    cx.update(|window, _| assert!(stage.focus.is_focused(window)));
+}
+
+#[gpui_kit::test]
+fn edit_delete_resolve_and_attach_act_on_a_thread_that_moved_from_the_line_it_sits_on_now_and_do_nothing_from_the_line_it_was_written_on(
+    cx: &mut TestAppContext,
+) {
+    // A draft written on line 3, carried by the Keeper to line 5, where the pane draws it.
+    let mut draft = comment('7');
+    draft.round = None;
+    let mut moved = carried(
+        thread_at('7', Some(version('4')), 3, "c"),
+        version('5'),
+        5,
+        5,
+        None,
+    );
+    moved.comments = vec![draft];
+    moved.state = ThreadState::Draft;
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(vec![round(1, Some('5'), true)], vec![moved]),
+        history_of("5"),
+        "",
+        "a\nb\nc\nd\ne\nf\n",
+        cx,
+    );
+    let the = thread_id('7');
+    let notice = |stage: &Stage, cx: &mut VisualTestContext| {
+        stage.pane.read_with(cx, |pane, _| pane.notice())
+    };
+
+    // On line 3, which is other code now, each key finds nothing and sends nothing.
+    go_to_new_line(3, &stage, &mut cx);
+    for (keys, words) in [
+        ("i", "no draft"),
+        ("d d", "no draft"),
+        ("x", "no thread"),
+        ("t", "no thread"),
+    ] {
+        cx.simulate_keystrokes(keys);
+        assert_eq!(
+            stage.pane.read_with(&cx, |pane, _| pane.comment_box()),
+            None,
+            "{keys} opened a box on the line the thread was written on"
+        );
+        let said = notice(&stage, &mut cx)
+            .unwrap_or_else(|| panic!("{keys} on the line the thread was written on said nothing"));
+        assert!(said.contains(words), "{keys}: {said}");
+    }
+
+    // On line 5, where it is drawn, edit opens the draft, and delete, resolve and attach ask
+    // the Keeper, each the first request the Keeper hears since the keys above, which sent
+    // none.
+    go_to_new_line(5, &stage, &mut cx);
+    cx.simulate_keystrokes("i");
+    let opened = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.comment_box())
+        .expect("the draft opens on the line the thread sits on");
+    assert_eq!(
+        (opened.thread, opened.comment),
+        (the.clone(), comment('7').id)
+    );
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment('7').id,
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    cx.simulate_keystrokes("x");
+    let asked = stage.keeper.expect(
+        Request::ResolveThread {
+            review: review_id(),
+            thread: the.clone(),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
+    cx.simulate_keystrokes("t");
+    let asked = stage.keeper.expect(
+        Request::AttachReview {
+            review: review_id(),
+            thread: Some(the),
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::AttachedReview { start: Vec::new() }));
 }
