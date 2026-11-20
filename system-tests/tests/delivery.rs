@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use serde_json::Value;
 use yaar_link::{
-    Anchor, Attachment, Author, CommentId, DraftOn, Fact, Lines, Review, ReviewId, SentBy, Session,
-    SessionState, Side, Step as Taken, TerminalId, TerminalSize, Thread, ThreadId, ThreadState,
-    TurnEnd, WorkspaceAgents, WorkspaceId,
+    Anchor, Attachment, Author, CommentId, DraftOn, Fact, HistoryEntry, Lines, Review, ReviewId,
+    SentBy, Session, SessionState, Side, Step as Taken, TerminalId, TerminalSize, Thread, ThreadId,
+    ThreadState, TurnEnd, WorkspaceAgents, WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, Script, StandinLog, Step};
 use yaar_system_tests::{Client, DEADLINE, Repo, World, descendants_of, is_alive, wait_until};
@@ -422,6 +422,29 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     // The stand-in ends, and what it received is what the test typed and nothing more.
     let over = log_when(&world, "default", has_exited);
     assert_eq!(over.received, b"Please look\r");
+
+    // The Keeper records the state of the worktree for the round and for the turn's end on a
+    // thread of its own, and keeps the turn's state last. Until the history holds the ended
+    // turn with its state and the round holds its own, its git work is not over, and a look
+    // at the repository would come before whatever it might do.
+    wait_for(
+        &mut client,
+        |client| {
+            let history = client.history(&workspace).ok()?;
+            let turn_recorded = history.entries.iter().any(|entry| {
+                matches!(
+                    entry,
+                    HistoryEntry::Turn { session: of, state: Some(_), .. } if *of == session.id
+                )
+            });
+            let round_recorded = review_of(client, &workspace, &session)
+                .rounds
+                .first()
+                .is_some_and(|round| round.state.is_some());
+            (turn_recorded && round_recorded).then_some(())
+        },
+        |fact| matches!(fact, Fact::TurnEnded { .. } | Fact::ReviewsChanged { .. }),
+    );
 
     // Nobody committed, and the app left no file in the worktree.
     untouched.holds_in(&repo);
