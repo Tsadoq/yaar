@@ -813,7 +813,7 @@ mod tests {
         );
     }
 
-    /// Waits for `download::installed` (P8): its body is a `todo!()` until then, and a row
+    /// Waits for `download::installed` (P8): it has no body until then, and a row
     /// with a download calls it. The folder is written as `download.rs` documents it.
     #[test]
     #[ignore = "waits for download::installed, which package 8 writes"]
