@@ -16,7 +16,9 @@ use yaar_link::{
     ThreadState, TurnEnd, WorkspaceAgents, WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, Script, StandinLog, Step};
-use yaar_system_tests::{Client, DEADLINE, Repo, World, descendants_of, is_alive, wait_until};
+use yaar_system_tests::{
+    Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
+};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -607,7 +609,7 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
     let (world, repo) = World::with_standin("claude", &outside);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
-    let mut agent = world.start_agent_outside("claude", &outside, repo.path());
+    let mut agent = world.start_agent_outside(Dialect::ClaudeCode, &outside, repo.path());
     agent.wait_for_prompt();
 
     // Followed: a session of the worktree's workspace that runs in no terminal of the app.
