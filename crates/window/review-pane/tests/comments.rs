@@ -10,7 +10,7 @@ use std::path::PathBuf;
 
 use gpui_kit::{
     ClipboardItem, Entity, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext,
-    point, px,
+    point, px, size,
 };
 use yaar_diff::{Row, Side};
 use yaar_link::{
@@ -20,7 +20,7 @@ use yaar_link::{
 use yaar_review_pane::{CommentBox, PaneRow, Position, ReviewPane};
 
 use common::{
-    COMMIT, Stage, bounds_of_row, drawn, file, id, no_agent_review, open, review_id, rows,
+    COMMIT, Stage, WINDOW, bounds_of_row, drawn, file, id, no_agent_review, open, review_id, rows,
     since_main, texts, wait_for_files, wait_until, workspace,
 };
 
@@ -86,6 +86,13 @@ fn open_on_two_files_of(
     cx.simulate_click(first_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     (stage, changes, cx)
+}
+
+/// A review with a sent comment has a round, which the pane lists in a line of its own above
+/// the files: the window grows by that line, so that the rows these tests read are in view as
+/// they were before the line was there.
+fn room_for_the_rounds_line(cx: &mut VisualTestContext) {
+    cx.simulate_resize(size(WINDOW.width, WINDOW.height + px(20.)));
 }
 
 fn position(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Position {
@@ -599,6 +606,7 @@ fn a_thread_is_drawn_after_the_row_that_shows_its_last_line_with_a_row_for_each_
     cx: &mut TestAppContext,
 ) {
     let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    room_for_the_rounds_line(&mut cx);
     let pane = stage.pane.clone();
     // A thread on a removed line, one on an added line with a reply, and one on a line no
     // row shows: line 1 of `src/lib.rs` is among the unchanged lines left out.
@@ -727,6 +735,7 @@ fn a_thread_is_drawn_after_the_row_that_shows_its_last_line_with_a_row_for_each_
 #[gpui_kit::test]
 fn a_reply_opens_on_a_thread_whose_last_comment_was_sent_and_on_no_other(cx: &mut TestAppContext) {
     let (mut stage, _changes, mut cx) = open_on_two_files(cx);
+    room_for_the_rounds_line(&mut cx);
     let pane = stage.pane.clone();
     // A thread with a comment that was sent, on the added line; one with nothing sent
     // yet, on the removed line.

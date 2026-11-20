@@ -12,7 +12,7 @@ use std::rc::Rc;
 
 use gpui_kit::{
     Bounds, ClipboardItem, Entity, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext,
-    VisualTestContext, point, px,
+    VisualTestContext, point, px, size,
 };
 use yaar_diff::{Row, Side};
 use yaar_frame::{Place, SetBase};
@@ -1300,6 +1300,10 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
     // A new file of five thousand lines: five thousand rows under two.
     let new: String = (0..5000).map(|line| format!("line {line}\n")).collect();
     let (stage, path, mut cx) = open_on_one_file("", &new, cx);
+    // The line of the rounds, which the pane draws above the rows for every review, takes
+    // one of the rows: the window grows by it, so that the rows in view are as before.
+    let height = WINDOW.height + px(20.);
+    cx.simulate_resize(size(WINDOW.width, height));
     let pane = &stage.pane;
     assert_eq!(rows(pane, &mut cx).len(), 5002);
 
@@ -1362,7 +1366,7 @@ fn of_a_long_diff_only_the_rows_in_view_are_laid_out_and_the_wheel_moves_the_vie
     assert_eq!(row, 43);
     assert!(in_view(&mut cx).contains(&row));
     let drawn = bounds_of_row(row, &mut cx);
-    assert!(drawn.top() >= px(0.) && drawn.bottom() <= WINDOW.height);
+    assert!(drawn.top() >= px(0.) && drawn.bottom() <= height);
 }
 
 #[gpui_kit::test]
@@ -1649,6 +1653,9 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
             .collect::<String>()
     };
     let (mut stage, _, mut cx) = open_on_one_file("", &lines(100), cx);
+    // The line of the rounds takes one row of the window: it grows by it.
+    let height = WINDOW.height + px(20.);
+    cx.simulate_resize(size(WINDOW.width, height));
     let changes = since_main(Vec::new(), vec![file("src/long.txt", FileStatus::Modified)]);
     let shown = rows(&stage.pane, &mut cx);
     assert_eq!(shown.len(), 102);
@@ -1688,7 +1695,7 @@ fn changes_the_keeper_refuses_to_read_again_stay_as_they_are_shown_and_the_pane_
     // The rows took the room that is left: one row fewer is laid out, and the last of
     // them ends inside the window.
     assert_eq!(in_view(&mut cx), 0..19);
-    assert!(bounds_of_row(18, &mut cx).bottom() <= WINDOW.height);
+    assert!(bounds_of_row(18, &mut cx).bottom() <= height);
 
     // The pane asked for no file meanwhile: there are no new changes to read the
     // files of. The next thing it asks is the changes, when it is told again that
