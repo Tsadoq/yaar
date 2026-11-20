@@ -165,8 +165,15 @@ impl Composed {
     /// the other, so waiting for the last of them covers those before it.
     ///
     /// `passed` is the request the step waited for: for the kinds that act on a review it
-    /// says what the step has to see done.
-    fn settle(&mut self, kind: RequestKind, passed: &Request, cx: &mut VisualTestContext) {
+    /// says what the step has to see done. `from` is the place on the tap where the step's own
+    /// requests begin.
+    fn settle(
+        &mut self,
+        kind: RequestKind,
+        passed: &Request,
+        from: usize,
+        cx: &mut VisualTestContext,
+    ) {
         match kind {
             RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
                 cx.read_from_clipboard()
@@ -256,13 +263,15 @@ impl Composed {
                 // The question is gone once answered, so the key that answers later asks the
                 // Keeper which Adapters there are to answer for first.
                 if !wanted {
+                    // Only what this step's key sent counts: an earlier step's question does
+                    // not say who asks now.
                     let requests = self.tap.requests();
                     let at = requests
                         .iter()
                         .rposition(|request| request == passed)
                         .expect("the request that passed is on the tap");
                     assert!(
-                        requests[..at]
+                        requests[from..at]
                             .iter()
                             .any(|request| request.kind() == RequestKind::ListConsents),
                         "the answer with no question shown was sent without asking who asks"
@@ -764,6 +773,7 @@ impl Composed {
                 }
             };
 
+            let from = self.tap.requests().len();
             self.press(&control, cx);
             self.give(&control, &answer, cx);
             // The Window writes a request before the action that asked returns, so it
@@ -771,7 +781,7 @@ impl Composed {
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
             let passed = self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
-            self.settle(kind, &passed, cx);
+            self.settle(kind, &passed, from, cx);
             if let Some(before) = launched_after {
                 self.end_the_stand_in_started_after(before);
             }

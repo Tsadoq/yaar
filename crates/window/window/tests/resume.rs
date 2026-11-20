@@ -9,7 +9,7 @@
 mod common;
 
 use gpui_kit::{Modifiers, TestAppContext};
-use yaar_link::SessionState;
+use yaar_link::{Program, Request, SessionState};
 use yaar_system_tests::standin::Did;
 use yaar_system_tests::{DEADLINE, World, wait_until as wait_for};
 
@@ -47,6 +47,26 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
     // started with exactly those arguments.
     let at = window.point_in("terminal-resume-0", &mut cx);
     cx.simulate_click(at, Modifiers::none());
+    // The line stands for as long as the Keeper lists the session resumable, not only until
+    // the click: from the click on, whenever the model still lists it, the control is drawn.
+    // The Keeper's listing comes after the program starts, so the first looks come while the
+    // session is still listed.
+    wait_until(
+        &mut cx,
+        "the session to be listed resumable no more",
+        |cx| {
+            let listed = window.models.agents.read_with(cx, |agents, _| {
+                agents
+                    .session(&cut_off.session)
+                    .is_some_and(|session| session.resumable)
+            });
+            assert!(
+                !listed || drawn("terminal-resume-0", cx).is_some(),
+                "the control went before the session was listed resumable no more"
+            );
+            !listed
+        },
+    );
     let wanted = ["--resume".to_owned(), cut_off.cli_session.clone()];
     assert!(
         wait_for(DEADLINE, || window.world.agent_log("default").args
@@ -57,6 +77,30 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
     assert_eq!(
         window.world.agent_log("default").session,
         cut_off.cli_session
+    );
+
+    // One click asked for one resume, and the Keeper refused nothing.
+    let resumes = window
+        .tap
+        .requests()
+        .into_iter()
+        .filter(|request| {
+            matches!(
+                request,
+                Request::OpenTerminal {
+                    program: Program::Resume { .. },
+                    ..
+                }
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(
+        matches!(
+            resumes.as_slice(),
+            [Request::OpenTerminal { program: Program::Resume { session }, .. }]
+                if *session == cut_off.session
+        ),
+        "one click sends one resume of the session: {resumes:?}"
     );
 
     // The session reports: the Keeper lists it running in the terminal the control opened, and
@@ -79,6 +123,11 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         .read_with(&cx, |agents, _| agents.session(&cut_off.session).cloned())
         .expect("the agents' list still holds the session");
     assert_eq!(session.terminal.as_ref(), Some(&opened[0]));
+    assert_eq!(
+        window.terminals.read_with(&cx, |pane, _| pane.notice()),
+        None,
+        "the Keeper refused nothing the click asked"
+    );
     assert_eq!(
         window.models.agents.read_with(&cx, |agents, _| agents
             .of(&cut_off.workspace)
