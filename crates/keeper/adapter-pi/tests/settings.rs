@@ -746,66 +746,88 @@ fn the_question_shows_the_problem_before_any_answer() {
 fn a_no_and_ask_again_are_kept_where_the_file_cannot_be_read_and_it_is_left_alone() {
     let world = World::with_pi();
     world.put(b"{\"extensions\": [1]}");
+    let before = world.age();
+    let named = world.settings().to_str().unwrap().to_owned();
 
     let no = world.answer(ConsentAnswer::No);
 
     assert_eq!(no.answer, ConsentAnswer::No, "the user's no stands");
     assert!(
-        no.problem.is_some(),
+        no.problem.is_some_and(|problem| problem.contains(&named)),
         "and the app says it could not look in the file"
     );
     assert_eq!(world.kept().as_deref(), Some("no\n"));
     assert_eq!(world.bytes(), b"{\"extensions\": [1]}");
+    assert_eq!(world.modified(), before);
     // A restart: a kept no needs nothing read, so it is no problem now.
     assert_eq!(world.consent().answer, ConsentAnswer::No);
     assert_eq!(world.consent().problem, None);
+
+    let again = world.answer(ConsentAnswer::NotAsked);
+
+    assert_eq!(
+        again.answer,
+        ConsentAnswer::NotAsked,
+        "the question comes back"
+    );
+    assert!(
+        again
+            .problem
+            .is_some_and(|problem| problem.contains(&named)),
+        "and the app says it could not look in the file"
+    );
+    assert_eq!(world.kept(), None, "the kept no is forgotten");
+    assert_eq!(world.bytes(), b"{\"extensions\": [1]}");
+    assert_eq!(world.modified(), before);
+    world.only_the_settings_are_in_pi_folder();
 }
 
-#[test]
-fn with_pi_not_installed_nothing_is_asked_and_nothing_is_written() {
-    let world = World::without_pi();
-    let before = world.tree();
-
+/// Gives each answer a world of its own, so that a write by one cannot be undone by the next,
+/// and reads the whole tree after each call.
+fn assert_nothing_is_asked_or_written(prepare: &dyn Fn(&World)) {
     for answer in [
         ConsentAnswer::Yes,
         ConsentAnswer::No,
         ConsentAnswer::NotAsked,
     ] {
-        assert_eq!(world.pi().consent(&world.folder), None);
+        let world = World::without_pi();
+        prepare(&world);
+        let before = world.tree();
+
+        assert_eq!(world.pi().consent(&world.folder), None, "{answer:?}");
+        assert_eq!(
+            world.tree(),
+            before,
+            "{answer:?}: a question writes nothing"
+        );
         assert_eq!(
             world.pi().answer_consent(&world.folder, answer),
             None,
             "{answer:?}"
         );
+        assert_eq!(
+            world.tree(),
+            before,
+            "{answer:?}: the home and the folder hold what they held"
+        );
+        assert_eq!(world.kept(), None, "{answer:?}: no answer is kept");
     }
+}
 
-    assert_eq!(
-        world.tree(),
-        before,
-        "the home and the folder hold what they held"
-    );
+#[test]
+fn with_pi_not_installed_nothing_is_asked_and_nothing_is_written() {
+    assert_nothing_is_asked_or_written(&|_| {});
 }
 
 #[test]
 fn a_dot_pi_with_no_agent_folder_is_pi_not_installed_and_so_is_a_file_in_its_place() {
-    let world = World::without_pi();
-    fs::create_dir_all(world.home.join(".pi")).unwrap();
-    let before = world.tree();
-    assert_eq!(world.pi().consent(&world.folder), None);
-    assert_eq!(
-        world.pi().answer_consent(&world.folder, ConsentAnswer::Yes),
-        None
-    );
-    assert_eq!(world.tree(), before);
-
-    fs::write(world.agent_folder(), b"not a folder").unwrap();
-    let before = world.tree();
-    assert_eq!(world.pi().consent(&world.folder), None);
-    assert_eq!(
-        world.pi().answer_consent(&world.folder, ConsentAnswer::Yes),
-        None
-    );
-    assert_eq!(world.tree(), before);
+    assert_nothing_is_asked_or_written(&|world| {
+        fs::create_dir_all(world.home.join(".pi")).unwrap();
+    });
+    assert_nothing_is_asked_or_written(&|world| {
+        fs::create_dir_all(world.home.join(".pi")).unwrap();
+        fs::write(world.agent_folder(), b"not a folder").unwrap();
+    });
 }
 
 #[test]
@@ -1139,6 +1161,27 @@ fn a_no_that_finds_the_lock_held_is_kept_and_the_entry_stays_with_the_problem() 
     assert_eq!(consent.answer, ConsentAnswer::No, "the user's no is kept");
     assert!(consent.problem.unwrap().contains("try again"));
     assert!(lock.is_dir());
+}
+
+#[test]
+fn an_answer_that_cannot_be_renamed_into_place_leaves_no_temporary_file() {
+    // The temporary file is written whole and the rename then fails, because what stands
+    // where the kept answer goes is a folder that is not empty.
+    let world = World::with_pi();
+    let in_the_way = world.folder.join(CONSENT_FILE);
+    fs::create_dir(&in_the_way).unwrap();
+    fs::write(in_the_way.join("keep"), b"x").unwrap();
+    let before = world.tree();
+
+    let consent = world.answer(ConsentAnswer::No);
+
+    assert!(
+        consent
+            .problem
+            .is_some_and(|problem| problem.contains(in_the_way.to_str().unwrap())),
+        "the app says it could not keep the answer"
+    );
+    assert_eq!(world.tree(), before, "no temporary file is left behind");
 }
 
 #[test]
