@@ -815,8 +815,8 @@ built = [
 id = "DOCK-04"
 what = "A launcher starts the start command its Adapter names in a new terminal."
 level = "component"
-part = "dock"
-through = "its calls, on a real pseudo-terminal"
+part = "keeper"
+through = "the Link, as the Window speaks it, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-021"]
@@ -838,15 +838,16 @@ built = [
 id = "DOCK-07"
 what = "The name pi typed in a shell of the app runs the app's wrapper, which passes every argument on and adds the extension."
 level = "component"
-part = "dock"
-through = "its calls, on a real pseudo-terminal"
+part = "keeper"
+through = "the Link, as the Window speaks it, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-022"]
+note = "The shell's .profile is the line the README gives a user (YAAR_PATH), then the test's own folder of scripts. Without that line a login shell loses the wrapper's first place: macOS's path_helper puts the system's folders ahead of it, Ubuntu's /etc/profile sets the search path anew. The known limit of ADR-008's assumption, open with Matteo."
 
 [[test]]
 id = "LISTEN-03"
-what = "Esc during a turn: the stand-in prints the mark Claude Code prints and reports nothing, and the turn ends in the app."
+what = "Esc during a turn ends the turn in the app: as Claude Code the stand-in prints the mark Claude Code prints and reports nothing; as pi it reports the run aborted, as pi's extension does, and prints no mark."
 level = "system"
 part = "app"
 through = "the Link on one side, the agent's side on the other"
@@ -856,7 +857,6 @@ proves = ["FR-007"]
 built = [
     "system-tests/tests/agents.rs::esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "TP-01"
@@ -1111,6 +1111,7 @@ driver = "recorded-events"
 runs = "ci"
 proves = ["FR-023", "FR-035"]
 slice = 7
+note = "pi's recording holds the four tools in five runs, one prompt each; the seven kinds come in that order across them."
 
 [[test]]
 id = "LISTEN-02"
@@ -1198,6 +1199,7 @@ driver = "recorded-events"
 runs = "ci"
 proves = ["FR-082", "FR-090"]
 slice = 7
+note = "pi takes the review inside the user's message through input, the route measured whole at 1,503,509 characters; before_agent_start fires for no message pi queues. The size is shown here up to the Adapter's answer, and through the extension and the reporting program in PIX-01."
 
 [[test]]
 id = "ADP-09"
@@ -1253,7 +1255,7 @@ driver = "agent"
 runs = "ci"
 proves = ["FR-023", "FR-082", "FR-090", "FR-097", "FR-098"]
 slice = 7
-note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript."
+note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript. pi only: Claude Code's pieces are REPLY-02 and the companion's hook tests. Node 22.18 or later; CI pins Node 24.11.1. The review rides in the user's own message through pi's input event, 1,500,000 characters through the extension and the reporting program."
 
 [[test]]
 id = "STATE-01"
@@ -2748,7 +2750,6 @@ proves = ["FR-116", "FR-117"]
 built = [
     "system-tests/tests/keeping.rs::a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "HOLD-02"
@@ -2790,7 +2791,6 @@ proves = ["FR-116"]
 built = [
     "system-tests/tests/keeping.rs::a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "UITEST-04"
@@ -2804,7 +2804,6 @@ proves = ["FR-080", "FR-086", "FR-097", "FR-081", "FR-108"]
 built = [
     "system-tests/tests/delivery.rs::a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-01"
@@ -2818,7 +2817,6 @@ proves = ["FR-007", "FR-030", "FR-046"]
 built = [
     "system-tests/tests/agents.rs::a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-02"
@@ -2829,6 +2827,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-014"]
+note = "Runs for both CLIs, with the slice that builds it (FR-023)."
 
 [[test]]
 id = "AGENT-04"
@@ -2842,7 +2841,7 @@ proves = ["FR-025", "FR-026", "FR-022"]
 built = [
     "system-tests/tests/agents.rs::edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. The offer to attach exists from slice 6; its absence is checked from then on."
+note = "The offer to attach exists from slice 6; its absence is checked from then on."
 
 [[test]]
 id = "AGENT-08"
@@ -2856,7 +2855,6 @@ proves = ["FR-093"]
 built = [
     "system-tests/tests/delivery.rs::a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-09"
@@ -2870,7 +2868,7 @@ proves = ["FR-114", "FR-115", "FR-022"]
 built = [
     "system-tests/tests/agents.rs::the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left",
 ]
-note = "The clause on a session of the other agent is shown when the stand-in speaks pi (slice 7); slice 4 shows the rest with Claude Code. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Runs for each CLI with the other as the other agent."
 
 [[test]]
 id = "AGENT-12"
@@ -2886,7 +2884,6 @@ built = [
     "system-tests/tests/files.rs::a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_of_a_cli",
     "system-tests/tests/files.rs::the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_else",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-13"
@@ -2906,7 +2903,7 @@ built = [
     "system-tests/tests/files.rs::a_credential_file_is_named_by_its_path_or_by_the_path_of_the_descriptor_it_was_opened_beside",
     "system-tests/tests/files.rs::a_file_that_is_no_credential_of_a_cli_is_named_by_no_line_of_a_trace",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. Built and run on Linux only; macOS has no tracer short of lifting the system's protection."
+note = "Built and run on Linux only; macOS has no tracer short of lifting the system's protection. As pi the wrapper and the reporting program are traced; the extension, TypeScript, runs only under PIX-01 and is not traced."
 
 [[test]]
 id = "AGENT-15"
@@ -2920,7 +2917,7 @@ proves = ["FR-120", "FR-119"]
 built = [
     "system-tests/tests/rounds.rs::everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id",
 ]
-note = "The resume control is the Link's offer (Session::resumable) and Program::Resume, shown at this level; the Window's control, and pi, come with slice 7 (SWB-06, CLI-05). With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "The resume control is the Link's offer and Program::Resume at this level, and the Window's control in its two other tests."
 
 [[test]]
 id = "AGENT-16"
@@ -2934,7 +2931,7 @@ proves = ["FR-027", "FR-028"]
 built = [
     "system-tests/tests/agents.rs::an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writes_nothing_to_its_terminal_and_the_keys_of_the_answer_turn_it_off",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Claude Code only: pi has no permission prompt of its own (ADR-007); that no recorded line of pi gives a permission event is LISTEN-01P's."
 
 [[test]]
 id = "AGENT-17"
@@ -2948,7 +2945,6 @@ proves = ["FR-102", "FR-103", "FR-105", "FR-097", "FR-098", "FR-099", "FR-108"]
 built = [
     "system-tests/tests/rounds.rs::a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-19"
@@ -2962,7 +2958,6 @@ proves = ["FR-094", "FR-095"]
 built = [
     "system-tests/tests/rounds.rs::accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-14"
@@ -2976,7 +2971,6 @@ proves = ["NFR-026"]
 built = [
     "system-tests/tests/delivery.rs::an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-20"
@@ -2990,7 +2984,7 @@ proves = ["FR-111"]
 built = [
     "system-tests/tests/agents.rs::two_sessions_in_one_worktree_each_have_a_review",
 ]
-note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery."
 
 [[test]]
 id = "DELIVER-04"
@@ -3004,7 +2998,7 @@ proves = ["FR-092"]
 built = [
     "system-tests/tests/delivery.rs::a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only",
 ]
-note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4."
 
 [[test]]
 id = "STORE-04"
@@ -3028,7 +3022,6 @@ proves = ["FR-007"]
 built = [
     "system-tests/tests/agents.rs::an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "LOAD-01"
@@ -3174,7 +3167,7 @@ driver = "real-clis"
 runs = "release"
 checklist = "real-clis"
 proves = ["FR-120", "FR-023"]
-note = "Never run with pi. pi's command for one of two sessions of a worktree is not found yet: if pi has none, this requirement goes back to the maintainer."
+note = "pi's command for one of two sessions of a worktree is pi --session-dir <its folder> --session <id> (phase 4): the release check runs it with two sessions."
 
 [[test]]
 id = "PERF-01"
@@ -3487,14 +3480,14 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 7
-note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change. Two CLIs in one worktree come with slice 7."
+note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change."
 
 [[test]]
 id = "SEAM-03"
 what = "A way of delivery written in the test fulfils the contract and is handed the same rendered text as the three built ones, with no other crate changed."
 level = "component"
 part = "keeper"
-through = "the Link, as the Window speaks it"
+through = "the engine's send, on the Keeper's own data, with the Link before and after"
 driver = "client"
 runs = "ci"
 proves = ["NFR-003"]
