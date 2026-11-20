@@ -263,7 +263,7 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     assert_eq!(old_sides_told(&running), vec![]);
     assert_eq!(
         started_in(&log),
-        [repo.root.clone()],
+        std::slice::from_ref(&repo.root),
         "a second process was started"
     );
 
@@ -537,7 +537,7 @@ fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_fo
     let new_pid = new_side.pid.expect("the new side runs");
     let list = settled(&mut running);
     assert_eq!(server_in(&list, &ws2, None), None);
-    assert_eq!(started_in(&log), [shown.root.clone()]);
+    assert_eq!(started_in(&log), std::slice::from_ref(&shown.root));
 
     // The old side's first use.
     running.ask(Ask::OldSide {
@@ -724,7 +724,7 @@ fn an_export_still_being_written_when_the_old_side_is_dropped_is_removed_when_it
         "an export nobody wants any more was kept"
     );
     assert_eq!(old_sides_told(&running), vec![]);
-    assert_eq!(started_in(&log), [repo.root.clone()]);
+    assert_eq!(started_in(&log), std::slice::from_ref(&repo.root));
     running.end();
 }
 
