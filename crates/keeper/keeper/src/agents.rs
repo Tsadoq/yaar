@@ -778,24 +778,30 @@ impl Core {
     /// holds the Adapters while it reads the Switchboard would break.
     fn offers(&self) -> Vec<Resumable> {
         let names: Vec<&'static str> = self.described.iter().map(|d| d.name).collect();
-        let given = Arc::new(Mutex::new(Vec::new()));
+        let given = Arc::new(Mutex::new(HashMap::new()));
         let noted = Arc::clone(&given);
-        let mut offers = lock(&self.switchboard).resumable(&move |agent, cli, record| {
+        let offers = lock(&self.switchboard).resumable(&move |agent, cli, record| {
             names.contains(&agent).then(|| {
-                lock(&noted).push((cli.clone(), record.map(Path::to_owned)));
+                lock(&noted).insert((agent.to_owned(), cli.clone()), record.map(Path::to_owned));
                 String::new()
             })
         });
-        let given = std::mem::take(&mut *lock(&given));
+        let given: HashMap<(String, CliSession), Option<PathBuf>> =
+            std::mem::take(&mut *lock(&given));
         let adapters = lock(&self.adapters);
-        // Paired by position: the Switchboard calls the maker once for each offer it gives,
-        // in the order of its result, and gives no offer for a session the maker refused.
-        for (offer, (cli, record)) in offers.iter_mut().zip(given) {
-            if let Some(adapter) = adapters.iter().find(|a| a.name() == offer.agent) {
-                offer.command = adapter.resume(&cli, record.as_deref());
-            }
-        }
+        // Each offer finds what was noted for it by the session it is for: an agent's name
+        // and its CLI's id name one session. An offer with nothing noted, or whose Adapter
+        // is not held, is left out; the maker noted every offer the Switchboard gave and
+        // the names are those of the Adapters, so none is.
         offers
+            .into_iter()
+            .filter_map(|mut offer| {
+                let record = given.get(&(offer.agent.clone(), offer.cli.clone()))?;
+                let adapter = adapters.iter().find(|a| a.name() == offer.agent)?;
+                offer.command = adapter.resume(&offer.cli, record.as_deref());
+                Some(offer)
+            })
+            .collect()
     }
 
     /// The folder of the Adapter named `agent`.

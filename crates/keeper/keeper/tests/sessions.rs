@@ -1073,6 +1073,72 @@ fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart
 }
 
 #[test]
+fn a_session_of_each_cli_cut_off_together_is_offered_the_resume_of_its_own_cli() {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let claude_records = recorded::hook_events(DIALOGS);
+    let pi_records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+
+    scratch.hook(None, &claude_records[0].in_project(&repo).input_bytes());
+    window.agents_until(
+        &workspace,
+        "the session of Claude Code",
+        is_state(SessionState::Idle),
+    );
+    let pi_start = pi_records[1].in_project(&repo);
+    scratch.pi_report(pi.0.id(), pi_start.payload_bytes());
+    let both = window.agents_until(&workspace, "the session of pi too", |agents| {
+        agents.sessions.len() == 2
+    });
+    let of = |agent: &str| {
+        both.sessions
+            .iter()
+            .find(|s| s.agent == agent)
+            .unwrap_or_else(|| panic!("a session of {agent}"))
+            .id
+            .clone()
+    };
+    let (claude, pi_session) = (of(yaar_adapter_claude::NAME), of(yaar_adapter_pi::NAME));
+    window.stop(keeper);
+
+    // Both were cut off by the one stop: each is offered, and each resume is its own CLI's.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let listed = window.agents();
+    assert_eq!(listed[0].sessions.len(), 2);
+    assert!(listed[0].sessions.iter().all(|s| s.resumable));
+    window.open_program(
+        &workspace,
+        Program::Resume {
+            session: claude.clone(),
+        },
+    );
+    assert_eq!(
+        scratch.launched_with()[3],
+        format!("claude --resume '{}'", claude_records[0].session())
+    );
+    scratch.forget_the_launch();
+    window.open_program(
+        &workspace,
+        Program::Resume {
+            session: pi_session,
+        },
+    );
+    let record_file = pi_start.payload["sessionFile"]
+        .as_str()
+        .expect("the record names its file");
+    assert_eq!(
+        scratch.launched_with()[3],
+        pi_resume(record_file, pi_records[1].session())
+    );
+    window.stop(keeper);
+}
+
+#[test]
 fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_and_never_once_the_session_reports()
  {
     let scratch = Scratch::with_launcher_shell();
