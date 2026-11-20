@@ -34,7 +34,7 @@ tar.workspace = true
 
 # Named until the package of slice 8 that first uses each takes its name out.
 [package.metadata.cargo-machete]
-ignored = ["flate2", "libc", "ring", "rustls", "rustls-native-certs", "tar", "toml", "url", "yaar-diff"]
+ignored = ["yaar-diff"]
 
 [lints]
 workspace = true
