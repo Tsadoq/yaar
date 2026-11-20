@@ -420,19 +420,29 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
     write_message(&mut keeper, &stale).expect("answer late");
     let barrier = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
     let mut asked_again = None;
+    let mut set_heard = false;
     let barrier_id = loop {
         let (asked, request) = next_request(&mut keeper, cx);
         match request {
             Request::ListWorkspaces => break asked,
             Request::SetSetting { setting } => {
                 assert_eq!(setting, chosen);
+                set_heard = true;
                 let kept = Message::Reply {
                     to: asked,
                     reply: Ok(Reply::Done),
                 };
                 write_message(&mut keeper, &kept).expect("answer the set");
             }
-            Request::GetSettings => asked_again = Some(asked),
+            Request::GetSettings => {
+                // One question asked before the set would be answered by a Keeper that has
+                // not kept the chosen setting yet.
+                assert!(
+                    set_heard,
+                    "the list is asked for again before the Keeper heard the set"
+                );
+                asked_again = Some(asked);
+            }
             _ => {}
         }
     };
