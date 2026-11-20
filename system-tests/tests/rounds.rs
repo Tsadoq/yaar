@@ -750,8 +750,9 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
 }
 
 fn accepting_the_offer(dialect: Dialect) {
-    let (world, repo) =
-        World::with_standin_as(dialect, "default", &script(&["turn", "end", "exit"]));
+    // Both CLIs are installed whichever is accepted, so that a launcher that starts the other
+    // one is found by the assertions on the agent of the session, not by a wait that runs out.
+    let (world, repo) = World::with_standin_and_pi("default", &script(&["turn", "end", "exit"]));
     let checked_out_at_the_start = checked_out(&repo);
     assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();

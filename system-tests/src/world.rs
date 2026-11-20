@@ -27,7 +27,7 @@ use yaar_link::{
 use crate::client::{Client, DEADLINE};
 use crate::descendants_of;
 use crate::dialect::Dialect;
-use crate::standin::{LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE};
+use crate::standin::{LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE, Script};
 
 /// How long the Keeper a world starts stays with no Window attached: longer than any
 /// test. It ends with its world, not by itself in the middle of a test that has no
@@ -740,7 +740,7 @@ impl World {
     /// Keeper started. Name the script `default` for the stand-in that a launcher or a
     /// shell of the app starts to follow it.
     pub fn with_standin(name: &str, script: &crate::standin::Script) -> (World, Repo) {
-        World::with_standin_as(crate::dialect::Dialect::ClaudeCode, name, script)
+        World::with_standin_as(Dialect::ClaudeCode, name, script)
     }
 
     /// A world for a test of an agent as `dialect`, as [`World::with_standin`] makes it for
@@ -748,14 +748,23 @@ impl World {
     /// starts, so that the Keeper asks the question of pi, and the user's yes is given after
     /// it, so that the stand-in started as `pi` finds the app's extension in pi's settings,
     /// as pi does.
-    pub fn with_standin_as(
-        dialect: crate::dialect::Dialect,
-        name: &str,
-        script: &crate::standin::Script,
-    ) -> (World, Repo) {
+    pub fn with_standin_as(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
+        World::with_standin_where(dialect == Dialect::Pi, name, script)
+    }
+
+    /// A world as [`World::with_standin_as`] makes it, with pi installed and allowed
+    /// whichever the dialect of the test is: for a test of a launcher that must start the CLI
+    /// it was asked for. Where pi is not installed, a launcher that started pi in a run as
+    /// Claude Code would find a pi that never reports, and the test would end in a wait that
+    /// ran out and not at the sentence that says which CLI started.
+    pub fn with_standin_and_pi(name: &str, script: &Script) -> (World, Repo) {
+        World::with_standin_where(true, name, script)
+    }
+
+    fn with_standin_where(pi: bool, name: &str, script: &Script) -> (World, Repo) {
         let mut world = World::new();
         world.agents_on_path();
-        if dialect == crate::dialect::Dialect::Pi {
+        if pi {
             world.install_pi();
         }
         world.agent_script(name, script);
@@ -763,7 +772,7 @@ impl World {
         repo.git(&["config", "user.name", "A Test"]);
         repo.git(&["config", "user.email", "test@example.invalid"]);
         world.start_keeper();
-        if dialect == crate::dialect::Dialect::Pi {
+        if pi {
             world.allow_pi_extension();
         }
         (world, repo)
