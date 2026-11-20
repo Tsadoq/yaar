@@ -1097,10 +1097,7 @@ fn a_working_agent_is_not_found_gone_with_another(dialect: Dialect) {
     // process it follows, and that pass looks at the working agent's as it looks at this
     // one's, so the fact that this session is not running is the fact that the pass was
     // made: no wait for a time to pass stands in its place.
-    let pid = idle.log(&world).pid;
-    assert_ne!(pid, 0);
-    // SAFETY: a signal to a process of this test.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    kill(idle.log(&world).pid);
     let not_running = |agents: &WorkspaceAgents, session: &yaar_link::SessionId| {
         agents.workspace == workspace
             && agents
