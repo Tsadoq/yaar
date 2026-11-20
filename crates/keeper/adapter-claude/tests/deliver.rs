@@ -410,6 +410,54 @@ fn the_read_of_the_file_that_was_delivered_is_allowed_and_no_other_read_is() {
 }
 
 #[test]
+fn the_read_of_the_delivered_file_is_allowed_when_the_path_of_the_adapters_folder_holds_a_link() {
+    let mut place = Place::new();
+    // The folder is given through a link that leads back to the scratch folder, as a data
+    // folder under /var is on macOS, where /var links to /private/var.
+    let link = place._scratch.path().join("linked");
+    std::os::unix::fs::symlink(place._scratch.path(), &link).expect("make the link");
+    place.folder = link.join("agents").join("claude");
+
+    let (adapter, asked) = heard_the_session(&place);
+    let text = review(INLINE_LIMIT + 1, "x");
+    let answer = parsed(&hand_out(&adapter, &place, &asked, &text).expect("a delivery"));
+    let context = answer["hookSpecificOutput"]["additionalContext"]
+        .as_str()
+        .expect("a text");
+    let (delivered, _) = pointer_of(context);
+    let canonical = delivered.canonicalize().expect("the file is there");
+    assert!(
+        delivered.starts_with(&link),
+        "the pointer names the path with the link: {delivered:?}"
+    );
+    assert_ne!(delivered, canonical, "the link is in the way of the path");
+    let session = asked.session.0.clone();
+
+    let mut heard = adapter;
+    for path in [&delivered, &canonical] {
+        let allowed =
+            read_asks_of(&mut heard, &place, reading(path, &session)).expect("the read is asked");
+        assert_eq!(
+            allowed.asks,
+            Asks::ReadOwnFile,
+            "{path:?}, as the Adapter that heard it"
+        );
+        assert_eq!(
+            read_asks(&place, reading(path, &session)).map(|asked| asked.asks),
+            Some(Asks::ReadOwnFile),
+            "{path:?}, as a fresh Adapter"
+        );
+    }
+
+    // Through the link, the folder of another session is still no folder of this one.
+    std::fs::create_dir_all(place.reviews().join("another-session")).expect("make the folder");
+    assert_eq!(
+        read_asks(&place, reading(&delivered, "another-session")),
+        None
+    );
+}
+
+#[test]
 fn a_read_asks_nothing_while_the_folder_of_reviews_is_not_there() {
     let place = Place::new();
     let session = place.record(READ_FILE, 3).session().to_owned();
