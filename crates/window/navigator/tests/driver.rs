@@ -720,7 +720,7 @@ fn a_server_that_reads_nothing_stalls_neither_the_caller_nor_the_stop() {
     freeze(pid);
 
     // Far more than a pipe holds: a caller that wrote it itself would wait for the server.
-    let text = "x".repeat(8 * 1024 * 1024);
+    let text = "x".repeat(1024 * 1024);
     let (done, finished) = channel();
     let server = &run.server;
     std::thread::scope(|scope| {

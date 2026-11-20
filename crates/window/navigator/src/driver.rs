@@ -107,7 +107,8 @@ pub struct Launch {
     pub ready: Ready,
     /// File extension, with no dot, to the LSP `languageId`.
     pub language_ids: Vec<(String, String)>,
-    /// The file its standard error is written to; none drops it.
+    /// The file its standard error is appended to, its folder made when it is not there;
+    /// none drops it.
     pub log: Option<PathBuf>,
 }
 
