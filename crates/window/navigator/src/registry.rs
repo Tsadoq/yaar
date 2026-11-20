@@ -475,13 +475,30 @@ fn node_of(value: &DeValue<'_>) -> Result<Node, String> {
     })
 }
 
+/// Where in the text `key` is first written, as its own key or as a part of the header or
+/// key of anything under it: the span the parser records for a key that a later header
+/// names again is the later one's.
+fn first_written(start: usize, value: &DeValue<'_>) -> usize {
+    match value {
+        DeValue::Table(table) => table
+            .iter()
+            .map(|(key, value)| first_written(key.span().start, value.get_ref()))
+            .fold(start, usize::min),
+        DeValue::Array(items) => items
+            .iter()
+            .map(|item| first_written(start, item.get_ref()))
+            .fold(start, usize::min),
+        _ => start,
+    }
+}
+
 /// The entries of `table`, in the order of their keys in the text.
 fn entries(table: &DeTable<'_>) -> Result<Vec<(String, Node)>, String> {
     let mut found = table
         .iter()
         .map(|(key, value)| {
             Ok((
-                key.span().start,
+                first_written(key.span().start, value.get_ref()),
                 key.get_ref().to_string(),
                 node_of(value.get_ref())?,
             ))
@@ -517,7 +534,13 @@ fn nodes(
     };
     let mut rows: Vec<_> = table
         .iter()
-        .map(|(key, value)| (key.span().start, key.get_ref().to_string(), value))
+        .map(|(key, value)| {
+            (
+                first_written(key.span().start, value.get_ref()),
+                key.get_ref().to_string(),
+                value,
+            )
+        })
         .collect();
     rows.sort_by_key(|(at, _, _)| *at);
     rows.into_iter()
@@ -1306,6 +1329,22 @@ mod tests {
     }
 
     #[test]
+    fn a_row_is_where_its_name_is_first_written_even_when_its_own_header_comes_later() {
+        // The row's first mention is a header of something under it; its own header is
+        // written after another row's.
+        let by_servers = "[[z.server]]\nname = \"z\"\nmachine = [\"z\"]\n\
+                          [b]\nextensions = { b = \"b\" }\n[[b.server]]\nname = \"b\"\nmachine = [\"b\"]\n\
+                          [z]\nextensions = { z = \"z\" }\n";
+        let by_extensions = "[z.extensions]\nz = \"z\"\n\
+                             [b]\nextensions = { b = \"b\" }\n[[b.server]]\nname = \"b\"\nmachine = [\"b\"]\n\
+                             [z]\n[[z.server]]\nname = \"z\"\nmachine = [\"z\"]\n";
+        for text in [by_servers, by_extensions] {
+            let registry = read_ok(text, None);
+            assert_eq!(names(&registry), ["z", "b"], "{text}");
+        }
+    }
+
+    #[test]
     fn the_json_values_of_a_server_keep_their_types() {
         let text = "[a]\nextensions = { a = \"a\" }\n\
                     [[a.server]]\nname = \"a\"\n\
@@ -1541,13 +1580,13 @@ mod tests {
 
     #[test]
     fn a_users_row_of_a_built_in_name_replaces_it_whole_and_takes_what_it_leaves_out() {
-        let builtin = format!("{}{}", good("first"), BUILTIN_RUST);
+        let builtin = format!("{}{}{}", good("first"), BUILTIN_RUST, good("last"));
         let user = "[rust]\n[[rust.server]]\nname = \"mine\"\ncommand = [\"/opt/ra\", \"--x\"]\n\
                     [[rust.server]]\ncommand = [\"/opt/ra2\"]\nproject = [\"p/ra\"]\nmachine = [\"ra\"]\n";
         let registry = read_ok(&builtin, Some(user));
 
-        // In the built-in row's place.
-        assert_eq!(names(&registry), ["first", "rust"]);
+        // In the built-in row's place, not after the rows that follow it.
+        assert_eq!(names(&registry), ["first", "rust", "last"]);
         let rust = registry.row("rust").unwrap();
         assert!(rust.registered);
         assert_eq!(rust.title, "Rust");

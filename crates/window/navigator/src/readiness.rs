@@ -307,6 +307,21 @@ mod tests {
     }
 
     #[test]
+    fn a_report_under_a_token_that_is_a_number_holds_readiness_back_until_it_ends() {
+        // Alone, then beside a token that is text: its begin holds the server back and only
+        // its own end lets it go.
+        let mut alone = Readiness::new(&Ready::Progress);
+        assert_eq!(notify(&mut alone, json!(7), "begin"), Readying::Starting);
+        assert_eq!(notify(&mut alone, json!(7), "end"), Readying::Ready);
+
+        let mut beside = Readiness::new(&Ready::Progress);
+        assert_eq!(notify(&mut beside, json!("a"), "begin"), Readying::Starting);
+        assert_eq!(notify(&mut beside, json!(7), "begin"), Readying::Starting);
+        assert_eq!(notify(&mut beside, json!("a"), "end"), Readying::Starting);
+        assert_eq!(notify(&mut beside, json!(7), "end"), Readying::Ready);
+    }
+
+    #[test]
     fn by_the_progress_rule_an_end_with_no_begin_and_a_report_in_between_do_not_make_it_ready() {
         let mut readiness = Readiness::new(&Ready::Progress);
         assert_eq!(

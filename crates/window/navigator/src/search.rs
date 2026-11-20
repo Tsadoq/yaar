@@ -120,22 +120,21 @@ pub fn look(
         };
         if let Some((program, args)) = server.command.as_ref().and_then(|c| c.split_first()) {
             // A variable in the program (`{root}/tools/ls`) is put in here, as the program
-            // is what is looked for; the arguments are expanded when the server starts.
-            let Ok(program) = expand(program, &vars) else {
-                continue;
-            };
-            let program = program.as_str();
-            let program = if Path::new(program).components().count() > 1
-                || Path::new(program).is_absolute()
-            {
-                Some(root.join(program)).filter(|p| is_executable(p))
-            } else {
-                search_path
-                    .iter()
-                    .filter(|folder| folder.is_absolute())
-                    .map(|folder| folder.join(program))
-                    .find(|p| is_executable(p))
-            };
+            // is what is looked for; the arguments are expanded when the server starts. A
+            // program that cannot be put in is no candidate, and the server's other paths
+            // are still looked at.
+            let program = expand(program, &vars).ok().and_then(|program| {
+                if Path::new(&program).components().count() > 1 || Path::new(&program).is_absolute()
+                {
+                    Some(root.join(&program)).filter(|p| is_executable(p))
+                } else {
+                    search_path
+                        .iter()
+                        .filter(|folder| folder.is_absolute())
+                        .map(|folder| folder.join(&program))
+                        .find(|p| is_executable(p))
+                }
+            });
             if let Some(program) = program {
                 found
                     .registered
@@ -605,6 +604,20 @@ mod tests {
         }
     }
 
+    /// A relative path that leads from the folder the process stands in to `target`.
+    fn relative_to_here(target: &Path) -> PathBuf {
+        let here = std::env::current_dir().unwrap().canonicalize().unwrap();
+        let mut path: PathBuf = here.components().skip(1).map(|_| "..").collect();
+        path.push(target.strip_prefix("/").unwrap());
+        assert!(path.is_relative());
+        assert_eq!(
+            here.join(&path).canonicalize().unwrap(),
+            target.canonicalize().unwrap(),
+            "the relative path does lead there"
+        );
+        path
+    }
+
     /// The program of each candidate, and its server's place in the row.
     fn programs(candidates: &[Candidate]) -> Vec<(usize, PathBuf)> {
         candidates
@@ -676,12 +689,14 @@ mod tests {
         let uno_c = scratch.executable("c/uno");
         let two_c = scratch.executable("c/two");
         scratch.file("a/uno", 0o600);
-        // A folder of the path that is not there, and one that is not an absolute path
-        // (which would mean the folder the process happens to stand in).
+        // A folder of the path that is not there, and ones that are not absolute paths: a
+        // path that does lead to `a` from where the process stands is followed by nothing,
+        // since a relative folder would make whatever the process stands in a source of
+        // servers.
         let search = [
             scratch.path("missing"),
             b,
-            PathBuf::from("a"),
+            relative_to_here(&a),
             PathBuf::new(),
             a,
             c,
@@ -732,10 +747,14 @@ mod tests {
             "[\"{root}/tools/rel\"]",
             "[\"/nowhere/at/all\"]",
             "[\"missingname\"]",
+            "[\"onlyrelative\"]",
         ]);
         let row = registry.row("lang").unwrap();
+        // A folder reached only by a relative path is no folder of the search path.
+        scratch.executable("viarelative/onlyrelative");
         let search = [
             scratch.path("none"),
+            relative_to_here(&scratch.path("viarelative")),
             scratch.path("bin"),
             scratch.path("elsewhere"),
         ];
@@ -760,6 +779,27 @@ mod tests {
         assert_eq!(found.registered[0].args, ["--flag", "{root}"]);
         assert_eq!(found.registered[1].args, Vec::<String>::new());
         assert_eq!(found.registered[2].args, ["x"]);
+    }
+
+    #[test]
+    fn a_registered_program_that_cannot_be_put_in_leaves_out_only_itself() {
+        let scratch = Scratch::new("unputin");
+        let project = scratch.executable("bin/other/one");
+        let machine = scratch.executable("onpath/one");
+        let registry = look_row();
+        let mut row = registry.row("lang").unwrap().clone();
+        row.servers[0].command = Some(vec!["{no_such_variable}/ls".into()]);
+        let found = look(
+            &row,
+            &scratch.0,
+            &[scratch.path("onpath")],
+            &scratch.path("servers"),
+            None,
+        );
+
+        assert_eq!(found.registered, vec![]);
+        assert_eq!(programs(&found.project), [(0, project)]);
+        assert_eq!(programs(&found.machine), [(0, machine)]);
     }
 
     #[test]
