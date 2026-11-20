@@ -28,7 +28,11 @@
 //! [`crate::Location`] whose line is the spot's plus one, whose column is in bytes of that
 //! line as its file holds it (`lsp::byte_column`), and whose text is that line; references
 //! sorted by path, then line. A server that answers with an error, or ends before it
-//! answered ([`server_gone`]), has the ask answered by text match, marked.
+//! answered ([`server_gone`]), has the ask answered by text match, marked. An ask is held for
+//! the server's process as well as for its request number, which each process counts from the
+//! start: when the key's server was stopped or searched for again without `server_gone`, its
+//! asks are answered by text match at the next ask or answer, and none takes the answer of a
+//! later process.
 //!
 //! # Text match
 //!
@@ -66,6 +70,7 @@ use yaar_diff::FileDiff;
 use yaar_link::WorkspaceId;
 use yaar_text_search::{Found, TextSearch, is_ignored};
 
+use crate::driver::Server;
 use crate::lifecycle::{ensure, ready_server};
 use crate::lsp::{Spot, byte_column, file_uri, hover_text, spots, utf16_column};
 use crate::navigator::{Core, Event, ServerKey, Side};
@@ -127,8 +132,14 @@ struct Pending {
 
 /// What an ask waits for.
 enum How {
-    /// The answer of a server to one of its requests.
-    Server { key: ServerKey, request: u64 },
+    /// The answer of a server to one of its requests. The request's number is the server's
+    /// own, a count that starts again with each process, so the process is named too: a
+    /// number held for a server that has since ended is not the next one's.
+    Server {
+        key: ServerKey,
+        pid: u32,
+        request: u64,
+    },
     /// A text search.
     Search,
 }
@@ -162,6 +173,7 @@ struct Reply {
 
 /// [`crate::Ask::Hover`], [`crate::Ask::Definition`] and [`crate::Ask::References`].
 pub(crate) fn ask(core: &mut Core, id: AskId, question: Question, place: Place) {
+    answer_the_stale(core);
     // With no worktree there is nothing to ask or to search: an empty answer, marked.
     let Some(worktree) = core
         .folder_of(&place.workspace)
@@ -190,8 +202,8 @@ pub(crate) fn ask(core: &mut Core, id: AskId, question: Question, place: Place) 
         } => {
             ensure(core, &key, &root);
             match send(core, &key, &file, &place, question, past.as_deref()) {
-                Some(request) => {
-                    let how = How::Server { key, request };
+                Some((pid, request)) => {
+                    let how = How::Server { key, pid, request };
                     core.answers
                         .waiting
                         .insert(id, pending(root, own_line, how));
@@ -268,7 +280,8 @@ fn plan(core: &mut Core, place: &Place, worktree: &Path) -> Plan {
 }
 
 /// Sends the request of `question` about `place` to the server of `key`, when it is ready:
-/// the text of `file` as it is now first, then the request. Gives its number. None when no
+/// the text of `file` as it is now first, then the request. Gives the server's process id and
+/// the request's number. None when no
 /// server of the key is ready, or the file cannot be read as text, or has no such line (a
 /// past line that changed since, or a file gone), or the server refuses: the ask is then
 /// answered by text match.
@@ -279,7 +292,7 @@ fn send(
     place: &Place,
     question: Question,
     past: Option<&str>,
-) -> Option<u64> {
+) -> Option<(u32, u64)> {
     // An address is made of an absolute path only.
     if !file.is_absolute() {
         return None;
@@ -300,7 +313,8 @@ fn send(
     if question == Question::References {
         params["context"] = json!({"includeDeclaration": true});
     }
-    server.request(question.method(), params).ok()
+    let request = server.request(question.method(), params).ok()?;
+    Some((server.pid(), request))
 }
 
 /// The line of `now` that line `line`, from 0, of `past` has become, when no change
@@ -400,8 +414,11 @@ pub(crate) fn cancel(core: &mut Core, id: AskId) {
     let Some(pending) = core.answers.waiting.remove(&id) else {
         return;
     };
-    if let How::Server { key, request } = pending.how
+    // Only the server the request was sent to is told: a later process of the key counts its
+    // requests again from the start.
+    if let How::Server { key, pid, request } = pending.how
         && let Some(server) = ready_server(core, &key)
+        && server.pid() == pid
     {
         server.cancel(request);
     }
@@ -478,8 +495,11 @@ pub(crate) fn server_answered(
     request: u64,
     result: Result<serde_json::Value, String>,
 ) {
+    // A server answers only after it was ready, and the answer is its current process's: an
+    // ask held for another process of the key is answered first, by text match.
+    answer_the_stale(core);
     let waiting = core.answers.waiting.iter().find_map(|(id, pending)| {
-        matches!(&pending.how, How::Server { key: k, request: r } if k == key && *r == request)
+        matches!(&pending.how, How::Server { key: k, request: r, .. } if k == key && *r == request)
             .then_some(*id)
     });
     // None: the ask was cancelled, and the answer comes after.
@@ -495,6 +515,27 @@ pub(crate) fn server_answered(
             tell(core, id, pending.question, reply, false);
         }
         Err(_) => by_text(core, id, pending),
+    }
+}
+
+/// Every ask held for a server process that is no longer the key's ready one is answered by
+/// text match, marked. A key's server is stopped, or searched for again, without
+/// [`server_gone`] being told, and its process never answers what it was asked.
+fn answer_the_stale(core: &mut Core) {
+    let stale: Vec<AskId> = core
+        .answers
+        .waiting
+        .iter()
+        .filter(|(_, pending)| match &pending.how {
+            How::Server { key, pid, .. } => ready_server(core, key).map(Server::pid) != Some(*pid),
+            How::Search => false,
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in stale {
+        if let Some(pending) = core.answers.waiting.remove(&id) {
+            by_text(core, id, pending);
+        }
     }
 }
 

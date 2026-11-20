@@ -120,9 +120,12 @@ fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answ
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row_ready_when(&go, &log)));
     running.show(&repo, &ws, &repository);
-    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
-        state.state == State::Starting
+    // The row's trial run is shown as Starting too, with no process of the server's: the
+    // asks wait until the server itself runs and has not met its rule of readiness.
+    let held = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Starting && state.pid.is_some()
     });
+    assert!(held.pid.is_some_and(is_alive), "{held:#?}");
 
     let main = repo.root.join("main.sil");
     let lib = repo.root.join("lib.sil");
@@ -360,6 +363,192 @@ fn a_ready_later_candidate_answers_while_the_question_waits() {
     running.end();
 }
 
+/// Sends `signal` to `pid`, the process of a server this test's Navigator started.
+fn signal(pid: u32, signal: libc::c_int) {
+    // SAFETY: kill sends a signal and touches nothing of ours; the process is a child of the
+    // Navigator of this test, which holds it until the test ends.
+    let sent = unsafe { libc::kill(pid as libc::pid_t, signal) };
+    assert_eq!(sent, 0, "signal {signal} to {pid}");
+}
+
+/// The id of the ask a thing told answers; none for anything else.
+fn answered_id(told: &Told) -> Option<AskId> {
+    match told {
+        Told::Hover { id, .. } | Told::Definition { id, .. } | Told::References { id, .. } => {
+            Some(*id)
+        }
+        _ => None,
+    }
+}
+
+/// What was told in answer to each of `ids`, in the order of `ids`: waits, as
+/// [`Running::wait_told`] does, for the ones not told yet.
+fn answers_to(running: &mut Running, ids: &[AskId]) -> Vec<Told> {
+    for id in ids {
+        if !running
+            .told
+            .iter()
+            .any(|told| answered_id(told) == Some(*id))
+        {
+            running.wait_told("the answer to an ask", DEADLINE, |told| {
+                answered_id(told) == Some(*id)
+            });
+        }
+    }
+    ids.iter()
+        .map(|id| {
+            running
+                .told
+                .iter()
+                .find(|told| answered_id(told) == Some(*id))
+                .expect("the answer was waited for")
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn requests_in_flight_at_once_to_one_server_are_each_answered_with_their_own_name() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let names = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta"];
+    let main: String = names.iter().map(|name| format!("use {name}\n")).collect();
+    let repo = scratch.repository(
+        "project",
+        &[("main.sil", main.as_str()), ("notes.txt", "milk\nmilk\n")],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    let pid = ready.pid.expect("a ready server runs");
+
+    // The server is stopped, so that every request is on its way when the first answer
+    // comes: a hover at each name, and the references of the last.
+    signal(pid, libc::SIGSTOP);
+    let mut ids = Vec::new();
+    for (at, name) in names.iter().enumerate() {
+        let id = AskId(100 + at as u64);
+        let place = place(
+            &repo,
+            &ws,
+            Tree::Worktree,
+            "main.sil",
+            at as u32 + 1,
+            name,
+            0,
+        );
+        running.ask(Ask::Hover { id, place });
+        ids.push(id);
+    }
+    let references = AskId(200);
+    running.ask(Ask::References {
+        id: references,
+        place: place(&repo, &ws, Tree::Worktree, "main.sil", 6, "zeta", 0),
+    });
+    // The barrier: an ask about a file of no row is answered by text match, and is handled
+    // after every ask sent before it.
+    running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    signal(pid, libc::SIGCONT);
+
+    for (told, name) in answers_to(&mut running, &ids).into_iter().zip(names) {
+        let Told::Hover { answer, .. } = told else {
+            panic!("a hover was answered by {told:?}");
+        };
+        assert_eq!(
+            answer,
+            Answered {
+                value: Some(format!("standin: {name}")),
+                guessed: false
+            }
+        );
+    }
+    let told = answers_to(&mut running, &[references]).remove(0);
+    let Told::References { answer, .. } = told else {
+        panic!("the references were answered by {told:?}");
+    };
+    assert_eq!(
+        answer,
+        Answered {
+            value: vec![at(&repo.root.join("main.sil"), 6, 4, "use zeta")],
+            guessed: false
+        }
+    );
+    running.end();
+}
+
+#[test]
+fn an_ask_left_waiting_when_its_server_was_stopped_is_answered_by_text_match_and_never_takes_the_answer_of_a_later_one()
+ {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\nuse alpha\n")]);
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+    let first = running
+        .wait_state(&ws, "standin", None, DEADLINE, |state| {
+            state.state == State::Ready
+        })
+        .pid
+        .expect("a ready server runs");
+    let at_alpha = || place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0);
+
+    // A hover the server does not answer, because it is stopped; then the workspace goes
+    // and the server with it, the stop waiting for the process to end.
+    signal(first, libc::SIGSTOP);
+    running.ask(Ask::Hover {
+        id: AskId(1),
+        place: at_alpha(),
+    });
+    running.ask(Ask::Workspaces(vec![]));
+    running.wait_told("the servers of the workspace gone", DEADLINE, |told| {
+        matches!(told, Told::Servers(states) if states.iter().all(|state| state.workspace != ws))
+    });
+    assert!(!is_alive(first), "the stopped server was not ended");
+
+    // The workspace is back, with a server of its own, the first request of which has the
+    // number the first request of the earlier one had.
+    running.show(&repo, &ws, &repository);
+    let second = running
+        .wait_state(&ws, "standin", None, DEADLINE, |state| {
+            state.state == State::Ready && state.pid != Some(first)
+        })
+        .pid
+        .expect("a ready server runs");
+    assert_ne!(first, second);
+    running.ask(Ask::Hover {
+        id: AskId(2),
+        place: at_alpha(),
+    });
+
+    let told = answers_to(&mut running, &[AskId(1), AskId(2)]);
+    let Told::Hover { answer: first, .. } = &told[0] else {
+        panic!("a hover was answered by {:?}", told[0]);
+    };
+    assert!(
+        first.guessed,
+        "the ask of the server that ended was answered by it: {first:#?}"
+    );
+    assert_eq!(first.value.as_deref(), Some("main.sil:1: def alpha"));
+    let Told::Hover { answer: second, .. } = &told[1] else {
+        panic!("a hover was answered by {:?}", told[1]);
+    };
+    assert_eq!(
+        *second,
+        Answered {
+            value: Some("standin: alpha".to_owned()),
+            guessed: false
+        }
+    );
+    running.end();
+}
+
 #[test]
 fn a_file_outside_the_worktree_is_asked_about_by_its_absolute_path() {
     let scratch = Scratch::new();
@@ -445,7 +634,7 @@ fn the_files_that_changed_are_told_to_a_ready_server_once_and_a_gone_one_does_no
         state.state == State::Ready
     });
 
-    // A path told twice, one that no longer exists, and one outside the worktree.
+    // A path told twice, and one that no longer exists.
     running.ask(Ask::FilesChanged {
         workspace: ws.clone(),
         paths: vec![
