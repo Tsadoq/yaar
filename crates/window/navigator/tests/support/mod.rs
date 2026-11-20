@@ -1041,6 +1041,12 @@ fn git_archive(repo: &Repo, version: &str) -> Result<Vec<u8>, String> {
         command.env(name, value);
     }
     command.env("HOME", &repo.home);
+    for name in REPOSITORY_VARIABLES
+        .into_iter()
+        .chain(CONFIGURATION_VARIABLES)
+    {
+        command.env_remove(name);
+    }
     let output = command.output().map_err(|error| error.to_string())?;
     if output.status.success() {
         Ok(output.stdout)
@@ -1109,7 +1115,8 @@ struct Hearing {
 /// bytes set for `name` and status 200, a name set as a redirect ([`Loopback::redirect`])
 /// with 302 and its `Location`, any other request, whatever its method, with 404; and keeps
 /// every request it heard. It reads one request a connection and closes it after the
-/// answer. Stopped when dropped.
+/// answer; a connection that never sends a request holds its thread until the process
+/// ends. Stopped when dropped.
 pub struct Loopback {
     port: u16,
     hearing: Arc<Mutex<Hearing>>,
@@ -1256,9 +1263,11 @@ fn answer(stream: TcpStream, hearing: &Mutex<Hearing>) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
 }
 
-/// The bytes of a `.tar.gz` holding `files` (path in the archive, bytes, mode). A path is
-/// written as given, so that an archive that holds an absolute path or one that climbs out
-/// of its folder, which a downloader must refuse, can be packed too.
+/// The bytes of a `.tar.gz` holding `files` (path in the archive, bytes, mode). A path of up
+/// to 100 bytes is written as given, so that an archive that holds an absolute path or one
+/// that climbs out of its folder, which a downloader must refuse, can be packed too. A
+/// longer path goes through the `tar` crate's long-name entry, which refuses a `..`
+/// component: such a path panics here.
 pub fn tar_gz(files: &[(&str, &[u8], u32)]) -> Vec<u8> {
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
         Vec::new(),

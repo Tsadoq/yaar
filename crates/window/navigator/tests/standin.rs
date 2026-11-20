@@ -302,10 +302,18 @@ fn initialize_is_answered_with_its_capabilities_and_logged_with_what_it_received
     let scratch = Scratch::new();
     let log = scratch.root.join("run.log");
     let log_arg = log.display().to_string();
+    let (tmp, cache) = (scratch.root.join("tmp"), scratch.root.join("cache"));
+    let (tmp_arg, cache_arg) = (tmp.display().to_string(), cache.display().to_string());
     let mut standin = Standin::start_in(
         &scratch.root,
         &["--log", &log_arg, "--fail-trial"],
-        &[("STANDIN_MARK", "yes")],
+        &[
+            ("STANDIN_MARK", "yes"),
+            ("STANDIN_OTHER", "also"),
+            ("OTHER_MARK", "no"),
+            ("TMPDIR", &tmp_arg),
+            ("XDG_CACHE_HOME", &cache_arg),
+        ],
     );
     let result = standin.result_of(
         "initialize",
@@ -335,18 +343,17 @@ fn initialize_is_answered_with_its_capabilities_and_logged_with_what_it_received
     assert_eq!(start["pid"], json!(standin.child.id()));
     assert_eq!(start["cwd"], json!(scratch.root.display().to_string()));
     assert_eq!(start["args"], json!(["--log", log_arg, "--fail-trial"]));
-    assert_eq!(start["env"]["STANDIN_MARK"], json!("yes"));
+    // Exactly the names its doc lists, with their values: a later row reads a server's
+    // temporary and cache folders from here, and no other variable is copied.
     assert_eq!(
-        start["env"]["HOME"],
-        json!(scratch.root.join("home").display().to_string())
-    );
-    let names: Vec<&String> = start["env"].as_object().unwrap().keys().collect();
-    assert!(
-        names.iter().all(
-            |name| ["HOME", "TMPDIR", "XDG_CACHE_HOME"].contains(&name.as_str())
-                || name.starts_with("STANDIN_")
-        ),
-        "{names:?}"
+        start["env"],
+        json!({
+            "HOME": scratch.root.join("home").display().to_string(),
+            "TMPDIR": tmp_arg,
+            "XDG_CACHE_HOME": cache_arg,
+            "STANDIN_MARK": "yes",
+            "STANDIN_OTHER": "also",
+        })
     );
     assert_eq!(
         log[1],
@@ -526,6 +533,46 @@ fn a_name_with_no_definition_or_no_name_at_the_place_has_no_location() {
     assert_eq!(
         standin.locations("textDocument/references", &main, 0, 3),
         json!([])
+    );
+}
+
+#[test]
+fn a_definition_is_a_line_whose_first_word_after_any_white_space_is_def_and_then_white_space() {
+    let scratch = Scratch::new();
+    let project = scratch.root.join("repos").join("defs");
+    std::fs::create_dir_all(&project).unwrap();
+    let defs = project.join("defs.sil");
+    std::fs::write(
+        &defs,
+        "  def indented\ndeftotal\ndefine total\ndef total_more rest\n\tdef tabbed\ndef\ndef  \n",
+    )
+    .unwrap();
+    let uses = project.join("uses.sil");
+    let line = "use indented total_more tabbed total ine deftotal";
+    std::fs::write(&uses, format!("{line}\n")).unwrap();
+    let column = |name: &str| (line.find(name).unwrap() + 1) as u32;
+    let mut standin = Standin::start(&scratch, &[]);
+    standin.start_session(&project, json!(null));
+    let mut definition =
+        |name: &str| standin.locations("textDocument/definition", &uses, 0, column(name));
+
+    // The three that are definitions: after white space of either kind, and with more after
+    // the name.
+    assert_eq!(definition("indented"), json!([location(&defs, 0, 6, 14)]));
+    assert_eq!(definition("total_more"), json!([location(&defs, 3, 4, 14)]));
+    assert_eq!(definition("tabbed"), json!([location(&defs, 4, 5, 11)]));
+    // The ones that are not: `deftotal` is one word, `define total` is the word `define`,
+    // and a line `def` with no name defines nothing.
+    assert_eq!(
+        definition("total "),
+        json!([]),
+        "`deftotal` defines no `total`"
+    );
+    assert_eq!(definition("ine"), json!([]), "`define` defines no `ine`");
+    assert_eq!(
+        definition("deftotal"),
+        json!([]),
+        "`deftotal` is not a definition"
     );
 }
 
@@ -879,6 +926,46 @@ fn a_scratch_is_a_folder_of_its_own_with_its_links_resolved_and_goes_when_droppe
     assert!(std::env::var_os("GIT_DIR").is_none());
     drop(scratch);
     assert!(!root.exists());
+}
+
+#[test]
+fn a_scratch_removes_the_variables_that_name_a_repository_or_hand_git_settings() {
+    let this_test = "a_scratch_removes_the_variables_that_name_a_repository_or_hand_git_settings";
+    let names = [
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_COMMON_DIR",
+        "GIT_PREFIX",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_CONFIG",
+    ];
+    if std::env::var_os("YAAR_SUPPORT_CHILD").is_some() {
+        // The child process, started with every one of them set, as a git hook starts a
+        // test.
+        let _scratch = Scratch::new();
+        for name in names {
+            assert!(
+                std::env::var_os(name).is_none(),
+                "{name} is still set after Scratch::new"
+            );
+        }
+        return;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", this_test, "--nocapture", "--test-threads=1"])
+        .env("YAAR_SUPPORT_CHILD", "1")
+        .envs(names.map(|name| (name, "/no/such/place")))
+        .env("GIT_CONFIG_KEY_0", "yaar.leak")
+        .env("GIT_CONFIG_VALUE_0", "leaked")
+        .output()
+        .expect("run the test in a process of its own");
+    let said = String::from_utf8_lossy(&output.stdout).into_owned()
+        + &String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{said}");
+    assert!(said.contains("1 passed"), "the child test ran: {said}");
 }
 
 #[test]
@@ -1392,10 +1479,13 @@ fn real_servers_in_a_folder_that_lacks_a_pinned_version_names_the_servers() {
     let scratch = Scratch::new();
     let empty = scratch.root.join("servers");
     let found = real_servers_in(Some(empty.clone().into())).expect_err("nothing is pinned there");
-    assert!(found.starts_with(&format!("{} lacks the pinned version of ", empty.display())));
-    for server in ["tsgo", "ty", "rust-analyzer"] {
-        assert!(found.contains(server), "{found}");
-    }
+    let prefix = format!("{} lacks the pinned version of ", empty.display());
+    let named = found
+        .strip_prefix(&prefix)
+        .unwrap_or_else(|| panic!("the sentence does not start with `{prefix}`: {found}"));
+    let mut named: Vec<&str> = named.split(", ").collect();
+    named.sort_unstable();
+    assert_eq!(named, ["rust-analyzer", "tsgo", "ty"], "{found}");
 }
 
 fn strings(value: &toml::Value) -> Vec<&str> {
@@ -2058,6 +2148,42 @@ fn the_keepers_export_is_the_version_as_plain_files_in_the_folder_asked() {
 }
 
 #[test]
+fn the_keepers_export_is_of_the_repository_asked_whatever_the_environment_names() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("target", &[("main.sil", "use alpha\n")]);
+    let decoy = scratch.repository("decoy", &[("other.sil", "def beta\n")]);
+    // SAFETY: as in `Scratch::new`: the tests of this crate are run by `cargo nextest`, a
+    // process for each, and no other thread reads the environment while this one writes it.
+    unsafe {
+        std::env::set_var("GIT_DIR", decoy.root.join(".git"));
+        std::env::set_var("GIT_WORK_TREE", &decoy.root);
+    }
+    let (mut running, end) = played();
+    let into = scratch.root.join("navigator").join("old").join("1");
+    let asked = yaar_navigator::ExportAsk {
+        workspace: workspace_id('1'),
+        version: repo.base.clone(),
+        into: into.clone(),
+    };
+    end.told
+        .send_blocking(Told::ExportWanted(asked.clone()))
+        .unwrap();
+    running.export_when_wanted(&repo, DEADLINE);
+    assert_eq!(
+        end.asks.recv_blocking().unwrap(),
+        Ask::Exported {
+            asked,
+            failed: None
+        }
+    );
+    assert_eq!(
+        std::fs::read_to_string(into.join("main.sil")).unwrap(),
+        "use alpha\n"
+    );
+    assert!(!into.join("other.sil").exists());
+}
+
+#[test]
 fn an_export_of_a_version_git_does_not_know_is_answered_as_a_failure_with_its_reason() {
     let scratch = Scratch::new();
     let repo = scratch.repository("plain", &[("main.sil", "def a\n")]);
@@ -2186,6 +2312,71 @@ fn a_started_navigator_tells_its_languages_and_its_end_is_clean() {
     running.end();
 }
 
+/// A Navigator on the stand-in's row with its worktree on screen, and the process of the
+/// stand-in it started, read from the stand-in's own log once the log says it is ready.
+/// What the Navigator told is read by no wait.
+fn running_with_a_server(scratch: &Scratch) -> (Running, u32) {
+    let log = scratch.root.join("run.log");
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let row = standin_row(
+        "standin",
+        &["--log", &log.display().to_string()],
+        "answer",
+        "",
+    );
+    let running = Running::start(scratch.config(&row));
+    running.show(&repo, &workspace_id('1'), &repository_id('1'));
+    // The server's start is a fact that stays true once it is: looked at again, with a
+    // short pause, up to the deadline.
+    let until = Instant::now() + DEADLINE;
+    loop {
+        let lines: Vec<Value> = std::fs::read_to_string(&log)
+            .unwrap_or_default()
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        if lines.iter().any(|line| line["event"] == "ready") {
+            assert_eq!(lines[0]["event"], "start");
+            return (running, lines[0]["pid"].as_u64().unwrap() as u32);
+        }
+        assert!(Instant::now() < until, "the stand-in did not become ready");
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// Waits for the lifecycle (P9) and the registry (P6): the Navigator told of its server,
+/// which no wait of the test read, and `end` still proves that server's process gone.
+#[test]
+fn end_proves_gone_the_server_of_a_navigator_whose_list_no_wait_read() {
+    let scratch = Scratch::new();
+    let (running, pid) = running_with_a_server(&scratch);
+    assert!(is_alive(pid));
+    running.end();
+    assert!(!is_alive(pid), "end passed with the server's process alive");
+}
+
+/// Waits for the lifecycle (P9) and the registry (P6): a test that failed before its end
+/// still ends its Navigator when its `Running` is dropped by the panic.
+#[test]
+fn a_running_dropped_by_a_panic_ends_its_navigator_and_its_servers() {
+    let scratch = Scratch::new();
+    let started = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let (running, pid) = running_with_a_server(&scratch);
+        assert!(is_alive(pid));
+        let _running = running;
+        std::panic::resume_unwind(Box::new(pid));
+    }));
+    let pid = *started
+        .expect_err("the closure panics")
+        .downcast::<u32>()
+        .expect("with the server's process as its payload");
+    assert!(
+        !is_alive(pid),
+        "the dropped Running left its server running"
+    );
+}
+
 // ---------------------------------------------------------------------------------------
 // Loopback and the packing of downloads.
 // ---------------------------------------------------------------------------------------
@@ -2248,7 +2439,8 @@ fn a_loopback_serves_a_file_and_keeps_the_request_line_and_the_headers_in_order(
     assert!(headers.contains(&("content-length".to_owned(), "4".to_owned())));
     assert_eq!(body, [0, 1, 2, 255]);
 
-    // Kept before the answer was written: the client has the answer and `heard` holds it.
+    // The client has the answer and `heard` holds the request. That it was kept before the
+    // answer was written is shown by the next test.
     assert_eq!(
         loopback.heard(),
         [Heard {
@@ -2269,6 +2461,35 @@ fn a_loopback_serves_a_file_and_keeps_the_request_line_and_the_headers_in_order(
         .map(|heard| heard.line)
         .collect();
     assert_eq!(lines, ["GET /a.bin", "GET /b.txt"]);
+}
+
+#[test]
+fn a_loopback_keeps_the_request_before_it_writes_the_answer() {
+    // An answer far larger than the buffers of both ends of the connection: the listener's
+    // write cannot finish until the client reads, so a listener that kept the request after
+    // its write has not kept it when the client holds the first byte of the answer.
+    let loopback = Loopback::serve(vec![("big".to_owned(), vec![7; 32 << 20])]);
+    let mut connection = std::net::TcpStream::connect(address_of(&loopback))
+        .expect("connect to the loopback listener");
+    connection
+        .write_all(b"GET /big HTTP/1.1\r\nHost: x\r\n\r\n")
+        .unwrap();
+    let mut first = [0u8; 1];
+    connection.read_exact(&mut first).unwrap();
+    assert_eq!(first, *b"H");
+    let heard = loopback.heard();
+    assert_eq!(
+        heard.len(),
+        1,
+        "the request is kept before the answer is written"
+    );
+    assert_eq!(heard[0].line, "GET /big");
+
+    let mut rest = Vec::new();
+    connection.read_to_end(&mut rest).unwrap();
+    let (status, _, body) = split_answer(&[&first[..], &rest[..]].concat());
+    assert_eq!(status, "HTTP/1.1 200 OK");
+    assert_eq!(body.len(), 32 << 20);
 }
 
 #[test]
