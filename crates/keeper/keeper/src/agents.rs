@@ -1338,9 +1338,14 @@ impl Core {
         });
     }
 
-    /// The sessions of one workspace as a Window is shown them: those that run and those
-    /// that ended and still hold a review, in the order they started. None for a
-    /// workspace where no session ever reported.
+    /// The sessions of one workspace as a Window is shown them: those that run, those that
+    /// ended and still hold a review, and those that can still be brought back, in the
+    /// order they started. None for a workspace where no session ever reported.
+    ///
+    /// A session listed only because it can be brought back (not running, holding no
+    /// review) does not decide the state the workspace shows: after a restart the new
+    /// session's state is shown, not "not running". It decides it when no other session of
+    /// the workspace is listed. A session that ended and holds a review counts always.
     fn workspace_agents(
         &self,
         kept: &Kept,
@@ -1355,6 +1360,7 @@ impl Core {
         let offers = self.offers();
         let board = lock(&self.switchboard);
         let mut shown = Vec::new();
+        let mut shown_if_alone = Vec::new();
         let mut sessions = Vec::new();
         for record in records {
             let known = board.session(&yaar_switchboard::SessionId(record.id.as_str().to_owned()));
@@ -1378,7 +1384,11 @@ impl Core {
                 .iter()
                 .find(|adapter| adapter.name == record.agent)
                 .map_or(record.agent.as_str(), |adapter| adapter.title);
-            shown.push(state);
+            if state == State::NotRunning && review.is_none() {
+                shown_if_alone.push(state);
+            } else {
+                shown.push(state);
+            }
             let turn = known.as_ref().and_then(|known| known.turn.clone());
             let turn_from_user = turn.is_some()
                 && lock(&self.turns_from_user)
@@ -1404,6 +1414,9 @@ impl Core {
                 turn_from_user,
                 resumable: offered,
             });
+        }
+        if shown.is_empty() {
+            shown = shown_if_alone;
         }
         Ok(Some(WorkspaceAgents {
             workspace: yaar_link::WorkspaceId::new(workspace.as_str()),

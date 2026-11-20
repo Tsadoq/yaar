@@ -1317,7 +1317,8 @@ fn the_end_of_another_terminal_does_not_free_a_session_a_resume_terminal_is_open
 }
 
 #[test]
-fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_the_workspace() {
+fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_the_workspace_and_does_not_decide_its_state()
+ {
     let scratch = Scratch::with_launcher_shell();
     let repo = scratch.repository("repo");
     let keeper = scratch.keeper();
@@ -1353,6 +1354,9 @@ fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_
         .expect("the session still offered is listed");
     assert_eq!(offered.state, SessionState::NotRunning);
     assert!(offered.resumable);
+    // The session that was cut off is listed only because it can be brought back: the
+    // state the workspace shows is its new session's.
+    assert_eq!(both.shown, Some(SessionState::Idle));
     window.stop(keeper);
 }
 
