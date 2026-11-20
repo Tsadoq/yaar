@@ -892,8 +892,38 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
         assert_eq!(READ_WITHIN, Duration::from_secs(60));
         assert_eq!(config.timeouts().connect, Some(CONNECT_WITHIN));
         assert_eq!(config.timeout_per_read(), Some(READ_WITHIN));
-        // The library's default reads the proxy variables of the environment.
-        assert!(config.proxy().is_none(), "a proxy is set");
+
+        // The library's default reads the proxy variables of the environment, and none is
+        // set in a plain run, so the clause is read in a process started with every one of
+        // them set to an address.
+        let this_test = "download::tests::the_downloader_waits_30_seconds_to_connect_and_60_for_each_read_and_uses_no_proxy";
+        if std::env::var_os("YAAR_PROXY_CHILD").is_some() {
+            assert!(config.proxy().is_none(), "a proxy is set");
+            return;
+        }
+        let mut child = std::process::Command::new(std::env::current_exe().expect("this program"));
+        child
+            .args([this_test, "--exact", "--nocapture", "--test-threads=1"])
+            .env("YAAR_PROXY_CHILD", "1")
+            .env_remove("NO_PROXY")
+            .env_remove("no_proxy");
+        for name in [
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        ] {
+            child.env(name, "http://127.0.0.1:9");
+        }
+        let output = child
+            .output()
+            .expect("run the test in a process of its own");
+        let said = String::from_utf8_lossy(&output.stdout).into_owned()
+            + &String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{said}");
+        assert!(said.contains("1 passed"), "the child test ran: {said}");
     }
 
     #[test]
