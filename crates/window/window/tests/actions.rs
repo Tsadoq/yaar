@@ -13,7 +13,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{Action, TestAppContext, VisualTestContext};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{
     Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
