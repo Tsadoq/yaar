@@ -804,3 +804,95 @@ fn a_resume_whose_terminal_ended_before_the_answer_was_taken_can_be_asked_for_ag
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
 }
+
+#[gpui_kit::test]
+fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_lets_none_go(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let (one, two) = (workspace_id('1'), workspace_id('2'));
+    // A shell of the workspace, which ends while the resume that follows is held.
+    panes.press_in_the_app::<NewTerminal>(&mut cx);
+    panes.answer_open(&terminal('s'), Program::Shell, &mut cx);
+    let a = session('a', "claude", &one, true);
+    tell_agents(&panes, &one, vec![a.clone()]);
+    wait_drawn(&mut cx, "the resume line", |cx| {
+        drawn("terminal-resume-0", cx).is_some()
+    });
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('b'), resume(&a), &mut cx);
+
+    // The shell ends before the resumed CLI reports: the Keeper still lists the session
+    // resumable, and the resume is still held, so a click and the key ask for nothing.
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: terminal('s'),
+        ending: Ending::Exited(0),
+    });
+    wait_for_ending(&panes, &terminal('s'), &mut cx);
+    click_in("terminal-resume-0", &mut cx);
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+    // The barrier is a shell asked for in the other workspace: the next request the
+    // Keeper hears when neither asked for a second resume.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    wait_drawn(&mut cx, "the other workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&two))
+    });
+    panes.press_in_the_app::<NewTerminal>(&mut cx);
+    let (_, request) = panes.keeper.request(&mut cx);
+    assert!(
+        matches!(
+            &request,
+            Request::OpenTerminal {
+                workspace,
+                program: Program::Shell,
+                ..
+            } if *workspace == two
+        ),
+        "{request:?}"
+    );
+
+    // The end of the resume's own terminal lets it go.
+    click_in(&format!("sidebar-workspace-{one}"), &mut cx);
+    wait_drawn(&mut cx, "the first workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&one))
+    });
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: terminal('b'),
+        ending: Ending::Exited(1),
+    });
+    wait_for_ending(&panes, &terminal('b'), &mut cx);
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('c'), resume(&a), &mut cx);
+}
+
+#[gpui_kit::test]
+fn resume_agent_takes_the_first_session_offered_that_no_resume_was_opened_for(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let one = workspace_id('1');
+    let a = session('a', "claude", &one, true);
+    let b = session('b', "pi", &one, true);
+    tell_agents(&panes, &one, vec![a.clone(), b.clone()]);
+    wait_drawn(&mut cx, "the two sessions offered", |cx| {
+        offered(&panes, cx) == [a.id.clone(), b.id.clone()]
+    });
+
+    // With both offered and neither held, the key reaches the first; the next press, the
+    // second; and with none left it says so.
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+    panes.answer_open(&terminal('c'), resume(&a), &mut cx);
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+    panes.answer_open(&terminal('d'), resume(&b), &mut cx);
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+    assert_eq!(
+        panes.pane.read_with(&cx, |pane, _| pane.notice()),
+        Some("No session of this workspace is left to resume.".to_owned())
+    );
+}
