@@ -3,6 +3,7 @@
 //! were given. No Keeper, no app: the stand-in knows only Claude Code's side of the plugin
 //! contract.
 
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::fs;
 use std::io::Write;
@@ -2284,6 +2285,8 @@ struct PiKit {
     extension: PathBuf,
     program: PathBuf,
     reports: PathBuf,
+    /// The bytes the test last wrote into pi's settings, none while it wrote none.
+    settings_written: RefCell<Option<Vec<u8>>>,
 }
 
 /// One run of the reporting program, as the test's program wrote it down.
@@ -2310,7 +2313,12 @@ impl PiKit {
         let extension = root.join("ext/yaar.ts");
         fs::create_dir_all(extension.parent().expect("a folder")).expect("make the folder");
         fs::write(&extension, "// stands for the extension\n").expect("write the extension");
-        let (program, reports) = (root.join("report.sh"), root.join("reports"));
+        // The program lies in a folder whose name a shell would split and expand: run
+        // through `sh -c`, it is not found, so a stand-in that puts a shell between itself
+        // and the program fails every report.
+        let folder = root.join("report $x");
+        fs::create_dir_all(&folder).expect("make the folder");
+        let (program, reports) = (folder.join("report.sh"), root.join("reports"));
         // An answer for a steered message comes before one for any message, and each
         // answer is a file of the test's, there or not.
         fs::write(
@@ -2346,6 +2354,7 @@ exit 0
             extension,
             program,
             reports,
+            settings_written: RefCell::new(None),
         }
     }
 
@@ -2361,17 +2370,34 @@ exit 0
     }
 
     fn write_settings(&self, text: &str) {
-        fs::create_dir_all(self.settings().parent().expect("a folder")).expect("make the folder");
-        fs::write(self.settings(), text).expect("write the settings");
+        self.write_settings_bytes(text.as_bytes());
     }
 
-    /// Settings that list the extension, with another key and another entry beside it.
+    fn write_settings_bytes(&self, bytes: &[u8]) {
+        fs::create_dir_all(self.settings().parent().expect("a folder")).expect("make the folder");
+        fs::write(self.settings(), bytes).expect("write the settings");
+        *self.settings_written.borrow_mut() = Some(bytes.to_vec());
+    }
+
+    /// Settings that list the extension, with other keys beside it, in a layout no JSON
+    /// writer produces (keys out of order, mixed indentation, spaces before the colons, a
+    /// closing line and a blank one), so that a stand-in that parsed and wrote them back
+    /// would change bytes.
     fn list_extension(&self) {
-        let listed = json!({
-            "theme": "dark",
-            "extensions": [self.extension]
-        });
-        self.write_settings(&serde_json::to_string_pretty(&listed).expect("JSON"));
+        let path = serde_json::to_string(&self.extension).expect("JSON");
+        self.write_settings(&format!(
+            "{{\n\t\"zoom\" : 1,\n  \"extensions\":[ {path} ] ,\n\t  \"theme\":\"dark\"\n}}\n\n"
+        ));
+    }
+
+    /// Checks that pi's settings are the bytes the test wrote, or still not there: pi, and
+    /// the stand-in as pi, never writes them. Called after the stand-in has ended.
+    fn assert_settings_kept(&self) {
+        assert_eq!(
+            fs::read(self.settings()).ok(),
+            *self.settings_written.borrow(),
+            "the stand-in changed pi's settings"
+        );
     }
 
     /// The stand-in as `pi`, in a shell that names the program.
@@ -2480,7 +2506,6 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
-    let settings = fs::read(kit.settings()).expect("the settings");
     // What the program answers to a message is what the log holds as the hook's answer.
     kit.answer("input", r#"{"review": "a review"}"#);
     let script = Script(vec![
@@ -2635,7 +2660,7 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
 
     // pi's own files: the settings as they were, no session file, nothing else made.
     assert_eq!(log.extensions, std::slice::from_ref(&kit.extension));
-    assert_eq!(fs::read(kit.settings()).unwrap(), settings);
+    kit.assert_settings_kept();
     assert!(!file.exists());
     let made: Vec<String> = fs::read_dir(kit.root.join("home/.pi/agent"))
         .unwrap()
@@ -2655,6 +2680,7 @@ fn pi_with_no_extension_in_its_settings_reports_nothing_and_with_one_reports_thr
         .start();
     run.say(0, "hello");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let log = run.log();
     assert!(log.extensions.is_empty());
     assert!(hooked(&log).is_empty(), "{log:?}");
@@ -2676,6 +2702,7 @@ fn pi_with_no_extension_in_its_settings_reports_nothing_and_with_one_reports_thr
         .start();
     run.say(0, "hello");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     assert_eq!(
         events_of(&kit.reports()),
         ["session_start", "input", "agent_start", "session_shutdown"]
@@ -2690,6 +2717,7 @@ fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_afte
     start.args = vec!["-e".into(), kit.extension.display().to_string()];
     let mut run = start.start();
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let log = run.log();
     assert_eq!(log.extensions, std::slice::from_ref(&kit.extension));
     assert_eq!(log.args, ["-e", &kit.extension.display().to_string()]);
@@ -2709,7 +2737,38 @@ fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_afte
     start.args = vec!["--extension".into(), other.display().to_string()];
     let mut run = start.start();
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     assert_eq!(run.log().extensions, [kit.extension.clone(), other]);
+
+    // A file named in the settings and again with the flag is listed twice, as pi's own
+    // list has it.
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let mut start = kit.start(place, Script(vec![Step::Exit]));
+    start.args = vec!["-e".into(), kit.extension.display().to_string()];
+    let mut run = start.start();
+    assert!(run.wait_exit().success());
+    assert_eq!(
+        run.log().extensions,
+        [kit.extension.clone(), kit.extension.clone()]
+    );
+}
+
+#[test]
+fn settings_that_start_with_a_byte_order_mark_are_read_as_pi_reads_them() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    let path = serde_json::to_string(&kit.extension).expect("JSON");
+    kit.write_settings(&format!("\u{feff}{{\"extensions\": [{path}]}}\n"));
+    let mut run = kit.start(place, Script(vec![Step::Exit])).start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(run.log().extensions, std::slice::from_ref(&kit.extension));
+    assert_eq!(
+        events_of(&kit.reports()),
+        ["session_start", "session_shutdown"]
+    );
 }
 
 /// A run as pi with the script `turn`, `edit`, `end`, `exit` in which no report is made:
@@ -2725,7 +2784,6 @@ fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str
     ]);
     let mut start = kit.start(place, script);
     set_up(&kit, &mut start);
-    let settings = fs::read(kit.settings()).ok();
     let mut run = start.start();
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
     run.say(0, "go");
@@ -2744,7 +2802,7 @@ fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str
     run.pty.drain();
     in_order(&run.pty.output, &["● Edit a.txt", "● Done"]);
     // pi's settings are the same bytes, or still not there.
-    assert_eq!(fs::read(kit.settings()).ok(), settings);
+    kit.assert_settings_kept();
 }
 
 #[test]
@@ -2769,6 +2827,29 @@ fn pi_with_entries_that_name_no_file_reports_nothing() {
                 null
             ]});
             kit.write_settings(&listed.to_string());
+        },
+        &[],
+    );
+}
+
+#[test]
+fn pi_given_an_extension_with_dash_e_that_names_no_file_reports_nothing() {
+    // No settings, and a flag whose path is no file: one that is not there, and a folder.
+    pi_reports_nothing(
+        |kit, start| {
+            start.args = vec![
+                "-e".into(),
+                kit.root.join("ext/missing.ts").display().to_string(),
+            ];
+        },
+        &[],
+    );
+    pi_reports_nothing(
+        |kit, start| {
+            start.args = vec![
+                "--extension".into(),
+                kit.root.join("ext").display().to_string(),
+            ];
         },
         &[],
     );
@@ -2838,6 +2919,7 @@ fn a_reporting_program_that_cannot_be_started_is_a_report_with_no_answer_and_the
     fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
     run.say(0, "go");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let log = run.log();
     assert_eq!(
         hooked(&log),
@@ -2869,6 +2951,7 @@ fn a_self_started_turn_is_an_input_from_the_extension_with_no_prompt_and_no_key_
     let script = Script(vec![Step::SelfTurn, Step::End, Step::Exit]);
     let mut run = kit.start(place, script).start();
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let reports = kit.reports();
     assert_eq!(
         events_of(&reports),
@@ -2914,6 +2997,7 @@ fn a_line_typed_during_a_hold_is_an_input_that_steers_at_its_enter_and_starts_no
     assert_eq!(seen[3].payload["streamingBehavior"], "steer");
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     // The message went with the run that was open: one start, one end.
     assert_eq!(
         events_of(&kit.reports()),
@@ -2956,6 +3040,7 @@ fn esc_during_a_turn_reports_the_run_aborted_prints_no_mark_and_the_script_goes_
     });
     run.say(held, "second");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
 
     // The first run was aborted, and the read and the end of it that the script still had
     // were skipped; the second run is whole.
@@ -3014,6 +3099,7 @@ fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_b
     let mut run = kit.start(place, script).start();
     run.say(0, "please do it");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
 
     let reports = kit.reports();
     assert_eq!(
@@ -3112,6 +3198,7 @@ fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names_as_pi() {
     kit.wait_reports(4);
     fs::write(&go, "").expect("make the file");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let reports = kit.reports();
     let reply = reports
         .iter()
@@ -3135,6 +3222,7 @@ fn a_session_told_by_session_and_session_dir_keeps_that_id_and_names_its_file_in
     ];
     let mut run = start.start();
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let reports = kit.reports();
     assert_eq!(events_of(&reports), ["session_start", "session_shutdown"]);
     for report in &reports {
@@ -3163,6 +3251,7 @@ fn a_script_with_ask_is_refused_at_its_line_and_nothing_is_reported() {
     ]);
     let mut run = kit.start(place, script).start();
     let status = run.wait_exit();
+    kit.assert_settings_kept();
     assert_eq!(status.code(), Some(2));
     run.pty.drain();
     let shown = String::from_utf8_lossy(&run.pty.output).into_owned();
@@ -3190,6 +3279,7 @@ fn a_shell_command_that_fails_is_a_result_with_is_error_and_an_edit_of_an_empty_
     fs::write(run.work.join("empty.txt"), "").expect("seed");
     run.say(0, "go");
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     let reports = kit.reports();
     let results: Vec<&Report> = reports
         .iter()

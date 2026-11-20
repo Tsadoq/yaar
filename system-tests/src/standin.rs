@@ -31,11 +31,12 @@
 //! with `-e`. A path that names no file is passed over, and settings that are not a JSON
 //! object give none, as pi does; it reads nothing else of pi's and writes nothing there. It
 //! writes its arguments and the extensions it found down as they came ([`StandinLog::args`],
-//! [`StandinLog::extensions`]), and runs as pi only when it found one: a pi whose user said no, or was not asked, loads no extension and
-//! reports nothing. It cannot run the extension, which is TypeScript: it does what the
-//! extension does instead, and only that. For each moment of its script it runs the
-//! reporting program the shell of the app names in `YAAR_PI_REPORT`, with no shell between, so that
-//! the program's parent is the stand-in, as it is pi for the extension; it writes the
+//! [`StandinLog::extensions`]), and runs as pi only when it found one: a pi whose user said
+//! no, or was not asked, loads no extension and reports nothing. It cannot run the
+//! extension, which is TypeScript: it does what the extension does instead, and only that.
+//! For each moment of its script it runs the reporting program the shell of the app names
+//! in `YAAR_PI_REPORT`, with no shell between, so that the program's parent is the
+//! stand-in, as it is pi for the extension; it writes the
 //! report's payload on the program's standard input, in the shape the crate doc of
 //! `yaar-adapter-pi` gives (the `event`, `sessionId`, `sessionFile`, `cwd` and the keys of
 //! the event), and waits for it to end, at most 10 s, and writes down
@@ -59,11 +60,10 @@
 //! written down as `Did::Tool` with what the program printed. A line typed during a
 //! [`Step::Hold`] inside a turn is a message pi takes while it works, as Enter during a tool
 //! does in pi: `input` with `streamingBehavior` `steer` at its Enter, its review kept, and
-//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks no permission: a script that holds
-//! one is refused at its line, as a script line it cannot read. It prints no progress
-//! sequence and no interrupt mark: pi reports both itself. Its call of the reply tool runs
-//! the program with `--tool`, and writes the arguments and what the program printed down
-//! as [`Did::Tool`]. A report whose program cannot be started, or does not end in 10 s, is
+//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks
+//! no permission: a script that holds one is refused at its line, as a script line it cannot
+//! read. It prints no progress sequence and no interrupt mark: pi reports both itself. A
+//! report whose program cannot be started, or does not end in 10 s, is
 //! written down with what it printed, which is nothing then, and the script goes on, as pi
 //! goes on when the extension's report fails.
 //!
@@ -1430,17 +1430,19 @@ impl Standin {
     fn pi_reply(&self, thread: &str, arguments: &Value) {
         out(format!("\u{25cf} Reply {thread}\r\n").as_bytes());
         let payload = json!({"toolCallId": self.pi_call_id(), "arguments": arguments});
-        let answer = match self.pi_run("reply_to_thread", payload, true) {
-            None => json!({"message": "no extension is loaded: pi has no such tool"}),
-            Some((printed, killed)) => serde_json::from_slice(&printed).unwrap_or_else(|_| {
-                let why = if killed {
-                    "the program did not end in time"
-                } else {
-                    "the program printed no JSON"
-                };
-                json!({"message": why})
-            }),
-        };
+        // A thread is only known from a review the extension's answer carried, so the
+        // program is there.
+        let (printed, killed) = self
+            .pi_run("reply_to_thread", payload, true)
+            .expect("a review was received, so a program was run");
+        let answer = serde_json::from_slice(&printed).unwrap_or_else(|_| {
+            let why = if killed {
+                "the program did not end in time"
+            } else {
+                "the program printed no JSON"
+            };
+            json!({"message": why})
+        });
         self.log.did(
             "tool",
             json!({"arguments": arguments, "answer": answer, "received": self.input.received}),
