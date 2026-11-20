@@ -7,6 +7,23 @@
 // `Type.Boolean(options)` the schema of their type with the options' keys; and
 // `Type.Optional(schema)` the schema marked optional.
 //
-// Not built yet: the package of pi's extension writes it.
+// The mark is a key that is a symbol, which JSON leaves out: what the harness writes of a
+// tool's parameters is the schema alone.
 
-export const Type = {};
+const OPTIONAL = Symbol("optional");
+
+export const Type = {
+  Object(properties) {
+    const required = Object.keys(properties).filter((name) => !properties[name][OPTIONAL]);
+    return { type: "object", properties, required };
+  },
+  String(options = {}) {
+    return { type: "string", ...options };
+  },
+  Boolean(options = {}) {
+    return { type: "boolean", ...options };
+  },
+  Optional(schema) {
+    return { ...schema, [OPTIONAL]: true };
+  },
+};
