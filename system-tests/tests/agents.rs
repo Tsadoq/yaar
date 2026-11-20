@@ -11,7 +11,8 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use yaar_link::{
-    Fact, SessionState, Step as Taken, TerminalId, TerminalSize, TurnEnd, TurnId, WorkspaceAgents,
+    Anchor, Attachment, CommentId, DraftOn, Fact, Lines, ReviewId, SessionState, Side,
+    Step as Taken, TerminalId, TerminalSize, ThreadId, TurnEnd, TurnId, WorkspaceAgents,
     WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, INTERRUPT_MARK, Script};
@@ -132,6 +133,51 @@ fn only_session(agents: &WorkspaceAgents) -> &yaar_link::Session {
         panic!("not exactly one session: {agents:?}");
     };
     session
+}
+
+/// The id of the `n`th thing of a kind: 32 digits, as the Window draws them.
+fn id(kind: u128, n: u128) -> String {
+    format!("{:032x}", (kind << 64) + n)
+}
+
+/// The one review of a workspace with no agent session: of no agent, with no thread.
+fn the_review_of_no_agent(client: &mut Client, workspace: &WorkspaceId) -> ReviewId {
+    let reviews = client.reviews(workspace);
+    let [review] = &reviews.reviews[..] else {
+        panic!("not exactly one review: {:?}", reviews.reviews);
+    };
+    assert_eq!(review.agent, None);
+    assert_eq!(review.threads, vec![]);
+    review.id.clone()
+}
+
+/// Starts a thread of `review` on the line 1 of `file`, as the files on disk hold it, whose
+/// text is `line`, with the draft `text`.
+fn start_a_thread_on_line_one(
+    client: &mut Client,
+    review: &ReviewId,
+    file: &str,
+    line: &str,
+    text: &str,
+) -> ThreadId {
+    let thread = ThreadId::new(id(2, 1));
+    let anchor = Anchor {
+        tree: None,
+        path: path(file),
+        side: Side::New,
+        lines: Lines { first: 1, last: 1 },
+        text: line.to_owned(),
+    };
+    client
+        .save_draft(
+            review,
+            &thread,
+            &CommentId::new(id(3, 1)),
+            DraftOn::NewThread { anchor },
+            text,
+        )
+        .expect("save the draft");
+    thread
 }
 
 /// Ends the test the way it must: the client leaves, the Keeper ends with the world, and
@@ -299,6 +345,14 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let other = open(&mut client, &elsewhere);
+    // A review waits in the workspace with a comment attached, so that anything that took
+    // one of these programs for an agent would show it: as a session at a terminal, or as a
+    // message that carries the comment.
+    let review = the_review_of_no_agent(&mut client, &workspace);
+    start_a_thread_on_line_one(&mut client, &review, "a.txt", "a", "Why a?");
+    client
+        .attach_review(&review, None)
+        .expect("attach the review");
 
     // A program that is neither Claude Code nor pi, which prints the mark too.
     let first = client.open_terminal(&workspace, SIZE).expect("a terminal");
@@ -371,6 +425,25 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
         "{:?}",
         client.agents()
     );
+    // No offer to attach: no session lists the attachment at a terminal of the workspace,
+    // neither program ran a hook that could carry it into a message, and the comment waits
+    // where it was, attached and not sent.
+    for started in [&unsupported, &around] {
+        let log = started.log(&world);
+        assert!(
+            log.did.iter().all(|did| !matches!(did, Did::Hook { .. })),
+            "{log:?}"
+        );
+    }
+    let reviews = client.reviews(&workspace).reviews;
+    let [waiting] = &reviews[..] else {
+        panic!("not exactly one review: {reviews:?}");
+    };
+    assert_eq!(waiting.agent, None);
+    assert_eq!(waiting.attached, Some(Attachment::Review));
+    assert_eq!(waiting.rounds, vec![]);
+    assert_eq!(waiting.threads.len(), 1, "{waiting:?}");
+    assert_eq!(waiting.threads[0].comments[0].round, None);
     // The edits are there and no agent made them.
     let uncommitted = client.uncommitted(&workspace, None).expect("uncommitted");
     let mut edited: Vec<_> = uncommitted
