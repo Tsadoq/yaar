@@ -30,7 +30,10 @@
 //! notice that the turn still runs and select nothing, and the press after the one that said
 //! so passes to the round before, as a press after a round's change does. Once the turn is
 //! an entry with a state, the round is counted to the newest entry like any other. A round
-//! with no turn, as a copy has, is counted to the newest entry at once.
+//! with no turn, as a copy has, is counted to the newest entry at once. Until the pane has
+//! read the history at all, no round is counted, whatever turn it carries, and the notice
+//! says that no state of the worktree is recorded to count to yet: with nothing read, the
+//! pane cannot say that a turn is still running.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -184,7 +187,8 @@ impl ReviewPane {
     }
 
     /// What the state of the round `state`, sent in `turn`, is counted to in the history the
-    /// pane holds.
+    /// pane holds. Until the pane has read the history, nothing is: [`Counted::NoState`],
+    /// whatever turn the round carries.
     fn counted_since(&self, state: &str, turn: Option<&TurnId>) -> Counted {
         match &self.tree.history {
             Some(history) => counted(&history.entries, state, turn),
