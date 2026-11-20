@@ -299,6 +299,52 @@ fn a_tar_gz_installs_the_program_executable_and_installed_toml_names_it() {
 }
 
 #[test]
+fn folders_a_long_name_and_a_pax_note_of_the_archive_unpack_as_they_should() {
+    use tar::EntryType::{Directory, Regular, XGlobalHeader};
+    let scratch = Scratch::new();
+    let servers = scratch.root.join("servers");
+    // A name longer than a tar header holds goes through the long-name entry of GNU tar.
+    let long = format!("standin/lib/{}/file.txt", "d".repeat(110));
+    let bytes = tar_gz(&[(long.as_str(), b"long", 0o644)]);
+    let long_download = Loopback::serve(vec![("long.tar.gz".to_owned(), bytes.clone())]);
+    let program = tar_gz_of(&[
+        entry("pax_global_header", XGlobalHeader, b"20 comment=a note\n"),
+        entry("./", Directory, b""),
+        entry("standin/", Directory, b""),
+        entry("./standin/lib/", Directory, b""),
+        entry(IN_ARCHIVE, Regular, b"program"),
+        entry("top-level-file", Regular, b"dropped by the strip"),
+    ]);
+    let pax = Loopback::serve(vec![("pax.tar.gz".to_owned(), program.clone())]);
+    let downloader = Downloader::new().expect("a downloader");
+
+    // The row names the long-named file as its program, so that it is what the unpacking
+    // is checked by.
+    let with_program = Download {
+        program: "lib".to_owned() + "/" + &"d".repeat(110) + "/file.txt",
+        ..pinned(long_download.url("long.tar.gz"), &bytes, "1")
+    };
+    let done = downloader
+        .fetch("standin", &with_program, &servers)
+        .expect("the long name unpacks");
+    assert_eq!(std::fs::read(&done.program).unwrap(), b"long");
+
+    // The note is read past, the folders made, a file with nothing left after the strip
+    // passed over.
+    let done = downloader
+        .fetch(
+            "standin",
+            &pinned(pax.url("pax.tar.gz"), &program, "2"),
+            &servers,
+        )
+        .expect("the archive with a pax note unpacks");
+    assert_eq!(std::fs::read(&done.program).unwrap(), b"program");
+    assert!(servers.join("standin/2/lib").is_dir());
+    assert!(!servers.join("standin/2/top-level-file").exists());
+    assert_eq!(partials(&servers), Vec::<PathBuf>::new());
+}
+
+#[test]
 fn a_gz_installs_its_one_file_under_the_programs_name_executable() {
     let scratch = Scratch::new();
     let servers = scratch.root.join("servers");
