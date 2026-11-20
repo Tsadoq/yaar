@@ -245,7 +245,15 @@ impl Core {
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+    use std::process::{Command, Stdio};
+    use std::sync::{Arc, Weak};
+
+    use yaar_system_tests::recorded;
+
     use super::*;
+    use crate::Options;
+    use crate::agents::Agents;
 
     #[test]
     fn a_report_is_late_once_it_has_waited_longer_than_the_limit_and_not_before() {
@@ -270,6 +278,186 @@ mod tests {
     fn a_clock_that_reads_earlier_than_the_report_is_not_late() {
         let now = Instant::now();
         assert!(!late(now + Duration::from_secs(1), now));
+    }
+
+    /// A folder of the test's own, removed when it ends.
+    struct Scratch(PathBuf);
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn git(folder: &Path, arguments: &[&str]) {
+        let status = Command::new("git")
+            .args(arguments)
+            .current_dir(folder)
+            .stdout(Stdio::null())
+            .status()
+            .expect("run git");
+        assert!(status.success(), "git {arguments:?}");
+    }
+
+    #[test]
+    fn a_message_that_waited_too_long_is_sent_no_review_and_what_is_attached_stays_attached() {
+        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
+        let root = Path::new("/tmp")
+            .canonicalize()
+            .expect("the temporary folder")
+            .join(format!("yaar-keeper-late-{}", std::process::id()));
+        let _scratch = Scratch(root.clone());
+        // SAFETY: changing the environment is sound only while no other thread reads it.
+        // This is the first statement that reads it, and the tests of this crate are run by
+        // `cargo nextest`, which gives each test a process of its own.
+        unsafe {
+            for (name, value) in [
+                ("GIT_CONFIG_GLOBAL", "/dev/null"),
+                ("GIT_CONFIG_NOSYSTEM", "1"),
+                ("GIT_AUTHOR_NAME", "A Test"),
+                ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
+                ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
+                ("GIT_COMMITTER_NAME", "A Test"),
+                ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
+                ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
+            ] {
+                std::env::set_var(name, value);
+            }
+            std::env::set_var("HOME", root.join("home"));
+            for name in [
+                "GIT_DIR",
+                "GIT_WORK_TREE",
+                "GIT_INDEX_FILE",
+                "GIT_CONFIG_COUNT",
+                "GIT_CONFIG_PARAMETERS",
+                "GIT_CONFIG",
+            ] {
+                std::env::remove_var(name);
+            }
+        }
+        let repo = root.join("repo");
+        std::fs::create_dir_all(root.join("home")).expect("make the folders");
+        std::fs::create_dir_all(&repo).expect("make the folders");
+        git(&repo, &["init", "--quiet", "-b", "main"]);
+        std::fs::write(repo.join("a.txt"), "one\ntwo\nthree\n").expect("write a file");
+        git(&repo, &["add", "--all"]);
+        git(&repo, &["commit", "--quiet", "-m", "first"]);
+
+        // The parts as the Keeper starts them, with the Adapter of Claude Code.
+        let options = Options {
+            socket: root.join("k.sock"),
+            linger: Duration::from_secs(60),
+            app_version: "test-keeper".to_owned(),
+            data_dir: root.join("data"),
+            companions: Some(root.join("companions")),
+        };
+        let git_found = yaar_recorder::Git::find().expect("git is installed");
+        let store = yaar_store::Store::open(&{
+            std::fs::create_dir_all(&options.data_dir).expect("make the data folder");
+            options.data_dir.join(yaar_store::FILE_NAME)
+        })
+        .expect("open the database");
+        let kept = Kept {
+            reviews: yaar_review_engine::Reviews::new(
+                store.clone(),
+                git_found.clone(),
+                options.data_dir.join("states"),
+            ),
+            workspaces: yaar_workspaces::Workspaces::new(git_found, store.clone()),
+            store,
+        };
+        let watching = Arc::new(crate::watching::Watching::new(Weak::new()));
+        let agents = Agents::start(&options, Some(&kept), watching, Weak::new());
+        let core = &agents.core;
+        let workspace = kept
+            .workspaces
+            .open_folder(&repo)
+            .expect("open the folder")
+            .workspace;
+
+        // A session starts in the folder, and its review holds an attached draft.
+        let events = recorded::hook_events("claude/review-file-read.jsonl");
+        let report = |record: &recorded::HookRecord| AgentReport {
+            agent: yaar_adapter_claude::NAME.to_owned(),
+            terminal: None,
+            pid: std::process::id(),
+            payload: record.in_project(&repo).input_bytes(),
+        };
+        let mut told = Told::default();
+        assert_eq!(
+            core.report_taken(&kept, &report(&events[0]), Instant::now(), &mut told),
+            Reply::Done
+        );
+        let session = kept
+            .store
+            .session_of_cli(yaar_adapter_claude::NAME, events[0].session())
+            .expect("read the session")
+            .expect("the session started");
+        let review = kept
+            .reviews
+            .review_of_session(&session.id)
+            .expect("read the review")
+            .expect("the session has a review");
+        let worktree = kept
+            .workspaces
+            .worktree(&workspace)
+            .expect("read the worktree")
+            .expect("the worktree");
+        let comment = yaar_review_engine::CommentId::new(format!("{:032x}", 2));
+        kept.reviews
+            .save_draft(
+                Some(&worktree),
+                &review,
+                &yaar_review_engine::DraftSave {
+                    thread: yaar_review_engine::ThreadId::new(format!("{:032x}", 1)),
+                    comment: comment.clone(),
+                    on: yaar_review_engine::DraftOn::NewThread(yaar_review_engine::NewAnchor {
+                        tree: None,
+                        path: PathBuf::from("a.txt"),
+                        side: yaar_review_engine::Side::New,
+                        first: 1,
+                        last: 1,
+                        text: "one".to_owned(),
+                    }),
+                    text: "Why is this `one`?".to_owned(),
+                },
+            )
+            .expect("save the draft");
+        kept.reviews
+            .attach(
+                &review,
+                yaar_review_engine::Attachment::Review,
+                &agents.sessions_now(&kept, &yaar_link::WorkspaceId::new(workspace.as_str())),
+            )
+            .expect("attach the review");
+
+        // The user's message reaches the Keeper's side too late to be answered in time.
+        let message = report(&events[2]);
+        let late_by = Instant::now()
+            .checked_sub(DELIVER_BY * 2)
+            .expect("the machine has been up for longer than three seconds");
+        let mut told = Told::default();
+        let answer = core.report_taken(&kept, &message, late_by, &mut told);
+        assert_eq!(answer, Reply::Done);
+        assert!(told.reviews.is_empty() && told.rounds.is_empty());
+        let held = kept.reviews.review(&review).expect("read the review");
+        assert_eq!(
+            held.attached(),
+            Some(&yaar_review_engine::Attachment::Review)
+        );
+        assert!(held.rounds().is_empty(), "{:?}", held.rounds());
+        assert_eq!(
+            held.comment(&comment).map(|(_, comment)| comment.round),
+            Some(None)
+        );
+
+        // The same message, on time, is sent the review: what was kept was whole.
+        let mut told = Told::default();
+        let answer = core.report_taken(&kept, &message, Instant::now(), &mut told);
+        assert!(matches!(answer, Reply::Answer { .. }), "{answer:?}");
+        let sent = kept.reviews.review(&review).expect("read the review");
+        assert_eq!(sent.attached(), None);
+        assert_eq!(sent.rounds().len(), 1);
     }
 
     #[test]
