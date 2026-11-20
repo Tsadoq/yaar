@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use yaar_recorder::{Change, ChangedPath, GitError, StateId, StateStore};
 use yaar_store::{NoticeRecord, Side, ThreadId, ThreadPlace, WorkspaceId};
 
-use crate::engine::{EngineError, Reviews};
+use crate::engine::{EngineError, Reviews, is_outside};
 use crate::follow::{FileStep, Notice, Place, Placed, carry, carry_file};
 
 /// What one file became between two trees, with the bytes it needs: [`FileStep`] owns
@@ -148,7 +148,12 @@ impl Reviews {
         let mut candidates = Vec::new();
         for review in self.store.reviews_of(workspace)? {
             for thread in review.threads {
-                if thread.resolved || thread.anchor.side != Side::New {
+                // A thread on a file outside the worktree has no version to carry from, and
+                // no diff names its file.
+                if thread.resolved
+                    || thread.anchor.side != Side::New
+                    || is_outside(&thread.anchor.path)
+                {
                     continue;
                 }
                 let (from, at) = match &thread.now {
@@ -303,7 +308,8 @@ impl Reviews {
 
     /// Where a thread placed at `placed` in tree `from` sits in tree `to`, two versions of
     /// `workspace` read through its state store: recorded states or commits it holds,
-    /// whichever each is. Nothing is kept.
+    /// whichever each is. Nothing is kept. A place on the old side or on a file outside the
+    /// worktree is given back as it is.
     pub fn carry_between(
         &self,
         workspace: &WorkspaceId,
@@ -311,8 +317,9 @@ impl Reviews {
         from: &str,
         to: &str,
     ) -> Result<Placed, EngineError> {
-        // A thread on the old side stays where it is whatever the trees are: nothing is read.
-        if placed.at.side != Side::New {
+        // A thread on the old side, or on a file outside the worktree, stays where it is
+        // whatever the trees are: nothing is read.
+        if placed.at.side != Side::New || is_outside(&placed.at.path) {
             return Ok(placed.clone());
         }
         let states = self.states_of(workspace)?;
