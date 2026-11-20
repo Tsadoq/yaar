@@ -358,6 +358,15 @@ fn an_answer_when_every_question_held_is_answered_already_asks_the_list_first(
     cx: &mut TestAppContext,
 ) {
     let (list, mut keeper) = linked(cx);
+    // The model first shows a question, so that the wait after the next fact shows the
+    // model took that fact: an empty list of questions is also what a model that has heard
+    // nothing gives.
+    tell(
+        &list,
+        &mut keeper,
+        vec![consent("b", ConsentAnswer::NotAsked)],
+        cx,
+    );
     // The model holds an Adapter, but none of its questions is shown: it was answered, and
     // went without a problem. The answer is for the Adapters the Keeper lists, not for the
     // questions the model shows, of which there is none.
