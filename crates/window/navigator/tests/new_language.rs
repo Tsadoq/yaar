@@ -111,9 +111,16 @@ const TEXTS: [&str; 11] = [
 ];
 
 /// The text of every string literal of `source`, the part of it before its unit tests,
-/// comments left out.
+/// comments left out. What is cut off is the unit-test module and nothing else: a
+/// `#[cfg(test)]` item before product code would hide that code from the scan.
 fn string_literals(source: &str) -> Vec<String> {
-    let code = source.split("\n#[cfg(test)]").next().unwrap_or(source);
+    let (code, tests) = source
+        .split_once("\n#[cfg(test)]")
+        .unwrap_or((source, "\nmod tests"));
+    assert!(
+        tests.trim_start().starts_with("mod tests"),
+        "the first #[cfg(test)] of a source file opens its unit-test module, not another item"
+    );
     let chars: Vec<char> = code.chars().collect();
     let mut literals = Vec::new();
     let mut at = 0;
