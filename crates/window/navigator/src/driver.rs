@@ -20,7 +20,9 @@
 //! `textDocument.synchronization` `{}`; `workspace.configuration` true;
 //! `workspace.workspaceFolders` true; `workspace.didChangeWatchedFiles.dynamicRegistration`
 //! false; `window.workDoneProgress` true. Then `initialized`, and
-//! `workspace/didChangeConfiguration` with the row's `settings`.
+//! `workspace/didChangeConfiguration` with the row's `settings`. What a caller asks of the
+//! driver before the server answered `initialize` is held, and sent after those two: a
+//! client sends a server nothing until it has the answer, and `initialized` comes first.
 //!
 //! # What a server asks, and is answered (ADR-015's four)
 //!
@@ -141,6 +143,14 @@ enum Outgoing {
     Close,
 }
 
+/// What waits for the answer to `initialize`.
+struct Gate {
+    /// Whether the answer came, and what callers send goes to the queue at once.
+    open: bool,
+    /// What callers sent before it, in the order they sent it.
+    held: Vec<Outgoing>,
+}
+
 /// How the server's process ended, and whether the reading thread is done.
 struct Ends {
     /// Set when the process was reaped: its exit code, none for one killed by a signal.
@@ -153,6 +163,11 @@ struct Ends {
 struct Shared {
     /// The writing thread's queue.
     outbox: Sender<Outgoing>,
+    /// What callers send waits here until the server is initialized.
+    gate: Mutex<Gate>,
+    /// Set, under the child's lock, when the process was reaped by a wait that `Child`
+    /// does not know of: a kill after it would reach a process id that may be another's.
+    reaped_apart: AtomicBool,
     /// Whether the readiness rule was met and the server runs.
     ready: AtomicBool,
     /// Set when the reading thread has seen the end: nothing is sent after it.
@@ -179,16 +194,60 @@ fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 impl Shared {
-    /// Queues one message for the server. Never waits: the writing thread writes it.
+    /// Queues one message of a caller's for the server, after the ones before it, and, until
+    /// the server is initialized, after `initialized`. Never waits: the writing thread
+    /// writes it.
     fn send(&self, message: &Value) -> Result<(), String> {
         if self.closed.load(Ordering::SeqCst) {
             return Err("the server has ended".to_owned());
         }
-        let mut frame = Vec::new();
-        write_frame(&mut frame, message).map_err(|error| error.to_string())?;
+        self.queue(Outgoing::Frame(frame_of(message)?))
+    }
+
+    /// Queues what a caller sends, or holds it until the server is initialized.
+    fn queue(&self, outgoing: Outgoing) -> Result<(), String> {
+        let mut gate = locked(&self.gate);
+        if gate.open {
+            self.outbox
+                .send(outgoing)
+                .map_err(|_| "the server's input is closed".to_owned())
+        } else {
+            gate.held.push(outgoing);
+            Ok(())
+        }
+    }
+
+    /// Queues one message of the driver's own, that does not wait for the server to be
+    /// initialized: the first request, and the answers to the server's.
+    fn send_now(&self, message: &Value) -> Result<(), String> {
+        if self.closed.load(Ordering::SeqCst) {
+            return Err("the server has ended".to_owned());
+        }
         self.outbox
-            .send(Outgoing::Frame(frame))
+            .send(Outgoing::Frame(frame_of(message)?))
             .map_err(|_| "the server's input is closed".to_owned())
+    }
+
+    /// The server answered `initialize`: queues `first`, then what callers sent meanwhile,
+    /// and from now on what callers send goes to the queue at once.
+    fn open_gate(&self, first: &[Value]) {
+        let mut gate = locked(&self.gate);
+        for message in first {
+            let _ = self.send_now(message);
+        }
+        for outgoing in gate.held.drain(..) {
+            let _ = self.outbox.send(outgoing);
+        }
+        gate.open = true;
+    }
+
+    /// Ends the process with a kill, unless it was reaped, when the signal could reach a
+    /// process that is not the server's.
+    fn kill(&self, child: &Mutex<Child>) {
+        let mut child = locked(child);
+        if !self.reaped_apart.load(Ordering::SeqCst) {
+            let _ = child.kill();
+        }
     }
 
     /// Waits until the process was reaped, giving how it ended; none when `within` passed
@@ -200,6 +259,13 @@ impl Shared {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         ends.reaped
     }
+}
+
+/// One message as a whole frame.
+fn frame_of(message: &Value) -> Result<Vec<u8>, String> {
+    let mut frame = Vec::new();
+    write_frame(&mut frame, message).map_err(|error| error.to_string())?;
+    Ok(frame)
 }
 
 /// A running language server.
@@ -251,6 +317,11 @@ impl Server {
         let (outbox, inbox) = channel();
         let shared = Arc::new(Shared {
             outbox,
+            gate: Mutex::new(Gate {
+                open: false,
+                held: Vec::new(),
+            }),
+            reaped_apart: AtomicBool::new(false),
             ready: AtomicBool::new(false),
             closed: AtomicBool::new(false),
             next_request: AtomicU64::new(INITIALIZE + 1),
@@ -263,8 +334,8 @@ impl Server {
             }),
             ended: Condvar::new(),
         });
-        // First in the queue: whatever a caller sends after `start` comes after it.
-        let _ = shared.send(&request_message(
+        // First in the queue, and what a caller sends after `start` waits for its answer.
+        let _ = shared.send_now(&request_message(
             INITIALIZE,
             "initialize",
             initialize_params(&launch, &root_uri, &folder),
@@ -289,7 +360,7 @@ impl Server {
                 start_thread("language-server-waiter", move || reap(pid, &child, &shared))
             });
         if let Err(error) = started {
-            let _ = locked(&child).kill();
+            shared.kill(&child);
             return Err(error);
         }
         Ok(Server { pid, shared, child })
@@ -386,10 +457,10 @@ impl Server {
             .shared
             .send(&request_message(shutdown, "shutdown", Value::Null));
         let _ = self.shared.send(&notification_message("exit", Value::Null));
-        let _ = self.shared.outbox.send(Outgoing::Close);
+        let _ = self.shared.queue(Outgoing::Close);
 
         if self.shared.wait_reaped(within).is_none() {
-            let _ = locked(&self.child).kill();
+            self.shared.kill(&self.child);
             // A killed process is reaped at once.
             let mut ends = locked(&self.shared.ends);
             while ends.reaped.is_none() {
@@ -412,7 +483,7 @@ impl Server {
 impl Drop for Server {
     /// A server nobody stopped is killed: it is reaped by its own thread, and its exit told.
     fn drop(&mut self) {
-        let _ = locked(&self.child).kill();
+        self.shared.kill(&self.child);
     }
 }
 
@@ -524,6 +595,9 @@ fn reap(pid: u32, child: &Mutex<Child>, shared: &Shared) {
         // child may end in between, and then this is the call that reaps it.
         // SAFETY: as above, and it may reap.
         let mut taken: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // Under the child's lock, so that no kill is on its way to the process id when it is
+        // reaped and no kill comes after: `reaped_apart` is set before the lock is let go.
+        let guard = locked(child);
         // SAFETY: as above.
         let took = unsafe {
             libc::waitid(
@@ -534,8 +608,11 @@ fn reap(pid: u32, child: &Mutex<Child>, shared: &Shared) {
             )
         };
         if took == 0 && ended(&taken) {
+            shared.reaped_apart.store(true, Ordering::SeqCst);
+            drop(guard);
             break exit_code(&taken);
         }
+        drop(guard);
     };
     let mut ends = locked(&shared.ends);
     ends.reaped = Some(code);
@@ -581,7 +658,7 @@ impl Reader {
                 Ok(None) => break,
                 Err(_) => {
                     // A stream that is no frames cannot be taken up again.
-                    let _ = locked(&self.child).kill();
+                    self.shared.kill(&self.child);
                     break;
                 }
             }
@@ -624,7 +701,7 @@ impl Reader {
                 "error": {"code": METHOD_NOT_FOUND, "message": format!("the driver does not answer {method}")},
             }),
         };
-        let _ = self.shared.send(&reply);
+        let _ = self.shared.send_now(&reply);
     }
 
     /// An answer: to `initialize`, or to a request of a caller's.
@@ -636,12 +713,11 @@ impl Reader {
             if result.is_err() {
                 // It never began: the process is of no use.
                 self.readiness.ended();
-                let _ = locked(&self.child).kill();
+                self.shared.kill(&self.child);
                 return;
             }
-            for message in after_initialize(&self.settings) {
-                let _ = self.shared.send(&message);
-            }
+            // Then what callers sent while they waited for this answer.
+            self.shared.open_gate(&after_initialize(&self.settings));
             self.initialized = true;
             self.readiness.answered_initialize();
             self.tell_ready();
@@ -682,7 +758,7 @@ impl Reader {
         let code = match self.shared.wait_reaped(AFTER_OUTPUT_CLOSED) {
             Some(code) => code,
             None => {
-                let _ = locked(&self.child).kill();
+                self.shared.kill(&self.child);
                 let mut ends = locked(&self.shared.ends);
                 while ends.reaped.is_none() {
                     ends = self
