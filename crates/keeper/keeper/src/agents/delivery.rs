@@ -31,19 +31,33 @@
 //! itself, whose process a `/clear` keeps), that running session is the one the report is
 //! of. Every other report is of the session it names.
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use yaar_agent::Asked;
+use yaar_agent::{Answer, Asked, Asks};
 use yaar_link::{AgentReport, Reply};
+use yaar_review_engine::ThreadReply;
+use yaar_store::{SentBy, SessionId, SessionRecord, ThreadId};
+use yaar_switchboard::State;
 
 use super::{Core, Told};
+use crate::lock;
 use crate::wiring::Kept;
+
+/// The longest a report may have waited, from the moment it reached the Keeper, for a review
+/// still to be sent with it. The hook program gives up at 2 s, and what it prints after that
+/// goes nowhere; the comments are marked sent only here, so a send that late could mark
+/// comments the agent never received. Half a second is left for the answer to reach the hook
+/// program once the send is kept, which is a few writes to the drive.
+const DELIVER_BY: Duration = Duration::from_millis(1500);
+
+/// Whether a report that reached the Keeper at `at` is too old at `now` to be sent a review.
+fn late(at: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(at) > DELIVER_BY
+}
 
 impl Core {
     /// Answers what `report` waits for, `asked` as its Adapter read it: see this module's
-    /// doc. `at` is the moment the report reached the Keeper. Answers `Reply::Done` until
-    /// the package that builds delivery fills it in, as every report of slices 4 and 5
-    /// was answered.
+    /// doc. `at` is the moment the report reached the Keeper.
     pub(super) fn answer_asked(
         &self,
         kept: &Kept,
@@ -52,7 +66,161 @@ impl Core {
         at: Instant,
         told: &mut Told,
     ) -> Reply {
-        let _ = (kept, report, asked, at, told);
-        Reply::Done
+        match &asked.asks {
+            Asks::Message => self.deliver(kept, report, asked, at, told),
+            Asks::ReadOwnFile | Asks::OwnTool => self.answer(report, asked, &Answer::Allow),
+            Asks::Reply(reply) => {
+                let Some(session) = self.session_of(kept, report, asked) else {
+                    return self.answer(
+                        report,
+                        asked,
+                        &Answer::Refused {
+                            why: "the app knows no session of this agent",
+                        },
+                    );
+                };
+                let given = ThreadReply {
+                    thread: ThreadId::new(reply.thread.as_str()),
+                    text: reply.text.clone(),
+                    addressed: reply.addressed,
+                };
+                match kept.reviews.agent_replied(&session.id, &given) {
+                    Ok(_) => {
+                        told.reviews_changed(&session.workspace);
+                        self.answer(
+                            report,
+                            asked,
+                            &Answer::Replied {
+                                thread: &reply.thread,
+                                addressed: reply.addressed,
+                                characters: reply.text.chars().count(),
+                            },
+                        )
+                    }
+                    Err(e) => self.answer(
+                        report,
+                        asked,
+                        &Answer::Refused {
+                            why: &e.to_string(),
+                        },
+                    ),
+                }
+            }
+        }
+    }
+
+    /// What the Adapter of `report` hands its piece for `answer`, as `Reply::Answer`; `Done`
+    /// for an Adapter the Keeper does not have.
+    fn answer(&self, report: &AgentReport, asked: &Asked, answer: &Answer<'_>) -> Reply {
+        let adapters = lock(&self.adapters);
+        match adapters
+            .iter()
+            .find(|adapter| adapter.name() == report.agent)
+        {
+            Some(adapter) => Reply::Answer {
+                bytes: adapter.answer(asked, answer),
+            },
+            None => Reply::Done,
+        }
+    }
+
+    /// The user's message: sends what is attached to the review of its session, and answers
+    /// with what the Adapter's delivery made of it; `Done` when there is nothing to carry, or
+    /// when the report is too old to be answered in time.
+    fn deliver(
+        &self,
+        kept: &Kept,
+        report: &AgentReport,
+        asked: &Asked,
+        at: Instant,
+        told: &mut Told,
+    ) -> Reply {
+        let Some(session) = self.session_of(kept, report, asked) else {
+            return Reply::Done;
+        };
+        let review = match kept.reviews.review_of_session(&session.id) {
+            Ok(Some(review)) => review,
+            Ok(None) => return Reply::Done,
+            Err(e) => {
+                eprintln!("yaar-keeper: {}: {e}", report.agent);
+                return Reply::Done;
+            }
+        };
+        // One lock of the Adapters for the delivery and the send: the engine calls the
+        // delivery while it holds its own turn.
+        let adapters = lock(&self.adapters);
+        let Some(adapter) = adapters
+            .iter()
+            .find(|adapter| adapter.name() == report.agent)
+        else {
+            return Reply::Done;
+        };
+        let Some(folder) = self.folder_of(&report.agent) else {
+            return Reply::Done;
+        };
+        // Checked last, as near the send as it can be.
+        if late(at, Instant::now()) {
+            return Reply::Done;
+        }
+        let mut delivery = adapter.delivery(folder, asked);
+        match kept
+            .reviews
+            .send_attached(&review, SentBy::Delivered, &mut *delivery)
+        {
+            Ok(Some((bytes, sent))) => {
+                told.reviews_changed(&session.workspace);
+                // The state of the worktree is recorded after, off the agent's way.
+                told.round_to_record(&session.workspace, &review, sent.round.number);
+                Reply::Answer { bytes }
+            }
+            Ok(None) => Reply::Done,
+            // Nothing was sent: the comments stay attached and the message goes as it is.
+            Err(e) => {
+                eprintln!("yaar-keeper: {}: {e}", report.agent);
+                Reply::Done
+            }
+        }
+    }
+
+    /// The session `report` is of: the one the report's CLI names, except where that one
+    /// does not run or has no review and a session of the same CLI that runs has the
+    /// report's process, which is a CLI whose session id changed under a tool server that
+    /// kept the old one.
+    fn session_of(
+        &self,
+        kept: &Kept,
+        report: &AgentReport,
+        asked: &Asked,
+    ) -> Option<SessionRecord> {
+        let named = kept
+            .store
+            .session_of_cli(&report.agent, &asked.session.0)
+            .unwrap_or_else(|e| {
+                eprintln!("yaar-keeper: {}: {e}", report.agent);
+                None
+            });
+        let running = lock(&self.switchboard)
+            .sessions()
+            .into_iter()
+            .filter(|known| known.agent == report.agent && known.state != State::NotRunning)
+            .collect::<Vec<_>>();
+        if let Some(named) = &named
+            && running.iter().any(|known| known.id.0 == named.id.as_str())
+            && matches!(kept.reviews.review_of_session(&named.id), Ok(Some(_)))
+        {
+            return Some(named.clone());
+        }
+        let process = running
+            .iter()
+            .find(|known| known.pid == Some(report.pid) && known.cli != asked.session);
+        match process {
+            Some(known) => kept
+                .store
+                .session(&SessionId::new(known.id.0.clone()))
+                .ok()
+                .flatten()
+                .or(named),
+            None => named,
+        }
     }
 }
