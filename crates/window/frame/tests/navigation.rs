@@ -563,8 +563,23 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
     );
 }
 
+/// The changes of workspace 1 asked for again and answered as `list`, and waited for until
+/// the model has taken the answer.
+fn answer_again(models: &Models, keeper: &mut KeeperEnd, list: Changes, cx: &mut TestAppContext) {
+    models.changes.update(cx, |changes, cx| changes.refresh(cx));
+    let (asked, _) = request_of(keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(asked, Ok(Reply::Changes(list)));
+    wait_until(cx, "the answer to be taken", |cx| {
+        models
+            .changes
+            .read_with(cx, |changes, _| !changes.is_loading())
+    });
+}
+
 #[gpui_kit::test]
-fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it(cx: &mut TestAppContext) {
+fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it_and_holds_that_answer_as_the_last(
+    cx: &mut TestAppContext,
+) {
     let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs"]))));
@@ -584,6 +599,104 @@ fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it(cx: &mu
         .update(cx, |navigation, _| navigation.download("go"));
     navigator.expect(
         Ask::Download {
+            language: "go".to_owned(),
+        },
+        cx,
+    );
+
+    // But the list the model held is the last answer: `a.rs` was put back since, and the
+    // server that started from the disk may have read it as it was a moment before.
+    answer_again(&models, &mut keeper, changes('1', &[]), cx);
+    models
+        .navigation
+        .update(cx, |navigation, _| navigation.update("go"));
+    navigator.expect(
+        Ask::FilesChanged {
+            workspace: id('1'),
+            paths: vec![PathBuf::from("a.rs")],
+        },
+        cx,
+    );
+    navigator.expect(
+        Ask::Update {
+            language: "go".to_owned(),
+        },
+        cx,
+    );
+}
+
+#[gpui_kit::test]
+fn the_old_path_of_a_rename_the_keeper_answered_before_a_connect_is_held_as_the_last_answer_too(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
+    let mut renamed = changes('1', &[]);
+    renamed.files.push(ChangedFile {
+        path: PathBuf::from("new.rs"),
+        status: FileStatus::Renamed {
+            from: PathBuf::from("old.rs"),
+        },
+    });
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(asked, Ok(Reply::Changes(renamed)));
+    wait_until(cx, "the answer to be taken", |cx| {
+        models
+            .changes
+            .read_with(cx, |changes, _| changes.changes().is_some())
+    });
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+
+    answer_again(&models, &mut keeper, changes('1', &[]), cx);
+    models
+        .navigation
+        .update(cx, |navigation, _| navigation.update("go"));
+    navigator.expect(
+        Ask::FilesChanged {
+            workspace: id('1'),
+            paths: vec![PathBuf::from("new.rs"), PathBuf::from("old.rs")],
+        },
+        cx,
+    );
+    navigator.expect(
+        Ask::Update {
+            language: "go".to_owned(),
+        },
+        cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_connect(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs"]))));
+    models.changes.update(cx, |changes, cx| changes.refresh(cx));
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "the repository is busy".to_owned(),
+        }),
+    );
+    wait_until(cx, "the refusal to be taken", |cx| {
+        models.changes.read_with(cx, |changes, _| {
+            !changes.is_loading() && changes.refusal().is_some()
+        })
+    });
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+
+    // Nothing was seeded, so an empty list after it leaves nothing to tell; the update
+    // after it is the barrier.
+    answer_again(&models, &mut keeper, changes('1', &[]), cx);
+    models
+        .navigation
+        .update(cx, |navigation, _| navigation.update("go"));
+    navigator.expect(
+        Ask::Update {
             language: "go".to_owned(),
         },
         cx,
@@ -1338,6 +1451,43 @@ fn a_navigator_that_ends_resolves_what_waits_to_gone_and_leaves_the_model_unconn
     let after = hover(&models, place("src/a.rs", "alpha"), cx);
     let (slot, _task) = pending(after, cx);
     assert_eq!(resolved(&slot, cx), Err(NavError::NotConnected));
+}
+
+#[gpui_kit::test]
+fn whether_a_navigator_is_connected_notifies_when_it_changes_at_a_connect_and_at_an_end(
+    cx: &mut TestAppContext,
+) {
+    let (models, _keeper) = window(Vec::new(), &one_workspace(), cx);
+    // No server and no language is ever told, so nothing else gives the observers a reason
+    // to look: only the change of the answer to `is_connected` does.
+    let seen = Rc::new(RefCell::new(Vec::<bool>::new()));
+    let _watching = cx.update(|cx| {
+        let seen = seen.clone();
+        cx.observe(&models.navigation, move |navigation, cx| {
+            seen.borrow_mut().push(navigation.read(cx).is_connected());
+        })
+    });
+    cx.run_until_parked();
+    let before = seen.borrow().len();
+
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+    assert!(
+        seen.borrow().len() > before && seen.borrow().last() == Some(&true),
+        "a connect notifies, and the model says it is connected: {:?}",
+        seen.borrow()
+    );
+
+    let connected = seen.borrow().len();
+    navigator.end(cx);
+    models
+        .navigation
+        .read_with(cx, |navigation, _| assert!(!navigation.is_connected()));
+    assert!(
+        seen.borrow().len() > connected && seen.borrow().last() == Some(&false),
+        "an end notifies, and the model says it is not connected: {:?}",
+        seen.borrow()
+    );
 }
 
 #[gpui_kit::test]

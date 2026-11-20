@@ -21,7 +21,9 @@
 //!   workspace held, so that a file that left the list because it was put back is told
 //!   too; nothing when there are no paths, nothing after a refusal, and nothing at the
 //!   connect (a server starts from the files on disk, so a new Navigator holds nothing
-//!   stale);
+//!   stale), though the list the changes model holds then, when it holds one and the last
+//!   question was not refused, is the last answer the next one is set against; a path may
+//!   be told again and may no longer exist;
 //! - for each [`yaar_navigator::Told::ExportWanted`], `Request::ExportVersion` to the
 //!   Keeper through the link, and the answer handed back as
 //!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
@@ -41,7 +43,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::*;
-use yaar_link::{FileStatus, Reply, RepositoryId, Request, Setting, WorkspaceId};
+use yaar_link::{Changes, FileStatus, Reply, RepositoryId, Request, Setting, WorkspaceId};
 use yaar_navigator::{
     Answered, Ask, AskId, ExportAsk, Language, Location, OpenedFile, Place, Port,
     RepositoryConsent, ServerState, Told, WorkspaceRoot,
@@ -215,6 +217,16 @@ impl Navigation {
             old.waiting.borrow_mut().clear();
         }
         let Port { asks, told } = port;
+        // The list the changes model holds is the last answer of the Keeper this Navigator
+        // is owed: it is not told, since a server starts from the files on disk, but the
+        // next answer is set against it, so that a file put back since is told changed.
+        let mut told_changes = HashMap::new();
+        let held = self.changes.read(cx);
+        if held.refusal().is_none()
+            && let Some(taken) = held.changes()
+        {
+            told_changes.insert(taken.workspace.clone(), changed_paths(taken));
+        }
         let reading = cx.spawn(async move |navigation, cx| {
             while let Ok(told) = told.recv().await {
                 if navigation
@@ -236,15 +248,18 @@ impl Navigation {
             told_workspaces: None,
             told_on_screen: None,
             told_consents: None,
-            told_changes: HashMap::new(),
+            told_changes,
         });
         // What the last Navigator told is no news of this one.
         self.forget(cx);
         self.tell_workspaces(cx);
         self.tell_consents(cx);
+        // Whether a Navigator is connected changed, as far as an observer can tell.
+        cx.notify();
     }
 
-    /// Whether a Navigator is connected.
+    /// Whether a Navigator is connected. A change of the answer, at a connect and at the
+    /// end of the Navigator, notifies the model's observers.
     pub fn is_connected(&self) -> bool {
         self.alive().is_some()
     }
@@ -479,6 +494,9 @@ impl Navigation {
             connection.waiting.borrow_mut().clear();
         }
         self.forget(cx);
+        // `forget` notifies only for what there was to forget, and a Navigator that told
+        // no server and no language still was connected.
+        cx.notify();
     }
 
     /// Drops the languages and the servers a Navigator told.
@@ -599,19 +617,7 @@ impl Navigation {
             return;
         };
         let workspace = taken.workspace.clone();
-        // The old path of a renamed file changed on disk as well: it is gone, and a server
-        // still holds what it had.
-        let now: BTreeSet<PathBuf> = taken
-            .files
-            .iter()
-            .flat_map(|file| {
-                let from = match &file.status {
-                    FileStatus::Renamed { from } => Some(from.clone()),
-                    _ => None,
-                };
-                std::iter::once(file.path.clone()).chain(from)
-            })
-            .collect();
+        let now = changed_paths(taken);
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -626,4 +632,20 @@ impl Navigation {
                 .try_send(Ask::FilesChanged { workspace, paths });
         }
     }
+}
+
+/// The paths a list of changes names: each file's, and the old path of a renamed file as
+/// well, which changed on disk too: it is gone, and a server still holds what it had.
+fn changed_paths(changes: &Changes) -> BTreeSet<PathBuf> {
+    changes
+        .files
+        .iter()
+        .flat_map(|file| {
+            let from = match &file.status {
+                FileStatus::Renamed { from } => Some(from.clone()),
+                _ => None,
+            };
+            std::iter::once(file.path.clone()).chain(from)
+        })
+        .collect()
 }
