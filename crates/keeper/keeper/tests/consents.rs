@@ -807,11 +807,17 @@ fn after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_ext
     );
     let launcher = window.until_ended(&launched);
 
+    // What pi printed, each line read from the marker it starts with: the prompt of a shell
+    // may stand in front of the first line the command prints.
     let lines = |heard: &str| -> Vec<String> {
         heard
             .lines()
-            .map(|line| line.trim_end_matches('\r').to_owned())
-            .filter(|line| line.starts_with("PI-REPORT <") || line.starts_with("PI-SETTINGS <"))
+            .map(|line| line.trim_end_matches('\r'))
+            .filter_map(|line| {
+                line.find("PI-REPORT <")
+                    .or_else(|| line.find("PI-SETTINGS <"))
+                    .map(|at| line[at..].to_owned())
+            })
             .collect()
     };
     let (typed, launcher) = (lines(&typed), lines(&launcher));
