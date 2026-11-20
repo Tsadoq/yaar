@@ -14,20 +14,22 @@
 //! result of an event, the Keeper's end has already heard the report of it, and a report
 //! that is not there then is a report that was not made.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::DirBuilderExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError, TryRecvError};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use yaar_adapter_pi::{
     EXTENSION, EXTENSION_FILE, INSTRUCTION, NAME, Pi, REPLY_EVENT, REPLY_TOOL, REPORT_VARIABLE,
+    TOOL_DEADLINE,
 };
 use yaar_agent::{
     Adapter, AgentReply, Answer, Asks, CliSession, Event, Phase, Rendered, Report, Reported,
@@ -40,7 +42,7 @@ use yaar_link::{
 
 /// How long the test waits for a fact it expects, such as the harness starting up or a
 /// report arriving: a deadline, never a pause.
-const PATIENCE: Duration = Duration::from_secs(30);
+const PATIENCE: Duration = Duration::from_secs(10);
 
 /// The terminal of the app the harness runs in.
 const TERMINAL: &str = "t1";
@@ -372,7 +374,9 @@ fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<Age
 struct Harness {
     child: Child,
     stdin: Option<ChildStdin>,
-    lines: Receiver<String>,
+    /// The harness's standard output, one end of a socket pair, read by the test's own
+    /// thread, so that "no line yet" is a read that would block and nothing else.
+    output: BufReader<UnixStream>,
     stderr: Option<JoinHandle<Vec<u8>>>,
     /// What the harness said it had registered.
     registered: Value,
@@ -391,6 +395,11 @@ impl Harness {
     /// `report` being what `YAAR_PI_REPORT` is, none for a variable that is not set, and
     /// waits for the line that says what the extension registered.
     fn start(scratch: &Scratch, extension: &Path, report: Option<&Path>) -> Harness {
+        let (ours, theirs) = UnixStream::pair().expect("a socket pair for the harness's output");
+        // Set now, while the harness's end is surely open: a socket whose other end has
+        // gone refuses an option on macOS.
+        ours.set_read_timeout(Some(PATIENCE))
+            .expect("a deadline for the harness's output");
         let mut command = Command::new("node");
         command
             // The warning that type stripping is experimental, on the Node versions that
@@ -406,24 +415,17 @@ impl Harness {
             .env(SOCKET_VARIABLE, scratch.socket())
             .env(TERMINAL_VARIABLE, TERMINAL)
             .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .stdout(Stdio::from(OwnedFd::from(theirs)))
             .stderr(Stdio::piped());
         if let Some(report) = report {
             command.env(REPORT_VARIABLE, report);
         }
         let mut child = command.spawn().expect("start node");
+        // The command holds the harness's end of the socket pair: with it dropped, the
+        // harness's own is the only one left, and the test's end reads to the end when
+        // the harness ends.
+        drop(command);
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take().expect("the harness's standard output");
-        let (send, lines) = mpsc::channel();
-        // Read by a thread, so that a wait for a line is a wait on a channel.
-        thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let Ok(line) = line else { return };
-                if send.send(line).is_err() {
-                    return;
-                }
-            }
-        });
         let mut stderr = child.stderr.take().expect("the harness's standard error");
         let stderr = Some(thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -433,7 +435,7 @@ impl Harness {
         let mut harness = Harness {
             child,
             stdin,
-            lines,
+            output: BufReader::new(ours),
             stderr,
             registered: Value::Null,
         };
@@ -462,19 +464,46 @@ impl Harness {
     }
 
     /// The next line the harness wrote, as JSON.
-    fn line(&self) -> Value {
-        match self.lines.recv_timeout(PATIENCE) {
-            Ok(line) => serde_json::from_str(&line).expect("a line of the harness is JSON"),
+    fn line(&mut self) -> Value {
+        let mut text = String::new();
+        match self.output.read_line(&mut text) {
+            Ok(0) => panic!("the harness ended without writing a line"),
+            Ok(_) => serde_json::from_str(&text).expect("a line of the harness is JSON"),
             Err(why) => panic!("the harness wrote no line: {why}"),
         }
     }
 
-    /// The next line, if the harness has written one already.
-    fn line_ready(&self) -> Option<Value> {
-        self.lines
-            .try_recv()
-            .ok()
-            .map(|line| serde_json::from_str(&line).expect("a line of the harness is JSON"))
+    /// The next line, if the harness has written one already: a read of its output that
+    /// does not wait, by the test's own thread.
+    fn line_ready(&mut self) -> Option<Value> {
+        self.output
+            .get_ref()
+            .set_nonblocking(true)
+            .expect("a read that does not wait");
+        let ready = match self.output.fill_buf() {
+            Ok([]) => panic!("the harness ended without writing a line"),
+            Ok(_) => true,
+            Err(why) if why.kind() == ErrorKind::WouldBlock => false,
+            Err(why) => panic!("the harness's output cannot be read: {why}"),
+        };
+        self.output
+            .get_ref()
+            .set_nonblocking(false)
+            .expect("reads that wait again");
+        ready.then(|| self.line())
+    }
+
+    /// The next line, if the harness writes one before `by`: a time ahead of the clock.
+    fn line_before(&mut self, by: Instant) -> Option<Value> {
+        loop {
+            if let Some(line) = self.line_ready() {
+                return Some(line);
+            }
+            if Instant::now() >= by {
+                return None;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 
     /// Plays one event to the handlers and gives what each returned.
@@ -512,10 +541,11 @@ impl Harness {
         drop(self.stdin.take());
         let mut unread = Vec::new();
         loop {
-            match self.lines.recv_timeout(PATIENCE) {
-                Ok(line) => unread.push(line),
-                Err(RecvTimeoutError::Disconnected) => break,
-                Err(RecvTimeoutError::Timeout) => panic!("the harness did not end"),
+            let mut text = String::new();
+            match self.output.read_line(&mut text) {
+                Ok(0) => break,
+                Ok(_) => unread.push(text.trim_end_matches('\n').to_owned()),
+                Err(why) => panic!("the harness did not end: {why}"),
             }
         }
         let status = self.child.wait().expect("wait for the harness");
@@ -903,6 +933,32 @@ fn reports_that_are_made_together_reach_the_app_one_at_a_time_in_order() {
     assert_eq!(world.harness.line(), json!({"results": [[null], [null]]}));
 }
 
+#[test]
+fn an_ordinary_report_is_given_up_after_the_short_deadline_and_only_the_reply_tool_waits_the_long_one()
+ {
+    let mut world = World::new();
+    let gate = Gate::new();
+    let held = gate.clone();
+    world
+        .keeper
+        .answer_with(move |_| Answering::HoldThenDone(held.clone()));
+    let context = world.context();
+    // Well short of the long deadline, well past the short one, and ahead of the clock.
+    let by = Instant::now() + TOOL_DEADLINE / 2;
+
+    world.harness.send_fire("agent_start", json!({}), &context);
+
+    assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
+    let said = world.harness.line_before(by);
+    // The app has still not answered when pi is let go: the program gave up by itself.
+    gate.open();
+    assert_eq!(
+        said,
+        Some(json!({"results": [null]})),
+        "pi waited for an answer the app did not give past the short deadline"
+    );
+}
+
 /// A text of the characters a review holds, after the instruction and a blank line: some
 /// of two and of three bytes, some outside the basic plane, quotes, backslashes, line
 /// breaks and a control.
@@ -1041,6 +1097,101 @@ fn the_report_of_a_message_asks_for_a_review_whether_pi_is_idle_or_queues_the_me
     assert_eq!(
         turns_started, 2,
         "a message queued while a run is open starts no turn: the run is the turn"
+    );
+}
+
+#[test]
+fn a_review_reaches_the_message_pi_queues_as_it_does_the_one_of_an_idle_pi() {
+    let mut world = World::new();
+    let review = review(2_000);
+    let folder = world.scratch.project();
+    let attached = review.clone();
+    world.keeper.answer_with(move |report| {
+        if event_of(report) == "input" {
+            Answering::Answer(handing_out(report, &folder, &attached))
+        } else {
+            Answering::Done
+        }
+    });
+    world.fire("session_start", json!({"reason": "startup"}));
+    let idle = world.fire("input", message("idle", json!(null)));
+    world.fire("agent_start", json!({}));
+    // A run is open from here: the next two are what the user types while pi works.
+    let steered = world.fire("input", message("steered", json!("steer")));
+    let followed = world.fire("input", message("followed up", json!("followUp")));
+
+    for (text, results) in [
+        ("idle", idle),
+        ("steered", steered),
+        ("followed up", followed),
+    ] {
+        assert_eq!(
+            results,
+            [json!({"action": "transform", "text": format!("{text}\n\n{review}"), "images": []})],
+            "the message `{text}` carries the review"
+        );
+    }
+}
+
+#[test]
+fn the_report_of_a_message_says_whose_it_is_and_a_message_another_extension_sent_asks_for_nothing()
+{
+    let mut world = World::new();
+    let folder = world.scratch.project();
+    world.fire("input", message("the user's", json!(null)));
+    let mut another = message("an extension's", json!(null));
+    another["source"] = json!("extension");
+    world.fire("input", another);
+    let (users, others) = (world.keeper.next_report(), world.keeper.next_report());
+
+    assert_eq!(payload(&users)["source"], "interactive");
+    assert_eq!(payload(&others)["source"], "extension");
+    let adapter = Pi::new();
+    let asked = adapter
+        .asked(&folder, &as_handed(&users))
+        .expect("readable")
+        .expect("the user's message asks");
+    assert_eq!(asked.asks, Asks::Message);
+    assert!(
+        adapter
+            .asked(&folder, &as_handed(&others))
+            .expect("readable")
+            .is_none(),
+        "a message another extension sent carries no review and marks no comment sent"
+    );
+}
+
+#[test]
+fn a_session_pi_brings_back_and_a_run_the_user_interrupted_are_reported_as_such() {
+    let mut world = World::new();
+    world.fire("session_start", json!({"reason": "resume"}));
+    world.fire("agent_start", json!({}));
+    world.fire("agent_settled", json!({"aborted": true}));
+    world.fire("session_shutdown", json!({"reason": "reload"}));
+    world.fire("session_start", json!({"reason": "reload"}));
+    world.fire("session_shutdown", json!({"reason": "new"}));
+    let heard: Vec<_> = (0..6).map(|_| world.keeper.next_report()).collect();
+
+    let mut adapter = Pi::new();
+    let told_by_the_adapter: Vec<Event> = heard
+        .iter()
+        .flat_map(|report| adapter.report(&as_handed(report)).expect("a report"))
+        .map(|reported| reported.event)
+        .collect();
+
+    assert_eq!(
+        told_by_the_adapter,
+        [
+            Event::SessionStarted {
+                how: Start::Resumed
+            },
+            Event::TurnStarted,
+            Event::TurnEnded {
+                how: TurnEnd::Interrupted
+            },
+            // A reload is the same session, whose start and shutdown are told to nobody.
+            Event::SessionEnded,
+        ]
     );
 }
 

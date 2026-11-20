@@ -168,8 +168,8 @@ function answerToInput(event: PiEvent, answer: string): Record<string, unknown> 
 }
 
 /**
- * The extension, as pi calls it once it loaded the file, and again after `/new`. With no
- * YAAR_PI_REPORT set, outside the app, it registers nothing and returns.
+ * The extension, as pi calls it once it loaded the file. With no YAAR_PI_REPORT set,
+ * outside the app, it registers nothing and returns.
  */
 export default function yaar(pi: ExtensionAPI): void {
   if (!process.env[REPORT_VARIABLE]) {
