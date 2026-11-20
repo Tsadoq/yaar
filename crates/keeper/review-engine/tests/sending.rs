@@ -715,36 +715,35 @@ fn a_thread_attached_alone_is_sent_alone_as_the_view_shows_it_and_the_other_draf
     );
 }
 
-#[test]
-fn each_of_two_rounds_that_wait_for_their_state_gets_the_state_its_own_call_recorded() {
+/// A review in a repository with two rounds sent and no state recorded for either.
+fn two_rounds_waiting_for_their_state() -> Round {
+    let round = attached_review_in_a_repository();
     let Round {
-        scratch,
-        repo,
         worktree,
-        store,
         reviews,
         review,
-    } = attached_review_in_a_repository();
+        ..
+    } = &round;
     let mut keeper = Keeper::new(INSTRUCTION);
     reviews
-        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .send_attached(review, SentBy::Delivered, &mut keeper)
         .expect("send round 1")
         .expect("something was sent");
     reviews
         .save_draft(
-            Some(&worktree),
-            &review,
+            Some(worktree),
+            review,
             &new_thread(2, "b.txt", 1, "two", "and why two"),
         )
         .expect("a second thread");
     reviews
-        .attach(&review, Attachment::Review, &[])
+        .attach(review, Attachment::Review, &[])
         .expect("attach again");
     reviews
-        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .send_attached(review, SentBy::Delivered, &mut keeper)
         .expect("send round 2")
         .expect("something was sent");
-    let waiting = reviews.review(&review).expect("read");
+    let waiting = reviews.review(review).expect("read");
     assert_eq!(
         waiting
             .rounds()
@@ -753,23 +752,42 @@ fn each_of_two_rounds_that_wait_for_their_state_gets_the_state_its_own_call_reco
             .collect::<Vec<_>>(),
         vec![None, None]
     );
+    round
+}
 
-    // The recording of the first takes a second, and the second is recorded in between, or
-    // after: each call names its round, and the files differ between the two.
-    write(&repo, "a.txt", "one, for the first round\n");
-    let first = reviews
-        .record_round(&worktree, &review, 1)
-        .expect("record round 1");
-    write(&repo, "a.txt", "one, for the second round\n");
-    let second = reviews
-        .record_round(&worktree, &review, 2)
-        .expect("record round 2");
-    assert_ne!(first, second);
+/// Records the two waiting rounds in `order`, with a change of a file before each call, and
+/// shows that each round holds the state its own call returned, also from a Store opened
+/// anew.
+fn each_round_gets_the_state_its_own_call_recorded(order: [u32; 2]) {
+    let Round {
+        scratch,
+        repo,
+        worktree,
+        store,
+        reviews,
+        review,
+    } = two_rounds_waiting_for_their_state();
 
-    let expected = vec![
-        (1, Some(first.as_str().to_owned())),
-        (2, Some(second.as_str().to_owned())),
-    ];
+    // Each call names its round, and the files differ between the two calls.
+    let mut recorded = Vec::new();
+    for round in order {
+        write(
+            &repo,
+            "a.txt",
+            &format!("one, for call {}\n", recorded.len() + 1),
+        );
+        let state = reviews
+            .record_round(&worktree, &review, round)
+            .unwrap_or_else(|error| panic!("record round {round}: {error}"));
+        recorded.push((round, state));
+    }
+    assert_ne!(recorded[0].1, recorded[1].1);
+
+    let mut expected: Vec<(u32, Option<String>)> = recorded
+        .iter()
+        .map(|(round, state)| (*round, Some(state.as_str().to_owned())))
+        .collect();
+    expected.sort();
     let states_of = |reviews: &Reviews| {
         reviews
             .review(&review)
@@ -786,6 +804,17 @@ fn each_of_two_rounds_that_wait_for_their_state_gets_the_state_its_own_call_reco
     drop(store);
     let reviews = engine(&scratch, self::store(&scratch));
     assert_eq!(states_of(&reviews), expected);
+}
+
+#[test]
+fn each_of_two_rounds_that_wait_for_their_state_gets_the_state_its_own_call_recorded() {
+    each_round_gets_the_state_its_own_call_recorded([1, 2]);
+}
+
+#[test]
+fn the_second_of_two_rounds_recorded_first_gets_its_own_state_and_the_first_the_one_recorded_after()
+{
+    each_round_gets_the_state_its_own_call_recorded([2, 1]);
 }
 
 #[test]
