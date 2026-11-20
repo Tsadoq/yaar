@@ -49,8 +49,12 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
     cx.simulate_click(at, Modifiers::none());
     // The line stands for as long as the Keeper lists the session resumable, not only until
     // the click: from the click on, whenever the model still lists it, the control is drawn.
-    // The Keeper's listing comes after the program starts, so the first looks come while the
-    // session is still listed.
+    // The test makes that true of every look it takes, and makes it fail when no look found
+    // the session listed with its line (below). What it only expects is the order: that the
+    // first look comes before the resumed session reports, which needs a login shell, the
+    // stand-in and its hook program, while the look follows the click at once. A report
+    // before the first look fails the test instead of passing it with nothing seen.
+    let mut seen_with_its_line = false;
     wait_until(
         &mut cx,
         "the session to be listed resumable no more",
@@ -60,12 +64,18 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
                     .session(&cut_off.session)
                     .is_some_and(|session| session.resumable)
             });
+            let line = drawn("terminal-resume-0", cx).is_some();
             assert!(
-                !listed || drawn("terminal-resume-0", cx).is_some(),
+                !listed || line,
                 "the control went before the session was listed resumable no more"
             );
+            seen_with_its_line |= listed && line;
             !listed
         },
+    );
+    assert!(
+        seen_with_its_line,
+        "no look after the click found the session listed with its line: its report came before the first look"
     );
     let wanted = ["--resume".to_owned(), cut_off.cli_session.clone()];
     assert!(
