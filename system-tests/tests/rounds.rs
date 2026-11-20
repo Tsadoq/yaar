@@ -687,38 +687,60 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     assert_eq!(sent.agent, Some(started.id.clone()));
     wait_for_exit(&world, "default");
 
-    // A session that ended leaves its review, while another session runs: attaching that
-    // review offers its own CLI, and accepting starts a launcher whose session takes it,
-    // not the running one's review, and nothing goes to the one that runs.
+    // Two sessions that ended leave a review each, while a third runs: attaching the review
+    // of the one that ended first offers its CLI, and accepting starts a launcher whose
+    // session takes that review, not the one of the session that ended last, which the CLI's
+    // next session would take but for the launcher, not the running session's, and nothing
+    // goes to the one that runs.
     let other_repo = repository_with(&world, "other", &[("x.txt", "x\n")]);
     let other = open(&mut client, &other_repo);
-    let first_shell = client.open_terminal(&other, SIZE).expect("a terminal");
+    let running_shell = client.open_terminal(&other, SIZE).expect("a terminal");
     start_in(
         &world,
         &mut client,
-        &first_shell,
+        &running_shell,
         "running",
         &script(&["turn", "end", "exit"]),
     );
-    client.wait_for_prompt(&first_shell, 0);
-    let running = session_where(&mut client, &other, |s| s.state == SessionState::Idle);
-    let second_shell = client.open_terminal(&other, SIZE).expect("a terminal");
-    start_in(
-        &world,
-        &mut client,
-        &second_shell,
-        "ended",
-        &script(&["exit"]),
-    );
-    wait_for_exit(&world, "ended");
-    let ended = session_where(&mut client, &other, |s| {
-        s.id != running.id && s.state == SessionState::NotRunning
+    client.wait_for_prompt(&running_shell, 0);
+    let running = session_where(&mut client, &other, |s| {
+        s.terminal.as_ref() == Some(&running_shell)
     });
-    let left = ended
-        .review
-        .clone()
-        .expect("the review the ended session left");
-    assert_ne!(Some(&left), running.review.as_ref());
+    // Each of the other two waits at a gate outside a turn, so that both run at once and
+    // each gets a review of its own, and ends when the test opens its gate.
+    let mut gated = Vec::new();
+    for name in ["first", "second"] {
+        let gate = world
+            .agent_script(name, &Script(vec![]))
+            .with_extension("go");
+        let shell = client.open_terminal(&other, SIZE).expect("a terminal");
+        start_in(
+            &world,
+            &mut client,
+            &shell,
+            name,
+            &Script(vec![Step::Hold(gate.clone()), Step::Exit]),
+        );
+        let session = session_where(&mut client, &other, |s| s.terminal.as_ref() == Some(&shell));
+        gated.push((name, gate, session));
+    }
+    let reviews_of: Vec<_> = gated
+        .iter()
+        .map(|(_, _, session)| session.review.clone().expect("a review of its own"))
+        .collect();
+    assert_ne!(reviews_of[0], reviews_of[1]);
+    for review in &reviews_of {
+        assert_ne!(Some(review), running.review.as_ref());
+    }
+    // The first ends, then the second: the second is the session that ended last.
+    for (name, gate, session) in &gated {
+        std::fs::write(gate, "").expect("open the gate");
+        wait_for_exit(&world, name);
+        session_where(&mut client, &other, |s| {
+            s.id == session.id && s.state == SessionState::NotRunning
+        });
+    }
+    let left = reviews_of[0].clone();
     start_thread(&mut client, &left, 2, "x.txt", 1, "x", "Why x?");
     let offered = client.attach_review(&left, None).expect("attach");
     assert_eq!(
@@ -743,20 +765,20 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
         s.terminal.as_ref() == Some(&second_launcher)
     });
     assert_eq!(launched.review, Some(left.clone()));
-    // The running session keeps its own review, and the ended one gave its up.
+    assert_eq!(launched.attached, Some(Attachment::Review));
+    // The running session and the session that ended last keep their own reviews.
     let held = sessions_of(&mut client, &other);
-    let of = |session: &Session| held.iter().find(|s| s.id == session.id).cloned();
-    assert_eq!(
-        of(&running).expect("the running session").review,
-        running.review
-    );
-    // A session that ended and holds no review is not listed at all.
-    assert!(
-        of(&ended).is_none_or(|session| session.review.is_none()),
-        "{held:?}"
-    );
+    let review_of = |session: &Session| {
+        held.iter()
+            .find(|s| s.id == session.id)
+            .unwrap_or_else(|| panic!("{session:?} is not listed in {held:?}"))
+            .review
+            .clone()
+    };
+    assert_eq!(review_of(&running), running.review);
+    assert_eq!(review_of(&gated[1].2), Some(reviews_of[1].clone()));
     let reviews = client.reviews(&other).reviews;
-    assert_eq!(reviews.len(), 2, "{reviews:?}");
+    assert_eq!(reviews.len(), 3, "{reviews:?}");
     assert_eq!(
         reviews
             .iter()
@@ -776,7 +798,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     );
     let answers = prompt_answers(&world.agent_log("default"));
     assert!(carried(&answers[0]).contains("Why x?"), "{answers:?}");
-    client.type_line(&first_shell, "hello");
+    client.type_line(&running_shell, "hello");
     wait_for_exit(&world, "running");
     let answers = prompt_answers(&world.agent_log("running"));
     assert_eq!(answers.len(), 1, "{answers:?}");
