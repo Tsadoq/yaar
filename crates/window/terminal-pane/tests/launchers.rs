@@ -14,7 +14,7 @@ use gpui_kit::{
     Bounds, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
 };
 use yaar_link::{
-    AgentCli, Fact, Program, Request, Session, SessionId, SessionState, TerminalId,
+    AgentCli, Fact, Program, Repository, Request, Session, SessionId, SessionState, TerminalId,
     WorkspaceAgents, WorkspaceId,
 };
 use yaar_terminal_pane::{NewAgentTerminal, NewTerminal, NextAgentCli, ResumeAgent};
@@ -47,9 +47,18 @@ fn agent(name: &str) -> Program {
 /// A window whose Keeper names `clis` and lists one workspace, on screen. The Window asks
 /// for the CLIs when it connects, so they are set before.
 fn open_naming(cx: &mut TestAppContext, clis: Vec<AgentCli>) -> (Panes, VisualTestContext) {
+    open_naming_in(cx, common::one_repository(), clis)
+}
+
+/// [`open_naming`] with the Keeper listing `repository`.
+fn open_naming_in(
+    cx: &mut TestAppContext,
+    repository: Repository,
+    clis: Vec<AgentCli>,
+) -> (Panes, VisualTestContext) {
     open_panes_staged(
         cx,
-        &[common::one_repository()],
+        &[repository],
         move |keeper| keeper.set_clis(clis),
         |_, _| {},
     )
@@ -207,7 +216,7 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
 
 #[gpui_kit::test]
 fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut TestAppContext) {
-    let (mut panes, mut cx) = open_naming(cx, Vec::new());
+    let (mut panes, mut cx) = open_naming_in(cx, two_workspaces(), Vec::new());
     wait_drawn(&mut cx, "the shell's launcher", |cx| {
         drawn("terminal-launcher-shell", cx).is_some()
     });
@@ -220,24 +229,35 @@ fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut
     assert!(drawn("terminal-launcher-claude", &mut cx).is_none());
     assert!(drawn("terminal-launcher-pi", &mut cx).is_none());
 
-    // The key opens nothing and says why, and Next Agent CLI has nothing to move to. What
-    // the Window sends next is a shell asked for by its own key, which shows that the two
-    // keys before it sent nothing.
+    // The key opens nothing and says why, and Next Agent CLI has nothing to move to. A key
+    // that fell back to a shell would ask for one in the workspace on screen, which is the
+    // one the barrier cannot be: the barrier is a shell asked for by New Terminal in the
+    // other workspace, so that the first request the Keeper hears is told from anything the
+    // two keys sent.
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.notice()),
         Some("The Keeper names no agent CLI to start.".to_owned())
     );
+    let other = workspace_id('2');
+    click_in(&format!("sidebar-workspace-{other}"), &mut cx);
+    wait_drawn(&mut cx, "the other workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&other))
+    });
     panes.press_in_the_app::<NewTerminal>(&mut cx);
     let (_, request) = panes.keeper.request(&mut cx);
     assert!(
         matches!(
-            request,
+            &request,
             Request::OpenTerminal {
+                workspace,
                 program: Program::Shell,
                 ..
-            }
+            } if *workspace == other
         ),
         "{request:?}"
     );
@@ -438,10 +458,12 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
 
     // Two sessions of the workspace on screen are resumable, one that ended is not, and
     // one of the other workspace is resumable there.
-    let (a, b) = (
-        session('a', "claude", &one, true),
-        session('b', "pi", &one, true),
-    );
+    // The titles differ in length the other way round from the agents' names, which the
+    // widths of the controls below tell apart: the words are `Resume` and the title.
+    let mut a = session('a', "claude", &one, true);
+    a.title = "a".to_owned();
+    let mut b = session('b', "pi", &one, true);
+    b.title = "the long title of the second session".to_owned();
     let ended = session('c', "claude", &one, false);
     let elsewhere = session('d', "pi", &two, true);
     tell_agents(&panes, &one, vec![a.clone(), b.clone(), ended]);
@@ -465,6 +487,10 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     );
     assert!(first.right() <= second.left());
     assert!(within(first, line) && within(second, line));
+    assert!(
+        second.size.width > first.size.width,
+        "{second:?} is not wider than {first:?}: the control does not carry the title"
+    );
     wait_until(&mut cx, "the terminal made shorter", |_| {
         panes
             .keeper
@@ -602,4 +628,50 @@ fn a_resume_the_keeper_refuses_is_the_notice_and_the_session_can_be_resumed_agai
     // The refusal did not use up the session: the key takes it again.
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
+}
+
+#[gpui_kit::test]
+fn a_resume_asked_for_once_is_not_asked_for_again_while_the_session_is_listed_resumable(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let (one, two) = (workspace_id('1'), workspace_id('2'));
+    let a = session('a', "claude", &one, true);
+    tell_agents(&panes, &one, vec![a.clone()]);
+    wait_drawn(&mut cx, "the resume line", |cx| {
+        drawn("terminal-resume-0", cx).is_some()
+    });
+
+    // A second click before the Keeper has answered the first asks nothing: the Keeper
+    // refuses a session only once it runs, which is later than that.
+    click_in("terminal-resume-0", &mut cx);
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('b'), resume(&a), &mut cx);
+    // Nor does a click after the answer, while the Keeper still lists the session as
+    // resumable, or Resume Agent.
+    click_in("terminal-resume-0", &mut cx);
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+
+    // The barrier is a shell asked for in the other workspace: it is the next request the
+    // Keeper hears when none of the above asked for a second resume.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    wait_drawn(&mut cx, "the other workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&two))
+    });
+    panes.press_in_the_app::<NewTerminal>(&mut cx);
+    let (_, request) = panes.keeper.request(&mut cx);
+    assert!(
+        matches!(
+            &request,
+            Request::OpenTerminal {
+                workspace,
+                program: Program::Shell,
+                ..
+            } if *workspace == two
+        ),
+        "{request:?}"
+    );
 }

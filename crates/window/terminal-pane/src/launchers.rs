@@ -17,7 +17,8 @@
 //! resumable (`yaar_link::Session::resumable`), a line `terminal-resume` offers a control
 //! for each, in the order the model lists them, `terminal-resume-<n>`, n counted from 0,
 //! with the words `Resume <the session's title>`. A click opens a terminal that runs
-//! `yaar_link::Program::Resume` of that session. [`crate::ResumeAgent`] does the same for
+//! `yaar_link::Program::Resume` of that session, once: while the pane holds a resume it opened
+//! for the session, another click asks nothing. [`crate::ResumeAgent`] does the same for
 //! the first resumable session of the workspace on screen the pane has not opened a resume
 //! for since it was listed: a second press reaches the second session, not the first again.
 //! The line goes with the last resumable session, as the Keeper tells the agents again
@@ -53,6 +54,8 @@ pub(crate) struct Launchers {
     chosen: usize,
     /// The sessions the pane opened a resume for, until they are listed resumable no more.
     resumed: Vec<SessionId>,
+    /// Keeps `resumed` in step with the agents model, once there is something in it.
+    watching: Option<Subscription>,
 }
 
 impl TerminalPane {
@@ -119,6 +122,17 @@ impl TerminalPane {
             .retain(|id| agents.session(id).is_some_and(|session| session.resumable));
     }
 
+    /// Starts forgetting resumes with every change of the agents model, rather than with
+    /// every frame: a window that is not drawn while the Keeper tells a session resumable
+    /// no more, and then resumable again, would never see it not resumable.
+    fn watch_agents(&mut self, cx: &mut Context<Self>) {
+        if self.launchers.watching.is_none() {
+            self.launchers.watching = Some(cx.observe(&self.models.agents, |pane, _, cx| {
+                pane.forget_resumed(cx);
+            }));
+        }
+    }
+
     /// Asks the Keeper for a new terminal for the workspace on screen that runs `program`,
     /// as [`crate::NewTerminal`] asks for a shell: at the size the pane lays terminals out
     /// at, shown and focused once the Keeper answers, its refusal the notice. Whether a
@@ -161,10 +175,17 @@ impl TerminalPane {
 
     /// Asks for the terminal that resumes `session`, and remembers that it was asked for.
     fn resume(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        // The Keeper refuses a session only once it runs, which is later than the answer
+        // to this question: a second ask while the first stands would open a second
+        // terminal on one session. A refusal forgets it, so that a retry goes through.
+        if self.launchers.resumed.contains(&session) {
+            return;
+        }
         let program = Program::Resume {
             session: session.clone(),
         };
-        if self.launch(program, cx) && !self.launchers.resumed.contains(&session) {
+        if self.launch(program, cx) {
+            self.watch_agents(cx);
             self.launchers.resumed.push(session);
         }
     }
@@ -229,8 +250,7 @@ impl TerminalPane {
 
     /// The two lines of the module's doc, as the pane's top row (`terminal-launchers`, and
     /// `terminal-resume` under it while there is a session to resume).
-    pub(crate) fn render_launchers(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        self.forget_resumed(cx);
+    pub(crate) fn render_launchers(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chosen = self.chosen_cli(cx);
         let mut launchers = self.line("terminal-launchers", cx).child(self.control(
             "terminal-launcher-shell".to_owned(),
@@ -325,7 +345,6 @@ impl TerminalPane {
     /// screen that no resume was opened for since it was listed, or says that none is
     /// left.
     pub(crate) fn resume_agent(&mut self, _: &ResumeAgent, _: &mut Window, cx: &mut Context<Self>) {
-        self.forget_resumed(cx);
         let next = self
             .resumable_sessions(cx)
             .into_iter()
