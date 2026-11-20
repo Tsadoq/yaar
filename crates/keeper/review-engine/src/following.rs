@@ -114,9 +114,12 @@ impl Reviews {
     /// is the order the states were recorded. A thread that sits in `to` already, or in a
     /// state newer than `to`, is left: two recordings of one workspace can run at once (a
     /// turn's end and a new thread's first save, say), and their calls of this may come in
-    /// the other order. A thread that sits on its anchor, in a commit, is carried to any
-    /// state, a thread that has no place yet only to the newest state the list holds, so
-    /// that one that was not moved there cannot be carried back to an older one afterwards.
+    /// the other order. A thread that has a place in a state is carried forward to any newer
+    /// state. A thread that has no place yet, one that sits where its anchor says (in a
+    /// commit or in a state), is carried only to the newest state the list holds: when it
+    /// does not move there nothing is written to say it was carried, and a later call for
+    /// an older state would carry it back. A state taken outside the engine, and so never
+    /// followed, leaves such a thread waiting for the next state the engine follows.
     ///
     /// The engine's turn is not held while the trees are read and diffed, which may take
     /// long with many threads: a report of the agent, which waits for the engine's turn,
@@ -137,7 +140,7 @@ impl Reviews {
             .collect();
         // A state the store does not list has no place in the order: nothing is carried
         // to it.
-        let Some(&newest) = order.get(to.as_str()) else {
+        let Some(&to_at) = order.get(to.as_str()) else {
             return Ok(Vec::new());
         };
 
@@ -176,14 +179,15 @@ impl Reviews {
                 };
                 // Forward only: a tree that is a state is carried from when it is older
                 // than `to`; a tree that is not one is a commit, carried from to any state.
-                if from == to.as_str() || order.get(&from).is_some_and(|&n| n >= newest) {
+                if from == to.as_str() || order.get(&from).is_some_and(|&n| n >= to_at) {
                     continue;
                 }
                 // A thread with no place yet that sits where it was written is not written
                 // down when it has not moved, so nothing would say it was carried to `to`:
                 // a later call for an older state would carry it back. It waits for the
                 // newest state, whose own call carries it.
-                if thread.now.is_none() && newest + 1 < order.len() {
+                let to_is_newest = to_at + 1 == order.len();
+                if thread.now.is_none() && !to_is_newest {
                     continue;
                 }
                 candidates.push(Candidate {

@@ -672,6 +672,67 @@ fn a_hundred_threads_on_one_file_are_all_placed_by_one_follow() {
 }
 
 #[test]
+fn threads_followed_to_one_state_by_calls_at_once_are_given_by_one_call_each() {
+    // Two recordings that ran at once may both follow the state their own recording took,
+    // or the same one: whichever call reads a thread's place before the other keeps it, the
+    // other must find the place changed when it takes its turn and leave the thread out,
+    // so that a thread is given as changed by one call only. No timing decides the
+    // outcome: any order of the calls gives the same sum, and a call that kept what it read
+    // before the turn would count a thread twice whenever two of them read before either
+    // one kept.
+    const THREADS: u32 = 40;
+    const CALLERS: usize = 4;
+    const ROUNDS: u32 = 6;
+    let world = World::new(THREADS);
+    for n in 1..=THREADS {
+        world.thread_on(u128::from(n), n);
+    }
+    for round in 1..=ROUNDS {
+        let mut lines = numbered(THREADS);
+        for above in 0..round {
+            lines.insert(0, format!("above {above}"));
+        }
+        world.rewrite(&lines);
+        let state = world.record();
+
+        let start = std::sync::Barrier::new(CALLERS);
+        let given: Vec<Vec<ThreadId>> = std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..CALLERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        world.reviews.follow(&workspace(), &state).expect("follow")
+                    })
+                })
+                .collect();
+            calls
+                .into_iter()
+                .map(|call| call.join().expect("the call ends"))
+                .collect()
+        });
+
+        let mut all: Vec<ThreadId> = given.into_iter().flatten().collect();
+        all.sort();
+        let wanted: Vec<ThreadId> = {
+            let mut ids: Vec<ThreadId> = (1..=THREADS)
+                .map(|n| ThreadId::new(id(u128::from(n))))
+                .collect();
+            ids.sort();
+            ids
+        };
+        assert_eq!(all, wanted, "round {round}: each thread is given once");
+        let reviews = world.second_engine();
+        for n in 1..=THREADS {
+            assert_eq!(
+                thread_of(&reviews, &world.review, u128::from(n)).now,
+                Some(place(&state, "a.txt", n + round, n + round)),
+                "round {round}, thread {n}"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_resolved_thread_and_a_thread_on_the_old_side_stay_and_a_reopened_one_catches_up() {
     let world = World::new(10);
     let first = world.record();
