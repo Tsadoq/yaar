@@ -542,6 +542,17 @@ fn the_view_closes_when_the_attachment_goes_and_when_the_keeper_has_no_text(
     panes
         .keeper
         .reply(id, Err(common::refused("nothing attached")));
+    // The refusal closes the view, and a press that comes before the Window took it
+    // closes the view itself, which asks nothing. Output the Keeper sends after the
+    // refusal comes after it on the link, so the press waits until that output is on the
+    // screen.
+    panes.keeper.output(&t, b"REFUSAL-TAKEN");
+    wait_until(&mut cx, "the output after the refusal", |cx| {
+        lines(&panes.pane, &t, cx)
+            .iter()
+            .any(|line| line.contains("REFUSAL-TAKEN"))
+    });
+    cx.run_until_parked();
     click_in("terminal-attachment-view-0", &mut cx);
     answer_text(&panes, &review('x'), "T", &mut cx);
     wait_for("terminal-attachment-text-0", true, &mut cx);
