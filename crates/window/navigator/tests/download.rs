@@ -93,6 +93,25 @@ fn versions(servers: &Path) -> Vec<String> {
     found
 }
 
+/// Sets the modification time of `folder` to a fixed time long past, and gives it. A folder
+/// is touched whenever an entry is made or removed in it, so a time that is still this one
+/// after a call shows that the call made nothing in the folder, however fast the clock.
+fn set_modified_long_ago(folder: &Path) -> std::time::SystemTime {
+    let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::open(folder)
+        .and_then(|handle| handle.set_modified(long_ago))
+        .expect("set the folder's modification time");
+    assert_eq!(modified(folder), long_ago, "the time is as it was set");
+    long_ago
+}
+
+/// The modification time of `folder`.
+fn modified(folder: &Path) -> std::time::SystemTime {
+    std::fs::metadata(folder)
+        .and_then(|data| data.modified())
+        .expect("read the folder's modification time")
+}
+
 /// The three strings of `installed.toml` of the server `standin`.
 fn installed_file(servers: &Path) -> (String, String, String) {
     let text = std::fs::read_to_string(servers.join("standin").join(INSTALLED_FILE))
@@ -231,12 +250,23 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
         sha256: sha256(b"other"),
         ..pinned(loopback.url("standin.tar.gz"), &bytes, "2")
     };
+    // Unpacking makes and removes a partial folder inside the server's folder, which moves
+    // that folder's modification time and leaves nothing else to see. The time is set to
+    // one long past, so that a change of it, whatever the clock says, shows an unpack.
+    let own = servers.join("standin");
+    let long_ago = set_modified_long_ago(&own);
     assert_eq!(
         downloader.fetch("standin", &second, &servers),
         Err(DownloadError::Digest {
             expected: sha256(b"other"),
             found: sha256(&bytes),
         })
+    );
+    // The return of `fetch` is the barrier: nothing of it runs after.
+    assert_eq!(
+        modified(&own),
+        long_ago,
+        "the bytes were unpacked before the digest matched"
     );
     assert_eq!(installed(&servers, "standin"), Some(kept.clone()));
     assert_eq!(kept.version, "1");
@@ -258,6 +288,14 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
         vec![("standin/other", Regular, b"x")],
     ];
     let guarded = scratch.root.join("guarded");
+    downloader
+        .fetch(
+            "standin",
+            &pinned(loopback.url("standin.tar.gz"), &bytes, "0"),
+            &guarded,
+        )
+        .expect("a version installs, so that the server's folder exists");
+    let own = guarded.join("standin");
     let before = tree(&scratch.root);
     for (n, entries) in refused_by_unpacking.iter().enumerate() {
         let bad = tar_gz_of(entries);
@@ -266,6 +304,7 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
             sha256: sha256(b"other"),
             ..pinned(loopback.url("bad.tar.gz"), &bad, "1")
         };
+        let long_ago = set_modified_long_ago(&own);
         assert_eq!(
             downloader.fetch("standin", &download, &guarded),
             Err(DownloadError::Digest {
@@ -275,15 +314,18 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
             "archive {n}"
         );
         assert_eq!(loopback.heard().len(), 1, "archive {n} arrived");
-        assert_eq!(versions(&guarded), Vec::<String>::new(), "archive {n}");
+        assert_eq!(
+            modified(&own),
+            long_ago,
+            "archive {n} was unpacked before the digest matched"
+        );
+        assert_eq!(versions(&guarded), ["0"], "archive {n}");
         assert_eq!(partials(&guarded), Vec::<PathBuf>::new(), "archive {n}");
     }
-    let created: BTreeSet<_> = tree(&scratch.root).difference(&before).cloned().collect();
-    assert!(
-        created
-            .iter()
-            .all(|path| path == Path::new("guarded") || path == Path::new("guarded/standin")),
-        "nothing was unpacked, so nothing is written but the server's own folder: {created:?}"
+    assert_eq!(
+        tree(&scratch.root),
+        before,
+        "nothing was unpacked, so nothing is written"
     );
 }
 
