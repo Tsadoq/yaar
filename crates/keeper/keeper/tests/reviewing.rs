@@ -463,22 +463,38 @@ impl Window {
         }
     }
 
-    /// Reads until an `AgentsChanged` of `workspace` that shows no session with something
-    /// attached has come after the first `mark` facts. The agents' side tells in the order
-    /// it was handed its work, so every `AgentsChanged` an earlier request told is in
-    /// front of it: a test that attached before the mark and detaches after it reads what
-    /// the requests between told, and no more is to come.
-    fn agents_detached_since(&mut self, mark: usize, workspace: &WorkspaceId) {
+    /// Reads until an `AgentsChanged` of `workspace` shows a session in `state` after the
+    /// first `mark` facts, and gives the number of facts up to and including it. A test
+    /// that makes the state change itself, with a hook that returns once the agents' side
+    /// took its report, has every `AgentsChanged` of an earlier request in front of that
+    /// one: the agents' side tells in the order it was handed its work.
+    fn agents_in_state_since(
+        &mut self,
+        mark: usize,
+        workspace: &WorkspaceId,
+        state: SessionState,
+    ) -> usize {
         loop {
-            let seen = self.facts[mark..].iter().any(|fact| {
+            let seen = self.facts[mark..].iter().position(|fact| {
                 matches!(fact, Fact::AgentsChanged(told) if told.workspace == *workspace
-                    && told.sessions.iter().all(|session| session.attached.is_none()))
+                    && told.sessions.iter().any(|session| session.state == state))
             });
-            if seen {
-                return;
+            if let Some(at) = seen {
+                return mark + at + 1;
             }
-            self.read("the sessions told with nothing attached");
+            self.read("the sessions told in the state");
         }
+    }
+
+    /// How many `AgentsChanged` of `workspace` came among the facts from `mark` up to
+    /// `end`.
+    fn agents_changed_between(&self, mark: usize, end: usize, workspace: &WorkspaceId) -> usize {
+        self.facts[mark..end]
+            .iter()
+            .filter(
+                |fact| matches!(fact, Fact::AgentsChanged(told) if told.workspace == *workspace),
+            )
+            .count()
     }
 
     /// How many `AgentsChanged` of `workspace` came after the first `mark` facts.
@@ -896,7 +912,7 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
 #[test]
 fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_and_the_agents() {
     let mut setup = Setup::new();
-    let (_, review, _) = setup.session();
+    let (_, review, terminal) = setup.session();
     setup.window.draft(&review, 1, 1, "first draft");
     setup.window.draft(&review, 2, 2, "second draft");
     setup.window.flush();
@@ -920,12 +936,25 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
         Ok(Reply::Done)
     );
     setup.window.flush();
-    setup.window.agents_detached_since(mark, &setup.workspace);
     assert_eq!(
         setup.window.reviews_changed_since(mark, &setup.workspace),
         1
     );
-    assert_eq!(setup.window.agents_changed_since(mark, &setup.workspace), 1);
+    // The detach, and no read before it, told the agents once. A message of the session
+    // changes its state and goes through the agents' side after both, and its hook
+    // returns once the agents' side took the report: the `AgentsChanged` that shows the
+    // state is the last one the detach and the read could have caused.
+    let records = recorded::hook_events(DIALOGS);
+    setup.hook_in(&terminal, &records, 2);
+    let end = setup
+        .window
+        .agents_in_state_since(mark, &setup.workspace, SessionState::Works);
+    assert_eq!(
+        setup
+            .window
+            .agents_changed_between(mark, end - 1, &setup.workspace),
+        1
+    );
     let held = setup.review(&review);
     assert_eq!(held.attached, None);
     assert_eq!(held.threads.len(), 2);
