@@ -215,6 +215,9 @@ enum Answering {
     Answer(Vec<u8>),
     /// Holds the answer until the gate is opened, then answers `Done`.
     HoldThenDone(Arc<Gate>),
+    /// Holds the answer until the program that reported has given up and left, which the
+    /// connection shows by ending, then opens the gate and answers `Done` to nobody.
+    HoldUntilTheProgramLeaves(Arc<Gate>),
 }
 
 /// A gate the test opens when it wants a held answer to go.
@@ -238,10 +241,17 @@ impl Gate {
 
     /// Waits until the gate is open, or the deadline.
     fn wait(&self) {
+        self.wait_up_to(PATIENCE);
+    }
+
+    /// Waits until the gate is open, or `limit`, and says whether it is open.
+    fn wait_up_to(&self, limit: Duration) -> bool {
         let opened = self.opened.lock().expect("the gate");
-        let _ = self
+        let (opened, _) = self
             .changed
-            .wait_timeout_while(opened, PATIENCE, |opened| !*opened);
+            .wait_timeout_while(opened, limit, |opened| !*opened)
+            .expect("the gate");
+        *opened
     }
 }
 
@@ -354,6 +364,13 @@ fn serve(mut stream: UnixStream, policy: &Mutex<Policy>, tell: &mpsc::Sender<Age
         Answering::Answer(bytes) => Some(bytes),
         Answering::HoldThenDone(gate) => {
             gate.wait();
+            None
+        }
+        Answering::HoldUntilTheProgramLeaves(gone) => {
+            // The program sends nothing more: the read ends when it closes its end, or at
+            // the deadline of this thread's own.
+            while read_message(&mut stream).is_ok() {}
+            gone.open();
             None
         }
     };
@@ -857,6 +874,79 @@ fn each_event_of_a_turn_is_reported_in_pi_s_order_and_is_read_as_the_event_of_th
 }
 
 #[test]
+fn a_tool_that_failed_is_reported_as_failed_and_is_no_file_read_or_written() {
+    let mut world = World::new();
+    let project = world.scratch.project();
+    let patch =
+        "--- a/src/calc.py\n+++ b/src/calc.py\n@@ -1 +1,2 @@\n a\n+b\n@@ -9 +10,2 @@\n c\n+d\n";
+    let failed = |tool: &str, id: &str, input: Value, details: Value| json!({"toolName": tool, "toolCallId": id, "input": input, "content": [], "details": details, "isError": true});
+    let worked = |tool: &str, id: &str, input: Value, details: Value| json!({"toolName": tool, "toolCallId": id, "input": input, "content": [], "details": details, "isError": false});
+    let read = json!({"path": "src/missing.py"});
+    let edit = json!({"path": "src/calc.py", "edits": []});
+    let write = json!({"path": "src/new.py", "content": "x"});
+
+    // Each failed result is followed by the same tool's result that worked, so that what
+    // the Adapter tells for the second shows that it read the reports at all.
+    world.fire(
+        "tool_result",
+        failed("read", "c1", read.clone(), Value::Null),
+    );
+    world.fire(
+        "tool_result",
+        worked("read", "c2", json!({"path": "src/calc.py"}), Value::Null),
+    );
+    world.fire(
+        "tool_result",
+        failed("edit", "c3", edit.clone(), json!({"patch": patch})),
+    );
+    world.fire(
+        "tool_result",
+        worked("edit", "c4", edit, json!({"patch": patch})),
+    );
+    world.fire(
+        "tool_result",
+        failed("write", "c5", write.clone(), Value::Null),
+    );
+    world.fire("tool_result", worked("write", "c6", write, Value::Null));
+    let heard: Vec<_> = (0..6).map(|_| world.keeper.next_report()).collect();
+
+    let says_failed: Vec<_> = heard
+        .iter()
+        .map(|report| payload(report)["isError"].clone())
+        .collect();
+    assert_eq!(
+        says_failed,
+        [true, false, true, false, true, false].map(Value::Bool),
+        "a result says whether the tool failed"
+    );
+    let mut adapter = Pi::new();
+    let told_by_the_adapter: Vec<Event> = heard
+        .iter()
+        .flat_map(|report| adapter.report(&as_handed(report)).expect("a report"))
+        .map(|reported| reported.event)
+        .collect();
+    assert_eq!(
+        told_by_the_adapter,
+        [
+            Event::FileRead {
+                path: project.join("src/calc.py")
+            },
+            Event::FileWritten {
+                path: project.join("src/calc.py"),
+                tool: WriteTool::Edit,
+                lines: Some(vec![1..=2, 10..=11]),
+            },
+            Event::FileWritten {
+                path: project.join("src/new.py"),
+                tool: WriteTool::Write,
+                lines: None,
+            },
+        ],
+        "a failed read is no file read, a failed edit or write no file written"
+    );
+}
+
+#[test]
 fn a_session_pi_keeps_in_no_file_is_reported_with_a_null_file() {
     let mut world = World::new();
     let mut context = world.context();
@@ -906,13 +996,23 @@ fn a_handler_returns_only_after_the_app_answered_its_report() {
 #[test]
 fn reports_that_are_made_together_reach_the_app_one_at_a_time_in_order() {
     let mut world = World::new();
-    let gate = Gate::new();
-    let held = gate.clone();
+    // Opened when the program of the first report has left: the connection of the first
+    // report has ended.
+    let first_has_left = Gate::new();
+    let first = first_has_left.clone();
+    // Whether the first report's program had left when the second report arrived.
+    let seen_leaving = Arc::new(AtomicBool::new(false));
+    let seen = seen_leaving.clone();
     world.keeper.answer_with(move |report| {
-        if event_of(report) == "session_start" {
-            Answering::HoldThenDone(held.clone())
-        } else {
-            Answering::Done
+        match event_of(report).as_str() {
+            "session_start" => Answering::HoldUntilTheProgramLeaves(first.clone()),
+            "agent_start" => {
+                // The program leaves before the next one starts, so the look is at a fact
+                // that is already true; the short wait is for this thread's own lag.
+                seen.store(first.wait_up_to(Duration::from_secs(1)), Ordering::SeqCst);
+                Answering::Done
+            }
+            _ => Answering::Done,
         }
     });
     let context = world.context();
@@ -922,14 +1022,16 @@ fn reports_that_are_made_together_reach_the_app_one_at_a_time_in_order() {
         .harness
         .send(&json!({"fireTogether": [started, begun]}));
 
+    // The first is held, and its program gives up by itself at its short deadline. The
+    // second report is not started until it has: when it arrives, the first's connection
+    // has ended. Reports run at the same time would have the second here within moments
+    // of the first, while the first's connection was still open.
     assert_eq!(event_of(&world.keeper.next_report()), "session_start");
-    // The first is held: the second report is not started until it has ended.
+    assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
     assert!(
-        world.keeper.hears_nothing(),
+        seen_leaving.load(Ordering::SeqCst),
         "a report was started before the one before it ended"
     );
-    gate.open();
-    assert_eq!(event_of(&world.keeper.next_report()), "agent_start");
     assert_eq!(world.harness.line(), json!({"results": [[null], [null]]}));
 }
 
