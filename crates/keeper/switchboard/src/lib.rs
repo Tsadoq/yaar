@@ -195,6 +195,9 @@ struct Entry {
     unreviewed: bool,
     /// A shell command began in the open turn and was not reported ended.
     command_open: bool,
+    /// The Keeper's stop cut the session off and no report of it has been heard since: it
+    /// is offered to resume, with its CLI's own record of it, when it had one.
+    offer: Option<Option<PathBuf>>,
 }
 
 impl Entry {
@@ -214,6 +217,7 @@ impl Entry {
             waiting: false,
             unreviewed: false,
             command_open: false,
+            offer: None,
         }
     }
 
@@ -319,8 +323,11 @@ impl Switchboard {
         cli: CliSession,
         cli_record: Option<PathBuf>,
     ) {
-        let _ = (session, agent, cli, cli_record);
-        todo!("a session cut off by the Keeper's stop, offered to resume")
+        if self.find(agent, &cli).is_none() {
+            let mut entry = Entry::kept(session, agent, cli);
+            entry.offer = Some(cli_record);
+            self.sessions.push(entry);
+        }
     }
 
     /// The offers to resume: each session remembered with
@@ -331,8 +338,20 @@ impl Switchboard {
     /// ran again and ended, by its CLI's word or as its process went, is not offered: only
     /// a stop of the Keeper cuts a session off.
     pub fn resumable(&self, command: &ResumeCommand) -> Vec<Resumable> {
-        let _ = command;
-        todo!("the offers to resume")
+        self.sessions
+            .iter()
+            .filter_map(|entry| {
+                let record = entry.offer.as_ref()?;
+                let known = &entry.known;
+                let command = command(&known.agent, &known.cli, record.as_deref())?;
+                Some(Resumable {
+                    session: known.id.clone(),
+                    agent: known.agent.clone(),
+                    cli: known.cli.clone(),
+                    command,
+                })
+            })
+            .collect()
     }
 
     /// Takes one event of the Adapter named `agent`, and gives what it changed, in order.
@@ -359,7 +378,14 @@ impl Switchboard {
     ) -> Vec<Change> {
         let mut changes = Vec::new();
         let mut first_heard = false;
-        let at = match self.find(agent, &reported.session) {
+        let found = self.find(agent, &reported.session);
+        // Any report of a session ends its offer, the end of one that is not running too:
+        // the CLI has brought it back or has been told it is over, and either way the Keeper's
+        // stop is no longer the last thing that happened to it.
+        if let Some(at) = found {
+            self.sessions[at].offer = None;
+        }
+        let at = match found {
             // The end of a session that is not running tells nothing new, and is no
             // resume: its process went first, or the end came twice.
             Some(at) if reported.event == Event::SessionEnded && !self.sessions[at].running() => {
@@ -1402,6 +1428,204 @@ mod tests {
         assert_eq!(desk.draws, 1, "the session keeps the id the Store gave it");
         assert_eq!(desk.board.session(&kept).expect("kept").state, State::Idle);
         assert_eq!(desk.board.sessions().len(), 2);
+    }
+
+    /// The command maker of the tests: one word for the Adapter, the CLI's id and the record
+    /// it was given, so that a test sees what the offer carried. None for the agent `none`.
+    fn resume_words(agent: &str, cli: &CliSession, record: Option<&Path>) -> Option<String> {
+        if agent == "none" {
+            return None;
+        }
+        let record = record.map_or("-".to_string(), |path| path.display().to_string());
+        Some(format!("{agent} resume {} {record}", cli.0))
+    }
+
+    fn cli(id: &str) -> CliSession {
+        CliSession(id.to_string())
+    }
+
+    fn offered(board: &Switchboard) -> Vec<Resumable> {
+        board.resumable(&resume_words)
+    }
+
+    fn sessions_offered(board: &Switchboard) -> Vec<SessionId> {
+        offered(board).into_iter().map(|o| o.session).collect()
+    }
+
+    /// A and B were running when the Keeper stopped; C ended by its CLI's word.
+    fn after_a_restart() -> Switchboard {
+        let mut board = Switchboard::new();
+        board.remember_resumable(SessionId("sa".to_string()), "claude", cli("a-1"), None);
+        board.remember_resumable(
+            SessionId("sb".to_string()),
+            "pi",
+            cli("b-1"),
+            Some(PathBuf::from("/s/b-1.jsonl")),
+        );
+        board.remember(SessionId("sc".to_string()), "claude", cli("c-1"));
+        board
+    }
+
+    #[test]
+    fn after_a_restart_each_session_that_was_running_is_offered_with_its_command_and_id() {
+        let mut desk = Desk::new();
+        desk.board = after_a_restart();
+        let sa = SessionId("sa".to_string());
+        let sb = SessionId("sb".to_string());
+
+        // Running before the stop: A and B in the order they were remembered, never C, which
+        // ended before it. Each carries what its Adapter's command makes of its agent, its
+        // CLI's id and its CLI's record, and the session and CLI ids themselves.
+        assert_eq!(
+            offered(&desk.board),
+            [
+                Resumable {
+                    session: sa.clone(),
+                    agent: "claude".to_string(),
+                    cli: cli("a-1"),
+                    command: "claude resume a-1 -".to_string(),
+                },
+                Resumable {
+                    session: sb.clone(),
+                    agent: "pi".to_string(),
+                    cli: cli("b-1"),
+                    command: "pi resume b-1 /s/b-1.jsonl".to_string(),
+                },
+            ]
+        );
+
+        // A report of A is heard: it runs again, by its CLI's resume, and is offered no more.
+        desk.hear(
+            "a-1",
+            Event::SessionStarted {
+                how: Start::Resumed,
+            },
+        );
+        assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
+
+        // A's process goes: not offered again, whatever it does after.
+        let changes = desk.board.gone(100);
+        assert!(changes.contains(&ended(&sa)), "{changes:?}");
+        assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
+
+        // An agent the command maker has no command for is not offered.
+        desk.board
+            .remember_resumable(SessionId("sd".to_string()), "none", cli("d-1"), None);
+        assert_eq!(sessions_offered(&desk.board), [sb]);
+    }
+
+    #[test]
+    fn a_session_heard_before_or_remembered_before_is_left_as_it_is() {
+        let mut desk = Desk::new();
+        desk.hear("h", started());
+        let heard = desk.id("h");
+        desk.board.gone(100);
+        desk.board
+            .remember(SessionId("sc".to_string()), "claude", cli("c-1"));
+
+        // Held already, whether its CLI reported it or the Store kept it: no offer, and
+        // the id it holds stays.
+        desk.board
+            .remember_resumable(SessionId("x".to_string()), "claude", cli("h"), None);
+        desk.board
+            .remember_resumable(SessionId("y".to_string()), "claude", cli("c-1"), None);
+        assert!(offered(&desk.board).is_empty());
+        assert_eq!(desk.board.session(&heard).expect("heard").cli, cli("h"));
+        assert_eq!(desk.board.sessions().len(), 2);
+
+        // Remembered twice with another record: the first offer stands.
+        desk.board.remember_resumable(
+            SessionId("sa".to_string()),
+            "pi",
+            cli("p"),
+            Some(PathBuf::from("/s/one.jsonl")),
+        );
+        desk.board.remember_resumable(
+            SessionId("other".to_string()),
+            "pi",
+            cli("p"),
+            Some(PathBuf::from("/s/two.jsonl")),
+        );
+        let offers = offered(&desk.board);
+        assert_eq!(offers.len(), 1, "{offers:?}");
+        assert_eq!(offers[0].session, SessionId("sa".to_string()));
+        assert_eq!(offers[0].command, "pi resume p /s/one.jsonl");
+
+        // Remembered as not running later: the offer is not taken back.
+        desk.board
+            .remember(SessionId("later".to_string()), "pi", cli("p"));
+        assert_eq!(offered(&desk.board).len(), 1);
+    }
+
+    #[test]
+    fn a_remembered_session_is_a_not_running_one_the_cli_resumes_under_its_id() {
+        let mut desk = Desk::new();
+        desk.board = after_a_restart();
+        let sb = SessionId("sb".to_string());
+        let known = desk.board.session(&sb).expect("the session");
+        assert_eq!(known.state, State::NotRunning);
+        assert_eq!(known.agent, "pi");
+        assert!(desk.board.pids().is_empty());
+
+        let changes = desk.take(
+            "pi",
+            reported(
+                "b-1",
+                7,
+                Event::SessionStarted {
+                    how: Start::Resumed,
+                },
+            ),
+        );
+        assert!(
+            matches!(&changes[0], Change::Started { session, resumed: true, .. } if *session == sb),
+            "{changes:?}"
+        );
+        assert_eq!(desk.draws, 0, "it keeps the id the Store gave it");
+    }
+
+    #[test]
+    fn any_report_of_a_remembered_session_takes_its_offer_back_and_only_its_own() {
+        let first = |event| {
+            let mut desk = Desk::new();
+            desk.board = after_a_restart();
+            desk.take("claude", reported("a-1", 7, event));
+            desk
+        };
+        let sb = SessionId("sb".to_string());
+
+        // Whatever the first report is: an event of a turn, or the end of the session,
+        // which changes nothing else for a session that is not running.
+        for event in [Event::TurnStarted, read("/x"), permission(true)] {
+            let desk = first(event);
+            assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
+        }
+        let desk = first(Event::SessionEnded);
+        assert_eq!(sessions_offered(&desk.board), std::slice::from_ref(&sb));
+
+        // The same CLI id under another Adapter's name is another session.
+        let mut desk = Desk::new();
+        desk.board = after_a_restart();
+        desk.take("pi", reported("a-1", 7, started()));
+        assert_eq!(desk.board.resumable(&resume_words).len(), 2);
+        desk.take("claude", reported("b-1", 7, started()));
+        assert_eq!(desk.board.resumable(&resume_words).len(), 2);
+    }
+
+    #[test]
+    fn a_session_that_ran_again_and_ended_is_not_offered_and_asking_takes_nothing() {
+        let mut desk = Desk::new();
+        desk.board = after_a_restart();
+        let sa = SessionId("sa".to_string());
+        let sb = SessionId("sb".to_string());
+        assert_eq!(sessions_offered(&desk.board), [sa.clone(), sb.clone()]);
+        // Asking again gives the same: the offers are read, not taken.
+        assert_eq!(sessions_offered(&desk.board), [sa.clone(), sb.clone()]);
+
+        desk.hear("a-1", started());
+        desk.hear("a-1", Event::SessionEnded);
+        assert_eq!(desk.state("a-1"), State::NotRunning);
+        assert_eq!(sessions_offered(&desk.board), [sb]);
     }
 
     #[test]
