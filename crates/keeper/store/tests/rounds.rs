@@ -346,3 +346,39 @@ fn the_state_of_a_round_is_set_once_and_the_edit_mark_only_for_a_round_that_is_k
         ]
     );
 }
+
+#[test]
+fn the_edit_mark_of_one_round_is_set_while_a_later_round_is_kept_and_marks_that_round_only() {
+    let scratch = Scratch::new();
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        review_with_marks(&store);
+        store
+            .put_round(&rid(1), &round(2), &[])
+            .expect("put round 2");
+        store
+            .set_round_edited(&rid(1), 1)
+            .expect("set the edit mark of round 1");
+        assert_eq!(
+            review_of(&store).rounds,
+            vec![
+                Round {
+                    edited: true,
+                    ..round(1)
+                },
+                round(2)
+            ]
+        );
+    }
+    let again = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(
+        review_of(&again).rounds,
+        vec![
+            Round {
+                edited: true,
+                ..round(1)
+            },
+            round(2)
+        ]
+    );
+}
