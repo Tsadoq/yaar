@@ -694,7 +694,17 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
     );
     assert!(wanted.borrow().is_empty());
 
-    // An offer, then what is attached goes: the offer goes with it.
+    // The agent stops. An offer, then what is attached goes: the offer goes with it.
+    stage
+        .keeper
+        .tell_agents(agents_of(vec![session_a(SessionState::NotRunning)]));
+    wait_until(&mut cx, "the session stopped", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.sessions()
+                .iter()
+                .any(|session| session.state == SessionState::NotRunning)
+        })
+    });
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -714,7 +724,114 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
             .pane
             .read_with(cx, |pane, _| !pane.offer_to_start().is_empty())
     });
-    tell_reviews(&mut stage, review_of_a(threads, None), &mut cx);
+    tell_reviews(&mut stage, review_of_a(threads.clone(), None), &mut cx);
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.offer_to_start())
+            .is_empty()
+    );
+    assert!(!is_drawn("review-offer-start", &mut cx));
+
+    // Attached again from elsewhere, with nothing asked here: the offer that went does not
+    // come back.
+    let mut again = review_of_a(threads, Some(Attachment::Review));
+    again.reviews[0]
+        .threads
+        .push(thread('2', "story.txt", 3, ThreadState::Draft));
+    tell_reviews(&mut stage, again, &mut cx);
+    assert!(is_drawn("review-attached:review", &mut cx));
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.offer_to_start())
+            .is_empty()
+    );
+    assert!(!is_drawn("review-offer-start", &mut cx));
+}
+
+#[gpui_kit::test]
+fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_answer_naming_no_cli_replaces_it(
+    cx: &mut TestAppContext,
+) {
+    let threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
+    // Another thread, so that each reviews told below differs from the one before and the
+    // test can wait for it.
+    let more = vec![
+        threads[0].clone(),
+        thread('2', "story.txt", 3, ThreadState::Draft),
+    ];
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(threads.clone(), None),
+        SessionState::NotRunning,
+        cx,
+    );
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+
+    // The agent does not run: the offer is made.
+    let attach = |answer: Vec<AgentCli>, stage: &mut Stage, cx: &mut VisualTestContext| {
+        cx.simulate_keystrokes("a");
+        let asked = stage.keeper.expect(
+            Request::AttachReview {
+                review: review_id(),
+                thread: None,
+            },
+            cx,
+        );
+        stage
+            .keeper
+            .reply(asked, Ok(Reply::AttachedReview { start: answer }));
+    };
+    attach(vec![claude()], &mut stage, &mut cx);
+    tell_reviews(
+        &mut stage,
+        review_of_a(threads, Some(Attachment::Review)),
+        &mut cx,
+    );
+    wait_until(&mut cx, "the offer", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.offer_to_start() == [claude()])
+    });
+    assert!(is_drawn("review-offer-start", &mut cx));
+
+    // The agent is started some other way: its CLI is not offered to start any more.
+    stage
+        .keeper
+        .tell_agents(agents_of(vec![session_a(SessionState::Idle)]));
+    wait_until(&mut cx, "the session running", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.sessions()
+                .iter()
+                .any(|session| session.state == SessionState::Idle)
+        })
+    });
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.offer_to_start())
+            .is_empty()
+    );
+    assert!(!is_drawn("review-offer-start", &mut cx));
+
+    // Attached again, the answer names no CLI: it replaces the offer that was made, which
+    // does not come back when the agent stops.
+    attach(Vec::new(), &mut stage, &mut cx);
+    tell_reviews(
+        &mut stage,
+        review_of_a(more, Some(Attachment::Review)),
+        &mut cx,
+    );
+    stage
+        .keeper
+        .tell_agents(agents_of(vec![session_a(SessionState::NotRunning)]));
+    wait_until(&mut cx, "the session stopped", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.sessions()
+                .iter()
+                .any(|session| session.state == SessionState::NotRunning)
+        })
+    });
     assert!(
         stage
             .pane

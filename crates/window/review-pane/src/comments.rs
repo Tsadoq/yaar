@@ -152,6 +152,7 @@ impl ReviewPane {
         for save in &self.saves {
             apply(&mut shown, save);
         }
+        self.attaching.reviews_read(&shown);
         self.reviews = Some(shown);
         // Read anew, the reviews may add or take rows above what the reviewer reads.
         self.rebuild_steady(cx);

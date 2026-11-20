@@ -948,7 +948,7 @@ fn resuming_says_when_nothing_is_paused_or_follow_is_off_and_turning_it_off_ends
 }
 
 #[gpui_kit::test]
-fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_a_turn_the_cli_started_itself_does_not_and_with_follow_off_nothing_does(
+fn with_follow_on_a_message_of_the_user_to_the_agent_switches_the_pane_to_flow_and_with_follow_off_it_does_not(
     cx: &mut TestAppContext,
 ) {
     let (t0, t1, t2, t3) = (turn_id('0'), turn_id('1'), turn_id('2'), turn_id('3'));

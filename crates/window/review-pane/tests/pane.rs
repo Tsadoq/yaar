@@ -17,8 +17,9 @@ use gpui_kit::{
 use yaar_diff::{Row, Side};
 use yaar_frame::{Place, SetBase};
 use yaar_link::{
-    Changes, Comparison, Content, Fact, FileSides, FileStatus, FlowForm, NoComparison, Refusal,
-    Reply, Request, RequestKind, Setting,
+    Anchor, Author, Changes, Comment, CommentId, Comparison, Content, Fact, FileSides, FileStatus,
+    FlowForm, Lines, NoComparison, Refusal, Reply, Request, RequestKind, Setting, Side as LinkSide,
+    Thread, ThreadId, ThreadState,
 };
 use yaar_review_pane::{
     FILES_ON_THEIR_WAY, Following, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown,
@@ -27,8 +28,8 @@ use yaar_review_pane::{
 
 use common::{
     Stage, WINDOW, bounds_of_row, commit, default_base, drawn, file, id, link_up, open,
-    open_window, read_file, repository, rows, since_main, texts, wait_for_files, wait_until,
-    workspace,
+    open_staged, open_window, read_file, repository, reviews_of, rows, since_main, texts,
+    wait_for_files, wait_until, workspace,
 };
 
 /// The rows of the pane as a reader of a unified diff would write them down: a heading
@@ -658,8 +659,37 @@ fn lines(version: &str) -> Vec<String> {
     version.lines().map(str::to_owned).collect()
 }
 
+/// A thread of the reviewer on the new side of `path` at `line`, in this state, with its one
+/// comment sent when it is not a draft.
+fn a_thread(digit: char, path: &str, line: u32, state: ThreadState) -> Thread {
+    let comment = Comment {
+        id: CommentId::new(digit.to_string().repeat(32)),
+        author: Author::Reviewer,
+        text: format!("comment {digit}"),
+        round: (state != ThreadState::Draft).then_some(1),
+    };
+    Thread {
+        id: ThreadId::new(digit.to_string().repeat(32)),
+        anchor: Anchor {
+            tree: None,
+            path: PathBuf::from(path),
+            side: LinkSide::New,
+            lines: Lines {
+                first: line,
+                last: line,
+            },
+            text: format!("line {line}"),
+        },
+        resolved: state == ThreadState::Resolved,
+        addressed: false,
+        comments: vec![comment],
+        state,
+        now: None,
+    }
+}
+
 /// What a key of the pane's table does on the state the next test puts it in: a reviewer
-/// on a line of a file whose change has no thread and no comment.
+/// on a line of a file whose change has two threads, an open one and a resolved one.
 #[derive(Clone, Copy)]
 enum Effect {
     /// Moves the reviewer or switches the layout.
@@ -692,14 +722,20 @@ enum Effect {
 fn effect_of(keystroke: &str) -> Effect {
     match keystroke {
         "j" | "down" | "k" | "up" | "s" => Effect::Moves,
-        "c" => Effect::Box,
+        // A comment on the line, or a reply to the thread on it.
+        "c" | "o" => Effect::Box,
         "shift-c" => Effect::Field,
         // The pane has no history here to take the focus to.
         // And no turn offered anything, and no other session has a review.
-        "i" | "o" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
-        // No thread is on the reviewer's line, none moved to code that changed, no round
-        // has a state, and no agent is offered to start.
-        "t" | "x" | "u" | "w" | "shift-s" | "shift-n" => Effect::Notice,
+        "i" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
+        // None moved to code that changed, no round has a state, and no agent is offered to
+        // start.
+        "w" | "shift-s" | "shift-n" => Effect::Notice,
+        // The reviewer is on a line with an open thread and a resolved one: each key acts
+        // on the one it applies to.
+        "t" => Effect::Sends(RequestKind::AttachReview),
+        "x" => Effect::Sends(RequestKind::ResolveThread),
+        "u" => Effect::Sends(RequestKind::ReopenThread),
         "shift-t" => Effect::Setting,
         "f" => Effect::Views,
         "shift-f" => Effect::Follow,
@@ -795,7 +831,20 @@ impl Effect {
 // that cut, paste, undo and save.
 #[gpui_kit::test]
 fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut TestAppContext) {
-    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    // Two threads of the reviewer on one line of the story, an open one and a resolved
+    // one, so that the keys that resolve, reopen and attach a thread have one to act on.
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            let mut review = common::no_agent_review();
+            review.threads = vec![
+                a_thread('1', "story.txt", 3, ThreadState::Sent),
+                a_thread('2', "story.txt", 3, ThreadState::Resolved),
+            ];
+            keeper.set_reviews(reviews_of(vec![review]));
+        },
+        cx,
+    );
     let changes = since_main(
         vec![commit('b', "Edit the story")],
         vec![
@@ -817,6 +866,11 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         &mut cx,
     );
     wait_for_files(&stage.pane, &mut cx);
+    wait_until(&mut cx, "the threads of the review", |cx| {
+        rows(&stage.pane, cx)
+            .iter()
+            .any(|row| matches!(row, PaneRow::Thread { .. }))
+    });
     let shown = |pane: &Entity<ReviewPane>, cx: &mut TestAppContext| {
         (
             lines_of("story.txt", pane, cx),
@@ -828,8 +882,10 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     assert_eq!(before.0, [lines(story.0), lines(story.1)]);
     assert_eq!(before.1, [Vec::new(), lines(fresh)]);
 
-    // The keys go to the pane: it has the focus, on a line of the first file.
-    let a_line = bounds_of_row(3, &mut cx).center();
+    // The keys go to the pane: it has the focus, on the line of the first file that the
+    // two threads follow (the added line: the rows are the comparison, the commit, the file,
+    // two lines of context and the removed line before it).
+    let a_line = bounds_of_row(6, &mut cx).center();
     cx.simulate_click(a_line, Modifiers::none());
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     // Something to paste, should a key paste.
@@ -858,6 +914,17 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
     {
+        // Back on the line the threads follow, where the keys that act on a thread find
+        // them: the keys before this one moved the reviewer.
+        let on_the_line = Position {
+            path: PathBuf::from("story.txt"),
+            side: Side::New,
+            line: 2,
+        };
+        if the_pane.read_with(&cx, |pane, _| pane.position().cloned()) != Some(on_the_line) {
+            let a_line = bounds_of_row(6, &mut cx).center();
+            cx.simulate_click(a_line, Modifiers::none());
+        }
         let effect = effect_of(control.keystroke);
         let only_in_flow = matches!(effect, Effect::Form | Effect::Resume);
         if only_in_flow {

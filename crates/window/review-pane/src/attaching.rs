@@ -6,9 +6,9 @@
 //! [`crate::AttachReview`] and [`crate::AttachThread`] send `Request::AttachReview`, the
 //! user's; the answer, `Reply::AttachedReview`, names the CLIs to offer, which the pane
 //! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
-//! until one is taken, the review shown changes, the workspace changes, or what is attached
-//! goes. Taking one, by its control or by [`crate::StartAgent`] (the first CLI offered;
-//! with none offered the notice says so), asks the terminal pane, through the shared list
+//! until one is taken, the review shown changes, the workspace changes, what is attached
+//! goes, or the review's session runs. Taking one, by its control or by
+//! [`crate::StartAgent`] (the first CLI offered; with none offered the notice says so), asks the terminal pane, through the shared list
 //! of terminals (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to
 //! open that CLI's launcher for the review: no pane calls another.
 //! [`crate::DetachReview`] sends `Request::DetachReview`. A refusal is said in the pane's
@@ -23,7 +23,10 @@
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_frame::{AskError, Wanted};
-use yaar_link::{AgentCli, Attachment, Refusal, Reply, Request, ReviewId, ThreadId, WorkspaceId};
+use yaar_link::{
+    AgentCli, Attachment, Refusal, Reply, Request, ReviewId, SessionState, ThreadId, WorkspaceId,
+    WorkspaceReviews,
+};
 
 use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
@@ -51,18 +54,40 @@ impl Attaching {
     pub(crate) fn forget(&mut self) {
         self.offer = None;
     }
+
+    /// The reviews of the workspace were read anew: an offer for a review that is not
+    /// attached in them goes, so that it does not come back if the review is attached again
+    /// by another Window.
+    pub(crate) fn reviews_read(&mut self, reviews: &WorkspaceReviews) {
+        let gone = self.offer.as_ref().is_some_and(|offer| {
+            offer.workspace == reviews.workspace
+                && !reviews
+                    .reviews
+                    .iter()
+                    .any(|review| review.id == offer.review && review.attached.is_some())
+        });
+        if gone {
+            self.offer = None;
+        }
+    }
 }
 
 impl ReviewPane {
     /// The CLIs the pane offers to start with the review attached, as the last attach
     /// answered; empty while none is offered. The offer is of one review of one workspace:
     /// it is not offered with another review shown, in another workspace, or once nothing
-    /// is attached of the review any more.
+    /// is attached of the review any more, or while the review's session runs: an agent
+    /// started some other way is not started a second time.
     pub fn offer_to_start(&self) -> Vec<AgentCli> {
         let Some(offer) = &self.attaching.offer else {
             return Vec::new();
         };
-        let kept = self.reviews_of.as_ref() == Some(&offer.workspace)
+        let runs = self.sessions.iter().any(|session| {
+            session.review.as_ref() == Some(&offer.review)
+                && session.state != SessionState::NotRunning
+        });
+        let kept = !runs
+            && self.reviews_of.as_ref() == Some(&offer.workspace)
             && self
                 .review()
                 .is_some_and(|review| review.id == offer.review && review.attached.is_some());
