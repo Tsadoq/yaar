@@ -365,9 +365,9 @@ fn opened(core: &Core, path: &Path) -> Result<OpenedFile, String> {
 }
 
 /// What the file at `path` is, for the comments on it: in an export, in a worktree and not
-/// ignored by git, or anything else. `yaar_text_search::is_ignored` is called once, for
-/// the first workspace folder that holds the file, and reads git's configuration each time
-/// it is called.
+/// ignored by git, or anything else. `yaar_text_search::is_ignored` is called once for each
+/// workspace folder that holds the file, until one of them does not ignore it (so twice for
+/// a folder nested in another), and reads git's configuration each time it is called.
 fn kind_of(core: &Core, path: &Path) -> FileKind {
     if let Some((workspace, version, relative)) = old_side::version_of(core, path) {
         return FileKind::Version {
