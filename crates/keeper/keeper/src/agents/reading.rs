@@ -111,12 +111,38 @@ impl Agents {
         &self,
         kept: &Kept,
         workspace: &WorkspaceId,
-        review: &yaar_link::ReviewId,
+        review: &ReviewId,
         from: &str,
         to: &str,
     ) -> Result<Reply, Refusal> {
-        let _ = (kept, workspace, review, from, to);
-        todo!("what a review shows of a change, with its credits")
+        let id = yaar_workspaces::WorkspaceId::new(workspace.as_str());
+        let worktree = kept.workspaces.worktree(&id).map_err(refusal)?;
+        let found = review_of_workspace(kept, &id, review)?;
+        let states = states_of(kept, &id)?;
+        // The engine reads the two versions from the state store alone, as states it holds.
+        // A commit of the repository is copied into the store first, and a version nothing
+        // holds is refused as `Request::CompareVersions` refuses it.
+        states
+            .compare(worktree.as_deref(), from, Some(to))
+            .map_err(|error| {
+                versions_refusal(error, &states, worktree.as_deref(), [Some(from), Some(to)])
+            })?;
+        let changes = kept
+            .reviews
+            .credited_change(found.id(), from, to)
+            .map_err(failed)?;
+        Ok(Reply::ComparedForReview(
+            changes
+                .into_iter()
+                .map(|change| CreditedFile {
+                    file: ChangedFile {
+                        path: change.path,
+                        status: status(change.change),
+                    },
+                    by: change.by.iter().map(SessionId::new).collect(),
+                })
+                .collect(),
+        ))
     }
 
     /// `Request::ReadVersions`: each side at its own path, in a version of the state store
@@ -172,24 +198,7 @@ impl Agents {
         // for it.
         worktree_needed(kept, &id, workspace)?;
         let review = review
-            .map(|review| {
-                let unknown = || Refusal::UnknownReview {
-                    review: review.clone(),
-                };
-                let found = kept
-                    .reviews
-                    .review(&yaar_store::ReviewId::new(review.as_str()))
-                    .map_err(|error| match error {
-                        EngineError::UnknownReview(_) => unknown(),
-                        other => failed(other),
-                    })?;
-                // A review lists the changes of its own workspace.
-                if found.workspace() == &id {
-                    Ok(found)
-                } else {
-                    Err(unknown())
-                }
-            })
+            .map(|review| review_of_workspace(kept, &id, review))
             .transpose()?;
         let credits = kept.workspaces.credits(&id).map_err(refusal)?;
         let changes: Vec<Credited> = credits
@@ -350,6 +359,31 @@ fn worktree_needed(
         .ok_or_else(|| Refusal::UnknownWorkspace {
             workspace: workspace.clone(),
         })
+}
+
+/// The review `review` as the Keeper holds it; refused with `UnknownReview` when it holds
+/// none, and for one of another workspace than `workspace`, since a review lists the changes
+/// of its own workspace alone.
+fn review_of_workspace(
+    kept: &Kept,
+    workspace: &yaar_workspaces::WorkspaceId,
+    review: &ReviewId,
+) -> Result<yaar_review_engine::Review, Refusal> {
+    let unknown = || Refusal::UnknownReview {
+        review: review.clone(),
+    };
+    let found = kept
+        .reviews
+        .review(&yaar_store::ReviewId::new(review.as_str()))
+        .map_err(|error| match error {
+            EngineError::UnknownReview(_) => unknown(),
+            other => failed(other),
+        })?;
+    if found.workspace() == workspace {
+        Ok(found)
+    } else {
+        Err(unknown())
+    }
 }
 
 /// The state store of a workspace.

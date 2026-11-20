@@ -466,7 +466,7 @@ impl Parts {
                     },
                 }),
             Request::GetReviews { workspace } => {
-                get_reviews(workspaces, reviews, workspace).map(Reply::Reviews)
+                get_reviews(workspaces, reviews, &kept.store, workspace).map(Reply::Reviews)
             }
             Request::SaveDraft {
                 review,
@@ -1150,17 +1150,19 @@ fn reviews_changed(workspace: &WorkspaceId) -> Fact {
     }
 }
 
-/// The reviews of a workspace, with its files marked viewed when the worktree is there.
+/// The reviews of a workspace, with its files marked viewed when the worktree is there and
+/// each round with the turn it was sent in, which `store` keeps.
 fn get_reviews(
     workspaces: &Workspaces,
     reviews: &Reviews,
+    store: &Store,
     workspace: yaar_link::WorkspaceId,
 ) -> Result<yaar_link::WorkspaceReviews, Refusal> {
     let worktree = worktree_of(workspaces, &workspace)?;
     let view = reviews
         .of_workspace(&WorkspaceId::new(workspace.as_str()), worktree.as_deref())
         .map_err(engine_refusal)?;
-    Ok(workspace_reviews(workspace, view))
+    workspace_reviews(workspace, view, store)
 }
 
 /// Keeps one save of a draft. A text that changes a comment of the review is kept with no
@@ -1419,20 +1421,34 @@ fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
     }
 }
 
-/// The reviews of a workspace, in the words of the Link.
+/// The reviews of a workspace, in the words of the Link; refused when `store` cannot say
+/// which turn a round was sent in.
 fn workspace_reviews(
     workspace: yaar_link::WorkspaceId,
     view: yaar_review_engine::WorkspaceView,
-) -> yaar_link::WorkspaceReviews {
-    yaar_link::WorkspaceReviews {
+    store: &Store,
+) -> Result<yaar_link::WorkspaceReviews, Refusal> {
+    let reviews = view
+        .reviews
+        .iter()
+        .map(|found| {
+            let turns = store
+                .round_turns(&yaar_store::ReviewId::new(found.id().as_str()))
+                .map_err(|e| engine_refusal(EngineError::Store(e)))?;
+            Ok(review(found, &turns))
+        })
+        .collect::<Result<_, Refusal>>()?;
+    Ok(yaar_link::WorkspaceReviews {
         workspace,
-        reviews: view.reviews.iter().map(review).collect(),
+        reviews,
         viewed: view.viewed,
-    }
+    })
 }
 
-/// One review, in the words of the Link.
-fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
+/// One review, in the words of the Link. `turns` is the turn each of its rounds was sent
+/// in, by the round's number, as the Store keeps it: a round with none, as a copy, has
+/// none.
+fn review(review: &yaar_review_engine::Review, turns: &[(u32, String)]) -> yaar_link::Review {
     use yaar_review_engine::{Attachment, Author, SentBy};
 
     yaar_link::Review {
@@ -1502,9 +1518,10 @@ fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
                     SentBy::Delivered => yaar_link::SentBy::Delivered,
                 },
                 edited: round.edited,
-                // The turn a round was sent in comes from the Store: filled by the package
-                // of slice 7 that keeps it (`Store::round_turns`).
-                turn: None,
+                turn: turns
+                    .iter()
+                    .find(|(number, _)| *number == round.number)
+                    .map(|(_, turn)| yaar_link::TurnId::new(turn)),
             })
             .collect(),
     }
