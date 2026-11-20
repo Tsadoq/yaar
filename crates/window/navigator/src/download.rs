@@ -732,6 +732,156 @@ mod tests {
         ));
     }
 
+    // A certificate and its key made for the test alone, with `openssl req -x509` for the
+    // address 127.0.0.1, valid from 2020 to 2120, not a certificate authority. They guard
+    // nothing: the key is public, and the downloader trusts the certificate only in the one
+    // test that builds its agent with it.
+    const TEST_CERTIFICATE: &str = "\
+-----BEGIN CERTIFICATE-----
+MIIBtDCCAVqgAwIBAgIUYpSQHapmF/Opz8hiNEhioquUvyswCgYIKoZIzj0EAwIw
+FDESMBAGA1UEAwwJMTI3LjAuMC4xMCAXDTIwMDEwMTAwMDAwMFoYDzIxMjAwMTAx
+MDAwMDAwWjAUMRIwEAYDVQQDDAkxMjcuMC4wLjEwWTATBgcqhkjOPQIBBggqhkjO
+PQMBBwNCAASykQt2EgWSmXqQ6ilPkk0HIccsGUiIiknCMQxXMg+fLnbpSmMIPZHM
+Ez1xkfY5soU97rW7fCf+AHfJmC3lAP9wo4GHMIGEMB0GA1UdDgQWBBTsRr9qh18+
+cosA/KXCksshG+wHpDAfBgNVHSMEGDAWgBTsRr9qh18+cosA/KXCksshG+wHpDAP
+BgNVHREECDAGhwR/AAABMAwGA1UdEwEB/wQCMAAwDgYDVR0PAQH/BAQDAgeAMBMG
+A1UdJQQMMAoGCCsGAQUFBwMBMAoGCCqGSM49BAMCA0gAMEUCIFWX+/BQ/XE+zfny
+fjl4mgjDtarMIHrNNA3EVJEKjYNCAiEA2iBx5Vhpnq5pVWMiak6FLn2oMJGilmPy
+xf9a/ayOZCY=
+-----END CERTIFICATE-----
+";
+    const TEST_KEY: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgvJsZTNATq1aw96/J
+waBeNJo91rx7YtXd6LYMMNoq1imhRANCAASykQt2EgWSmXqQ6ilPkk0HIccsGUiI
+iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
+-----END PRIVATE KEY-----
+";
+
+    /// A listener on `127.0.0.1` that serves one TLS connection with the test certificate:
+    /// it reads the request head, answers `302` to `location` and closes. Gives its port.
+    fn redirecting_over_tls(location: String) -> u16 {
+        use rustls::pki_types::pem::PemObject;
+        use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+
+        let config = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .expect("protocol versions")
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![
+                CertificateDer::from_pem_slice(TEST_CERTIFICATE.as_bytes())
+                    .expect("the certificate"),
+            ],
+            PrivateKeyDer::from_pem_slice(TEST_KEY.as_bytes()).expect("the key"),
+        )
+        .expect("a server configuration");
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+        let port = listener.local_addr().expect("its address").port();
+        std::thread::spawn(move || {
+            let Ok((tcp, _)) = listener.accept() else {
+                return;
+            };
+            let connection = rustls::ServerConnection::new(Arc::new(config)).expect("a connection");
+            let mut stream = rustls::StreamOwned::new(connection, tcp);
+            let mut seen = Vec::new();
+            let mut byte = [0_u8; 1];
+            // Reading the request drives the handshake.
+            while !seen.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(1) => seen.push(byte[0]),
+                    _ => return,
+                }
+            }
+            let _ = stream.write_all(
+                format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n")
+                    .as_bytes(),
+            );
+            stream.conn.send_close_notify();
+            let _ = stream.flush();
+        });
+        port
+    }
+
+    /// A plain listener on `127.0.0.1` that answers every request with an empty 200, and
+    /// sends the first line of each request it hears to the channel, in the order the
+    /// connections arrived. Gives its port and the channel.
+    fn hearing() -> (u16, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
+        let port = listener.local_addr().expect("its address").port();
+        let (heard, hearing) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else {
+                    return;
+                };
+                let mut seen = Vec::new();
+                let mut byte = [0_u8; 1];
+                while !seen.ends_with(b"\r\n\r\n") {
+                    match stream.read(&mut byte) {
+                        Ok(1) => seen.push(byte[0]),
+                        _ => break,
+                    }
+                }
+                let line = String::from_utf8_lossy(&seen);
+                let _ = heard.send(line.lines().next().unwrap_or_default().to_owned());
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+            }
+        });
+        (port, hearing)
+    }
+
+    #[test]
+    fn a_redirect_from_https_to_the_loopback_address_over_http_is_refused_and_nothing_is_heard_there()
+     {
+        use rustls::pki_types::pem::PemObject;
+
+        let (plain_port, heard) = hearing();
+        let landing = format!("http://127.0.0.1:{plain_port}/landing");
+        let tls_port = redirecting_over_tls(landing.clone());
+        let certificate =
+            rustls::pki_types::CertificateDer::from_pem_slice(TEST_CERTIFICATE.as_bytes())
+                .expect("the certificate");
+        let downloader = Downloader {
+            agent: agent(
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                RootCerts::Specific(Arc::new(vec![
+                    Certificate::from_der(certificate.as_ref()).to_owned(),
+                ])),
+            ),
+        };
+
+        let outcome = downloader.get(&format!("https://127.0.0.1:{tls_port}/server.tgz"));
+
+        // The refusal names the address the redirect led to, which is allowed as an address
+        // on its own: only the step from https to it is what is refused.
+        assert!(
+            allowed(&landing),
+            "the landing address is one that is fetched"
+        );
+        match outcome {
+            Err(DownloadError::NotAllowed(address)) => assert_eq!(address, landing),
+            Err(other) => panic!("the redirect was not refused by the rule: {other:?}"),
+            Ok(_) => panic!("the redirect to {landing} was followed"),
+        }
+        // The barrier: a request of the test's own, straight to the listener the redirect
+        // named. Connections are accepted in the order they arrive, so a request of the
+        // downloader's would be heard before it, and this is the first thing heard.
+        let mut own = std::net::TcpStream::connect(("127.0.0.1", plain_port)).expect("connect");
+        own.write_all(b"GET /barrier HTTP/1.1\r\n\r\n")
+            .expect("send");
+        assert_eq!(
+            heard
+                .recv_timeout(Duration::from_secs(10))
+                .expect("the barrier was heard"),
+            "GET /barrier HTTP/1.1",
+            "something was heard at the address of the redirect before the test's own request"
+        );
+    }
+
     #[test]
     fn the_downloader_waits_30_seconds_to_connect_and_60_for_each_read_and_uses_no_proxy() {
         let downloader = Downloader::new().expect("a downloader");
