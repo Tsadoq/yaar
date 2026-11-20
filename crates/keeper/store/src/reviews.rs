@@ -893,6 +893,11 @@ impl Store {
                 }
             }
             drop(insert);
+            // Kept with none, a state is still one whose credits were kept.
+            keeping.execute(
+                "INSERT OR IGNORE INTO state_kept (workspace, state) VALUES (?1, ?2)",
+                params![workspace, state],
+            )?;
             Ok(keeping.commit()?)
         })
     }
@@ -947,8 +952,12 @@ impl Store {
         workspace: &WorkspaceId,
         state: &str,
     ) -> Result<bool, StoreError> {
-        let _ = (workspace, state);
-        todo!("whether a state's credits were kept")
+        let (workspace, state) = (workspace.0.clone(), state.to_owned());
+        self.ask(move |connection| {
+            connection
+                .prepare("SELECT 1 FROM state_kept WHERE workspace = ?1 AND state = ?2")?
+                .exists([workspace, state])
+        })
     }
 
     /// Keeps that round `round` of `review` was sent in the turn `turn` of its session, in
@@ -960,16 +969,33 @@ impl Store {
         round: u32,
         turn: &str,
     ) -> Result<(), StoreError> {
-        let _ = (review, round, turn);
-        todo!("the turn a round was sent in")
+        let (review, turn) = (review.0.clone(), turn.to_owned());
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE round SET turn = ?3 WHERE review = ?1 AND number = ?2",
+                params![review, round, turn],
+            )?;
+            if changed == 0 {
+                return refused(format!("review {review} has no round {round}"));
+            }
+            Ok(())
+        })
     }
 
     /// The turn each round of `review` was sent in, as [`Store::set_round_turn`] kept it, by
     /// the number of the round, ordered by it; a round with none is left out. Empty for a
     /// review the Store does not hold.
     pub fn round_turns(&self, review: &ReviewId) -> Result<Vec<(u32, String)>, StoreError> {
-        let _ = review;
-        todo!("the turns the rounds of a review were sent in")
+        let review = review.0.clone();
+        self.ask(move |connection| {
+            connection
+                .prepare(
+                    "SELECT number, turn FROM round
+                     WHERE review = ?1 AND turn IS NOT NULL ORDER BY number",
+                )?
+                .query_map([review], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
+        })
     }
 
     /// Flushes the drive now: every draft saved so far is then on it. The writer does

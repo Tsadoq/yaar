@@ -382,3 +382,110 @@ fn the_edit_mark_of_one_round_is_set_while_a_later_round_is_kept_and_marks_that_
         ]
     );
 }
+
+/// A review `n` with rounds 1 to `rounds`, none with a state.
+fn review_with_rounds(store: &Store, n: u128, rounds: u32) {
+    store
+        .put_review(&ReviewRecord {
+            id: rid(n),
+            workspace: WorkspaceId::new(id(1)),
+            agent: Some(format!("session-{n}")),
+            reviewed: None,
+            threads: vec![],
+            rounds: vec![],
+            attached: None,
+        })
+        .expect("put review");
+    for number in 1..=rounds {
+        store
+            .put_round(&rid(n), &round(number), &[])
+            .expect("put round");
+    }
+}
+
+#[test]
+fn the_turns_rounds_were_sent_in_come_back_by_the_number_of_the_round_and_only_for_the_rounds_that_have_one()
+ {
+    let scratch = Scratch::new();
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        review_with_rounds(&store, 1, 3);
+        review_with_rounds(&store, 2, 1);
+        // A round sent before any turn was kept has none.
+        assert_eq!(store.round_turns(&rid(1)).expect("read"), []);
+
+        // Round 3 is kept before round 1 and round 2 never is: the order is the rounds'.
+        store.set_round_turn(&rid(1), 3, "turn-c").expect("set 3");
+        store.set_round_turn(&rid(1), 1, "turn-a").expect("set 1");
+        store
+            .set_round_turn(&rid(2), 1, "turn-z")
+            .expect("set another review's");
+        assert_eq!(
+            store.round_turns(&rid(1)).expect("read"),
+            [(1, "turn-a".to_owned()), (3, "turn-c".to_owned())]
+        );
+
+        // The turn a later send names is the one kept; the other marks of the round, and
+        // a state set after, leave it where it was.
+        store
+            .set_round_turn(&rid(1), 1, "turn-b")
+            .expect("set again");
+        store
+            .set_round_state(&rid(1), 1, &"b".repeat(40))
+            .expect("set the state");
+        store
+            .set_round_edited(&rid(1), 3)
+            .expect("set the edit mark");
+    }
+
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(
+        store.round_turns(&rid(1)).expect("read"),
+        [(1, "turn-b".to_owned()), (3, "turn-c".to_owned())]
+    );
+    assert_eq!(
+        store.round_turns(&rid(2)).expect("read"),
+        [(1, "turn-z".to_owned())]
+    );
+    // The rounds themselves are as they were, the turn being no part of a Round.
+    assert_eq!(
+        review_of_n(&store, 1).rounds,
+        vec![
+            Round {
+                state: Some("b".repeat(40)),
+                ..round(1)
+            },
+            round(2),
+            Round {
+                edited: true,
+                ..round(3)
+            },
+        ]
+    );
+}
+
+fn review_of_n(store: &Store, n: u128) -> ReviewRecord {
+    store
+        .review(&rid(n))
+        .expect("read the review")
+        .expect("the review is kept")
+}
+
+#[test]
+fn a_turn_for_a_round_or_a_review_the_store_does_not_hold_is_refused_and_keeps_nothing() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    review_with_rounds(&store, 1, 1);
+
+    let sentence = refusal_of(store.set_round_turn(&rid(1), 2, "turn-a"));
+    assert!(sentence.contains("no round 2"), "{sentence}");
+    refusal_of(store.set_round_turn(&rid(9), 1, "turn-a"));
+    assert_eq!(store.round_turns(&rid(1)).expect("read"), []);
+    // A review the Store does not hold has no turns to give, and no fault.
+    assert_eq!(store.round_turns(&rid(9)).expect("read"), []);
+    // Nothing was made for the round either: sent later, it starts with none.
+    store
+        .put_round(&rid(1), &round(2), &[])
+        .expect("put round 2");
+    assert_eq!(store.round_turns(&rid(1)).expect("read"), []);
+}

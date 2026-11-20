@@ -194,15 +194,33 @@ impl Store {
         session: &SessionId,
         cli_record: Option<&Path>,
     ) -> Result<(), StoreError> {
-        let _ = (session, cli_record);
-        todo!("where a session's CLI keeps its record")
+        let (session, cli_record) = (session.0.clone(), cli_record.map(bytes));
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE session SET cli_record = ?2 WHERE id = ?1",
+                params![session, cli_record],
+            )?;
+            if changed == 0 {
+                return refused(format!("session {session} is not kept"));
+            }
+            Ok(())
+        })
     }
 
     /// The CLI's own record of `session`, as [`Store::set_session_cli_record`] last kept
     /// it; none where nothing was kept, and for a session the Store does not hold.
     pub fn session_cli_record(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
-        let _ = session;
-        todo!("where a session's CLI keeps its record, read back")
+        let session = session.0.clone();
+        self.ask(move |connection| {
+            let kept: Option<Option<Vec<u8>>> = connection
+                .query_row(
+                    "SELECT cli_record FROM session WHERE id = ?1",
+                    [session],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(kept.flatten().map(path))
+        })
     }
 
     /// The session by its id.
