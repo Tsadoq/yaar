@@ -328,6 +328,36 @@ impl Composed {
         );
     }
 
+    /// Shows Changes in the review pane by a click on its name in the bar, which pauses no
+    /// follow, and waits until it is on screen with its first row drawn.
+    pub fn show_the_changes_view(&self, cx: &mut VisualTestContext) {
+        let at = self.point_in("review-view-changes", cx);
+        cx.simulate_click(at, Modifiers::none());
+        wait_until(cx, "Changes on screen", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.view() == yaar_review_pane::View::Changes)
+                && cx.debug_bounds("review-row-0").is_some()
+        });
+    }
+
+    /// Whether some line of the screen of `terminal`, as its emulator holds it, holds `mark`.
+    /// What a program prints is read from the screen, as a user reads it; a shell's prompt
+    /// is no mark, so a test waits for a mark the program prints itself.
+    pub fn shows_on_screen(
+        &self,
+        terminal: &TerminalId,
+        mark: &str,
+        cx: &mut VisualTestContext,
+    ) -> bool {
+        self.terminals
+            .read_with(cx, |pane, _| pane.terminal(terminal))
+            .is_some_and(|view| {
+                view.read_with(cx, |view, _| view.lines())
+                    .iter()
+                    .any(|line| line.contains(mark))
+            })
+    }
+
     /// Whether the focus is inside an element that sets this key context.
     pub fn focus_is_in(&self, context: &str, cx: &mut VisualTestContext) -> bool {
         cx.update(|window, _| {
