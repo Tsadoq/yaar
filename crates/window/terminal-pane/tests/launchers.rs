@@ -504,7 +504,7 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     wait_drawn(&mut cx, "the first control gone", |cx| {
         drawn("terminal-resume-1", cx).is_none()
     });
-    assert_eq!(offered(&panes, &mut cx), [b.id.clone()]);
+    assert_eq!(offered(&panes, &mut cx), std::slice::from_ref(&b.id));
     assert!(drawn("terminal-resume-0", &mut cx).is_some());
 
     // The other workspace on screen has its own line.
