@@ -451,9 +451,10 @@ mod tests {
             Some(None)
         );
 
-        // The same message, on time, is sent the review: what was kept was whole.
+        // The same message, on time, is sent the review: what was kept was whole. Its time
+        // is ahead of the clock, so that no machine is slow enough to make it late.
         let mut told = Told::default();
-        let answer = core.report_taken(&kept, &message, Instant::now(), &mut told);
+        let answer = core.report_taken(&kept, &message, Instant::now() + DELIVER_BY, &mut told);
         assert!(matches!(answer, Reply::Answer { .. }), "{answer:?}");
         let sent = kept.reviews.review(&review).expect("read the review");
         assert_eq!(sent.attached(), None);
