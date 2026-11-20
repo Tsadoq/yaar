@@ -96,17 +96,24 @@ fn offer_of(version: &str, archive: &[u8]) -> Offer {
 /// the fact wrongly started was begun before this one, and has reached the listener long
 /// before a whole download, its unpacking and its server's start are through.
 fn control_row(url: &str, archive: &[u8]) -> String {
+    control_row_named("control", "ctl", url, archive)
+}
+
+/// [`control_row`] under another name, for files `main.<extension>`: a test that reads its
+/// clause twice, once for each of two Navigators on one servers folder, needs a control
+/// that the first one did not leave installed.
+fn control_row_named(name: &str, extension: &str, url: &str, archive: &[u8]) -> String {
     let platform = Platform::current().expect("a machine the built-in rows download for");
     format!(
-        "[control]\n\
-         extensions = {{ ctl = \"standin\" }}\n\
-         markers = [\"main.ctl\"]\n\
+        "[{name}]\n\
+         extensions = {{ {extension} = \"standin\" }}\n\
+         markers = [\"main.{extension}\"]\n\
          \n\
-         [[control.server]]\n\
-         name = \"control\"\n\
+         [[{name}.server]]\n\
+         name = \"{name}\"\n\
          trial = [\"--version\"]\n\
          \n\
-         [[control.server.download]]\n\
+         [[{name}.server.download]]\n\
          platform = {}\n\
          version = \"1\"\n\
          url = {}\n\
@@ -125,10 +132,15 @@ fn control_row(url: &str, archive: &[u8]) -> String {
 /// Asks for the download of the `control` row and waits until its server runs: the barrier
 /// of a clause that says no download of another row began.
 fn download_the_control(running: &mut Running, workspace: &WorkspaceId) {
+    download_a_control(running, workspace, "control");
+}
+
+/// [`download_the_control`] for the control row `name`.
+fn download_a_control(running: &mut Running, workspace: &WorkspaceId, name: &str) {
     running.ask(Ask::Download {
-        language: "control".to_owned(),
+        language: name.to_owned(),
     });
-    running.wait_state(workspace, "control", None, DEADLINE, |state| {
+    running.wait_state(workspace, name, None, DEADLINE, |state| {
         state.state == State::Ready
     });
 }
@@ -206,12 +218,13 @@ fn wait_for_all(
     );
 }
 
-/// Whether a list of servers told in `told` shows a download on its way.
+/// Whether a list of servers told in `told` shows a download of the stand-in's row on its
+/// way (a control row's is another row's).
 fn shows_downloading(told: &[Told]) -> bool {
     told.iter().any(|told| match told {
-        Told::Servers(list) => list
-            .iter()
-            .any(|state| matches!(state.state, State::Downloading { .. })),
+        Told::Servers(list) => list.iter().any(|state| {
+            state.language == "standin" && matches!(state.state, State::Downloading { .. })
+        }),
         _ => false,
     })
 }
@@ -251,21 +264,34 @@ fn root_of(repo: &Repo, workspace: &WorkspaceId, digit: char) -> WorkspaceRoot {
 fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_asks_for_the_update()
 {
     let scratch = Scratch::new();
-    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def alpha\n"),
+            ("main.ctl", "\n"),
+            ("main.ctlb", "\n"),
+        ],
+    );
     let (one, two) = (archive_of("1"), archive_of("2"));
     let loopback = Loopback::serve(vec![
         ("standin-1.tar.gz".to_owned(), one.clone()),
         ("standin-2.tar.gz".to_owned(), two.clone()),
+        ("control.tar.gz".to_owned(), one.clone()),
+        ("controlb.tar.gz".to_owned(), one.clone()),
     ]);
     let log = scratch.root.join("standin.log");
+    // Each Navigator has a control row of its own, whose download is the barrier of what
+    // the clauses say was not fetched: an update or a download that the Navigator wrongly
+    // began by itself runs on a thread that no barrier of the Navigator's own orders.
     let pinning_one = row_with(
         &log,
         &download_of("1", &loopback.url("standin-1.tar.gz"), &one),
-    );
-    let pinning_two = row_with(
-        &log,
-        &download_of("2", &loopback.url("standin-2.tar.gz"), &two),
-    );
+    ) + &control_row(&loopback.url("control.tar.gz"), &one);
+    let pinning_two =
+        row_with(
+            &log,
+            &download_of("2", &loopback.url("standin-2.tar.gz"), &two),
+        ) + &control_row_named("controlb", "ctlb", &loopback.url("controlb.tar.gz"), &one);
     let servers = scratch.root.join("servers");
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
 
@@ -278,10 +304,12 @@ fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_a
                 offer: Some(offer_of("1", &one)),
             }
     });
-    // Nothing is downloaded before the user's yes.
+    // Nothing is downloaded before the user's yes: only the control's request is heard.
     barrier(&mut running, &repo, &ws);
-    assert_eq!(lines(&loopback), Vec::<String>::new());
+    download_the_control(&mut running, &ws);
+    assert_eq!(lines(&loopback), ["GET /control.tar.gz"]);
     assert!(!shows_downloading(&running.told));
+    assert_eq!(installed(&servers, "standin"), None);
 
     let asked_at = running.told.len();
     running.ask(Ask::Download {
@@ -305,7 +333,10 @@ fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_a
     let record = installed(&servers, "standin").expect("version 1 is installed");
     assert_eq!(record.version, "1");
     assert_eq!(record.sha256, sha256(&one));
-    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+    assert_eq!(
+        lines(&loopback),
+        ["GET /control.tar.gz", "GET /standin-1.tar.gz"]
+    );
     running.end();
 
     // Navigator B, on the same folders: the row now pins version 2.
@@ -318,6 +349,7 @@ fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_a
     assert_eq!(before.program, Some(program_of(&scratch, "1")));
     assert_eq!(before.update, Some(offer_of("2", &two)));
     barrier(&mut running, &repo, &ws);
+    download_a_control(&mut running, &ws, "controlb");
     // It stays as it is: nothing is fetched, nothing changes of what runs or what is kept.
     let still = state_of(&running, &ws);
     assert_eq!(
@@ -325,7 +357,14 @@ fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_a
         (&State::Ready, &before.program, before.pid, &before.update)
     );
     assert!(!shows_downloading(&running.told));
-    assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
+    assert_eq!(
+        lines(&loopback),
+        [
+            "GET /control.tar.gz",
+            "GET /standin-1.tar.gz",
+            "GET /controlb.tar.gz"
+        ]
+    );
     assert_eq!(installed(&servers, "standin").unwrap().version, "1");
     assert!(!servers.join("standin").join("2").exists());
 
@@ -340,7 +379,12 @@ fn a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_a
     assert_ne!(updated.pid, before.pid);
     assert_eq!(
         lines(&loopback),
-        ["GET /standin-1.tar.gz", "GET /standin-2.tar.gz"]
+        [
+            "GET /control.tar.gz",
+            "GET /standin-1.tar.gz",
+            "GET /controlb.tar.gz",
+            "GET /standin-2.tar.gz"
+        ]
     );
     let record = installed(&servers, "standin").expect("version 2 is installed");
     assert_eq!(record.version, "2");
@@ -517,7 +561,9 @@ fn a_registered_server_whose_command_fails_is_not_offered_and_a_download_asked_f
     let failing = scratch.put_failing(&scratch.root.join("tools"), "failing", 1);
     write_user_row(&scratch, &[failing.display().to_string()]);
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
-    // The built-in row has a download and nothing on the machine.
+    // The built-in row has a download, and its server is on the machine: the row of the
+    // user replaces it whole, so that server is no candidate when the user's command fails.
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
     let builtin =
         row_with_a_title(&downloads) + &control_row(&loopback.url("control.tar.gz"), &archive);
     let mut running = Running::start(scratch.config(&builtin));
@@ -528,6 +574,7 @@ fn a_registered_server_whose_command_fails_is_not_offered_and_a_download_asked_f
         matches!(state.state, State::Missing { .. })
     });
     assert_eq!(missing.state, State::Missing { offer: None });
+    assert_eq!((missing.server, missing.pid), (None, None));
     assert!(missing.registered);
     assert!(!runs(&failing).is_empty(), "the command was never run");
 
@@ -559,6 +606,32 @@ fn a_registered_server_whose_command_fails_is_not_offered_and_a_download_asked_f
         "{standin_states:#?}"
     );
     assert!(!servers_of(&scratch).join("standin").exists());
+    // The server of the built-in row on the machine never ran, not before the control ended
+    // either: no list told at all shows the row ready, or on a server or program that is not
+    // the user's command.
+    let ever: Vec<ServerState> = running
+        .told
+        .iter()
+        .filter_map(|told| match told {
+            Told::Servers(list) => Some(list),
+            _ => None,
+        })
+        .flatten()
+        .filter(|state| state.language == "standin")
+        .cloned()
+        .collect();
+    assert!(
+        ever.iter().all(|state| state.state != State::Ready
+            && state
+                .server
+                .as_deref()
+                .is_none_or(|server| server == "mine")
+            && state
+                .program
+                .as_ref()
+                .is_none_or(|program| *program == failing)),
+        "{ever:#?}"
+    );
     running.end();
 }
 
@@ -770,6 +843,60 @@ fn an_update_leaves_the_running_server_serving_until_its_download_ended() {
     assert_ne!(after.pid, before.pid);
     // The old server was stopped before the new one's state was told.
     assert!(!is_alive(before.pid.expect("a process")));
+    assert_eq!(held.heard(), ["GET /standin-2.tar.gz"]);
+    running.end();
+}
+
+#[test]
+fn a_workspace_shown_while_an_update_is_on_its_way_runs_the_new_version_when_it_ends() {
+    let scratch = Scratch::new();
+    let first = scratch.repository("first", &[("main.sil", "def alpha\n")]);
+    let second = scratch.repository("second", &[("main.sil", "def alpha\n")]);
+    install(&scratch, "1");
+    let two = archive_of("2");
+    let held = Held::serve("standin-2.tar.gz", two.clone());
+    let row = row_with(
+        &scratch.root.join("standin.log"),
+        &download_of("2", &held.url("standin-2.tar.gz"), &two),
+    );
+    let (ws1, ws2) = (workspace_id('1'), workspace_id('2'));
+    let mut running = Running::start(scratch.config(&row));
+    running.show(&first, &ws1, &repository_id('1'));
+    let before_first = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready && state.update.is_some()
+    });
+
+    running.ask(Ask::Update {
+        language: "standin".to_owned(),
+    });
+    held.wait_for_a_request();
+    // A second workspace is shown while the update is on its way. It was not part of the
+    // update that began, and finds version 1 installed: it runs it, and offers the update.
+    running.ask(Ask::Workspaces(vec![
+        root_of(&first, &ws1, '1'),
+        root_of(&second, &ws2, '2'),
+    ]));
+    running.ask(Ask::OnScreen(Some(ws2.clone())));
+    let before_second = running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(before_second.program, Some(program_of(&scratch, "1")));
+    assert_eq!(before_second.update, Some(offer_of("2", &two)));
+
+    held.release();
+    // The update ended, and removed version 1: both workspaces run version 2, and offer
+    // nothing, and the server of the second that ran version 1 is gone.
+    let program = Some(program_of(&scratch, "2"));
+    wait_for_all(&mut running, &[&ws1, &ws2], |state| {
+        state.state == State::Ready && state.program == program && state.update.is_none()
+    });
+    assert!(!program_of(&scratch, "1").exists());
+    for before in [&before_first, &before_second] {
+        assert!(
+            !is_alive(before.pid.expect("a process")),
+            "a server of version 1 still runs"
+        );
+    }
     assert_eq!(held.heard(), ["GET /standin-2.tar.gz"]);
     running.end();
 }

@@ -35,9 +35,13 @@
 //! Navigator's thread waits for nothing); when it cannot be made, the download fails with
 //! its sentence as the reason.
 //!
-//! A download that ends well also searches again the keys of the row that show the offer
-//! then: a workspace shown while the download was on its way found nothing, and would
-//! otherwise offer what is installed.
+//! A download that ends well also searches again the keys of the row that are not on the
+//! waiting list but need it. A workspace shown while the download was on its way found
+//! nothing and shows the offer, or found the version that was installed then and runs it
+//! with an update to show: the first would otherwise offer what is installed, the second
+//! would keep running a program whose folder the download removed and offer the version
+//! it just installed. A key that is still starting when the download ends is not told
+//! apart, and runs on as it started.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -58,7 +62,16 @@ pub(crate) struct Fetches {
     /// The rows with a download on its way, each with the keys that were shown for it when it
     /// began. A key that is forgotten meanwhile stays in the list, and is left alone when the
     /// download ends, since `lifecycle::search_again` leaves a key it does not know alone.
-    on_its_way: BTreeMap<String, Vec<ServerKey>>,
+    on_its_way: BTreeMap<String, Waiting>,
+}
+
+/// The download of one row that is on its way.
+#[derive(Default)]
+struct Waiting {
+    /// The name of the server being fetched.
+    server: String,
+    /// The keys that were shown for the download when it began.
+    keys: Vec<ServerKey>,
 }
 
 /// [`crate::Ask::Download`]: downloads the row's server for every key whose state offers it.
@@ -109,13 +122,18 @@ pub(crate) fn downloaded(
     language: String,
     outcome: Result<Installed, DownloadError>,
 ) {
-    let waiting = core.fetch.on_its_way.remove(&language).unwrap_or_default();
-    let mut keys = waiting;
+    let Waiting { server, mut keys } = core.fetch.on_its_way.remove(&language).unwrap_or_default();
     match outcome {
         Ok(_) => {
             // A key made while the download was on its way found nothing, and shows the
-            // offer: it finds what is installed now.
-            for (key, _) in lifecycle::offering(core, &language) {
+            // offer: it finds what is installed now. A key that found the version installed
+            // then runs it still, and the download removed its folder: it starts the new one.
+            let late = lifecycle::offering(core, &language).into_iter().chain(
+                lifecycle::updating(core, &language)
+                    .into_iter()
+                    .filter(|(_, shown)| shown.server == server),
+            );
+            for (key, _) in late.collect::<Vec<_>>() {
                 if !keys.contains(&key) {
                     keys.push(key);
                 }
@@ -149,7 +167,13 @@ fn begin(
     server: String,
     download: Download,
 ) {
-    core.fetch.on_its_way.insert(language.to_owned(), keys);
+    core.fetch.on_its_way.insert(
+        language.to_owned(),
+        Waiting {
+            server: server.clone(),
+            keys,
+        },
+    );
     let downloader = Arc::clone(&core.fetch.downloader);
     let servers = core.config.servers.clone();
     let events = core.events.clone();
