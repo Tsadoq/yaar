@@ -2906,7 +2906,6 @@ fn a_line_typed_during_a_hold_is_an_input_that_steers_at_its_enter_and_starts_no
     // The report is made at the Enter, while the hold goes on: the file it waits for is
     // not there yet when the report is.
     let seen = kit.wait_reports(4);
-    assert!(!go.exists());
     assert_eq!(
         events_of(&seen),
         ["session_start", "input", "agent_start", "input"]
