@@ -2,6 +2,11 @@
 //!
 //! Owns: the terminal emulator and its drawing, several terminals, launchers, the attachment shown at the agent's terminal.
 //!
+//! Next to the shell it offers a launcher for each agent CLI the Keeper names, and a
+//! control that resumes each session a restart cut off (`launchers.rs`). Under them it
+//! shows the question an Adapter asks before it writes into the user's own settings of its
+//! CLI, with the two controls that answer it (`consent.rs`).
+//!
 //! Surface:
 //! - [`entry`], the pane as the Window program registers it, with [`pane`], which builds
 //!   it for the Frame, and [`controls`], its actions with their keys;
@@ -21,9 +26,11 @@
 //! It depends on the Frame and on no other pane.
 
 mod attachment;
+mod consent;
 mod draw;
 mod emulator;
 mod keys;
+mod launchers;
 mod modes;
 mod mouse;
 mod view;
@@ -41,6 +48,7 @@ use yaar_link::{
 };
 
 pub use attachment::ADDRESS_EACH_COMMENT;
+pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
 pub use emulator::{
     Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
 };
@@ -83,6 +91,21 @@ actions!(
         /// terminal with the focus, while a review is attached to its next message and it
         /// shows no permission prompt; the user presses Enter.
         AddressEachComment,
+        /// Opens a new terminal for the workspace on screen that runs the launcher of the
+        /// chosen agent CLI, and gives it the focus.
+        NewAgentTerminal,
+        /// Makes the next agent CLI the Keeper names the chosen one, whose launcher
+        /// New Agent Terminal opens; after the last, the first.
+        NextAgentCli,
+        /// Opens a terminal that resumes the next session of the workspace on screen that
+        /// a restart cut off, with its CLI's own command.
+        ResumeAgent,
+        /// Answers yes to the question of every Adapter that writes into its CLI's own
+        /// settings only with the user's leave: each installs its entry.
+        InstallAgentExtensions,
+        /// Answers no to that question: nothing is installed, and an entry installed
+        /// before is taken out.
+        KeepAgentExtensionsOut,
     ]
 );
 
@@ -132,7 +155,12 @@ pub fn pane() -> BuildPane {
 /// [`NewTerminal`] sends [`RequestKind::OpenTerminal`]. [`Copy`], [`Paste`],
 /// [`ScrollPageUp`] and [`ScrollPageDown`] are kept keys: they work inside a terminal
 /// only, on a key no program is given. Copy and paste are Cmd-C and Cmd-V on macOS and
-/// Ctrl-Shift-C and Ctrl-Shift-V elsewhere.
+/// Ctrl-Shift-C and Ctrl-Shift-V elsewhere. [`NewAgentTerminal`] (`secondary-shift-t`),
+/// [`NextAgentCli`] (`secondary-alt-c`) and [`ResumeAgent`] (`secondary-shift-r`) work
+/// anywhere; the first and the last send [`RequestKind::OpenTerminal`], of a launcher and
+/// of a session's resume. [`InstallAgentExtensions`] (`secondary-alt-e`) and
+/// [`KeepAgentExtensionsOut`] (`secondary-alt-shift-e`) work anywhere and send
+/// [`RequestKind::AnswerConsent`], yes and no to an Adapter's question for leave.
 pub fn controls() -> Vec<Control> {
     let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
     let nothing = |title, action: fn() -> Box<dyn Action>, keystroke, place| Control {
@@ -222,6 +250,47 @@ pub fn controls() -> Vec<Control> {
             "secondary-alt-a",
             Place::Anywhere,
         ),
+        Control {
+            title: "New Agent Terminal",
+            action: || Box::new(NewAgentTerminal),
+            keystroke: "secondary-shift-t",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
+        nothing(
+            "Next Agent CLI",
+            || Box::new(NextAgentCli),
+            // Not Ctrl-Alt-T, which the Linux desktops give to opening a terminal of
+            // their own before the app sees it.
+            "secondary-alt-c",
+            Place::Anywhere,
+        ),
+        Control {
+            title: "Resume Agent",
+            action: || Box::new(ResumeAgent),
+            keystroke: "secondary-shift-r",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
+        // Not Cmd-Alt-I, the toolkit's inspector on macOS.
+        Control {
+            title: "Install Agent Extensions",
+            action: || Box::new(InstallAgentExtensions),
+            keystroke: "secondary-alt-e",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::AnswerConsent)),
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Keep Agent Extensions Out",
+            action: || Box::new(KeepAgentExtensionsOut),
+            keystroke: "secondary-alt-shift-e",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::AnswerConsent)),
+            asks: Asks::Nothing,
+        },
     ]
 }
 
@@ -371,6 +440,8 @@ pub struct TerminalPane {
     /// What the pane shows of the reviews attached to its agents' next messages: its own
     /// state, chosen by the package that builds it (`attachment.rs`).
     attachments: attachment::Attachments,
+    /// The chosen launcher and the resumes opened: the state of `launchers.rs`.
+    launchers: launchers::Launchers,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -385,6 +456,11 @@ impl TerminalPane {
         models.routes.route(&pane, Self::view_attachment);
         models.routes.route(&pane, Self::detach_attachment);
         models.routes.route(&pane, Self::address_each_comment);
+        models.routes.route(&pane, Self::new_agent_terminal);
+        models.routes.route(&pane, Self::next_agent_cli);
+        models.routes.route(&pane, Self::resume_agent);
+        models.routes.route(&pane, Self::install_agent_extensions);
+        models.routes.route(&pane, Self::keep_agent_extensions_out);
 
         let focus = cx.focus_handle();
         let handed_on = cx.on_focus(&focus, window, |pane, window, cx| {
@@ -405,6 +481,8 @@ impl TerminalPane {
         });
         // The waiting mark follows the agents, whatever else changes.
         let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
+        // The question for leave comes and goes with what the Keeper tells.
+        let consents = cx.observe(&models.consents, |_, _, cx| cx.notify());
         // A terminal the list gains is attached.
         let terminals = cx.observe(&models.terminals, |pane, _, cx| pane.attach_missing(cx));
         // A terminal another pane wants is opened here.
@@ -432,8 +510,9 @@ impl TerminalPane {
             window_title: None,
             attaching: HashMap::new(),
             attachments: attachment::Attachments::default(),
+            launchers: launchers::Launchers::default(),
             _subscriptions: vec![
-                handed_on, keys, facts, workspaces, agents, terminals, wanted,
+                handed_on, keys, facts, workspaces, agents, consents, terminals, wanted,
             ],
         };
         pane.attach_missing(cx);
@@ -967,6 +1046,13 @@ impl Render for TerminalPane {
         let (border, muted) = (theme.border, theme.muted_foreground);
         let (warning, warning_text) = (theme.warning, theme.warning_foreground);
         let shown = self.shown();
+        // The launchers and the resume controls take a row of their own at the top
+        // (`launchers.rs`), so that no terminal's first rows lie under them; the room the
+        // canvas measures is what lies below them.
+        let launchers = self.render_launchers(cx);
+        // The question an Adapter asks before it writes into its CLI's settings lies in
+        // the same top row, under them (`consent.rs`).
+        let consent = self.render_consent(cx);
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             // The name comes from the entry the view is taken from, so that no view is
             // drawn under the name of another terminal.
@@ -1068,24 +1154,34 @@ impl Render for TerminalPane {
         )
         .absolute()
         .size_full();
+        let notice = self.notice.clone().map(|notice| {
+            div()
+                .flex_none()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(notice)
+        });
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
-            .relative()
             .flex()
             .flex_col()
-            .child(room)
-            .children(self.notice.clone().map(|notice| {
+            .children(launchers)
+            .children(consent)
+            .child(
                 div()
-                    .flex_none()
-                    .px_3()
-                    .py_1()
-                    .text_sm()
-                    .text_color(cx.theme().danger)
-                    .child(notice)
-            }))
-            .children(empty)
-            .child(div().flex_1().min_h_0().flex().flex_row().children(slots))
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(room)
+                    .children(notice)
+                    .children(empty)
+                    .child(div().flex_1().min_h_0().flex().flex_row().children(slots)),
+            )
     }
 }

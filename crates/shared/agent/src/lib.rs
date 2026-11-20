@@ -10,14 +10,16 @@
 //!   command runs, so that a write the watcher sees can be credited to the session whose
 //!   command was running;
 //! - [`Reported`], an event with the CLI's own session and the terminal and process it
-//!   came from; [`CliSession`], the CLI's own name for a session;
+//!   came from, and the CLI's own record of the session; [`CliSession`], the CLI's
+//!   own name for a session;
 //! - [`Report`], what a piece of the app inside the CLI passed on, as the Keeper hands it
 //!   to the Adapter;
 //! - [`Adapter`], what one integration module of a CLI supplies: its names, the pieces it
 //!   writes into the app's folder and the entries every shell of the app gets for them,
 //!   the marks of the terminal output it watches for, the reading of its reports, its
 //!   delivery and its command for bringing a session back; [`ShellEntry`] and
-//!   [`ReportError`];
+//!   [`ReportError`]; and, for an Adapter that writes into the user's own settings of its
+//!   CLI only with the user's leave, its [`Consent`] and the [`ConsentAnswer`] it keeps;
 //! - what a report waits for the app to answer, [`Asked`] with its [`Asks`] and the
 //!   agent's [`AgentReply`] to a thread; and what the app answers it, beyond a review,
 //!   [`Answer`], which the Adapter writes in its CLI's own words;
@@ -161,6 +163,12 @@ pub struct Reported {
     /// hook's input. The Keeper finds the session's workspace from it, and from the
     /// terminal where it names none.
     pub folder: Option<PathBuf>,
+    /// The CLI's own record of the session, a file, as its report named it: for pi the
+    /// session file, which its command for bringing the session back needs. None where
+    /// the report names none, and for a CLI whose resume needs only the session's id, as
+    /// Claude Code's. The Keeper keeps the last one a session's reports named, so that
+    /// [`Adapter::resume`] is given it after a restart.
+    pub cli_record: Option<PathBuf>,
     /// What happened.
     pub event: Event,
 }
@@ -193,8 +201,42 @@ pub enum ShellEntry {
         /// The path added to it.
         path: PathBuf,
     },
-    /// A folder put first on the search path, `PATH`, as for pi's wrapper.
-    SearchFirst(PathBuf),
+    /// A variable set to this value, whatever the user's own environment holds: pi's
+    /// `YAAR_PI_REPORT`, which names the program pi's extension reports through.
+    Variable {
+        /// The variable.
+        name: OsString,
+        /// Its value.
+        value: OsString,
+    },
+}
+
+/// What the user said when an Adapter asked leave to write into the user's own settings of
+/// its CLI, as the Adapter keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentAnswer {
+    /// Not asked yet, or asked and not answered.
+    NotAsked,
+    /// Yes: the Adapter's entry is in the CLI's settings.
+    Yes,
+    /// No: nothing of the app's is in the CLI's settings.
+    No,
+}
+
+/// How an Adapter that writes into the user's own settings of its CLI only with the user's
+/// leave stands: what it asks, what the user said, and what went wrong.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consent {
+    /// What the Window asks the user, in plain words that name what the app will write and
+    /// where, and say that the answer can be changed.
+    pub question: String,
+    /// What the user said, as the CLI's settings show it now: a yes whose entry is no
+    /// longer there is [`ConsentAnswer::NotAsked`] again.
+    pub answer: ConsentAnswer,
+    /// What went wrong the last time the Adapter read the CLI's settings or changed them,
+    /// as a sentence a person reads: a settings file the Adapter cannot read as the CLI
+    /// writes it, which it then left as it was. None when nothing went wrong.
+    pub problem: Option<String>,
 }
 
 /// Why a report could not be read. The Keeper has answered the piece already, and writes
@@ -360,9 +402,32 @@ pub trait Adapter: Send {
     /// this Adapter, and gives the entries every shell of the app gets so that the CLI
     /// loads them. `companions` is the folder of the app's programs that pass a CLI's
     /// reports on, where the pieces find them. Called at every start of the Keeper; what
-    /// was written before is written again. Nothing is written anywhere else: not into
-    /// the user's settings of the CLI, not into a worktree.
+    /// was written before is written again, at the same paths. Nothing is written anywhere
+    /// else: not into a worktree, and not into the user's settings of the CLI, which only
+    /// [`Adapter::answer_consent`] writes, after the user's yes.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>>;
+
+    /// Whether this Adapter writes into the user's own settings of its CLI, which it does
+    /// only with the user's leave, and how that stands now: none for an Adapter that never
+    /// does, as Claude Code's, and none while its CLI is not installed, when there is
+    /// nothing to ask. `folder` is the Adapter's own folder of the app, where it keeps the
+    /// user's answer. It reads, and writes nothing.
+    fn consent(&self, folder: &Path) -> Option<Consent> {
+        let _ = folder;
+        None
+    }
+
+    /// Takes the user's answer and keeps it in `folder`. A yes writes the Adapter's one
+    /// entry into the CLI's settings and changes nothing else there; a no, or
+    /// [`ConsentAnswer::NotAsked`] (ask again), takes out the entry if it is there and
+    /// writes nothing else. A settings file the Adapter cannot read as the CLI writes it
+    /// is left as it was, and the [`Consent`] given says so in `problem`. Gives how it
+    /// stands then, as [`Adapter::consent`] would; none for an Adapter that needs no leave
+    /// or whose CLI is not installed, which keeps nothing.
+    fn answer_consent(&self, folder: &Path, answer: ConsentAnswer) -> Option<Consent> {
+        let _ = (folder, answer);
+        None
+    }
 
     /// The runs of bytes in a terminal's output that this CLI writes and the Keeper must
     /// hear of, as the end of a turn the user interrupted: the Dock watches every
@@ -406,8 +471,10 @@ pub trait Adapter: Send {
 
     /// What a terminal runs in the user's shell to bring back `session`, as the user would
     /// type it: the CLI's own command for that, with the session's id quoted for the
-    /// shell, as `claude --resume '<id>'`.
-    fn resume(&self, session: &CliSession) -> String;
+    /// shell, as `claude --resume '<id>'`. `cli_record` is the CLI's own record of the
+    /// session, as the session's reports last named it ([`Reported::cli_record`]); none
+    /// where they named none. A CLI whose command needs only the id leaves it unread.
+    fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String;
 }
 
 #[cfg(test)]

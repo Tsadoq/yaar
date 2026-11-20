@@ -149,6 +149,7 @@ impl Scratch {
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
             companions,
+            home: self.0.join("home"),
         };
         std::thread::spawn(move || run(options))
     }
@@ -620,6 +621,13 @@ fn claude() -> AgentCli {
     }
 }
 
+fn pi() -> AgentCli {
+    AgentCli {
+        agent: yaar_adapter_pi::NAME.to_owned(),
+        title: yaar_adapter_pi::TITLE.to_owned(),
+    }
+}
+
 /// The state the review tells of a thread.
 fn state_of(review: &yaar_link::Review, thread: &ThreadId) -> ThreadState {
     review
@@ -751,7 +759,7 @@ fn attaching_the_review_of_no_agent_offers_every_supported_cli() {
     assert_eq!(
         setup.attach(&review, None),
         Ok(Reply::AttachedReview {
-            start: vec![claude()]
+            start: vec![claude(), pi()]
         })
     );
     assert_eq!(setup.review(&review).attached, Some(Attachment::Review));
@@ -780,8 +788,8 @@ fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and
         .put_session(&yaar_store::SessionRecord {
             id: session.clone(),
             workspace: yaar_store::WorkspaceId::new(workspace.as_str()),
-            agent: "pi".to_owned(),
-            cli_session: "pi-session".to_owned(),
+            agent: "otheragent".to_owned(),
+            cli_session: "otheragent-session".to_owned(),
             terminal: None,
             number: 1,
             running: false,

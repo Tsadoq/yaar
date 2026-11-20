@@ -8,7 +8,8 @@
 //! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
 //! until one is taken, the review shown changes, the workspace changes, what is attached
 //! goes, or the review's session runs. Taking one, by its control or by
-//! [`crate::StartAgent`] (the first CLI offered; with none offered the notice says so),
+//! [`crate::StartAgent`] (the chosen CLI, the first offered until
+//! [`crate::NextOfferedAgent`] chooses the next; with none offered the notice says so),
 //! asks the terminal pane, through the shared list of terminals
 //! (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to open that
 //! CLI's launcher for the review: no pane calls another.
@@ -22,6 +23,7 @@
 //! attached when a Window opens; attaching it again gives the offer again.
 
 use gpui_kit::component::theme::ActiveTheme;
+use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_frame::{AskError, Wanted};
 use yaar_link::{
@@ -31,7 +33,7 @@ use yaar_link::{
 
 use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
-use crate::{AttachReview, AttachThread, DetachReview, ReviewPane, StartAgent};
+use crate::{AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReviewPane, StartAgent};
 
 /// The CLIs one attach offered to start, and what they were offered for.
 struct Offer {
@@ -41,6 +43,9 @@ struct Offer {
     review: ReviewId,
     /// The CLIs the Keeper named, in the order it gave them.
     start: Vec<AgentCli>,
+    /// The place in `start` of the CLI Start Agent takes: the first until the reviewer
+    /// chooses another.
+    chosen: usize,
 }
 
 /// What attaching keeps: the offer the last attach was answered with.
@@ -142,18 +147,35 @@ impl ReviewPane {
                 .flex()
                 .gap_2()
                 .child("The agent is not running:");
+            let chosen = self.offer_chosen();
             for cli in offered {
                 let agent = cli.agent.clone();
+                let mark = chosen.as_ref() == Some(&cli);
                 offer = offer.child(
                     div()
                         .debug_selector({
                             let agent = agent.clone();
                             move || format!("review-offer-start-{agent}")
                         })
+                        .relative()
                         .px_2()
                         .bg(theme.secondary)
                         .text_color(theme.secondary_foreground)
                         .child(format!("Start {}", cli.title))
+                        .when(mark, |control| {
+                            // An underline over the control of the CLI Start Agent takes.
+                            let agent = agent.clone();
+                            control.child(
+                                div()
+                                    .debug_selector(move || format!("review-offer-chosen-{agent}"))
+                                    .absolute()
+                                    .bottom_0()
+                                    .left_0()
+                                    .w_full()
+                                    .h(px(2.))
+                                    .bg(theme.primary),
+                            )
+                        })
                         .on_mouse_down(
                             MouseButton::Left,
                             cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
@@ -195,6 +217,7 @@ impl ReviewPane {
                             workspace,
                             review,
                             start,
+                            chosen: 0,
                         });
                         cx.notify();
                     })
@@ -284,14 +307,39 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// [`StartAgent`]: the first CLI offered; with none offered the notice says so.
+    /// The CLI of the offer that [`StartAgent`] starts: the first offered until
+    /// [`NextOfferedAgent`] chooses another, drawn with `review-offer-chosen-<agent>` over
+    /// its control; none while nothing is offered. A new offer chooses its first again.
+    pub fn offer_chosen(&self) -> Option<AgentCli> {
+        let offered = self.offer_to_start();
+        let chosen = self.attaching.offer.as_ref()?.chosen;
+        offered.into_iter().nth(chosen)
+    }
+
+    /// [`NextOfferedAgent`]: the next CLI of the offer is the chosen one, after the last the
+    /// first; with none offered the notice says so.
+    pub(crate) fn next_offered_agent(
+        &mut self,
+        _: &NextOfferedAgent,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.acted(cx);
+        let offered = self.offer_to_start().len();
+        match &mut self.attaching.offer {
+            Some(offer) if offered > 0 => {
+                offer.chosen = (offer.chosen + 1) % offered;
+                cx.notify();
+            }
+            _ => self.say("No agent is offered to start: attach a review first", cx),
+        }
+    }
+
+    /// [`StartAgent`]: the CLI chosen of the offer; with none offered the notice says so.
     pub(crate) fn start_agent(&mut self, _: &StartAgent, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
-        match self.offer_to_start().first() {
-            Some(first) => {
-                let agent = first.agent.clone();
-                self.start(&agent, cx);
-            }
+        match self.offer_chosen() {
+            Some(chosen) => self.start(&chosen.agent, cx),
             None => self.say("No agent is offered to start: attach a review first", cx),
         }
     }

@@ -7,6 +7,7 @@ use gpui_kit::*;
 use yaar_link::{ReviewId, SessionId};
 
 use crate::draw::ROW_HEIGHT;
+use crate::tree::ListedFor;
 use crate::{ChangeShown, ReviewPane, TakeOffer, ToggleKeepSelection};
 
 /// What a turn end offered while the pane kept the selection.
@@ -88,16 +89,18 @@ impl ReviewPane {
             })
     }
 
-    /// Shows the change of an offer and the review it came with. A reviewer's action gives
-    /// the window, which lets it leave the comment box of the review it moves away from.
+    /// Shows the change of an offer and the review it came with, the change listed for that
+    /// review (`shared.rs`). A reviewer's action gives the window, which lets it leave the
+    /// comment box of the review it moves away from.
     fn show_offer(&mut self, offer: Offer, window: Option<&mut Window>, cx: &mut Context<Self>) {
-        if let Some(review) = offer.review {
+        if let Some(review) = offer.review.clone() {
             self.choose_review(review, window, cx);
         }
         let ChangeShown::Since { from, to } = offer.change else {
             return;
         };
-        self.select_since(from, to, cx);
+        let listed_for = offer.review.map_or(ListedFor::NoReview, ListedFor::Review);
+        self.select_since_for(from, to, listed_for, cx);
     }
 
     /// What [`TakeOffer`] does: shows what a turn end offered, and the review of its

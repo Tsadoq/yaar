@@ -893,6 +893,11 @@ impl Store {
                 }
             }
             drop(insert);
+            // Kept with none, a state is still one whose credits were kept.
+            keeping.execute(
+                "INSERT OR IGNORE INTO state_kept (workspace, state) VALUES (?1, ?2)",
+                params![workspace, state],
+            )?;
             Ok(keeping.commit()?)
         })
     }
@@ -934,6 +939,62 @@ impl Store {
                 }
             }
             Ok(credits)
+        })
+    }
+
+    /// Whether the credits of the recorded state `state` of `workspace` were kept with
+    /// [`Store::put_credits`], none among them: a state of a worktree with nothing
+    /// uncommitted is kept with no credit, and is told from a state nothing was kept with,
+    /// as one recorded at a send. Every call of `put_credits` keeps this mark in its own
+    /// transaction.
+    pub fn credits_were_kept(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+    ) -> Result<bool, StoreError> {
+        let (workspace, state) = (workspace.0.clone(), state.to_owned());
+        self.ask(move |connection| {
+            connection
+                .prepare("SELECT 1 FROM state_kept WHERE workspace = ?1 AND state = ?2")?
+                .exists([workspace, state])
+        })
+    }
+
+    /// Keeps that round `round` of `review` was sent in the turn `turn` of its session, in
+    /// place of what was kept before. Refused for a review or a round the Store does not
+    /// hold. Returns when it is on the drive.
+    pub fn set_round_turn(
+        &self,
+        review: &ReviewId,
+        round: u32,
+        turn: &str,
+    ) -> Result<(), StoreError> {
+        let (review, turn) = (review.0.clone(), turn.to_owned());
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE round SET turn = ?3 WHERE review = ?1 AND number = ?2",
+                params![review, round, turn],
+            )?;
+            if changed == 0 {
+                return refused(format!("review {review} has no round {round}"));
+            }
+            Ok(())
+        })
+    }
+
+    /// The turn each round of `review` was sent in, as [`Store::set_round_turn`] kept it, by
+    /// the number of the round, ordered by it; a round with none is left out. Empty for a
+    /// review the Store does not hold.
+    pub fn round_turns(&self, review: &ReviewId) -> Result<Vec<(u32, String)>, StoreError> {
+        let review = review.0.clone();
+        self.ask(move |connection| {
+            connection
+                .prepare(
+                    "SELECT number, turn FROM round
+                     WHERE review = ?1 AND turn IS NOT NULL ORDER BY number",
+                )?
+                .query_map([review], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect()
         })
     }
 

@@ -33,6 +33,14 @@
 //! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
 //! | `GetSettings` | `settings::get`, from the Store | none |
 //! | `SetSetting` | `settings::set`, into the Store | `SettingChanged` with the setting |
+//! | `ListClis` | `Agents::supported`, the Adapters' names and titles | none |
+//! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
+//! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
+//! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
+//!
+//! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
+//! question waits for an answer or its CLI's settings could not be changed: the question
+//! it shows (`Parts::consents`).
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -230,6 +238,14 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => Answerer::InOrder,
+        // The Adapters' names, which never change while the Keeper runs.
+        RequestKind::ListClis => Answerer::Here,
+        // git in the state store and the Store's credits of each state in the range: as a
+        // comparison of two versions.
+        RequestKind::CompareForReview => Answerer::Apart,
+        // A few small files of the CLIs' settings, read or written once, which a user's
+        // key waits for no longer than the drive takes.
+        RequestKind::ListConsents | RequestKind::AnswerConsent => Answerer::Here,
     }
 }
 
@@ -306,6 +322,13 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => false,
+        // No fact carries what they read: the CLIs never change, and a Window told of a
+        // turn's end or of a change of reviews asks again for what a review shows.
+        RequestKind::ListClis | RequestKind::CompareForReview => false,
+        // An answer leads to `ConsentsChanged`, and the list carries what that fact
+        // carries: read between two answers and sent after the fact of the second, it
+        // would be taken for the newer one.
+        RequestKind::ListConsents | RequestKind::AnswerConsent => true,
     }
 }
 
@@ -362,6 +385,12 @@ impl Parts {
         if let Ok(kept) = &self.kept {
             self.watching.window_gone(kept, window);
         }
+    }
+
+    /// How the Adapters that need the user's leave stand: what a Window is told at its
+    /// connect when one waits for an answer.
+    pub(crate) fn consents(&self) -> Vec<yaar_link::Consent> {
+        self.agents.consents()
     }
 
     /// How many programs of terminals run.
@@ -437,7 +466,7 @@ impl Parts {
                     },
                 }),
             Request::GetReviews { workspace } => {
-                get_reviews(workspaces, reviews, workspace).map(Reply::Reviews)
+                get_reviews(workspaces, reviews, &kept.store, workspace).map(Reply::Reviews)
             }
             Request::SaveDraft {
                 review,
@@ -555,6 +584,25 @@ impl Parts {
             Request::GetAttachment { review } => {
                 crate::reviewing::attachment(kept, &self.agents, &review)
             }
+            // The requests of slice 7: the CLIs to offer a launcher of, and what a review
+            // shows of a change with its credits.
+            Request::ListClis => Ok(Reply::Clis(self.agents.supported())),
+            Request::CompareForReview {
+                workspace,
+                review,
+                from,
+                to,
+            } => self
+                .agents
+                .compare_for_review(kept, &workspace, &review, &from, &to),
+            // The questions for leave of the Adapters that write into a CLI's settings.
+            Request::ListConsents => Ok(Reply::Consents(self.agents.consents())),
+            Request::AnswerConsent { agent, answer } => {
+                self.agents.answer_consent(&agent, answer).map(|consents| {
+                    facts.push(Fact::ConsentsChanged(consents.clone()));
+                    Reply::Consents(consents)
+                })
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -614,7 +662,7 @@ impl Parts {
             // The CLI's own command for bringing the session back, through the user's
             // shell as a launcher's command.
             Program::Resume { session } => {
-                let command = self.agents.resume_command(kept, session)?;
+                let command = self.agents.resume_command(session, &terminal)?;
                 Start::launcher(folder, size(at), &command)
             }
         };
@@ -1102,17 +1150,19 @@ fn reviews_changed(workspace: &WorkspaceId) -> Fact {
     }
 }
 
-/// The reviews of a workspace, with its files marked viewed when the worktree is there.
+/// The reviews of a workspace, with its files marked viewed when the worktree is there and
+/// each round with the turn it was sent in, which `store` keeps.
 fn get_reviews(
     workspaces: &Workspaces,
     reviews: &Reviews,
+    store: &Store,
     workspace: yaar_link::WorkspaceId,
 ) -> Result<yaar_link::WorkspaceReviews, Refusal> {
     let worktree = worktree_of(workspaces, &workspace)?;
     let view = reviews
         .of_workspace(&WorkspaceId::new(workspace.as_str()), worktree.as_deref())
         .map_err(engine_refusal)?;
-    Ok(workspace_reviews(workspace, view))
+    workspace_reviews(workspace, view, store)
 }
 
 /// Keeps one save of a draft. A text that changes a comment of the review is kept with no
@@ -1371,20 +1421,34 @@ fn content(version: Option<Vec<u8>>) -> yaar_link::Content {
     }
 }
 
-/// The reviews of a workspace, in the words of the Link.
+/// The reviews of a workspace, in the words of the Link; refused when `store` cannot say
+/// which turn a round was sent in.
 fn workspace_reviews(
     workspace: yaar_link::WorkspaceId,
     view: yaar_review_engine::WorkspaceView,
-) -> yaar_link::WorkspaceReviews {
-    yaar_link::WorkspaceReviews {
+    store: &Store,
+) -> Result<yaar_link::WorkspaceReviews, Refusal> {
+    let reviews = view
+        .reviews
+        .iter()
+        .map(|found| {
+            let turns = store
+                .round_turns(&yaar_store::ReviewId::new(found.id().as_str()))
+                .map_err(|e| engine_refusal(EngineError::Store(e)))?;
+            Ok(review(found, &turns))
+        })
+        .collect::<Result<_, Refusal>>()?;
+    Ok(yaar_link::WorkspaceReviews {
         workspace,
-        reviews: view.reviews.iter().map(review).collect(),
+        reviews,
         viewed: view.viewed,
-    }
+    })
 }
 
-/// One review, in the words of the Link.
-fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
+/// One review, in the words of the Link. `turns` is the turn each of its rounds was sent
+/// in, by the round's number, as the Store keeps it: a round with none, as a copy, has
+/// none.
+fn review(review: &yaar_review_engine::Review, turns: &[(u32, String)]) -> yaar_link::Review {
     use yaar_review_engine::{Attachment, Author, SentBy};
 
     yaar_link::Review {
@@ -1454,6 +1518,10 @@ fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
                     SentBy::Delivered => yaar_link::SentBy::Delivered,
                 },
                 edited: round.edited,
+                turn: turns
+                    .iter()
+                    .find(|(number, _)| *number == round.number)
+                    .map(|(_, turn)| yaar_link::TurnId::new(turn)),
             })
             .collect(),
     }

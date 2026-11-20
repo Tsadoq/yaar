@@ -1,23 +1,30 @@
-//! System tests of the rounds of a review with Claude Code, past the first: a second round
-//! that the agent answers while it rewrites a commented line, the offer made on attaching
-//! a review whose agent does not run, and everything killed as a restart of the machine
-//! would. The built Keeper, Dock and hook program and the tool server, and the stand-in
-//! agent started in a shell or a launcher of the app, read through the Link as a Window
-//! reads it and through the stand-in's own log.
+//! System tests of the rounds of a review, past the first: a second round that the agent
+//! answers while it rewrites a commented line, the offer made on attaching a review whose
+//! agent does not run, and everything killed as a restart of the machine would. The built
+//! Keeper, Dock, hook and reporting programs and the tool server, and the stand-in agent
+//! started in a shell or a launcher of the app, read through the Link as a Window reads it
+//! and through the stand-in's own log.
+//!
+//! Each row runs for both CLIs: its body is a function of a [`Dialect`], run as Claude Code
+//! by the test that carries the row's name and as pi by the one with `_as_pi` after it. A
+//! world as pi has pi installed before its Keeper starts and gives the user's yes after, so
+//! that the stand-in typed as `pi` finds the app's extension in the world's pi settings, as
+//! pi does.
 //!
 //! In every worktree here nobody commits: each test notes the commit checked out when it
 //! starts and finds it unchanged at its end.
 
 use std::path::PathBuf;
 
-use serde_json::Value;
 use yaar_link::{
     Anchor, Attachment, Author, ChangedFile, CommentId, DraftOn, Fact, FileStatus, HistoryEntry,
     Lines, Notice, Placed, Program, Review, ReviewId, SentBy, Session, SessionState, Side,
     TerminalId, TerminalSize, ThreadId, ThreadState, WorkspaceId,
 };
-use yaar_system_tests::standin::{Did, Script, Step};
-use yaar_system_tests::{Client, DEADLINE, Repo, World, descendants_of, is_alive, wait_until};
+use yaar_system_tests::standin::{Did, PI_SESSIONS, Script, Step};
+use yaar_system_tests::{
+    Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
+};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -160,30 +167,48 @@ fn is_turn_end(fact: &Fact) -> bool {
     matches!(fact, Fact::TurnEnded { .. })
 }
 
-/// What a `UserPromptSubmit` hook of the stand-in printed, one entry for each such hook it
-/// ran, in order.
-fn prompt_answers(log: &yaar_system_tests::standin::StandinLog) -> Vec<Vec<u8>> {
+/// What the stand-in of `dialect` was answered at each moment the user's message was taken
+/// (Claude Code's `UserPromptSubmit` hook, pi's `input`), one entry for each such moment it
+/// reported, in order.
+fn prompt_answers(dialect: Dialect, log: &yaar_system_tests::standin::StandinLog) -> Vec<Vec<u8>> {
     log.did
         .iter()
         .filter_map(|did| match did {
-            Did::Hook { event, answer, .. } if event == "UserPromptSubmit" => Some(answer.clone()),
+            Did::Hook { event, answer, .. } if event == dialect.message_event() => {
+                Some(answer.clone())
+            }
             _ => None,
         })
         .collect()
 }
 
-/// The text a hook's answer hands to the model with the user's message: empty for an
-/// answer that carries none.
-fn carried(answer: &[u8]) -> String {
+/// The text an answer of the Keeper to the user's message hands to the model with it: empty
+/// for an answer that carries none.
+fn carried(dialect: Dialect, answer: &[u8]) -> String {
     if answer.is_empty() {
         return String::new();
     }
-    let json: Value = serde_json::from_slice(answer)
-        .unwrap_or_else(|why| panic!("{why}: {:?}", String::from_utf8_lossy(answer)));
-    json["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .unwrap_or_else(|| panic!("no text in {json}"))
-        .to_owned()
+    dialect
+        .review_in(answer)
+        .unwrap_or_else(|| panic!("no text in {:?}", String::from_utf8_lossy(answer)))
+}
+
+/// Whether the stand-in of `dialect` reported the end of a tool after step `step` of its
+/// script began, and was answered.
+fn tool_done_after(
+    dialect: Dialect,
+    log: &yaar_system_tests::standin::StandinLog,
+    step: usize,
+) -> bool {
+    let mut began = false;
+    log.did.iter().any(|did| match did {
+        Did::Began { step: at, .. } if *at == step => {
+            began = true;
+            false
+        }
+        Did::Hook { event, .. } => began && event == dialect.tool_done_event(),
+        _ => false,
+    })
 }
 
 /// Waits until the stand-in whose log is `name` has ended its program.
@@ -199,13 +224,14 @@ fn wait_for_exit(world: &World, name: &str) {
     );
 }
 
-/// Types into `terminal` the start of the stand-in as `claude` with the script `script` as
-/// `name`'s own, and its log as `name`'s: the way a user types the CLI's name in a shell of
-/// the app.
+/// Types into `terminal` the start of the stand-in as `dialect`'s CLI with the script
+/// `script` as `name`'s own, and its log as `name`'s: the way a user types the CLI's name in
+/// a shell of the app.
 fn start_in(
     world: &World,
     client: &mut Client,
     terminal: &TerminalId,
+    dialect: Dialect,
     name: &str,
     script: &Script,
 ) {
@@ -214,9 +240,10 @@ fn start_in(
     client.type_line(
         terminal,
         &format!(
-            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' claude",
+            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' {}",
             script_file.display(),
-            log_file.display()
+            log_file.display(),
+            dialect.name()
         ),
     );
 }
@@ -262,10 +289,42 @@ fn assert_no_commit_was_made(client: &mut Client, workspace: &WorkspaceId) {
     );
 }
 
+/// What a stand-in of `dialect` is started with by the resume command of its CLI, as the
+/// Keeper's Adapter makes it for the session `cli_session`: Claude Code's `--resume <id>`,
+/// pi's `--session-dir <the folder of the session's file> --session <id>`, whose folder is
+/// where the stand-in as pi keeps its session files, under the home of the world.
+fn resume_arguments(world: &World, dialect: Dialect, cli_session: &str) -> Vec<String> {
+    match dialect {
+        Dialect::ClaudeCode => vec!["--resume".to_owned(), cli_session.to_owned()],
+        Dialect::Pi => vec![
+            "--session-dir".to_owned(),
+            world
+                .home()
+                .join(PI_SESSIONS)
+                .to_str()
+                .expect("a path of text")
+                .to_owned(),
+            "--session".to_owned(),
+            cli_session.to_owned(),
+        ],
+    }
+}
+
 // AGENT-15.
 #[test]
 fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id()
  {
+    everything_killed(Dialect::ClaudeCode);
+}
+
+// AGENT-15, as pi.
+#[test]
+fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id_as_pi()
+ {
+    everything_killed(Dialect::Pi);
+}
+
+fn everything_killed(dialect: Dialect) {
     // One turn that rewrites the line of the first comment, and no exit: the stand-in is
     // still there when everything is killed.
     let one_turn = Script(vec![
@@ -273,7 +332,7 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
         Step::Write(path("notes.txt"), "omega, wholly new\nbeta\n".into()),
         Step::End,
     ]);
-    let (mut world, _) = World::with_standin("default", &one_turn);
+    let (mut world, _) = World::with_standin_as(dialect, "default", &one_turn);
     let repo = repository_with(
         &world,
         "notes",
@@ -287,7 +346,7 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
     // A session, and a first round with its turn: a comment, attached, and a message that
     // carries it.
     let launcher = client
-        .open_launcher(&workspace, "claude", SIZE)
+        .open_launcher(&workspace, dialect.name(), SIZE)
         .expect("open the launcher");
     client.wait_for_prompt(&launcher, 0);
     let session = session_where(&mut client, &workspace, |s| s.state == SessionState::Idle);
@@ -390,8 +449,17 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
         .expect("open the resume launcher");
     client.wait_for_prompt(&resumed, 0);
     let log = world.agent_log("default");
-    assert_eq!(log.args, vec!["--resume".to_owned(), cli_session.clone()]);
+    assert_eq!(
+        log.args,
+        resume_arguments(&world, dialect, &cli_session),
+        "{log:?}"
+    );
     assert_eq!(log.session, cli_session);
+    if dialect == Dialect::Pi {
+        // It found the extension in pi's settings, as pi does after the yes given before
+        // the kill, which the restart kept: no other way gave it one (no `-e`, above).
+        assert_eq!(log.extensions, [world.pi_extension()], "{log:?}");
+    }
     // The same session runs again, with its review and the attachment, and no other
     // session came.
     let again = session_where(&mut client, &workspace, |s| {
@@ -405,13 +473,19 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
     // And the attachment goes with its next message.
     client.type_line(&resumed, "go on");
     assert!(
-        wait_until(DEADLINE, || !prompt_answers(&world.agent_log("default"))
-            .is_empty()),
+        wait_until(DEADLINE, || !prompt_answers(
+            dialect,
+            &world.agent_log("default")
+        )
+        .is_empty()),
         "{:?}",
         world.agent_log("default")
     );
-    let answers = prompt_answers(&world.agent_log("default"));
-    assert!(carried(&answers[0]).contains("And b?"), "{answers:?}");
+    let answers = prompt_answers(dialect, &world.agent_log("default"));
+    assert!(
+        carried(dialect, &answers[0]).contains("And b?"),
+        "{answers:?}"
+    );
     wait_for_exit(&world, "default");
 
     assert_eq!(checked_out(&repo), checked_out_at_the_start);
@@ -424,6 +498,17 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
 #[test]
 fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved()
  {
+    a_second_round(Dialect::ClaudeCode);
+}
+
+// AGENT-17, as pi.
+#[test]
+fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved_as_pi()
+ {
+    a_second_round(Dialect::Pi);
+}
+
+fn a_second_round(dialect: Dialect) {
     // The second turn holds until the test makes the file, rewrites line 2 of notes.txt and
     // holds again until the test has read the review, so that the reply and the turn's end
     // come after the read. The steps the test waits for, by their place in the script below.
@@ -431,7 +516,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
     const WRITE: usize = 5;
     const HOLD_AFTER_WRITE: usize = 6;
     // Replies name threads by their number in the review the agent was handed.
-    let (world, _) = World::with_standin("default", &Script(vec![]));
+    let (world, _) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let gate = world
         .agent_script("default", &Script(vec![]))
         .with_extension("go");
@@ -477,7 +562,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let launcher = client
-        .open_launcher(&workspace, "claude", SIZE)
+        .open_launcher(&workspace, dialect.name(), SIZE)
         .expect("open the launcher");
     let prompt = client.wait_for_prompt(&launcher, 0);
     let session = session_where(&mut client, &workspace, |s| s.state == SessionState::Idle);
@@ -527,27 +612,29 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
         "the round is shown as edited before the agent edited"
     );
     // The review it carried names both threads, the thread of round 1 not among them.
-    let answers = prompt_answers(&world.agent_log("default"));
+    let answers = prompt_answers(dialect, &world.agent_log("default"));
     assert_eq!(answers.len(), 2, "{answers:?}");
-    let handed = carried(&answers[1]);
+    let handed = carried(dialect, &answers[1]);
     assert!(handed.contains(&format!("## Thread {t1}")), "{handed}");
     assert!(handed.contains(&format!("## Thread {t2}")), "{handed}");
     assert!(!handed.contains(&format!("## Thread {first}")), "{handed}");
 
-    // The agent makes its edit and answers; the turn ends.
+    // The agent makes its edit and answers; the turn ends. The barrier is the report that
+    // the write ran, the dialect's `tool_done_event` after the step began, which the stand-in
+    // writes down once the Keeper answered it.
     std::fs::write(&gate, "").expect("open the gate");
     assert!(
-        wait_until(DEADLINE, || world
-            .agent_log("default")
-            .did
-            .iter()
-            .any(|did| matches!(did, Did::Done { step: WRITE, .. }))),
+        wait_until(DEADLINE, || tool_done_after(
+            dialect,
+            &world.agent_log("default"),
+            WRITE
+        )),
         "{:?}",
         world.agent_log("default")
     );
     // The stand-in holds right after its write, in the turn that has not ended: the Keeper
-    // took the write's report before the hook was answered, so one read finds the round
-    // edited, and a round marked only at the turn's end or later is not.
+    // took the write's report before it was answered, so one read finds the round edited,
+    // and a round marked only at the turn's end or later is not.
     assert!(
         wait_until(DEADLINE, || world.agent_log("default").did.iter().any(
             |did| matches!(
@@ -652,14 +739,27 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
 #[test]
 fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message()
  {
-    let (world, repo) = World::with_standin("default", &script(&["turn", "end", "exit"]));
+    accepting_the_offer(Dialect::ClaudeCode);
+}
+
+// AGENT-19, as pi.
+#[test]
+fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message_as_pi()
+ {
+    accepting_the_offer(Dialect::Pi);
+}
+
+fn accepting_the_offer(dialect: Dialect) {
+    // Both CLIs are installed whichever is accepted, so that a launcher that starts the other
+    // one is found by the assertions on the agent of the session, not by a wait that runs out.
+    let (world, repo) = World::with_standin_and_pi("default", &script(&["turn", "end", "exit"]));
     let checked_out_at_the_start = checked_out(&repo);
     assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
 
     // No agent ran here: the review is of no agent. Attaching a draft of it offers every
-    // supported CLI of this slice.
+    // supported CLI, Claude Code and pi.
     let reviews = client.reviews(&workspace).reviews;
     let [no_agent] = &reviews[..] else {
         panic!("not exactly one review: {reviews:?}");
@@ -681,7 +781,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
             .iter()
             .map(|cli| cli.agent.as_str())
             .collect::<Vec<_>>(),
-        ["claude"]
+        ["claude", "pi"]
     );
 
     // Accepting it starts the CLI in the workspace, and its session has the review.
@@ -689,7 +789,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
         .open_program(
             &workspace,
             Program::AgentFor {
-                agent: "claude".into(),
+                agent: dialect.name().into(),
                 review: review.clone(),
             },
             SIZE,
@@ -697,13 +797,18 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
         .expect("accept the offer");
     client.wait_for_prompt(&launcher, 0);
     let started = session_where(&mut client, &workspace, |s| s.state == SessionState::Idle);
+    assert_eq!(
+        started.agent,
+        dialect.name(),
+        "a launcher started the other CLI than the one accepted"
+    );
     assert_eq!(started.terminal, Some(launcher.clone()));
     assert_eq!(started.review, Some(review.clone()));
     assert_eq!(started.attached, Some(Attachment::Review));
     // Nothing went to it before its first message: the hook of the session's start was
     // answered before the stand-in printed its prompt, and it answered nothing.
     let log = world.agent_log("default");
-    assert!(prompt_answers(&log).is_empty(), "{log:?}");
+    assert!(prompt_answers(dialect, &log).is_empty(), "{log:?}");
     assert!(
         log.did.iter().all(|did| match did {
             Did::Hook { answer, .. } => answer.is_empty(),
@@ -715,13 +820,16 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     // Its first message carries the review, and the comment is sent.
     client.type_line(&launcher, "go");
     assert!(
-        wait_until(DEADLINE, || !prompt_answers(&world.agent_log("default"))
-            .is_empty()),
+        wait_until(DEADLINE, || !prompt_answers(
+            dialect,
+            &world.agent_log("default")
+        )
+        .is_empty()),
         "{:?}",
         world.agent_log("default")
     );
-    let answers = prompt_answers(&world.agent_log("default"));
-    let handed = carried(&answers[0]);
+    let answers = prompt_answers(dialect, &world.agent_log("default"));
+    let handed = carried(dialect, &answers[0]);
     assert!(handed.contains("Name it better."), "{handed}");
     assert!(
         handed.contains(&format!("## Thread {}", id(2, 1))),
@@ -746,6 +854,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
         &world,
         &mut client,
         &running_shell,
+        dialect,
         "running",
         &script(&["turn", "end", "exit"]),
     );
@@ -765,6 +874,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
             &world,
             &mut client,
             &shell,
+            dialect,
             name,
             &Script(vec![Step::Hold(gate.clone()), Step::Exit]),
         );
@@ -795,13 +905,13 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
             .iter()
             .map(|cli| cli.agent.as_str())
             .collect::<Vec<_>>(),
-        ["claude"]
+        [dialect.name()]
     );
     let second_launcher = client
         .open_program(
             &other,
             Program::AgentFor {
-                agent: "claude".into(),
+                agent: dialect.name().into(),
                 review: left.clone(),
             },
             SIZE,
@@ -811,6 +921,11 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     let launched = session_where(&mut client, &other, |s| {
         s.terminal.as_ref() == Some(&second_launcher)
     });
+    assert_eq!(
+        launched.agent,
+        dialect.name(),
+        "a launcher started the other CLI than the one accepted"
+    );
     assert_eq!(launched.review, Some(left.clone()));
     assert_eq!(launched.attached, Some(Attachment::Review));
     // The running session and the session that ended last keep their own reviews.
@@ -838,18 +953,24 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     // after the attach, carries nothing.
     client.type_line(&second_launcher, "go");
     assert!(
-        wait_until(DEADLINE, || !prompt_answers(&world.agent_log("default"))
-            .is_empty()),
+        wait_until(DEADLINE, || !prompt_answers(
+            dialect,
+            &world.agent_log("default")
+        )
+        .is_empty()),
         "{:?}",
         world.agent_log("default")
     );
-    let answers = prompt_answers(&world.agent_log("default"));
-    assert!(carried(&answers[0]).contains("Why x?"), "{answers:?}");
+    let answers = prompt_answers(dialect, &world.agent_log("default"));
+    assert!(
+        carried(dialect, &answers[0]).contains("Why x?"),
+        "{answers:?}"
+    );
     client.type_line(&running_shell, "hello");
     wait_for_exit(&world, "running");
-    let answers = prompt_answers(&world.agent_log("running"));
+    let answers = prompt_answers(dialect, &world.agent_log("running"));
     assert_eq!(answers.len(), 1, "{answers:?}");
-    assert_eq!(carried(&answers[0]), "");
+    assert_eq!(carried(dialect, &answers[0]), "");
     wait_for_exit(&world, "default");
     assert_eq!(checked_out(&repo), checked_out_at_the_start);
     assert_eq!(worktree_status(&repo), "");

@@ -29,8 +29,10 @@
 //! `reading.rs`, from the Store, the state stores and Workspaces, through `Kept`: it holds
 //! nothing of this side's thread. What a report waits for, and the app's answer to it, is
 //! worked out in `delivery.rs`: the review that rides with a message, the allows, the
-//! agent's replies.
+//! agent's replies. What the Adapters that write into a CLI's own settings only with the
+//! user's leave ask, and the user's answer, are handed on in `consents.rs`.
 
+mod consents;
 mod delivery;
 mod reading;
 
@@ -41,7 +43,6 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use yaar_adapter_claude::ClaudeCode;
 use yaar_agent::{
     Adapter, Asked, Asks, CliSession, Event, Phase, Report, Reported, ShellEntry, WriteTool,
 };
@@ -52,7 +53,7 @@ use yaar_link::{
 use yaar_store::{
     EndedBy, SessionId, SessionRecord, StepRecord, TurnEndRecord, TurnId, TurnRecord, WorkspaceId,
 };
-use yaar_switchboard::{Change, State, Switchboard};
+use yaar_switchboard::{Change, Resumable, State, Switchboard};
 
 use crate::watching::Watching;
 use crate::wiring::{Answered, Kept, Outcome, Parts};
@@ -96,9 +97,13 @@ struct Core {
     // Per session, whether the turn it has now began with a message of the user. Kept in
     // memory: a Keeper that starts has no turn running.
     turns_from_user: Mutex<HashMap<String, bool>>,
-    // Called from the one thread that works the queue.
+    // Called from the one thread that works the queue. Never held together with the
+    // Switchboard's lock, in either order.
     adapters: Mutex<Vec<Box<dyn Adapter>>>,
     switchboard: Mutex<Switchboard>,
+    // The sessions a terminal of the user's resume is open for, until that terminal ends.
+    // Held while the offers are made, so taken before the Adapters and the Switchboard.
+    resuming: Mutex<Vec<Hold>>,
     // The thread of each workspace that records the states of its turns and of its rounds,
     // begun at the first that is to be recorded there, and the channel it is given them on.
     recorders: Mutex<HashMap<WorkspaceId, Sender<ToRecord>>>,
@@ -109,6 +114,14 @@ struct Core {
     // never taken in the same moment.
     starts: Mutex<HashMap<WorkspaceId, Starts>>,
     this: Weak<Core>,
+}
+
+/// A session a resume terminal was opened for.
+struct Hold {
+    /// The app's id of the session.
+    session: String,
+    /// The terminal the resume runs in, whose end frees the session.
+    terminal: String,
 }
 
 /// The recordings of a workspace's turn ends and the turns that wait for them.
@@ -292,7 +305,7 @@ impl Agents {
         watching: Arc<Watching>,
         shared: Weak<Shared>,
     ) -> Agents {
-        let adapters: Vec<Box<dyn Adapter>> = vec![Box::new(ClaudeCode::new())];
+        let adapters: Vec<Box<dyn Adapter>> = crate::adapters(&options.home);
         let companions = options.companions.clone().unwrap_or_else(|| {
             std::env::current_exe()
                 .ok()
@@ -342,6 +355,7 @@ impl Agents {
             turns_from_user: Mutex::new(HashMap::new()),
             adapters: Mutex::new(adapters),
             switchboard: Mutex::new(switchboard),
+            resuming: Mutex::new(Vec::new()),
             recorders: Mutex::new(HashMap::new()),
             recorder_threads: Mutex::new(Vec::new()),
             starts: Mutex::new(HashMap::new()),
@@ -443,7 +457,8 @@ impl Agents {
     /// The Keeper opens `terminal` in `workspace`. Called before the program of the terminal
     /// starts, so that no report from it can come first: a report is followed only when its
     /// terminal is one the Keeper holds, and a session whose folder no worktree holds belongs
-    /// to the workspace of its terminal.
+    /// to the workspace of its terminal. A terminal that resumes a session has nothing more
+    /// to be told: [`Agents::resume_command`] bound its hold to the terminal's id.
     pub(crate) fn terminal_opened(
         &self,
         terminal: &TerminalId,
@@ -466,42 +481,45 @@ impl Agents {
         );
     }
 
-    /// What a terminal runs in the user's shell to bring back `session`, a session of the
-    /// Store that ran when its Keeper stopped and runs no more: its Adapter's
-    /// `Adapter::resume` with the CLI's own id of it. Refused with [`Refusal::Failed`] for
-    /// a session the Store does not hold, one that runs, and one of a CLI the Keeper has
-    /// no Adapter for.
+    /// What a terminal runs in the user's shell to bring back `session`: the `command` of
+    /// the session's offer in `yaar_switchboard::Switchboard::resumable`, the one place the
+    /// command is made, from the Adapter's `Adapter::resume` with the CLI's own id and the
+    /// CLI's own record of the session that the Keeper's start handed the Switchboard.
+    /// Refused with [`Refusal::Failed`] for a session that has no offer (the Switchboard
+    /// does not hold it, it runs, its CLI ended it, it reported since the Keeper started, or
+    /// no Adapter has its CLI) and for one a resume terminal is open for, until that
+    /// terminal ends or the session reports.
+    ///
+    /// The session is held for `terminal`, the one the caller made for the resume and is
+    /// about to open: a refusal leaves no hold, and the end of that terminal, told as ended
+    /// also when it cannot start, frees the session.
     pub(crate) fn resume_command(
         &self,
-        kept: &Kept,
         session: &yaar_link::SessionId,
+        terminal: &yaar_link::TerminalId,
     ) -> Result<String, Refusal> {
-        let id = SessionId::new(session.as_str());
-        let record = kept
-            .store
-            .session(&id)
-            .map_err(failed)?
+        let mut holds = lock(&self.core.resuming);
+        let offer = self
+            .core
+            .offers()
+            .into_iter()
+            .find(|offer| offer.session.0 == session.as_str())
             .ok_or_else(|| Refusal::Failed {
-                reason: format!("the app holds no session {session}"),
+                reason: format!(
+                    "session {session} is not one to bring back: the app holds none by that id, \
+                     it runs, or it ended by its CLI's word"
+                ),
             })?;
-        // Either part says it runs: the Store and the Switchboard are kept in step, and a
-        // session one of them still holds as running is not brought back a second time.
-        let runs = lock(&self.core.switchboard)
-            .session(&yaar_switchboard::SessionId(id.as_str().to_owned()))
-            .is_some_and(|known| known.state != State::NotRunning);
-        if record.running || runs {
+        if holds.iter().any(|hold| hold.session == session.as_str()) {
             return Err(Refusal::Failed {
-                reason: format!("session {session} runs: there is nothing to bring back"),
+                reason: format!("a terminal is bringing session {session} back already"),
             });
         }
-        let adapters = lock(&self.core.adapters);
-        let adapter = adapters
-            .iter()
-            .find(|adapter| adapter.name() == record.agent)
-            .ok_or_else(|| Refusal::Failed {
-                reason: format!("the app knows no agent CLI named {}", record.agent),
-            })?;
-        Ok(adapter.resume(&CliSession(record.cli_session)))
+        holds.push(Hold {
+            session: session.as_str().to_owned(),
+            terminal: terminal.as_str().to_owned(),
+        });
+        Ok(offer.command)
     }
 
     /// The instruction on how to answer each thread of the CLI named `agent`, its
@@ -749,6 +767,43 @@ impl Core {
         }
     }
 
+    /// The sessions the Keeper's stop cut off and nothing has reported since, each with the
+    /// command its Adapter makes for bringing it back: what a Window is offered and what a
+    /// resume runs, the one place the command is made.
+    ///
+    /// The Switchboard is asked with a command maker that only notes what it is given, and
+    /// let go; the Adapters are locked after, to make each command. The command maker the
+    /// Switchboard takes cannot borrow the Adapters, and holding the Switchboard's lock and
+    /// the Adapters' together would fix an order of the two that code of this side which
+    /// holds the Adapters while it reads the Switchboard would break.
+    fn offers(&self) -> Vec<Resumable> {
+        let names: Vec<&'static str> = self.described.iter().map(|d| d.name).collect();
+        let given = Arc::new(Mutex::new(HashMap::new()));
+        let noted = Arc::clone(&given);
+        let offers = lock(&self.switchboard).resumable(&move |agent, cli, record| {
+            names.contains(&agent).then(|| {
+                lock(&noted).insert((agent.to_owned(), cli.clone()), record.map(Path::to_owned));
+                String::new()
+            })
+        });
+        let given: HashMap<(String, CliSession), Option<PathBuf>> =
+            std::mem::take(&mut *lock(&given));
+        let adapters = lock(&self.adapters);
+        // Each offer finds what was noted for it by the session it is for: an agent's name
+        // and its CLI's id name one session. An offer with nothing noted, or whose Adapter
+        // is not held, is left out; the maker noted every offer the Switchboard gave and
+        // the names are those of the Adapters, so none is.
+        offers
+            .into_iter()
+            .filter_map(|mut offer| {
+                let record = given.get(&(offer.agent.clone(), offer.cli.clone()))?;
+                let adapter = adapters.iter().find(|a| a.name() == offer.agent)?;
+                offer.command = adapter.resume(&offer.cli, record.as_deref());
+                Some(offer)
+            })
+            .collect()
+    }
+
     /// The folder of the Adapter named `agent`.
     fn folder_of(&self, agent: &str) -> Option<&Path> {
         self.described
@@ -788,6 +843,8 @@ impl Core {
         // Held no more: what its CLI still reports is followed no further.
         lock(&self.terminals).remove(terminal.as_str());
         lock(&self.opened_for).remove(terminal.as_str());
+        // A resume that ran in it is over: the session may be brought back again.
+        lock(&self.resuming).retain(|hold| hold.terminal != terminal.as_str());
         let mut pids = Vec::new();
         for known in lock(&self.switchboard).sessions() {
             if known.state != State::NotRunning
@@ -871,6 +928,7 @@ impl Core {
                 continue;
             };
             let event = reported.event.clone();
+            let (cli, cli_record) = (reported.session.0.clone(), reported.cli_record.clone());
             let changes = lock(&self.switchboard).take(agent, reported, &mut random_id_text);
             let starting = Starting {
                 workspace: &workspace,
@@ -878,6 +936,10 @@ impl Core {
                 from_user,
             };
             self.apply(kept, changes, Some(starting), cause, told);
+            // After the changes: a session that starts is kept by them.
+            if let Some(record) = cli_record {
+                keep_cli_record(kept, agent, &cli, &record);
+            }
         }
     }
 
@@ -1276,9 +1338,14 @@ impl Core {
         });
     }
 
-    /// The sessions of one workspace as a Window is shown them: those that run and those
-    /// that ended and still hold a review, in the order they started. None for a
-    /// workspace where no session ever reported.
+    /// The sessions of one workspace as a Window is shown them: those that run, those that
+    /// ended and still hold a review, and those that can still be brought back, in the
+    /// order they started. None for a workspace where no session ever reported.
+    ///
+    /// A session listed only because it can be brought back (not running, holding no
+    /// review) does not decide the state the workspace shows: after a restart the new
+    /// session's state is shown, not "not running". It decides it when no other session of
+    /// the workspace is listed. A session that ended and holds a review counts always.
     fn workspace_agents(
         &self,
         kept: &Kept,
@@ -1289,8 +1356,11 @@ impl Core {
             return Ok(None);
         }
         let reviews = kept.store.reviews_of(workspace).map_err(failed)?;
+        // Before the Switchboard is held: the offers take the Adapters first.
+        let offers = self.offers();
         let board = lock(&self.switchboard);
         let mut shown = Vec::new();
+        let mut shown_if_alone = Vec::new();
         let mut sessions = Vec::new();
         for record in records {
             let known = board.session(&yaar_switchboard::SessionId(record.id.as_str().to_owned()));
@@ -1301,7 +1371,12 @@ impl Core {
                 .iter()
                 .find(|review| review.agent.as_deref() == Some(record.id.as_str()));
             let review = held.map(|review| ReviewId::new(review.id.as_str()));
-            if state == State::NotRunning && review.is_none() {
+            let offered = offers
+                .iter()
+                .any(|offer| offer.session.0 == record.id.as_str());
+            // A session still offered stays listed: the Window draws its resume control
+            // from the list, though another session has taken over its review.
+            if state == State::NotRunning && review.is_none() && !offered {
                 continue;
             }
             let title = self
@@ -1309,7 +1384,11 @@ impl Core {
                 .iter()
                 .find(|adapter| adapter.name == record.agent)
                 .map_or(record.agent.as_str(), |adapter| adapter.title);
-            shown.push(state);
+            if state == State::NotRunning && review.is_none() {
+                shown_if_alone.push(state);
+            } else {
+                shown.push(state);
+            }
             let turn = known.as_ref().and_then(|known| known.turn.clone());
             let turn_from_user = turn.is_some()
                 && lock(&self.turns_from_user)
@@ -1333,9 +1412,11 @@ impl Core {
                     .and_then(|review| review.attached.as_ref())
                     .map(attachment_of),
                 turn_from_user,
-                resumable: state == State::NotRunning
-                    && record.ended_by == Some(EndedBy::KeeperStopped),
+                resumable: offered,
             });
+        }
+        if shown.is_empty() {
+            shown = shown_if_alone;
         }
         Ok(Some(WorkspaceAgents {
             workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
@@ -1521,17 +1602,33 @@ fn newest_state(kept: &Kept, workspace: &WorkspaceId) -> Option<String> {
 }
 
 /// Tells the Switchboard of every session the Store holds, and marks those the Store holds
-/// as running ended by `KeeperStopped`: a Keeper that starts runs none.
+/// as running ended by `KeeperStopped`: a Keeper that starts runs none. Every session the
+/// Keeper's stop cut off, now or in a start before this one that nothing brought back, is
+/// offered to resume, with the CLI's own record of it the Store keeps.
 fn remember_and_cut_off(kept: &Kept, switchboard: &mut Switchboard) {
     match kept.store.workspaces() {
         Ok(workspaces) => {
             for workspace in workspaces {
                 for record in kept.store.sessions_of(&workspace.id).unwrap_or_default() {
-                    switchboard.remember(
-                        yaar_switchboard::SessionId(record.id.as_str().to_owned()),
-                        &record.agent,
-                        CliSession(record.cli_session),
-                    );
+                    let id = yaar_switchboard::SessionId(record.id.as_str().to_owned());
+                    if record.running || record.ended_by == Some(EndedBy::KeeperStopped) {
+                        let cli_record = kept.store.session_cli_record(&record.id).unwrap_or_else(
+                            |e| {
+                                eprintln!(
+                                    "yaar-keeper: the record of a session could not be read: {e}"
+                                );
+                                None
+                            },
+                        );
+                        switchboard.remember_resumable(
+                            id,
+                            &record.agent,
+                            CliSession(record.cli_session),
+                            cli_record,
+                        );
+                    } else {
+                        switchboard.remember(id, &record.agent, CliSession(record.cli_session));
+                    }
                 }
             }
         }
@@ -1544,6 +1641,25 @@ fn remember_and_cut_off(kept: &Kept, switchboard: &mut Switchboard) {
             }
         }
         Err(e) => eprintln!("yaar-keeper: the sessions could not be read: {e}"),
+    }
+}
+
+/// Keeps `record` as the CLI's own record of the session the CLI calls `cli`, when the
+/// Store holds another or none: the last one a session's reports named is the one its
+/// resume is given. A report that names none leaves what is kept.
+fn keep_cli_record(kept: &Kept, agent: &str, cli: &str, record: &Path) {
+    let session = match kept.store.session_of_cli(agent, cli) {
+        Ok(Some(session)) => session.id,
+        Ok(None) => return,
+        Err(e) => {
+            eprintln!("yaar-keeper: a session could not be read: {e}");
+            return;
+        }
+    };
+    match kept.store.session_cli_record(&session) {
+        Ok(held) if held.as_deref() == Some(record) => {}
+        Ok(_) => keep(kept.store.set_session_cli_record(&session, Some(record))),
+        Err(e) => eprintln!("yaar-keeper: the record of a session could not be read: {e}"),
     }
 }
 
@@ -1586,7 +1702,7 @@ fn session_of(change: &Change) -> yaar_switchboard::SessionId {
 fn entry(shell: ShellEntry) -> yaar_dock::Entry {
     match shell {
         ShellEntry::PathList { name, path } => yaar_dock::Entry::PathList { name, path },
-        ShellEntry::SearchFirst(folder) => yaar_dock::Entry::SearchFirst(folder),
+        ShellEntry::Variable { name, value } => yaar_dock::Entry::Variable { name, value },
     }
 }
 

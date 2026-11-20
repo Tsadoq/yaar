@@ -1,11 +1,12 @@
 # The checks that run on every change.
 #
 #   checks-linux    formatting, lints, tests, licences, dependencies planted to see them
-#                   refused, unused dependencies, layout rules, test plan
+#                   refused, unused dependencies, layout rules, test plan; Node for the
+#                   one test of pi's extension
 #   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
 #   install-linux   the install script, piped as a user would, on five releases
 #   macos           lints, tests, layout rules, test plan, release build for both
-#                   processors, the app
+#                   processors, the app; Node for the one test of pi's extension
 #
 # Linux runs on x86-64 and on arm64. No job needs a display.
 name: ci
@@ -58,6 +59,15 @@ jobs:
             libxkbcommon-x11-dev fonts-dejavu-core jq strace
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Node, for the one test that loads pi's extension, which is TypeScript and runs
+      # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
+      # the user's pi runs the extension.
+      - name: Node, for the test of pi's extension
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.11.1
+          package-manager-cache: false
 
       - name: Rust toolchain named in rust-toolchain.toml
         run: |
@@ -306,6 +316,15 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Node, for the one test that loads pi's extension, which is TypeScript and runs
+      # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
+      # the user's pi runs the extension.
+      - name: Node, for the test of pi's extension
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 24.11.1
+          package-manager-cache: false
 
       - name: Rust toolchain named in rust-toolchain.toml, plus the Intel target
         run: |

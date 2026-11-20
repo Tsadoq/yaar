@@ -18,6 +18,7 @@ use yaar_link::{
 };
 
 use crate::agents::{AgentList, TerminalList};
+use crate::consents::ConsentList;
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
 use crate::routes::Routes;
 use crate::settings::SettingList;
@@ -37,6 +38,8 @@ pub struct Models {
     pub terminals: Entity<TerminalList>,
     /// The settings the user set, the form of Flow of each workspace among them.
     pub settings: Entity<SettingList>,
+    /// The questions for leave of the Adapters that write into a CLI's own settings.
+    pub consents: Entity<ConsentList>,
     /// Where a pane puts the actions it takes from wherever the focus is in the window.
     pub routes: Routes,
 }
@@ -49,6 +52,7 @@ impl Models {
         let agents = cx.new(|cx| AgentList::new(link.clone(), cx));
         let terminals = cx.new(|cx| TerminalList::new(link.clone(), cx));
         let settings = cx.new(|cx| SettingList::new(link.clone(), cx));
+        let consents = cx.new(|cx| ConsentList::new(link.clone(), cx));
         Models {
             link,
             workspaces,
@@ -56,6 +60,7 @@ impl Models {
             agents,
             terminals,
             settings,
+            consents,
             routes: Routes::default(),
         }
     }

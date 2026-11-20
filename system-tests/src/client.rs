@@ -27,10 +27,11 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use yaar_link::{
-    AgentCli, ChangedFile, Changes, CommentId, CreditedFile, DraftOn, Fact, FileSides, FileStatus,
-    Hello, History, Message, Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId,
-    ReviewId, TerminalId, TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents,
-    WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
+    AgentCli, ChangedFile, Changes, CommentId, Consent, ConsentAnswer, CreditedFile, DraftOn, Fact,
+    FileSides, FileStatus, Hello, History, Message, Program, Refusal, Reply, Repository,
+    RepositoryId, Request, RequestId, ReviewId, TerminalId, TerminalInfo, TerminalSize, ThreadId,
+    Turn, TurnId, WorkspaceAgents, WorkspaceId, WorkspaceReviews, handshake, read_message,
+    write_message,
 };
 
 /// How long a call waits for the Keeper before it gives up.
@@ -596,6 +597,60 @@ impl Client {
         })? {
             Reply::Compared(files) => Ok(files),
             other => panic!("asked to compare two versions, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks what `review` shows of the change from `from` to the recorded state `to`, each
+    /// file with the sessions credited with it, as the review pane asks at a turn's end.
+    pub fn compare_for_review(
+        &mut self,
+        workspace: &WorkspaceId,
+        review: &ReviewId,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<CreditedFile>, Refusal> {
+        match self.request(Request::CompareForReview {
+            workspace: workspace.clone(),
+            review: review.clone(),
+            from: from.to_owned(),
+            to: to.to_owned(),
+        })? {
+            Reply::ComparedForReview(files) => Ok(files),
+            other => panic!("asked what a review shows of a change, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for the agent CLIs the Keeper has an Adapter for, in its order.
+    pub fn clis(&mut self) -> Result<Vec<AgentCli>, Refusal> {
+        match self.request(Request::ListClis)? {
+            Reply::Clis(clis) => Ok(clis),
+            other => panic!("asked for the agent CLIs, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for every Adapter that needs the user's leave to write into its CLI's own
+    /// settings, with its question and the answer kept, as the Window's controls do before
+    /// they answer.
+    pub fn consents(&mut self) -> Result<Vec<Consent>, Refusal> {
+        match self.request(Request::ListConsents)? {
+            Reply::Consents(consents) => Ok(consents),
+            other => panic!("asked for the questions for leave, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Answers the question for leave of the Adapter `agent`, as the user does with the
+    /// Window's controls, and gives every Adapter's consent as it then stands.
+    pub fn answer_consent(
+        &mut self,
+        agent: &str,
+        answer: ConsentAnswer,
+    ) -> Result<Vec<Consent>, Refusal> {
+        match self.request(Request::AnswerConsent {
+            agent: agent.to_owned(),
+            answer,
+        })? {
+            Reply::Consents(consents) => Ok(consents),
+            other => panic!("answered a question for leave, the Keeper answered {other:?}"),
         }
     }
 

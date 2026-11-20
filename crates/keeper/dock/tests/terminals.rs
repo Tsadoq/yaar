@@ -269,6 +269,27 @@ fn number_after(events: &[Event], prefix: &str) -> libc::pid_t {
         .expect("a number")
 }
 
+/// The number a script wrote to `path` with `echo $! > path`, once the file holds a whole
+/// line of it. A fact of the file system, not of the terminal: where a program shares its
+/// terminal with another, no line of the terminal can be told to be whole or to begin where
+/// the program began it.
+fn pid_in_file(path: &Path) -> libc::pid_t {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        if let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.strip_suffix('\n')?.parse().ok())
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no number in {path:?} within {DEADLINE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 #[test]
 fn three_terminals_run_at_once_each_with_its_own_program_and_their_output_stays_apart() {
     let scratch = Scratch::new();
@@ -997,14 +1018,24 @@ fn a_process_left_behind_that_keeps_writing_does_not_keep_the_end_from_being_tol
     // terminal from the job when the shell exits, so the end is not held up there and this
     // test cannot fail on it; where the job keeps the terminal, the Dock must read only a
     // bounded amount once it lets the terminal go.
+    //
+    // The shell and the job write to one terminal, and a terminal that is full holds a
+    // write up half way, so that a line of one can come in the middle of a line of the
+    // other. The job's number therefore goes to a file, not to the terminal.
+    let pid_file = scratch.path().join("job");
+    // A run that was killed can have left a file here with another run's number.
+    let _ = std::fs::remove_file(&pid_file);
     let script = scratch.script(
         "chatters",
-        "trap '' HUP\n(while :; do echo chatter; done) &\necho \"left $!\"\necho done\n",
+        &format!(
+            "trap '' HUP\n(while :; do echo chatter; done) &\necho $! > '{}'\n",
+            pid_file.display()
+        ),
     );
     let dock = Dock::new();
     let (_, watch) = open(&dock, scratch.start(script));
-    let events = watch.wait_for_line("done");
-    let left = Reap(number_after(&events, "left "));
+    // Until the guard exists, the Dock's own drop stops the job if the test fails.
+    let left = Reap(pid_in_file(&pid_file));
 
     let events = watch.wait_for_end();
     assert_eq!(events.last(), Some(&Event::Ended(Ending::Exited(0))));
@@ -1091,7 +1122,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
     }
     let scratch = Scratch::new();
     let plugin = scratch.path().join("plugin");
-    let first = scratch.path().join("pieces");
+    let reporter = scratch.path().join("pieces/yaar-pi-report");
     // What the user's own environment is, less what a system program drops by itself:
     // macOS removes the variables of the dynamic loader before it runs `env`.
     let users: BTreeMap<String, String> = std::env::vars()
@@ -1113,7 +1144,10 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
             name: "CLAUDE_CODE_PLUGIN_DIRS".into(),
             path: plugin.clone(),
         },
-        Entry::SearchFirst(first.clone()),
+        Entry::Variable {
+            name: "YAAR_PI_REPORT".into(),
+            value: reporter.clone().into_os_string(),
+        },
     ]);
     let (_, watch) = open(&dock, start);
     let events = watch.wait_for_end();
@@ -1135,7 +1169,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
             "CLAUDE_CODE_PLUGIN_DIRS",
             format!("/user/own:{}", plugin.display()),
         ),
-        ("PATH", format!("{}:/usr/bin:/bin", first.display())),
+        ("YAAR_PI_REPORT", reporter.display().to_string()),
         ("YAAR_SOCKET", "/run/yaar/keeper.sock".to_owned()),
         (
             "YAAR_TERMINAL",

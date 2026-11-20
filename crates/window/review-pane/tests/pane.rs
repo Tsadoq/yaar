@@ -729,8 +729,8 @@ fn effect_of(keystroke: &str) -> Effect {
         // And no turn offered anything, and no other session has a review.
         "i" | "d d" | "m" | "shift-m" | "tab" | "shift-o" | "shift-a" => Effect::Notice,
         // None moved to code that changed, no round has a state, and no agent is offered to
-        // start.
-        "w" | "shift-s" | "shift-n" => Effect::Notice,
+        // start or to choose.
+        "w" | "shift-s" | "shift-n" | "ctrl-n" => Effect::Notice,
         // The reviewer is on a line with an open thread and a resolved one: each key acts
         // on the one it applies to.
         "t" => Effect::Sends(RequestKind::AttachReview),

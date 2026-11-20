@@ -2,8 +2,9 @@
 //! plugin, and the stand-in agent started in a shell or a launcher of the app, read through
 //! the Link as a Window reads it and through the stand-in's own log.
 //!
-//! The stand-in runs as Claude Code. Its terminal is the app's, so what a test types
-//! reaches it as keys, and what it prints is what the Dock keeps.
+//! The stand-in runs as Claude Code, and, in the second function of each row that holds for
+//! both CLIs, as pi, through the same body with the same assertions. Its terminal is the app's,
+//! so what a test types reaches it as keys, and what it prints is what the Dock keeps.
 
 use std::collections::HashMap;
 use std::fs;
@@ -16,7 +17,9 @@ use yaar_link::{
     WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, INTERRUPT_MARK, Script};
-use yaar_system_tests::{Client, DEADLINE, Repo, World, descendants_of, is_alive, wait_until};
+use yaar_system_tests::{
+    Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
+};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -51,6 +54,55 @@ fn repository_with(world: &World, name: &str, files: &[(&str, &str)]) -> Repo {
     }
     repo.commit("Add the files of the test");
     repo
+}
+
+/// What a world of a test has of pi.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PiHere {
+    /// Not installed: the Keeper asks nothing of it and writes nothing into its settings.
+    Absent,
+    /// Installed and not answered: pi's settings list nothing of the app's.
+    Asked,
+    /// Installed, and the user said yes: the settings list the extension the Keeper wrote.
+    Allowed,
+}
+
+/// A world as [`World::with_standin`] makes one, with pi as `pi` has it: the question the
+/// Keeper asks of pi's settings is put and, for [`PiHere::Allowed`], answered yes after the
+/// Keeper started and before any pi does, as the user's yes would.
+fn world_with(script: &Script, pi: PiHere) -> (World, Repo) {
+    let mut world = World::new();
+    world.agents_on_path();
+    world.agent_script("default", script);
+    let repo = world.repository("app");
+    repo.git(&["config", "user.name", "A Test"]);
+    repo.git(&["config", "user.email", "test@example.invalid"]);
+    if pi != PiHere::Absent {
+        world.install_pi();
+    }
+    world.start_keeper();
+    if pi == PiHere::Allowed {
+        world.allow_pi_extension();
+    }
+    (world, repo)
+}
+
+/// The world of a test whose stand-in speaks as `dialect`: pi, for the dialect that is pi,
+/// is allowed to load the app's extension.
+fn world_for(dialect: Dialect, script: &Script) -> (World, Repo) {
+    let pi = match dialect {
+        Dialect::ClaudeCode => PiHere::Absent,
+        Dialect::Pi => PiHere::Allowed,
+    };
+    world_with(script, pi)
+}
+
+/// What the Keeper calls the sessions of `dialect`, before their number.
+fn title_of(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::ClaudeCode => "Claude Code",
+        Dialect::Pi => "pi",
+    }
 }
 
 /// A stand-in the test started in a shell, with the script and log of its own.
@@ -203,6 +255,17 @@ fn bytes_of(file: &Path) -> Vec<u8> {
 #[test]
 fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded()
  {
+    a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen(Dialect::ClaudeCode);
+}
+
+// AGENT-01, as pi.
+#[test]
+fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded_as_pi()
+ {
+    a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen(Dialect::Pi);
+}
+
+fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen(dialect: Dialect) {
     let turn = script(&[
         "turn",
         "read notes.txt",
@@ -213,13 +276,13 @@ fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then
         "turn",
         "exit",
     ]);
-    let (world, _) = World::with_standin("default", &turn);
+    let (world, _) = world_for(dialect, &turn);
     // The repository of the test, with the file the agent reads and edits.
     let repo = repository_with(&world, "notes", &[("notes.txt", "alpha\n")]);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
-    client.type_line(&terminal, "claude");
+    client.type_line(&terminal, dialect.name());
     let prompt = client.wait_for_prompt(&terminal, 0);
     let branch = repo.git(&["rev-parse", "--abbrev-ref", "HEAD"]);
     let head = repo.git(&["rev-parse", "HEAD"]);
@@ -339,7 +402,25 @@ fn a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then
 #[test]
 fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made()
  {
-    let (world, _) = World::with_standin("default", &script(&["turn", "exit"]));
+    edits_of_programs_the_app_does_not_follow_are_no_session(Dialect::ClaudeCode);
+}
+
+// AGENT-04, as pi.
+#[test]
+fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made_as_pi()
+ {
+    edits_of_programs_the_app_does_not_follow_are_no_session(Dialect::Pi);
+}
+
+fn edits_of_programs_the_app_does_not_follow_are_no_session(dialect: Dialect) {
+    // As pi, the CLI started around the app's pieces is pi whose settings list nothing of
+    // the app's: pi is installed and the user has not said yes. The yes comes once it is
+    // over, so that the supported CLI that is heard at the end loads the extension.
+    let pi = match dialect {
+        Dialect::ClaudeCode => PiHere::Absent,
+        Dialect::Pi => PiHere::Asked,
+    };
+    let (world, _) = world_with(&script(&["turn", "exit"]), pi);
     let repo = repository_with(&world, "edited", &[("a.txt", "a\n"), ("b.txt", "b\n")]);
     let elsewhere = repository_with(&world, "elsewhere", &[("x.txt", "x\n")]);
     let mut client = world.client();
@@ -374,8 +455,11 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
         &mut client,
         &second,
         "around",
-        "claude",
-        "STANDIN_IGNORE_PIECES=1",
+        dialect.name(),
+        match dialect {
+            Dialect::ClaudeCode => "STANDIN_IGNORE_PIECES=1",
+            Dialect::Pi => "",
+        },
         &script(&["turn", "edit b.txt y", "end", "exit"]),
     );
     client.wait_for_prompt(&second, 0);
@@ -390,6 +474,14 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
             .get(after..)
             .is_some_and(|new| new.windows(NO_PROGRESS.len()).any(|w| w == NO_PROGRESS))
     });
+    if dialect == Dialect::Pi {
+        // It found no extension to load, which is why it reported nothing, and the user's
+        // yes is still to come: the settings list nothing of the app's.
+        let log = around.log(&world);
+        assert_eq!(log.extensions, Vec::<PathBuf>::new(), "{log:?}");
+        assert!(!world.pi_settings().exists());
+        world.allow_pi_extension();
+    }
     // Then a supported CLI starts in another workspace and is heard: the Keeper takes its
     // report after every report and mark that came before it.
     let third = client.open_terminal(&other, SIZE).expect("a terminal");
@@ -398,7 +490,7 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
         &mut client,
         &third,
         "heard",
-        "claude",
+        dialect.name(),
         "",
         &script(&["turn", "exit"]),
     );
@@ -471,8 +563,21 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
 #[test]
 fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left()
  {
+    sessions_of_a_cli_take_over_the_review_of_no_agent_in_turn(Dialect::ClaudeCode);
+}
+
+// AGENT-09, as pi, with Claude Code as the other agent.
+#[test]
+fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left_as_pi()
+ {
+    sessions_of_a_cli_take_over_the_review_of_no_agent_in_turn(Dialect::Pi);
+}
+
+fn sessions_of_a_cli_take_over_the_review_of_no_agent_in_turn(dialect: Dialect) {
+    // The other agent's session comes in the last step, so that a world holds both CLIs:
+    // pi is installed and its yes is given, whichever is `dialect`.
     // The launcher's stand-in follows the default script: one turn, then it ends.
-    let (world, repo) = World::with_standin("default", &script(&["turn", "end", "exit"]));
+    let (world, repo) = world_with(&script(&["turn", "end", "exit"]), PiHere::Allowed);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let before = client.reviews(&workspace);
@@ -484,7 +589,7 @@ fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session
 
     // From the launcher.
     let launcher = client
-        .open_launcher(&workspace, "claude", SIZE)
+        .open_launcher(&workspace, dialect.name(), SIZE)
         .expect("open the launcher");
     client.wait_for_prompt(&launcher, 0);
     let from_launcher = client.wait_for_agents(&workspace, DEADLINE, |agents| {
@@ -523,7 +628,7 @@ fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session
         &mut client,
         &shell,
         "typed",
-        "claude",
+        dialect.name(),
         "",
         &script(&["turn", "end", "exit"]),
     );
@@ -544,9 +649,9 @@ fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session
     // The same session either way: its CLI, its own terminal, idle, a review.
     assert_ne!(second.id, launched.id);
     assert_eq!(second.agent, launched.agent);
-    assert_eq!(second.agent, "claude");
-    assert_eq!(launched.title, "Claude Code 1");
-    assert_eq!(second.title, "Claude Code 2");
+    assert_eq!(second.agent, dialect.name());
+    assert_eq!(launched.title, format!("{} 1", title_of(dialect)));
+    assert_eq!(second.title, format!("{} 2", title_of(dialect)));
     assert_eq!(launched.terminal, Some(launcher.clone()));
     assert_eq!(second.terminal, Some(shell.clone()));
     assert_eq!(launched.state, SessionState::Idle);
@@ -571,10 +676,65 @@ fn the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session
 
     client.type_line(&shell, "bye");
     typed.wait_for_exit(&world);
+    // The second session is over in the Keeper's books too, with the review it took over
+    // still its own: what a session of the other agent finds is a review left open.
+    client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.id == second.id && s.state == SessionState::NotRunning)
+    });
+
+    // A session of the other agent does not take it over: it starts with a review of its
+    // own, and the one the session of this agent left stays where it was.
+    let other = dialect.other();
+    let other_shell = client.open_terminal(&workspace, SIZE).expect("a terminal");
+    let started = start_in(
+        &world,
+        &mut client,
+        &other_shell,
+        "other",
+        other.name(),
+        "",
+        &script(&["turn", "end", "exit"]),
+    );
+    client.wait_for_prompt(&other_shell, 0);
+    let with_other = client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.agent == other.name() && s.state == SessionState::Idle)
+    });
+    let theirs = with_other
+        .sessions
+        .iter()
+        .find(|s| s.agent == other.name())
+        .expect("the other agent's session")
+        .clone();
+    assert_eq!(theirs.title, format!("{} 1", title_of(other)));
+    let their_review = theirs.review.clone().expect("a review of its own");
+    assert_ne!(their_review, review);
+    let reviews = client.reviews(&workspace).reviews;
+    assert_eq!(reviews.len(), 2, "{reviews:?}");
+    let held = reviews.iter().find(|r| r.id == review).expect("the review");
+    assert_eq!(held.agent, Some(second.id.clone()), "{reviews:?}");
+    let own = reviews
+        .iter()
+        .find(|r| r.id == their_review)
+        .expect("its review");
+    assert_eq!(own.agent, Some(theirs.id.clone()), "{reviews:?}");
+    let later = client.agents();
+    let all = later.iter().find(|a| a.workspace == workspace).unwrap();
+    let held_by = |id: &yaar_link::SessionId| all.sessions.iter().find(|s| s.id == *id).unwrap();
+    assert_eq!(held_by(&second.id).review, Some(review.clone()), "{all:?}");
+
+    client.type_line(&other_shell, "bye");
+    started.wait_for_exit(&world);
     end(world, client);
 }
 
-// AGENT-16.
+// AGENT-16. Claude Code only: pi asks no permission, and its stand-in refuses a script that
+// holds an `ask`, so this row has no run as pi.
 #[test]
 fn an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writes_nothing_to_its_terminal_and_the_keys_of_the_answer_turn_it_off()
  {
@@ -649,13 +809,27 @@ fn an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writ
 #[test]
 fn esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app()
  {
-    let held = script(&["turn", "hold never", "end"]);
-    let (world, repo) = World::with_standin("default", &held);
+    esc_during_a_turn_ends_the_turn_in_the_app(Dialect::ClaudeCode);
+}
+
+// LISTEN-03, as pi: the stand-in reports the run aborted, as pi's extension does, and
+// prints no mark.
+#[test]
+fn esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app_as_pi()
+ {
+    esc_during_a_turn_ends_the_turn_in_the_app(Dialect::Pi);
+}
+
+fn esc_during_a_turn_ends_the_turn_in_the_app(dialect: Dialect) {
+    // The `turn` after the interrupted one prints the stand-in's prompt, which is the
+    // barrier: everything the stand-in did because of the Esc came before it.
+    let held = script(&["turn", "hold never", "end", "turn"]);
+    let (world, repo) = world_for(dialect, &held);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
-    client.type_line(&terminal, "claude");
-    client.wait_for_prompt(&terminal, 0);
+    client.type_line(&terminal, dialect.name());
+    let prompt = client.wait_for_prompt(&terminal, 0);
     client.type_line(&terminal, "work");
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
         agents.shown == Some(SessionState::Works)
@@ -665,12 +839,15 @@ fn esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_th
     });
 
     client.type_into(&terminal, b"\x1b");
-    // The mark Claude Code prints is in the terminal's output.
-    client.wait_for_output(&terminal, DEADLINE, |output| {
+    let has_mark = |output: &[u8]| {
         output
             .windows(INTERRUPT_MARK.len())
             .any(|window| window == INTERRUPT_MARK)
-    });
+    };
+    if dialect == Dialect::ClaudeCode {
+        // The mark Claude Code prints is in the terminal's output.
+        client.wait_for_output(&terminal, DEADLINE, has_mark);
+    }
     // The turn ends in the app.
     let seen = seen_until(&mut client, is_turn_end);
     assert!(
@@ -686,20 +863,25 @@ fn esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_th
         Some(TurnEnd::Interrupted)
     );
 
-    // The stand-in reported nothing after the interrupt: it ran no hook, and its script is
-    // over, which is the barrier for what it might still have done.
+    // The stand-in is at the prompt of its next turn: all it did for the Esc is behind us.
+    client.wait_for_prompt(&terminal, prompt);
+    let output = client.wait_for_output(&terminal, DEADLINE, |_| true);
+    // What the CLI prints for an interrupt: Claude Code's mark, and none from pi, which
+    // reports its interrupt itself.
+    assert_eq!(has_mark(&output), dialect == Dialect::ClaudeCode);
+    // Nor is it on the screen the terminal holds.
+    let screen = client.screen(&terminal, SIZE);
+    assert_eq!(
+        screen.iter().any(|line| line.contains("Interrupted")),
+        dialect == Dialect::ClaudeCode,
+        "{screen:?}"
+    );
+
+    // The stand-in reported nothing after the interrupt: it ran no hook before the prompt
+    // of its next turn.
     let started = Started {
         name: "default".into(),
     };
-    assert!(
-        wait_until(DEADLINE, || started
-            .log(&world)
-            .did
-            .iter()
-            .any(|did| matches!(did, Did::ScriptDone { .. }))),
-        "{:?}",
-        started.log(&world)
-    );
     let did = started.log(&world).did;
     let at = did
         .iter()
@@ -709,20 +891,70 @@ fn esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_th
         did[at..].iter().all(|did| !matches!(did, Did::Hook { .. })),
         "{did:?}"
     );
+    // As pi it reported the interrupt itself, just before: the run aborted, and no other
+    // end of the turn.
+    let moments: Vec<_> = did[..at]
+        .iter()
+        .filter_map(|did| match did {
+            Did::Hook { event, .. } => Some(event.as_str()),
+            _ => None,
+        })
+        .collect();
+    let ends = moments
+        .iter()
+        .filter(|event| **event == dialect.turn_end_event())
+        .count();
+    assert_eq!(
+        ends,
+        usize::from(dialect == Dialect::Pi),
+        "reported before the interrupt: {moments:?}"
+    );
     end(world, client);
 }
 
 // LISTEN-07.
 #[test]
 fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives() {
-    let idle = Script(vec![]);
-    let (world, repo) = World::with_standin("default", &idle);
+    a_killed_agent_shows_as_not_running(Dialect::ClaudeCode);
+}
+
+// LISTEN-07, as pi.
+#[test]
+fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives_as_pi() {
+    a_killed_agent_shows_as_not_running(Dialect::Pi);
+}
+
+fn a_killed_agent_shows_as_not_running(dialect: Dialect) {
+    let (world, repo) = world_for(dialect, &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
-    client.type_line(&terminal, "claude");
+    let bystander_terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
+    let doomed = start_in(
+        &world,
+        &mut client,
+        &terminal,
+        "doomed",
+        dialect.name(),
+        "",
+        &script(&["turn"]),
+    );
+    client.wait_for_prompt(&terminal, 0);
+    let bystander = start_in(
+        &world,
+        &mut client,
+        &bystander_terminal,
+        "bystander",
+        dialect.name(),
+        "",
+        &script(&["turn"]),
+    );
+    client.wait_for_prompt(&bystander_terminal, 0);
     let seen = seen_until(&mut client, |fact| {
-        shows(fact, &workspace, SessionState::Idle)
+        matches!(fact, Fact::AgentsChanged(agents)
+            if agents.workspace == workspace
+                && agents.sessions.len() == 2
+                && agents.sessions.iter().all(|s| s.state == SessionState::Idle))
     });
     assert!(
         seen.iter().all(|fact| !matches!(fact,
@@ -730,20 +962,54 @@ fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_live
                 if agents.sessions.iter().any(|s| s.state == SessionState::NotRunning))),
         "{seen:?}"
     );
+    let Some(Fact::AgentsChanged(agents)) = seen.last() else {
+        panic!("the wait ended on no change of the agents: {seen:?}");
+    };
+    let session_in = |terminal: &TerminalId| {
+        agents
+            .sessions
+            .iter()
+            .find(|s| s.terminal.as_ref() == Some(terminal))
+            .expect("a session in the terminal")
+            .id
+            .clone()
+    };
+    let (doomed_session, other_session) = (session_in(&terminal), session_in(&bystander_terminal));
+    let not_running = |agents: &WorkspaceAgents, session: &yaar_link::SessionId| {
+        agents.workspace == workspace
+            && agents
+                .sessions
+                .iter()
+                .any(|s| s.id == *session && s.state == SessionState::NotRunning)
+    };
+
+    // The Keeper finds a process gone in a pass over every process it follows, so a
+    // session found gone in the pass that finds the bystander's gone is one whose own
+    // process the Keeper takes for gone while it lives. The bystander is killed first, and
+    // that pass is the barrier before the session under test is killed: until then it was
+    // not found gone, and what ends it afterwards is the kill.
+    kill(bystander.log(&world).pid);
+    let seen = seen_until(
+        &mut client,
+        |fact| matches!(fact, Fact::AgentsChanged(agents) if not_running(agents, &other_session)),
+    );
+    assert!(
+        seen.iter().all(|fact| !matches!(fact,
+            Fact::AgentsChanged(agents) if not_running(agents, &doomed_session))),
+        "the session was found gone before it was killed: {seen:?}"
+    );
 
     // Killed, with no goodbye.
-    let pid = Started {
-        name: "default".into(),
-    }
-    .log(&world)
-    .pid;
-    assert_ne!(pid, 0);
-    // SAFETY: a signal to a process of this test.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    kill(doomed.log(&world).pid);
     let gone = client.wait_for_agents(&workspace, DEADLINE, |agents| {
-        agents.shown == Some(SessionState::NotRunning)
+        not_running(agents, &doomed_session)
     });
-    assert_eq!(only_session(&gone).state, SessionState::NotRunning);
+    assert!(
+        gone.sessions
+            .iter()
+            .any(|s| s.id == doomed_session && s.state == SessionState::NotRunning),
+        "{gone:?}"
+    );
     // The shell it ran in is still there: the end came from the process, not the terminal.
     let terminals = client.terminals();
     assert!(
@@ -753,26 +1019,52 @@ fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_live
     end(world, client);
 }
 
+/// Kills the process `pid` of a stand-in with no goodbye.
+fn kill(pid: u32) {
+    assert_ne!(pid, 0);
+    // SAFETY: a signal to a process of this test.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+}
+
 // Not a row: the process the Keeper takes for an agent's, which it looks at every little
 // while for as long as the agent works.
 #[test]
 fn an_agent_that_works_is_never_shown_as_not_running_while_the_keeper_finds_another_agents_process_gone()
  {
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    a_working_agent_is_not_found_gone_with_another(Dialect::ClaudeCode);
+}
+
+// Not a row, as pi.
+#[test]
+fn an_agent_that_works_is_never_shown_as_not_running_while_the_keeper_finds_another_agents_process_gone_as_pi()
+ {
+    a_working_agent_is_not_found_gone_with_another(Dialect::Pi);
+}
+
+fn a_working_agent_is_not_found_gone_with_another(dialect: Dialect) {
+    let (world, repo) = world_for(dialect, &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let one = client.open_terminal(&workspace, SIZE).expect("a terminal");
     let two = client.open_terminal(&workspace, SIZE).expect("a terminal");
     // The first holds its turn open until the test makes the file beside the repository.
     let holding = script(&["turn", "hold ../go", "end", "turn"]);
-    start_in(&world, &mut client, &one, "one", "claude", "", &holding);
+    start_in(
+        &world,
+        &mut client,
+        &one,
+        "one",
+        dialect.name(),
+        "",
+        &holding,
+    );
     client.wait_for_prompt(&one, 0);
     let idle = start_in(
         &world,
         &mut client,
         &two,
         "two",
-        "claude",
+        dialect.name(),
         "",
         &script(&["turn"]),
     );
@@ -805,10 +1097,7 @@ fn an_agent_that_works_is_never_shown_as_not_running_while_the_keeper_finds_anot
     // process it follows, and that pass looks at the working agent's as it looks at this
     // one's, so the fact that this session is not running is the fact that the pass was
     // made: no wait for a time to pass stands in its place.
-    let pid = idle.log(&world).pid;
-    assert_ne!(pid, 0);
-    // SAFETY: a signal to a process of this test.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    kill(idle.log(&world).pid);
     let not_running = |agents: &WorkspaceAgents, session: &yaar_link::SessionId| {
         agents.workspace == workspace
             && agents
@@ -847,15 +1136,25 @@ fn an_agent_that_works_is_never_shown_as_not_running_while_the_keeper_finds_anot
 // AGENT-20.
 #[test]
 fn two_sessions_in_one_worktree_each_have_a_review() {
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    two_sessions_in_one_worktree_each_have_a_review_of(Dialect::ClaudeCode);
+}
+
+// AGENT-20, as pi.
+#[test]
+fn two_sessions_in_one_worktree_each_have_a_review_as_pi() {
+    two_sessions_in_one_worktree_each_have_a_review_of(Dialect::Pi);
+}
+
+fn two_sessions_in_one_worktree_each_have_a_review_of(dialect: Dialect) {
+    let (world, repo) = world_for(dialect, &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let one = client.open_terminal(&workspace, SIZE).expect("a terminal");
     let two = client.open_terminal(&workspace, SIZE).expect("a terminal");
     let turn = script(&["turn", "end", "exit"]);
-    let first = start_in(&world, &mut client, &one, "one", "claude", "", &turn);
+    let first = start_in(&world, &mut client, &one, "one", dialect.name(), "", &turn);
     client.wait_for_prompt(&one, 0);
-    let second = start_in(&world, &mut client, &two, "two", "claude", "", &turn);
+    let second = start_in(&world, &mut client, &two, "two", dialect.name(), "", &turn);
     client.wait_for_prompt(&two, 0);
 
     let both = client.wait_for_agents(&workspace, DEADLINE, |agents| {
@@ -932,10 +1231,17 @@ fn two_sessions_in_one_worktree_each_have_a_review() {
             })
             .collect();
         let events: Vec<_> = hooks.iter().map(|(event, ..)| event.as_str()).collect();
-        assert_eq!(
-            events,
-            ["SessionStart", "UserPromptSubmit", "Stop", "SessionEnd"]
-        );
+        // The moments the dialect names, in order, around the two the stand-in's CLI
+        // reports on its own: the start of the session, and for pi the start of the run
+        // after the message.
+        let (start, run) = match dialect {
+            Dialect::ClaudeCode => ("SessionStart", None),
+            Dialect::Pi => ("session_start", Some("agent_start")),
+        };
+        let mut expected = vec![start, dialect.message_event()];
+        expected.extend(run);
+        expected.extend([dialect.turn_end_event(), dialect.session_end_event()]);
+        assert_eq!(events, expected);
         assert!(
             hooks
                 .iter()
@@ -994,6 +1300,17 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         in_shell.get("YAAR_TERMINAL"),
         Some(&terminal.as_str().to_owned())
     );
+    // pi's extension, which pi loads from its own settings, reports through the program
+    // this names.
+    let reporter = in_shell
+        .get("YAAR_PI_REPORT")
+        .expect("pi's reporting program");
+    assert!(Path::new(reporter).is_absolute(), "{reporter}");
+    assert_eq!(
+        Path::new(reporter).file_name(),
+        Some(std::ffi::OsStr::new("yaar-pi-report")),
+        "{reporter}"
+    );
     for name in ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"] {
         assert!(in_shell.contains_key(name), "{name} is not in {in_shell:?}");
     }
@@ -1022,6 +1339,7 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         "__CF_USER_TEXT_ENCODING",
         "CLAUDE_CODE_PLUGIN_DIRS",
         "YAAR_TERMINAL",
+        "YAAR_PI_REPORT",
         "TERM",
         "COLORTERM",
         "TERM_PROGRAM",

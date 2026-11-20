@@ -17,8 +17,8 @@ use gpui_kit::{
     AppContext, Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px,
 };
 use yaar_link::{
-    ChangedFile, Fact, FileStatus, FlowForm, History, Reply, Request, Session, SessionState, Step,
-    TurnId,
+    ChangedFile, CreditedFile, Fact, FileStatus, FlowForm, History, Reply, Request, Session,
+    SessionState, Step, TurnId,
 };
 use yaar_review_pane::{ChangeShown, FlowAt, Following, PaneRow, TimelineEntry, View};
 
@@ -355,14 +355,24 @@ fn turn_ended(t: &TurnId, state: Option<String>, since: Option<String>) -> Fact 
 }
 
 /// Answers what a turn end under the default setting asks for Changes: the list of what
-/// changed from `from` to `to`, holding one file, and that file's two versions.
+/// changed from `from` to `to` that the review of the turn's session shows, holding one file
+/// that session made, and that file's two versions.
 fn the_turn_end_selects(stage: &mut Stage, from: &str, to: &str, cx: &mut VisualTestContext) {
-    compared(
-        stage,
-        from,
-        Some(to),
-        vec![file("a.txt", FileStatus::Modified)],
+    let asked = stage.keeper.expect(
+        Request::CompareForReview {
+            workspace: id('1'),
+            review: review_id(),
+            from: from.to_owned(),
+            to: to.to_owned(),
+        },
         cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::ComparedForReview(vec![CreditedFile {
+            file: file("a.txt", FileStatus::Modified),
+            by: vec![session_id('a')],
+        }])),
     );
     read_versions_of(stage, from, Some(to), ("a.txt", "one\n", "two\n"), cx);
 }

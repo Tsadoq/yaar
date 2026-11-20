@@ -800,7 +800,7 @@ built = [
 
 [[test]]
 id = "DOCK-02"
-what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by one folder put first on the search path, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
+what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by the variable that names pi's reporting program, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
 level = "component"
 part = "dock"
 through = "its calls, on a real pseudo-terminal"
@@ -815,11 +815,14 @@ built = [
 id = "DOCK-04"
 what = "A launcher starts the start command its Adapter names in a new terminal."
 level = "component"
-part = "dock"
-through = "its calls, on a real pseudo-terminal"
+part = "keeper"
+through = "the Link, as the Window speaks it, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-021"]
+built = [
+    "crates/keeper/keeper/tests/launchers.rs::a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal",
+]
 
 [[test]]
 id = "DOCK-05"
@@ -836,17 +839,22 @@ built = [
 
 [[test]]
 id = "DOCK-07"
-what = "The name pi typed in a shell of the app runs the app's wrapper, which passes every argument on and adds the extension."
+what = "Every shell of the app, and the launcher of pi, names pi's reporting program; after the user's yes, pi's own settings in the user's home list the extension the pi Adapter wrote, so that pi typed in a shell and pi started from its launcher load the same."
 level = "component"
-part = "dock"
-through = "its calls, on a real pseudo-terminal"
+part = "keeper"
+through = "the Link, as the Window speaks it, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-022"]
+built = [
+    "crates/keeper/keeper/tests/consents.rs::every_shell_of_the_app_and_the_launcher_of_pi_name_the_reporting_program",
+    "crates/keeper/keeper/tests/consents.rs::after_the_users_yes_pi_typed_in_a_shell_and_pi_from_its_launcher_load_the_extension_the_adapter_wrote",
+]
+note = "No wrapper and no folder put first on the search path (DEC-228): pi loads the extension from its own settings, which the app writes only after the user's yes (CONSENT-01)."
 
 [[test]]
 id = "LISTEN-03"
-what = "Esc during a turn: the stand-in prints the mark Claude Code prints and reports nothing, and the turn ends in the app."
+what = "Esc during a turn ends the turn in the app: as Claude Code the stand-in prints the mark Claude Code prints and reports nothing; as pi it reports the run aborted, as pi's extension does, and prints no mark."
 level = "system"
 part = "app"
 through = "the Link on one side, the agent's side on the other"
@@ -855,8 +863,8 @@ runs = "ci"
 proves = ["FR-007"]
 built = [
     "system-tests/tests/agents.rs::esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app",
+    "system-tests/tests/agents.rs::esc_during_a_turn_makes_the_stand_in_print_the_mark_and_report_nothing_and_the_turn_ends_in_the_app_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "TP-01"
@@ -893,6 +901,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-021"]
+built = [
+    "crates/window/terminal-pane/tests/launchers.rs::next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_names",
+    "crates/window/terminal-pane/tests/launchers.rs::with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so",
+    "crates/window/terminal-pane/tests/launchers.rs::the_wheel_over_the_launchers_scrolls_no_terminal_and_sends_its_program_nothing",
+]
 
 [[test]]
 id = "TP-04"
@@ -1081,6 +1094,9 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-120"]
+built = [
+    "crates/keeper/switchboard/src/lib.rs::after_a_restart_each_session_that_was_running_is_offered_with_its_command_and_id",
+]
 
 [[test]]
 id = "LISTEN-01"
@@ -1111,6 +1127,14 @@ driver = "recorded-events"
 runs = "ci"
 proves = ["FR-023", "FR-035"]
 slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/listen.rs::recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_same_seven_events_in_order",
+    "crates/keeper/adapter-pi/tests/listen.rs::every_event_of_the_runs_names_its_session_terminal_process_folder_and_session_file",
+    "crates/keeper/adapter-pi/tests/listen.rs::no_line_of_any_recording_of_pi_gives_a_permission_event",
+    "crates/keeper/adapter-pi/tests/listen.rs::a_prompt_naming_a_file_with_an_at_mention_gives_no_read",
+    "crates/keeper/adapter-pi/tests/listen.rs::a_file_read_through_a_shell_command_gives_the_command_and_no_read",
+]
+note = "pi's recording holds the four tools in five runs, one prompt each; the kinds come in the same order within each run."
 
 [[test]]
 id = "LISTEN-02"
@@ -1198,6 +1222,11 @@ driver = "recorded-events"
 runs = "ci"
 proves = ["FR-082", "FR-090"]
 slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/deliver.rs::a_review_of_one_and_a_half_million_characters_is_delivered_whole_with_the_instruction",
+    "crates/keeper/adapter-pi/tests/deliver.rs::text_that_json_escapes_comes_back_byte_for_byte",
+]
+note = "pi takes the review inside the user's message through input, the route measured whole at 1,503,509 characters; before_agent_start fires for no message pi queues. The size is shown here up to the Adapter's answer, and through the extension and the reporting program in PIX-01."
 
 [[test]]
 id = "ADP-09"
@@ -1209,6 +1238,13 @@ driver = "recorded-events"
 runs = "ci"
 proves = ["FR-093"]
 slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/deliver.rs::a_review_attached_while_pi_works_goes_with_the_message_pi_queued_with_enter",
+    "crates/keeper/adapter-pi/tests/deliver.rs::a_review_attached_while_pi_works_goes_with_the_message_pi_queued_with_alt_enter",
+    "crates/keeper/adapter-pi/tests/deliver.rs::a_message_pis_own_extension_queued_asks_nothing_and_every_other_asks_for_the_review",
+    "crates/keeper/keeper/tests/delivery.rs::a_message_pi_takes_while_it_works_carries_the_review_and_the_comments_are_sent_at_its_report",
+    "crates/keeper/keeper/tests/delivery.rs::a_message_pi_queues_for_after_its_run_carries_the_review_the_same_way",
+]
 
 [[test]]
 id = "COMP-01"
@@ -1245,7 +1281,7 @@ note = "Claude Code's tool server only; pi's registered tool is PIX-01, slice 7.
 
 [[test]]
 id = "PIX-01"
-what = "The pi extension, loaded by a stand-in for pi's extension interface: it reports the events, hands an attached review whole to the user's message with the instruction on how to answer, reports that message so the comments become sent, and offers the reply tool with no way to resolve."
+what = "The pi extension, loaded by a stand-in for pi's extension interface: it reports the events, hands an attached review whole to the user's message with the instruction on how to answer, reports that message so the comments become sent, and offers the reply tool with no way to resolve, and, loaded where no reporting program is named, as outside the app, registers nothing and prints nothing."
 level = "component"
 part = "companion-pi"
 through = "the Link on one side, the agent's side on the other"
@@ -1253,7 +1289,130 @@ driver = "agent"
 runs = "ci"
 proves = ["FR-023", "FR-082", "FR-090", "FR-097", "FR-098"]
 slice = 7
-note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript."
+built = [
+    "crates/keeper/adapter-pi/tests/extension.rs::the_extension_registers_the_seven_events_and_the_one_reply_tool_and_nothing_for_a_dialog",
+    "crates/keeper/adapter-pi/tests/extension.rs::each_event_of_a_turn_is_reported_in_pi_s_order_and_is_read_as_the_event_of_the_table",
+    "crates/keeper/adapter-pi/tests/extension.rs::a_review_of_one_and_a_half_million_characters_goes_whole_into_the_users_message_with_the_instruction",
+    "crates/keeper/adapter-pi/tests/extension.rs::the_report_of_a_message_asks_for_a_review_whether_pi_is_idle_or_queues_the_message",
+    "crates/keeper/adapter-pi/tests/extension.rs::a_review_reaches_the_message_pi_queues_as_it_does_the_one_of_an_idle_pi",
+    "crates/keeper/adapter-pi/tests/extension.rs::the_reply_tool_reaches_the_app_as_it_was_called_and_gives_the_agent_what_the_app_answered",
+    "crates/keeper/adapter-pi/tests/extension.rs::loaded_with_no_reporting_program_named_the_extension_registers_nothing_and_prints_nothing",
+    "crates/keeper/adapter-pi/tests/extension.rs::a_handler_returns_only_after_the_app_answered_its_report",
+    "crates/keeper/adapter-pi/tests/extension.rs::the_reporting_program_is_looked_for_again_at_each_report",
+]
+note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript. pi only: Claude Code's pieces are REPLY-02 and the companion's hook tests. Node 22.18 or later; CI pins Node 24.11.1. The review rides in the user's own message through pi's input event, 1,500,000 characters through the extension and the reporting program."
+
+[[test]]
+id = "CONSENT-01"
+what = "A yes writes the extension's absolute path at the end of the top-level extensions of pi's settings and changes no other byte of the file; with no array it adds the key, with no file it writes one as pi would, and with the entry there already it writes nothing."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020", "FR-018", "FR-022"]
+slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/settings.rs::a_yes_with_no_file_writes_one_as_pi_would",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_yes_changes_no_other_byte_of_a_file_of_any_layout",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_yes_leaves_an_array_of_two_with_the_entry_third",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_yes_with_the_entry_already_there_writes_nothing",
+    "crates/keeper/adapter-pi/tests/settings.rs::the_entry_is_the_extensions_absolute_path_as_a_json_string",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-02"
+what = "Taking the yes back takes out that one entry and nothing else, and a no or a question not yet answered writes nothing into pi's settings."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/settings.rs::taking_the_yes_back_takes_out_the_one_string_and_changes_nothing_else",
+    "crates/keeper/adapter-pi/tests/settings.rs::taking_the_yes_back_leaves_the_users_own_entries_wherever_ours_stands",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_no_and_a_question_not_yet_answered_write_nothing_into_pis_settings",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_no_and_a_question_not_yet_answered_make_no_file_where_there_is_none",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-03"
+what = "A settings file the app cannot read as pi writes it is left byte for byte as it was, and the answer says why; with pi not installed nothing is asked and nothing is written."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/settings.rs::a_file_pi_would_not_read_is_left_byte_for_byte_and_the_answer_says_why",
+    "crates/keeper/adapter-pi/tests/settings.rs::the_question_shows_the_problem_before_any_answer",
+    "crates/keeper/adapter-pi/tests/settings.rs::with_pi_not_installed_nothing_is_asked_and_nothing_is_written",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_dot_pi_with_no_agent_folder_is_pi_not_installed_and_so_is_a_file_in_its_place",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-04"
+what = "The answer is kept across a restart, a yes, a no and a question not yet answered each as it was; a kept yes whose entry the user took out is asked again, and nothing is written back."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+built = [
+    "crates/keeper/adapter-pi/tests/settings.rs::a_yes_a_no_and_a_question_not_yet_answered_are_each_kept_across_a_restart",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_kept_yes_whose_entry_the_user_took_out_is_asked_again_and_nothing_is_written_back",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_kept_yes_whose_file_the_user_removed_is_asked_again",
+    "crates/keeper/adapter-pi/tests/settings.rs::a_kept_yes_stands_again_when_the_user_puts_the_entry_back",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-05"
+what = "The Keeper tells a Window the question of an Adapter not yet answered when the Window first asks it something, tells every Window the answer, and tells a Window that connects after the answer nothing."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["NFR-020", "NFR-001"]
+slice = 7
+built = [
+    "crates/keeper/keeper/tests/consents.rs::a_window_is_told_the_question_of_an_adapter_before_the_reply_to_its_first_request_and_every_window_the_answer",
+    "crates/keeper/keeper/tests/consents.rs::a_window_that_connects_after_a_no_is_told_nothing_either_and_the_list_says_no",
+    "crates/keeper/keeper/tests/consents.rs::with_pi_not_installed_no_question_is_listed_or_told_and_a_yes_is_refused_and_writes_nothing",
+    "crates/keeper/keeper/tests/consents.rs::an_answer_for_an_adapter_that_asks_no_leave_or_that_does_not_exist_is_refused_and_nothing_is_written_or_told",
+    "crates/keeper/keeper/tests/consents.rs::a_piece_of_a_cli_is_not_told_the_question_before_the_reply_to_its_report",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-06"
+what = "The terminal pane shows each question the Keeper tells in the Adapter's words with two controls, sends the user's yes or no by a click or a key, and the question goes once the answer is told; the same two keys change the answer later."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["NFR-020", "NFR-001", "FR-121"]
+slice = 7
+built = [
+    "crates/window/terminal-pane/tests/consent.rs::each_question_the_keeper_tells_shows_in_the_adapters_words_with_two_controls_above_the_terminals",
+    "crates/window/terminal-pane/tests/consent.rs::a_click_on_a_control_sends_the_answer_and_the_line_goes_once_the_answer_is_told",
+    "crates/window/terminal-pane/tests/consent.rs::the_two_keys_answer_with_a_question_shown_from_outside_the_terminal_and_on_macos_from_inside",
+    "crates/window/terminal-pane/tests/consent.rs::with_no_question_shown_the_keys_ask_the_list_and_answer_each_adapter_it_names",
+    "crates/window/terminal-pane/tests/consent.rs::one_answer_goes_for_every_question_shown",
+    "crates/window/terminal-pane/tests/consent.rs::an_answer_the_keeper_refuses_is_said_in_the_notice_and_the_question_stays",
+]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
 
 [[test]]
 id = "STATE-01"
@@ -1884,6 +2043,8 @@ proves = []
 slice = 6
 built = [
     "crates/keeper/review-engine/tests/credits.rs::a_recorded_state_keeps_who_is_credited_with_each_path_and_a_path_two_sessions_changed_shows_whole_in_both_reviews_marked",
+    "crates/keeper/review-engine/tests/credits.rs::a_state_kept_with_no_credit_for_a_clean_worktree_does_not_take_those_of_the_next_turn",
+    "crates/keeper/review-engine/tests/credits.rs::a_session_credited_with_a_path_in_two_states_is_listed_once_and_the_path_is_not_shared",
 ]
 note = "The engine lists what a review shows of a change, with the mark on a path two sessions changed; drawing the mark and narrowing a turn end's selection to a session's paths are WIN-09, slice 7."
 
@@ -2461,6 +2622,8 @@ built = [
     "crates/window/review-pane/tests/attaching.rs::attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_takes_the_first",
     "crates/window/review-pane/tests/attaching.rs::attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_when_nothing_is_attached_any_more",
     "crates/window/review-pane/tests/attaching.rs::an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_answer_naming_no_cli_replaces_it",
+    "crates/window/review-pane/tests/attaching.rs::next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_and_a_new_offer_chooses_the_first_again",
+    "crates/window/review-pane/tests/attaching.rs::the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_keeps_it_chosen",
 ]
 
 [[test]]
@@ -2747,8 +2910,8 @@ runs = "ci"
 proves = ["FR-116", "FR-117"]
 built = [
     "system-tests/tests/keeping.rs::a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back",
+    "system-tests/tests/keeping.rs::a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "HOLD-02"
@@ -2789,8 +2952,8 @@ runs = "ci"
 proves = ["FR-116"]
 built = [
     "system-tests/tests/keeping.rs::a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds",
+    "system-tests/tests/keeping.rs::a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "UITEST-04"
@@ -2803,8 +2966,8 @@ runs = "ci"
 proves = ["FR-080", "FR-086", "FR-097", "FR-081", "FR-108"]
 built = [
     "system-tests/tests/delivery.rs::a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter",
+    "system-tests/tests/delivery.rs::a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-01"
@@ -2817,8 +2980,8 @@ runs = "ci"
 proves = ["FR-007", "FR-030", "FR-046"]
 built = [
     "system-tests/tests/agents.rs::a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded",
+    "system-tests/tests/agents.rs::a_turn_with_a_read_an_edit_a_new_file_and_a_shell_write_is_seen_as_works_then_finished_with_its_steps_in_order_and_a_state_recorded_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-02"
@@ -2829,6 +2992,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-014"]
+note = "Runs for both CLIs, with the slice that builds it (FR-023)."
 
 [[test]]
 id = "AGENT-04"
@@ -2841,8 +3005,9 @@ runs = "ci"
 proves = ["FR-025", "FR-026", "FR-022"]
 built = [
     "system-tests/tests/agents.rs::edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made",
+    "system-tests/tests/agents.rs::edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. The offer to attach exists from slice 6; its absence is checked from then on."
+note = "The offer to attach exists from slice 6; its absence is checked from then on. As pi, a CLI started around the app's pieces is pi whose settings hold no entry of the app's (no yes given)."
 
 [[test]]
 id = "AGENT-08"
@@ -2855,8 +3020,8 @@ runs = "ci"
 proves = ["FR-093"]
 built = [
     "system-tests/tests/delivery.rs::a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it",
+    "system-tests/tests/delivery.rs::a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-09"
@@ -2869,8 +3034,9 @@ runs = "ci"
 proves = ["FR-114", "FR-115", "FR-022"]
 built = [
     "system-tests/tests/agents.rs::the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left",
+    "system-tests/tests/agents.rs::the_stand_in_started_from_its_launcher_and_by_its_name_gives_the_same_session_and_each_takes_over_the_review_the_last_left_as_pi",
 ]
-note = "The clause on a session of the other agent is shown when the stand-in speaks pi (slice 7); slice 4 shows the rest with Claude Code. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Runs for each CLI with the other as the other agent."
 
 [[test]]
 id = "AGENT-12"
@@ -2885,8 +3051,9 @@ built = [
     "system-tests/tests/files.rs::the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored",
     "system-tests/tests/files.rs::a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_of_a_cli",
     "system-tests/tests/files.rs::the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_else",
+    "system-tests/tests/files.rs::the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "As pi no yes is given by the turn: what a yes writes into pi's settings is CONSENT-01's."
 
 [[test]]
 id = "AGENT-13"
@@ -2905,8 +3072,10 @@ built = [
     "system-tests/tests/files.rs::a_call_that_was_unfinished_is_joined_with_the_line_that_resumed_it",
     "system-tests/tests/files.rs::a_credential_file_is_named_by_its_path_or_by_the_path_of_the_descriptor_it_was_opened_beside",
     "system-tests/tests/files.rs::a_file_that_is_no_credential_of_a_cli_is_named_by_no_line_of_a_trace",
+    "system-tests/tests/files.rs::neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn_as_pi",
+    "system-tests/tests/files.rs::the_settings_of_pi_are_replaced_by_a_rename_that_succeeded_onto_their_path_and_by_nothing_else",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect. Built and run on Linux only; macOS has no tracer short of lifting the system's protection."
+note = "Built and run on Linux only; macOS has no tracer short of lifting the system's protection. As pi the reporting program is traced; the extension, TypeScript, runs only under PIX-01 and is not traced; the Keeper opens pi's settings after a yes, never its credential file."
 
 [[test]]
 id = "AGENT-15"
@@ -2919,8 +3088,11 @@ runs = "ci"
 proves = ["FR-120", "FR-119"]
 built = [
     "system-tests/tests/rounds.rs::everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id",
+    "system-tests/tests/rounds.rs::everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_turns_and_its_attachment_as_left_and_resuming_runs_the_cli_with_the_sessions_id_as_pi",
+    "crates/window/window/tests/resume.rs::the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_goes_when_it_reports",
+    "crates/window/terminal-pane/tests/launchers.rs::a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_goes_when_listed_no_more",
 ]
-note = "The resume control is the Link's offer (Session::resumable) and Program::Resume, shown at this level; the Window's control, and pi, come with slice 7 (SWB-06, CLI-05). With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "The resume control is the Link's offer and Program::Resume at this level, and the Window's control in its two other tests."
 
 [[test]]
 id = "AGENT-16"
@@ -2934,7 +3106,7 @@ proves = ["FR-027", "FR-028"]
 built = [
     "system-tests/tests/agents.rs::an_agent_that_asks_for_permission_turns_the_waiting_state_on_and_the_app_writes_nothing_to_its_terminal_and_the_keys_of_the_answer_turn_it_off",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Claude Code only: pi has no permission prompt of its own (ADR-007); that no recorded line of pi gives a permission event is LISTEN-01P's."
 
 [[test]]
 id = "AGENT-17"
@@ -2947,8 +3119,8 @@ runs = "ci"
 proves = ["FR-102", "FR-103", "FR-105", "FR-097", "FR-098", "FR-099", "FR-108"]
 built = [
     "system-tests/tests/rounds.rs::a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved",
+    "system-tests/tests/rounds.rs::a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-19"
@@ -2961,8 +3133,8 @@ runs = "ci"
 proves = ["FR-094", "FR-095"]
 built = [
     "system-tests/tests/rounds.rs::accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message",
+    "system-tests/tests/rounds.rs::accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_the_review_attached_to_its_first_message_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-14"
@@ -2975,8 +3147,8 @@ runs = "ci"
 proves = ["NFR-026"]
 built = [
     "system-tests/tests/delivery.rs::an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads",
+    "system-tests/tests/delivery.rs::an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "AGENT-20"
@@ -2989,8 +3161,9 @@ runs = "ci"
 proves = ["FR-111"]
 built = [
     "system-tests/tests/agents.rs::two_sessions_in_one_worktree_each_have_a_review",
+    "system-tests/tests/agents.rs::two_sessions_in_one_worktree_each_have_a_review_as_pi",
 ]
-note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Added in slice 4, which closes FR-111: DELIVER-04 showed it at this level and moved to slice 6 with delivery."
 
 [[test]]
 id = "DELIVER-04"
@@ -3003,8 +3176,9 @@ runs = "ci"
 proves = ["FR-092"]
 built = [
     "system-tests/tests/delivery.rs::a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only",
+    "system-tests/tests/delivery.rs::a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only_as_pi",
 ]
-note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4. With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
+note = "Until slice 4 the row also named FR-111. Receiving a review is delivery, which slice 6 builds; AGENT-20 shows two sessions with a review each in slice 4."
 
 [[test]]
 id = "STORE-04"
@@ -3027,8 +3201,8 @@ runs = "ci"
 proves = ["FR-007"]
 built = [
     "system-tests/tests/agents.rs::an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives",
+    "system-tests/tests/agents.rs::an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_lives_as_pi",
 ]
-note = "With the stand-in as Claude Code only until slice 7, which adds the pi dialect."
 
 [[test]]
 id = "LOAD-01"
@@ -3054,7 +3228,7 @@ proves = ["FR-022", "FR-111", "FR-115"]
 
 [[test]]
 id = "LOAD-03"
-what = "pi, pi --continue, pi list and pi mcp list typed in a shell of the app behave as without the app, and the first two load the extension."
+what = "pi, pi --continue, pi list and pi mcp list typed in a shell of the app behave as without the app, and, after the user's yes, the first two load the extension."
 level = "system"
 part = "app"
 through = "the real program in a terminal of the app"
@@ -3065,7 +3239,7 @@ proves = ["FR-022", "FR-023"]
 
 [[test]]
 id = "LOAD-04"
-what = "After a session of each CLI, git status with ignored files and a listing of each CLI's settings show no change by the app, and macOS has asked for no keychain access on the app's behalf."
+what = "After a session of each CLI, git status with ignored files and a listing of each CLI's settings show no change by the app but, after the user's yes, the one entry the app put into pi's settings; and macOS has asked for no keychain access on the app's behalf."
 level = "system"
 part = "app"
 through = "the real program in a terminal of the app"
@@ -3073,6 +3247,30 @@ driver = "real-clis"
 runs = "release"
 checklist = "real-clis"
 proves = ["NFR-020", "NFR-021", "NFR-023"]
+
+[[test]]
+id = "LOAD-07"
+what = "After the user's yes, pi started in another terminal program loads the app's extension, which registers no tool, prints nothing and reports nothing."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["NFR-020", "FR-018"]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "LOAD-08"
+what = "After the user's yes, a subagent of pi started in a terminal of the app reports as a session of its own, and its writes are credited to it."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-023"]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
 
 [[test]]
 id = "LOAD-05"
@@ -3174,7 +3372,7 @@ driver = "real-clis"
 runs = "release"
 checklist = "real-clis"
 proves = ["FR-120", "FR-023"]
-note = "Never run with pi. pi's command for one of two sessions of a worktree is not found yet: if pi has none, this requirement goes back to the maintainer."
+note = "pi's command for one of two sessions of a worktree is pi --session-dir <its folder> --session <id> (phase 4): the release check runs it with two sessions."
 
 [[test]]
 id = "PERF-01"
@@ -3420,6 +3618,7 @@ proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", 
 built = [
     "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
     "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
+    "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts_where_an_agent_runs_with_a_review_attached",
 ]
 note = "The walk is over the kinds of request of the Link. Who starts a kind is declared in the Link's own table, which a reviewer checks. The request that stops everything joins the walk when its control is built. Opening a terminal is the user's; telling a terminal's size is the Window's. Reading the reviews and saving a draft as it is typed are the Window's; deleting a draft, copying a review, marking it reviewed, marking a file viewed and committing are the user's. The reply is REV-03's and the review pane's own test of its key; the walk shows only that the reply is a control with a key."
 
@@ -3487,18 +3686,24 @@ driver = "test-platform"
 runs = "ci"
 proves = []
 slice = 7
-note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change. Two CLIs in one worktree come with slice 7."
+built = [
+    "crates/window/window/tests/credits.rs::with_two_sessions_in_one_worktree_that_changed_the_same_file_each_review_shows_it_whole_with_the_mark_and_a_turn_end_selects_only_the_paths_credited_to_its_session_and_those_no_agent_made",
+]
+note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change."
 
 [[test]]
 id = "SEAM-03"
 what = "A way of delivery written in the test fulfils the contract and is handed the same rendered text as the three built ones, with no other crate changed."
 level = "component"
 part = "keeper"
-through = "the Link, as the Window speaks it"
+through = "the engine's send, on the Keeper's own data, with the Link before and after"
 driver = "client"
 runs = "ci"
 proves = ["NFR-003"]
 slice = 7
+built = [
+    "crates/keeper/keeper/tests/seam.rs::a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_built_ones",
+]
 
 [[test]]
 id = "SEAM-05"

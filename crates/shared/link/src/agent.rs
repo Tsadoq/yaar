@@ -105,6 +105,36 @@ pub struct AgentCli {
     pub title: String,
 }
 
+/// What the user said when an Adapter asked leave to write into the user's own settings
+/// of its CLI, as the Keeper keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConsentAnswer {
+    /// Not asked yet, or asked and not answered: the Window shows the question.
+    NotAsked,
+    /// Yes: the Adapter's entry is in the CLI's settings.
+    Yes,
+    /// No: the app writes nothing into the CLI's settings, and takes out what it wrote.
+    No,
+}
+
+/// One Adapter that writes into the user's own settings of its CLI only with the user's
+/// leave, and how that stands. Only an Adapter that needs leave, and whose CLI is
+/// installed, is listed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consent {
+    /// The Adapter, by its name: `pi`.
+    pub agent: String,
+    /// What the Window asks the user, in the Adapter's words: what the app will write and
+    /// where, and that the answer can be changed. The Window shows it as it is.
+    pub question: String,
+    /// What the user said.
+    pub answer: ConsentAnswer,
+    /// What went wrong the last time the app looked at the CLI's settings or changed them,
+    /// in a sentence the Window shows as it is: a settings file the app cannot read as the
+    /// CLI writes it, which the app then left as it was. None when nothing went wrong.
+    pub problem: Option<String>,
+}
+
 /// The agent sessions of one workspace, and the state the workspace shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceAgents {
@@ -336,6 +366,41 @@ pub(crate) fn read_agent_cli(input: &mut In<'_>) -> Result<AgentCli, LinkError> 
         agent: input.text()?,
         title: input.text()?,
     })
+}
+
+pub(crate) fn write_consent(out: &mut Out, consent: &Consent) {
+    out.text(&consent.agent);
+    out.text(&consent.question);
+    write_consent_answer(out, consent.answer);
+    out.optional(consent.problem.as_deref(), Out::text);
+}
+
+pub(crate) fn read_consent(input: &mut In<'_>) -> Result<Consent, LinkError> {
+    Ok(Consent {
+        agent: input.text()?,
+        question: input.text()?,
+        answer: read_consent_answer(input)?,
+        problem: input.optional(In::text)?,
+    })
+}
+
+pub(crate) fn write_consent_answer(out: &mut Out, answer: ConsentAnswer) {
+    out.u8(match answer {
+        ConsentAnswer::NotAsked => 0,
+        ConsentAnswer::Yes => 1,
+        ConsentAnswer::No => 2,
+    });
+}
+
+pub(crate) fn read_consent_answer(input: &mut In<'_>) -> Result<ConsentAnswer, LinkError> {
+    match input.u8()? {
+        0 => Ok(ConsentAnswer::NotAsked),
+        1 => Ok(ConsentAnswer::Yes),
+        2 => Ok(ConsentAnswer::No),
+        _ => Err(LinkError::Malformed(
+            "unknown answer to a question for leave",
+        )),
+    }
 }
 
 pub(crate) fn write_workspace_agents(out: &mut Out, agents: &WorkspaceAgents) {

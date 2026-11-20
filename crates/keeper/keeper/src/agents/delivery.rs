@@ -186,6 +186,7 @@ impl Core {
             .send_attached(&review, SentBy::Delivered, &mut *delivery)
         {
             Ok(Some((bytes, sent))) => {
+                self.round_sent_in(kept, &review, sent.round.number, &session);
                 told.reviews_changed(&session.workspace);
                 // The state of the worktree is recorded after, off the agent's way.
                 told.round_to_record(&session.workspace, &review, sent.round.number);
@@ -197,6 +198,30 @@ impl Core {
                 eprintln!("yaar-keeper: {}: {e}", report.agent);
                 Reply::Done
             }
+        }
+    }
+
+    /// Round `round` of `review` was just sent with a message of `session`: the turn of
+    /// that session that runs now, the one the message started or, for a message the CLI
+    /// took while it works, the one that ran, is kept as the round's
+    /// (`Store::set_round_turn`), so that the Window can tell whether that turn has ended.
+    /// Nothing is kept for a session with no turn open, which the Window then counts as
+    /// it counts a copy.
+    pub(crate) fn round_sent_in(
+        &self,
+        kept: &Kept,
+        review: &yaar_store::ReviewId,
+        round: u32,
+        session: &SessionRecord,
+    ) {
+        let open = lock(&self.switchboard)
+            .session(&yaar_switchboard::SessionId(session.id.as_str().to_owned()))
+            .and_then(|known| known.turn);
+        let Some((turn, _)) = open else {
+            return;
+        };
+        if let Err(e) = kept.store.set_round_turn(review, round, &turn.0) {
+            eprintln!("yaar-keeper: the turn of round {round} was not kept: {e}");
         }
     }
 
@@ -350,6 +375,7 @@ mod tests {
             app_version: "test-keeper".to_owned(),
             data_dir: root.join("data"),
             companions: Some(root.join("companions")),
+            home: root.join("home"),
         };
         let git_found = yaar_recorder::Git::find().expect("git is installed");
         let store = yaar_store::Store::open(&{

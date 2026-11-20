@@ -20,6 +20,8 @@
 //!   set, as the [`FlowForm`] of a workspace; and what slice 6 adds to reviews: the
 //!   [`ThreadState`] of a thread, where it sits now ([`Placed`]) and the [`Notice`] of
 //!   code that changed under it, and the [`AgentCli`]s offered when a review is attached;
+//!   and the [`Consent`] of an Adapter that asks the user's leave before it writes into
+//!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -59,8 +61,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use agent::{
-    AgentCli, AgentReport, CreditedFile, History, HistoryEntry, Session, SessionState, Step,
-    TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
+    AgentCli, AgentReport, Consent, ConsentAnswer, CreditedFile, History, HistoryEntry, Session,
+    SessionState, Step, TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
 };
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use review::{
@@ -90,8 +92,9 @@ use wire::{In, Out};
 /// step. 7: attaching a review and what a piece of an agent CLI is answered with, the
 /// agent's replies, the states of a thread and where it sits now, rounds whose state is
 /// recorded after the send, the launcher of a CLI for a review and the resumption of a
-/// session.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// session. 8: the agent CLIs the Keeper has an Adapter for, what a review shows of a
+/// change with who is credited with each file, and the turn a round was sent in.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -1084,7 +1087,28 @@ mod tests {
             Request::GetAttachment {
                 review: review_id(),
             },
+            Request::ListClis,
+            Request::CompareForReview {
+                workspace: workspace.clone(),
+                review: review_id(),
+                from: COMMIT.to_owned(),
+                to: "e".repeat(40),
+            },
+            Request::ListConsents,
+            Request::AnswerConsent {
+                agent: "pi".to_owned(),
+                answer: ConsentAnswer::Yes,
+            },
         ];
+        // The two other answers to a question for leave.
+        let refused = Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        };
+        let asked_again = Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::NotAsked,
+        };
         // The launcher of a CLI started for a review, a session resumed, and the review
         // attached whole.
         let for_a_review = Request::OpenTerminal {
@@ -1319,6 +1343,43 @@ mod tests {
             Reply::Attachment {
                 text: "Answer each thread.\n\n## Thread 5555".to_owned(),
             },
+            Reply::Clis(vec![
+                AgentCli {
+                    agent: "claude".to_owned(),
+                    title: "Claude Code".to_owned(),
+                },
+                AgentCli {
+                    agent: "pi".to_owned(),
+                    title: "pi".to_owned(),
+                },
+            ]),
+            Reply::Clis(Vec::new()),
+            Reply::ComparedForReview(vec![
+                CreditedFile {
+                    file: ChangedFile {
+                        path: PathBuf::from("src/both.rs"),
+                        status: FileStatus::Modified,
+                    },
+                    by: vec![SessionId::new("a-session"), SessionId::new("b-session")],
+                },
+                CreditedFile {
+                    file: ChangedFile {
+                        path: PathBuf::from("by-hand.txt"),
+                        status: FileStatus::Added,
+                    },
+                    by: Vec::new(),
+                },
+            ]),
+            Reply::ComparedForReview(Vec::new()),
+            Reply::Consents(vec![consent(ConsentAnswer::NotAsked, None)]),
+            Reply::Consents(vec![
+                consent(ConsentAnswer::Yes, None),
+                consent(
+                    ConsentAnswer::No,
+                    Some("the settings at /home/u/.pi/agent/settings.json are not JSON"),
+                ),
+            ]),
+            Reply::Consents(Vec::new()),
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1395,6 +1456,8 @@ mod tests {
                 workspace: workspace.clone(),
                 form: FlowForm::LiveDiff,
             }),
+            Fact::ConsentsChanged(vec![consent(ConsentAnswer::Yes, None)]),
+            Fact::ConsentsChanged(Vec::new()),
             Fact::Step {
                 workspace,
                 session: session_id(),
@@ -1454,6 +1517,12 @@ mod tests {
                 request,
             });
         }
+        for request in [refused, asked_again] {
+            messages.push(Message::Request {
+                id: RequestId(u32::MAX - 4),
+                request,
+            });
+        }
         for reply in replies {
             messages.push(Message::Reply {
                 to: RequestId(u32::MAX),
@@ -1491,6 +1560,16 @@ mod tests {
 
     fn review_id() -> ReviewId {
         ReviewId::new("88888888888888888888888888888888")
+    }
+
+    /// pi's question for leave, answered as given.
+    fn consent(answer: ConsentAnswer, problem: Option<&str>) -> Consent {
+        Consent {
+            agent: "pi".to_owned(),
+            question: "Install the app's extension into pi's settings?".to_owned(),
+            answer,
+            problem: problem.map(str::to_owned),
+        }
     }
 
     /// The full id of a recorded state.
@@ -1735,18 +1814,21 @@ mod tests {
                             state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Copied,
                             edited: false,
+                            turn: None,
                         },
                         Round {
                             number: 2,
                             state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Delivered,
                             edited: true,
+                            turn: Some(TurnId::new("d".repeat(32))),
                         },
                         Round {
                             number: 3,
                             state: None,
                             sent_by: SentBy::Delivered,
                             edited: false,
+                            turn: Some(TurnId::new("e".repeat(32))),
                         },
                     ],
                 },
@@ -1786,8 +1868,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; ten kinds are tried a second time, and the
-        // opening of a terminal a third and a fourth, for each kind of program.
+        // One of each, in the order of the table; eleven kinds are tried a second time, the
+        // opening of a terminal a third and a fourth, for each kind of program, and the
+        // answer to a question for leave a third, for each answer.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
@@ -1804,6 +1887,8 @@ mod tests {
                 RequestKind::OpenTerminal,
                 RequestKind::OpenTerminal,
                 RequestKind::AttachReview,
+                RequestKind::AnswerConsent,
+                RequestKind::AnswerConsent,
             ]
         );
     }
@@ -1837,6 +1922,7 @@ mod tests {
                 RequestKind::ResolveThread,
                 RequestKind::ReopenThread,
                 RequestKind::ResolveAddressed,
+                RequestKind::AnswerConsent,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
@@ -1865,6 +1951,13 @@ mod tests {
             // What the control that views an attachment shows is read to be shown; the
             // control itself sends nothing a user starts.
             RequestKind::GetAttachment,
+            // The launchers offered are read to be drawn, and what a review shows of a
+            // change is read to be shown.
+            RequestKind::ListClis,
+            RequestKind::CompareForReview,
+            // Which Adapters need the user's leave is read to know what to ask; the answer
+            // is the user's, by a control.
+            RequestKind::ListConsents,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

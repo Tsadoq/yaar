@@ -361,3 +361,73 @@ fn credits_kept_again_for_a_state_replace_what_was_kept_and_a_name_twice_is_kept
         vec![credit(b"a.rs", &["s-1"])]
     );
 }
+
+#[test]
+fn a_state_kept_with_no_credit_is_told_from_one_nothing_was_kept_with_by_a_store_opened_anew() {
+    let scratch = Scratch::new();
+    let (nothing, some, never) = ("1".repeat(40), "2".repeat(40), "3".repeat(40));
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        assert!(
+            !store
+                .credits_were_kept(&workspace(1), &nothing)
+                .expect("read")
+        );
+        store
+            .put_credits(&workspace(1), &nothing, &[])
+            .expect("put none");
+        store
+            .put_credits(&workspace(1), &some, &[credit(b"a.rs", &["s-1"])])
+            .expect("put credits");
+    }
+
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert!(
+        store
+            .credits_were_kept(&workspace(1), &nothing)
+            .expect("read")
+    );
+    assert_eq!(
+        store.credits_of(&workspace(1), &nothing).expect("read"),
+        vec![]
+    );
+    assert!(store.credits_were_kept(&workspace(1), &some).expect("read"));
+    // A state nothing was kept with, and the same state of another workspace.
+    assert!(
+        !store
+            .credits_were_kept(&workspace(1), &never)
+            .expect("read")
+    );
+    assert!(
+        !store
+            .credits_were_kept(&workspace(2), &nothing)
+            .expect("read")
+    );
+    assert!(!store.credits_were_kept(&workspace(2), &some).expect("read"));
+}
+
+#[test]
+fn the_mark_that_credits_were_kept_stays_when_they_are_kept_again_with_none_and_is_not_made_by_a_refused_call()
+ {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    let (kept, refused) = ("1".repeat(40), "2".repeat(40));
+    store
+        .put_credits(&workspace(1), &kept, &[credit(b"a.rs", &["s-1"])])
+        .expect("put credits");
+    store
+        .put_credits(&workspace(1), &kept, &[])
+        .expect("put none");
+    assert!(store.credits_were_kept(&workspace(1), &kept).expect("read"));
+    assert_eq!(
+        store.credits_of(&workspace(1), &kept).expect("read"),
+        vec![]
+    );
+
+    refusal_of(store.put_credits(&workspace(1), &refused, &[credit(b"z.rs", &[""])]));
+    assert!(
+        !store
+            .credits_were_kept(&workspace(1), &refused)
+            .expect("read")
+    );
+}

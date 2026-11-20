@@ -608,8 +608,7 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.update(|window, cx| stage.focus.focus(window, cx));
 
-    // A list of two CLIs is a shape the Keeper of this slice, with one Adapter, never
-    // sends: it is allowed here to show the drawing of a list.
+    // The Keeper of slice 7 offers both CLIs for the review of no agent.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -666,6 +665,187 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     });
     cx.simulate_keystrokes("shift-n");
     assert_eq!(*wanted.borrow(), [started("pi"), started("claude")]);
+}
+
+/// The CLI the pane says Start Agent takes.
+fn chosen(stage: &Stage, cx: &mut VisualTestContext) -> Option<AgentCli> {
+    stage.pane.read_with(cx, |pane, _| pane.offer_chosen())
+}
+
+/// Whether the mark of the chosen CLI is drawn over the control of the CLI `agent`, and
+/// over no other control.
+fn mark_is_over(agent: &str, others: &[&str], cx: &mut VisualTestContext) -> bool {
+    let mark = format!("review-offer-chosen-{agent}");
+    if !is_drawn(&mark, cx) {
+        return false;
+    }
+    let mark = drawn(&mark, cx).expect("it was drawn");
+    let control = drawn(&format!("review-offer-start-{agent}"), cx).expect("the control is drawn");
+    others
+        .iter()
+        .all(|other| !is_drawn(&format!("review-offer-chosen-{other}"), cx))
+        && control.intersect(&mark) == mark
+}
+
+/// Attaches the review of no agent and answers the offer of these CLIs; the test waits
+/// until the pane holds the offer.
+fn attach_and_be_offered(
+    stage: &mut Stage,
+    review: &ReviewId,
+    offered: Vec<AgentCli>,
+    cx: &mut VisualTestContext,
+) {
+    cx.simulate_keystrokes("a");
+    let asked = stage.keeper.expect(
+        Request::AttachReview {
+            review: review.clone(),
+            thread: None,
+        },
+        cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::AttachedReview {
+            start: offered.clone(),
+        }),
+    );
+    wait_until(cx, "the offer", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.offer_to_start() == offered)
+    });
+}
+
+#[gpui_kit::test]
+fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_and_a_new_offer_chooses_the_first_again(
+    cx: &mut TestAppContext,
+) {
+    let mut review = no_agent_review();
+    review.threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| keeper.set_reviews(reviews_of(vec![review.clone()])),
+        cx,
+    );
+    let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
+    stage.keeper.show(&changes, |_| texts(OLD, NEW), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    wait_until(&mut cx, "the review of no agent", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().is_some_and(|r| !r.threads.is_empty())
+        })
+    });
+    let wanted = wanted_terminals(&stage, &mut cx);
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    // What the answer to an attach is shown against: the Keeper holds the review attached.
+    review.attached = Some(Attachment::Review);
+    tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
+    let started = |agent: &str| Wanted::AgentFor {
+        workspace: id('1'),
+        agent: agent.to_owned(),
+        review: review.id.clone(),
+    };
+
+    // Nothing is offered: nothing is chosen, and the key says so in the notice. The next
+    // request the test causes is the first the pane sent.
+    assert_eq!(chosen(&stage, &mut cx), None);
+    cx.simulate_keystrokes("ctrl-n");
+    assert!(
+        notice(&stage, &mut cx).is_some_and(|words| words.contains("attach a review first")),
+        "ctrl-n with no offer says to attach a review first"
+    );
+
+    // The offer of two CLIs chooses the first and marks its control.
+    attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert!(mark_is_over("claude", &["pi"], &mut cx));
+
+    // Ctrl-N chooses the next, and the mark moves with it; after the last, the first.
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+    assert!(mark_is_over("pi", &["claude"], &mut cx));
+    assert!(stage.pane.read_with(&cx, |pane, _| pane.notice()).is_none());
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert!(mark_is_over("claude", &["pi"], &mut cx));
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+
+    // Start Agent starts the chosen CLI, not the first, and the offer is taken.
+    cx.simulate_keystrokes("shift-n");
+    assert_eq!(*wanted.borrow(), [started("pi")]);
+    assert_eq!(chosen(&stage, &mut cx), None);
+    assert!(!is_drawn("review-offer-chosen-pi", &mut cx));
+    assert!(!is_drawn("review-offer-chosen-claude", &mut cx));
+
+    // An offer made after another chooses its first CLI, not the one chosen last: the
+    // second answer names the CLIs in the other order, so that the pane holding it shows
+    // that it was taken.
+    attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+    attach_and_be_offered(&mut stage, &review.id, vec![pi(), claude()], &mut cx);
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+    assert!(mark_is_over("pi", &["claude"], &mut cx));
+
+    // A click on a control starts that CLI whatever is chosen.
+    click("review-offer-start-claude", &mut cx);
+    assert_eq!(*wanted.borrow(), [started("pi"), started("claude")]);
+    assert_eq!(chosen(&stage, &mut cx), None);
+}
+
+#[gpui_kit::test]
+fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_keeps_it_chosen(
+    cx: &mut TestAppContext,
+) {
+    let mut review = no_agent_review();
+    review.threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| keeper.set_reviews(reviews_of(vec![review.clone()])),
+        cx,
+    );
+    let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
+    stage.keeper.show(&changes, |_| texts(OLD, NEW), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    wait_until(&mut cx, "the review of no agent", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().is_some_and(|r| !r.threads.is_empty())
+        })
+    });
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    review.attached = Some(Attachment::Review);
+    tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
+    let third = AgentCli {
+        agent: "third".to_owned(),
+        title: "Third".to_owned(),
+    };
+
+    // A step is one CLI along the offer, not a toggle between two.
+    attach_and_be_offered(
+        &mut stage,
+        &review.id,
+        vec![claude(), pi(), third.clone()],
+        &mut cx,
+    );
+    let mut seen = Vec::new();
+    for _ in 0..4 {
+        cx.simulate_keystrokes("ctrl-n");
+        seen.push(chosen(&stage, &mut cx));
+    }
+    assert_eq!(
+        seen,
+        [Some(pi()), Some(third.clone()), Some(claude()), Some(pi())]
+    );
+    assert!(mark_is_over("pi", &["claude", "third"], &mut cx));
+
+    // One CLI offered: it stays chosen, with its mark, and nothing is said.
+    attach_and_be_offered(&mut stage, &review.id, vec![claude()], &mut cx);
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert!(mark_is_over("claude", &[], &mut cx));
+    assert_eq!(notice(&stage, &mut cx), None);
 }
 
 #[gpui_kit::test]

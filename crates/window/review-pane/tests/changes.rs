@@ -1235,7 +1235,38 @@ fn wait_drawn(selector: &str, cx: &mut VisualTestContext) {
     }
 }
 
-/// Answers the comparison of a turn's change and the read of its one file.
+/// Answers the comparison a turn's end asks for, which the review of the turn's session
+/// makes: the files of the change, each credited to that session.
+fn compared_for_the_session(
+    stage: &mut Stage,
+    from: String,
+    to: String,
+    files: Vec<ChangedFile>,
+    cx: &mut VisualTestContext,
+) {
+    let asked = stage.keeper.expect(
+        Request::CompareForReview {
+            workspace: id('1'),
+            review: review_of_the_session(),
+            from,
+            to,
+        },
+        cx,
+    );
+    let credited = files
+        .into_iter()
+        .map(|file| CreditedFile {
+            file,
+            by: vec![session()],
+        })
+        .collect();
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::ComparedForReview(credited)));
+}
+
+/// Answers the comparison of a turn's change that the reviewer selected in the tree, and
+/// the read of its one file.
 fn show_the_turn(
     stage: &mut Stage,
     from: String,
@@ -1250,6 +1281,36 @@ fn show_the_turn(
         vec![file(path, FileStatus::Added)],
         cx,
     );
+    read_the_turn(stage, from, to, path, cx);
+}
+
+/// Answers the comparison a turn's end, or the offer it made, asks for, and the read of its
+/// one file.
+fn show_the_end_of_the_turn(
+    stage: &mut Stage,
+    from: String,
+    to: String,
+    path: &str,
+    cx: &mut VisualTestContext,
+) {
+    compared_for_the_session(
+        stage,
+        from.clone(),
+        to.clone(),
+        vec![file(path, FileStatus::Added)],
+        cx,
+    );
+    read_the_turn(stage, from, to, path, cx);
+}
+
+/// Answers the read of the one file of a turn's change.
+fn read_the_turn(
+    stage: &mut Stage,
+    from: String,
+    to: String,
+    path: &str,
+    cx: &mut VisualTestContext,
+) {
     read_versions(
         stage,
         versions_of(Some(from), path, Some(to), path),
@@ -1288,7 +1349,7 @@ fn when_a_turn_ends_changes_selects_what_changed_since_the_last_review(cx: &mut 
                 }
         })
     });
-    show_the_turn(&mut stage, s1(), s2(), "turn.txt", &mut cx);
+    show_the_end_of_the_turn(&mut stage, s1(), s2(), "turn.txt", &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
         None,
@@ -1307,7 +1368,7 @@ fn when_a_turn_ends_changes_selects_what_changed_since_the_last_review(cx: &mut 
                 }
         })
     });
-    show_the_turn(&mut stage, start(), s3(), "later.txt", &mut cx);
+    show_the_end_of_the_turn(&mut stage, start(), s3(), "later.txt", &mut cx);
 
     // A turn whose state was not recorded changes no selection: the Keeper's answers for
     // the history and the uncommitted changes, which that turn end makes the Window ask
@@ -1415,7 +1476,7 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
     wait_drawn("review-offer", &mut cx);
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("shift-o");
-    show_the_turn(&mut stage, s2(), s3(), "second.txt", &mut cx);
+    show_the_end_of_the_turn(&mut stage, s2(), s3(), "second.txt", &mut cx);
     assert_eq!(
         shown(&stage.pane, &mut cx),
         ChangeShown::Since {
@@ -1435,7 +1496,7 @@ fn set_to_keep_the_selection_changes_stays_as_it_is_at_a_turn_end_and_offers_wha
         .expect("the control is drawn")
         .center();
     cx.simulate_click(at, Modifiers::none());
-    show_the_turn(&mut stage, s1(), s2(), "third.txt", &mut cx);
+    show_the_end_of_the_turn(&mut stage, s1(), s2(), "third.txt", &mut cx);
     assert_eq!(shown(&stage.pane, &mut cx), since);
     assert!(drawn("review-offer", &mut cx).is_none());
 

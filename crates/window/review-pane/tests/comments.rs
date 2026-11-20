@@ -470,6 +470,7 @@ fn reviews_with(threads: Vec<Thread>) -> WorkspaceReviews {
                     state: Some("5".repeat(40)),
                     sent_by: SentBy::Copied,
                     edited: false,
+                    turn: None,
                 }]
             } else {
                 Vec::new()

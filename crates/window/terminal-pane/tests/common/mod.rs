@@ -121,6 +121,8 @@ struct Standing {
 #[derive(Default)]
 struct Inner {
     agents: Vec<WorkspaceAgents>,
+    /// What every `ListClis` is answered with: none until a test sets them.
+    clis: Vec<yaar_link::AgentCli>,
     terminals: Vec<TerminalInfo>,
     /// By workspace; a workspace with none set has a history with no entry.
     histories: HashMap<WorkspaceId, History>,
@@ -202,6 +204,9 @@ impl Standing {
                 let reply = Reply::Agents(inner.agents.clone());
                 inner.agents_held.offer(id, reply)
             }
+            // The Window asks once for each connection, at a moment the test does not
+            // choose: answered here, as the agents are.
+            Request::ListClis => Heard::Answer(Ok(Reply::Clis(inner.clis.clone()))),
             Request::ListTerminals => {
                 inner.asked.terminals += 1;
                 let reply = Reply::Terminals(inner.terminals.clone());
@@ -482,6 +487,12 @@ impl TestKeeper {
         self.standing.lock().agents = agents;
     }
 
+    /// Sets the agent CLIs every `ListClis` is answered with from now on: the Window asks
+    /// when it connects, so a test sets them before.
+    pub fn set_clis(&self, clis: Vec<yaar_link::AgentCli>) {
+        self.standing.lock().clis = clis;
+    }
+
     /// Sets the terminals every `ListTerminals` is answered with from now on.
     pub fn set_terminals(&self, terminals: Vec<TerminalInfo>) {
         self.standing.lock().terminals = terminals;
@@ -644,6 +655,17 @@ impl TestKeeper {
         terminal: &TerminalId,
         cx: &mut TestAppContext,
     ) -> (WorkspaceId, TerminalSize) {
+        self.open_running(terminal, yaar_link::Program::Shell, cx)
+    }
+
+    /// [`TestKeeper::open`] for a terminal that has to run `program`: a launcher's or a
+    /// resume's.
+    pub fn open_running(
+        &mut self,
+        terminal: &TerminalId,
+        wanted: yaar_link::Program,
+        cx: &mut TestAppContext,
+    ) -> (WorkspaceId, TerminalSize) {
         let (id, request) = self.request(cx);
         let Request::OpenTerminal {
             workspace,
@@ -653,7 +675,7 @@ impl TestKeeper {
         else {
             panic!("the Window sent {request:?}, and a terminal was asked for");
         };
-        assert_eq!(program, yaar_link::Program::Shell);
+        assert_eq!(program, wanted);
         self.reply(
             id,
             Ok(Reply::TerminalOpened {
@@ -671,8 +693,23 @@ impl TestKeeper {
         });
     }
 
-    /// Tells the Window a fact.
+    /// Tells the Window a fact. What the fact says of the agents of a workspace is what
+    /// every `ListAgents` is answered with from then on, as the Keeper's list holds what
+    /// it told: the Window asks again for the list when it hears a change while an answer
+    /// is on its way, and an answer older than the fact would take the fact's sessions
+    /// away again.
     pub fn tell(&self, fact: yaar_link::Fact) {
+        if let yaar_link::Fact::AgentsChanged(told) = &fact {
+            let mut inner = self.standing.lock();
+            match inner
+                .agents
+                .iter_mut()
+                .find(|agents| agents.workspace == told.workspace)
+            {
+                Some(held) => *held = told.clone(),
+                None => inner.agents.push(told.clone()),
+            }
+        }
         self.write(&Message::Fact(fact));
     }
 
@@ -859,13 +896,26 @@ impl Panes {
     /// Waits until the pane holds the terminal.
     pub fn open_terminal(&mut self, id: &TerminalId, cx: &mut VisualTestContext) {
         self.press_in_the_app::<yaar_terminal_pane::NewTerminal>(cx);
-        let (_, size) = self.keeper.open(id, cx);
+        self.answer_open(id, yaar_link::Program::Shell, cx);
+    }
+
+    /// Answers the next request, which has to ask for a terminal that runs `program`, with
+    /// `id`, and waits until the pane holds the terminal. Gives the workspace and the size
+    /// the request asked for.
+    pub fn answer_open(
+        &mut self,
+        id: &TerminalId,
+        program: yaar_link::Program,
+        cx: &mut VisualTestContext,
+    ) -> (WorkspaceId, TerminalSize) {
+        let (workspace, size) = self.keeper.open_running(id, program, cx);
         self.opened.insert(id.clone(), size);
         let pane = self.pane.clone();
         let id = id.clone();
         wait_until(cx, "the terminal in the pane", move |cx| {
             pane.read_with(cx, |pane, _| pane.terminals().contains(&id))
         });
+        (workspace, size)
     }
 
     /// Presses the key of a control of the terminal pane, after a click in the pane

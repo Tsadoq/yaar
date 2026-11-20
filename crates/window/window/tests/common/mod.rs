@@ -17,8 +17,11 @@ use gpui_kit::{
     point, px,
 };
 use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wanted};
-use yaar_link::{ReviewId, SessionId, TerminalId, ThreadId};
+use yaar_link::{
+    ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
+};
 use yaar_review_pane::ReviewPane;
+use yaar_system_tests::standin::{Script, Step};
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
 use yaar_terminal_pane::TerminalPane;
 
@@ -49,6 +52,8 @@ pub struct Composed {
     pub repositories: Vec<Repo>,
     /// The agent the walk of the reviews started, once it did.
     pub agent: Option<RunningAgent>,
+    /// The session a restart cut off, when the test made one before it opened the Window.
+    pub cut_off: Option<CutOff>,
     /// Counts what the test makes, for names of its own.
     made: u32,
     _waiting: WaitingForPrograms,
@@ -231,6 +236,7 @@ fn open_composed_with(
             _watching_the_keys: watching,
             repositories: Vec::new(),
             agent: None,
+            cut_off: None,
             made: 0,
             _waiting: WaitingForPrograms { started },
         },
@@ -245,6 +251,111 @@ fn open_composed_with(
 pub fn give_an_identity(repository: &Repo) {
     repository.git(&["config", "user.name", "A Test"]);
     repository.git(&["config", "user.email", "test@example.invalid"]);
+}
+
+/// A new repository of `world` with something to review: on a branch that left `main` with
+/// one commit, and with one more change that is not committed.
+pub fn repository_to_review(world: &World, name: &str) -> Repo {
+    let repository = world.repository(name);
+    give_an_identity(&repository);
+    repository.git(&["checkout", "--quiet", "-b", "work"]);
+    repository.write("notes.txt", "one\ntwo\nthree\n");
+    repository.commit("Add the notes");
+    repository.write("notes.txt", "one\n2\nthree\n");
+    repository
+}
+
+/// What [`a_session_cut_off`] leaves: the workspace, the session of Claude Code a restart cut
+/// off, and the id that CLI gave the session.
+pub struct CutOff {
+    /// The repository of the workspace, opened in the Keeper.
+    pub repo: Repo,
+    /// The workspace the session worked in.
+    pub workspace: WorkspaceId,
+    /// The session, listed resumable by the Keeper that started after the kill.
+    pub session: SessionId,
+    /// The id the CLI gave its session, which its resume command names.
+    pub cli_session: String,
+    /// The file that, once made, lets a stand-in that follows the world's `default` script
+    /// end. Nobody makes it before the test does.
+    pub gate: PathBuf,
+}
+
+/// The size of the terminals a client of the world opens.
+const CLIENT_SIZE: TerminalSize = TerminalSize {
+    columns: 100,
+    rows: 30,
+};
+
+/// Brings `world` to the state a restart of the machine leaves: a workspace with a session
+/// of Claude Code that was running when everything was killed, and a Keeper started again
+/// on what the first one kept, which lists the session as resumable. A client of the world
+/// opens the repository and its launcher, as a Window would, and is gone before the
+/// Keeper is killed; the stand-in on the world's search path follows the script `default`,
+/// which holds at [`CutOff::gate`] and then ends. The world has a Keeper running when this
+/// returns, and no Window is open on it.
+pub fn a_session_cut_off(world: &mut World) -> CutOff {
+    world.agents_on_path();
+    let gate = world.home().with_file_name("cut-off-gate");
+    world.agent_script(
+        "default",
+        &Script(vec![Step::Hold(gate.clone()), Step::Exit]),
+    );
+    world.start_keeper();
+    let repo = repository_to_review(world, "cut-off");
+    let mut client = world.client();
+    let (_, workspace) = client
+        .open_folder(repo.path())
+        .expect("the Keeper opens the folder");
+    client
+        .open_launcher(&workspace, "claude", CLIENT_SIZE)
+        .expect("the Keeper opens the launcher");
+    let session = session_where(&mut client, &workspace, |session| {
+        session.state != SessionState::NotRunning
+    });
+    // The id the CLI gave itself is written down when the stand-in starts.
+    assert!(
+        wait_for(DEADLINE, || !world.agent_log("default").session.is_empty()),
+        "the stand-in wrote down no session id"
+    );
+    let cli_session = world.agent_log("default").session;
+    drop(client);
+    world.kill_everything();
+    world.start_keeper();
+    let mut client = world.client();
+    session_where(&mut client, &workspace, |listed| {
+        listed.id == session.id && listed.resumable
+    });
+    drop(client);
+    CutOff {
+        repo,
+        workspace,
+        session: session.id,
+        cli_session,
+        gate,
+    }
+}
+
+/// The session of `workspace` that `wanted` accepts, once the Keeper lists one: the list is
+/// asked for again until it does.
+fn session_where(
+    client: &mut yaar_system_tests::Client,
+    workspace: &WorkspaceId,
+    mut wanted: impl FnMut(&yaar_link::Session) -> bool,
+) -> yaar_link::Session {
+    let mut found = None;
+    let came = wait_for(DEADLINE, || {
+        found = client
+            .agents()
+            .into_iter()
+            .filter(|agents| agents.workspace == *workspace)
+            .flat_map(|agents| agents.sessions)
+            .find(|session| wanted(session));
+        found.is_some()
+    });
+    found
+        .filter(|_| came)
+        .unwrap_or_else(|| panic!("no such session came: {:?}", client.agents()))
 }
 
 /// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
@@ -328,6 +439,36 @@ impl Composed {
         );
     }
 
+    /// Shows Changes in the review pane by a click on its name in the bar, which pauses no
+    /// follow, and waits until it is on screen with its first row drawn.
+    pub fn show_the_changes_view(&self, cx: &mut VisualTestContext) {
+        let at = self.point_in("review-view-changes", cx);
+        cx.simulate_click(at, Modifiers::none());
+        wait_until(cx, "Changes on screen", |cx| {
+            self.review
+                .read_with(cx, |pane, _| pane.view() == yaar_review_pane::View::Changes)
+                && cx.debug_bounds("review-row-0").is_some()
+        });
+    }
+
+    /// Whether some line of the screen of `terminal`, as its emulator holds it, holds `mark`.
+    /// What a program prints is read from the screen, as a user reads it; a shell's prompt
+    /// is no mark, so a test waits for a mark the program prints itself.
+    pub fn shows_on_screen(
+        &self,
+        terminal: &TerminalId,
+        mark: &str,
+        cx: &mut VisualTestContext,
+    ) -> bool {
+        self.terminals
+            .read_with(cx, |pane, _| pane.terminal(terminal))
+            .is_some_and(|view| {
+                view.read_with(cx, |view, _| view.lines())
+                    .iter()
+                    .any(|line| line.contains(mark))
+            })
+    }
+
     /// Whether the focus is inside an element that sets this key context.
     pub fn focus_is_in(&self, context: &str, cx: &mut VisualTestContext) -> bool {
         cx.update(|window, _| {
@@ -361,12 +502,7 @@ impl Composed {
     /// the workspace is on screen and the review pane draws its first row.
     pub fn open_a_folder(&mut self, cx: &mut VisualTestContext) -> PathBuf {
         let name = format!("opened-{}", self.next());
-        let repository = self.world.repository(&name);
-        give_an_identity(&repository);
-        repository.git(&["checkout", "--quiet", "-b", "work"]);
-        repository.write("notes.txt", "one\ntwo\nthree\n");
-        repository.commit("Add the notes");
-        repository.write("notes.txt", "one\n2\nthree\n");
+        let repository = repository_to_review(&self.world, &name);
         let folder = repository.path().to_owned();
         self.repositories.push(repository);
         self.open_this_folder(&folder, cx);

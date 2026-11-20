@@ -219,9 +219,6 @@ pub enum Entry {
         /// The path added.
         path: PathBuf,
     },
-    /// A folder put first on the search path, `PATH`, before what the Keeper's own
-    /// environment holds there.
-    SearchFirst(PathBuf),
 }
 
 /// Where the events of one terminal go. Called on a thread of the Dock's own, one event
@@ -279,7 +276,7 @@ impl Start {
 
     /// This start with the app's `entries` added to [`Start::env`], each worked out from
     /// the Keeper's own environment: a [`Entry::Variable`] as it is, a [`Entry::PathList`]
-    /// added after that variable's value, a [`Entry::SearchFirst`] put before `PATH`'s.
+    /// added after that variable's value.
     /// Two entries of one call that name one variable build on each other.
     /// Nothing else of the environment changes: the program's environment differs from
     /// the Keeper's by these entries, by [`TERMINAL_VARIABLES`] and by
@@ -289,8 +286,8 @@ impl Start {
     }
 
     /// [`Start::with`], with the look at the Keeper's environment handed in. Entries of
-    /// one call that name one variable build on each other, so that two folders put
-    /// first on `PATH` are both there; what the Keeper holds is the base of the first.
+    /// one call that name one variable build on each other, so that two paths added to
+    /// one list are both there; what the Keeper holds is the base of the first.
     fn with_environment(
         mut self,
         entries: &[Entry],
@@ -308,16 +305,6 @@ impl Start {
                     }
                     value.push(path);
                     (name.clone(), value)
-                }
-                Entry::SearchFirst(path) => {
-                    let name = OsString::from("PATH");
-                    let mut value = path.as_os_str().to_owned();
-                    let held = held_value(&added, &keeper, &name);
-                    if !held.is_empty() {
-                        value.push(":");
-                        value.push(held);
-                    }
-                    (name, value)
                 }
             };
             added.insert(name.clone(), value.clone());
@@ -1067,22 +1054,6 @@ mod tests {
     }
 
     #[test]
-    fn a_folder_put_first_comes_before_the_keepers_search_path_and_is_alone_where_it_has_none() {
-        let entry = [Entry::SearchFirst(PathBuf::from("/app/pieces"))];
-        for (held, value) in [
-            (Some("/usr/bin:/bin"), "/app/pieces:/usr/bin:/bin"),
-            (Some(""), "/app/pieces"),
-            (None, "/app/pieces"),
-        ] {
-            let start = start().with_environment(&entry, |name| {
-                assert_eq!(name, "PATH");
-                held.map(OsString::from)
-            });
-            assert_eq!(env_of(&start), [pair("PATH", value)], "{held:?}");
-        }
-    }
-
-    #[test]
     fn entries_come_after_what_the_start_holds_and_two_for_one_variable_build_on_each_other() {
         let mut before = start();
         before.env.push(("KEPT".into(), "1".into()));
@@ -1092,8 +1063,6 @@ mod tests {
                     name: "YAAR_TERMINAL".into(),
                     value: "abc".into(),
                 },
-                Entry::SearchFirst(PathBuf::from("/one")),
-                Entry::SearchFirst(PathBuf::from("/two")),
                 Entry::PathList {
                     name: "DIRS".into(),
                     path: PathBuf::from("/x"),
@@ -1103,15 +1072,13 @@ mod tests {
                     path: PathBuf::from("/y"),
                 },
             ],
-            |name| (name == "PATH").then(|| OsString::from("/usr/bin")),
+            |name| (name == "DIRS").then(OsString::new),
         );
         assert_eq!(
             env_of(&with),
             [
                 pair("KEPT", "1"),
                 pair("YAAR_TERMINAL", "abc"),
-                pair("PATH", "/one:/usr/bin"),
-                pair("PATH", "/two:/one:/usr/bin"),
                 pair("DIRS", "/x"),
                 pair("DIRS", "/x:/y"),
             ]

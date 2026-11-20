@@ -20,11 +20,14 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use yaar_link::{APP_FOLDER, Hello, MAX_FRAME, Message, Request, handshake, read_message};
+use yaar_link::{
+    APP_FOLDER, ConsentAnswer, Hello, MAX_FRAME, Message, Request, handshake, read_message,
+};
 
 use crate::client::{Client, DEADLINE};
 use crate::descendants_of;
-use crate::standin::{LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE};
+use crate::dialect::Dialect;
+use crate::standin::{LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE, Script};
 
 /// How long the Keeper a world starts stays with no Window attached: longer than any
 /// test. It ends with its world, not by itself in the middle of a test that has no
@@ -122,9 +125,8 @@ impl World {
     /// profile may add one too (macOS's adds those of `/etc/paths`). Both a login `dash`
     /// and a login `bash` started as `sh` read it.
     ///
-    /// What the app put first on the path of a shell is kept only where the system's
-    /// profile keeps it: a profile that sets the path outright takes it away before this
-    /// one runs, in the world as outside it.
+    /// The profile holds no line for the app: the app puts no folder first on the path of
+    /// a shell, and pi finds the app's extension in its own settings instead.
     fn profile(&self) -> String {
         let quoted = |text: &OsStr| format!("'{}'", text.to_string_lossy().replace('\'', r"'\''"));
         let machine = std::env::var_os("PATH").map(|search| without_agent_clis(&search));
@@ -392,42 +394,78 @@ impl World {
         }
     }
 
-    /// Starts the stand-in agent `name` as a user would start it outside every terminal of
-    /// the app, in `folder`: in a pseudo-terminal the world opens itself, with the world's
-    /// environment for programs (`World::command`), `YAAR_TERMINAL` unset, and
-    /// `CLAUDE_CODE_PLUGIN_DIRS` naming the plugin folder the world's Keeper wrote, as a
-    /// user who points Claude Code at the app's plugin by hand would. It reports over the
-    /// Keeper's socket from no terminal the Keeper holds. Its script is `script`; its log
-    /// is `agent_log(name)`.
+    /// Starts the stand-in agent of `dialect` as a user would start it outside every
+    /// terminal of the app, in `folder`: in a pseudo-terminal the world opens itself, with
+    /// the world's environment for programs (`World::command`) and `YAAR_TERMINAL` unset. It
+    /// reports over the Keeper's socket from no terminal the Keeper holds. Its script is
+    /// `script`; its log is `agent_log(dialect.name())`.
+    ///
+    /// As Claude Code it gets `CLAUDE_CODE_PLUGIN_DIRS` naming the plugin folder the
+    /// world's Keeper wrote, as a user who points Claude Code at the app's plugin by hand
+    /// would.
+    ///
+    /// As pi it is the stand-in named `pi`, which finds its extension in pi's settings, as
+    /// pi does, and reports through the program `YAAR_PI_REPORT` names. The world sets both
+    /// by hand, where they are missing, as a user who points pi at the app's pieces by hand
+    /// would: the variable names the reporting program the Keeper's shells name, and the
+    /// settings ([`World::pi_settings`]) list the extension the world's Keeper wrote, which
+    /// the Keeper's yes is not needed for. A settings file that lists it already, after
+    /// [`World::allow_pi_extension`], is left as it is; one that does not has the entry
+    /// added to its `extensions` and keeps its other keys; where there is no file, one is
+    /// made, with the folder it lies in, holding the entry alone.
+    ///
+    /// The file the world writes is compact JSON, not the layout the app keeps: a test that
+    /// compares a user's settings byte for byte gives the Keeper's yes first.
+    ///
+    /// Panics when the world's Keeper wrote no plugin, or no extension, to point at: start
+    /// the Keeper first.
     pub fn start_agent_outside(
         &self,
-        name: &str,
+        dialect: Dialect,
         script: &crate::standin::Script,
         folder: &Path,
     ) -> OutsideAgent {
+        let name = dialect.name();
         let agents = self
             .agents
             .as_ref()
             .expect("put the stand-ins on the search path first (World::agents_on_path)");
-        // Where the Adapter of Claude Code writes its plugin, once the Keeper runs.
-        let plugin = self.data_dir().join("agents").join("claude").join("plugin");
-        assert!(
-            plugin.join("hooks/hooks.json").exists(),
-            "the Keeper of this world wrote no plugin at {}: start it first",
-            plugin.display()
-        );
         let script_file = self.agent_script(name, script);
+        // Started by its name, as a shell finds it, which the stand-in reads its dialect from.
+        let mut command = self.command(&agents.join(name));
+        command
+            .env(SCRIPT_VARIABLE, script_file)
+            .env(LOG_VARIABLE, self.agent_file(name, "log"))
+            .current_dir(folder);
+        match dialect {
+            Dialect::ClaudeCode => {
+                // Where the Adapter of Claude Code writes its plugin, once the Keeper runs.
+                let plugin = self.data_dir().join("agents").join("claude").join("plugin");
+                assert!(
+                    plugin.join("hooks/hooks.json").exists(),
+                    "the Keeper of this world wrote no plugin at {}: start it first",
+                    plugin.display()
+                );
+                command.env("CLAUDE_CODE_PLUGIN_DIRS", plugin);
+            }
+            Dialect::Pi => {
+                // Where the Adapter of pi writes its extension, once the Keeper runs.
+                let extension = self.pi_extension();
+                assert!(
+                    extension.is_file(),
+                    "the Keeper of this world wrote no extension of pi at {}: start it first",
+                    extension.display()
+                );
+                self.list_in_pi_settings(&extension);
+                // The reporting program lies beside the Keeper, where the Keeper names it.
+                command.env("YAAR_PI_REPORT", crate::program("yaar-pi-report"));
+            }
+        }
         let (master, slave) = open_terminal();
         let stdio = |terminal: &OwnedFd| {
             Stdio::from(terminal.try_clone().expect("duplicate the terminal's end"))
         };
-        // Started by its name, as a shell finds it, which the stand-in reads its dialect from.
-        let child = self
-            .command(&agents.join(name))
-            .env(SCRIPT_VARIABLE, script_file)
-            .env(LOG_VARIABLE, self.agent_file(name, "log"))
-            .env("CLAUDE_CODE_PLUGIN_DIRS", plugin)
-            .current_dir(folder)
+        let child = command
             .stdin(stdio(&slave))
             .stdout(stdio(&slave))
             .stderr(stdio(&slave))
@@ -442,6 +480,106 @@ impl World {
             output: Vec::new(),
             seen: 0,
         }
+    }
+
+    /// The settings of pi in this world's home, `<home>/.pi/agent/settings.json`: where pi
+    /// looks for the extensions it loads, and where the Keeper writes the one entry after
+    /// the user's yes. The file is there only when something wrote it.
+    pub fn pi_settings(&self) -> PathBuf {
+        self.pi_folder().join("settings.json")
+    }
+
+    /// Makes pi installed in this world, as pi's first run does: the folder
+    /// `<home>/.pi/agent` and nothing in it, so that the world's Keeper asks the user's
+    /// leave to write into pi's settings. Call it before [`World::start_keeper`]: a world
+    /// that never calls it has no pi, and its home holds no `.pi` after a Keeper ran.
+    pub fn install_pi(&self) {
+        fs::create_dir_all(self.pi_folder()).expect("make the folder of pi's own files");
+    }
+
+    /// Gives the user's yes to the question of pi, as the Window's control does: sends
+    /// `AnswerConsent` for `pi` through a client of the world, and waits until the Keeper
+    /// lists the answer as yes, whence pi's settings list the extension. Call it after
+    /// [`World::start_keeper`], and [`World::install_pi`] before that.
+    ///
+    /// Panics when the Keeper lists no question of pi (pi is not installed in this world),
+    /// when it says what went wrong with pi's settings, and when the answer is not yes
+    /// within [`DEADLINE`].
+    pub fn allow_pi_extension(&self) {
+        let mut client = self.client();
+        let mut consents = client
+            .answer_consent("pi", ConsentAnswer::Yes)
+            .unwrap_or_else(|why| panic!("the Keeper refused the yes for pi: {why:?}"));
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let pi = consents
+                .iter()
+                .find(|consent| consent.agent == "pi")
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the Keeper asks no question of pi: call install_pi before start_keeper \
+                         ({consents:?})"
+                    )
+                });
+            assert_eq!(pi.problem, None, "pi's settings could not be changed");
+            if pi.answer == ConsentAnswer::Yes {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the Keeper did not list the answer for pi as yes: {pi:?}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+            consents = client
+                .consents()
+                .unwrap_or_else(|why| panic!("the Keeper refused the list of questions: {why:?}"));
+        }
+    }
+
+    fn pi_folder(&self) -> PathBuf {
+        self.home().join(".pi").join("agent")
+    }
+
+    /// Where the Adapter of pi writes its extension, once the Keeper runs: the file the
+    /// stand-in as pi finds in pi's settings and reports as having loaded.
+    pub fn pi_extension(&self) -> PathBuf {
+        self.data_dir()
+            .join("agents")
+            .join("pi")
+            .join("extension")
+            .join("yaar.ts")
+    }
+
+    /// Makes pi's settings list `extension` among the top-level `extensions`, leaving them
+    /// as they are when they do: what a user who points pi at the app's extension by hand
+    /// does.
+    fn list_in_pi_settings(&self, extension: &Path) {
+        let entry = extension.to_str().expect("the extension's path is text");
+        let settings = self.pi_settings();
+        let mut text = match fs::read_to_string(&settings) {
+            Ok(text) => serde_json::from_str::<serde_json::Value>(&text).unwrap_or_else(|why| {
+                panic!(
+                    "the settings of pi at {} are not JSON: {why}",
+                    settings.display()
+                )
+            }),
+            Err(why) if why.kind() == io::ErrorKind::NotFound => serde_json::json!({}),
+            Err(why) => panic!("read {}: {why}", settings.display()),
+        };
+        let object = text.as_object_mut().unwrap_or_else(|| {
+            panic!("the settings of pi at {} are no object", settings.display())
+        });
+        let listed = object
+            .entry("extensions")
+            .or_insert_with(|| serde_json::json!([]))
+            .as_array_mut()
+            .unwrap_or_else(|| panic!("`extensions` of {} is no array", settings.display()));
+        if listed.iter().any(|listed| listed.as_str() == Some(entry)) {
+            return;
+        }
+        listed.push(serde_json::Value::String(entry.to_owned()));
+        fs::create_dir_all(self.pi_folder()).expect("make the folder of pi's own files");
+        fs::write(&settings, text.to_string()).expect("write the settings of pi");
     }
 
     /// Kills the Keeper this world started with the kill signal, as a crash or the system
@@ -602,13 +740,41 @@ impl World {
     /// Keeper started. Name the script `default` for the stand-in that a launcher or a
     /// shell of the app starts to follow it.
     pub fn with_standin(name: &str, script: &crate::standin::Script) -> (World, Repo) {
+        World::with_standin_as(Dialect::ClaudeCode, name, script)
+    }
+
+    /// A world for a test of an agent as `dialect`, as [`World::with_standin`] makes it for
+    /// the stand-in `name`. As pi, pi is installed in the world's home before the Keeper
+    /// starts, so that the Keeper asks the question of pi, and the user's yes is given after
+    /// it, so that the stand-in started as `pi` finds the app's extension in pi's settings,
+    /// as pi does.
+    pub fn with_standin_as(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
+        World::with_standin_where(dialect == Dialect::Pi, name, script)
+    }
+
+    /// A world as [`World::with_standin_as`] makes it, with pi installed and allowed
+    /// whichever the dialect of the test is: for a test of a launcher that must start the CLI
+    /// it was asked for. Where pi is not installed, a launcher that started pi in a run as
+    /// Claude Code would find a pi that never reports, and the test would end in a wait that
+    /// ran out and not at the sentence that says which CLI started.
+    pub fn with_standin_and_pi(name: &str, script: &Script) -> (World, Repo) {
+        World::with_standin_where(true, name, script)
+    }
+
+    fn with_standin_where(pi: bool, name: &str, script: &Script) -> (World, Repo) {
         let mut world = World::new();
         world.agents_on_path();
+        if pi {
+            world.install_pi();
+        }
         world.agent_script(name, script);
         let repo = world.repository("app");
         repo.git(&["config", "user.name", "A Test"]);
         repo.git(&["config", "user.email", "test@example.invalid"]);
         world.start_keeper();
+        if pi {
+            world.allow_pi_extension();
+        }
         (world, repo)
     }
 

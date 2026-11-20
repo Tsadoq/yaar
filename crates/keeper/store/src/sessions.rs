@@ -6,7 +6,7 @@
 //! calls of slice 1 do: a step is a few bytes, and an agent takes a few steps a second.
 
 use std::ops::RangeInclusive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, Row, params};
 
@@ -182,6 +182,44 @@ impl Store {
                 ],
             )?;
             Ok(keeping.commit()?)
+        })
+    }
+
+    /// Keeps the CLI's own record of `session`, a file, as its reports last named it
+    /// (`yaar_agent::Reported::cli_record`), in place of what was kept before; none takes
+    /// it away. Refused for a session the Store does not hold. Returns when it is on the
+    /// drive.
+    pub fn set_session_cli_record(
+        &self,
+        session: &SessionId,
+        cli_record: Option<&Path>,
+    ) -> Result<(), StoreError> {
+        let (session, cli_record) = (session.0.clone(), cli_record.map(bytes));
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE session SET cli_record = ?2 WHERE id = ?1",
+                params![session, cli_record],
+            )?;
+            if changed == 0 {
+                return refused(format!("session {session} is not kept"));
+            }
+            Ok(())
+        })
+    }
+
+    /// The CLI's own record of `session`, as [`Store::set_session_cli_record`] last kept
+    /// it; none where nothing was kept, and for a session the Store does not hold.
+    pub fn session_cli_record(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
+        let session = session.0.clone();
+        self.ask(move |connection| {
+            let kept: Option<Option<Vec<u8>>> = connection
+                .query_row(
+                    "SELECT cli_record FROM session WHERE id = ?1",
+                    [session],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            Ok(kept.flatten().map(path))
         })
     }
 

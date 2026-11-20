@@ -268,6 +268,7 @@ impl ReviewPane {
             .on_action(cx.listener(Self::show_original))
             .on_action(cx.listener(Self::since_round))
             .on_action(cx.listener(Self::start_agent))
+            .on_action(cx.listener(Self::next_offered_agent))
     }
 
     /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
@@ -384,6 +385,8 @@ impl ReviewPane {
                 // A change no agent made is marked where the uncommitted changes are shown.
                 let no_agent =
                     self.tree.shown == ChangeShown::Uncommitted && self.made_by_no_agent(path);
+                // A file another session changed too (`shared.rs`).
+                let shared = self.shared_mark(index, path, cx);
                 row.px_2()
                     .gap_3()
                     .bg(theme.secondary)
@@ -402,6 +405,7 @@ impl ReviewPane {
                             .text_color(theme.warning)
                             .child("no agent")
                     }))
+                    .children(shared)
                     .children(viewed.then(|| {
                         div()
                             .debug_selector(|| format!("review-viewed-{index}"))

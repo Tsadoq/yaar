@@ -69,6 +69,7 @@ mod live_draw;
 mod moved;
 mod rounds;
 mod saves;
+mod shared;
 mod states;
 mod steady;
 mod threads;
@@ -184,9 +185,12 @@ actions!(
         /// first press the newest round with a recorded state, each press after it the
         /// round before, and after the first round the newest again.
         SinceRound,
-        /// Takes the offer to start an agent with the review attached: starts the first
-        /// CLI offered.
+        /// Takes the offer to start an agent with the review attached: starts the chosen
+        /// CLI offered, the first until Next Offered Agent chooses another.
         StartAgent,
+        /// Makes the next CLI of the offer to start an agent the chosen one, which Start
+        /// Agent starts; after the last, the first.
+        NextOfferedAgent,
     ]
 );
 
@@ -523,6 +527,14 @@ pub fn controls() -> Vec<Control> {
         control("Original Line", || Box::new(ShowOriginal), "w"),
         control("Since Round", || Box::new(SinceRound), "shift-s"),
         control("Start Agent", || Box::new(StartAgent), "shift-n"),
+        // A key vim gives a line down too, as `j` and Down do: every plain and shifted letter
+        // is vim's or the pane's, Ctrl-K starts the app's chords on Linux, and an Option
+        // letter is a dead key on macOS, so no free key is nearer.
+        control(
+            "Next Offered Agent",
+            || Box::new(NextOfferedAgent),
+            "ctrl-n",
+        ),
     ]
 }
 
@@ -714,7 +726,8 @@ struct ShownDiff {
 /// The tree of Changes above the rows carries `review-history-<index>` on the entry at
 /// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
 /// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
-/// row>`.
+/// row>`; the heading of a file that a session other than the review's own is credited with
+/// too carries `review-shared-<index of its row>`.
 /// The line above the tree that names the agent sessions whose reviews there are carries
 /// `review-session` for the one session there is, or `review-session-<index>` on each of
 /// several, which a click shows the review of; the line that says the pane keeps the
@@ -1713,8 +1726,8 @@ mod tests {
     use yaar_link::RequestKind;
 
     use super::{
-        AttachReview, AttachThread, DetachReview, ReopenThread, ResolveAddressed, ResolveThread,
-        ShowOriginal, SinceRound, StartAgent,
+        AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReopenThread, ResolveAddressed,
+        ResolveThread, ShowOriginal, SinceRound, StartAgent,
     };
     use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
@@ -1858,6 +1871,7 @@ mod tests {
                 ("w", ShowOriginal.name(), None, Asks::Nothing),
                 ("shift-s", SinceRound.name(), None, Asks::Nothing),
                 ("shift-n", StartAgent.name(), None, Asks::Nothing),
+                ("ctrl-n", NextOfferedAgent.name(), None, Asks::Nothing),
             ]
         );
     }
@@ -1972,6 +1986,10 @@ mod tests {
             (
                 StartAgent.name(),
                 "neither has one; neither starts an agent",
+            ),
+            (
+                NextOfferedAgent.name(),
+                "neither has one; vim's `ctrl-n` is a second key for a line down, which `j` has",
             ),
         ];
         let held = controls();

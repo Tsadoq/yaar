@@ -8926,6 +8926,12 @@ dependencies = [
 [[package]]
 name = "yaar-adapter-pi"
 version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "yaar-agent",
+ "yaar-link",
+ "yaar-system-tests",
+]
 
 [[package]]
 name = "yaar-agent"
@@ -8972,6 +8978,7 @@ dependencies = [
  "libc",
  "serde_json",
  "yaar-adapter-claude",
+ "yaar-adapter-pi",
  "yaar-agent",
  "yaar-dock",
  "yaar-link",

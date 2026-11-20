@@ -13,11 +13,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gpui_kit::{Action, TestAppContext, VisualTestContext};
+use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{
-    Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
-    ThreadId, ThreadState, Workspace,
+    Attachment, CommentId, ConsentAnswer, FlowForm, Origin, Program, Request, RequestKind,
+    ReviewId, Setting, ThreadId, ThreadState, Workspace, WorkspaceId,
 };
 use yaar_review_pane::{PaneRow, View};
 use yaar_system_tests::standin::{Did, Script};
@@ -25,7 +25,7 @@ use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, RunningAgent, give_an_identity, key_of, wait_until};
+use common::{Composed, RunningAgent, key_of, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -64,6 +64,22 @@ fn open_composed_with_an_agent(cx: &mut TestAppContext) -> (Composed, VisualTest
     world.agent_script("default", &script);
     world.start_keeper();
     check_the_panes(common::open_composed_in(world, cx, Vec::new()))
+}
+
+/// [`open_composed_with_an_agent`] for the walk of every request, in a world where pi is
+/// installed, so that the Window asks the question for leave, and where a restart cut off a
+/// session of Claude Code in a workspace of its own, so that Resume Agent has a session to
+/// bring back. The stand-ins that start after the restart hold at the gate of the world.
+fn open_composed_for_the_walk(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
+    let mut world = World::new();
+    // pi's own folder is there before the first Keeper starts: the question exists only then.
+    world.install_pi();
+    let cut_off = common::a_session_cut_off(&mut world);
+    let script = Script::parse(&format!("hold {}\nexit", gate_of(&world).display()));
+    world.agent_script("default", &script);
+    let (mut window, cx) = check_the_panes(common::open_composed_in(world, cx, Vec::new()));
+    window.cut_off = Some(cut_off);
+    (window, cx)
 }
 
 /// The file outside the worktrees that holds the stand-in until the test makes it.
@@ -112,12 +128,7 @@ impl Composed {
     /// its folder.
     fn new_repository(&mut self) -> PathBuf {
         let name = format!("walked-{}", self.next());
-        let repository = self.world.repository(&name);
-        give_an_identity(&repository);
-        repository.git(&["checkout", "--quiet", "-b", "work"]);
-        repository.write("notes.txt", "one\ntwo\nthree\n");
-        repository.commit("Add the notes");
-        repository.write("notes.txt", "one\n2\nthree\n");
+        let repository = common::repository_to_review(&self.world, &name);
         let folder = repository.path().to_owned();
         self.repositories.push(repository);
         folder
@@ -154,8 +165,15 @@ impl Composed {
     /// the other, so waiting for the last of them covers those before it.
     ///
     /// `passed` is the request the step waited for: for the kinds that act on a review it
-    /// says what the step has to see done.
-    fn settle(&mut self, kind: RequestKind, passed: &Request, cx: &mut VisualTestContext) {
+    /// says what the step has to see done. `from` is the place on the tap where the step's own
+    /// requests begin.
+    fn settle(
+        &mut self,
+        kind: RequestKind,
+        passed: &Request,
+        from: usize,
+        cx: &mut VisualTestContext,
+    ) {
         match kind {
             RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
                 cx.read_from_clipboard()
@@ -211,10 +229,55 @@ impl Composed {
             | RequestKind::ListTerminals
             | RequestKind::AttachTerminal
             | RequestKind::GetSettings
-            | RequestKind::GetAttachment => {
+            | RequestKind::GetAttachment
+            | RequestKind::ListClis
+            | RequestKind::CompareForReview
+            | RequestKind::ListConsents => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
+            // The answer shows in pi's settings: a yes lists the extension of the app, and a
+            // no takes it out again.
+            RequestKind::AnswerConsent => {
+                let Request::AnswerConsent { answer, .. } = passed else {
+                    panic!("the step of AnswerConsent waited for {passed:?}")
+                };
+                let settings = self.world.pi_settings();
+                let lists_it = move || {
+                    std::fs::read_to_string(&settings).is_ok_and(|text| text.contains("yaar.ts"))
+                };
+                let wanted = *answer == ConsentAnswer::Yes;
+                // And the Window holds the Keeper's answer: the question is gone from its
+                // model, so that the next key asks the Keeper again what there is to answer.
+                wait_until(
+                    cx,
+                    "pi's settings and the Window to show the answer",
+                    |cx| {
+                        lists_it() == wanted
+                            && self
+                                .models
+                                .consents
+                                .read_with(cx, |consents, _| consents.asked().is_empty())
+                    },
+                );
+                // The question is gone once answered, so the key that answers later asks the
+                // Keeper which Adapters there are to answer for first.
+                if !wanted {
+                    // Only what this step's key sent counts: an earlier step's question does
+                    // not say who asks now.
+                    let requests = self.tap.requests();
+                    let at = requests
+                        .iter()
+                        .rposition(|request| request == passed)
+                        .expect("the request that passed is on the tap");
+                    assert!(
+                        requests[from..at]
+                            .iter()
+                            .any(|request| request.kind() == RequestKind::ListConsents),
+                        "the answer with no question shown was sent without asking who asks"
+                    );
+                }
+            }
             RequestKind::AttachReview => {
                 let attached = match passed {
                     Request::AttachReview {
@@ -481,12 +544,27 @@ impl Composed {
     /// to put that request, with what the walk chose for it, on the tap. Fails when no
     /// control sends the kind.
     fn walk(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
+        self.walk_the_controls_titled(kind, |_| true, cx);
+    }
+
+    /// [`Composed::walk`] for the controls of the kind whose titles `chosen` accepts: for a
+    /// test that needs one thing a kind of request does, not every control that does it.
+    fn walk_the_controls_titled(
+        &mut self,
+        kind: RequestKind,
+        chosen: impl Fn(&str) -> bool,
+        cx: &mut VisualTestContext,
+    ) {
         let controls = controls_that_send(kind);
         assert!(
             !controls.is_empty(),
             "no control of the Window sends {kind:?}: a user has no way to start it"
         );
-        for control in controls {
+        for control in controls.into_iter().filter(|control| chosen(control.title)) {
+            // The workspace to go back to after a step that had to bring another on screen,
+            // and the stand-in a launcher started, which the step has to end.
+            let mut back_to: Option<WorkspaceId> = None;
+            let mut launched_after: Option<u32> = None;
             // No arm catches the rest: a kind added to the Link stops this from
             // compiling until somebody says here how to walk it.
             let (answer, wanted): (Answer, Wanted) = match kind {
@@ -511,26 +589,59 @@ impl Composed {
                         Box::new(move |passed| *passed == request),
                     )
                 }
-                RequestKind::OpenTerminal => {
-                    // A shell for the workspace on screen, at whatever size the pane lays
-                    // a terminal out at. Only the step that asks for a terminal sends one.
-                    let on_screen = self
-                        .on_screen(cx)
-                        .expect("a workspace is on screen before the walk opens a terminal");
-                    (
-                        Answer::Nothing,
-                        Box::new(move |passed| {
-                            matches!(
-                                passed,
-                                Request::OpenTerminal {
-                                    workspace,
-                                    program: Program::Shell,
-                                    ..
-                                } if *workspace == on_screen.id
-                            )
-                        }),
-                    )
-                }
+                RequestKind::OpenTerminal => match control.title {
+                    "New Terminal" => {
+                        // A shell for the workspace on screen, at whatever size the pane lays
+                        // a terminal out at. Only the step that asks for a terminal sends one.
+                        let on_screen = self
+                            .on_screen(cx)
+                            .expect("a workspace is on screen before the walk opens a terminal");
+                        (
+                            Answer::Nothing,
+                            Box::new(move |passed| {
+                                matches!(
+                                    passed,
+                                    Request::OpenTerminal {
+                                        workspace,
+                                        program: Program::Shell,
+                                        ..
+                                    } if *workspace == on_screen.id
+                                )
+                            }),
+                        )
+                    }
+                    // The launcher of the chosen CLI, and the resume of the session the
+                    // restart cut off, both in the workspace that session belongs to.
+                    "New Agent Terminal" | "Resume Agent" => {
+                        let cut_off = self
+                            .cut_off
+                            .as_ref()
+                            .expect("the walk opened the Window after a restart cut a session off");
+                        let (workspace, session) =
+                            (cut_off.workspace.clone(), cut_off.session.clone());
+                        back_to = self.bring_on_screen(&workspace, cx);
+                        launched_after = Some(self.world.agent_log("default").pid);
+                        let program = if control.title == "Resume Agent" {
+                            Program::Resume { session }
+                        } else {
+                            let chosen = self
+                                .terminals
+                                .read_with(cx, |pane, cx| pane.chosen_cli(cx))
+                                .expect("the Keeper names the CLIs the launchers start");
+                            Program::Agent {
+                                agent: chosen.agent,
+                            }
+                        };
+                        let request = move |passed: &Request| {
+                            matches!(passed, Request::OpenTerminal { workspace: of, program: opened, .. }
+                                if *of == workspace && *opened == program)
+                        };
+                        (Answer::Nothing, Box::new(request))
+                    }
+                    other => {
+                        panic!("the walk does not know the control {other} that opens a terminal")
+                    }
+                },
                 RequestKind::DeleteDraft => {
                     // A draft to delete, written the way a user writes one.
                     let (review, comment) = self.write_a_draft(cx);
@@ -605,11 +716,28 @@ impl Composed {
                 | RequestKind::ListTerminals
                 | RequestKind::AttachTerminal
                 | RequestKind::GetSettings
-                | RequestKind::GetAttachment => {
+                | RequestKind::GetAttachment
+                | RequestKind::ListClis
+                | RequestKind::CompareForReview
+                | RequestKind::ListConsents => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
+                }
+                // The control says which answer it gives, and the Keeper is asked for pi's, the
+                // one CLI of the world that asks.
+                RequestKind::AnswerConsent => {
+                    let answer = if control.title == "Install Agent Extensions" {
+                        ConsentAnswer::Yes
+                    } else {
+                        ConsentAnswer::No
+                    };
+                    let request = Request::AnswerConsent {
+                        agent: "pi".to_owned(),
+                        answer,
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
                 }
                 RequestKind::AttachReview => {
                     let (review, thread) = self.agent_with_a_thread(cx);
@@ -645,6 +773,7 @@ impl Composed {
                 }
             };
 
+            let from = self.tap.requests().len();
             self.press(&control, cx);
             self.give(&control, &answer, cx);
             // The Window writes a request before the action that asked returns, so it
@@ -652,7 +781,13 @@ impl Composed {
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
             let passed = self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
-            self.settle(kind, &passed, cx);
+            self.settle(kind, &passed, from, cx);
+            if let Some(before) = launched_after {
+                self.end_the_stand_in_started_after(before);
+            }
+            if let Some(workspace) = back_to {
+                self.bring_on_screen(&workspace, cx);
+            }
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
@@ -660,6 +795,52 @@ impl Composed {
                 self.wait_until_on_screen(folder, cx);
             }
         }
+    }
+
+    /// Puts `workspace` on screen by a click on its row of the sidebar, as a user does, and
+    /// waits until it is. Gives the workspace that was on screen, or none when `workspace`
+    /// was.
+    fn bring_on_screen(
+        &mut self,
+        workspace: &WorkspaceId,
+        cx: &mut VisualTestContext,
+    ) -> Option<WorkspaceId> {
+        let before = self.on_screen(cx).map(|shown| shown.id);
+        if before.as_ref() == Some(workspace) {
+            return None;
+        }
+        let row = self.point_in(&format!("sidebar-workspace-{workspace}"), cx);
+        cx.simulate_click(row, Modifiers::none());
+        wait_until(cx, "the workspace on screen", |cx| {
+            self.on_screen(cx)
+                .is_some_and(|shown| shown.id == *workspace)
+        });
+        before
+    }
+
+    /// Ends the stand-in a launcher of the Window started, which follows the script that
+    /// holds at the gate of the world, and which no agent of the walk runs beside: the gate
+    /// is made, the stand-in is gone, and the gate is taken away again for the agent the walk
+    /// starts later. The stand-in is the one whose process differs from `before`, the last the
+    /// log named, once the log names one; it names it after the stand-in read its script.
+    fn end_the_stand_in_started_after(&mut self, before: u32) {
+        let world = &self.world;
+        assert!(
+            yaar_system_tests::wait_until(DEADLINE, || {
+                // A log read while the stand-in starts it is empty: pid 0.
+                let started = world.agent_log("default").pid;
+                started != 0 && started != before
+            }),
+            "no stand-in started after the control opened its terminal"
+        );
+        let pid = self.world.agent_log("default").pid;
+        let gate = gate_of(&self.world);
+        std::fs::write(&gate, "").expect("make the gate");
+        assert!(
+            yaar_system_tests::wait_until(DEADLINE, || !is_alive(pid)),
+            "the stand-in {pid} did not end at the gate"
+        );
+        std::fs::remove_file(&gate).expect("take the gate away");
     }
 
     /// The control of the Window titled `title`.
@@ -879,7 +1060,7 @@ impl Composed {
 
 #[gpui_kit::test]
 fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestAppContext) {
-    let (mut window, mut cx) = open_composed_with_an_agent(cx);
+    let (mut window, mut cx) = open_composed_for_the_walk(cx);
 
     // A workspace is on screen before the walk, whichever kind the walk meets first:
     // without one there is nothing to set a base for.
@@ -1023,7 +1204,12 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
     window.walk(RequestKind::OpenFolder, &mut cx);
     // A terminal on screen, opened by its key as a user opens one, so that the keys of the
     // terminal pane have a terminal to act on and the focus is inside one.
-    window.walk(RequestKind::OpenTerminal, &mut cx);
+    // A shell: the launchers and the resume have their own walk, in the test above.
+    window.walk_the_controls_titled(
+        RequestKind::OpenTerminal,
+        |title| title == "New Terminal",
+        &mut cx,
+    );
     wait_until(&mut cx, "the terminal on screen", |cx| {
         cx.debug_bounds("terminal-slot-0").is_some()
     });

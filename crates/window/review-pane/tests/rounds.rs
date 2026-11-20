@@ -67,6 +67,16 @@ fn round(number: u32, state: Option<char>, edited: bool) -> Round {
         state: state.map(version),
         sent_by: SentBy::Delivered,
         edited,
+        turn: None,
+    }
+}
+
+/// A round sent in the turn of the digit `turn` (see [`turn`]), which the history may not
+/// hold yet.
+fn round_in_turn(number: u32, state: char, turn: char) -> Round {
+    Round {
+        turn: Some(TurnId::new(turn.to_string().repeat(32))),
+        ..round(number, Some(state), false)
     }
 }
 
@@ -205,6 +215,28 @@ fn tell_reviews(stage: &mut Stage, reviews: WorkspaceReviews, cx: &mut VisualTes
                 .is_some_and(|review| (&review.rounds, &review.threads) == (&held.0, &held.1))
         })
     });
+}
+
+/// The Keeper's history is now this one, and the pane has read it: no turn end is told, so
+/// that nothing is selected by it.
+fn history_grows(stage: &mut Stage, history: History, cx: &mut VisualTestContext) {
+    let asked = stage.keeper.history_asked();
+    stage.keeper.set_history(history.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(cx, "the longer history in the pane", |cx| {
+        stage.keeper.history_asked() > asked
+            && stage
+                .pane
+                .read_with(cx, |pane, _| pane.history() == Some(&history))
+    });
+}
+
+fn notice(stage: &Stage, cx: &mut VisualTestContext) -> Option<String> {
+    stage.pane.read_with(cx, |pane, _| pane.notice())
 }
 
 fn rounds(stage: &Stage, cx: &mut VisualTestContext) -> Vec<RoundShown> {
@@ -1129,4 +1161,215 @@ fn in_a_comparison_of_versions_a_moved_thread_is_acted_on_from_where_that_versio
     select(&mut stage, 1, version('4'), version('5'), &mut cx);
     assert_eq!(reply_from(5, &stage, &mut cx), Some(the));
     assert_eq!(reply_from(3, &stage, &mut cx), None);
+}
+
+#[gpui_kit::test]
+fn a_round_sent_in_a_turn_that_still_runs_is_not_counted_and_is_once_the_history_holds_that_turn_with_its_state(
+    cx: &mut TestAppContext,
+) {
+    // Round 1 has no turn, as a copy has none: counted as ever. Round 2 was sent in the
+    // turn `7`, which the history does not hold: its newest turn is `5`, older than the
+    // state recorded at the send.
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(
+            vec![round(1, Some('4'), true), round_in_turn(2, '6', '7')],
+            Vec::new(),
+        ),
+        history_of("5"),
+        "a\nb\n",
+        "a\nc\n",
+        cx,
+    );
+    assert!(is_drawn("review-round-2-since", &mut cx));
+
+    // Since Round, for the newest round, which is the first it goes to, says the turn
+    // runs and selects nothing.
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(
+        said.contains("still runs") && said.contains("Round 2"),
+        "{said}"
+    );
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    // So does the control of the round, and it selects nothing either.
+    click("review-round-2-since", &mut cx);
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(
+        said.contains("still runs") && said.contains("Round 2"),
+        "{said}"
+    );
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    // The press after the notice passes to the round before, which has no turn and is
+    // counted to the newest turn of the history, as before. This is the first request the
+    // Keeper hears from the pane since the history: the press and the click sent none.
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('4')),
+            to: version('5'),
+        }
+    );
+    compared(
+        &mut stage,
+        version('4'),
+        Some(version('5')),
+        Vec::new(),
+        &mut cx,
+    );
+
+    // After the round before, the newest again: the turn still runs. The notice then
+    // belongs to round 2, so the press after it passes on to the round before once more
+    // and does not stay on round 2.
+    cx.simulate_keystrokes("shift-s");
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(said.contains("Round 2"), "{said}");
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('4')),
+            to: version('5'),
+        }
+    );
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('4')),
+            to: version('5'),
+        }
+    );
+
+    // The press after round 1's change comes to round 2 again and says its turn still
+    // runs. The notice stays on screen until an action takes it away.
+    cx.simulate_keystrokes("shift-s");
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(said.contains("Round 2"), "{said}");
+
+    // The turn ends: the history holds it, with its state. The round is counted to that
+    // state, which is newer than the round's own, as RP-38 counts a round. The notice
+    // that said the turn runs is still on screen but is no longer true of round 2, so
+    // the press that follows is not one after the notice that passes on to round 1: it
+    // shows what changed since round 2.
+    history_grows(&mut stage, history_of("57"), &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('6')),
+            to: version('7'),
+        }
+    );
+    compared(
+        &mut stage,
+        version('6'),
+        Some(version('7')),
+        Vec::new(),
+        &mut cx,
+    );
+
+    // The control of the round asks for the same, from another change shown.
+    click("review-history-0", &mut cx);
+    compared(
+        &mut stage,
+        COMMIT.to_owned(),
+        Some(version('5')),
+        Vec::new(),
+        &mut cx,
+    );
+    click("review-round-2-since", &mut cx);
+    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('6')),
+            to: version('7'),
+        }
+    );
+    compared(
+        &mut stage,
+        version('6'),
+        Some(version('7')),
+        Vec::new(),
+        &mut cx,
+    );
+    click("review-history-0", &mut cx);
+    compared(
+        &mut stage,
+        COMMIT.to_owned(),
+        Some(version('5')),
+        Vec::new(),
+        &mut cx,
+    );
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('6')),
+            to: version('7'),
+        }
+    );
+    compared(
+        &mut stage,
+        version('6'),
+        Some(version('7')),
+        Vec::new(),
+        &mut cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_turn_the_history_holds_with_no_state_is_a_turn_that_still_runs_and_so_is_one_in_a_history_with_no_entry(
+    cx: &mut TestAppContext,
+) {
+    // The turn `7` is an entry of the history, but with no state recorded: not an entry
+    // with a state, so the round is not counted.
+    let mut history = history_of("5");
+    history.entries.push(HistoryEntry::Turn {
+        turn: TurnId::new("7".repeat(32)),
+        session: session_id('a'),
+        state: None,
+    });
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(vec![round_in_turn(1, '6', '7')], Vec::new()),
+        history,
+        "a\nb\n",
+        "a\nc\n",
+        cx,
+    );
+    click("review-round-1-since", &mut cx);
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(said.contains("still runs"), "{said}");
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    // A history read with no entry: the turn is not in it either, and that it still runs
+    // is what is true, not that no state is recorded.
+    history_grows(&mut stage, history_of(""), &mut cx);
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(said.contains("still runs"), "{said}");
+    assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
+
+    // Barrier: a request the pane sends after all of these is the next the Keeper hears,
+    // so none of the presses and clicks sent one before it. The history has an entry to
+    // click again.
+    history_grows(&mut stage, history_of("5"), &mut cx);
+    click("review-history-0", &mut cx);
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert_eq!(
+        next,
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: COMMIT.to_owned(),
+            to: Some(version('5')),
+        }
+    );
 }

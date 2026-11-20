@@ -40,7 +40,11 @@ pub const PROJECT: &str = "/home/reviewer/project";
 /// only the experiment's tools read is dropped, which the empty name says.
 ///
 /// It covers every working name a test reads: the hooks' inputs and the variables of
-/// `claude/*.jsonl`. The folders of the experiment's plugins (`ade-full`, `ade-d`,
+/// `claude/*.jsonl`, and the key that names the terminal in each line of `pi/*.jsonl`. The
+/// recordings of pi carry the working name in values no test reads as well: the paths of
+/// the experiment's extensions in the arguments of each `factory` line, the custom type
+/// and the tag of the experiment's review in the heads of messages, and the experiment's
+/// own lines, whose `event` starts with `inject:`. The folders of the experiment's plugins (`ade-full`, `ade-d`,
 /// `ade-d-inline`, `ade-full-inline`) stay in the values of variables no test reads,
 /// `CLAUDE_CODE_PLUGIN_DIRS`, `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`, and in the
 /// text of the experiment's own review inside a tool's response, which no test reads
@@ -316,6 +320,137 @@ pub fn terminal_chunks(name: &str) -> Vec<Vec<u8>> {
         .collect()
 }
 
+/// One recorded event of pi, as the experiment's logging extension wrote it: what pi gave
+/// the extension, with the session and the folder of the extension's context.
+///
+/// A line is one JSON object whose `event` names pi's event and whose other keys are what
+/// pi gave with it, under pi's own names (`sessionId`, `sessionFile`, `cwd`, `reason`,
+/// `source`, `streamingBehavior`, `toolName`, `input`, `isError`, `details`, `aborted`):
+/// the shape the app's extension reports in, as the crate doc of `yaar-adapter-pi` says, so
+/// that [`PiRecord::payload_bytes`] is a payload a test hands the Adapter. The logger's own
+/// keys (`ts`, `tNs`, `keys`, `mode`, and the lengths and heads of texts) are there too,
+/// and the Adapter reads none of them. The lines the experiment's extension wrote of its own
+/// doing, whose `event` starts with `inject:`, are records of the experiment: a test names
+/// them as facts of the recording, never as pi's.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PiRecord {
+    /// pi's event, as `tool_result`; or the experiment's own, as `inject:transform`.
+    pub event: String,
+    /// The whole line, with the names of [`RENAMED`] mapped: the variable that named the
+    /// terminal is under the app's name.
+    pub payload: serde_json::Value,
+    /// pi's process.
+    pub pid: u32,
+}
+
+impl PiRecord {
+    /// The line as the app's extension would write it as a report's payload: the JSON of
+    /// [`PiRecord::payload`], equal in meaning to the recorded line, its keys ordered by name.
+    pub fn payload_bytes(&self) -> Vec<u8> {
+        serde_json::to_vec(&self.payload).expect("a JSON value is written")
+    }
+
+    /// The same record as if it had been made in the folder `root`: every text that names
+    /// [`PROJECT`] or a path under it names `root` in its place, as
+    /// [`HookRecord::in_project`] does. A relative `input.path` stays relative: it is
+    /// relative to `cwd`, which moves.
+    pub fn in_project(&self, root: &std::path::Path) -> PiRecord {
+        let root = root.to_string_lossy();
+        let mut record = self.clone();
+        in_project_of(&mut record.payload, &root);
+        record
+    }
+
+    /// The terminal it names, under the app's variable.
+    pub fn terminal(&self) -> Option<&str> {
+        self.payload[yaar_link::TERMINAL_VARIABLE].as_str()
+    }
+
+    /// pi's own id of the session, `sessionId`.
+    pub fn session(&self) -> &str {
+        self.payload["sessionId"].as_str().unwrap_or_default()
+    }
+
+    /// The file pi keeps the session in, `sessionFile`; none where it names none.
+    pub fn session_file(&self) -> Option<&str> {
+        self.payload["sessionFile"].as_str()
+    }
+}
+
+/// Every event of pi's recording `name`, as `pi/turn-tools.jsonl`, in the order of its
+/// lines, with the names of [`RENAMED`] mapped. Every test with recorded events of pi reads
+/// them here. Panics as [`path`] does, and on a line that is not a record of pi's, naming
+/// its number.
+pub fn pi_events(name: &str) -> Vec<PiRecord> {
+    lines(name)
+        .iter()
+        .enumerate()
+        .map(|(number, line)| {
+            pi_record(line).unwrap_or_else(|| {
+                panic!("line {number} of the recording {name} is not a record of pi's")
+            })
+        })
+        .collect()
+}
+
+/// Every event of the shape of pi's written by hand `name`, in [`HAND_MADE`], in the order of
+/// its lines, the first, which says why, left out. Panics as [`hand_made_hook_events`] does,
+/// and on a later line that is not a record of pi's, naming its number.
+pub fn hand_made_pi_events(name: &str) -> Vec<PiRecord> {
+    let path = hand_made(name);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let says_why = lines
+        .next()
+        .and_then(|first| serde_json::from_str::<serde_json::Value>(first).ok())
+        .is_some_and(|first| {
+            first["hand_made"]
+                .as_str()
+                .is_some_and(|why| !why.is_empty())
+        });
+    assert!(
+        says_why,
+        "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
+    );
+    lines
+        .enumerate()
+        .map(|(number, line)| {
+            pi_record(line).unwrap_or_else(|| {
+                panic!(
+                    "line {} of the hand-made shape {name} is not a record of pi's",
+                    number + 1
+                )
+            })
+        })
+        .collect()
+}
+
+/// One line of pi's recording, with the names of [`RENAMED`] mapped; none for a line that is
+/// not one: no JSON object, or no `event` or `pid`.
+fn pi_record(line: &str) -> Option<PiRecord> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let event = value.get("event")?.as_str()?.to_owned();
+    let pid = u32::try_from(value.get("pid")?.as_u64()?).ok()?;
+    let mut fields = serde_json::Map::new();
+    for (name, field) in value.as_object()? {
+        match RENAMED.iter().find(|(from, _)| from == name) {
+            Some((_, "")) => {}
+            Some((_, to)) => {
+                fields.insert((*to).to_owned(), field.clone());
+            }
+            None => {
+                fields.insert(name.clone(), field.clone());
+            }
+        }
+    }
+    Some(PiRecord {
+        event,
+        payload: serde_json::Value::Object(fields),
+        pid,
+    })
+}
+
 /// The folder of the recordings in this checkout.
 fn folder() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FOLDER)
@@ -414,6 +549,61 @@ fn rename_in(value: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_line_of_pi_is_read_with_the_variable_of_the_terminal_under_the_apps_name() {
+        let line = r#"{"ts": "x", "pid": 50199, "event": "tool_call", "sessionId": "s-1", "sessionFile": "/home/reviewer/experiment/pi/sess/a.jsonl", "cwd": "/home/reviewer/project", "ADE_TERM_ID": "term-7a", "toolName": "read", "input": {"path": "src/calc.py"}}"#;
+        let record = pi_record(line).expect("a record of pi's");
+        assert_eq!(record.event, "tool_call");
+        assert_eq!(record.pid, 50199);
+        assert_eq!(record.terminal(), Some("term-7a"));
+        assert!(record.payload.get("ADE_TERM_ID").is_none());
+        assert_eq!(record.session(), "s-1");
+        assert_eq!(
+            record.session_file(),
+            Some("/home/reviewer/experiment/pi/sess/a.jsonl")
+        );
+        let moved = record.in_project(std::path::Path::new("/tmp/w"));
+        assert_eq!(moved.payload["cwd"], "/tmp/w");
+        assert_eq!(moved.payload["input"]["path"], "src/calc.py");
+        let again: serde_json::Value =
+            serde_json::from_slice(&moved.payload_bytes()).expect("the payload is JSON");
+        assert_eq!(again, moved.payload);
+        assert!(pi_record(r#"{"event": "input"}"#).is_none(), "no pid");
+        assert!(pi_record("not json").is_none());
+    }
+
+    #[test]
+    fn every_line_of_the_recordings_of_pi_is_a_record_and_names_a_session_but_the_factorys() {
+        for name in [
+            "pi/turn-tools.jsonl",
+            "pi/resume-quit-abort.jsonl",
+            "pi/review-before-agent-start.jsonl",
+            "pi/queued-message.jsonl",
+            "pi/reply-tool.jsonl",
+        ] {
+            for (number, record) in pi_events(name).iter().enumerate() {
+                let own = record.event == "factory" || record.event.starts_with("inject:");
+                assert!(
+                    own || !record.session().is_empty(),
+                    "line {number} of {name} names no session"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_shapes_of_pi_written_by_hand_say_so_first_and_then_hold_records_of_pi() {
+        for name in [
+            "pi-shell-read.jsonl",
+            "pi-at-mention.jsonl",
+            "pi-typed-while-working.jsonl",
+        ] {
+            let records = hand_made_pi_events(name);
+            assert!(!records.is_empty(), "{name} holds no record");
+            assert!(records.iter().all(|record| !record.session().is_empty()));
+        }
+    }
 
     #[test]
     fn a_hook_line_is_read_with_the_working_names_mapped_to_the_apps() {

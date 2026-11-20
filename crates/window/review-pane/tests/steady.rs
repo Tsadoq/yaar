@@ -787,6 +787,7 @@ fn the_first_round_of_a_review_leaves_the_diff_where_it_is_on_screen(cx: &mut Te
         state: None,
         sent_by: SentBy::Delivered,
         edited: false,
+        turn: None,
     }];
     stage.keeper.set_reviews(review);
     stage

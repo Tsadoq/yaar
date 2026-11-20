@@ -22,7 +22,7 @@ use std::path::PathBuf;
 use gpui_kit::{Action, Keystroke, TestAppContext, VisualTestContext};
 use yaar_frame::{Control, PROGRAM_CONTEXT};
 use yaar_link::TerminalId;
-use yaar_terminal_pane::NewTerminal;
+use yaar_terminal_pane::{NewAgentTerminal, NewTerminal};
 
 use common::{Composed, key_of, open_composed, wait_until};
 
@@ -73,6 +73,13 @@ fn documented() -> BTreeSet<String> {
             "cmd-alt-v",
             "cmd-alt-x",
             "cmd-alt-a",
+            // The launchers and the resume control of the terminal pane, of slice 7.
+            "cmd-shift-t",
+            "cmd-alt-c",
+            "cmd-shift-r",
+            // The answers to a question for leave, of slice 7.
+            "cmd-alt-e",
+            "cmd-alt-shift-e",
         ]);
     } else {
         keys.extend(["ctrl-shift-c", "ctrl-shift-v"]);
@@ -258,8 +265,9 @@ impl Walk {
     }
 
     /// Presses a key as the platform delivers it, and gives the names of the actions it
-    /// ran. A key that opens a terminal is waited for until the terminal is in the pane,
-    /// so that it does not arrive in the middle of a later step.
+    /// ran. A key that opens a terminal, a shell or an agent's launcher, is waited for until
+    /// the terminal is in the pane, so that it does not arrive in the middle of a later step
+    /// and take the focus from the pane a later key is pressed in.
     fn press(&mut self, key: &str) -> Vec<&'static str> {
         let terminals = self
             .window
@@ -272,7 +280,7 @@ impl Walk {
         });
         self.cx.run_until_parked();
         let ran = self.window.ran.take();
-        if ran.contains(&NewTerminal.name()) {
+        if ran.contains(&NewTerminal.name()) || ran.contains(&NewAgentTerminal.name()) {
             wait_until(&mut self.cx, "the new terminal in the pane", |cx| {
                 self.window
                     .terminals
