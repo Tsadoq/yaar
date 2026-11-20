@@ -224,3 +224,30 @@ impl Core {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_report_is_late_once_it_has_waited_longer_than_the_limit_and_not_before() {
+        let at = Instant::now();
+        assert!(!late(at, at));
+        assert!(!late(at, at + DELIVER_BY));
+        assert!(late(at, at + DELIVER_BY + Duration::from_millis(1)));
+        assert!(late(at, at + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn a_clock_that_reads_earlier_than_the_report_is_not_late() {
+        let now = Instant::now();
+        assert!(!late(now + Duration::from_secs(1), now));
+    }
+
+    #[test]
+    fn the_limit_leaves_the_hook_program_time_to_print_what_it_is_answered() {
+        // The hook program gives up at 2 s; a send kept at the limit is answered within the
+        // half second that is left, which is a few writes to the drive and a local socket.
+        assert!(DELIVER_BY + Duration::from_millis(500) <= Duration::from_secs(2));
+    }
+}

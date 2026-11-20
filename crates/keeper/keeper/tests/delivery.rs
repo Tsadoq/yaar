@@ -762,15 +762,13 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
     assert_eq!((round.number, round.sent_by), (1, SentBy::Delivered));
     assert_eq!(comment_of(&after_the_send, &comment).round, Some(1));
     assert_eq!(after_the_send.attached, None);
-    // Whether the state is kept already depends on how fast the recording thread is: the
-    // reading above shows the send, the one below the state.
+    // Whether the state is kept already when the reading above is made depends on how fast the
+    // recording thread is, so the reading above shows the send only. The state is told by a
+    // change of its own: the second one, after which the round has it.
     setup.changes(1);
-    let after_the_state = setup.review_of(session[0].session());
-    assert!(
-        after_the_state.rounds[0].state.is_some(),
-        "the round has no state: {:?}",
-        after_the_state.rounds
-    );
+    let cli = session[0].session();
+    let kept = setup.review_of(cli).rounds[0].state.clone();
+    assert!(kept.is_some_and(|state| !state.is_empty()));
     setup.stop();
 }
 
@@ -967,7 +965,7 @@ fn a_review_longer_than_the_inline_limit_is_a_file_the_session_may_read_and_no_o
 
 #[test]
 fn the_call_of_the_reply_tool_is_allowed_and_a_call_of_another_tool_is_not() {
-    let mut setup = Setup::new();
+    let setup = Setup::new();
     let session = recorded::hook_events(REPLY_HOOKS);
     setup.hook(&session[1]);
 
