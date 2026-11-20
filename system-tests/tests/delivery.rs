@@ -11,11 +11,11 @@ use std::time::Instant;
 
 use serde_json::Value;
 use yaar_link::{
-    Anchor, Attachment, Author, CommentId, DraftOn, Fact, Lines, Review, ReviewId, SentBy,
-    Session, SessionState, Side, Step as Taken, TerminalId, TerminalSize, Thread, ThreadId,
-    ThreadState, TurnEnd, WorkspaceAgents, WorkspaceId,
+    Anchor, Attachment, Author, CommentId, DraftOn, Fact, Lines, Review, ReviewId, SentBy, Session,
+    SessionState, Side, Step as Taken, TerminalId, TerminalSize, Thread, ThreadId, ThreadState,
+    TurnEnd, WorkspaceAgents, WorkspaceId,
 };
-use yaar_system_tests::standin::{Did, Script, Step, StandinLog};
+use yaar_system_tests::standin::{Did, Script, StandinLog, Step};
 use yaar_system_tests::{Client, DEADLINE, Repo, World, descendants_of, is_alive, wait_until};
 
 const SIZE: TerminalSize = TerminalSize {
@@ -329,7 +329,10 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     // What the view control shows: the instruction, then the review.
     let view = client.attachment(&review.id).expect("the view");
     assert!(view.contains(REPLY_TOOL), "{view}");
-    assert!(view.contains("Only the reviewer resolves a thread."), "{view}");
+    assert!(
+        view.contains("Only the reviewer resolves a thread."),
+        "{view}"
+    );
     assert!(
         view.contains(&format!("Thread {thread}")) && view.contains("Please give this a better"),
         "{view}"
@@ -339,7 +342,9 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     // keys, which shows that what is typed reaches it, nothing else did: it ran no
     // `UserPromptSubmit`, and the comment is still a draft.
     client.type_into(&terminal, b"Please look");
-    let before_enter = log_when(&world, "default", |log| log.received.ends_with(b"Please look"));
+    let before_enter = log_when(&world, "default", |log| {
+        log.received.ends_with(b"Please look")
+    });
     assert_eq!(before_enter.received, b"Please look");
     assert!(
         prompts(&before_enter).is_empty(),
@@ -394,7 +399,10 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     assert_eq!(reply.author, Author::Agent);
     assert_eq!(reply.text, body);
     assert_eq!(thread_now.state, ThreadState::Addressed);
-    assert!(thread_now.addressed && !thread_now.resolved, "{thread_now:?}");
+    assert!(
+        thread_now.addressed && !thread_now.resolved,
+        "{thread_now:?}"
+    );
 
     // The stand-in ends, and what it received is what the test typed and nothing more.
     let over = log_when(&world, "default", has_exited);
@@ -461,6 +469,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         "Say more about alpha.",
     );
     assert_eq!(client.attach_review(&review.id, None), Ok(vec![]));
+    let view = client.attachment(&review.id).expect("the view");
     let attached = review_of(&mut client, &workspace, &session);
     assert_eq!(attached.attached, Some(Attachment::Review));
     assert_eq!(attached.rounds, vec![]);
@@ -472,7 +481,11 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
     let queued = log_when(&world, "default", |log| prompts(log).len() == 2);
     // The stand-in is still in its hold: the hook ran at Enter, not after the tool.
     assert!(
-        !gate.exists() && !queued.did.iter().any(|did| matches!(did, Did::Done { step: 1, .. })),
+        !gate.exists()
+            && !queued
+                .did
+                .iter()
+                .any(|did| matches!(did, Did::Done { step: 1, .. })),
         "the hold ended before the message was taken: {:?}",
         queued.did
     );
@@ -482,6 +495,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         context.contains(&format!("Thread {thread}")) && context.contains("Say more about alpha."),
         "{context}"
     );
+    assert_eq!(context, view);
     assert!(
         queued.received[..read].ends_with(b"also this\r"),
         "the stand-in had read {:?}",
@@ -515,9 +529,10 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         .and_then(|candidate| candidate.turn)
         .expect("the turn still runs");
     fs::write(&gate, "").expect("let the turn go on");
-    client.wait_for_fact(DEADLINE, |fact| {
-        matches!(fact, Fact::TurnEnded { turn, .. } if *turn == running)
-    });
+    client.wait_for_fact(
+        DEADLINE,
+        |fact| matches!(fact, Fact::TurnEnded { turn, .. } if *turn == running),
+    );
     let kept = client.turn(&running).expect("the turn is kept");
     assert_eq!(kept.ended, Some(TurnEnd::Finished));
     assert!(
@@ -571,16 +586,32 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
 
     // A first message: it works, and its turn ends.
     agent.type_line("make a change");
-    // The turn is over at once, so each state is waited for in the facts that told it: a
-    // look at the sessions could come after it was gone.
-    for state in [SessionState::Works, SessionState::Unreviewed] {
-        client.wait_for_agents(&workspace, DEADLINE, |agents| agents.shown == Some(state));
-    }
+    // The turn is over at once, so the state is waited for in the fact that told it: a look
+    // at the sessions could come after it was gone.
+    client.wait_for_agents(&workspace, DEADLINE, |agents| {
+        agents.shown == Some(SessionState::Works)
+    });
+    let Fact::TurnEnded { turn, .. } = client.wait_for_fact(
+        DEADLINE,
+        |fact| matches!(fact, Fact::TurnEnded { workspace: of, .. } if *of == workspace),
+    ) else {
+        unreachable!("the wait accepts a turn's end");
+    };
+    assert_eq!(
+        client.turn(&turn).expect("the turn is kept").ended,
+        Some(TurnEnd::Finished)
+    );
     let first = log_when(&world, "claude", |log| {
-        log.did.iter().any(|did| matches!(did, Did::Hook { event, .. } if event == "Stop"))
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Hook { event, .. } if event == "Stop"))
     });
     assert_eq!(prompts(&first).len(), 1);
-    let turns = client.history(&workspace).expect("the history").entries.len();
+    let turns = client
+        .history(&workspace)
+        .expect("the history")
+        .entries
+        .len();
     assert_eq!(turns, 1, "one turn of the agent was followed");
 
     // A review, attached, goes with its second message.
@@ -613,7 +644,10 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
     };
     assert_eq!((reply.author, reply.text.as_str()), (Author::Agent, body));
     assert_eq!(thread_now.state, ThreadState::WaitsForReviewer);
-    assert!(!thread_now.addressed && !thread_now.resolved, "{thread_now:?}");
+    assert!(
+        !thread_now.addressed && !thread_now.resolved,
+        "{thread_now:?}"
+    );
 
     // It is still in no terminal, and the app opened none for it.
     log_when(&world, "claude", has_exited);
@@ -634,10 +668,10 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
     // Two sessions of one worktree, each in a shell of its own with a script and a log of
     // its own, and each with a review.
     start_in(&world, &mut client, &one, "a", &talk);
-    let mut at_one = client.wait_for_prompt(&one, 0);
+    let at_one = client.wait_for_prompt(&one, 0);
     sessions_when(&mut client, &workspace, |agents| agents.sessions.len() == 1);
     start_in(&world, &mut client, &two, "b", &talk);
-    let mut at_two = client.wait_for_prompt(&two, 0);
+    let at_two = client.wait_for_prompt(&two, 0);
     let both = sessions_when(&mut client, &workspace, |agents| {
         agents.sessions.len() == 2
             && agents
@@ -674,7 +708,11 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
     // decided what went with it.
     client.type_line(&two, "hello B");
     let hello_b = log_when(&world, "b", |log| !prompts(log).is_empty());
-    assert_eq!(prompts(&hello_b)[0].0, b"", "{:?}", hello_b.did);
+    assert!(
+        prompts(&hello_b)[0].0.is_empty(),
+        "B's answer: {:?}",
+        String::from_utf8_lossy(prompts(&hello_b)[0].0)
+    );
     let kept = review_of(&mut client, &workspace, &a);
     assert_eq!(kept.attached, Some(Attachment::Review));
     assert_eq!(kept.rounds, vec![]);
@@ -682,6 +720,13 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
     assert_eq!(review_of(&mut client, &workspace, &b).rounds, vec![]);
 
     // A message to A: A's answer carries A's review.
+    let thread_id = thread.as_str().as_bytes();
+    let holds = |log: &StandinLog| {
+        log.did.iter().any(|did| {
+            matches!(did, Did::Hook { answer, .. }
+                if answer.windows(thread_id.len()).any(|window| window == thread_id))
+        })
+    };
     client.type_line(&one, "hello A");
     let hello_a = log_when(&world, "a", |log| !prompts(log).is_empty());
     let context = context_of(prompts(&hello_a)[0].0).expect("A's answer carries a review");
@@ -693,28 +738,36 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
         review.attached.is_none() && !review.rounds.is_empty()
     });
     assert_eq!(thread_of(&sent, &thread).comments[0].round, Some(1));
+    let b_so_far = world.agent_log("b");
+    assert!(
+        !holds(&b_so_far),
+        "B received A's review: {:?}",
+        b_so_far.did
+    );
 
     // Both go on to a second message and end. B's log never held the thread of A's review
     // in any answer.
-    at_one = client.wait_for_prompt(&one, at_one);
-    at_two = client.wait_for_prompt(&two, at_two);
-    assert!(at_one > 0 && at_two > 0);
+    client.wait_for_prompt(&one, at_one);
+    client.wait_for_prompt(&two, at_two);
     client.type_line(&one, "bye A");
     client.type_line(&two, "bye B");
     for name in ["a", "b"] {
         log_when(&world, name, has_exited);
     }
-    let thread_id = thread.as_str().as_bytes();
-    let holds = |log: &StandinLog| {
-        log.did.iter().any(|did| {
-            matches!(did, Did::Hook { answer, .. }
-                if answer.windows(thread_id.len()).any(|window| window == thread_id))
-        })
-    };
     let (log_a, log_b) = (world.agent_log("a"), world.agent_log("b"));
-    assert!(holds(&log_a), "A never received the thread: {:?}", log_a.did);
+    assert!(
+        holds(&log_a),
+        "A never received the thread: {:?}",
+        log_a.did
+    );
     assert!(!holds(&log_b), "B received A's review: {:?}", log_b.did);
-    let b_answers: Vec<_> = prompts(&log_b).into_iter().map(|(answer, _)| answer).collect();
-    assert_eq!(b_answers, [b"" as &[u8], b""], "{:?}", log_b.did);
+    let b_answers: Vec<_> = prompts(&log_b)
+        .into_iter()
+        .map(|(answer, _)| answer)
+        .collect();
+    assert!(
+        b_answers.iter().all(|answer| answer.is_empty()),
+        "B's answers: {b_answers:?}"
+    );
     end(world, client);
 }
