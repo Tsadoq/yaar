@@ -18,7 +18,10 @@
 //! for each, in the order the model lists them, `terminal-resume-<n>`, n counted from 0,
 //! with the words `Resume <the session's title>`. A click opens a terminal that runs
 //! `yaar_link::Program::Resume` of that session, once: while the pane holds a resume it opened
-//! for the session, another click asks nothing. [`crate::ResumeAgent`] does the same for
+//! for the session, another click asks nothing. The pane lets go of it when the session is
+//! listed resumable no more, and when the terminal it opened ends, which is all the pane
+//! hears of a resumed program that fails before it reports. [`crate::ResumeAgent`] does the
+//! same for
 //! the first resumable session of the workspace on screen the pane has not opened a resume
 //! for since it was listed: a second press reaches the second session, not the first again.
 //! The line goes with the last resumable session, as the Keeper tells the agents again
@@ -33,7 +36,8 @@
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_link::{AgentCli, Program, Reply, Request, Session, SessionId};
+use yaar_frame::AskError;
+use yaar_link::{AgentCli, Fact, Program, Reply, Request, Session, SessionId, TerminalId};
 
 use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane};
 
@@ -46,16 +50,30 @@ const NO_CLI: &str = "The Keeper names no agent CLI to start.";
 /// What the notice says when Resume Agent finds no session to resume.
 const NOTHING_TO_RESUME: &str = "No session of this workspace is left to resume.";
 
-/// What the pane keeps of its launchers: which CLI is the chosen one, and the sessions it
-/// opened a resume for.
+/// A resume the pane asked for.
+struct Resume {
+    /// The session it brings back.
+    session: SessionId,
+    /// The terminal the Keeper opened for it, once the pane has the answer.
+    terminal: Option<TerminalId>,
+}
+
+/// What the pane keeps of its launchers: which CLI is the chosen one, and the resumes it
+/// asked for.
 #[derive(Default)]
 pub(crate) struct Launchers {
     /// The chosen CLI, by its index in the CLIs the Keeper named.
     chosen: usize,
-    /// The sessions the pane opened a resume for, until they are listed resumable no more.
-    resumed: Vec<SessionId>,
+    /// The resumes the pane asked for, until their session is listed resumable no more or
+    /// their terminal ends.
+    resumed: Vec<Resume>,
+    /// Terminals that ended while a resume still waited for its answer: a program that
+    /// fails at once can end before the pane takes the answer that names its terminal.
+    ended: Vec<TerminalId>,
     /// Keeps `resumed` in step with the agents model, once there is something in it.
     watching: Option<Subscription>,
+    /// Keeps `resumed` in step with the terminals that end, as long as `watching` does.
+    hearing: Option<Subscription>,
 }
 
 impl TerminalPane {
@@ -117,19 +135,92 @@ impl TerminalPane {
     /// so that a session listed again, as after another restart, is offered again.
     fn forget_resumed(&mut self, cx: &App) {
         let agents = self.models.agents.read(cx);
+        self.launchers.resumed.retain(|resume| {
+            agents
+                .session(&resume.session)
+                .is_some_and(|session| session.resumable)
+        });
+    }
+
+    /// Whether the pane holds a resume it asked for `session`.
+    fn holds(&self, session: &SessionId) -> bool {
         self.launchers
             .resumed
-            .retain(|id| agents.session(id).is_some_and(|session| session.resumable));
+            .iter()
+            .any(|resume| resume.session == *session)
     }
 
     /// Starts forgetting resumes with every change of the agents model, rather than with
     /// every frame: a window that is not drawn while the Keeper tells a session resumable
-    /// no more, and then resumable again, would never see it not resumable.
+    /// no more, and then resumable again, would never see it not resumable. And with every
+    /// terminal that ends: the Keeper clears a session's resumable mark only when the
+    /// resumed CLI reports it, so a CLI that fails before that leaves the session listed
+    /// and its control drawn, which has to ask again.
     fn watch_agents(&mut self, cx: &mut Context<Self>) {
         if self.launchers.watching.is_none() {
             self.launchers.watching = Some(cx.observe(&self.models.agents, |pane, _, cx| {
                 pane.forget_resumed(cx);
             }));
+        }
+        if self.launchers.hearing.is_none() {
+            self.launchers.hearing =
+                Some(cx.subscribe(&self.models.link, |pane, _, fact: &Fact, _| {
+                    pane.resumed_ended(fact);
+                }));
+        }
+    }
+
+    /// Lets go of the resume whose terminal ended; a terminal that ends before its resume
+    /// has an answer is remembered for the answer.
+    fn resumed_ended(&mut self, fact: &Fact) {
+        let Fact::TerminalEnded { terminal, .. } = fact else {
+            return;
+        };
+        let resumed = &mut self.launchers.resumed;
+        let held = resumed.len();
+        resumed.retain(|resume| resume.terminal.as_ref() != Some(terminal));
+        if resumed.len() == held && resumed.iter().any(|resume| resume.terminal.is_none()) {
+            self.launchers.ended.push(terminal.clone());
+        }
+    }
+
+    /// Takes the Keeper's answer to the question for the resume of `session`: the terminal
+    /// it opened is the one whose end lets the resume go, or none was opened and the
+    /// session can be tried again.
+    fn resume_answered(&mut self, session: &SessionId, answer: &Result<Reply, AskError>) {
+        let opened = match answer {
+            Ok(Reply::TerminalOpened { terminal }) => Some(terminal),
+            _ => None,
+        };
+        let ended = opened.and_then(|terminal| {
+            self.launchers
+                .ended
+                .iter()
+                .position(|ended| ended == terminal)
+        });
+        match (opened, ended) {
+            (Some(terminal), None) => {
+                if let Some(resume) = self
+                    .launchers
+                    .resumed
+                    .iter_mut()
+                    .find(|resume| resume.session == *session)
+                {
+                    resume.terminal = Some(terminal.clone());
+                }
+            }
+            _ => self
+                .launchers
+                .resumed
+                .retain(|resume| resume.session != *session),
+        }
+        if !self
+            .launchers
+            .resumed
+            .iter()
+            .any(|resume| resume.terminal.is_none())
+        {
+            self.launchers.ended.clear();
         }
     }
 
@@ -157,12 +248,8 @@ impl TerminalPane {
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| {
-                // A resume the Keeper did not open is not one the pane has opened: the
-                // session can be tried again.
-                if let Program::Resume { session } = &program
-                    && !matches!(answer, Ok(Reply::TerminalOpened { .. }))
-                {
-                    pane.launchers.resumed.retain(|opened| opened != session);
+                if let Program::Resume { session } = &program {
+                    pane.resume_answered(session, &answer);
                 }
                 pane.opened(workspace, program, answer, cx);
             })
@@ -177,8 +264,9 @@ impl TerminalPane {
     fn resume(&mut self, session: SessionId, cx: &mut Context<Self>) {
         // The Keeper refuses a session only once it runs, which is later than the answer
         // to this question: a second ask while the first stands would open a second
-        // terminal on one session. A refusal forgets it, so that a retry goes through.
-        if self.launchers.resumed.contains(&session) {
+        // terminal on one session. A refusal forgets it, so that a retry goes through, and
+        // so does the end of the terminal it opened.
+        if self.holds(&session) {
             return;
         }
         let program = Program::Resume {
@@ -186,7 +274,10 @@ impl TerminalPane {
         };
         if self.launch(program, cx) {
             self.watch_agents(cx);
-            self.launchers.resumed.push(session);
+            self.launchers.resumed.push(Resume {
+                session,
+                terminal: None,
+            });
         }
     }
 
@@ -348,7 +439,7 @@ impl TerminalPane {
         let next = self
             .resumable_sessions(cx)
             .into_iter()
-            .find(|session| !self.launchers.resumed.contains(&session.id));
+            .find(|session| !self.holds(&session.id));
         match next {
             Some(session) => self.resume(session.id, cx),
             None => {

@@ -14,8 +14,8 @@ use gpui_kit::{
     Bounds, Modifiers, Pixels, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
 };
 use yaar_link::{
-    AgentCli, Fact, Program, Repository, Request, Session, SessionId, SessionState, TerminalId,
-    WorkspaceAgents, WorkspaceId,
+    AgentCli, Ending, Fact, Program, Reply, Repository, Request, Session, SessionId, SessionState,
+    TerminalId, WorkspaceAgents, WorkspaceId,
 };
 use yaar_terminal_pane::{NewAgentTerminal, NewTerminal, NextAgentCli, ResumeAgent};
 
@@ -31,10 +31,13 @@ fn claude() -> AgentCli {
     }
 }
 
+/// Titles that differ from the names of the agents, and in length the other way round
+/// for the two CLIs: the launcher asks the Keeper for the agent's name, and the words on
+/// it are the title, which the widths of the two launchers tell apart.
 fn pi() -> AgentCli {
     AgentCli {
         agent: "pi".to_owned(),
-        title: "pi".to_owned(),
+        title: "Pi, the coding agent".to_owned(),
     }
 }
 
@@ -129,6 +132,12 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
         bounds_of("terminal-launcher-pi", &mut cx),
     );
     assert!(shell.right() <= first.left() && first.right() <= second.left());
+    // Each launcher carries its CLI's title: pi's is longer than Claude Code's and its
+    // name is shorter.
+    assert!(
+        second.size.width > first.size.width,
+        "{second:?} is not wider than {first:?}: the launcher does not carry the CLI's title"
+    );
     for launcher in [shell, first, second] {
         assert!(within(launcher, row), "{launcher:?} lies outside {row:?}");
     }
@@ -155,6 +164,11 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     });
     let size = panes.grid(&first_terminal);
 
+    // A click on the launcher of Claude Code asks for a terminal that runs the agent by
+    // its name, not its title.
+    click_in("terminal-launcher-claude", &mut cx);
+    panes.answer_open(&terminal('x'), agent("claude"), &mut cx);
+
     // A click on the launcher of pi asks for a terminal that runs pi, at the size the
     // pane lays terminals out at; the answer is shown and has the focus.
     click_in("terminal-launcher-pi", &mut cx);
@@ -165,7 +179,7 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     });
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
-        [first_terminal.clone(), terminal('b')]
+        [first_terminal.clone(), terminal('x'), terminal('b')]
     );
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.shown()),
@@ -521,18 +535,36 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
         panes.pane.read_with(&cx, |pane, _| pane.notice()),
         Some("No session of this workspace is left to resume.".to_owned())
     );
+    // The barrier is a shell asked for in the other workspace, which is the next request
+    // the Keeper hears when the key sent nothing: a key that fell back to a shell would
+    // ask for one in the workspace on screen.
+    click_in(&format!("sidebar-workspace-{two}"), &mut cx);
+    wait_drawn(&mut cx, "the other workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&two))
+    });
     panes.press_in_the_app::<NewTerminal>(&mut cx);
     let (_, request) = panes.keeper.request(&mut cx);
     assert!(
         matches!(
-            request,
+            &request,
             Request::OpenTerminal {
+                workspace,
                 program: Program::Shell,
                 ..
-            }
+            } if *workspace == two
         ),
         "{request:?}"
     );
+    click_in(&format!("sidebar-workspace-{one}"), &mut cx);
+    wait_drawn(&mut cx, "the first workspace on screen", |cx| {
+        panes
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected() == Some(&one))
+    });
 
     // The resumed session reports: the Keeper tells it is no longer resumable, and its
     // control goes while the other stays.
@@ -674,4 +706,101 @@ fn a_resume_asked_for_once_is_not_asked_for_again_while_the_session_is_listed_re
         ),
         "{request:?}"
     );
+}
+
+/// Waits until the view of `id` shows that its program ended.
+fn wait_for_ending(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) {
+    let view = panes
+        .pane
+        .read_with(cx, |pane, _| pane.terminal(id))
+        .expect("the terminal");
+    wait_until(cx, "the ending", |cx| {
+        view.read_with(cx, |view, _| view.ending()).is_some()
+    });
+}
+
+#[gpui_kit::test]
+fn a_resume_whose_terminal_ends_before_the_session_reports_can_be_asked_for_again(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let one = workspace_id('1');
+    let a = session('a', "claude", &one, true);
+    tell_agents(&panes, &one, vec![a.clone()]);
+    wait_drawn(&mut cx, "the resume line", |cx| {
+        drawn("terminal-resume-0", cx).is_some()
+    });
+
+    // The resumed program exits before it reports, as a CLI does that cannot find its
+    // session: the Keeper still lists the session resumable, and the pane, which holds
+    // no terminal for it that runs, asks again for a click and for the key.
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('b'), resume(&a), &mut cx);
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: terminal('b'),
+        ending: Ending::Exited(1),
+    });
+    wait_for_ending(&panes, &terminal('b'), &mut cx);
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('c'), resume(&a), &mut cx);
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: terminal('c'),
+        ending: Ending::Signalled(9),
+    });
+    wait_for_ending(&panes, &terminal('c'), &mut cx);
+    panes.press_in_the_app::<ResumeAgent>(&mut cx);
+    panes.answer_open(&terminal('d'), resume(&a), &mut cx);
+    assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.notice()), None);
+}
+
+#[gpui_kit::test]
+fn a_resume_whose_terminal_ended_before_the_answer_was_taken_can_be_asked_for_again(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
+    let one = workspace_id('1');
+    let a = session('a', "claude", &one, true);
+    tell_agents(&panes, &one, vec![a.clone()]);
+    wait_drawn(&mut cx, "the resume line", |cx| {
+        drawn("terminal-resume-0", cx).is_some()
+    });
+
+    // A program that fails at once can end before the pane takes the answer that named
+    // its terminal. The fact for the end is sent first, and a change of the agents
+    // behind it, which the pane shows only after it has heard the end, stands for the
+    // moment the pane took it; then the answer.
+    click_in("terminal-resume-0", &mut cx);
+    let (id, request) = panes.keeper.request(&mut cx);
+    assert!(
+        matches!(
+            &request,
+            Request::OpenTerminal {
+                program: Program::Resume { .. },
+                ..
+            }
+        ),
+        "{request:?}"
+    );
+    panes.keeper.tell(Fact::TerminalEnded {
+        terminal: terminal('b'),
+        ending: Ending::Exited(1),
+    });
+    let marker = session('f', "pi", &one, true);
+    tell_agents(&panes, &one, vec![a.clone(), marker.clone()]);
+    wait_drawn(&mut cx, "the change heard", |cx| {
+        offered(&panes, cx) == [a.id.clone(), marker.id.clone()]
+    });
+    panes.keeper.reply(
+        id,
+        Ok(Reply::TerminalOpened {
+            terminal: terminal('b'),
+        }),
+    );
+    wait_until(&mut cx, "the terminal in the pane", |cx| {
+        panes
+            .pane
+            .read_with(cx, |pane, _| pane.terminals().contains(&terminal('b')))
+    });
+    click_in("terminal-resume-0", &mut cx);
+    panes.answer_open(&terminal('c'), resume(&a), &mut cx);
 }
