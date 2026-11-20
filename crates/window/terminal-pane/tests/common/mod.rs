@@ -693,8 +693,23 @@ impl TestKeeper {
         });
     }
 
-    /// Tells the Window a fact.
+    /// Tells the Window a fact. What the fact says of the agents of a workspace is what
+    /// every `ListAgents` is answered with from then on, as the Keeper's list holds what
+    /// it told: the Window asks again for the list when it hears a change while an answer
+    /// is on its way, and an answer older than the fact would take the fact's sessions
+    /// away again.
     pub fn tell(&self, fact: yaar_link::Fact) {
+        if let yaar_link::Fact::AgentsChanged(told) = &fact {
+            let mut inner = self.standing.lock();
+            match inner
+                .agents
+                .iter_mut()
+                .find(|agents| agents.workspace == told.workspace)
+            {
+                Some(held) => *held = told.clone(),
+                None => inner.agents.push(told.clone()),
+            }
+        }
         self.write(&Message::Fact(fact));
     }
 
