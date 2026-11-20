@@ -424,16 +424,19 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
 #[test]
 fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved()
  {
-    // The second turn holds until the test makes the file, then rewrites line 2 of notes.txt.
-    // The steps the test waits for, by their place in the script below.
+    // The second turn holds until the test makes the file, rewrites line 2 of notes.txt and
+    // holds again until the test has read the review, so that the reply and the turn's end
+    // come after the read. The steps the test waits for, by their place in the script below.
     const HOLD: usize = 4;
     const WRITE: usize = 5;
+    const HOLD_AFTER_WRITE: usize = 6;
     // Replies name threads by their number in the review the agent was handed.
     let (world, _) = World::with_standin("default", &Script(vec![]));
     let gate = world
         .agent_script("default", &Script(vec![]))
         .with_extension("go");
     let rewritten = "alpha\ndelta, replaced entirely\ngamma\n";
+    let after_write = gate.with_extension("go-on");
     let steps = Script(vec![
         Step::Turn,
         Step::Reply {
@@ -445,6 +448,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
         Step::Turn,
         Step::Hold(gate.clone()),
         Step::Write(path("notes.txt"), rewritten.into()),
+        Step::Hold(after_write.clone()),
         Step::Reply {
             thread: 1,
             addressed: true,
@@ -541,7 +545,27 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
         "{:?}",
         world.agent_log("default")
     );
-    review_where(&mut client, &workspace, &review, |r| r.rounds[1].edited);
+    // The stand-in holds right after its write, in the turn that has not ended: the Keeper
+    // took the write's report before the hook was answered, so one read finds the round
+    // edited, and a round marked only at the turn's end or later is not.
+    assert!(
+        wait_until(DEADLINE, || world.agent_log("default").did.iter().any(
+            |did| matches!(
+                did,
+                Did::Began {
+                    step: HOLD_AFTER_WRITE,
+                    ..
+                }
+            )
+        )),
+        "{:?}",
+        world.agent_log("default")
+    );
+    assert!(
+        review_now(&mut client, &workspace, &review).rounds[1].edited,
+        "the round is not shown as edited after the agent's first edit"
+    );
+    std::fs::write(&after_write, "").expect("let the agent go on");
     let Fact::TurnEnded { state, .. } = client.wait_for_fact(DEADLINE, is_turn_end) else {
         unreachable!()
     };
