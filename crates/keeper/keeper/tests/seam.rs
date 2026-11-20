@@ -345,8 +345,14 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
         asks: Asks::Message,
     };
     let mut copy = CopyAsText;
-    let mut claude = adapters[0].delivery(&claude_folder, &asked);
-    let mut pi = adapters[1].delivery(&pi_folder, &asked);
+    let named = |name: &str| {
+        adapters
+            .iter()
+            .find(|adapter| adapter.name() == name)
+            .unwrap_or_else(|| panic!("the Keeper holds no Adapter named {name}"))
+    };
+    let mut claude = named(yaar_adapter_claude::NAME).delivery(&claude_folder, &asked);
+    let mut pi = named(yaar_adapter_pi::NAME).delivery(&pi_folder, &asked);
     let mut own = ByTheTest;
     let mut ways: Vec<(&str, &mut dyn Delivery)> = vec![
         ("copy as text", &mut copy),
