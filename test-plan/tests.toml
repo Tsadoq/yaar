@@ -1134,7 +1134,7 @@ built = [
     "crates/keeper/adapter-pi/tests/listen.rs::a_prompt_naming_a_file_with_an_at_mention_gives_no_read",
     "crates/keeper/adapter-pi/tests/listen.rs::a_file_read_through_a_shell_command_gives_the_command_and_no_read",
 ]
-note = "pi's recording holds the four tools in five runs, one prompt each; the seven kinds come in that order across them."
+note = "pi's recording holds the four tools in five runs, one prompt each; the kinds come in the same order within each run."
 
 [[test]]
 id = "LISTEN-02"
