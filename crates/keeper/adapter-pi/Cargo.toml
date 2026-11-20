@@ -24,10 +24,5 @@ serde_json.workspace = true
 # The recorded events of pi, which the tests of the mapping replay.
 yaar-system-tests.workspace = true
 
-# Used by the packages of slice 7 that build the reporting program and the mapping: named
-# here until they do.
-[package.metadata.cargo-machete]
-ignored = ["yaar-link", "serde_json", "yaar-system-tests"]
-
 [lints]
 workspace = true
