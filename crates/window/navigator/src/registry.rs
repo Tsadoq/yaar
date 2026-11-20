@@ -1042,9 +1042,7 @@ mod tests {
             // `workspace/configuration` answer finds it.
             let value = ["tsserver", "automaticTypeAcquisition", "enabled"]
                 .iter()
-                .fold(Some(&tsgo.settings[section]), |at, part| {
-                    at.and_then(|v| v.get(part))
-                });
+                .try_fold(&tsgo.settings[section], |at, part| at.get(part));
             assert_eq!(value, Some(&json!(false)), "under the section {section}");
         }
     }

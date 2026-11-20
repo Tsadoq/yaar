@@ -164,14 +164,14 @@ pub fn look(
             }
         }
         // Only a server with a download can have one installed; a user's row has none.
-        if !server.downloads.is_empty() {
-            if let Some(installed) = installed(servers, &server.name) {
-                found.downloaded.push(candidate(
-                    CandidateKind::Downloaded,
-                    installed.program,
-                    &server.args,
-                ));
-            }
+        if !server.downloads.is_empty()
+            && let Some(installed) = installed(servers, &server.name)
+        {
+            found.downloaded.push(candidate(
+                CandidateKind::Downloaded,
+                installed.program,
+                &server.args,
+            ));
         }
     }
     found
