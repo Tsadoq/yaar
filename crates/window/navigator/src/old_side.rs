@@ -12,10 +12,10 @@
 //! depth but inside `.git` and inside a folder already linked, is linked into the export
 //! at the same relative path, where the export holds the folder above it (the walk goes
 //! down only folders the export holds too, so a build folder the version lacks costs
-//! nothing); then `answers::export_ready`. On failure, the folder is removed if it is there, the reason
-//! written to the standard error, and `answers::export_failed`; the next ask about that
-//! version asks again. Meanwhile every ask about the old side is answered by text match
-//! over the worktree, marked (`answers.rs`).
+//! nothing); then `answers::export_ready`. On failure, the folder is removed if it is
+//! there, the reason written to the standard error, and `answers::export_failed`; the
+//! next ask about that version asks again. Meanwhile every ask about the old side is
+//! answered by text match over the worktree, marked (`answers.rs`).
 //!
 //! No server of the old side runs before the first ask about it: the server is ensured by
 //! `answers::export_ready` once the export is written, as `lifecycle::ensure` of the old
