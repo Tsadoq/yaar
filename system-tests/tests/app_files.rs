@@ -172,24 +172,44 @@ fn a_path_git_quotes_is_named_all_the_same() {
     );
 }
 
-#[test]
-fn the_check_leaves_the_index_of_the_repository_it_reads_as_it_was() {
-    let (world, app) = world_with_standins();
+/// A repository with a tracked file that looks changed to git by its time alone, which
+/// `git status` refreshes in the index unless it is told not to take the lock that needs.
+fn repository_with_a_stale_index(world: &World) -> Repo {
+    let app = world.repository("app");
     app.write("tracked.txt", "same bytes\n");
     app.commit("Track a file");
-    // A file that looks changed to git by its time alone: `git status` would refresh the
-    // index with the new time unless it is told not to take the lock that needs.
     fs::File::options()
         .write(true)
         .open(app.path().join("tracked.txt"))
         .and_then(|file| file.set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1_000)))
         .expect("give the tracked file another time");
+    app
+}
+
+#[test]
+fn the_check_leaves_the_index_of_the_repository_it_reads_as_it_was() {
+    let mut world = World::new();
+    world.agents_on_path();
+    let app = repository_with_a_stale_index(&world);
     let index = app.path().join(".git/index");
     let before = fs::read(&index).expect("read the index");
     assert_eq!(listed(&world), [], "nothing of the app's");
     assert!(
         fs::read(&index).expect("read the index again") == before,
         "a check that only reads writes no index"
+    );
+}
+
+#[test]
+fn a_git_command_of_a_test_still_refreshes_the_index_as_git_does_by_itself() {
+    let world = World::new();
+    let app = repository_with_a_stale_index(&world);
+    let index = app.path().join(".git/index");
+    let before = fs::read(&index).expect("read the index");
+    app.git(&["status", "--porcelain"]);
+    assert!(
+        fs::read(&index).expect("read the index again") != before,
+        "the no-lock rule belongs to the check: a test's own git runs as git does"
     );
 }
 

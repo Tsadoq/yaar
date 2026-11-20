@@ -970,7 +970,7 @@ impl World {
         let mut named = Vec::new();
         for worktree in self.worktrees() {
             for command in LISTINGS {
-                let listing = git_in(&self.root, &worktree, command)
+                let listing = git_in(&self.root, &worktree, true, command)
                     .unwrap_or_else(|failed| panic!("the check of STORE-04: {failed}"));
                 let is_status = command[0] == "status";
                 named.extend(
@@ -1006,6 +1006,7 @@ impl World {
             let listed = git_in(
                 &self.root,
                 &repository,
+                true,
                 &["worktree", "list", "--porcelain"],
             )
             .unwrap_or_else(|failed| panic!("the check of STORE-04: {failed}"));
@@ -1042,17 +1043,20 @@ const LISTINGS: [&[&str]; 3] = [
 ];
 
 /// Runs git in `folder` as [`Repo::git`] runs it, with the world at `world`: what it
-/// printed, or what it wrote when it failed. It takes no optional lock, so that a check which
-/// only reads does not refresh the index of the repository it reads.
-fn git_in(world: &Path, folder: &Path, args: &[&str]) -> Result<String, String> {
+/// printed, or what it wrote when it failed. With `read_only` it takes no optional lock, so
+/// that the check of STORE-04, which only reads, does not refresh the index of the repository
+/// it reads; a test's own git, which passes false, runs as git does.
+fn git_in(world: &Path, folder: &Path, read_only: bool, args: &[&str]) -> Result<String, String> {
     let mut git = Command::new("git");
     git.env_clear();
     if let Some(search) = std::env::var_os("PATH") {
         git.env("PATH", search);
     }
+    if read_only {
+        git.arg("--no-optional-locks");
+    }
     let output = git
         .current_dir(folder)
-        .arg("--no-optional-locks")
         .args(args)
         .env("HOME", world.join("home"))
         .env("TMPDIR", world.join("tmp"))
@@ -1195,7 +1199,7 @@ impl Repo {
     /// Runs git in the worktree with these arguments and returns what it printed,
     /// without the line end. Panics, with what git wrote, when git fails.
     pub fn git(&self, args: &[&str]) -> String {
-        git_in(&self.world, &self.root, args).unwrap_or_else(|failed| panic!("{failed}"))
+        git_in(&self.world, &self.root, false, args).unwrap_or_else(|failed| panic!("{failed}"))
     }
 
     /// Writes a file of the worktree, making the folders above it.
