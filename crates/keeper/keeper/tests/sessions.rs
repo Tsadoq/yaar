@@ -790,18 +790,61 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         });
         assert!(matches!(asked, Err(Refusal::Failed { .. })), "{asked:?}");
     }
+
+    // A second session holds a review and ends by its CLI: not running, and not one the
+    // Keeper's stop cut off.
+    let tools = recorded::hook_events(TOOLS);
+    scratch.hook(None, &tools[1].in_project(&repo).input_bytes());
+    let second = window.agents_until(&workspace, "the second session", |agents| {
+        agents.sessions.len() == 2
+    });
+    let ended_by_cli = second
+        .sessions
+        .iter()
+        .find(|s| s.id != session)
+        .expect("the second session")
+        .id
+        .clone();
+    scratch.hook(None, &tools[35].in_project(&repo).input_bytes());
+    let ended = window.agents_until(
+        &workspace,
+        "the second ended",
+        is_state(SessionState::NotRunning),
+    );
+    let by_cli = ended
+        .sessions
+        .iter()
+        .find(|s| s.id == ended_by_cli)
+        .expect("the second session");
+    assert_eq!(by_cli.state, SessionState::NotRunning);
+    assert!(by_cli.review.is_some());
+    assert!(!by_cli.resumable, "its CLI ended it: nothing cut it off");
     window.stop(keeper);
 
-    // The Keeper starts again: the session was cut off.
+    // The Keeper starts again: the first session was cut off, the second was not.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
     assert_eq!(listed.len(), 1);
-    let cut_off = &listed[0].sessions[0];
-    assert_eq!(cut_off.id, session);
+    assert_eq!(listed[0].sessions.len(), 2);
+    let cut_off = listed[0]
+        .sessions
+        .iter()
+        .find(|s| s.id == session)
+        .expect("the first session");
     assert_eq!(cut_off.state, SessionState::NotRunning);
     assert!(cut_off.resumable);
     assert_eq!(cut_off.review, review);
+    let ended_before = listed[0]
+        .sessions
+        .iter()
+        .find(|s| s.id == ended_by_cli)
+        .expect("the second session");
+    assert_eq!(ended_before.state, SessionState::NotRunning);
+    assert!(
+        !ended_before.resumable,
+        "it ended before the Keeper stopped"
+    );
 
     window.open_program(&workspace, Program::Resume { session });
     let launched = scratch.launched_with();
@@ -814,7 +857,12 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     // Its CLI reports it again: it runs, and is resumable no more.
     scratch.hook(None, &record.input_bytes());
     let running = window.agents_until(&workspace, "the session runs", is_state(SessionState::Idle));
-    assert!(!running.sessions[0].resumable);
+    let runs = running
+        .sessions
+        .iter()
+        .find(|s| s.state == SessionState::Idle)
+        .expect("the session that runs");
+    assert!(!runs.resumable);
     window.stop(keeper);
 }
 
