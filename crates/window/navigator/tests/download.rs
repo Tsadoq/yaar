@@ -455,6 +455,76 @@ fn a_version_folder_another_process_wrote_is_kept_and_a_damaged_one_is_replaced(
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 }
 
+#[test]
+fn installed_reads_installed_toml_as_the_module_documents_it() {
+    let scratch = Scratch::new();
+    let servers = scratch.root.join("servers");
+    let write = |server: &str, text: &str| {
+        std::fs::create_dir_all(servers.join(server)).unwrap();
+        std::fs::write(servers.join(server).join(INSTALLED_FILE), text).unwrap();
+    };
+    let program = |server: &str, path: &str| {
+        let program = servers.join(server).join(path);
+        std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+        std::fs::write(&program, b"program").unwrap();
+        program
+    };
+
+    // The file as it is written in the folder of real servers: a program under a folder.
+    let tsc = program("tsgo", "7.0.2/lib/tsc");
+    write(
+        "tsgo",
+        "version = \"7.0.2\"\nsha256 = \"902e\"\nprogram = \"lib/tsc\"\n",
+    );
+    assert_eq!(
+        installed(&servers, "tsgo"),
+        Some(Installed {
+            version: "7.0.2".to_owned(),
+            sha256: "902e".to_owned(),
+            program: tsc,
+        })
+    );
+
+    // Nothing there, or a file that is no record: none.
+    assert_eq!(installed(&servers, "nothing"), None);
+    for (server, text) in [
+        ("not-toml", "version = "),
+        ("no-sha", "version = \"1\"\nprogram = \"p\"\n"),
+        ("a-number", "version = 1\nsha256 = \"x\"\nprogram = \"p\"\n"),
+        ("empty", ""),
+    ] {
+        program(server, "1/p");
+        write(server, text);
+        assert_eq!(installed(&servers, server), None, "{server}");
+    }
+    // A record whose program is not in the folder: the server is not there.
+    write("gone", "version = \"1\"\nsha256 = \"x\"\nprogram = \"p\"\n");
+    assert_eq!(installed(&servers, "gone"), None);
+    // A record that names a place outside the server's folder: never followed.
+    std::fs::write(scratch.root.join("outside"), b"x").unwrap();
+    for (version, program_name) in [
+        ("../..", "outside"),
+        ("1", "../../../outside"),
+        ("1", "/etc/hosts"),
+        ("", "p"),
+        ("1", ""),
+    ] {
+        program("escape", "1/p");
+        write(
+            "escape",
+            &format!("version = \"{version}\"\nsha256 = \"x\"\nprogram = \"{program_name}\"\n"),
+        );
+        assert_eq!(
+            installed(&servers, "escape"),
+            None,
+            "{version} {program_name}"
+        );
+    }
+    // A server named by a path is no server.
+    assert_eq!(installed(&servers, "../servers/tsgo"), None);
+    assert_eq!(installed(&servers, ""), None);
+}
+
 // ---------------------------------------------------------------------------------------
 // What a request carries, and where it may go
 // ---------------------------------------------------------------------------------------

@@ -670,3 +670,148 @@ pub fn missing(registry: &Registry, platform: Platform, servers: &Path) -> Vec<S
         .map(|(name, _)| (*name).to_owned())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn https_and_the_loopback_address_over_http_are_fetched_and_nothing_else() {
+        for url in [
+            "https://example.org/x",
+            "https://registry.npmjs.org/@typescript/typescript-darwin-arm64/-/x.tgz",
+            "http://127.0.0.1:1/x",
+            "http://127.0.0.1/x",
+            "http://[::1]:1/x",
+        ] {
+            assert!(allowed(url), "{url}");
+        }
+        for url in [
+            "http://localhost:1/x",
+            "http://example.org/x",
+            "http://127.0.0.2:1/x",
+            "http://0.0.0.0:1/x",
+            "http://[::2]:1/x",
+            "ftp://example.org/x",
+            "file:///x",
+            "https://",
+            "https:",
+            "not an address",
+            "",
+        ] {
+            assert!(!allowed(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn a_redirect_from_https_leads_only_to_https_and_a_loopback_one_may_lead_to_another() {
+        assert!(!redirect_allowed(
+            "https://a.example/x",
+            "http://127.0.0.1:1/x"
+        ));
+        assert!(redirect_allowed(
+            "https://a.example/x",
+            "https://b.example/y"
+        ));
+        assert!(redirect_allowed(
+            "http://127.0.0.1:1/x",
+            "http://127.0.0.1:2/y"
+        ));
+        assert!(!redirect_allowed(
+            "http://127.0.0.1:1/x",
+            "http://example.org/y"
+        ));
+        // Whatever the address of origin, the next address must be one that is fetched.
+        assert!(!redirect_allowed(
+            "https://a.example/x",
+            "ftp://b.example/y"
+        ));
+        assert!(redirect_allowed(
+            "http://127.0.0.1:1/x",
+            "https://b.example/y"
+        ));
+    }
+
+    #[test]
+    fn a_server_that_stops_sending_ends_the_download_when_the_wait_for_a_read_is_over() {
+        use std::net::TcpListener;
+        use std::sync::mpsc::{RecvTimeoutError, channel};
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
+        let port = listener.local_addr().expect("its address").port();
+        let (release, held) = channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("a connection");
+            let mut seen = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !seen.ends_with(b"\r\n\r\n") {
+                match stream.read(&mut byte) {
+                    Ok(1) => seen.push(byte[0]),
+                    _ => return,
+                }
+            }
+            // Ten of a thousand bytes, then silence, the connection kept open until the test
+            // has its answer.
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n0123456789");
+            let _ = held.recv();
+        });
+
+        let downloader = Downloader {
+            agent: agent(
+                Duration::from_secs(5),
+                Duration::from_secs(1),
+                RootCerts::Specific(Arc::new(Vec::new())),
+            ),
+        };
+        let folder =
+            std::env::temp_dir().join(format!("yaar-download-stall-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&folder);
+        let download = Download {
+            platform: Platform::LinuxX64,
+            version: "1".to_owned(),
+            url: format!("http://127.0.0.1:{port}/slow"),
+            sha256: "0".repeat(64),
+            archive: Archive::Gz,
+            strip: 0,
+            program: "p".to_owned(),
+            size: 1000,
+        };
+        // The download runs on a thread of its own, so that a missing wait fails this test
+        // with a sentence instead of holding it for good.
+        let (done, outcome) = channel();
+        let target = folder.clone();
+        let started = std::time::Instant::now();
+        std::thread::spawn(move || {
+            let _ = done.send(downloader.fetch("slow", &download, &target));
+        });
+        let outcome = match outcome.recv_timeout(Duration::from_secs(60)) {
+            Ok(outcome) => outcome,
+            Err(RecvTimeoutError::Timeout) => {
+                panic!("a stalled server holds the download for good")
+            }
+            Err(RecvTimeoutError::Disconnected) => panic!("the download thread ended"),
+        };
+        let waited = started.elapsed();
+        let _ = release.send(());
+        server.join().expect("the stalling server");
+
+        // It ended by the wait, not by some other failure sooner: a slow machine only
+        // lengthens what was waited.
+        assert!(waited >= Duration::from_secs(1), "ended after {waited:?}");
+        assert!(
+            matches!(outcome, Err(DownloadError::Network(_))),
+            "{outcome:?}"
+        );
+        let left: Vec<_> = fs::read_dir(&folder)
+            .into_iter()
+            .flatten()
+            .flatten()
+            .map(|entry| entry.file_name())
+            .collect();
+        let _ = fs::remove_dir_all(&folder);
+        assert!(
+            left.iter().all(|name| name == "slow"),
+            "no partial file is left: {left:?}"
+        );
+    }
+}
