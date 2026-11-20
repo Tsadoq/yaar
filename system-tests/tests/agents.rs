@@ -994,6 +994,17 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         in_shell.get("YAAR_TERMINAL"),
         Some(&terminal.as_str().to_owned())
     );
+    // pi's extension, which pi loads from its own settings, reports through the program
+    // this names.
+    let reporter = in_shell
+        .get("YAAR_PI_REPORT")
+        .expect("pi's reporting program");
+    assert!(Path::new(reporter).is_absolute(), "{reporter}");
+    assert_eq!(
+        Path::new(reporter).file_name(),
+        Some(std::ffi::OsStr::new("yaar-pi-report")),
+        "{reporter}"
+    );
     for name in ["TERM", "COLORTERM", "TERM_PROGRAM", "TERM_PROGRAM_VERSION"] {
         assert!(in_shell.contains_key(name), "{name} is not in {in_shell:?}");
     }
@@ -1022,6 +1033,7 @@ fn a_shell_of_the_app_differs_from_the_users_environment_only_by_the_apps_entrie
         "__CF_USER_TEXT_ENCODING",
         "CLAUDE_CODE_PLUGIN_DIRS",
         "YAAR_TERMINAL",
+        "YAAR_PI_REPORT",
         "TERM",
         "COLORTERM",
         "TERM_PROGRAM",
