@@ -350,7 +350,11 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
                 // What the program does with what it was told shows in whether it is still
                 // there: it has to read on until its own reply.
                 heard.hung_up_early = !stays_connected(&mut stream);
-                write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                // A program that has gone is not owed its reply, and a write to it fails:
+                // the test reports it through `hung_up_early`, not through a panic here.
+                if !heard.hung_up_early {
+                    write_message(&mut stream, &reply(Ok(Reply::Done))).expect("answer");
+                }
                 return heard;
             }
             Keeper::Silent => {}
@@ -369,19 +373,26 @@ fn serve(listener: &UnixListener, behaviour: &Keeper) -> Heard {
 
 /// Holds the connection until the program closes its end, as the real Keeper does, so that
 /// what the program does after its answer does not depend on the Keeper having gone.
+///
+/// It sets no option: the program may have printed its answer and left already, and on macOS
+/// an option cannot be set on a socket whose other end has closed. The read timeout that
+/// serves here was set when the connection was accepted, while the program still waited.
 fn stays_until_the_program_leaves(stream: &mut UnixStream) {
-    stream
-        .set_read_timeout(Some(PATIENCE))
-        .expect("set the Keeper's read timeout");
     while read_message(stream).is_ok() {}
 }
 
 /// Whether the other end is still there after a short while, which is to say that a read
 /// of it times out and does not find it closed.
 fn stays_connected(stream: &mut UnixStream) -> bool {
-    stream
+    // A program that has gone already is the very thing this asks about. Where the system
+    // refuses an option on a socket whose other end has closed (macOS: "Invalid argument"),
+    // that refusal is the answer: it has gone.
+    if stream
         .set_read_timeout(Some(Duration::from_millis(300)))
-        .expect("set a short read timeout");
+        .is_err()
+    {
+        return false;
+    }
     matches!(
         read_message(stream),
         Err(LinkError::Io(e)) if matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
