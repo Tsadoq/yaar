@@ -571,22 +571,28 @@ impl TerminalPane {
         // The pane is held weakly, so a pane that is gone takes no answer.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
-            pane.update(cx, |pane, cx| pane.opened(workspace, answer, cx))
-                .ok();
+            pane.update(cx, |pane, cx| {
+                pane.opened(workspace, Program::Shell, answer, cx)
+            })
+            .ok();
         })
         .detach();
         cx.notify();
     }
 
-    /// Takes the Keeper's answer to the question for a new terminal of `workspace`.
+    /// Takes the Keeper's answer to the question for a new terminal of `workspace` that
+    /// runs `program`.
     fn opened(
         &mut self,
         workspace: WorkspaceId,
+        program: Program,
         answer: Result<Reply, AskError>,
         cx: &mut Context<Self>,
     ) {
         match answer {
-            Ok(Reply::TerminalOpened { terminal }) => self.add_opened(workspace, terminal, cx),
+            Ok(Reply::TerminalOpened { terminal }) => {
+                self.add_opened(workspace, program, terminal, cx);
+            }
             Ok(_) => self.notice = Some(AskError::Unexpected.to_string()),
             Err(error) => self.notice = Some(error.to_string()),
         }
@@ -621,10 +627,16 @@ impl TerminalPane {
         view
     }
 
-    /// Adds a terminal the Keeper opened for this Window: it is shown in the slot that has
-    /// the focus and takes the focus, and joins the shared list of terminals, which does
-    /// not attach to it.
-    fn add_opened(&mut self, workspace: WorkspaceId, id: TerminalId, cx: &mut Context<Self>) {
+    /// Adds a terminal the Keeper opened for this Window to run `program`: it is shown in
+    /// the slot that has the focus and takes the focus, and joins the shared list of
+    /// terminals, as that program, which does not attach to it.
+    fn add_opened(
+        &mut self,
+        workspace: WorkspaceId,
+        program: Program,
+        id: TerminalId,
+        cx: &mut Context<Self>,
+    ) {
         if self.entry(&id).is_some() {
             return;
         }
@@ -637,7 +649,7 @@ impl TerminalPane {
         let info = TerminalInfo {
             id,
             workspace: workspace.clone(),
-            program: Program::Shell,
+            program,
         };
         self.models
             .terminals

@@ -355,12 +355,13 @@ impl TerminalPane {
             review,
         } = wanted;
         self.notice = None;
+        let program = Program::AgentFor {
+            agent: agent.clone(),
+            review: review.clone(),
+        };
         let request = Request::OpenTerminal {
             workspace: workspace.clone(),
-            program: Program::AgentFor {
-                agent: agent.clone(),
-                review: review.clone(),
-            },
+            program: program.clone(),
             size: self.size,
         };
         let asked = self
@@ -372,7 +373,7 @@ impl TerminalPane {
         // and its answer lost.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
-            pane.update(cx, |pane, cx| pane.opened(workspace, answer, cx))
+            pane.update(cx, |pane, cx| pane.opened(workspace, program, answer, cx))
                 .ok();
         })
         .detach();

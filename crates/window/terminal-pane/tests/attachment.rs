@@ -19,7 +19,7 @@ use gpui_kit::{
 use yaar_frame::Wanted;
 use yaar_link::{
     Attachment, Fact, Program, Reply, Request, ReviewId, Session, SessionId, SessionState,
-    TerminalId, ThreadId, WorkspaceAgents, WorkspaceId,
+    TerminalId, TerminalInfo, ThreadId, WorkspaceAgents, WorkspaceId,
 };
 use yaar_terminal_pane::{
     ADDRESS_EACH_COMMENT, AddressEachComment, DetachAttachment, NewTerminal, ToggleSplit,
@@ -735,7 +735,23 @@ fn a_launcher_a_pane_wants_for_a_review_is_opened_in_that_workspace_and_gets_the
     });
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&t)),
-        Some(one)
+        Some(one.clone())
+    );
+    // It is listed for every pane as the launcher it is, not as a shell.
+    let held = panes
+        .models
+        .terminals
+        .read_with(&cx, |list, _| list.terminals().to_vec());
+    assert_eq!(
+        held,
+        [TerminalInfo {
+            id: t,
+            workspace: one,
+            program: Program::AgentFor {
+                agent: "claude".to_owned(),
+                review: review('r'),
+            },
+        }]
     );
 }
 
