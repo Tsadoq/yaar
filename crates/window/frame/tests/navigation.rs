@@ -193,6 +193,25 @@ impl Navigator {
         assert_eq!(self.ask(cx), wanted);
     }
 
+    /// Nothing reaches this Navigator any more: the model let its port go, and everything
+    /// it had sent was read first, so an ask that was still on its way would be read here.
+    /// This is the barrier of a negative clause about a Navigator that is replaced.
+    fn ends_with_nothing_more(&mut self, cx: &mut TestAppContext) {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            cx.run_until_parked();
+            match self.asks.recv_timeout(Duration::from_millis(1)) {
+                Ok(ask) => panic!("an ask reached a Navigator that was replaced: {ask:?}"),
+                Err(RecvTimeoutError::Disconnected) => return,
+                Err(RecvTimeoutError::Timeout) => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the model still holds the port of the Navigator it replaced"
+            );
+        }
+    }
+
     /// The first telling: the workspaces, the one on screen and the answers on
     /// repositories, which the test reads whatever they hold.
     fn first_telling(
@@ -350,7 +369,7 @@ fn connected_with_nothing_listed_the_model_still_tells_the_navigator_so(cx: &mut
 }
 
 #[gpui_kit::test]
-fn another_workspace_coming_on_screen_is_told_and_a_list_that_did_not_change_is_not(
+fn another_workspace_coming_on_screen_is_told_and_a_list_that_keeps_it_there_does_not_tell_it_again(
     cx: &mut TestAppContext,
 ) {
     let listed = vec![repository(
@@ -366,12 +385,31 @@ fn another_workspace_coming_on_screen_is_told_and_a_list_that_did_not_change_is_
         .update(cx, |list, cx| list.select(&id('2'), cx));
     navigator.expect(Ask::OnScreen(Some(id('2'))), cx);
 
-    // The list asked for again and answered with what it already holds changes nothing
-    // for the Navigator; the next ask is the barrier.
-    models.workspaces.update(cx, |list, cx| list.refresh(cx));
-    let (asked, _) = request_of(&mut keeper, cx, |r| *r == Request::ListWorkspaces);
-    keeper.reply(asked, Ok(Reply::Workspaces(listed.clone())));
-    cx.run_until_parked();
+    // A workspace comes and the one on screen stays: the list is told whole and the
+    // workspace on screen is not, so the next ask is the barrier.
+    let after = vec![repository(
+        'a',
+        vec![
+            workspace('1', "main"),
+            workspace('2', "feature"),
+            workspace('3', "third"),
+        ],
+    )];
+    keeper.tell(Fact::Workspaces(after));
+    navigator.expect(
+        Ask::Workspaces(
+            ["main", "feature", "third"]
+                .iter()
+                .zip(['1', '2', '3'])
+                .map(|(branch, digit)| WorkspaceRoot {
+                    id: id(digit),
+                    repository: repo('a'),
+                    folder: Some(PathBuf::from(format!("/gits/{branch}"))),
+                })
+                .collect(),
+        ),
+        cx,
+    );
     models
         .navigation
         .update(cx, |navigation, _| navigation.download("rust"));
@@ -476,6 +514,31 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["b.rs"]))));
     navigator.expect(told(&["b.rs"]), cx);
 
+    // A refused question leaves the model showing the last list again, which is no news:
+    // the barrier comes first.
+    models.changes.update(cx, |changes, cx| changes.refresh(cx));
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "the repository is busy".to_owned(),
+        }),
+    );
+    wait_until(cx, "the refusal to be taken", |cx| {
+        models.changes.read_with(cx, |changes, _| {
+            !changes.is_loading() && changes.refusal().is_some()
+        })
+    });
+    models
+        .navigation
+        .update(cx, |navigation, _| navigation.download("go"));
+    navigator.expect(
+        Ask::Download {
+            language: "go".to_owned(),
+        },
+        cx,
+    );
+
     // Nothing changed and nothing is listed: no paths, nothing told. The barrier follows.
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
@@ -484,13 +547,45 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &[]))));
-    cx.run_until_parked();
+    wait_until(cx, "the answer to be taken", |cx| {
+        models
+            .changes
+            .read_with(cx, |changes, _| !changes.is_loading())
+    });
     models
         .navigation
         .update(cx, |navigation, _| navigation.download("python"));
     navigator.expect(
         Ask::Download {
             language: "python".to_owned(),
+        },
+        cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_renamed_file_is_told_changed_at_both_of_its_paths(cx: &mut TestAppContext) {
+    let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+
+    // The old path is gone from the disk, and a server still holds its symbols.
+    let mut renamed = changes('1', &["kept.rs"]);
+    renamed.files.push(ChangedFile {
+        path: PathBuf::from("new.rs"),
+        status: FileStatus::Renamed {
+            from: PathBuf::from("old.rs"),
+        },
+    });
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(asked, Ok(Reply::Changes(renamed)));
+    navigator.expect(
+        Ask::FilesChanged {
+            workspace: id('1'),
+            paths: ["kept.rs", "new.rs", "old.rs"]
+                .iter()
+                .map(PathBuf::from)
+                .collect(),
         },
         cx,
     );
@@ -1076,9 +1171,20 @@ fn the_user_s_wishes_reach_the_navigator_as_the_asks_that_name_them(cx: &mut Tes
 fn the_answer_on_a_repository_is_sent_as_its_setting_and_read_back_once_told(
     cx: &mut TestAppContext,
 ) {
-    let (models, keeper) = window(Vec::new(), &one_workspace(), cx);
+    // A setting that is no answer on a repository is held by the Keeper, so that `window`
+    // returns only once the answer to the first question for the settings was taken: an
+    // answer that landed after the test's own would take the user's answer off the list.
+    let (models, keeper) = window(
+        vec![Setting::FlowForm {
+            workspace: id('1'),
+            form: FlowForm::LiveDiff,
+        }],
+        &one_workspace(),
+        cx,
+    );
     let mut navigator = Navigator::connect(&models, cx);
-    navigator.first_telling(cx);
+    let (_, _, consents) = navigator.first_telling(cx);
+    assert_eq!(consents, Vec::new(), "no repository was answered yet");
     let read = |letter: char, cx: &mut TestAppContext| {
         models
             .navigation
@@ -1140,7 +1246,8 @@ fn a_second_connect_replaces_the_first_and_what_waited_on_it_is_gone(cx: &mut Te
     });
 
     // The ask that was waiting is dropped: it asks the new Navigator nothing, and the old
-    // one hears nothing more. The barrier is an ask of the new one.
+    // one hears nothing more. The barrier is an ask of the new one; the old port is read
+    // to its end, which comes once every sender of it is gone.
     drop(task);
     models
         .navigation
@@ -1151,12 +1258,14 @@ fn a_second_connect_replaces_the_first_and_what_waited_on_it_is_gone(cx: &mut Te
         },
         cx,
     );
-    assert!(
-        first.asks.try_recv().is_err(),
-        "nothing reached the first Navigator after the second was connected (ask {asked:?})"
-    );
+    first.ends_with_nothing_more(cx);
 
     // The model reads nothing more from the first Navigator: its channel is let go.
+    wait_until(
+        cx,
+        "the model to let the first Navigator's channel go",
+        |_| first.told.is_closed(),
+    );
     assert!(
         first
             .told

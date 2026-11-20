@@ -15,10 +15,11 @@
 //! - [`yaar_navigator::Ask::Consents`], every `Setting::ServersInRepository` of
 //!   `SettingList`, at the connect and whenever the settings change;
 //! - [`yaar_navigator::Ask::FilesChanged`], the paths of the changed files of the
-//!   workspace on screen as `WorkspaceChanges` holds them, each time it takes an answer of
-//!   the Keeper (a file may change again with its path in the list already), together with
-//!   the paths the last such answer for that workspace held, so that a file that left the
-//!   list because it was put back is told too; nothing when there are no paths;
+//!   workspace on screen as `WorkspaceChanges` holds them (the old path of a renamed file
+//!   too), each time it takes an answer of the Keeper (a file may change again with its
+//!   path in the list already), together with the paths the last such answer for that
+//!   workspace held, so that a file that left the list because it was put back is told
+//!   too; nothing when there are no paths, and nothing after a refusal;
 //! - for each [`yaar_navigator::Told::ExportWanted`], `Request::ExportVersion` to the
 //!   Keeper through the link, and the answer handed back as
 //!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
@@ -38,7 +39,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::*;
-use yaar_link::{Reply, RepositoryId, Request, Setting, WorkspaceId};
+use yaar_link::{FileStatus, Reply, RepositoryId, Request, Setting, WorkspaceId};
 use yaar_navigator::{
     Answered, Ask, AskId, ExportAsk, Language, Location, OpenedFile, Place, Port,
     RepositoryConsent, ServerState, Told, WorkspaceRoot,
@@ -596,7 +597,19 @@ impl Navigation {
             return;
         };
         let workspace = taken.workspace.clone();
-        let now: BTreeSet<PathBuf> = taken.files.iter().map(|file| file.path.clone()).collect();
+        // The old path of a renamed file changed on disk as well: it is gone, and a server
+        // still holds what it had.
+        let now: BTreeSet<PathBuf> = taken
+            .files
+            .iter()
+            .flat_map(|file| {
+                let from = match &file.status {
+                    FileStatus::Renamed { from } => Some(from.clone()),
+                    _ => None,
+                };
+                std::iter::once(file.path.clone()).chain(from)
+            })
+            .collect();
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
