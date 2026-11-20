@@ -569,3 +569,56 @@ fn a_state_recorded_at_a_send_stops_waiting_at_a_turn_end_that_keeps_credits_ins
             .is_empty()
     );
 }
+
+// REV-24
+#[test]
+fn a_commit_as_the_newer_version_counts_the_credits_of_every_state_after_the_older_one() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, &["x.txt"]);
+    let worktree = open(&repo);
+    let w = workspace();
+    let (a, b) = (session_id(1), session_id(2));
+    let store = store(&scratch);
+    let reviews = engine(&scratch, store.clone());
+    let r = reviewers(&reviews, &store);
+    let s0 = record(&reviews, &w, &worktree);
+    write(&repo, "x.txt", "by A\n");
+    let s1 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s1, &[credited("x.txt", &[&a])])
+        .expect("keep");
+    write(&repo, "y.txt", "by B\n");
+    let s2 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s2, &[credited("y.txt", &[&b])])
+        .expect("keep");
+    // The reviewer commits the worktree: the commit is kept, and is no state of the list.
+    commit_all(&repo, "second");
+    let second = support::git(&repo, &["rev-parse", "HEAD"]);
+    assert!(![&s0, &s1, &s2].contains(&&second));
+    reviews
+        .states_of(&w)
+        .expect("the state store")
+        .keep_commit(&worktree, &yaar_recorder::CommitId::new(&second))
+        .expect("keep the commit");
+
+    // The commit counts as the newest state: what s1 and s2 keep is looked at, though no
+    // state of the list is the commit.
+    assert_eq!(
+        reviews
+            .credited_change(&r.nobody, &s0, &second)
+            .expect("no agent"),
+        [
+            listed("x.txt", Change::Modified, &[&a], false),
+            listed("y.txt", Change::Added, &[&b], false),
+        ]
+    );
+    assert_eq!(
+        reviews.credited_change(&r.a, &s0, &second).expect("A"),
+        [listed("x.txt", Change::Modified, &[&a], false)]
+    );
+    assert_eq!(
+        reviews.credited_change(&r.b, &s0, &second).expect("B"),
+        [listed("y.txt", Change::Added, &[&b], false)]
+    );
+}
