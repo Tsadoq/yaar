@@ -7,17 +7,16 @@ use yaar_agent::ConsentAnswer as Kept;
 use yaar_link::{Consent, ConsentAnswer, Refusal};
 
 use super::Agents;
+use crate::lock;
 
 impl Agents {
     /// `Request::ListConsents`: [`yaar_agent::Adapter::consent`] of every Adapter, with
     /// the Adapter's own folder, in the order of the Adapters, those that give none left
     /// out, in the Link's words. Read with the Adapters' lock held, as a report is, for the
     /// few files an Adapter reads.
-    ///
-    /// A hook of the contract of slice 7 that gives none, so that no Window is asked
-    /// anything until the package of the Keeper's answer fills it.
     pub(crate) fn consents(&self) -> Vec<Consent> {
-        Vec::new()
+        let adapters = lock(&self.core.adapters);
+        self.all_of(&adapters, None)
     }
 
     /// `Request::AnswerConsent`: hands `answer` to
@@ -31,13 +30,49 @@ impl Agents {
         agent: &str,
         answer: ConsentAnswer,
     ) -> Result<Vec<Consent>, Refusal> {
-        let _ = (agent, answer);
-        todo!("the user's answer to an Adapter's question for leave")
+        let refused = || Refusal::Failed {
+            reason: format!("{agent} asks for no leave"),
+        };
+        // One hold for the answer and for the list that follows it, so that no report of
+        // an Adapter comes between and the list tells what the answer left.
+        let adapters = lock(&self.core.adapters);
+        let (index, adapter) = adapters
+            .iter()
+            .enumerate()
+            .find(|(_, adapter)| adapter.name() == agent)
+            .ok_or_else(refused)?;
+        let folder = &self.core.described[index].folder;
+        let answered = adapter
+            .answer_consent(folder, kept(answer))
+            .ok_or_else(refused)?;
+        Ok(self.all_of(&adapters, Some((index, answered))))
+    }
+
+    /// Every Adapter's consent in the Link's words, in the order of the Adapters, those that
+    /// give none left out; the one at `answered`'s index as it was just given, not asked
+    /// for again.
+    fn all_of(
+        &self,
+        adapters: &[Box<dyn yaar_agent::Adapter>],
+        answered: Option<(usize, yaar_agent::Consent)>,
+    ) -> Vec<Consent> {
+        let mut answered = answered;
+        adapters
+            .iter()
+            .zip(&self.core.described)
+            .enumerate()
+            .filter_map(|(index, (adapter, described))| {
+                let consent = match answered.take_if(|(at, _)| *at == index) {
+                    Some((_, consent)) => consent,
+                    None => adapter.consent(&described.folder)?,
+                };
+                Some(in_link_words(adapter.name(), consent))
+            })
+            .collect()
     }
 }
 
 /// An answer in the Adapters' words.
-#[expect(dead_code, reason = "the package of the Keeper's answer uses it")]
 fn kept(answer: ConsentAnswer) -> Kept {
     match answer {
         ConsentAnswer::NotAsked => Kept::NotAsked,
@@ -47,7 +82,6 @@ fn kept(answer: ConsentAnswer) -> Kept {
 }
 
 /// An Adapter's consent in the Link's words.
-#[expect(dead_code, reason = "the package of the Keeper's answer uses it")]
 fn in_link_words(agent: &str, consent: yaar_agent::Consent) -> Consent {
     Consent {
         agent: agent.to_owned(),
