@@ -1190,12 +1190,14 @@ fn save_draft(
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
     let review = ReviewId::new(review.as_str());
-    // Only a thread that starts here is put on the files of the worktree, and needs it.
-    let worktree = match save.on {
-        yaar_review_engine::DraftOn::NewThread(_) => {
+    // Only a thread that starts here is put on the files of the worktree, and needs it; one
+    // on a file outside the worktree, which has an absolute path, is put on nothing, and the
+    // worktree is not even looked up: the lookup may fail, and the save does not depend on it.
+    let worktree = match &save.on {
+        yaar_review_engine::DraftOn::NewThread(at) if !at.path.is_absolute() => {
             worktree_of_review(workspaces, reviews, &review)?.1
         }
-        yaar_review_engine::DraftOn::Thread => None,
+        yaar_review_engine::DraftOn::NewThread(_) | yaar_review_engine::DraftOn::Thread => None,
     };
     let saved = reviews
         .save_draft(worktree.as_deref(), &review, save)
@@ -1442,7 +1444,7 @@ fn workspace_reviews(
     view: yaar_review_engine::WorkspaceView,
     store: &Store,
 ) -> Result<yaar_link::WorkspaceReviews, Refusal> {
-    let reviews = view
+    let mut reviews = view
         .reviews
         .iter()
         .map(|found| {
@@ -1451,7 +1453,14 @@ fn workspace_reviews(
                 .map_err(|e| engine_refusal(EngineError::Store(e)))?;
             Ok(review(found, &turns))
         })
-        .collect::<Result<_, Refusal>>()?;
+        .collect::<Result<Vec<yaar_link::Review>, Refusal>>()?;
+    // A thread on a file outside the worktree, which has an absolute path, has no version:
+    // the Store keeps the empty one, and the Window is told none.
+    for thread in reviews.iter_mut().flat_map(|review| &mut review.threads) {
+        if thread.anchor.path.is_absolute() {
+            thread.anchor.tree = None;
+        }
+    }
     Ok(yaar_link::WorkspaceReviews {
         workspace,
         reviews,
