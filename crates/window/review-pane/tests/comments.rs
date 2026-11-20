@@ -1170,6 +1170,51 @@ fn a_comment_on_a_renamed_file_names_the_old_side_by_the_old_path_in_the_version
     assert_eq!(position(&pane, &mut cx), new);
     cx.simulate_keystrokes("shift-m");
     assert_eq!(position(&pane, &mut cx), old);
+
+    // The keys that act on the thread of this line find the one the Keeper holds under the
+    // old path: a reply opens in it.
+    cx.simulate_keystrokes("o");
+    let reply = comment_box(&pane, &mut cx).expect("a reply box on the old line");
+    assert_eq!(reply.thread, thread_id('a'));
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("escape");
+
+    // A draft of the reviewer's in that thread is theirs to edit and to delete from the
+    // old line.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/old_name.rs",
+            LinkSide::Old,
+            2,
+            vec![sent('1', "why", 1), draft('3', "about the old name")],
+        ),
+        thread(
+            'b',
+            "src/new_name.rs",
+            LinkSide::New,
+            2,
+            vec![sent('2', "ok", 1)],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    assert_eq!(position(&pane, &mut cx), old);
+    cx.simulate_keystrokes("i");
+    let opened = comment_box(&pane, &mut cx).expect("the draft is open on the old line");
+    assert_eq!(opened.thread, thread_id('a'));
+    assert_eq!(opened.comment, comment_id('3'));
+    assert_eq!(opened.text, "about the old name");
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("escape");
+    cx.simulate_keystrokes("d d");
+    let asked = stage.keeper.expect(
+        Request::DeleteDraft {
+            review: review_id(),
+            comment: comment_id('3'),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(asked, Ok(Reply::Done));
 }
 
 #[gpui_kit::test]
