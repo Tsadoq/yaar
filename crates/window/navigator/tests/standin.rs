@@ -455,6 +455,46 @@ fn hover_is_null_before_it_is_ready_and_the_name_after() {
 }
 
 #[test]
+fn the_ready_line_is_in_the_log_before_the_first_answer_that_needs_it_is_given() {
+    let scratch = Scratch::new();
+    let project = write_project(&scratch);
+    let main = project.join("main.sil");
+    let go = scratch.root.join("go");
+    let log = scratch.root.join("run.log");
+    let mut standin = Standin::start(
+        &scratch,
+        &[
+            "--ready-when",
+            &go.display().to_string(),
+            "--log",
+            &log.display().to_string(),
+        ],
+    );
+    standin.start_session(&project, json!(null));
+    // Its answer comes after `initialized` was handled and `go` is not there: null, and no
+    // `ready` line.
+    assert_eq!(standin.hover(&main, 0, 9), json!(null));
+    assert!(!events(&log_of(&log)).contains(&"ready"));
+
+    std::fs::write(&go, "").unwrap();
+    // The stand-in's look for `go` is its own. That it is ready is a fact that stays true
+    // once it is, so the hover is asked again, with no pause between asks (each waits for
+    // its answer on the channel), up to the deadline: the first answer that names the name
+    // is the first that needed readiness, and the log is read at once.
+    let until = Instant::now() + DEADLINE;
+    loop {
+        if standin.hover(&main, 0, 9) != json!(null) {
+            break;
+        }
+        assert!(Instant::now() < until, "the stand-in did not become ready");
+    }
+    assert!(
+        events(&log_of(&log)).contains(&"ready"),
+        "a hover was answered by the name before the log said ready"
+    );
+}
+
+#[test]
 fn hover_is_null_where_no_name_is() {
     let scratch = Scratch::new();
     let project = write_project(&scratch);
@@ -2210,6 +2250,86 @@ fn an_export_of_a_version_git_does_not_know_is_answered_as_a_failure_with_its_re
     assert!(!asked.into.exists(), "nothing was written");
 }
 
+/// The Keeper's answer to the export of `version` into `into`, as the played Keeper gives it.
+fn exported(repo: &Repo, version: &str, into: &Path) -> Option<String> {
+    let (mut running, end) = played();
+    let asked = yaar_navigator::ExportAsk {
+        workspace: workspace_id('1'),
+        version: version.to_owned(),
+        into: into.to_owned(),
+    };
+    end.told
+        .send_blocking(Told::ExportWanted(asked.clone()))
+        .unwrap();
+    running.export_when_wanted(repo, DEADLINE);
+    match end.asks.recv_blocking().unwrap() {
+        Ask::Exported { asked: got, failed } => {
+            assert_eq!(got, asked);
+            failed
+        }
+        other => panic!("not an answer to the export: {other:?}"),
+    }
+}
+
+#[test]
+fn the_keepers_export_refuses_a_folder_that_exists_and_leaves_it_as_it_was() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);
+    let into = scratch.root.join("navigator").join("old").join("1");
+    std::fs::create_dir_all(&into).unwrap();
+    std::fs::write(into.join("kept.txt"), "kept").unwrap();
+
+    let reason = exported(&repo, &repo.base, &into)
+        .expect("the export of a folder that exists is a failure");
+
+    assert!(
+        reason.contains(&into.display().to_string()),
+        "the reason names the folder: {reason}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(into.join("kept.txt")).unwrap(),
+        "kept"
+    );
+    assert!(
+        !into.join("main.sil").exists(),
+        "nothing was unpacked over what was there"
+    );
+    // A file where the folder should be is as much in the way.
+    let file = scratch.root.join("navigator").join("old").join("2");
+    std::fs::write(&file, "in the way").unwrap();
+    assert!(exported(&repo, &repo.base, &file).is_some());
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "in the way");
+}
+
+#[test]
+fn the_keepers_export_whose_write_fails_leaves_no_folder_behind() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);
+    // A tree git holds in its index and no file system can: one name of 300 bytes, which
+    // no system writes as a file, after a file that can be written first. The archive is
+    // made by git, and the unpack of it fails part of the way.
+    let blob = repo.git(&["rev-parse", "HEAD:main.sil"]);
+    let long = format!("{}.sil", "n".repeat(300));
+    repo.git(&[
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        &format!("100644,{blob},{long}"),
+    ]);
+    repo.git(&["commit", "--quiet", "-m", "a name no folder holds"]);
+    let version = repo.git(&["rev-parse", "HEAD"]);
+    let into = scratch.root.join("navigator").join("old").join("1");
+
+    let reason = exported(&repo, &version, &into)
+        .expect("the export of a tree that cannot be written is a failure");
+
+    assert!(!reason.is_empty());
+    assert!(
+        !into.exists(),
+        "a failed write left a folder with what was unpacked before it failed"
+    );
+}
+
 #[test]
 fn a_process_is_alive_while_it_runs_and_not_once_it_ended_whether_or_not_it_was_waited_for() {
     let _scratch = Scratch::new();
@@ -2294,6 +2414,71 @@ fn end_reads_the_pids_of_what_was_told_and_not_yet_read() {
         .unwrap();
     let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| running.end()));
     assert!(failure.is_err());
+    drop(child.stdin.take());
+    child.wait().unwrap();
+}
+
+/// A process that ran and ended, and its id.
+fn ended_process() -> u32 {
+    let mut child = Command::new("true").spawn().expect("start true");
+    let pid = child.id();
+    child.wait().unwrap();
+    pid
+}
+
+#[test]
+fn end_gives_the_navigator_time_for_every_server_told_read_or_not() {
+    let _scratch = Scratch::new();
+    let (read, unread) = (ended_process(), ended_process());
+    let (port, end) = yaar_navigator::port();
+    let (waited, within) = channel();
+    let mut running = Running::over_ending(port, move |within| {
+        waited.send(within).unwrap();
+        true
+    });
+    end.told
+        .send_blocking(Told::Servers(vec![state('1', "standin", None, Some(read))]))
+        .unwrap();
+    running.wait_told("the first list", DEADLINE, |told| {
+        matches!(told, Told::Servers(_))
+    });
+    // Told, and read by no wait: the time still counts its server.
+    end.told
+        .send_blocking(Told::Servers(vec![state(
+            '2',
+            "standin",
+            None,
+            Some(unread),
+        )]))
+        .unwrap();
+    running.end();
+    assert_eq!(
+        within.try_recv().expect("the Navigator was waited for"),
+        DEADLINE + yaar_navigator::STOP_DEADLINE * 2
+    );
+}
+
+#[test]
+fn end_reads_what_the_navigator_told_while_it_ended() {
+    let _scratch = Scratch::new();
+    let mut child = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .expect("start cat");
+    let pid = child.id();
+    let (port, end) = yaar_navigator::port();
+    // A server that started as the asks ended, and was told only while the Navigator wound
+    // up: no wait and no drain before the wait could have read it.
+    let running = Running::over_ending(port, move |_| {
+        end.told
+            .send_blocking(Told::Servers(vec![state('1', "standin", None, Some(pid))]))
+            .unwrap();
+        true
+    });
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| running.end()))
+        .expect_err("a process told while the Navigator ended is alive");
+    assert!(panic_text(failure).contains(&pid.to_string()));
     drop(child.stdin.take());
     child.wait().unwrap();
 }

@@ -754,9 +754,13 @@ fn receive<T>(receiver: &async_channel::Receiver<T>, within: Duration) -> Receiv
     }
 }
 
+/// What ends the Navigator a [`Running`] stands for: waits up to the time given for it to
+/// end, and gives whether it did.
+type Ending = Box<dyn FnOnce(Duration) -> bool + Send>;
+
 /// A Navigator started for a test, and the Frame's end of its port, which the test plays.
 pub struct Running {
-    navigator: Option<Navigator>,
+    navigator: Option<Ending>,
     port: Option<Port>,
     /// Everything told so far, in order.
     pub told: Vec<Told>,
@@ -770,7 +774,7 @@ impl Running {
         let (port, end) = yaar_navigator::port();
         let navigator = Navigator::start(config, end);
         let mut running = Running {
-            navigator: Some(navigator),
+            navigator: Some(Box::new(move |within| navigator.wait(within))),
             port: Some(port),
             told: Vec::new(),
             next: 1,
@@ -787,6 +791,22 @@ impl Running {
     pub fn over(port: Port) -> Running {
         Running {
             navigator: None,
+            port: Some(port),
+            told: Vec::new(),
+            next: 1,
+        }
+    }
+
+    /// As [`Running::over`], for a test of [`Running::end`] itself: `ending` is what the
+    /// test's Navigator does while `end` waits for it. It is handed the time `end` waits
+    /// for, and gives whether the Navigator ended; what it tells meanwhile, it tells on
+    /// the [`yaar_navigator::PortEnd`] of the port.
+    pub fn over_ending(
+        port: Port,
+        ending: impl FnOnce(Duration) -> bool + Send + 'static,
+    ) -> Running {
+        Running {
+            navigator: Some(Box::new(ending)),
             port: Some(port),
             told: Vec::new(),
             next: 1,
@@ -934,8 +954,9 @@ impl Running {
     /// Plays the Keeper's answer to the next [`Told::ExportWanted`]: waits for it until
     /// `deadline`, writes the asked version of `repo` into the asked folder with
     /// `git archive` unpacked by the `tar` crate, and hands back [`Ask::Exported`]. Gives
-    /// what was asked. A version that cannot be written is answered as the Keeper answers a
-    /// failure, with its reason (and the reason is printed).
+    /// what was asked. A folder that exists, or a version that cannot be written, is answered
+    /// as the Keeper answers a failure, with its reason (and the reason is printed), and
+    /// leaves nothing behind.
     pub fn export_when_wanted(
         &mut self,
         repo: &Repo,
@@ -967,7 +988,7 @@ impl Running {
         if let Some(navigator) = self.navigator.take() {
             let within = DEADLINE + STOP_DEADLINE * self.pids().len() as u32;
             assert!(
-                navigator.wait(within),
+                navigator(within),
                 "the Navigator did not end within {within:?} of its port being dropped"
             );
         }
@@ -1016,17 +1037,30 @@ impl Drop for Running {
         if let Some(told) = &told {
             self.drain(told);
         }
-        let _ = navigator.wait(DEADLINE + STOP_DEADLINE * self.pids().len() as u32);
+        let _ = navigator(DEADLINE + STOP_DEADLINE * self.pids().len() as u32);
     }
 }
 
 /// Writes `version` of `repo` into `into`, which is made, as plain files.
+///
+/// As the Keeper writes an export: `into` must not exist, its parents are made, and a write
+/// that fails leaves no folder. A Navigator that asks twice for one folder, or reuses one
+/// left over, is refused here as it is by the Keeper.
 fn write_version(repo: &Repo, version: &str, into: &Path) -> Result<(), String> {
+    if into.symlink_metadata().is_ok() {
+        return Err(format!("{} already exists", into.display()));
+    }
     let archive = git_archive(repo, version)?;
-    std::fs::create_dir_all(into).map_err(|error| error.to_string())?;
+    if let Some(parent) = into.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::create_dir(into).map_err(|error| error.to_string())?;
     tar::Archive::new(&archive[..])
         .unpack(into)
-        .map_err(|error| error.to_string())
+        .map_err(|error| {
+            let _ = std::fs::remove_dir_all(into);
+            error.to_string()
+        })
 }
 
 /// `git archive` of `version`, as tar bytes.
