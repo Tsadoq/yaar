@@ -583,6 +583,22 @@ impl Parts {
             reason: format!("no name for the terminal could be made: {error}"),
         })?;
         let terminal = yaar_link::TerminalId::new(id.as_str());
+        // A launcher for a review is refused, as for an Adapter the Keeper does not have,
+        // before anything is listed or started: the terminal would bind a review nobody holds.
+        if let Program::AgentFor { review, .. } = program {
+            let held = kept
+                .reviews
+                .review(&yaar_review_engine::ReviewId::new(review.as_str()));
+            match held {
+                Ok(_) => {}
+                Err(yaar_review_engine::EngineError::UnknownReview(_)) => {
+                    return Err(Refusal::Failed {
+                        reason: format!("the app holds no review {review}"),
+                    });
+                }
+                Err(error) => return Err(engine_refusal(error)),
+            }
+        }
         let start = match program {
             Program::Shell => Start::shell(folder, size(at)),
             Program::Agent { agent } | Program::AgentFor { agent, .. } => {

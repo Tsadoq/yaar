@@ -1024,6 +1024,75 @@ fn the_first_session_that_starts_in_a_terminal_opened_for_a_review_takes_that_re
 }
 
 #[test]
+fn a_terminal_opened_for_a_review_the_keeper_does_not_hold_is_refused_and_binds_nothing() {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let dialogs = recorded::hook_events(DIALOGS);
+    let at_mention = recorded::hook_events(AT_MENTION);
+
+    // A session ran and ended: the next session of that CLI takes its review.
+    scratch.hook(None, &dialogs[0].in_project(&repo).input_bytes());
+    let first = window.agents_until(&workspace, "the first", is_state(SessionState::Idle));
+    let kept = first.sessions[0].review.clone().expect("a review");
+    scratch.hook(None, &dialogs[13].in_project(&repo).input_bytes());
+    window.agents_until(
+        &workspace,
+        "the first ended",
+        is_state(SessionState::NotRunning),
+    );
+
+    let unheld = ReviewId::new("no-such-review");
+    assert_ne!(unheld, kept);
+    let asked = window.ask(Request::OpenTerminal {
+        workspace: workspace.clone(),
+        program: Program::AgentFor {
+            agent: yaar_adapter_claude::NAME.to_owned(),
+            review: unheld.clone(),
+        },
+        size: SIZE,
+    });
+    let Err(Refusal::Failed { reason }) = asked else {
+        panic!("the terminal was not refused: {asked:?}");
+    };
+    assert!(reason.contains("no-such-review"), "{reason}");
+    // The reply came after the Keeper had done all it does for the request: no terminal
+    // is listed, and the launcher's shell was never run.
+    assert_eq!(
+        window.ask(Request::ListTerminals),
+        Ok(Reply::Terminals(vec![]))
+    );
+    assert!(
+        !scratch.shell_log().exists(),
+        "a launcher ran for a review nobody holds"
+    );
+
+    // A session that starts in a plain shell of the workspace takes the review the
+    // takeover rules give it, and the unheld one is bound to nothing.
+    let terminal = window.open_program(&workspace, Program::Shell);
+    scratch.hook(
+        Some(&terminal),
+        &at_mention[0].in_project(&repo).input_bytes(),
+    );
+    let second = window.agents_until(&workspace, "the second", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.title == "Claude Code 2" && s.state == SessionState::Idle)
+    });
+    let started = second
+        .sessions
+        .iter()
+        .find(|s| s.title == "Claude Code 2")
+        .expect("the second");
+    assert_eq!(started.review, Some(kept));
+    assert_eq!(started.terminal, Some(terminal));
+    window.stop(keeper);
+}
+
+#[test]
 fn a_session_whose_review_a_new_session_took_over_is_no_longer_unreviewed() {
     let mut setup = Setup::new();
     let terminal = setup.window.open_terminal(&setup.workspace);
