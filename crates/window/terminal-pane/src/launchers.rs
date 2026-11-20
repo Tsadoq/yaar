@@ -30,10 +30,20 @@
 //! every terminal has the height of the pane less the row, and the resume line, which comes
 //! and goes, changes it as a window made smaller does.
 
+use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_link::{AgentCli, SessionId};
+use yaar_link::{AgentCli, Program, Reply, Request, Session, SessionId};
 
 use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane};
+
+/// The height of each of the two lines.
+const LINE: Pixels = px(28.);
+
+/// What the notice says when New Agent Terminal finds no CLI to start.
+const NO_CLI: &str = "The Keeper names no agent CLI to start.";
+
+/// What the notice says when Resume Agent finds no session to resume.
+const NOTHING_TO_RESUME: &str = "No session of this workspace is left to resume.";
 
 /// What the pane keeps of its launchers: which CLI is the chosen one, and the sessions it
 /// opened a resume for.
@@ -49,49 +59,283 @@ impl TerminalPane {
     /// The launchers the pane offers next to the shell: one for each agent CLI the Keeper
     /// names, in that order.
     pub fn launchers(&self, cx: &App) -> Vec<AgentCli> {
-        let _ = (cx, &self.launchers.chosen);
-        todo!("the launchers next to the shell")
+        self.models.agents.read(cx).clis().to_vec()
     }
 
     /// The CLI [`crate::NewAgentTerminal`] opens now; none while the Keeper names none.
     pub fn chosen_cli(&self, cx: &App) -> Option<AgentCli> {
-        let _ = cx;
-        todo!("the chosen launcher")
+        let agents = self.models.agents.read(cx);
+        agents
+            .clis()
+            .get(self.chosen_index(agents.clis().len()))
+            .cloned()
     }
 
     /// The sessions of the workspace on screen the pane offers to resume, in the order the
     /// agents model lists them.
     pub fn resumable(&self, cx: &App) -> Vec<SessionId> {
-        let _ = (cx, &self.launchers.resumed);
-        todo!("the sessions offered to resume")
+        self.resumable_sessions(cx)
+            .into_iter()
+            .map(|session| session.id)
+            .collect()
+    }
+
+    /// The index of the chosen CLI among `count`: the first when the one that was chosen
+    /// is not among the CLIs the Keeper names now.
+    fn chosen_index(&self, count: usize) -> usize {
+        if self.launchers.chosen < count {
+            self.launchers.chosen
+        } else {
+            0
+        }
+    }
+
+    /// The sessions of the workspace on screen the agents model lists as resumable.
+    fn resumable_sessions(&self, cx: &App) -> Vec<Session> {
+        let Some(workspace) = self.models.workspaces.read(cx).selected() else {
+            return Vec::new();
+        };
+        self.models
+            .agents
+            .read(cx)
+            .of(workspace)
+            .map(|agents| {
+                agents
+                    .sessions
+                    .iter()
+                    .filter(|session| session.resumable)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Forgets the resumes opened for sessions the agents model lists resumable no more,
+    /// so that a session listed again, as after another restart, is offered again.
+    fn forget_resumed(&mut self, cx: &App) {
+        let agents = self.models.agents.read(cx);
+        self.launchers
+            .resumed
+            .retain(|id| agents.session(id).is_some_and(|session| session.resumable));
+    }
+
+    /// Asks the Keeper for a new terminal for the workspace on screen that runs `program`,
+    /// as [`crate::NewTerminal`] asks for a shell: at the size the pane lays terminals out
+    /// at, shown and focused once the Keeper answers, its refusal the notice. Whether a
+    /// question was asked: with no workspace on screen there is nothing to open one in.
+    fn launch(&mut self, program: Program, cx: &mut Context<Self>) -> bool {
+        let Some(workspace) = self.models.workspaces.read(cx).selected().cloned() else {
+            return false;
+        };
+        self.notice = None;
+        let request = Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: program.clone(),
+            size: self.size,
+        };
+        let asked = self
+            .models
+            .link
+            .update(cx, |link, cx| link.ask(request, cx));
+        // Detached, as the question for a shell is: a task that is dropped is cancelled,
+        // and its answer lost. The pane is held weakly, so a pane that is gone takes no
+        // answer.
+        cx.spawn(async move |pane, cx| {
+            let answer = asked.await;
+            pane.update(cx, |pane, cx| {
+                // A resume the Keeper did not open is not one the pane has opened: the
+                // session can be tried again.
+                if let Program::Resume { session } = &program
+                    && !matches!(answer, Ok(Reply::TerminalOpened { .. }))
+                {
+                    pane.launchers.resumed.retain(|opened| opened != session);
+                }
+                pane.opened(workspace, program, answer, cx);
+            })
+            .ok();
+        })
+        .detach();
+        cx.notify();
+        true
+    }
+
+    /// Asks for the terminal that resumes `session`, and remembers that it was asked for.
+    fn resume(&mut self, session: SessionId, cx: &mut Context<Self>) {
+        let program = Program::Resume {
+            session: session.clone(),
+        };
+        if self.launch(program, cx) && !self.launchers.resumed.contains(&session) {
+            self.launchers.resumed.push(session);
+        }
+    }
+
+    /// One control of a line: a button that does `act` when it is clicked, under the
+    /// selector `selector`.
+    fn control(
+        &self,
+        selector: String,
+        label: String,
+        chosen: Option<String>,
+        act: impl Fn(&mut Self, &mut Context<Self>) + 'static,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let theme = cx.theme();
+        // The mark of the chosen launcher is a ring over the control, which takes no click
+        // from it.
+        let mark = chosen.map(|selector| {
+            div()
+                .debug_selector(move || selector.clone())
+                .absolute()
+                .top_0()
+                .left_0()
+                .size_full()
+                .rounded_sm()
+                .border_1()
+                .border_color(theme.primary)
+        });
+        div()
+            .id(SharedString::from(selector.clone()))
+            .debug_selector(move || selector.clone())
+            .relative()
+            .flex_none()
+            .px_2()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_xs()
+            .bg(theme.secondary)
+            .text_color(theme.secondary_foreground)
+            .child(label)
+            .children(mark)
+            .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| act(pane, cx)))
+    }
+
+    /// A line of the top row, `selector` its name, with `controls` in it.
+    fn line(&self, selector: &'static str, cx: &App) -> Div {
+        let theme = cx.theme();
+        div()
+            .debug_selector(move || selector.to_owned())
+            .flex_none()
+            .h(LINE)
+            .px_2()
+            .gap_2()
+            .flex()
+            .flex_row()
+            .items_center()
+            .bg(theme.muted)
+            .text_color(theme.foreground)
+            .border_b_1()
+            .border_color(theme.border)
     }
 
     /// The two lines of the module's doc, as the pane's top row (`terminal-launchers`, and
-    /// `terminal-resume` under it while there is a session to resume). A hook of the
-    /// contract that draws nothing.
-    pub(crate) fn render_launchers(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let _ = cx;
-        None
+    /// `terminal-resume` under it while there is a session to resume).
+    pub(crate) fn render_launchers(&mut self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        self.forget_resumed(cx);
+        let chosen = self.chosen_cli(cx);
+        let mut launchers = self.line("terminal-launchers", cx).child(self.control(
+            "terminal-launcher-shell".to_owned(),
+            "Shell".to_owned(),
+            None,
+            |pane, cx| {
+                pane.launch(Program::Shell, cx);
+            },
+            cx,
+        ));
+        for cli in self.launchers(cx) {
+            let agent = cli.agent.clone();
+            let mark = (chosen.as_ref() == Some(&cli))
+                .then(|| format!("terminal-launcher-chosen-{}", cli.agent));
+            launchers = launchers.child(self.control(
+                format!("terminal-launcher-{}", cli.agent),
+                cli.title,
+                mark,
+                move |pane, cx| {
+                    pane.launch(
+                        Program::Agent {
+                            agent: agent.clone(),
+                        },
+                        cx,
+                    );
+                },
+                cx,
+            ));
+        }
+        let sessions = self.resumable_sessions(cx);
+        let resume = (!sessions.is_empty()).then(|| {
+            let mut line = self.line("terminal-resume", cx);
+            for (n, session) in sessions.into_iter().enumerate() {
+                let id = session.id;
+                line = line.child(self.control(
+                    format!("terminal-resume-{n}"),
+                    format!("Resume {}", session.title),
+                    None,
+                    move |pane, cx| pane.resume(id.clone(), cx),
+                    cx,
+                ));
+            }
+            line
+        });
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .child(launchers)
+                .children(resume)
+                .into_any_element(),
+        )
     }
 
-    /// What [`crate::NewAgentTerminal`] does. A hook of the contract that does nothing.
+    /// What [`crate::NewAgentTerminal`] does: opens the chosen CLI's launcher, or says
+    /// that the Keeper names none.
     pub(crate) fn new_agent_terminal(
         &mut self,
         _: &NewAgentTerminal,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        match self.chosen_cli(cx) {
+            Some(cli) => {
+                self.launch(Program::Agent { agent: cli.agent }, cx);
+            }
+            None => {
+                self.notice = Some(NO_CLI.to_owned());
+                cx.notify();
+            }
+        }
     }
 
-    /// What [`crate::NextAgentCli`] does. A hook of the contract that does nothing.
+    /// What [`crate::NextAgentCli`] does: the next CLI is the chosen one, the first after
+    /// the last; nothing while the Keeper names none.
     pub(crate) fn next_agent_cli(
         &mut self,
         _: &NextAgentCli,
         _: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
+        let count = self.models.agents.read(cx).clis().len();
+        if count == 0 {
+            return;
+        }
+        self.launchers.chosen = (self.chosen_index(count) + 1) % count;
+        cx.notify();
     }
 
-    /// What [`crate::ResumeAgent`] does. A hook of the contract that does nothing.
-    pub(crate) fn resume_agent(&mut self, _: &ResumeAgent, _: &mut Window, _: &mut Context<Self>) {}
+    /// What [`crate::ResumeAgent`] does: resumes the first session of the workspace on
+    /// screen that no resume was opened for since it was listed, or says that none is
+    /// left.
+    pub(crate) fn resume_agent(&mut self, _: &ResumeAgent, _: &mut Window, cx: &mut Context<Self>) {
+        self.forget_resumed(cx);
+        let next = self
+            .resumable_sessions(cx)
+            .into_iter()
+            .find(|session| !self.launchers.resumed.contains(&session.id));
+        match next {
+            Some(session) => self.resume(session.id, cx),
+            None => {
+                self.notice = Some(NOTHING_TO_RESUME.to_owned());
+                cx.notify();
+            }
+        }
+    }
 }
