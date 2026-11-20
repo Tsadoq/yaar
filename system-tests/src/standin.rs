@@ -24,19 +24,19 @@
 //! app does not support, that only edits files. With [`IGNORE_PIECES`] set it runs no hook
 //! either, as a CLI started around the app's pieces.
 //!
-//! Started as `pi` it behaves as pi does with the app's extension loaded: the pi dialect,
-//! built by the stand-in's package of slice 7 (until then it refuses to start as `pi`). It
-//! is found by its name on the search path, as pi is, whether typed in a shell or run by a
+//! Started as `pi` it behaves as pi does with the app's extension loaded: the pi dialect.
+//! It is found by its name on the search path, as pi is, whether typed in a shell or run by a
 //! launcher, and finds its extensions as pi does: each path of the top-level array
 //! `extensions` of `<HOME>/.pi/agent/settings.json` that names a file, and each path given
 //! with `-e`. A path that names no file is passed over, and settings that are not a JSON
 //! object give none, as pi does; it reads nothing else of pi's and writes nothing there. It
-//! writes its arguments and the extensions it found down as they came, and runs as pi only
-//! when it found one: a pi whose user said no, or was not asked, loads no extension and
-//! reports nothing. It cannot run the extension, which is TypeScript: it does what the
-//! extension does instead, and only that. For each moment of its script it runs the
-//! reporting program the shell of the app names in `YAAR_PI_REPORT`, with no shell between, so that
-//! the program's parent is the stand-in, as it is pi for the extension; it writes the
+//! writes its arguments and the extensions it found down as they came ([`StandinLog::args`],
+//! [`StandinLog::extensions`]), and runs as pi only when it found one: a pi whose user said
+//! no, or was not asked, loads no extension and reports nothing. It cannot run the
+//! extension, which is TypeScript: it does what the extension does instead, and only that.
+//! For each moment of its script it runs the reporting program the shell of the app names
+//! in `YAAR_PI_REPORT`, with no shell between, so that the program's parent is the
+//! stand-in, as it is pi for the extension; it writes the
 //! report's payload on the program's standard input, in the shape the crate doc of
 //! `yaar-adapter-pi` gives (the `event`, `sessionId`, `sessionFile`, `cwd` and the keys of
 //! the event), and waits for it to end, at most 10 s, and writes down
@@ -60,9 +60,12 @@
 //! written down as `Did::Tool` with what the program printed. A line typed during a
 //! [`Step::Hold`] inside a turn is a message pi takes while it works, as Enter during a tool
 //! does in pi: `input` with `streamingBehavior` `steer` at its Enter, its review kept, and
-//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks no permission: a script that holds
-//! one is refused at its line, as a script line it cannot read. It prints no progress
-//! sequence and no interrupt mark: pi reports both itself.
+//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks
+//! no permission: a script that holds one is refused at its line, as a script line it cannot
+//! read. It prints no progress sequence and no interrupt mark: pi reports both itself. A
+//! report whose program cannot be started, or does not end in 10 s, is
+//! written down with what it printed, which is nothing then, and the script goes on, as pi
+//! goes on when the extension's report fails.
 //!
 //! Its script is a file, named by [`SCRIPT_VARIABLE`], of [`Step`]s, one to a line. It
 //! decides nothing: it follows the script and the keys. What reached it, every byte read
@@ -92,6 +95,7 @@
 //! `PreToolUse` and `PostToolUse` of the tool as Claude Code lists it. The thread a reply
 //! names is counted in the last review a `UserPromptSubmit` hook answered with.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
@@ -103,6 +107,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+
+use crate::dialect::Dialect;
 
 /// The variable that names the stand-in's script.
 pub const SCRIPT_VARIABLE: &str = "STANDIN_SCRIPT";
@@ -437,6 +443,10 @@ pub struct StandinLog {
     pub pid: u32,
     /// Its arguments, without its own name.
     pub args: Vec<String>,
+    /// The extensions it found as pi: each file the settings of pi in its home list and each
+    /// file `-e` names, in that order. Empty for a stand-in that is not pi, and for a pi that
+    /// found none.
+    pub extensions: Vec<PathBuf>,
     /// The CLI's own session id it gave itself, or the one it was told to resume.
     pub session: String,
     /// Every byte it read from its terminal, in order.
@@ -475,6 +485,11 @@ impl StandinLog {
             self.args = args
                 .iter()
                 .filter_map(|arg| arg.as_str().map(str::to_owned))
+                .collect();
+        } else if let Some(list) = entry["extensions"].as_array() {
+            self.extensions = list
+                .iter()
+                .filter_map(|path| path.as_str().map(PathBuf::from))
                 .collect();
         } else if let Some(session) = entry["session"].as_str() {
             self.session = session.to_owned();
@@ -545,6 +560,15 @@ const TOOL_SERVER_LISTED: &str = "plugin:yaar-review:yaar";
 /// that has said nothing by then is stuck, and the stand-in writes that down.
 const TOOL_WAIT: Duration = Duration::from_secs(15);
 
+/// The variable the shells of the app set, naming the program pi's extension runs for each
+/// report.
+const REPORT_VARIABLE: &str = "YAAR_PI_REPORT";
+
+/// pi's settings under the home, and where pi keeps the sessions of a stand-in that is told
+/// no folder of its own: nothing is ever written in either.
+const PI_SETTINGS: &str = ".pi/agent/settings.json";
+const PI_SESSIONS: &str = ".pi/agent/sessions/standin";
+
 /// The prompt of a turn Claude Code starts itself when a background task ends.
 const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>standin-task</task-id>\n\
 <status>completed</status>\n<summary>The background task has ended.</summary>\n\
@@ -559,27 +583,35 @@ const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>standin-task</tas
 /// killed, reports no end, as Claude Code does not.
 ///
 /// A name other than `pi` and `otheragent` acts as `claude`: the stand-in is run under that
-/// name where a test does not say.
+/// name where a test does not say. As `pi` it refuses, with status 2, a script that holds
+/// a step pi has no such thing as (`ask`), and says at which line.
 pub fn run(name: &str, args: &[String]) -> i32 {
     // In a shell of the app the terminal is the stand-in's controlling terminal, and its
     // closing sends a hangup: that is a close to read and end on, not a death.
     // SAFETY: ignoring a signal is always allowed.
     unsafe { libc::signal(libc::SIGHUP, libc::SIG_IGN) };
-    if name == "pi" {
-        eprintln!("the pi dialect of the stand-in comes with slice 7");
-        return 2;
-    }
     let script = match std::env::var_os(SCRIPT_VARIABLE) {
         Some(file) => {
             let text = std::fs::read_to_string(&file)
                 .unwrap_or_else(|why| panic!("the script {}: {why}", Path::new(&file).display()));
+            if name == "pi"
+                && let Some(line) = text
+                    .lines()
+                    .position(|line| line.split(' ').next() == Some("ask"))
+            {
+                eprintln!(
+                    "script line {}: `ask` is no step of pi's, which asks no permission",
+                    line + 1
+                );
+                return 2;
+            }
             Script::parse(&text)
         }
         None => Script::default(),
     };
     let pieces =
         name != "otheragent" && std::env::var(IGNORE_PIECES).map_or(true, |value| value != "1");
-    let mut standin = Standin::start(args, pieces);
+    let mut standin = Standin::start(args, pieces, name == "pi");
     let status = standin.go(&script);
     standin.restore();
     status
@@ -747,10 +779,23 @@ struct Standin {
     review: Option<String>,
     /// The plugin's tool server, once a [`Step::Reply`] started it.
     server: Option<ToolServer>,
+    /// What the stand-in is as pi; none when it is not pi.
+    pi: Option<PiSide>,
+}
+
+/// What the stand-in is, and keeps, as pi.
+struct PiSide {
+    /// The program pi's extension runs for each report; none when no extension was found,
+    /// the app's pieces are left out or no shell of the app named one: nothing is reported.
+    program: Option<PathBuf>,
+    /// The session's file, which is named in each report and never written.
+    session_file: PathBuf,
+    /// How many tools were called, for the ids pi gives them.
+    calls: Cell<u32>,
 }
 
 impl Standin {
-    fn start(args: &[String], pieces: bool) -> Standin {
+    fn start(args: &[String], pieces: bool, as_pi: bool) -> Standin {
         let saved = raw_terminal();
         let log = match std::env::var_os(LOG_VARIABLE) {
             Some(file) => Log(Some(File::create(&file).unwrap_or_else(|why| {
@@ -758,10 +803,7 @@ impl Standin {
             }))),
             None => Log(None),
         };
-        let resumed_id = args
-            .iter()
-            .position(|arg| arg == "--resume")
-            .and_then(|at| args.get(at + 1));
+        let resumed_id = value_of(args, &[if as_pi { "--session" } else { "--resume" }]);
         let session = resumed_id.cloned().unwrap_or_else(new_session_id);
         let cwd = std::env::current_dir().expect("the folder the stand-in runs in");
         let home =
@@ -772,8 +814,25 @@ impl Standin {
             .join(format!("{session}.jsonl"));
         log.line(&json!({"pid": std::process::id()}));
         log.line(&json!({"args": args}));
+        let pi = as_pi.then(|| {
+            let extensions = extensions_found(&home, args);
+            log.line(&json!({"extensions": extensions}));
+            let folder = value_of(args, &["--session-dir"])
+                .map_or_else(|| home.join(PI_SESSIONS), PathBuf::from);
+            PiSide {
+                program: std::env::var_os(REPORT_VARIABLE)
+                    .filter(|program| pieces && !extensions.is_empty() && !program.is_empty())
+                    .map(PathBuf::from),
+                session_file: folder.join(format!("{session}.jsonl")),
+                calls: Cell::new(0),
+            }
+        });
         log.line(&json!({"session": session}));
-        let plugin_dirs = if pieces { plugin_dirs() } else { Vec::new() };
+        let plugin_dirs = if pieces && !as_pi {
+            plugin_dirs()
+        } else {
+            Vec::new()
+        };
         let plugins = read_plugins(&plugin_dirs);
         Standin {
             log,
@@ -788,6 +847,7 @@ impl Standin {
             plugin_dirs,
             review: None,
             server: None,
+            pi,
         }
     }
 
@@ -800,8 +860,14 @@ impl Standin {
 
     /// Runs the script, and what follows it. Gives the exit status.
     fn go(&mut self, script: &Script) -> i32 {
-        let source = if self.resumed { "resume" } else { "startup" };
-        self.hook("SessionStart", None, json!({"source": source}));
+        if self.pi.is_some() {
+            // `pi --session` starts as any other pi does: the Keeper holds the session id it
+            // expects for the resume.
+            self.pi_report("session_start", json!({"reason": "startup"}));
+        } else {
+            let source = if self.resumed { "resume" } else { "startup" };
+            self.hook("SessionStart", None, json!({"source": source}));
+        }
         let steps = &script.0;
         // After an interruption the steps up to and with the next `end` are skipped.
         let mut skipping = false;
@@ -859,7 +925,12 @@ impl Standin {
     }
 
     fn interrupt(&mut self, step: usize) {
-        out(INTERRUPT_MARK);
+        if self.pi.is_some() {
+            // pi reports an interrupt itself and prints no mark of the app's kind.
+            self.pi_report("agent_settled", json!({"aborted": true}));
+        } else {
+            out(INTERRUPT_MARK);
+        }
         self.log.did(
             "interrupted",
             json!({"step": step, "received": self.input.received}),
@@ -868,6 +939,9 @@ impl Standin {
     }
 
     fn step(&mut self, at: usize, step: &Step) -> Ended {
+        if self.pi.is_some() {
+            return self.pi_step(at, step);
+        }
         match step {
             Step::Turn => self.turn(),
             Step::Read(path) => {
@@ -958,8 +1032,13 @@ impl Standin {
         // An Esc read after this line's Enter is left pending: Claude Code starts the turn
         // at the Enter, and the Esc interrupts it. An Esc before the Enter went with the line.
         self.in_turn = true;
-        self.submit(&line);
-        out(WORKING);
+        if self.pi.is_some() {
+            self.pi_message("interactive", None);
+            self.pi_report("agent_start", json!({}));
+        } else {
+            self.submit(&line);
+            out(WORKING);
+        }
         Ended::Done
     }
 
@@ -968,8 +1047,23 @@ impl Standin {
     fn self_turn(&mut self) {
         self.input.forget_esc();
         self.in_turn = true;
-        self.submit(TASK_NOTIFICATION);
-        out(WORKING);
+        if self.pi.is_some() {
+            self.pi_message("extension", None);
+            self.pi_report("agent_start", json!({}));
+        } else {
+            self.submit(TASK_NOTIFICATION);
+            out(WORKING);
+        }
+    }
+
+    /// Takes a message typed while a tool runs: Claude Code queues it and runs
+    /// `UserPromptSubmit` at once, pi reports `input` with `streamingBehavior` `steer`.
+    fn queue(&mut self, line: &str) {
+        if self.pi.is_some() {
+            self.pi_message("interactive", Some("steer"));
+        } else {
+            self.submit(line);
+        }
     }
 
     /// Runs `UserPromptSubmit` for a message, and keeps the review its answer carries, as
@@ -996,6 +1090,10 @@ impl Standin {
             panic!("no thread {thread} in the last review received, which names {ids:?}");
         };
         let arguments = json!({"thread": id, "body": body, "addressed": addressed});
+        if self.pi.is_some() {
+            self.pi_reply(id, &arguments);
+            return;
+        }
         let mut fields = json!({
             "tool_name": LISTED_REPLY_TOOL,
             "mcp_server": {"name": TOOL_SERVER_LISTED, "source": "plugin"},
@@ -1077,14 +1175,7 @@ impl Standin {
         };
         let input = json!({"file_path": file, "old_string": old, "new_string": new});
         self.tool("Edit", input, &format!("Edit {}", path.display()), || {
-            let mut after = before.clone();
-            if !after.is_empty() && !after.ends_with('\n') {
-                after.push('\n');
-            }
-            after.push_str(text);
-            after.push('\n');
-            std::fs::write(&file, after)
-                .unwrap_or_else(|why| panic!("edit {}: {why}", file.display()));
+            add_line(&file, &before, text);
             let added: Vec<String> = text.split('\n').map(|line| format!("+{line}")).collect();
             let patch = json!({
                 "oldStart": lines, "oldLines": 0,
@@ -1188,7 +1279,7 @@ impl Standin {
                     break Ended::Interrupted;
                 }
                 if let Some(line) = self.input.take_line() {
-                    self.submit(&line);
+                    self.queue(&line);
                     continue;
                 }
             }
@@ -1216,6 +1307,197 @@ impl Standin {
             "flooded",
             json!({"step": at, "longest_us": longest.as_micros() as u64}),
         );
+    }
+
+    /// One step of the script as pi takes it, with the app's extension loaded or not: the
+    /// reports of the moments, when there is a program to report to, and the same lines in
+    /// the terminal as for Claude Code, but no progress sequence.
+    fn pi_step(&mut self, at: usize, step: &Step) -> Ended {
+        match step {
+            Step::Turn => return self.turn(),
+            Step::Read(path) => {
+                let file = self.absolute(path);
+                self.pi_tool(
+                    "read",
+                    json!({"path": path}),
+                    &format!("Read {}", path.display()),
+                    || {
+                        std::fs::read(&file)
+                            .unwrap_or_else(|why| panic!("read {}: {why}", file.display()));
+                        (Value::Null, false)
+                    },
+                );
+            }
+            Step::Edit(path, text) => self.pi_edit(path, text),
+            Step::Write(path, text) => {
+                let file = self.absolute(path);
+                let banner = format!("Write {}", path.display());
+                self.pi_tool("write", json!({"path": path}), &banner, || {
+                    write_whole(&file, text);
+                    (Value::Null, false)
+                });
+            }
+            Step::Shell(command) => {
+                let cwd = self.cwd.clone();
+                let banner = format!("Bash {command}");
+                self.pi_tool("bash", json!({"command": command}), &banner, || {
+                    let status = sh(command)
+                        .current_dir(cwd)
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status()
+                        .unwrap_or_else(|why| panic!("run {command:?}: {why}"));
+                    (Value::Null, !status.success())
+                });
+            }
+            Step::Ask(..) => unreachable!("a script with `ask` is refused before pi starts"),
+            Step::Hold(path) => return self.hold(at, path),
+            Step::Flood(lines) => self.flood(at, *lines),
+            Step::End => {
+                self.in_turn = false;
+                out(b"\xe2\x97\x8f Done\r\n");
+                self.pi_report("agent_settled", json!({"aborted": false}));
+            }
+            Step::Mark => out(NO_PROGRESS),
+            Step::Exit => {
+                self.pi_report("session_shutdown", json!({"reason": "quit"}));
+                self.restore();
+                return Ended::Exit;
+            }
+            Step::SelfTurn => self.self_turn(),
+            Step::Reply {
+                thread,
+                addressed,
+                body,
+            } => self.reply(*thread, *addressed, body),
+        }
+        Ended::Done
+    }
+
+    /// The report of a message the user typed or an extension sent, `input`, and the review
+    /// its answer carries, kept as the last one received: the extension puts it into the
+    /// message.
+    fn pi_message(&mut self, source: &str, streaming: Option<&str>) {
+        let fields = json!({"source": source, "streamingBehavior": streaming});
+        if let Some(answer) = self.pi_report("input", fields)
+            && let Some(review) = Dialect::Pi.review_in(&answer)
+        {
+            self.review = Some(review);
+        }
+    }
+
+    /// A tool of the agent as pi runs it: `tool_call`, its line, the action, and
+    /// `tool_result`, which tells whether the action failed and what more it gave.
+    fn pi_tool(&self, name: &str, input: Value, banner: &str, act: impl FnOnce() -> (Value, bool)) {
+        let call = self.pi_call_id();
+        let shared = json!({"toolName": name, "toolCallId": call, "input": input});
+        self.pi_report("tool_call", shared.clone());
+        out(format!("\u{25cf} {banner}\r\n").as_bytes());
+        let (details, failed) = act();
+        let mut done = shared;
+        done["isError"] = json!(failed);
+        if !details.is_null() {
+            done["details"] = details;
+        }
+        self.pi_report("tool_result", done);
+    }
+
+    /// Adds a line to a file as pi's edit tool does, and reports the patch as one hunk of
+    /// that line and no line of context.
+    fn pi_edit(&self, path: &Path, text: &str) {
+        let file = self.absolute(path);
+        let before = std::fs::read_to_string(&file)
+            .unwrap_or_else(|why| panic!("edit {}: {why}", file.display()));
+        let lines = before.lines().count();
+        let added: Vec<String> = text.split('\n').map(|line| format!("+{line}")).collect();
+        let name = path.display();
+        let patch = format!(
+            "--- {name}\n+++ {name}\n@@ -{lines},0 +{},{} @@\n{}\n",
+            lines + 1,
+            added.len(),
+            added.join("\n")
+        );
+        let banner = format!("Edit {name}");
+        self.pi_tool("edit", json!({"path": path}), &banner, || {
+            add_line(&file, &before, text);
+            (json!({"patch": patch}), false)
+        });
+    }
+
+    /// A call of the reply tool as pi makes it: the program run with `--tool`, and what it
+    /// printed written down as [`Did::Tool`].
+    fn pi_reply(&self, thread: &str, arguments: &Value) {
+        out(format!("\u{25cf} Reply {thread}\r\n").as_bytes());
+        let payload = json!({"toolCallId": self.pi_call_id(), "arguments": arguments});
+        // A thread is only known from a review the extension's answer carried, so the
+        // program is there.
+        let (printed, killed) = self
+            .pi_run("reply_to_thread", payload, true)
+            .expect("a review was received, so a program was run");
+        let answer = serde_json::from_slice(&printed).unwrap_or_else(|_| {
+            let why = if killed {
+                "the program did not end in time"
+            } else {
+                "the program printed no JSON"
+            };
+            json!({"message": why})
+        });
+        self.log.did(
+            "tool",
+            json!({"arguments": arguments, "answer": answer, "received": self.input.received}),
+        );
+    }
+
+    /// The id pi gives its next tool call.
+    fn pi_call_id(&self) -> String {
+        let n = self.pi.as_ref().map_or(0, |pi| pi.calls.get()) + 1;
+        if let Some(pi) = &self.pi {
+            pi.calls.set(n);
+        }
+        format!("call_{n:04}")
+    }
+
+    /// Reports an event to the program the shell names, and writes down what it printed as
+    /// a hook of the event. Gives what it printed; none, and nothing written down, when pi
+    /// reports nothing: no extension found, the app's pieces left out, no program named.
+    fn pi_report(&self, event: &str, fields: Value) -> Option<Vec<u8>> {
+        let (answer, killed) = self.pi_run(event, fields, false)?;
+        self.log.did(
+            "hook",
+            json!({
+                "event": event,
+                "answer": hex(&answer),
+                "killed": killed,
+                "received": self.input.received,
+            }),
+        );
+        Some(answer)
+    }
+
+    /// Runs the reporting program for one event, as the extension does: with no shell
+    /// between, `--tool` for a call of the reply tool, the payload on its standard input,
+    /// to its end. Gives what it printed and whether it was killed for not ending in time;
+    /// a program that cannot be started prints nothing.
+    fn pi_run(&self, event: &str, fields: Value, tool: bool) -> Option<(Vec<u8>, bool)> {
+        let pi = self.pi.as_ref()?;
+        let program = pi.program.as_ref()?;
+        let mut payload = json!({
+            "event": event,
+            "sessionId": self.session,
+            "sessionFile": pi.session_file,
+            "cwd": self.cwd,
+        });
+        for (key, value) in fields.as_object().expect("an object") {
+            payload[key] = value.clone();
+        }
+        let mut command = Command::new(program);
+        if tool {
+            command.arg("--tool");
+        }
+        command.current_dir(&self.cwd);
+        default_hangup(&mut command);
+        Some(run_process(command, payload.to_string().as_bytes()).unwrap_or_default())
     }
 
     fn absolute(&self, path: &Path) -> PathBuf {
@@ -1287,6 +1569,47 @@ impl Standin {
         }
         commands
     }
+}
+
+/// Adds `text` as a last line of the file, whose content `before` is.
+fn add_line(file: &Path, before: &str, text: &str) {
+    let mut after = before.to_owned();
+    if !after.is_empty() && !after.ends_with('\n') {
+        after.push('\n');
+    }
+    after.push_str(text);
+    after.push('\n');
+    std::fs::write(file, after).unwrap_or_else(|why| panic!("edit {}: {why}", file.display()));
+}
+
+/// The value after the first of `flags` among the arguments, if there is one.
+fn value_of<'a>(args: &'a [String], flags: &[&str]) -> Option<&'a String> {
+    let at = args.iter().position(|arg| flags.contains(&arg.as_str()))?;
+    args.get(at + 1)
+}
+
+/// The extensions pi loads, as pi finds them: each string of the top-level `extensions` of
+/// its settings in the home that names a file, then each file `-e` names. A string that names
+/// no file is passed over, and settings that are no JSON object (pi reads them after a
+/// byte-order mark) give none.
+fn extensions_found(home: &Path, args: &[String]) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    if let Ok(text) = std::fs::read_to_string(home.join(PI_SETTINGS))
+        && let Ok(Value::Object(settings)) =
+            serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text))
+        && let Some(listed) = settings.get("extensions").and_then(Value::as_array)
+    {
+        found.extend(listed.iter().filter_map(Value::as_str).map(PathBuf::from));
+    }
+    for (at, arg) in args.iter().enumerate() {
+        if matches!(arg.as_str(), "-e" | "--extension")
+            && let Some(path) = args.get(at + 1)
+        {
+            found.push(PathBuf::from(path));
+        }
+    }
+    found.retain(|path| path.is_file());
+    found
 }
 
 /// Writes bytes to the terminal as they are, and lets the terminal have them at once. A
@@ -1593,14 +1916,20 @@ impl Drop for ToolServer {
 fn sh(command: &str) -> Command {
     let mut sh = Command::new("/bin/sh");
     sh.arg("-c").arg(command);
+    default_hangup(&mut sh);
+    sh
+}
+
+/// Puts the hangup signal back at its default in the child, which would otherwise keep
+/// the stand-in's choice to ignore it across `exec`.
+fn default_hangup(command: &mut Command) {
     // SAFETY: `signal` is async-signal-safe, and this runs between `fork` and `exec`.
     unsafe {
-        sh.pre_exec(|| {
+        command.pre_exec(|| {
             libc::signal(libc::SIGHUP, libc::SIG_DFL);
             Ok(())
         })
     };
-    sh
 }
 
 /// Runs one hook command as Claude Code does: through `/bin/sh -c` in `cwd`, with the
@@ -1608,19 +1937,25 @@ fn sh(command: &str) -> Command {
 /// [`HOOK_LIMIT`] is killed with everything it started. Gives what it printed and whether
 /// it was killed.
 fn run_hook(command: &str, input: &[u8], cwd: &Path) -> (Vec<u8>, bool) {
-    use std::io::Read;
-    let mut child = sh(command)
-        .current_dir(cwd)
+    let mut hook = sh(command);
+    hook.current_dir(cwd)
         .env("CLAUDE_PID", std::process::id().to_string())
         .env("CLAUDECODE", "1")
-        .env("CLAUDE_PROJECT_DIR", cwd)
+        .env("CLAUDE_PROJECT_DIR", cwd);
+    run_process(hook, input).unwrap_or_else(|why| panic!("run the hook {command:?}: {why}"))
+}
+
+/// Runs a prepared command with `input` on its standard input and its standard output kept,
+/// as [`run_hook`] says; fails only when the command cannot be started.
+fn run_process(mut command: Command, input: &[u8]) -> std::io::Result<(Vec<u8>, bool)> {
+    use std::io::Read;
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        // A group of its own, so that the kill below reaches what the hook started.
+        // A group of its own, so that the kill below reaches what the command started.
         .process_group(0)
-        .spawn()
-        .unwrap_or_else(|why| panic!("run the hook {command:?}: {why}"));
+        .spawn()?;
     let pid = child.id();
     let mut stdin = child.stdin.take().expect("a piped standard input");
     let mut stdout = child.stdout.take().expect("a piped standard output");
@@ -1647,5 +1982,5 @@ fn run_hook(command: &str, input: &[u8], cwd: &Path) -> (Vec<u8>, bool) {
     }
     let _ = waiter.join();
     let _ = writer.join();
-    (reader.join().unwrap_or_default(), killed)
+    Ok((reader.join().unwrap_or_default(), killed))
 }

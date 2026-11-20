@@ -3,6 +3,7 @@
 //! were given. No Keeper, no app: the stand-in knows only Claude Code's side of the plugin
 //! contract.
 
+use std::cell::RefCell;
 use std::ffi::CString;
 use std::fs;
 use std::io::Write;
@@ -2273,16 +2274,1037 @@ fn no_hook_run(name: &str, variable: Option<(&str, &str)>) {
     assert!(find(&run.pty.output, NO_PROGRESS).is_some());
 }
 
+// The stand-in as pi.
+
+/// What a test as pi has: an extension file, the reporting program of the test's own, which
+/// records what it is given and prints an answer the test chose, and the files they live in.
+/// Each test gives pi a home of its own, the folder of its place, so that nothing under the
+/// real `~/.pi` is read or written.
+struct PiKit {
+    root: PathBuf,
+    extension: PathBuf,
+    program: PathBuf,
+    reports: PathBuf,
+    /// The bytes the test last wrote into pi's settings, none while it wrote none.
+    settings_written: RefCell<Option<Vec<u8>>>,
+}
+
+/// One run of the reporting program, as the test's program wrote it down.
+struct Report {
+    /// The program's parent: the process that ran it.
+    parent: u32,
+    /// Whether it was run with `--tool`.
+    tool: bool,
+    /// Whether `s.txt` was in the folder it ran in when it ran.
+    s_there: bool,
+    /// What it was given on its standard input.
+    payload: Value,
+}
+
+impl Report {
+    fn event(&self) -> &str {
+        self.payload["event"].as_str().expect("an event")
+    }
+}
+
+impl PiKit {
+    fn new(place: &Place) -> PiKit {
+        let root = root_of(place);
+        let extension = root.join("ext/yaar.ts");
+        fs::create_dir_all(extension.parent().expect("a folder")).expect("make the folder");
+        fs::write(&extension, "// stands for the extension\n").expect("write the extension");
+        // The program lies in a folder whose name a shell would split and expand: run
+        // through `sh -c`, it is not found, so a stand-in that puts a shell between itself
+        // and the program fails every report.
+        let folder = root.join("report $x");
+        fs::create_dir_all(&folder).expect("make the folder");
+        let (program, reports) = (folder.join("report.sh"), root.join("reports"));
+        // An answer for a steered message comes before one for any message, and each
+        // answer is a file of the test's, there or not.
+        fs::write(
+            &program,
+            format!(
+                r#"#!/bin/sh
+tool=no
+[ "$1" = "--tool" ] && tool=yes
+payload=$(cat)
+there=no
+[ -e s.txt ] && there=yes
+printf '%s %s %s %s\n' "$PPID" "$tool" "$there" "$payload" >> '{reports}'
+case "$payload" in
+  *'"event":"input"'*)
+    if [ -f '{root}/answer-steer' ] && case "$payload" in *'"streamingBehavior":"steer"'*) true ;; *) false ;; esac; then
+      cat '{root}/answer-steer'
+    elif [ -f '{root}/answer-input' ]; then
+      cat '{root}/answer-input'
+    fi ;;
+  *'"event":"reply_to_thread"'*)
+    [ -f '{root}/answer-tool' ] && cat '{root}/answer-tool' ;;
+esac
+exit 0
+"#,
+                reports = reports.display(),
+                root = root.display(),
+            ),
+        )
+        .expect("write the program");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("make it run");
+        PiKit {
+            root,
+            extension,
+            program,
+            reports,
+            settings_written: RefCell::new(None),
+        }
+    }
+
+    /// The text the program prints for a report: `input` for any message, `steer` for a
+    /// message typed while a tool runs (which comes first), `tool` for the reply tool.
+    fn answer(&self, which: &str, text: &str) {
+        fs::write(self.root.join(format!("answer-{which}")), text).expect("write the answer");
+    }
+
+    /// pi's settings in the home of the test.
+    fn settings(&self) -> PathBuf {
+        self.root.join("home/.pi/agent/settings.json")
+    }
+
+    fn write_settings(&self, text: &str) {
+        self.write_settings_bytes(text.as_bytes());
+    }
+
+    fn write_settings_bytes(&self, bytes: &[u8]) {
+        fs::create_dir_all(self.settings().parent().expect("a folder")).expect("make the folder");
+        fs::write(self.settings(), bytes).expect("write the settings");
+        *self.settings_written.borrow_mut() = Some(bytes.to_vec());
+    }
+
+    /// Settings that list the extension, with other keys beside it, in a layout no JSON
+    /// writer produces (keys out of order, mixed indentation, a space before one colon, a
+    /// closing line and a blank one), so that a stand-in that parsed and wrote them back
+    /// would change bytes.
+    fn list_extension(&self) {
+        let path = serde_json::to_string(&self.extension).expect("JSON");
+        self.write_settings(&format!(
+            "{{\n\t\"zoom\" : 1,\n  \"extensions\":[ {path} ] ,\n\t  \"theme\":\"dark\"\n}}\n\n"
+        ));
+    }
+
+    /// Checks that pi's settings are the bytes the test wrote, or still not there: pi, and
+    /// the stand-in as pi, never writes them. Called after the stand-in has ended.
+    fn assert_settings_kept(&self) {
+        assert_eq!(
+            fs::read(self.settings()).ok(),
+            *self.settings_written.borrow(),
+            "the stand-in changed pi's settings"
+        );
+    }
+
+    /// The stand-in as `pi`, in a shell that names the program.
+    fn start<'a>(&self, place: Place, script: Script) -> Start<'a> {
+        let mut start = Start::new(place, "pi", script);
+        start
+            .env
+            .push(("YAAR_PI_REPORT", self.program.display().to_string()));
+        start
+    }
+
+    /// What the program was run for, in order.
+    fn reports(&self) -> Vec<Report> {
+        fs::read_to_string(&self.reports)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| {
+                let words: Vec<&str> = line.splitn(4, ' ').collect();
+                Report {
+                    parent: words[0].parse().expect("a process id"),
+                    tool: words[1] == "yes",
+                    s_there: words[2] == "yes",
+                    payload: serde_json::from_str(words[3]).expect("a payload is JSON"),
+                }
+            })
+            .collect()
+    }
+
+    /// Waits until the program has been run `n` times.
+    fn wait_reports(&self, n: usize) -> Vec<Report> {
+        let mut seen = Vec::new();
+        let enough = wait_until(DEADLINE, || {
+            seen = self.reports();
+            seen.len() >= n
+        });
+        let events: Vec<&str> = seen.iter().map(Report::event).collect();
+        assert!(enough, "waited for {n} reports; the program got {events:?}");
+        seen
+    }
+}
+
+fn events_of(reports: &[Report]) -> Vec<&str> {
+    reports.iter().map(Report::event).collect()
+}
+
+/// The words of every `Did::Hook` the stand-in wrote down, as `event`.
+fn hooked(log: &StandinLog) -> Vec<&str> {
+    log.did
+        .iter()
+        .filter_map(|did| match did {
+            Did::Hook { event, .. } => Some(event.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Checks that each needle is in the output, one after the other.
+fn in_order(output: &[u8], needles: &[&str]) {
+    let mut from = 0;
+    for needle in needles {
+        let at = find(&output[from..], needle.as_bytes()).unwrap_or_else(|| {
+            panic!(
+                "no {needle:?} after byte {from} of {:?}",
+                String::from_utf8_lossy(output)
+            )
+        });
+        from += at + needle.len();
+    }
+}
+
+/// The keys a payload of this event holds, which the crate doc of the pi Adapter gives.
+fn keys_of_event(report: &Report) -> Vec<&'static str> {
+    let mut keys = vec!["cwd", "event", "sessionFile", "sessionId"];
+    keys.extend(match report.event() {
+        "session_start" | "session_shutdown" => vec!["reason"],
+        "input" => vec!["source", "streamingBehavior"],
+        "agent_start" => vec![],
+        "tool_call" => vec!["input", "toolCallId", "toolName"],
+        "tool_result" if report.payload["toolName"] == "edit" => {
+            vec!["details", "input", "isError", "toolCallId", "toolName"]
+        }
+        "tool_result" => vec!["input", "isError", "toolCallId", "toolName"],
+        "agent_settled" => vec!["aborted"],
+        "reply_to_thread" => vec!["arguments", "toolCallId"],
+        other => panic!("an event the crate doc does not give: {other}"),
+    });
+    keys.sort_unstable();
+    keys
+}
+
+fn keys_of_payload(report: &Report) -> Vec<&str> {
+    let mut keys: Vec<&str> = report
+        .payload
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    keys
+}
+
 #[test]
-fn pi_refuses_to_start_and_says_why() {
-    let mut run = Start::new(Place::new(), "pi", Script(vec![Step::Turn, Step::Exit])).start();
+fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_payloads_the_adapter_reads()
+ {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    // What the program answers to a message is what the log holds as the hook's answer.
+    kit.answer("input", r#"{"review": "a review"}"#);
+    let script = Script(vec![
+        Step::Turn,
+        Step::Read(path("a.txt")),
+        Step::Edit(path("a.txt"), "more".into()),
+        Step::Write(path("n.txt"), "hi".into()),
+        Step::Shell("echo x > s.txt".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    fs::write(run.work.join("a.txt"), "one\ntwo\nthree\n").expect("seed");
+    run.say(0, "hello");
+    assert!(run.wait_exit().success());
+
+    let reports = kit.reports();
+    let log = run.log();
+    let moments = [
+        "session_start",
+        "input",
+        "agent_start",
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+        "tool_call",
+        "tool_result",
+        "agent_settled",
+        "session_shutdown",
+    ];
+    assert_eq!(events_of(&reports), moments);
+
+    // Every payload is one object with the keys the crate doc gives its event, naming the
+    // session, its file and the folder.
+    let file = kit
+        .root
+        .join("home/.pi/agent/sessions/standin")
+        .join(format!("{}.jsonl", log.session));
+    for report in &reports {
+        assert_eq!(
+            keys_of_payload(report),
+            keys_of_event(report),
+            "{:?}",
+            report.payload
+        );
+        assert_eq!(report.payload["sessionId"], log.session);
+        assert_eq!(report.payload["sessionFile"], file.display().to_string());
+        assert_eq!(report.payload["cwd"], run.work.display().to_string());
+        // The program is run by the stand-in itself, with no shell between, and not with
+        // `--tool`.
+        assert_eq!(report.parent, log.pid);
+        assert!(!report.tool);
+    }
+    let payload = |at: usize| &reports[at].payload;
+    assert_eq!(payload(0)["reason"], "startup");
+    assert_eq!(payload(1)["source"], "interactive");
+    assert!(payload(1)["streamingBehavior"].is_null());
+    let tools: Vec<(&str, &Value)> = [3, 5, 7, 9]
+        .iter()
+        .map(|at| {
+            (
+                payload(*at)["toolName"].as_str().expect("a tool"),
+                &payload(*at)["input"],
+            )
+        })
+        .collect();
+    assert_eq!(
+        tools,
+        [
+            ("read", &json!({"path": "a.txt"})),
+            ("edit", &json!({"path": "a.txt"})),
+            ("write", &json!({"path": "n.txt"})),
+            ("bash", &json!({"command": "echo x > s.txt"})),
+        ]
+    );
+    for at in [3, 5, 7, 9] {
+        // A result names the call it answers, and none failed.
+        assert_eq!(payload(at)["toolCallId"], payload(at + 1)["toolCallId"]);
+        assert_eq!(payload(at)["toolName"], payload(at + 1)["toolName"]);
+        assert_eq!(payload(at + 1)["isError"], false);
+    }
+    let ids: Vec<&Value> = [3, 5, 7, 9]
+        .iter()
+        .map(|at| &payload(*at)["toolCallId"])
+        .collect();
+    assert!(ids.windows(2).all(|pair| pair[0] != pair[1]), "{ids:?}");
+
+    // The edit's patch: one hunk, whose added range starts at the line after the last of
+    // the three lines the file had, with the line it added and no line of context.
+    let patch = payload(6)["details"]["patch"].as_str().expect("a patch");
+    let lines: Vec<&str> = patch.lines().collect();
+    assert_eq!(
+        lines,
+        ["--- a.txt", "+++ a.txt", "@@ -3,0 +4,1 @@", "+more"]
+    );
+
+    assert_eq!(payload(11)["aborted"], false);
+    assert_eq!(payload(12)["reason"], "quit");
+
+    // The shell command runs between its two reports: not yet there when the call was
+    // reported, there when the result was.
+    assert!(!reports[9].s_there && reports[10].s_there);
+
+    // What the stand-in wrote down: a hook of each report, under pi's own event name, with
+    // what the program printed.
+    assert_eq!(hooked(&log), moments);
+    let answers: Vec<&[u8]> = log
+        .did
+        .iter()
+        .filter_map(|did| match did {
+            Did::Hook { answer, killed, .. } => {
+                assert!(!killed);
+                Some(answer.as_slice())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(answers[1], br#"{"review": "a review"}"#);
+    assert!(
+        answers
+            .iter()
+            .enumerate()
+            .all(|(at, answer)| at == 1 || answer.is_empty())
+    );
+
+    // The steps acted, as the lines of the terminal show, and pi prints no progress
+    // sequence and no mark.
+    assert_eq!(
+        fs::read_to_string(run.work.join("a.txt")).unwrap(),
+        "one\ntwo\nthree\nmore\n"
+    );
+    assert_eq!(fs::read_to_string(run.work.join("n.txt")).unwrap(), "hi");
+    assert!(run.work.join("s.txt").exists());
+    run.pty.drain();
+    let shown = String::from_utf8_lossy(&run.pty.output).into_owned();
+    in_order(
+        shown.as_bytes(),
+        &[
+            "● Read a.txt",
+            "● Edit a.txt",
+            "● Write n.txt",
+            "● Bash echo x > s.txt",
+            "● Done",
+        ],
+    );
+    assert_eq!(count_of(&run.pty.output, WORKING), 0);
+    assert_eq!(count_of(&run.pty.output, NO_PROGRESS), 0);
+    assert_eq!(count_of(&run.pty.output, INTERRUPT_MARK), 0);
+
+    // pi's own files: the settings as they were, no session file, nothing else made.
+    assert_eq!(log.extensions, std::slice::from_ref(&kit.extension));
+    kit.assert_settings_kept();
+    assert!(!file.exists());
+    let made: Vec<String> = fs::read_dir(kit.root.join("home/.pi/agent"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(made, ["settings.json"]);
+}
+
+#[test]
+fn pi_with_no_extension_in_its_settings_reports_nothing_and_with_one_reports_through_the_program_the_shell_names()
+ {
+    // No settings at all: pi runs, finds no extension, and the program is never run.
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    let mut run = kit
+        .start(place, Script(vec![Step::Turn, Step::Exit]))
+        .start();
+    run.say(0, "hello");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let log = run.log();
+    assert!(log.extensions.is_empty());
+    assert!(hooked(&log).is_empty(), "{log:?}");
+    assert!(!kit.reports.exists(), "the program was run");
+    // It ran its script all the same: the turn and the exit are written down.
+    assert!(
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Done { step: 1, .. }))
+    );
+
+    // With the extension listed, the same script is reported, through the program the
+    // shell names.
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let mut run = kit
+        .start(place, Script(vec![Step::Turn, Step::Exit]))
+        .start();
+    run.say(0, "hello");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(
+        events_of(&kit.reports()),
+        ["session_start", "input", "agent_start", "session_shutdown"]
+    );
+}
+
+#[test]
+fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_after_those_that_do() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    let mut start = kit.start(place, Script(vec![Step::Exit]));
+    start.args = vec!["-e".into(), kit.extension.display().to_string()];
+    let mut run = start.start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let log = run.log();
+    assert_eq!(log.extensions, std::slice::from_ref(&kit.extension));
+    assert_eq!(log.args, ["-e", &kit.extension.display().to_string()]);
+    assert_eq!(
+        events_of(&kit.reports()),
+        ["session_start", "session_shutdown"]
+    );
+
+    // Both: what the settings list comes first, then the long form of the flag; a file
+    // named twice is not told apart, as pi's own list is not.
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let other = kit.root.join("ext/other.ts");
+    fs::write(&other, "").expect("write another");
+    let mut start = kit.start(place, Script(vec![Step::Exit]));
+    start.args = vec!["--extension".into(), other.display().to_string()];
+    let mut run = start.start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(run.log().extensions, [kit.extension.clone(), other]);
+
+    // A file named in the settings and again with the flag is listed twice, as pi's own
+    // list has it.
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let mut start = kit.start(place, Script(vec![Step::Exit]));
+    start.args = vec!["-e".into(), kit.extension.display().to_string()];
+    let mut run = start.start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(
+        run.log().extensions,
+        [kit.extension.clone(), kit.extension.clone()]
+    );
+}
+
+#[test]
+fn settings_that_start_with_a_byte_order_mark_are_read_as_pi_reads_them() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    let path = serde_json::to_string(&kit.extension).expect("JSON");
+    kit.write_settings(&format!("\u{feff}{{\"extensions\": [{path}]}}\n"));
+    let mut run = kit.start(place, Script(vec![Step::Exit])).start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(run.log().extensions, std::slice::from_ref(&kit.extension));
+    assert_eq!(
+        events_of(&kit.reports()),
+        ["session_start", "session_shutdown"]
+    );
+}
+
+/// A run as pi with the script `turn`, `edit`, `end`, `exit` in which no report is made:
+/// the program the test names was not run, and the steps acted.
+fn pi_reports_nothing(set_up: impl FnOnce(&PiKit, &mut Start<'_>), found: &[&str]) {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    let script = Script(vec![
+        Step::Turn,
+        Step::Edit(path("a.txt"), "edited".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut start = kit.start(place, script);
+    set_up(&kit, &mut start);
+    let mut run = start.start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    // The stand-in has ended, so a report that would have been run was run: the barrier of
+    // a clause that says nothing happened.
+    assert!(!kit.reports.exists(), "the program was run");
+    let log = run.log();
+    assert!(hooked(&log).is_empty(), "{log:?}");
+    let found: Vec<PathBuf> = found.iter().map(|name| kit.root.join(name)).collect();
+    assert_eq!(log.extensions, found);
+    assert_eq!(
+        fs::read_to_string(run.work.join("a.txt")).unwrap(),
+        "seed\nedited\n"
+    );
+    run.pty.drain();
+    in_order(&run.pty.output, &["● Edit a.txt", "● Done"]);
+    // pi's settings are the same bytes, or still not there.
+    kit.assert_settings_kept();
+}
+
+#[test]
+fn pi_with_no_settings_file_reports_nothing_and_its_steps_still_act() {
+    pi_reports_nothing(|_, _| {}, &[]);
+}
+
+#[test]
+fn pi_with_settings_that_list_no_extensions_reports_nothing() {
+    pi_reports_nothing(|kit, _| kit.write_settings(r#"{"theme": "dark"}"#), &[]);
+}
+
+#[test]
+fn pi_with_entries_that_name_no_file_reports_nothing() {
+    // A missing file, a folder and a value that is no string.
+    pi_reports_nothing(
+        |kit, _| {
+            let listed = json!({"extensions": [
+                kit.root.join("ext/missing.ts"),
+                kit.root.join("ext"),
+                5,
+                null
+            ]});
+            kit.write_settings(&listed.to_string());
+        },
+        &[],
+    );
+}
+
+#[test]
+fn pi_given_an_extension_with_dash_e_that_names_no_file_reports_nothing() {
+    // No settings, and a flag whose path is no file: one that is not there, and a folder.
+    pi_reports_nothing(
+        |kit, start| {
+            start.args = vec![
+                "-e".into(),
+                kit.root.join("ext/missing.ts").display().to_string(),
+            ];
+        },
+        &[],
+    );
+    pi_reports_nothing(
+        |kit, start| {
+            start.args = vec![
+                "--extension".into(),
+                kit.root.join("ext").display().to_string(),
+            ];
+        },
+        &[],
+    );
+}
+
+#[test]
+fn pi_with_settings_that_are_a_json_array_or_no_json_reports_nothing() {
+    pi_reports_nothing(
+        |kit, _| kit.write_settings(&json!([kit.extension]).to_string()),
+        &[],
+    );
+    pi_reports_nothing(
+        |kit, _| kit.write_settings(&format!(r#"{{"extensions": ["{}"#, kit.extension.display())),
+        &[],
+    );
+    // An `extensions` that is no array.
+    pi_reports_nothing(
+        |kit, _| {
+            kit.write_settings(&json!({"extensions": kit.extension}).to_string());
+        },
+        &[],
+    );
+}
+
+#[test]
+fn pi_with_the_extension_found_and_no_program_named_reports_nothing() {
+    pi_reports_nothing(
+        |kit, start| {
+            kit.list_extension();
+            start.env.clear();
+        },
+        &["ext/yaar.ts"],
+    );
+}
+
+#[test]
+fn pi_started_around_the_apps_pieces_reports_nothing_with_the_extension_listed() {
+    pi_reports_nothing(
+        |kit, start| {
+            kit.list_extension();
+            start.env.push((IGNORE_PIECES, "1".to_owned()));
+        },
+        &["ext/yaar.ts"],
+    );
+}
+
+#[test]
+fn a_reporting_program_that_cannot_be_started_is_a_report_with_no_answer_and_the_script_goes_on() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let mut start = kit.start(
+        place,
+        Script(vec![
+            Step::Turn,
+            Step::Edit(path("a.txt"), "edited".into()),
+            Step::End,
+            Step::Exit,
+        ]),
+    );
+    start.env.clear();
+    start.env.push((
+        "YAAR_PI_REPORT",
+        kit.root.join("no-such-program").display().to_string(),
+    ));
+    let mut run = start.start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let log = run.log();
+    assert_eq!(
+        hooked(&log),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "tool_call",
+            "tool_result",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    assert!(log.did.iter().all(|did| match did {
+        Did::Hook { answer, killed, .. } => answer.is_empty() && !killed,
+        _ => true,
+    }));
+    assert_eq!(
+        fs::read_to_string(run.work.join("a.txt")).unwrap(),
+        "seed\nedited\n"
+    );
+}
+
+#[test]
+fn a_self_started_turn_is_an_input_from_the_extension_with_no_prompt_and_no_key_read() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let script = Script(vec![Step::SelfTurn, Step::End, Step::Exit]);
+    let mut run = kit.start(place, script).start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let reports = kit.reports();
+    assert_eq!(
+        events_of(&reports),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    assert_eq!(reports[1].payload["source"], "extension");
+    assert!(reports[1].payload["streamingBehavior"].is_null());
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 0);
+    assert!(run.log().received.is_empty());
+}
+
+#[test]
+fn a_line_typed_during_a_hold_is_an_input_that_steers_at_its_enter_and_starts_no_run() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let go = kit.root.join("go");
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(go.clone()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    let at = run.say(0, "first");
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    run.pty.send(b"second\r");
+    // The report is made at the Enter, while the hold goes on: the file it waits for is
+    // not there yet when the report is.
+    let seen = kit.wait_reports(4);
+    assert_eq!(
+        events_of(&seen),
+        ["session_start", "input", "agent_start", "input"]
+    );
+    assert_eq!(seen[3].payload["source"], "interactive");
+    assert_eq!(seen[3].payload["streamingBehavior"], "steer");
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    // The message went with the run that was open: one start, one end.
+    assert_eq!(
+        events_of(&kit.reports()),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "input",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output, PROMPT.as_bytes()), 1);
+}
+
+#[test]
+fn esc_during_a_turn_reports_the_run_aborted_prints_no_mark_and_the_script_goes_on_after_end() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(kit.root.join("never")),
+        Step::Read(path("a.txt")),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    let at = run.say(0, "first");
+    let held = run.pty.wait_for("● Hold ".as_bytes(), at);
+    run.pty.send(b"\x1b");
+    run.wait_log("the interrupt", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Interrupted { .. }))
+    });
+    run.say(held, "second");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+
+    // The first run was aborted, and the read and the end of it that the script still had
+    // were skipped; the second run is whole.
+    let reports = kit.reports();
+    assert_eq!(
+        events_of(&reports),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "agent_settled",
+            "input",
+            "agent_start",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    assert_eq!(reports[3].payload["aborted"], true);
+    assert_eq!(reports[6].payload["aborted"], false);
+    // After the program ended, so that nothing printed later is missed: no mark, no
+    // progress sequence, and no `Done` for the run that was aborted.
+    run.pty.drain();
+    assert_eq!(count_of(&run.pty.output, INTERRUPT_MARK), 0);
+    assert_eq!(count_of(&run.pty.output, b"Interrupted"), 0);
+    assert_eq!(count_of(&run.pty.output, NO_PROGRESS), 0);
+    assert_eq!(count_of(&run.pty.output, "● Done".as_bytes()), 1);
+    assert_eq!(count_of(&run.pty.output, "● Read".as_bytes()), 0);
+}
+
+#[test]
+fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_byte() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    kit.answer(
+        "input",
+        &json!({"review": review_of(&["T1", "T2"])}).to_string(),
+    );
+    let answer = json!({"text": "recorded reply to T2 (addressed, 5 characters)"});
+    kit.answer("tool", &answer.to_string());
+    let script = Script(vec![
+        Step::Turn,
+        Step::Reply {
+            thread: 2,
+            addressed: true,
+            body: AWKWARD_BODY.into(),
+        },
+        Step::Reply {
+            thread: 1,
+            addressed: false,
+            body: "short".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    run.say(0, "please do it");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+
+    let reports = kit.reports();
+    assert_eq!(
+        events_of(&reports),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "reply_to_thread",
+            "reply_to_thread",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    let tools: Vec<bool> = reports.iter().map(|report| report.tool).collect();
+    assert_eq!(tools, [false, false, false, true, true, false, false]);
+    for at in [3, 4] {
+        assert_eq!(
+            keys_of_payload(&reports[at]),
+            keys_of_event(&reports[at]),
+            "{:?}",
+            reports[at].payload
+        );
+        assert_eq!(reports[at].parent, run.log().pid);
+    }
+    let sent = |at: usize| reports[at].payload["arguments"].clone();
+    assert_eq!(
+        sent(3),
+        json!({"thread": "T2", "body": AWKWARD_BODY, "addressed": true})
+    );
+    assert_eq!(
+        sent(4),
+        json!({"thread": "T1", "body": "short", "addressed": false})
+    );
+    assert_ne!(
+        reports[3].payload["toolCallId"],
+        reports[4].payload["toolCallId"]
+    );
+
+    // Written down as the call and what the program printed.
+    let tools: Vec<(Value, Value)> = run
+        .log()
+        .did
+        .iter()
+        .filter_map(|did| match did {
+            Did::Tool {
+                arguments, answer, ..
+            } => Some((arguments.clone(), answer.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0], (sent(3), answer));
+    assert_eq!(tools[1].0, sent(4));
+    // Neither is a report of a tool pi runs: no `Hook` of the reply.
+    assert_eq!(
+        hooked(&run.log()),
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    run.pty.drain();
+    in_order(&run.pty.output, &["● Reply T2", "● Reply T1"]);
+}
+
+#[test]
+fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names_as_pi() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    // The first message is answered with no review; the one typed while the tool runs is.
+    kit.answer(
+        "steer",
+        &json!({"review": review_of(&["queued-1"])}).to_string(),
+    );
+    let go = kit.root.join("go");
+    let script = Script(vec![
+        Step::Turn,
+        Step::Hold(go.clone()),
+        Step::Reply {
+            thread: 1,
+            addressed: true,
+            body: "done".into(),
+        },
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    let at = run.say(0, "first");
+    run.pty.wait_for("● Hold ".as_bytes(), at);
+    run.pty.send(b"second\r");
+    kit.wait_reports(4);
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let reports = kit.reports();
+    let reply = reports
+        .iter()
+        .find(|report| report.event() == "reply_to_thread")
+        .expect("the reply was reported");
+    assert_eq!(reply.payload["arguments"]["thread"], "queued-1");
+}
+
+#[test]
+fn a_session_told_by_session_and_session_dir_keeps_that_id_and_names_its_file_in_that_folder() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let folder = kit.root.join("sessions-of-the-test");
+    let mut start = kit.start(place, Script(vec![Step::Exit]));
+    start.args = vec![
+        "--session".into(),
+        "id-1".into(),
+        "--session-dir".into(),
+        folder.display().to_string(),
+    ];
+    let mut run = start.start();
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let reports = kit.reports();
+    assert_eq!(events_of(&reports), ["session_start", "session_shutdown"]);
+    for report in &reports {
+        assert_eq!(report.payload["sessionId"], "id-1");
+        assert_eq!(
+            report.payload["sessionFile"],
+            folder.join("id-1.jsonl").display().to_string()
+        );
+    }
+    // pi starts a session it was told to take up as any other: the Adapter reads the
+    // resume from the id it holds.
+    assert_eq!(reports[0].payload["reason"], "startup");
+    assert_eq!(run.log().session, "id-1");
+    assert!(!folder.exists(), "the stand-in made the folder");
+}
+
+#[test]
+fn a_script_with_ask_is_refused_at_its_line_and_nothing_is_reported() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let script = Script(vec![
+        Step::Turn,
+        Step::Ask(path("a.txt"), "text".into()),
+        Step::End,
+    ]);
+    let mut run = kit.start(place, script).start();
     let status = run.wait_exit();
+    kit.assert_settings_kept();
     assert_eq!(status.code(), Some(2));
     run.pty.drain();
     let shown = String::from_utf8_lossy(&run.pty.output).into_owned();
     assert!(
-        shown.contains("the pi dialect of the stand-in comes with slice 7"),
+        shown.contains("script line 2") && shown.contains("`ask`"),
         "{shown:?}"
+    );
+    assert!(!kit.reports.exists());
+}
+
+#[test]
+fn a_shell_command_that_fails_is_a_result_with_is_error_and_an_edit_of_an_empty_file_has_a_hunk_from_line_one()
+ {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let script = Script(vec![
+        Step::Turn,
+        Step::Shell("exit 3".into()),
+        Step::Edit(path("empty.txt"), "first\nsecond".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = kit.start(place, script).start();
+    fs::write(run.work.join("empty.txt"), "").expect("seed");
+    run.say(0, "go");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    let reports = kit.reports();
+    let results: Vec<&Report> = reports
+        .iter()
+        .filter(|report| report.event() == "tool_result")
+        .collect();
+    assert_eq!(results[0].payload["toolName"], "bash");
+    assert_eq!(results[0].payload["isError"], true);
+    assert_eq!(results[1].payload["isError"], false);
+    let patch = results[1].payload["details"]["patch"]
+        .as_str()
+        .expect("a patch");
+    assert_eq!(
+        patch.lines().collect::<Vec<_>>(),
+        [
+            "--- empty.txt",
+            "+++ empty.txt",
+            "@@ -0,0 +1,2 @@",
+            "+first",
+            "+second"
+        ]
+    );
+    assert_eq!(
+        fs::read_to_string(run.work.join("empty.txt")).unwrap(),
+        "first\nsecond\n"
     );
 }
 
