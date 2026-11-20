@@ -2,7 +2,10 @@
 //! the turn, its steps, its recorded state and its terminal's screen for a client that
 //! comes later, and an agent that is not slowed by a client that reads nothing.
 //!
-//! The stand-in runs as Claude Code in a shell of the app. The client is the test's own;
+//! The stand-in runs in a shell of the app as Claude Code and as pi: each test is a function
+//! of a [`Dialect`], the test function that carries the row's name runs it as Claude Code,
+//! and the one with `_as_pi` after the name runs the same body as pi, in a world whose pi is
+//! installed and whose user said yes to the app's extension. The client is the test's own;
 //! it leaves by dropping its connection with no goodbye, and it is stopped by not reading
 //! from it, which is what the Keeper sees of a Window that is gone or stuck.
 
@@ -14,7 +17,9 @@ use yaar_link::{
     HistoryEntry, SessionState, Step as Taken, TerminalId, TerminalSize, TurnEnd, WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, PROMPT, Script};
-use yaar_system_tests::{Client, DEADLINE, World, descendants_of, is_alive, wait_until};
+use yaar_system_tests::{
+    Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
+};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -50,6 +55,27 @@ fn script(words: &[String]) -> Script {
     Script::parse(&words.join("\n"))
 }
 
+/// A world for a test of an agent, as [`World::with_standin`] makes it for the stand-in
+/// `name`, for `dialect`: as pi, pi is installed in the world's home before the Keeper
+/// starts and the user's yes is given after it, so that the stand-in started as `pi` finds
+/// the app's extension in pi's settings, as pi does.
+fn world_with_standin(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
+    let mut world = World::new();
+    world.agents_on_path();
+    if dialect == Dialect::Pi {
+        world.install_pi();
+    }
+    world.agent_script(name, script);
+    let repo = world.repository("app");
+    repo.git(&["config", "user.name", "A Test"]);
+    repo.git(&["config", "user.email", "test@example.invalid"]);
+    world.start_keeper();
+    if dialect == Dialect::Pi {
+        world.allow_pi_extension();
+    }
+    (world, repo)
+}
+
 /// A stand-in the test started in a shell, with the script and log of its own.
 struct Started {
     name: String,
@@ -62,9 +88,10 @@ impl Started {
     }
 }
 
-/// Types into `terminal` the start of `claude` with the script `script` as `name`'s own:
-/// the stand-in follows the script and writes down its log as `name`.
+/// Types into `terminal` the start of `dialect`'s CLI with the script `script` as `name`'s
+/// own: the stand-in follows the script and writes down its log as `name`.
 fn start_in(
+    dialect: Dialect,
     world: &World,
     client: &mut Client,
     terminal: &TerminalId,
@@ -76,9 +103,10 @@ fn start_in(
     client.type_line(
         terminal,
         &format!(
-            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' claude",
+            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' {}",
             script_file.display(),
-            log_file.display()
+            log_file.display(),
+            dialect.name()
         ),
     );
     Started { name: name.into() }
@@ -117,9 +145,22 @@ fn leave(mut world: World) {
 #[test]
 fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back()
  {
+    a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
+        Dialect::ClaudeCode,
+    );
+}
+
+// HOLD-01, as pi.
+#[test]
+fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back_as_pi()
+ {
+    a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(Dialect::Pi);
+}
+
+fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(dialect: Dialect) {
     // The folder of the world, which the worktree is not in: the file that lets the agent
     // go on is made there, so that making it is no change of the worktree.
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
     let go = world.home().with_file_name("go");
     let named: Vec<String> = (1..=READS).map(|k| format!("f{k:03}.txt")).collect();
     for file in &named {
@@ -143,7 +184,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
     let terminal = client
         .open_terminal(&workspace, SIZE)
         .expect("open a terminal");
-    client.type_line(&terminal, "claude");
+    client.type_line(&terminal, dialect.name());
     client.wait_for_prompt(&terminal, 0);
     client.type_line(&terminal, "read them all");
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
@@ -206,6 +247,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
         panic!("not exactly one turn with a state in the history: {recorded:?}");
     };
     assert_eq!(*session_of_turn, session.id);
+    assert_eq!(session.agent, dialect.name());
 
     // Its recorded state is what the files hold, `late.txt` of the turn's end among them.
     assert_eq!(
@@ -314,7 +356,13 @@ fn longest_write(world: &World, name: &str) -> Duration {
 /// to its second prompt when `reading` holds, and nothing after the first prompt when it
 /// does not, until the stand-in's log holds its flood. Gives the longest write of the
 /// flood. The client is gone when the run is over.
-fn flood_run(world: &World, workspace: &WorkspaceId, name: &str, reading: bool) -> Duration {
+fn flood_run(
+    dialect: Dialect,
+    world: &World,
+    workspace: &WorkspaceId,
+    name: &str,
+    reading: bool,
+) -> Duration {
     let mut client = world.client();
     let terminal = client
         .open_terminal(workspace, SIZE)
@@ -325,7 +373,14 @@ fn flood_run(world: &World, workspace: &WorkspaceId, name: &str, reading: bool) 
         "end".to_owned(),
         "turn".to_owned(),
     ];
-    let agent = start_in(world, &mut client, &terminal, name, &script(&steps));
+    let agent = start_in(
+        dialect,
+        world,
+        &mut client,
+        &terminal,
+        name,
+        &script(&steps),
+    );
     client.wait_for_prompt(&terminal, 0);
     client.type_line(&terminal, "flood");
     if reading {
@@ -343,13 +398,33 @@ fn flood_run(world: &World, workspace: &WorkspaceId, name: &str, reading: bool) 
         );
     }
     drop(client);
+    // The agent reported the end of its turn through its CLI's own piece of the app: as pi
+    // it did so only because pi found the extension, so that a run in a world with no yes
+    // is no run of pi. The report may come after the flood, hence the wait.
+    assert!(
+        wait_until(DEADLINE, || agent.log(world).did.iter().any(
+            |did| matches!(did, Did::Hook { event, .. } if event == dialect.turn_end_event())
+        )),
+        "{name} reported no end of its turn: {:?}",
+        agent.log(world).did
+    );
     longest_write(world, name)
 }
 
 // HOLD-06.
 #[test]
 fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds() {
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    a_stopped_client_does_not_hold_the_agent_up(Dialect::ClaudeCode);
+}
+
+// HOLD-06, as pi. The limit is the row's own, as for Claude Code.
+#[test]
+fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds_as_pi() {
+    a_stopped_client_does_not_hold_the_agent_up(Dialect::Pi);
+}
+
+fn a_stopped_client_does_not_hold_the_agent_up(dialect: Dialect) {
+    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
     let mut setup = world.client();
     let workspace = setup.open_folder(repo.path()).expect("open the folder").1;
     // This client reads nothing again: it goes, so that only the runs' own clients are
@@ -360,8 +435,20 @@ fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_mi
     // Keeper that waits for the client that is stopped fails every one.
     let mut pairs = Vec::new();
     for attempt in 1..=ATTEMPTS {
-        let base = flood_run(&world, &workspace, &format!("base-{attempt}"), true);
-        let stopped = flood_run(&world, &workspace, &format!("stopped-{attempt}"), false);
+        let base = flood_run(
+            dialect,
+            &world,
+            &workspace,
+            &format!("base-{attempt}"),
+            true,
+        );
+        let stopped = flood_run(
+            dialect,
+            &world,
+            &workspace,
+            &format!("stopped-{attempt}"),
+            false,
+        );
         println!(
             "attempt {attempt}: longest write {base:?} with a client that reads, {stopped:?} with one that is stopped"
         );

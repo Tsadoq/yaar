@@ -1,6 +1,13 @@
 //! System tests of delivering a review: the built Keeper, the app's hook program and reply
-//! tool server, and the stand-in agent as Claude Code, read through the Link as a Window
-//! reads it and through the stand-in's own log, which is the agent's side.
+//! tool server or its reporting program for pi's extension, and the stand-in agent as Claude
+//! Code and as pi, read through the Link as a Window reads it and through the stand-in's own
+//! log, which is the agent's side.
+//!
+//! Each test is a function of a [`Dialect`]: the test function that carries the row's name
+//! runs it as Claude Code, and the one with `_as_pi` after the name runs the same body as
+//! pi, in a world whose pi is installed and whose user said yes to the app's extension.
+//! What a CLI calls the moment its user's message is taken, and how it hands the model a
+//! review, comes from the dialect; the rest of a body is the same.
 //!
 //! No test here commits in the worktree: the stand-in's scripts edit files and never run
 //! git, and each test that edits says what the repository is like when it ends.
@@ -9,7 +16,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use serde_json::Value;
 use yaar_link::{
     Anchor, Attachment, Author, CommentId, DraftOn, Fact, HistoryEntry, Lines, Review, ReviewId,
     SentBy, Session, SessionState, Side, Step as Taken, TerminalId, TerminalSize, Thread, ThreadId,
@@ -25,10 +31,36 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
-/// The listed name of the reply tool, which the instruction of every delivered review
-/// names: the system tests do not depend on the Adapter, so they look for the tool's own
-/// name where the Adapter's constant would be.
-const REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
+/// The name of the reply tool as the instruction of a review delivered to `dialect` names
+/// it: the system tests do not depend on the Adapters, so they look for the tool's own name
+/// where the Adapter's constant would be.
+fn reply_tool(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::ClaudeCode => "mcp__plugin_yaar-review_yaar__reply_to_thread",
+        Dialect::Pi => "reply_to_thread",
+    }
+}
+
+/// A world for a test of an agent, as [`World::with_standin`] makes it for the stand-in
+/// `name`, for `dialect`: as pi, pi is installed in the world's home before the Keeper
+/// starts and the user's yes is given after it, so that the stand-in started as `pi` finds
+/// the app's extension in pi's settings, as pi does.
+fn world_with_standin(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
+    let mut world = World::new();
+    world.agents_on_path();
+    if dialect == Dialect::Pi {
+        world.install_pi();
+    }
+    world.agent_script(name, script);
+    let repo = world.repository("app");
+    repo.git(&["config", "user.name", "A Test"]);
+    repo.git(&["config", "user.email", "test@example.invalid"]);
+    world.start_keeper();
+    if dialect == Dialect::Pi {
+        world.allow_pi_extension();
+    }
+    (world, repo)
+}
 
 /// A script of the steps in `words`, each the way `Script::parse` reads it.
 fn script(words: &[&str]) -> Script {
@@ -171,9 +203,10 @@ fn log_when(world: &World, name: &str, wanted: impl Fn(&StandinLog) -> bool) -> 
     world.agent_log(name)
 }
 
-/// What each `UserPromptSubmit` hook of the log answered, with the bytes the stand-in had
-/// read when it did, in order.
-fn prompts(log: &StandinLog) -> Vec<(&[u8], usize)> {
+/// What the report of each taken message of `dialect` (Claude Code's `UserPromptSubmit`,
+/// pi's `input`) answered according to the log, with the bytes the stand-in had read when
+/// it did, in order.
+fn prompts(dialect: Dialect, log: &StandinLog) -> Vec<(&[u8], usize)> {
     log.did
         .iter()
         .filter_map(|did| match did {
@@ -182,19 +215,10 @@ fn prompts(log: &StandinLog) -> Vec<(&[u8], usize)> {
                 answer,
                 received,
                 ..
-            } if event == "UserPromptSubmit" => Some((answer.as_slice(), *received)),
+            } if event == dialect.message_event() => Some((answer.as_slice(), *received)),
             _ => None,
         })
         .collect()
-}
-
-/// The text a hook's answer adds to the user's message, as Claude Code reads it; none when
-/// the answer holds none, as an empty answer does not.
-fn context_of(answer: &[u8]) -> Option<String> {
-    let answer: Value = serde_json::from_slice(answer).ok()?;
-    answer["hookSpecificOutput"]["additionalContext"]
-        .as_str()
-        .map(str::to_owned)
 }
 
 /// Whether the stand-in wrote down that it ended.
@@ -202,10 +226,11 @@ fn has_exited(log: &StandinLog) -> bool {
     log.did.iter().any(|did| matches!(did, Did::Exited { .. }))
 }
 
-/// Starts the stand-in as `claude` in `terminal`, a shell of the app, with the script and
-/// the log of the name `name`: the world writes `<name>.script`, and the stand-in writes
+/// Starts the stand-in as `dialect`'s CLI in `terminal`, a shell of the app, with the script
+/// and the log of the name `name`: the world writes `<name>.script`, and the stand-in writes
 /// `<name>.log`.
 fn start_in(
+    dialect: Dialect,
     world: &World,
     client: &mut Client,
     terminal: &TerminalId,
@@ -217,9 +242,10 @@ fn start_in(
     client.type_line(
         terminal,
         &format!(
-            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' claude",
+            "STANDIN_SCRIPT='{}' STANDIN_LOG='{}' {}",
             script_file.display(),
-            log_file.display()
+            log_file.display(),
+            dialect.name()
         ),
     );
 }
@@ -287,6 +313,17 @@ fn end(mut world: World, client: Client) {
 #[test]
 fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter()
  {
+    a_review_round_goes_from_a_comment_to_the_agents_reply(Dialect::ClaudeCode);
+}
+
+// UITEST-04, as pi.
+#[test]
+fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_to_the_agents_reply_and_nothing_reaches_the_agent_before_enter_as_pi()
+ {
+    a_review_round_goes_from_a_comment_to_the_agents_reply(Dialect::Pi);
+}
+
+fn a_review_round_goes_from_a_comment_to_the_agents_reply(dialect: Dialect) {
     let body = "He said \"yes\", it's `fine`\nsecond line; $(touch nothing)";
     let round = Script(vec![
         Step::Turn,
@@ -298,7 +335,7 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
         Step::End,
         Step::Exit,
     ]);
-    let (world, repo) = World::with_standin("default", &round);
+    let (world, repo) = world_with_standin(dialect, "default", &round);
     // A change nobody committed, so that the index and the status the test compares at the
     // end have something to lose: a recording that wrote the worktree's own index would
     // stage it.
@@ -309,7 +346,7 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client
-        .open_launcher(&workspace, "claude", SIZE)
+        .open_launcher(&workspace, dialect.name(), SIZE)
         .expect("open the launcher");
     client.wait_for_prompt(&terminal, 0);
     let agents = sessions_when(&mut client, &workspace, |agents| {
@@ -319,6 +356,7 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
             .any(|session| session.state == SessionState::Idle)
     });
     let session = only_session(&agents).clone();
+    assert_eq!(session.agent, dialect.name());
     let review = review_of(&mut client, &workspace, &session);
     assert_eq!(session.review, Some(review.id.clone()));
 
@@ -336,13 +374,20 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
 
     // What the view control shows: the instruction, then the review.
     let view = client.attachment(&review.id).expect("the view");
-    // The instruction comes first: the view opens with the sentence the Adapter's
-    // instruction opens with, and the review follows it.
+    // The instruction comes first: the view opens with the sentence the instruction of
+    // either Adapter opens with, and names the reply tool of this CLI; the review follows.
     assert!(
         view.starts_with("This is a code review of your changes, attached to the user's message."),
         "{view}"
     );
-    assert!(view.contains(REPLY_TOOL), "{view}");
+    assert!(view.contains(reply_tool(dialect)), "{view}");
+    // The bare name of pi's tool is a part of Claude Code's listed name, so the prefix of
+    // Claude Code's tools must be in the one view and not in the other.
+    assert_eq!(
+        view.contains("mcp__plugin_yaar-review_yaar__"),
+        dialect == Dialect::ClaudeCode,
+        "{view}"
+    );
     let instruction_ends = view
         .find("Only the reviewer resolves a thread.")
         .unwrap_or_else(|| panic!("{view}"));
@@ -356,15 +401,15 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     );
 
     // The user types a message and does not press Enter. Once the stand-in has read the
-    // keys, which shows that what is typed reaches it, nothing else did: it ran no
-    // `UserPromptSubmit`, and the comment is still a draft.
+    // keys, which shows that what is typed reaches it, nothing else did: it made no
+    // report of the message (the dialect's message_event), and the comment is still a draft.
     client.type_into(&terminal, b"Please look");
     let before_enter = log_when(&world, "default", |log| {
         log.received.ends_with(b"Please look")
     });
     assert_eq!(before_enter.received, b"Please look");
     assert!(
-        prompts(&before_enter).is_empty(),
+        prompts(dialect, &before_enter).is_empty(),
         "a message was submitted: {:?}",
         before_enter.did
     );
@@ -373,13 +418,13 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
     assert_eq!(waiting.rounds, vec![]);
     assert_eq!(thread_of(&waiting, &thread).comments[0].round, None);
 
-    // Enter: the message goes, and the hook's answer carries what the view showed.
+    // Enter: the message goes, and the report's answer carries what the view showed.
     client.type_into(&terminal, b"\r");
-    let submitted = log_when(&world, "default", |log| !prompts(log).is_empty());
-    let [(answer, _)] = prompts(&submitted)[..] else {
+    let submitted = log_when(&world, "default", |log| !prompts(dialect, log).is_empty());
+    let [(answer, _)] = prompts(dialect, &submitted)[..] else {
         panic!("not exactly one message: {:?}", submitted.did);
     };
-    assert_eq!(context_of(answer), Some(view));
+    assert_eq!(dialect.review_in(answer), Some(view));
 
     // The comment is sent, in round 1, delivered with the message.
     let sent = review_when(&mut client, &workspace, &session, |review| {
@@ -406,7 +451,20 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
             _ => None,
         })
         .expect("the reply tool was called");
-    assert_ne!(tool["isError"], true, "the reply tool answered {tool}");
+    // Claude Code's tool server answers with an error flag; pi's reporting program prints
+    // the text the extension gives the model, or an error, and the stand-in writes down
+    // `{"message": ..}` when the program printed nothing it could read.
+    match dialect {
+        Dialect::ClaudeCode => {
+            assert_ne!(tool["isError"], true, "the reply tool answered {tool}");
+        }
+        Dialect::Pi => assert!(
+            tool["text"].as_str().is_some_and(|text| {
+                text.starts_with(&format!("recorded reply to {thread} (addressed, "))
+            }) && tool["error"].is_null(),
+            "the reply tool answered {tool}"
+        ),
+    }
     let after = review_of(&mut client, &workspace, &session);
     let thread_now = thread_of(&after, &thread);
     let [first, reply] = &thread_now.comments[..] else {
@@ -458,7 +516,21 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
 #[test]
 fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it()
  {
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then(
+        Dialect::ClaudeCode,
+    );
+}
+
+// AGENT-08, as pi: the line typed during the hold is the `input` of a message queued with
+// `steer`.
+#[test]
+fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_and_is_sent_when_the_agent_takes_it_as_pi()
+ {
+    a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then(Dialect::Pi);
+}
+
+fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then(dialect: Dialect) {
+    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
     repo.write("notes.txt", "alpha\n");
     repo.commit("Add the notes");
     // The turn is held outside the worktree until the test makes the file.
@@ -475,7 +547,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client
-        .open_launcher(&workspace, "claude", SIZE)
+        .open_launcher(&workspace, dialect.name(), SIZE)
         .expect("open the launcher");
     client.wait_for_prompt(&terminal, 0);
     let agents = sessions_when(&mut client, &workspace, |agents| {
@@ -485,6 +557,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
             .any(|session| session.state == SessionState::Idle)
     });
     let session = only_session(&agents).clone();
+    assert_eq!(session.agent, dialect.name());
     let review = review_of(&mut client, &workspace, &session);
 
     // A message and Enter: the agent works, and holds at the tool that runs.
@@ -498,7 +571,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
             .iter()
             .any(|did| matches!(did, Did::Began { step: 1, .. }))
     });
-    assert_eq!(prompts(&world.agent_log("default")).len(), 1);
+    assert_eq!(prompts(dialect, &world.agent_log("default")).len(), 1);
 
     // While it works, a review is attached.
     let thread = comment_on_a_new_thread(
@@ -515,11 +588,12 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
     assert_eq!(attached.rounds, vec![]);
     assert_eq!(thread_of(&attached, &thread).comments[0].round, None);
 
-    // And a message is submitted: the hook of the queued message runs at Enter, while the
-    // hold goes on, and its answer carries the review.
+    // And a message is submitted: the report of the queued message runs at Enter (Claude
+    // Code's hook, pi's `input` of `steer`), while the hold goes on, and its answer carries
+    // the review.
     client.type_line(&terminal, "also this");
-    let queued = log_when(&world, "default", |log| prompts(log).len() == 2);
-    // The stand-in is still in its hold: the hook ran at Enter, not after the tool.
+    let queued = log_when(&world, "default", |log| prompts(dialect, log).len() == 2);
+    // The stand-in is still in its hold: the report was made at Enter, not after the tool.
     assert!(
         !gate.exists()
             && !queued
@@ -529,8 +603,10 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         "the hold ended before the message was taken: {:?}",
         queued.did
     );
-    let (answer, read) = prompts(&queued)[1];
-    let context = context_of(answer).expect("the answer carries the review");
+    let (answer, read) = prompts(dialect, &queued)[1];
+    let context = dialect
+        .review_in(answer)
+        .expect("the answer carries the review");
     assert!(
         context.contains(&format!("Thread {thread}")) && context.contains("Say more about alpha."),
         "{context}"
@@ -542,7 +618,8 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         String::from_utf8_lossy(&queued.received[..read])
     );
 
-    // The comment is sent when the agent takes the message, still before the hold ends.
+    // The comment is sent when the agent reports the message, which is when it takes it for
+    // both CLIs, still before the hold ends.
     let sent = review_when(&mut client, &workspace, &session, |review| {
         review.attached.is_none() && !review.rounds.is_empty()
     });
@@ -583,16 +660,36 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
         kept.steps
     );
     let over = log_when(&world, "default", has_exited);
-    assert_eq!(prompts(&over).len(), 2, "no third message: {:?}", over.did);
+    assert_eq!(
+        prompts(dialect, &over).len(),
+        2,
+        "no third message: {:?}",
+        over.did
+    );
     untouched.holds_in(&repo);
     end(world, client);
 }
 
-// AGENT-14. The stand-in is started under the name `claude`, which is also the name of its
+// AGENT-14. The stand-in is started under the dialect's name, which is also the name of its
 // script and its log: `start_agent_outside` runs the program of that name.
 #[test]
 fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads()
  {
+    an_agent_that_runs_in_no_terminal_is_followed_receives_a_review_and_replies(
+        Dialect::ClaudeCode,
+    );
+}
+
+// AGENT-14, as pi: the stand-in as pi runs outside every terminal of the app, with the
+// extension its settings list and the reporting program named by its environment.
+#[test]
+fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_receives_a_review_and_replies_to_its_threads_as_pi()
+ {
+    an_agent_that_runs_in_no_terminal_is_followed_receives_a_review_and_replies(Dialect::Pi);
+}
+
+fn an_agent_that_runs_in_no_terminal_is_followed_receives_a_review_and_replies(dialect: Dialect) {
+    let name = dialect.name();
     let body = "Not sure: `a` or \"b\"?\nTell me which.";
     let outside = Script(vec![
         Step::Turn,
@@ -606,10 +703,12 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
         Step::End,
         Step::Exit,
     ]);
-    let (world, repo) = World::with_standin("claude", &outside);
+    let (world, repo) = world_with_standin(dialect, name, &outside);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
-    let mut agent = world.start_agent_outside(Dialect::ClaudeCode, &outside, repo.path());
+    // As pi, `start_agent_outside` lists the extension in pi's settings itself, so the
+    // user's yes given in `world_with_standin` is not what lets the stand-in report here.
+    let mut agent = world.start_agent_outside(dialect, &outside, repo.path());
     agent.wait_for_prompt();
 
     // Followed: a session of the worktree's workspace that runs in no terminal of the app.
@@ -621,7 +720,7 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
     });
     let session = only_session(&agents).clone();
     assert_eq!(session.terminal, None);
-    assert_eq!(session.agent, "claude");
+    assert_eq!(session.agent, name);
     let review = review_of(&mut client, &workspace, &session);
 
     // A first message: it works, and its turn ends.
@@ -641,12 +740,12 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
         client.turn(&turn).expect("the turn is kept").ended,
         Some(TurnEnd::Finished)
     );
-    let first = log_when(&world, "claude", |log| {
+    let first = log_when(&world, name, |log| {
         log.did
             .iter()
-            .any(|did| matches!(did, Did::Hook { event, .. } if event == "Stop"))
+            .any(|did| matches!(did, Did::Hook { event, .. } if event == dialect.turn_end_event()))
     });
-    assert_eq!(prompts(&first).len(), 1);
+    assert_eq!(prompts(dialect, &first).len(), 1);
     let turns = client
         .history(&workspace)
         .expect("the history")
@@ -666,15 +765,18 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
     assert_eq!(client.attach_review(&review.id, None), Ok(vec![]));
     let view = client.attachment(&review.id).expect("the view");
     agent.type_line("now the review");
-    let second = log_when(&world, "claude", |log| prompts(log).len() == 2);
-    assert_eq!(context_of(prompts(&second)[1].0), Some(view));
+    let second = log_when(&world, name, |log| prompts(dialect, log).len() == 2);
+    assert_eq!(
+        dialect.review_in(prompts(dialect, &second)[1].0),
+        Some(view)
+    );
     let sent = review_when(&mut client, &workspace, &session, |review| {
         review.attached.is_none() && !review.rounds.is_empty()
     });
     assert_eq!(thread_of(&sent, &thread).comments[0].round, Some(1));
 
     // Its reply, without the addressed mark, leaves the thread waiting for the reviewer.
-    log_when(&world, "claude", |log| {
+    log_when(&world, name, |log| {
         log.did.iter().any(|did| matches!(did, Did::Tool { .. }))
     });
     let after = review_of(&mut client, &workspace, &session);
@@ -690,7 +792,7 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
     );
 
     // It is still in no terminal, and the app opened none for it.
-    log_when(&world, "claude", has_exited);
+    log_when(&world, name, has_exited);
     assert_eq!(client.terminals(), vec![]);
     end(world, client);
 }
@@ -698,7 +800,19 @@ fn an_agent_that_reports_over_the_socket_and_runs_in_no_terminal_is_followed_rec
 // DELIVER-04.
 #[test]
 fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only() {
-    let (world, repo) = World::with_standin("default", &Script(vec![]));
+    a_review_attached_to_one_of_two_sessions_is_received_by_that_session_only(Dialect::ClaudeCode);
+}
+
+// DELIVER-04, as pi: two sessions of pi, each reporting through the reporting program of its
+// own shell.
+#[test]
+fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_session_only_as_pi()
+{
+    a_review_attached_to_one_of_two_sessions_is_received_by_that_session_only(Dialect::Pi);
+}
+
+fn a_review_attached_to_one_of_two_sessions_is_received_by_that_session_only(dialect: Dialect) {
+    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let talk = script(&["turn", "end", "turn", "end", "exit"]);
@@ -707,10 +821,10 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
 
     // Two sessions of one worktree, each in a shell of its own with a script and a log of
     // its own, and each with a review.
-    start_in(&world, &mut client, &one, "a", &talk);
+    start_in(dialect, &world, &mut client, &one, "a", &talk);
     let at_one = client.wait_for_prompt(&one, 0);
     sessions_when(&mut client, &workspace, |agents| agents.sessions.len() == 1);
-    start_in(&world, &mut client, &two, "b", &talk);
+    start_in(dialect, &world, &mut client, &two, "b", &talk);
     let at_two = client.wait_for_prompt(&two, 0);
     let both = sessions_when(&mut client, &workspace, |agents| {
         agents.sessions.len() == 2
@@ -747,11 +861,11 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
     // with its draft. B's hook, in B's log, is the barrier: the Keeper answered it after it
     // decided what went with it.
     client.type_line(&two, "hello B");
-    let hello_b = log_when(&world, "b", |log| !prompts(log).is_empty());
+    let hello_b = log_when(&world, "b", |log| !prompts(dialect, log).is_empty());
     assert!(
-        prompts(&hello_b)[0].0.is_empty(),
+        prompts(dialect, &hello_b)[0].0.is_empty(),
         "B's answer: {:?}",
-        String::from_utf8_lossy(prompts(&hello_b)[0].0)
+        String::from_utf8_lossy(prompts(dialect, &hello_b)[0].0)
     );
     let kept = review_of(&mut client, &workspace, &a);
     assert_eq!(kept.attached, Some(Attachment::Review));
@@ -768,8 +882,10 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
         })
     };
     client.type_line(&one, "hello A");
-    let hello_a = log_when(&world, "a", |log| !prompts(log).is_empty());
-    let context = context_of(prompts(&hello_a)[0].0).expect("A's answer carries a review");
+    let hello_a = log_when(&world, "a", |log| !prompts(dialect, log).is_empty());
+    let context = dialect
+        .review_in(prompts(dialect, &hello_a)[0].0)
+        .expect("A's answer carries a review");
     assert!(
         context.contains(&format!("Thread {thread}")) && context.contains("A, please retitle"),
         "{context}"
@@ -801,7 +917,7 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
         log_a.did
     );
     assert!(!holds(&log_b), "B received A's review: {:?}", log_b.did);
-    let b_answers: Vec<_> = prompts(&log_b)
+    let b_answers: Vec<_> = prompts(dialect, &log_b)
         .into_iter()
         .map(|(answer, _)| answer)
         .collect();
