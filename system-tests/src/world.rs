@@ -739,13 +739,32 @@ impl World {
     /// Keeper started. Name the script `default` for the stand-in that a launcher or a
     /// shell of the app starts to follow it.
     pub fn with_standin(name: &str, script: &crate::standin::Script) -> (World, Repo) {
+        World::with_standin_as(crate::dialect::Dialect::ClaudeCode, name, script)
+    }
+
+    /// A world for a test of an agent as `dialect`, as [`World::with_standin`] makes it for
+    /// the stand-in `name`. As pi, pi is installed in the world's home before the Keeper
+    /// starts, so that the Keeper asks the question of pi, and the user's yes is given after
+    /// it, so that the stand-in started as `pi` finds the app's extension in pi's settings,
+    /// as pi does.
+    pub fn with_standin_as(
+        dialect: crate::dialect::Dialect,
+        name: &str,
+        script: &crate::standin::Script,
+    ) -> (World, Repo) {
         let mut world = World::new();
         world.agents_on_path();
+        if dialect == crate::dialect::Dialect::Pi {
+            world.install_pi();
+        }
         world.agent_script(name, script);
         let repo = world.repository("app");
         repo.git(&["config", "user.name", "A Test"]);
         repo.git(&["config", "user.email", "test@example.invalid"]);
         world.start_keeper();
+        if dialect == crate::dialect::Dialect::Pi {
+            world.allow_pi_extension();
+        }
         (world, repo)
     }
 

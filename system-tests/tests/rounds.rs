@@ -211,29 +211,6 @@ fn tool_done_after(
     })
 }
 
-/// A world for a test of an agent as `dialect`: the stand-ins on its search path, the script
-/// `script` written as `<name>.script`, a repository `app` with one commit and an identity
-/// of its own in its configuration, and the Keeper started. As pi, pi is installed in the
-/// world before the Keeper starts, so that the Keeper asks the question of pi, and the user's
-/// yes is given when it runs, so that pi finds the app's extension in the settings of the
-/// world's home.
-fn world_with_standin(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
-    let mut world = World::new();
-    world.agents_on_path();
-    if dialect == Dialect::Pi {
-        world.install_pi();
-    }
-    world.agent_script(name, script);
-    let repo = world.repository("app");
-    repo.git(&["config", "user.name", "A Test"]);
-    repo.git(&["config", "user.email", "test@example.invalid"]);
-    world.start_keeper();
-    if dialect == Dialect::Pi {
-        world.allow_pi_extension();
-    }
-    (world, repo)
-}
-
 /// Waits until the stand-in whose log is `name` has ended its program.
 fn wait_for_exit(world: &World, name: &str) {
     assert!(
@@ -355,7 +332,7 @@ fn everything_killed(dialect: Dialect) {
         Step::Write(path("notes.txt"), "omega, wholly new\nbeta\n".into()),
         Step::End,
     ]);
-    let (mut world, _) = world_with_standin(dialect, "default", &one_turn);
+    let (mut world, _) = World::with_standin_as(dialect, "default", &one_turn);
     let repo = repository_with(
         &world,
         "notes",
@@ -540,7 +517,7 @@ fn a_second_round(dialect: Dialect) {
     const WRITE: usize = 5;
     const HOLD_AFTER_WRITE: usize = 6;
     // Replies name threads by their number in the review the agent was handed.
-    let (world, _) = world_with_standin(dialect, "default", &Script(vec![]));
+    let (world, _) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let gate = world
         .agent_script("default", &Script(vec![]))
         .with_extension("go");
@@ -774,7 +751,8 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
 }
 
 fn accepting_the_offer(dialect: Dialect) {
-    let (world, repo) = world_with_standin(dialect, "default", &script(&["turn", "end", "exit"]));
+    let (world, repo) =
+        World::with_standin_as(dialect, "default", &script(&["turn", "end", "exit"]));
     let checked_out_at_the_start = checked_out(&repo);
     assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();

@@ -41,27 +41,6 @@ fn reply_tool(dialect: Dialect) -> &'static str {
     }
 }
 
-/// A world for a test of an agent, as [`World::with_standin`] makes it for the stand-in
-/// `name`, for `dialect`: as pi, pi is installed in the world's home before the Keeper
-/// starts and the user's yes is given after it, so that the stand-in started as `pi` finds
-/// the app's extension in pi's settings, as pi does.
-fn world_with_standin(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
-    let mut world = World::new();
-    world.agents_on_path();
-    if dialect == Dialect::Pi {
-        world.install_pi();
-    }
-    world.agent_script(name, script);
-    let repo = world.repository("app");
-    repo.git(&["config", "user.name", "A Test"]);
-    repo.git(&["config", "user.email", "test@example.invalid"]);
-    world.start_keeper();
-    if dialect == Dialect::Pi {
-        world.allow_pi_extension();
-    }
-    (world, repo)
-}
-
 /// A script of the steps in `words`, each the way `Script::parse` reads it.
 fn script(words: &[&str]) -> Script {
     Script::parse(&words.join("\n"))
@@ -335,7 +314,7 @@ fn a_review_round_goes_from_a_comment_to_the_agents_reply(dialect: Dialect) {
         Step::End,
         Step::Exit,
     ]);
-    let (world, repo) = world_with_standin(dialect, "default", &round);
+    let (world, repo) = World::with_standin_as(dialect, "default", &round);
     // A change nobody committed, so that the index and the status the test compares at the
     // end have something to lose: a recording that wrote the worktree's own index would
     // stage it.
@@ -530,7 +509,7 @@ fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then_
 }
 
 fn a_review_attached_while_the_agent_works_goes_with_the_message_submitted_then(dialect: Dialect) {
-    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
+    let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     repo.write("notes.txt", "alpha\n");
     repo.commit("Add the notes");
     // The turn is held outside the worktree until the test makes the file.
@@ -703,11 +682,11 @@ fn an_agent_that_runs_in_no_terminal_is_followed_receives_a_review_and_replies(d
         Step::End,
         Step::Exit,
     ]);
-    let (world, repo) = world_with_standin(dialect, name, &outside);
+    let (world, repo) = World::with_standin_as(dialect, name, &outside);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     // As pi, `start_agent_outside` lists the extension in pi's settings itself, so the
-    // user's yes given in `world_with_standin` is not what lets the stand-in report here.
+    // user's yes given in `World::with_standin_as` is not what lets the stand-in report here.
     let mut agent = world.start_agent_outside(dialect, &outside, repo.path());
     agent.wait_for_prompt();
 
@@ -812,7 +791,7 @@ fn a_review_attached_to_one_of_two_sessions_in_one_worktree_is_received_by_that_
 }
 
 fn a_review_attached_to_one_of_two_sessions_is_received_by_that_session_only(dialect: Dialect) {
-    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
+    let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let talk = script(&["turn", "end", "turn", "end", "exit"]);
@@ -857,9 +836,9 @@ fn a_review_attached_to_one_of_two_sessions_is_received_by_that_session_only(dia
     );
     assert_eq!(client.attach_review(&review_a.id, None), Ok(vec![]));
 
-    // A message to B and Enter: B's hook answers nothing, and A's review is still attached
-    // with its draft. B's hook, in B's log, is the barrier: the Keeper answered it after it
-    // decided what went with it.
+    // A message to B and Enter: B's report of the message answers nothing, and A's review is
+    // still attached with its draft. That report, in B's log, is the barrier: the Keeper
+    // answered it after it decided what went with it.
     client.type_line(&two, "hello B");
     let hello_b = log_when(&world, "b", |log| !prompts(dialect, log).is_empty());
     assert!(

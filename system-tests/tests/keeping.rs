@@ -17,9 +17,7 @@ use yaar_link::{
     HistoryEntry, SessionState, Step as Taken, TerminalId, TerminalSize, TurnEnd, WorkspaceId,
 };
 use yaar_system_tests::standin::{Did, PROMPT, Script};
-use yaar_system_tests::{
-    Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
-};
+use yaar_system_tests::{Client, DEADLINE, Dialect, World, descendants_of, is_alive, wait_until};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -53,27 +51,6 @@ const ATTEMPTS: usize = 3;
 /// A script of the steps in `words`, each the way `Script::parse` reads it.
 fn script(words: &[String]) -> Script {
     Script::parse(&words.join("\n"))
-}
-
-/// A world for a test of an agent, as [`World::with_standin`] makes it for the stand-in
-/// `name`, for `dialect`: as pi, pi is installed in the world's home before the Keeper
-/// starts and the user's yes is given after it, so that the stand-in started as `pi` finds
-/// the app's extension in pi's settings, as pi does.
-fn world_with_standin(dialect: Dialect, name: &str, script: &Script) -> (World, Repo) {
-    let mut world = World::new();
-    world.agents_on_path();
-    if dialect == Dialect::Pi {
-        world.install_pi();
-    }
-    world.agent_script(name, script);
-    let repo = world.repository("app");
-    repo.git(&["config", "user.name", "A Test"]);
-    repo.git(&["config", "user.email", "test@example.invalid"]);
-    world.start_keeper();
-    if dialect == Dialect::Pi {
-        world.allow_pi_extension();
-    }
-    (world, repo)
 }
 
 /// A stand-in the test started in a shell, with the script and log of its own.
@@ -160,7 +137,7 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
 fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(dialect: Dialect) {
     // The folder of the world, which the worktree is not in: the file that lets the agent
     // go on is made there, so that making it is no change of the worktree.
-    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
+    let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let go = world.home().with_file_name("go");
     let named: Vec<String> = (1..=READS).map(|k| format!("f{k:03}.txt")).collect();
     for file in &named {
@@ -424,7 +401,7 @@ fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_mi
 }
 
 fn a_stopped_client_does_not_hold_the_agent_up(dialect: Dialect) {
-    let (world, repo) = world_with_standin(dialect, "default", &Script(vec![]));
+    let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let mut setup = world.client();
     let workspace = setup.open_folder(repo.path()).expect("open the folder").1;
     // This client reads nothing again: it goes, so that only the runs' own clients are

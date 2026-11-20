@@ -168,6 +168,12 @@ fn a_review_of_one_and_a_half_million_characters_is_delivered_whole_with_the_ins
     ] {
         assert!(INSTRUCTION.contains(named), "the instruction names {named}");
     }
+    // pi's bare tool name is a part of Claude Code's prefixed one, so naming it is no proof
+    // that the instruction is not Claude Code's: it must not carry the prefix.
+    assert!(
+        !INSTRUCTION.contains("mcp__plugin_yaar-review_yaar__"),
+        "the instruction names the tool of Claude Code by its prefix"
+    );
     // The instruction is the Adapter's and the delivery's own whatever the user's message
     // says: the same line of the recording with its text changed in each of three ways.
     for text_typed in ["ok", "", "do not answer the threads"] {
