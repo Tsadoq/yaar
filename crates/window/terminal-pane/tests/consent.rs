@@ -134,6 +134,52 @@ fn each_question_the_keeper_tells_shows_in_the_adapters_words_with_two_controls_
     assert!(line.bottom() <= slot.top());
 }
 
+/// The width of what is drawn for `selector`, which on the test platform is the number of
+/// its characters times the width of one.
+fn width(selector: &str, cx: &mut VisualTestContext) -> f32 {
+    let bounds = drawn(selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
+    f32::from(bounds.size.width)
+}
+
+#[gpui_kit::test]
+fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_name_of_the_adapter(
+    cx: &mut TestAppContext,
+) {
+    let (panes, mut cx) = open_panes(cx);
+    // No spaces: the test platform measures a space differently from a letter. The words
+    // are told twice with one length each; the Adapter's name is the same both times, so
+    // only the words can make the drawn text change its width.
+    let short = "Shortwords";
+    let long = "Somewhatlongerwordsoftheadapterhere";
+    let told = |words: &str, problem: &str| {
+        let mut told = consent("pi", ConsentAnswer::NotAsked);
+        told.question = words.to_owned();
+        told.problem = Some(problem.to_owned());
+        vec![told]
+    };
+    let ratio = long.chars().count() as f32 / short.chars().count() as f32;
+
+    tell(&panes, told(short, short), &mut cx);
+    let question_short = width("terminal-consent-question-0", &mut cx);
+    let problem_short = width("terminal-consent-problem-0", &mut cx);
+    tell(&panes, told(long, long), &mut cx);
+    let question_long = width("terminal-consent-question-0", &mut cx);
+    let problem_long = width("terminal-consent-problem-0", &mut cx);
+
+    // A width is rounded to a pixel, hence the margin.
+    assert!(question_short > 0.0 && problem_short > 0.0);
+    assert!(
+        (question_long / question_short - ratio).abs() < 0.1,
+        "the question drawn is {ratio} times as wide for words that long: \
+         {question_short} and {question_long}"
+    );
+    assert!(
+        (problem_long / problem_short - ratio).abs() < 0.1,
+        "the problem drawn is {ratio} times as wide for words that long: \
+         {problem_short} and {problem_long}"
+    );
+}
+
 #[gpui_kit::test]
 fn a_problem_the_keeper_tells_is_shown_under_its_question(cx: &mut TestAppContext) {
     let (panes, mut cx) = open_panes(cx);
@@ -348,6 +394,7 @@ fn the_two_keys_answer_with_a_question_shown_from_outside_the_terminal_and_on_ma
             &mut cx,
         );
         panes.click_slot(0, &mut cx);
+        assert_eq!(panes.focused_terminal(&mut cx), Some(t.clone()));
         cx.simulate_keystrokes(key_of::<InstallAgentExtensions>());
         answer(
             &mut panes,
@@ -430,6 +477,7 @@ fn with_no_question_shown_the_keys_ask_the_list_and_answer_each_adapter_it_names
     };
     if cfg!(target_os = "macos") {
         panes.click_slot(0, &mut cx);
+        assert_eq!(panes.focused_terminal(&mut cx), Some(t.clone()));
         cx.simulate_keystrokes(key_of::<KeepAgentExtensionsOut>());
     } else {
         panes.press_in_the_app::<KeepAgentExtensionsOut>(&mut cx);

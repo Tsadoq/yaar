@@ -48,9 +48,12 @@ impl TerminalPane {
         }
         let theme = cx.theme();
         let questions = asked.into_iter().enumerate().map(|(n, consent)| {
+            // Each text takes the width of its words, not the line's, so that its bounds
+            // show what is drawn in it.
             div()
                 .flex()
                 .flex_col()
+                .items_start()
                 .gap_0p5()
                 .child(
                     div()

@@ -295,3 +295,60 @@ fn a_refused_answer_is_the_tasks_refusal_and_the_list_stays_as_it_was(cx: &mut T
     ));
     assert_eq!(asked(&list, cx), ["pi"]);
 }
+
+#[gpui_kit::test]
+fn a_refusal_of_the_first_answer_still_takes_the_list_of_the_others(cx: &mut TestAppContext) {
+    let (list, mut keeper) = linked(cx);
+    tell(
+        &list,
+        &mut keeper,
+        vec![
+            consent("a", ConsentAnswer::NotAsked),
+            consent("b", ConsentAnswer::NotAsked),
+        ],
+        cx,
+    );
+    let sent = list.update(cx, |list, cx| list.answer_all(ConsentAnswer::Yes, cx));
+    let sent = start(sent, cx);
+    let (first, request) = keeper.request(cx);
+    assert_eq!(request, answering("a", ConsentAnswer::Yes));
+    let (second, request) = keeper.request(cx);
+    assert_eq!(request, answering("b", ConsentAnswer::Yes));
+
+    // The first is refused and the second goes through: the list the Keeper answers the
+    // second with is taken though the task resolves to the refusal.
+    let refusal = Refusal::Failed {
+        reason: "no such agent".to_owned(),
+    };
+    keeper.reply(first, Err(refusal.clone()));
+    // The refusal is heard before the second answer comes, as it may be: a fact the Keeper
+    // tells after it is taken after it, so the task has seen the refusal by then. The task
+    // waits for the second answer all the same.
+    tell(
+        &list,
+        &mut keeper,
+        vec![
+            consent("a", ConsentAnswer::NotAsked),
+            consent("b", ConsentAnswer::NotAsked),
+            consent("c", ConsentAnswer::NotAsked),
+        ],
+        cx,
+    );
+    cx.run_until_parked();
+    assert!(
+        sent.borrow().is_none(),
+        "the task resolved before the second answer came"
+    );
+    keeper.reply(
+        second,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::NotAsked),
+            consent("b", ConsentAnswer::Yes),
+        ])),
+    );
+    assert!(matches!(
+        finished(&sent, cx),
+        Err(AskError::Refused(refused)) if refused == refusal
+    ));
+    assert_eq!(asked(&list, cx), ["a"]);
+}

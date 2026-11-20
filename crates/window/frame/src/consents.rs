@@ -64,9 +64,11 @@ impl ConsentList {
     /// the order of the Adapters; the question for the list too. The task resolves to
     /// whether an answer was sent: false, with nothing sent but the question for the list,
     /// when the Keeper lists no Adapter that needs leave, which the caller says. It resolves
-    /// to the first refusal the Keeper gave or the loss of the connection, and sends no
-    /// more then. The task is the caller's to keep: a dropped one stops asking, though what
-    /// was handed to the link stays sent.
+    /// to the first refusal the Keeper gave or the loss of the connection. For the questions
+    /// shown every answer is still awaited, so that the list each one brings is taken; after
+    /// the question for the list, a failure ends it and no more is sent. The task is the
+    /// caller's to keep: a dropped one stops asking, though what was handed to the link stays
+    /// sent.
     pub fn answer_all(
         &mut self,
         answer: ConsentAnswer,
@@ -101,10 +103,15 @@ impl ConsentList {
             .map(|consent| self.send_answer(consent.agent, answer, cx))
             .collect();
         cx.spawn(async move |_, _| {
+            // Every answer is awaited, so that the list each one brings is taken, and the
+            // first refusal is the one given back.
+            let mut refused = None;
             for asked in asked {
-                asked.await?;
+                if let Err(error) = asked.await {
+                    refused.get_or_insert(error);
+                }
             }
-            Ok(true)
+            refused.map_or(Ok(true), Err)
         })
     }
 
