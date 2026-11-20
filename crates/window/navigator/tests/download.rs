@@ -246,6 +246,45 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
         standin_bytes()
     );
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
+
+    // Nothing is unpacked before the digest has matched: archives that unpacking itself
+    // would refuse, under a wrong digest, still give the digest's error and write nothing,
+    // where a downloader that unpacked first would give `Unpack`.
+    use tar::EntryType::{Fifo, Regular};
+    let program = (IN_ARCHIVE, Regular, &b"ok"[..]);
+    let refused_by_unpacking: [Vec<(&str, tar::EntryType, &[u8])>; 3] = [
+        vec![("standin/../../escape", Regular, b"x")],
+        vec![program, ("standin/pipe", Fifo, b"")],
+        vec![("standin/other", Regular, b"x")],
+    ];
+    let guarded = scratch.root.join("guarded");
+    let before = tree(&scratch.root);
+    for (n, entries) in refused_by_unpacking.iter().enumerate() {
+        let bad = tar_gz_of(entries);
+        let loopback = Loopback::serve(vec![("bad.tar.gz".to_owned(), bad.clone())]);
+        let download = Download {
+            sha256: sha256(b"other"),
+            ..pinned(loopback.url("bad.tar.gz"), &bad, "1")
+        };
+        assert_eq!(
+            downloader.fetch("standin", &download, &guarded),
+            Err(DownloadError::Digest {
+                expected: sha256(b"other"),
+                found: sha256(&bad),
+            }),
+            "archive {n}"
+        );
+        assert_eq!(loopback.heard().len(), 1, "archive {n} arrived");
+        assert_eq!(versions(&guarded), Vec::<String>::new(), "archive {n}");
+        assert_eq!(partials(&guarded), Vec::<PathBuf>::new(), "archive {n}");
+    }
+    let created: BTreeSet<_> = tree(&scratch.root).difference(&before).cloned().collect();
+    assert!(
+        created
+            .iter()
+            .all(|path| path == Path::new("guarded") || path == Path::new("guarded/standin")),
+        "nothing was unpacked, so nothing is written but the server's own folder: {created:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------
@@ -902,6 +941,75 @@ fn bytes_that_stream_with_no_length_are_counted_and_stop_at_the_size() {
             .fetch("standin", &download, &servers),
         Err(DownloadError::TooLarge(10_000))
     );
+    assert_eq!(partials(&servers), Vec::<PathBuf>::new());
+    assert_eq!(versions(&servers), Vec::<String>::new());
+}
+
+/// A listener that answers its one request with `response`, written as given, and then keeps
+/// the connection open, without ending the answer, until `held` is released or dropped. Gives
+/// the address and the thread to join once it is released.
+fn held_server(
+    response: Vec<u8>,
+    held: std::sync::mpsc::Receiver<()>,
+) -> (String, std::thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("listen on the loopback address");
+    let port = listener.local_addr().expect("its address").port();
+    let thread = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("a connection");
+        let mut seen = Vec::new();
+        let mut byte = [0_u8; 1];
+        while !seen.ends_with(b"\r\n\r\n") {
+            match stream.read(&mut byte) {
+                Ok(1) => seen.push(byte[0]),
+                _ => return,
+            }
+        }
+        let _ = stream.write_all(&response);
+        // Until the test has its answer the answer is not over: only a download that stops
+        // by itself, at the count, can end before then.
+        let _ = held.recv();
+    });
+    (format!("http://127.0.0.1:{port}/served"), thread)
+}
+
+#[test]
+fn a_download_stops_at_the_byte_past_the_size_without_waiting_for_the_end_of_the_answer() {
+    use std::sync::mpsc::{RecvTimeoutError, channel};
+
+    let scratch = Scratch::new();
+    let servers = scratch.root.join("servers");
+    let size = 10_000_u64;
+    // Exactly one byte more than the row's size, in a chunk, and then no more: no length was
+    // announced and the answer never ends. A count made only at the end, or one that leaves
+    // room above the size, would wait here for the read to time out instead.
+    let body = vec![7_u8; size as usize + 1];
+    let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+    response.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
+    response.extend_from_slice(&body);
+    response.extend_from_slice(b"\r\n");
+    let (release, held) = channel::<()>();
+    let (url, server) = held_server(response, held);
+    let download = Download {
+        size,
+        ..pinned(url, &[0; 16384], "1")
+    };
+
+    let (done, outcome) = channel();
+    let target = servers.clone();
+    std::thread::spawn(move || {
+        let downloader = Downloader::new().expect("a downloader");
+        let _ = done.send(downloader.fetch("standin", &download, &target));
+    });
+    let outcome = outcome.recv_timeout(DEADLINE);
+    drop(release);
+    server.join().expect("the listener");
+    match outcome {
+        Ok(outcome) => assert_eq!(outcome, Err(DownloadError::TooLarge(size))),
+        Err(RecvTimeoutError::Timeout) => {
+            panic!("the download went on past the size, waiting for the answer to end")
+        }
+        Err(RecvTimeoutError::Disconnected) => panic!("the download thread ended"),
+    }
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
     assert_eq!(versions(&servers), Vec::<String>::new());
 }

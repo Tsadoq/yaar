@@ -631,8 +631,8 @@ fn pinned_servers(
 
 /// For each server of each row of `registry` with a download for `platform`: nothing when
 /// `servers` holds that version with that digest already, else [`Downloader::fetch`].
-/// `told` hears one line for each server, saying which it was, before the server is
-/// looked at, so that a failure is named by the last line told. What `cargo xtask
+/// `told` hears one line for each server, saying which it was, before its download is
+/// fetched, so that a failure is named by the last line told. What `cargo xtask
 /// language-servers` runs, and nothing else does. The first failure ends it. A downloader
 /// is made only for the first server that needs one.
 pub fn fill(
