@@ -401,7 +401,8 @@ impl Reviews {
     /// one git ignores, reached through go to definition or a reference (FR-075): it names
     /// no tree, needs no worktree, records no state and keeps no commit; it is kept with the
     /// empty version, which the Keeper gives the Window as none, and is never carried
-    /// through a diff (`following.rs`). Its lines and text are checked as any anchor's.
+    /// through a diff (`following.rs`). It is kept on the new side whatever side the save
+    /// gave: such a file has one. Its lines and text are checked as any anchor's.
     pub fn save_draft(
         &self,
         worktree: Option<&Worktree>,
@@ -432,10 +433,17 @@ impl Reviews {
                         version = Some(self.version_of(worktree, current.workspace(), at)?);
                         continue;
                     };
+                    // A file outside the worktree has no old version to be on, so its
+                    // thread is on the new side whatever the save gave.
+                    let side = if is_outside(&at.path) {
+                        Side::New
+                    } else {
+                        at.side
+                    };
                     let anchor = Anchor {
                         tree: version,
                         path: at.path.clone(),
-                        side: at.side,
+                        side,
                         first: at.first,
                         last: at.last,
                         text: at.text.clone(),
