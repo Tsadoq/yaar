@@ -734,6 +734,40 @@ fn a_server_that_fails_initialize_is_told_exited_and_never_ready() {
 }
 
 #[test]
+fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and_never_ready() {
+    let scratch = Scratch::new();
+    let (root, _) = project(&scratch, "def a\n");
+    let mut given = launch(&scratch, &root, &["--fail-initialize"]);
+    given.ready = Ready::Notification {
+        method: "standin/status".to_owned(),
+        matches: serde_json::from_value(json!({"ready": true})).unwrap(),
+    };
+    // The shell writes the status frame and only then becomes the stand-in, so the frame is
+    // in the pipe before the stand-in has started and before it answers `initialize`: a
+    // pipe keeps its order, so the driver reads the status first, with nothing to race.
+    let status = json!({"jsonrpc": "2.0", "method": "standin/status", "params": {"ready": true}});
+    given.args = [
+        "-c",
+        "printf 'Content-Length: %d\\r\\n\\r\\n%s' ${#1} \"$1\"; shift; exec \"$0\" \"$@\"",
+        standin().to_str().unwrap(),
+        &status.to_string(),
+        "--fail-initialize",
+    ]
+    .map(str::to_owned)
+    .to_vec();
+    given.program = PathBuf::from("/bin/sh");
+    let mut run = Run::start(given);
+    // `Exited` is the barrier: the status frame was read before it.
+    run.exited();
+    assert!(
+        !run.told.contains(&ServerEvent::Ready),
+        "told ready before the server answered initialize: {:?}",
+        run.told
+    );
+    assert!(!run.server.is_ready());
+}
+
+#[test]
 fn a_server_that_fails_initialize_and_runs_on_is_killed_and_told_exited() {
     let scratch = Scratch::new();
     let (root, _) = project(&scratch, "def a\n");
