@@ -5,10 +5,9 @@
 //!
 //! The hook program and the tool server are the built ones, run the way Claude Code runs
 //! them, the hook with recorded inputs moved into the test's own worktree; the Keeper is the
-//! library on a thread of the test. A review is attached through the Store the Keeper keeps
-//! its reviews in, and the text it should carry is rendered by the engine from that Store:
-//! the requests that attach a review and show its text are built apart from the delivery.
-//! The Keeper runs git with the environment of its process, so each test sets that
+//! library on a thread of the test. A review is attached with `Request::AttachReview` and
+//! the text it should carry is read with `Request::GetAttachment`, as a Window does, so that
+//! what the hook is answered with is compared with what the view control shows. The Keeper runs git with the environment of its process, so each test sets that
 //! environment as its first statement, and these tests are run by `cargo nextest`, which gives
 //! each test a process of its own.
 
@@ -28,8 +27,7 @@ use yaar_link::{
     Request, RequestId, Review, SOCKET_VARIABLE, SentBy, Side, TERMINAL_VARIABLE, TerminalId,
     TerminalSize, ThreadId, WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
 };
-use yaar_review_engine::{Scope, as_text};
-use yaar_store::{AttachedRecord, Store};
+use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
@@ -217,8 +215,8 @@ impl Scratch {
 
     /// The Keeper's database, opened beside the Keeper. The Store is written for one process
     /// and one connection of the Keeper's, and these tests keep to what it was written for:
-    /// they read what the Keeper kept and attach a review, which is one small write, while
-    /// the Keeper is at rest between two hooks.
+    /// they read what the Keeper kept, and write only the one state the app makes nowhere,
+    /// while the Keeper is at rest between two hooks.
     fn store(&self) -> Store {
         Store::open(&self.database()).expect("open the Keeper's database")
     }
@@ -649,33 +647,31 @@ impl Setup {
     }
 
     /// Attaches `review`, as the user does with the control: the whole review, to the next
-    /// message of its session.
-    fn attach(&self, review: &Review) {
-        self.scratch
-            .store()
-            .set_attached(
-                &yaar_store::ReviewId::new(review.id.as_str()),
-                Some(&AttachedRecord::Review),
-            )
-            .expect("attach the review");
+    /// message of its session. The attach is told to every Window, and this waits for that,
+    /// so that what it tells is not taken for what a later step tells.
+    fn attach(&mut self, review: &Review) {
+        let attached = self.window.ask(Request::AttachReview {
+            review: review.id.clone(),
+            thread: None,
+        });
+        assert!(
+            matches!(attached, Ok(Reply::AttachedReview { .. })),
+            "{attached:?}"
+        );
+        self.window.reviews_changed(&self.workspace);
     }
 
-    /// What the next message of the review's session would carry: the unsent comments of
-    /// what is attached, rendered by the engine after the instruction of Claude Code's
-    /// delivery.
-    fn attachment(&self, review: &Review) -> String {
-        let record = self
-            .scratch
-            .store()
-            .review(&yaar_store::ReviewId::new(review.id.as_str()))
-            .expect("read the review")
-            .expect("the review is kept");
-        as_text(
-            &yaar_review_engine::Review::from_record(record),
-            Scope::Attached,
-            yaar_adapter_claude::INSTRUCTION,
-        )
-        .text
+    /// What the next message of the review's session would carry, as the control that views
+    /// the attachment shows it: the unsent comments of what is attached after the instruction
+    /// of Claude Code's delivery.
+    fn attachment(&mut self, review: &Review) -> String {
+        let shown = self.window.ask(Request::GetAttachment {
+            review: review.id.clone(),
+        });
+        let Ok(Reply::Attachment { text }) = shown else {
+            panic!("no attachment: {shown:?}");
+        };
+        text
     }
 
     /// Starts a session by its recorded start, and gives its review, attached and holding a
