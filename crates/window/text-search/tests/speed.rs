@@ -32,7 +32,7 @@ fn the_full_list_of_a_repository_of_3500_files_arrives_within_100_ms_once_warm()
     for folder in 0..FOLDERS {
         for file in 0..FILES {
             let mut text = String::new();
-            let seventh = (folder * FILES + file) % 7 == 0;
+            let seventh = (folder * FILES + file).is_multiple_of(7);
             for number in 1..=LINES {
                 if seventh && number == WORD_LINE {
                     text.push_str("    let found = needle_word;\n");
