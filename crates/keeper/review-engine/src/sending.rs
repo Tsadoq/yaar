@@ -7,7 +7,7 @@
 //! The engine names no way: Claude Code's hook, pi's extension and a copy are each handed
 //! the same text, after their own instruction.
 
-use yaar_agent::{CopyAsText, Delivery};
+use yaar_agent::{CopyAsText, Delivery, Rendered};
 use yaar_recorder::{StateId, Worktree};
 use yaar_store::{ReviewId, SentBy, SessionId};
 
@@ -19,8 +19,17 @@ impl Reviews {
     /// The review of `session`: the one the Store holds whose agent is that session; none
     /// for a session with no review, as one whose review the next session took over.
     pub fn review_of_session(&self, session: &SessionId) -> Result<Option<ReviewId>, EngineError> {
-        let _ = session;
-        todo!()
+        // Read as one call of the Store each, and no turn is taken: a caller that holds the
+        // turn may ask.
+        let Some(kept) = self.store.session(session)? else {
+            return Ok(None);
+        };
+        Ok(self
+            .store
+            .reviews_of(&kept.workspace)?
+            .into_iter()
+            .find(|review| review.agent.as_deref() == Some(session.as_str()))
+            .map(|review| review.id))
     }
 
     /// What the user's next message would carry now: what is attached, rendered by
@@ -33,8 +42,8 @@ impl Reviews {
         review: &ReviewId,
         instruction: &str,
     ) -> Result<Option<ReviewText>, EngineError> {
-        let _ = (review, instruction);
-        todo!()
+        let rendered = as_text(&self.review(review)?, Scope::Attached, instruction);
+        Ok((!rendered.comments.is_empty()).then_some(rendered))
     }
 
     /// The one send: under the engine's turn, renders what `scope` of `review` carries after
@@ -58,8 +67,39 @@ impl Reviews {
         state: Option<&StateId>,
         delivery: &mut dyn Delivery,
     ) -> Result<Option<(Vec<u8>, Sent)>, EngineError> {
-        let _ = (review, scope, sent_by, state, delivery);
-        todo!()
+        // A send of everything is always at a state; only what is attached is sent before
+        // its state is recorded.
+        if state.is_none() && scope != Scope::Attached {
+            return Err(ReviewError::NothingToSend.into());
+        }
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        let rendered = as_text(&current, scope, delivery.instruction());
+        if rendered.comments.is_empty() {
+            return Ok(None);
+        }
+        // The send is made on this copy first, so that the round has its number to hand out;
+        // nothing is kept before the hand-out succeeded.
+        let sent = match state {
+            Some(state) => current.send(scope, state.as_str(), sent_by)?,
+            None => current.send_attached(sent_by)?,
+        };
+        let handed = delivery
+            .hand_out(&Rendered {
+                text: &rendered.text,
+                review: review.as_str(),
+                round: sent.round.number,
+                threads: rendered.threads.len(),
+            })
+            .map_err(EngineError::HandOut)?;
+        match scope {
+            Scope::Attached => {
+                self.store
+                    .put_round_detached(review, &sent.round, &sent.comments)?
+            }
+            Scope::Everything => self.store.put_round(review, &sent.round, &sent.comments)?,
+        }
+        Ok(Some((handed, sent)))
     }
 
     /// The user submitted a message that carries `review`'s attachment: [`Reviews::send`]
@@ -84,17 +124,32 @@ impl Reviews {
         review: &ReviewId,
         round: u32,
     ) -> Result<StateId, EngineError> {
-        let _ = (worktree, review, round);
-        todo!()
+        // A round that cannot be given a state records none.
+        let before = self.review(review)?;
+        match before.rounds().iter().find(|held| held.number == round) {
+            None => return Err(ReviewError::UnknownRound(round).into()),
+            Some(held) if held.state.is_some() => {
+                return Err(ReviewError::RoundHasState(round).into());
+            }
+            Some(_) => {}
+        }
+        // The recording can take a second: no turn is held while it runs.
+        let state = self.record_state(before.workspace(), worktree)?.id;
+
+        let _turn = self.turn();
+        let mut current = self.review(review)?;
+        current.set_round_state(round, state.as_str())?;
+        self.store.set_round_state(review, round, state.as_str())?;
+        Ok(state)
     }
 
     /// Copies a review as text and sends it, as a submit does: the text holds every unsent
     /// comment on an unresolved thread, after `yaar_agent::COPY_INSTRUCTION`; the state of
     /// `worktree`, the worktree of the review's workspace, is recorded; the copied comments
     /// are sent in a new round, recorded at that state, in one transaction of the Store.
-    /// Refused, with nothing recorded, when there is nothing to send. The package that
-    /// builds [`Reviews::send`] makes this the state recorded and then that send, of
-    /// [`Scope::Everything`] through `yaar_agent::CopyAsText`; what it does stays as it is.
+    /// Refused, with nothing recorded, when there is nothing to send. It is the state
+    /// recorded and then [`Reviews::send`] of [`Scope::Everything`] through
+    /// `yaar_agent::CopyAsText`.
     pub fn copy_as_text(
         &self,
         worktree: &Worktree,
@@ -105,24 +160,15 @@ impl Reviews {
             return Err(ReviewError::NothingToSend.into());
         }
         let state = self.record_state(before.workspace(), worktree)?;
-
-        let _turn = self.turn();
-        let mut current = self.review(review)?;
-        let mut copy = CopyAsText;
-        let rendered = as_text(&current, Scope::Everything, copy.instruction());
-        if rendered.comments.is_empty() {
-            return Err(ReviewError::NothingToSend.into());
-        }
-        let sent = current.send(Scope::Everything, state.id.as_str(), SentBy::Copied)?;
-        let handed = copy
-            .hand_out(&yaar_agent::Rendered {
-                text: &rendered.text,
-                review: review.as_str(),
-                round: sent.round.number,
-                threads: rendered.threads.len(),
-            })
-            .map_err(EngineError::HandOut)?;
-        self.store.put_round(review, &sent.round, &sent.comments)?;
+        let (handed, sent) = self
+            .send(
+                review,
+                Scope::Everything,
+                SentBy::Copied,
+                Some(&state.id),
+                &mut CopyAsText,
+            )?
+            .ok_or(ReviewError::NothingToSend)?;
         Ok(Copied {
             text: String::from_utf8(handed).expect("a copy hands back the text it was given"),
             round: sent.round.number,
