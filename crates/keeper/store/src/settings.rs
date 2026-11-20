@@ -105,10 +105,11 @@ pub enum Setting {
 }
 
 /// The name and value a setting of the whole app is kept as, or the workspace, name and
-/// value of one of a workspace.
+/// value of one of a workspace, or the repository, name and value of one of a repository.
 enum Row {
     App(&'static str, String),
     Workspace(String, &'static str, &'static str),
+    Repository(String, &'static str, &'static str),
 }
 
 impl Setting {
@@ -150,7 +151,14 @@ impl Setting {
                     FlowForm::LiveDiff => "live_diff",
                 },
             ),
-            Self::ServersInRepository { .. } => todo!(),
+            Self::ServersInRepository {
+                repository,
+                allowed,
+            } => Row::Repository(
+                repository.as_str().to_owned(),
+                "servers_inside",
+                if *allowed { "yes" } else { "no" },
+            ),
         }
     }
 
@@ -192,6 +200,20 @@ impl Setting {
         })
     }
 
+    /// The setting a row of `repository_setting` holds; none for a name or a value this
+    /// build does not know.
+    fn of_repository_row(repository: String, name: &str, value: &str) -> Option<Self> {
+        let allowed = match (name, value) {
+            ("servers_inside", "yes") => true,
+            ("servers_inside", "no") => false,
+            _ => return None,
+        };
+        Some(Self::ServersInRepository {
+            repository: RepositoryId::new(repository),
+            allowed,
+        })
+    }
+
     /// Where a setting of the whole app comes among the others: the order its kind is
     /// listed in.
     fn rank(&self) -> u8 {
@@ -209,7 +231,8 @@ impl Setting {
 impl Store {
     /// Every setting the user set: those of the whole app first, in the order
     /// [`Setting`] lists their kinds, then those of each workspace, in the order the
-    /// workspaces were first kept. A setting never set is not listed.
+    /// workspaces were first kept, then those of each repository, in the order the
+    /// repositories were first kept. A setting never set is not listed.
     pub fn settings(&self) -> Result<Vec<Setting>, StoreError> {
         self.ask(|connection| {
             let mut settings = connection
@@ -242,14 +265,33 @@ impl Store {
                 .filter_map(|row| row.transpose())
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             settings.extend(of_workspaces);
+            // The same for a repository the Store does not hold.
+            let of_repositories = connection
+                .prepare(
+                    "SELECT repository_setting.repository, repository_setting.name,
+                            repository_setting.value
+                     FROM repository_setting JOIN repository
+                         ON repository.id = repository_setting.repository
+                     ORDER BY repository.seq, repository_setting.name",
+                )?
+                .query_map([], |row| {
+                    Ok(Setting::of_repository_row(
+                        row.get(0)?,
+                        &row.get::<_, String>(1)?,
+                        &row.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|row| row.transpose())
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            settings.extend(of_repositories);
             Ok(settings)
         })
     }
 
     /// Keeps `setting`, in the place of the value the same setting had: one transaction
     /// that returns when the change is on the drive, so that a Keeper killed after the
-    /// call finds it. A setting of a workspace the Store does not hold is refused with a
-    /// sentence that names it.
+    /// call finds it. A setting of a workspace or of a repository the Store does not hold
+    /// is refused with a sentence that names it.
     pub fn set_setting(&self, setting: &Setting) -> Result<(), StoreError> {
         let row = setting.row();
         self.try_ask(move |connection| {
@@ -277,6 +319,22 @@ impl Store {
                          ON CONFLICT (workspace, name) DO UPDATE SET value = excluded.value
                          WHERE value IS NOT excluded.value",
                         params![workspace, name, value],
+                    )?;
+                }
+                Row::Repository(repository, name, value) => {
+                    if !exists(
+                        &keeping,
+                        "SELECT 1 FROM repository WHERE id = ?1",
+                        &repository,
+                    )? {
+                        return refused(format!("repository {repository} is not kept"));
+                    }
+                    keeping.execute(
+                        "INSERT INTO repository_setting (repository, name, value)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT (repository, name) DO UPDATE SET value = excluded.value
+                         WHERE value IS NOT excluded.value",
+                        params![repository, name, value],
                     )?;
                 }
             }
