@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use yaar_system_tests::{DEADLINE, Repo, World, wait_until};
+use yaar_system_tests::standin::Script;
+use yaar_system_tests::{DEADLINE, Repo, World, is_alive, wait_until};
 
 /// A review file as the Claude Code Adapter writes one: 32 hexadecimal digits, a dash, a
 /// number.
@@ -221,6 +222,24 @@ fn run_as_child(name: &str) -> Ended {
     }
 }
 
+/// A world as a test of an agent has it, with its Keeper running: what a test that fails
+/// at its end must not leave behind.
+fn world_with_keeper() -> (World, Repo) {
+    World::with_standin("default", &Script::parse(""))
+}
+
+/// Prints where a child's world lies and which process its Keeper is, for the test that
+/// started the child to look for afterwards.
+fn tell_where(world: &mut World, app: &Repo) {
+    let root = app
+        .path()
+        .parent()
+        .and_then(Path::parent)
+        .expect("the world");
+    let keeper = world.keeper_pid().expect("the Keeper runs");
+    println!("world: {}\nkeeper: {keeper}", root.display());
+}
+
 /// The folder a child's world lay in, which it printed as `world: <folder>`.
 fn world_of(child: &Ended) -> PathBuf {
     // The libtest harness has written the name of the test on the line before it.
@@ -229,6 +248,18 @@ fn world_of(child: &Ended) -> PathBuf {
         .split_once("world: ")
         .unwrap_or_else(|| panic!("the child told no world: {}", child.stdout));
     PathBuf::from(told.lines().next().unwrap_or_default())
+}
+
+/// The process id of the Keeper a child's world started, which it printed as `keeper: <id>`.
+fn keeper_of(child: &Ended) -> u32 {
+    let (_, told) = child
+        .stdout
+        .split_once("keeper: ")
+        .unwrap_or_else(|| panic!("the child told no Keeper: {}", child.stdout));
+    told.lines()
+        .next()
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("the child's Keeper is no process id: {}", child.stdout))
 }
 
 const LEAVES_A_FILE: &str = "child_a_test_ends_with_a_file_of_the_app_left_in_its_worktree";
@@ -241,11 +272,8 @@ fn child_a_test_ends_with_a_file_of_the_app_left_in_its_worktree() {
     if std::env::var(CHILD).as_deref() != Ok(LEAVES_A_FILE) {
         return;
     }
-    let (world, app) = world_with_standins();
-    println!(
-        "world: {}",
-        app.path().parent().unwrap().parent().unwrap().display()
-    );
+    let (mut world, app) = world_with_keeper();
+    tell_where(&mut world, &app);
     app.write("yaar-note.txt", "left behind");
     drop(world);
     println!("the drop of the world returned");
@@ -258,11 +286,8 @@ fn child_a_test_that_fails_ends_with_a_file_of_the_app_left_too() {
     if std::env::var(CHILD).as_deref() != Ok(FAILS_WITH_A_FILE) {
         return;
     }
-    let (world, app) = world_with_standins();
-    println!(
-        "world: {}",
-        app.path().parent().unwrap().parent().unwrap().display()
-    );
+    let (mut world, app) = world_with_keeper();
+    tell_where(&mut world, &app);
     app.write("yaar-note.txt", "left behind");
     let _held = world;
     panic!("the test's own failure");
@@ -296,6 +321,10 @@ fn a_test_that_ends_with_a_file_of_the_app_left_fails_naming_it_and_its_world_is
         !world_of(&child).exists(),
         "the world's folder is removed before the panic"
     );
+    assert!(
+        !is_alive(keeper_of(&child)),
+        "the Keeper ends before the panic"
+    );
 }
 
 #[test]
@@ -318,4 +347,5 @@ fn a_test_that_is_failing_already_does_not_have_the_check_panic_a_second_time() 
         child.stderr
     );
     assert!(!world_of(&child).exists(), "the world's folder is removed");
+    assert!(!is_alive(keeper_of(&child)), "the Keeper is gone");
 }
