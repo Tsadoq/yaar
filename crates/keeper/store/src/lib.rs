@@ -272,6 +272,23 @@ const TABLES_6: &str = "
     PRAGMA user_version = 6;
 ";
 
+/// What version 7 adds: the settings of one repository, as the user's answer on the
+/// language servers that lie inside it, one row per repository and name, as
+/// `workspace_setting` holds those of a workspace.
+#[expect(
+    dead_code,
+    reason = "the seventh step, which the Store's package of slice 8 adds"
+)]
+const TABLES_7: &str = "
+    CREATE TABLE repository_setting (
+        repository TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (repository, name)
+    ) STRICT;
+    PRAGMA user_version = 7;
+";
+
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its
 /// worktree is first seen, and written into the git folder of that worktree.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]

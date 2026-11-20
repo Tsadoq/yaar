@@ -6,6 +6,8 @@
 // Each test program takes what it needs of this.
 #![allow(dead_code)]
 
+pub mod navigator;
+
 use std::collections::{HashMap, VecDeque};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;

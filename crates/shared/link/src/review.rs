@@ -104,11 +104,19 @@ pub struct Anchor {
     /// worktree or a commit of the repository, never the id of a git tree object. In a
     /// [`crate::Request::SaveDraft`] that starts a thread it is none for lines of the files
     /// on disk: the Keeper records the state of the worktree then and puts the thread on
-    /// it. In what the Keeper sends it is always some.
+    /// it. In what the Keeper sends it is some, but for a thread on a file outside the
+    /// worktree, whose path is absolute: that thread has no version.
     pub tree: Option<String>,
     /// The path of the file in that version, relative to the folder of the worktree. On
     /// the old side of a renamed file it is the old path, where the file lies in the
     /// version the lines are read in; on the new side it is the path now.
+    ///
+    /// An absolute path names a file outside the worktree, or one inside it that git
+    /// ignores, which the reviewer reached through go to definition or a reference: a
+    /// library's source, a dependency's types. Such a thread has no version (`tree` is
+    /// none, in a save and in what the Keeper sends), sits on the new side, and keeps its
+    /// path, lines and text: no state is recorded for it, it is never carried through a
+    /// diff, and the Window shows it on its lines while their text is still the text kept.
     pub path: PathBuf,
     /// The side of the diff the lines were on where the comment was written.
     pub side: Side,

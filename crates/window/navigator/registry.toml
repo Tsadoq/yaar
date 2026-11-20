@@ -1,0 +1,268 @@
+# The built-in table of language servers. The user's own file,
+# <the app's data folder>/language-servers.toml, has the same form, and a row there with
+# the name of a row here takes its place. The form is written down in src/registry.rs.
+#
+# A language is added by one row here, and by no change of code (NFR-002). The servers of a
+# row are tried in the order of FR-060: the one the user registered, the project's own, one
+# installed on the machine, one the app downloaded; within each kind in the order written
+# here. Only the native servers that need no Node are downloaded, each pinned to a version
+# and to the SHA-256 digest of the bytes the publisher serves, and fetched from the
+# publisher's own address only when the user accepts the offer.
+
+# TypeScript and JavaScript: TypeScript 7's own server, one native program, first; then the
+# servers that run on the machine's Node, found only, never downloaded (ADR-015 point 5).
+[typescript]
+title = "TypeScript and JavaScript"
+markers = ["tsconfig.json", "jsconfig.json", "package.json"]
+
+[typescript.extensions]
+ts = "typescript"
+tsx = "typescriptreact"
+mts = "typescript"
+cts = "typescript"
+js = "javascript"
+jsx = "javascriptreact"
+mjs = "javascript"
+cjs = "javascript"
+
+# The old code reads the types of the worktree's dependencies.
+[typescript.old_side]
+link = ["node_modules"]
+
+[[typescript.server]]
+name = "tsgo"
+# The platform package a project that depends on typescript 7 holds.
+project = ["node_modules/@typescript/typescript-{platform}/lib/tsc"]
+machine = ["tsgo"]
+trial = ["--version"]
+args = ["--lsp", "--stdio"]
+ready = { kind = "answer" }
+
+# Off: the automatic acquisition of types, by which the server runs npm and installs type
+# packages into the user's cache folder for a file outside every project. The server asks
+# for these three sections; each holds the switch.
+[typescript.server.settings."js/ts".tsserver.automaticTypeAcquisition]
+enabled = false
+
+[typescript.server.settings.typescript.tsserver.automaticTypeAcquisition]
+enabled = false
+
+[typescript.server.settings.javascript.tsserver.automaticTypeAcquisition]
+enabled = false
+
+[[typescript.server.download]]
+platform = "darwin-arm64"
+version = "7.0.2"
+url = "https://registry.npmjs.org/@typescript/typescript-darwin-arm64/-/typescript-darwin-arm64-7.0.2.tgz"
+sha256 = "902e2fe1cf0799198ef902c6b8c310a450fef629a6baba41d45641ef75c04ebd"
+archive = "tar.gz"
+strip = 1
+program = "lib/tsc"
+size = 9270373
+
+[[typescript.server.download]]
+platform = "darwin-x64"
+version = "7.0.2"
+url = "https://registry.npmjs.org/@typescript/typescript-darwin-x64/-/typescript-darwin-x64-7.0.2.tgz"
+sha256 = "eba158cb54050f723d5ff781438f33de5640054440bb4f2bd170cfe9bc2eb551"
+archive = "tar.gz"
+strip = 1
+program = "lib/tsc"
+size = 10057523
+
+[[typescript.server.download]]
+platform = "linux-x64"
+version = "7.0.2"
+url = "https://registry.npmjs.org/@typescript/typescript-linux-x64/-/typescript-linux-x64-7.0.2.tgz"
+sha256 = "7ecad6f67377e831856367ab062ef394f21506a611405bf8ac0ff039348637d3"
+archive = "tar.gz"
+strip = 1
+program = "lib/tsc"
+size = 9669334
+
+[[typescript.server.download]]
+platform = "linux-arm64"
+version = "7.0.2"
+url = "https://registry.npmjs.org/@typescript/typescript-linux-arm64/-/typescript-linux-arm64-7.0.2.tgz"
+sha256 = "c83d931ac9dd7549cde6e71246aa9d6a9812843023df3e277fe3b5dcf41dd0ea"
+archive = "tar.gz"
+strip = 1
+program = "lib/tsc"
+size = 8900516
+
+# Its answers are syntax-only, and wrong, until its progress report ends.
+[[typescript.server]]
+name = "typescript-language-server"
+project = ["node_modules/.bin/typescript-language-server"]
+machine = ["typescript-language-server"]
+trial = ["--version"]
+args = ["--stdio"]
+ready = { kind = "progress" }
+
+[[typescript.server]]
+name = "vtsls"
+project = ["node_modules/.bin/vtsls"]
+machine = ["vtsls"]
+trial = ["--version"]
+args = ["--stdio"]
+ready = { kind = "progress" }
+
+# Python: basedpyright and pyright on the machine's Node, ty and pyrefly native, in the
+# project's virtual environment first, then on the machine (ADR-015 point 5). Only ty is
+# downloaded.
+[python]
+title = "Python"
+markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
+
+[python.extensions]
+py = "python"
+pyi = "python"
+
+# The old code reads the packages of the worktree's virtual environment.
+[python.old_side]
+link = [".venv"]
+
+# basedpyright finds a project's .venv itself; it has no --version.
+[[python.server]]
+name = "basedpyright"
+project = [".venv/bin/basedpyright-langserver"]
+machine = ["basedpyright-langserver"]
+args = ["--stdio"]
+ready = { kind = "answer" }
+
+# pyright does not look for .venv: it is told the interpreter there.
+[[python.server]]
+name = "pyright"
+project = [".venv/bin/pyright-langserver"]
+machine = ["pyright-langserver"]
+args = ["--stdio"]
+ready = { kind = "answer" }
+
+[python.server.settings.python]
+pythonPath = "{root}/.venv/bin/python"
+
+[[python.server]]
+name = "ty"
+project = [".venv/bin/ty"]
+machine = ["ty"]
+trial = ["--version"]
+args = ["server"]
+ready = { kind = "answer" }
+
+[[python.server.download]]
+platform = "darwin-arm64"
+version = "0.0.100"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.100/ty-aarch64-apple-darwin.tar.gz"
+sha256 = "22f993f68444218eca1633caaacc3c2615aa5f43122386ae811807aa7695c70a"
+archive = "tar.gz"
+strip = 1
+program = "ty"
+size = 13360358
+
+[[python.server.download]]
+platform = "darwin-x64"
+version = "0.0.100"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.100/ty-x86_64-apple-darwin.tar.gz"
+sha256 = "3e5d51fcad483343e07b8b1eb82eca93a55b5a3ce2a15733d43991b2511b0d82"
+archive = "tar.gz"
+strip = 1
+program = "ty"
+size = 14375692
+
+[[python.server.download]]
+platform = "linux-x64"
+version = "0.0.100"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.100/ty-x86_64-unknown-linux-gnu.tar.gz"
+sha256 = "27267f4a8b89f235ab8e59e005d12475c231d662d7adf1b14f687e47b628b04f"
+archive = "tar.gz"
+strip = 1
+program = "ty"
+size = 16696929
+
+[[python.server.download]]
+platform = "linux-arm64"
+version = "0.0.100"
+url = "https://github.com/astral-sh/ty/releases/download/0.0.100/ty-aarch64-unknown-linux-gnu.tar.gz"
+sha256 = "c3e5c5ff6422d90a5f08481c9ccb7c2063676fcf9dc7fec96061881308bb2f89"
+archive = "tar.gz"
+strip = 1
+program = "ty"
+size = 13717029
+
+[[python.server]]
+name = "pyrefly"
+project = [".venv/bin/pyrefly"]
+machine = ["pyrefly"]
+trial = ["--version"]
+args = ["lsp"]
+ready = { kind = "answer" }
+
+# Rust: rust-analyzer. The toolchain's own, through rustup's program of that name on the
+# search path, which runs the project's toolchain, comes first; then any other on the
+# machine; then the one the app downloaded. It needs the machine's Rust toolchain, which no
+# row can supply.
+[rust]
+title = "Rust"
+markers = ["Cargo.toml"]
+
+[rust.extensions]
+rs = "rust"
+
+[[rust.server]]
+name = "rust-analyzer"
+machine = ["rust-analyzer"]
+trial = ["--version"]
+ready = { kind = "notification", method = "experimental/serverStatus", match = { quiescent = true } }
+
+# rust-analyzer tells its status only to a client that asks for it.
+[rust.server.capabilities.experimental]
+serverStatusNotification = true
+
+# No `cargo check` after each load, and every build output in a folder of the app's own,
+# never in the project's `target`.
+[rust.server.initialization_options]
+checkOnSave = false
+cargo = { targetDir = "{target}" }
+
+[rust.server.settings.rust-analyzer]
+checkOnSave = false
+cargo = { targetDir = "{target}" }
+
+[rust.server.environment]
+CARGO_TARGET_DIR = "{target}"
+
+[[rust.server.download]]
+platform = "darwin-arm64"
+version = "2026-11-09"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-aarch64-apple-darwin.gz"
+sha256 = "e43a65008f8f4291320f33c0545dd577ad7623a7407b584a27155833d3722dfb"
+archive = "gz"
+program = "rust-analyzer"
+size = 14335571
+
+[[rust.server.download]]
+platform = "darwin-x64"
+version = "2026-11-09"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-apple-darwin.gz"
+sha256 = "abf410a54e33e9f8b2d37f76dde8884db86a030d6a9cc70c0e3f87a77c084c5c"
+archive = "gz"
+program = "rust-analyzer"
+size = 15071019
+
+[[rust.server.download]]
+platform = "linux-x64"
+version = "2026-11-09"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-x86_64-unknown-linux-gnu.gz"
+sha256 = "8c039b25cb338b3970c731646677a4c9d4e9dd7a92c9ab9ae459c71467fbf4a9"
+archive = "gz"
+program = "rust-analyzer"
+size = 15661566
+
+[[rust.server.download]]
+platform = "linux-arm64"
+version = "2026-11-09"
+url = "https://github.com/rust-lang/rust-analyzer/releases/download/2026-11-09/rust-analyzer-aarch64-unknown-linux-gnu.gz"
+sha256 = "813ca3cec78ac6dab99c7bc9d51e63578f6d401b994ecf29cc0dcad86f9b2cd4"
+archive = "gz"
+program = "rust-analyzer"
+size = 15102920

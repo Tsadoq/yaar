@@ -9,6 +9,12 @@ publish.workspace = true
 [dependencies]
 serde_json.workspace = true
 toml.workspace = true
+# The app's own downloader and built-in table, for `cargo xtask language-servers`.
+yaar-navigator.workspace = true
+
+# Named until the package of slice 8 that first uses each takes its name out.
+[package.metadata.cargo-machete]
+ignored = ["yaar-navigator"]
 
 [lints]
 workspace = true

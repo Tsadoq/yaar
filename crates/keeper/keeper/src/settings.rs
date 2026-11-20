@@ -30,7 +30,10 @@ pub(crate) fn get(kept: &Kept) -> Result<Reply, Refusal> {
 /// setting of a workspace the Keeper does not know is refused with
 /// `Refusal::UnknownWorkspace`, and nothing is kept or told.
 pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
-    let Setting::FlowForm { workspace, form } = &setting;
+    let (workspace, form) = match &setting {
+        Setting::FlowForm { workspace, form } => (workspace, form),
+        Setting::ServersInRepository { .. } => return set_of_repository(kept, setting, facts),
+    };
     let store_workspace = yaar_store::WorkspaceId::new(workspace.as_str());
     let known = kept.store.workspaces().map_err(failed)?;
     if !known.iter().any(|known| known.id == store_workspace) {
@@ -48,6 +51,19 @@ pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Resul
     Ok(Reply::Done)
 }
 
+/// `Request::SetSetting` of a setting of a repository: keeps the user's answer on the
+/// language servers inside it in the Store, answers `Reply::Done` once it is there, and puts
+/// `Fact::SettingChanged` with it into `facts`. A repository the Keeper does not know is
+/// refused with `Refusal::Failed` naming it, and nothing is kept or told.
+fn set_of_repository(
+    kept: &Kept,
+    setting: Setting,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let _ = (kept, setting, facts);
+    todo!()
+}
+
 /// A setting of the Store in the Link's words; none for a kind the Link has no word for.
 fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
     match setting {
@@ -58,6 +74,7 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
                 yaar_store::FlowForm::LiveDiff => FlowForm::LiveDiff,
             },
         }),
+        yaar_store::Setting::ServersInRepository { .. } => todo!(),
         yaar_store::Setting::TurnEnd(_)
         | yaar_store::Setting::StopAfter { .. }
         | yaar_store::Setting::Theme(_)

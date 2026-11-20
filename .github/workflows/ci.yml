@@ -2,11 +2,13 @@
 #
 #   checks-linux    formatting, lints, tests, licences, dependencies planted to see them
 #                   refused, unused dependencies, layout rules, test plan; Node for the
-#                   one test of pi's extension
+#                   one test of pi's extension; the real language servers of the tests of
+#                   the Navigator
 #   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
 #   install-linux   the install script, piped as a user would, on five releases
 #   macos           lints, tests, layout rules, test plan, release build for both
-#                   processors, the app; Node for the one test of pi's extension
+#                   processors, the app; Node for the one test of pi's extension; the real
+#                   language servers of the tests of the Navigator
 #
 # Linux runs on x86-64 and on arm64. No job needs a display.
 name: ci
@@ -97,6 +99,21 @@ jobs:
 
       - name: Format
         run: cargo fmt --all --check
+
+      # The real language servers some tests of the Navigator run on small fixed projects,
+      # fetched once by the app's own downloader from the publishers' addresses, pinned by
+      # version and digest in the Navigator's built-in table, and kept between runs. A test
+      # that needs them fails, and never skips, where the folder is missing or incomplete.
+      - name: Restore the language servers of the tests
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/yaar-language-servers
+          key: language-servers-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('crates/window/navigator/registry.toml') }}
+
+      - name: The language servers of the tests
+        run: |
+          cargo xtask language-servers "$HOME/yaar-language-servers"
+          echo "YAAR_LANGUAGE_SERVERS=$HOME/yaar-language-servers" >> "$GITHUB_ENV"
 
       - name: Lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings
@@ -350,6 +367,18 @@ jobs:
 
       - name: Fetch crates
         run: cargo fetch --locked
+
+      # The real language servers some tests of the Navigator run, as in checks-linux.
+      - name: Restore the language servers of the tests
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/yaar-language-servers
+          key: language-servers-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('crates/window/navigator/registry.toml') }}
+
+      - name: The language servers of the tests
+        run: |
+          cargo xtask language-servers "$HOME/yaar-language-servers"
+          echo "YAAR_LANGUAGE_SERVERS=$HOME/yaar-language-servers" >> "$GITHUB_ENV"
 
       - name: Lints
         run: cargo clippy --locked --workspace --all-targets -- -D warnings

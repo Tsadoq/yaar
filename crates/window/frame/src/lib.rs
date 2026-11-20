@@ -15,8 +15,10 @@
 //!   with their worktrees and the workspace on screen, [`WorkspaceChanges`], the changes
 //!   of that workspace, [`AgentList`], the agent sessions of every workspace,
 //!   [`TerminalList`], the terminals the Keeper holds, [`SettingList`], the settings the
-//!   user set, and [`ConsentList`], the questions for leave of the Adapters that write
-//!   into a CLI's own settings only with the user's yes;
+//!   user set, [`ConsentList`], the questions for leave of the Adapters that write
+//!   into a CLI's own settings only with the user's yes, and [`Navigation`], the Window's
+//!   one way to the Navigator, the answers of code intelligence and the state of its
+//!   language servers;
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
@@ -40,6 +42,7 @@ mod controls;
 pub mod keeper;
 mod link_model;
 mod models;
+mod navigation;
 mod routes;
 mod settings;
 mod sidebar;
@@ -56,6 +59,7 @@ pub use controls::{
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
+pub use navigation::{Asking, NavError, Navigation};
 pub use routes::Routes;
 pub use settings::SettingList;
 pub use sidebar::{

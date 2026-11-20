@@ -17,6 +17,12 @@
 //! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark` |
 //! | [`Setting::TerminalPlace`] | `setting` | `terminal_place` | `right`, `below`, `left` |
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
+//! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
+//!
+//! A setting of one repository is one row of `repository_setting`, by the repository and
+//! its name; one of a repository the Store does not hold is refused, and a row of one it no
+//! longer holds is not listed. Settings of repositories come last in [`Store::settings`],
+//! after those of the workspaces, in the order the repositories were first kept.
 //!
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.
@@ -24,7 +30,7 @@
 use rusqlite::params;
 
 use crate::reviews::{exists, refused};
-use crate::{Store, StoreError, WorkspaceId};
+use crate::{RepositoryId, Store, StoreError, WorkspaceId};
 
 /// What the app selects in Changes when a turn ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,6 +94,14 @@ pub enum Setting {
         /// The form.
         form: FlowForm,
     },
+    /// The user's answer on the language servers that lie inside a repository: whether
+    /// they may run.
+    ServersInRepository {
+        /// The repository.
+        repository: RepositoryId,
+        /// True for yes.
+        allowed: bool,
+    },
 }
 
 /// The name and value a setting of the whole app is kept as, or the workspace, name and
@@ -136,6 +150,7 @@ impl Setting {
                     FlowForm::LiveDiff => "live_diff",
                 },
             ),
+            Self::ServersInRepository { .. } => todo!(),
         }
     }
 
@@ -186,6 +201,7 @@ impl Setting {
             Self::Theme(_) => 2,
             Self::TerminalPlace(_) => 3,
             Self::FlowForm { .. } => 4,
+            Self::ServersInRepository { .. } => 5,
         }
     }
 }

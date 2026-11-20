@@ -22,8 +22,8 @@ use yaar_link::{
     Thread, ThreadId, ThreadState,
 };
 use yaar_review_pane::{
-    FILES_ON_THEIR_WAY, Following, HISTORY_CONTEXT, Layout, PaneRow, Position, ReviewPane, Unshown,
-    View, controls,
+    FILES_ON_THEIR_WAY, Following, HISTORY_CONTEXT, Layout, PaneRow, Position, REFERENCES_CONTEXT,
+    ReviewPane, Unshown, View, controls,
 };
 
 use common::{
@@ -717,6 +717,13 @@ enum Effect {
     Resume,
 }
 
+/// The keys of code intelligence and of the line of the language server, which the review
+/// pane's packages of slice 8 build: each takes its keys out of this list and names their
+/// effect in [`effect_of`].
+const OF_SLICE_8: [&str; 10] = [
+    "l", "h", "shift-k", "g d", "g r", "escape", "shift-i", "shift-u", "shift-y", "shift-q",
+];
+
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.
 fn effect_of(keystroke: &str) -> Effect {
@@ -913,6 +920,9 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     for control in controls()
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
+        // The keys of the list of references work in the list, which this state has none of.
+        .filter(|control| control.place != Place::In(REFERENCES_CONTEXT))
+        .filter(|control| !OF_SLICE_8.contains(&control.keystroke))
     {
         // Back on the line the threads follow, where the keys that act on a thread find
         // them: the keys before this one moved the reviewer.

@@ -4,10 +4,14 @@
 //! cargo xtask layout           check the rules between the crates of the workspace
 //! cargo xtask coverage         check that every requirement has a test in the plan
 //! cargo xtask coverage list    the same, then each requirement with its tests
+//! cargo xtask language-servers <folder>
+//!                              fill <folder> with the real language servers the built-in
+//!                              table pins for this machine, for the tests that need them
 //! ```
 
 mod coverage;
 mod layout;
+mod servers;
 
 use std::fs;
 use std::path::{Component, Path};
@@ -19,8 +23,9 @@ fn main() -> ExitCode {
         ["layout"] => check_layout(),
         ["coverage"] => check_coverage(false),
         ["coverage", "list"] => check_coverage(true),
+        ["language-servers", folder] => servers::fill(Path::new(folder)),
         _ => {
-            eprintln!("usage: cargo xtask layout | coverage [list]");
+            eprintln!("usage: cargo xtask layout | coverage [list] | language-servers <folder>");
             ExitCode::from(2)
         }
     }

@@ -34,6 +34,7 @@
 
 mod consents;
 mod delivery;
+mod exports;
 mod reading;
 
 use std::collections::HashMap;

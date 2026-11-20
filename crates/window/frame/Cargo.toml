@@ -11,6 +11,9 @@ yaar-link.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
 async-channel.workspace = true
+# The vocabulary of code intelligence, which the Frame's model hands to the Navigator and
+# back; the Window program starts the Navigator itself.
+yaar-navigator.workspace = true
 
 [dev-dependencies]
 # GPUI's test platform, for tests only: the programs users get are built without it.

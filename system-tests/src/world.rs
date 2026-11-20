@@ -951,8 +951,43 @@ impl Drop for OutsideAgent {
     }
 }
 
+impl World {
+    /// Every line that a git command which lists the files of a worktree prints, for each
+    /// repository of this world and each worktree git lists for it, that names a file of the
+    /// app, with the worktree's folder: what STORE-04 holds to be empty (NFR-021).
+    ///
+    /// The commands are `git status --porcelain=v2 --ignored --untracked-files=all`,
+    /// `git ls-files --cached --others --exclude-standard` and `git ls-files --others
+    /// --ignored --exclude-standard`, each run as [`Repo::git`] runs git. A line names a file
+    /// of the app when a part of a path it holds is a name of [`APP_FILE_NAMES`] or starts
+    /// with one of [`APP_FILE_STARTS`], case aside, or is a review file the Claude Code
+    /// Adapter writes, `<32 hexadecimal digits>-<number>.md`.
+    ///
+    /// Called at the end of every test whose world has the stand-in on its search path
+    /// ([`World::agents_on_path`]), from the world's drop, before the Keeper is ended,
+    /// unless the test is already failing; and by STORE-04's own test.
+    pub fn app_files_listed(&self) -> Vec<(PathBuf, String)> {
+        todo!()
+    }
+}
+
+/// Names of a file or folder of the app: one such part in a path a git command lists is a
+/// file of the app in the worktree.
+pub const APP_FILE_NAMES: [&str; 5] = [
+    "ade-id",
+    ".mcp.json",
+    ".claude-plugin",
+    "yaar.ts",
+    "language-servers.toml",
+];
+
+/// Starts of names of a file or folder of the app.
+pub const APP_FILE_STARTS: [&str; 2] = ["yaar-", ".yaar"];
+
 impl Drop for World {
     fn drop(&mut self) {
+        // STORE-04: the package of slice 8 that builds `app_files_listed` calls it here,
+        // for a world with the stand-in, before the Keeper is ended.
         self.end_keeper();
         // A process the Keeper started, as the user's git of a commit whose Keeper was
         // killed, may still be finishing and writing into the folder: it is removed

@@ -35,7 +35,9 @@ use yaar_link::{Hello, handshake};
 pub use client::{Client, DEADLINE};
 pub use dialect::Dialect;
 pub use processes::{Descriptor, descendants_of, descriptors_of};
-pub use world::{OutsideAgent, Repo, Tap, World, without_agent_clis};
+pub use world::{
+    APP_FILE_NAMES, APP_FILE_STARTS, OutsideAgent, Repo, Tap, World, without_agent_clis,
+};
 
 /// The programs the Keeper finds beside itself: its companions, the hook program and the
 /// reply tool's server of Claude Code and the reporting program of pi, and the stand-in
@@ -51,9 +53,13 @@ const KEEPER_SET: [&str; 5] = [
 /// The Window, kept apart: it is large, and nothing looks for it beside the others.
 const WINDOW_SET: [&str; 1] = ["yaar-review"];
 
+/// The stand-in language server of the Navigator's package, which the tests of the composed
+/// Window give the Navigator through a registry row of their own.
+const LANGUAGE_SET: [&str; 1] = ["standin-lsp"];
+
 /// The path of a built program of the workspace, building the programs first: the Keeper,
 /// the Window, the hook program and the reply tool's server of the Claude Code companion,
-/// and the stand-in agent.
+/// the reporting program of pi, the stand-in agent, and the stand-in language server.
 ///
 /// They are built every time, once in each process that asks, and not only when one is
 /// missing: a run of the tests builds a program only for the tests of its own package,
@@ -73,7 +79,7 @@ const WINDOW_SET: [&str; 1] = ["yaar-review"];
 pub fn program(name: &str) -> PathBuf {
     static STAGED: Mutex<Vec<(&'static [&'static str], PathBuf)>> = Mutex::new(Vec::new());
     static BUILD: Once = Once::new();
-    let set: &'static [&'static str] = [&KEEPER_SET[..], &WINDOW_SET[..]]
+    let set: &'static [&'static str] = [&KEEPER_SET[..], &WINDOW_SET[..], &LANGUAGE_SET[..]]
         .into_iter()
         .find(|set| set.contains(&name))
         .unwrap_or_else(|| panic!("{name} is not a program the system tests build"));
@@ -117,8 +123,10 @@ fn build_programs(profile_dir: &Path) {
         "yaar-adapter-pi",
         "-p",
         "yaar-system-tests",
+        "-p",
+        "yaar-navigator",
     ]);
-    for name in KEEPER_SET.iter().chain(&WINDOW_SET) {
+    for name in KEEPER_SET.iter().chain(&WINDOW_SET).chain(&LANGUAGE_SET) {
         build.args(["--bin", name]);
     }
     if profile_dir.file_name().is_some_and(|p| p == "release") {
@@ -127,7 +135,7 @@ fn build_programs(profile_dir: &Path) {
     let output = build.stderr(Stdio::inherit()).output().expect("run cargo");
     assert!(output.status.success(), "building the programs failed");
     let reported = String::from_utf8_lossy(&output.stdout);
-    for name in KEEPER_SET.iter().chain(&WINDOW_SET) {
+    for name in KEEPER_SET.iter().chain(&WINDOW_SET).chain(&LANGUAGE_SET) {
         let artifact = format!(r#""name":"{name}","src_path""#);
         assert!(
             reported

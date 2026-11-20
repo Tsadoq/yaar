@@ -37,6 +37,7 @@
 //! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
 //! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
 //! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
+//! | `ExportVersion` | `Agents::export_version`, through `StateStore::export` | none |
 //!
 //! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
 //! question waits for an answer or its CLI's settings could not be changed: the question
@@ -246,6 +247,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // A few small files of the CLIs' settings, read or written once, which a user's
         // key waits for no longer than the drive takes.
         RequestKind::ListConsents | RequestKind::AnswerConsent => Answerer::Here,
+        // git's checkout of a whole tree, a second or more on a large repository: as a
+        // comparison of two versions.
+        RequestKind::ExportVersion => Answerer::Apart,
     }
 }
 
@@ -329,6 +333,8 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // carries: read between two answers and sent after the fact of the second, it
         // would be taken for the newer one.
         RequestKind::ListConsents | RequestKind::AnswerConsent => true,
+        // It leads to no fact, and no fact carries what it writes.
+        RequestKind::ExportVersion => false,
     }
 }
 
@@ -603,6 +609,14 @@ impl Parts {
                     Reply::Consents(consents)
                 })
             }
+            // The old side of a diff, for the Window's language server.
+            Request::ExportVersion {
+                workspace,
+                version,
+                into,
+            } => self
+                .agents
+                .export_version(kept, &workspace, &version, &into),
         };
         Answered::Now(Outcome { reply, facts, then })
     }

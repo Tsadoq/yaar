@@ -7,7 +7,9 @@
 //! - [`panes`], the one list of the panes of the Window. A pane is added by one line
 //!   there, and has its keys bound and its view built from that line;
 //! - [`init`], which prepares the app before a window opens;
-//! - [`open`], which opens the window with every pane, linked to the Keeper;
+//! - [`open`], which opens the window with every pane, linked to the Keeper, and starts the
+//!   Navigator with what this user's environment gives it; [`open_with`] does the same with
+//!   a Navigator's configuration of the caller's;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
 //!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
@@ -82,6 +84,27 @@ pub fn init(cx: &mut App) {
 /// The system brings an app it launches to the front. The Window does not push itself
 /// there: a window started in the background stays in the background.
 pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
+    open_with(socket, yaar_navigator::NavigatorConfig::for_this_user(), cx)
+}
+
+/// [`open`], with the Navigator started on `navigator`: the folders, the registry and the
+/// environment of its servers. A test of the composed Window hands one of its own, with the
+/// stand-in language server in its registry and its folders in the test's own.
+///
+/// The Navigator is started on a new port (`yaar_navigator::port`), its end handed to
+/// `yaar_navigator::Navigator::start` and the Frame's end to the Frame's model
+/// `Models::navigation` (`Navigation::connect`). The Navigator's handle is kept in a global
+/// of the app; when the app quits, the model's port is dropped and the Window waits up to
+/// `yaar_navigator::STOP_DEADLINE` and a second more for the Navigator to stop its servers,
+/// so that no server outlives the Window (ADR-015 point 10). A second window gets a
+/// Navigator of its own.
+pub fn open_with(
+    socket: PathBuf,
+    navigator: yaar_navigator::NavigatorConfig,
+    cx: &mut App,
+) -> Result<Opened> {
+    // The Window program's package starts the Navigator here.
+    let _ = navigator;
     let panes = panes().iter().map(|pane| (pane.build)()).collect();
     yaar_frame::open(socket, VERSION, panes, cx)
 }

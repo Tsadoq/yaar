@@ -97,6 +97,12 @@ impl Render for ReviewPane {
         // The bar names both views and is drawn in both; Flow, when it is on screen, takes
         // the place of everything of Changes below it.
         let bar = self.render_bar(window, cx);
+        // The line of the language server of the code on screen: under the bar, in every
+        // view, the file view included.
+        let servers = self.render_servers(cx);
+        let hover = self.render_hover(cx);
+        let references = self.render_references(cx);
+        let file_view = self.render_file_view(window, cx);
         let flow = (self.view == View::Flow).then(|| self.render_flow(window, cx));
         let theme = cx.theme();
         let pane = div()
@@ -162,9 +168,22 @@ impl Render for ReviewPane {
                 .on_action(cx.listener(Self::escape_commit))
                 .child(Input::new(&field.input))
         });
+        // A file reached through a definition or a reference takes the place of the rows
+        // and of Flow until the reviewer goes back.
+        if let Some(file_view) = file_view {
+            return pane.children(bar).children(servers).child(
+                body.child(self.with_keys(div().flex_1().min_h_0().child(file_view), cx))
+                    .children(hover)
+                    .children(references)
+                    .children(notice)
+                    .children(comment_box),
+            );
+        }
         if let Some(flow) = flow {
-            return pane.children(bar).child(
+            return pane.children(bar).children(servers).child(
                 body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                    .children(hover)
+                    .children(references)
                     .children(notice)
                     .children(comment_box)
                     .children(commit_field),
@@ -178,7 +197,7 @@ impl Render for ReviewPane {
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
-            return pane.children(bar).child(
+            return pane.children(bar).children(servers).child(
                 body.children(sessions)
                     .children(start)
                     .children(rounds)
@@ -216,7 +235,7 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(bar).child(
+        pane.children(bar).children(servers).child(
             body.children(sessions)
                 .children(start)
                 .children(rounds)
@@ -224,6 +243,8 @@ impl Render for ReviewPane {
                 .children(tree)
                 .children(refused)
                 .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+                .children(hover)
+                .children(references)
                 .children(notice)
                 .children(comment_box)
                 .children(commit_field),
@@ -269,6 +290,16 @@ impl ReviewPane {
             .on_action(cx.listener(Self::since_round))
             .on_action(cx.listener(Self::start_agent))
             .on_action(cx.listener(Self::next_offered_agent))
+            .on_action(cx.listener(Self::next_name))
+            .on_action(cx.listener(Self::previous_name))
+            .on_action(cx.listener(Self::hover_name))
+            .on_action(cx.listener(Self::go_to_definition))
+            .on_action(cx.listener(Self::find_references))
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::download_server))
+            .on_action(cx.listener(Self::update_server))
+            .on_action(cx.listener(Self::allow_servers))
+            .on_action(cx.listener(Self::refuse_servers))
     }
 
     /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches

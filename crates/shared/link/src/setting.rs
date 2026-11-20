@@ -10,10 +10,15 @@
 //! wire. A later kind is one more variant, with the next number, and changes none of
 //! these: the settings screen adds what a turn end selects, the time before the language
 //! servers of a workspace off screen stop, the theme and the place of the terminal pane.
+//!
+//! The user's answer to the question the review pane asks before a language server that
+//! lies inside a repository first runs is a setting of that repository,
+//! [`Setting::ServersInRepository`]: asked once for the repository, whichever of its
+//! worktrees is on screen, and kept across restarts.
 
 use crate::LinkError;
 use crate::wire::{In, Out};
-use crate::workspace::WorkspaceId;
+use crate::workspace::{RepositoryId, WorkspaceId};
 
 /// The two forms of Flow: the steps of the agent in order, or the diff of the running
 /// turn as it grows.
@@ -38,6 +43,15 @@ pub enum Setting {
         /// The form.
         form: FlowForm,
     },
+    /// Whether the language servers that lie inside a repository may run: the user's
+    /// answer to the question asked before the first of them runs. Not set while the
+    /// question waits for an answer.
+    ServersInRepository {
+        /// The repository.
+        repository: RepositoryId,
+        /// The user's answer: true for yes.
+        allowed: bool,
+    },
 }
 
 impl Setting {
@@ -51,6 +65,13 @@ impl Setting {
                     workspace: other, ..
                 },
             ) => workspace == other,
+            (
+                Setting::ServersInRepository { repository, .. },
+                Setting::ServersInRepository {
+                    repository: other, ..
+                },
+            ) => repository == other,
+            _ => false,
         }
     }
 }
@@ -77,6 +98,14 @@ pub(crate) fn write_setting(out: &mut Out, setting: &Setting) {
             out.text(workspace.as_str());
             write_form(out, *form);
         }
+        Setting::ServersInRepository {
+            repository,
+            allowed,
+        } => {
+            out.u8(1);
+            out.text(repository.as_str());
+            out.u8(u8::from(*allowed));
+        }
     }
 }
 
@@ -85,6 +114,14 @@ pub(crate) fn read_setting(input: &mut In<'_>) -> Result<Setting, LinkError> {
         0 => Setting::FlowForm {
             workspace: WorkspaceId::new(input.text()?),
             form: read_form(input)?,
+        },
+        1 => Setting::ServersInRepository {
+            repository: RepositoryId::new(input.text()?),
+            allowed: match input.u8()? {
+                0 => false,
+                1 => true,
+                _ => return Err(LinkError::Malformed("an answer is neither 0 nor 1")),
+            },
         },
         _ => return Err(LinkError::Malformed("an unknown kind of setting")),
     })

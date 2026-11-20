@@ -393,6 +393,12 @@ impl Reviews {
     /// every Window is told of, [`Saved::Made`], and it waits for the drive. A save that
     /// finds, once its state is recorded, that a save of the same comment made the thread
     /// meanwhile changes the text instead.
+    ///
+    /// A new thread whose anchor's path is absolute sits on a file outside the worktree, or
+    /// one git ignores, reached through go to definition or a reference (FR-075): it names
+    /// no tree, needs no worktree, records no state and keeps no commit; it is kept with the
+    /// empty version, which the Keeper gives the Window as none, and is never carried
+    /// through a diff (`following.rs`). Its lines and text are checked as any anchor's.
     pub fn save_draft(
         &self,
         worktree: Option<&Worktree>,

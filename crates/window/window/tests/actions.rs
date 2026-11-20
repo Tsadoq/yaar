@@ -110,8 +110,18 @@ fn controls_that_send(kind: RequestKind) -> Vec<Control> {
     yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends == Some(Sends::Request(kind)))
+        .filter(|control| !OF_SLICE_8.contains(&control.title))
         .collect()
 }
+
+/// The two answers to the question before a language server inside a repository runs,
+/// which send `SetSetting` once the review pane's package of slice 8 builds them; the Window
+/// program's package of slice 8 takes this filter away and walks them, with the question
+/// told by the Navigator of its composed Window.
+const OF_SLICE_8: [&str; 2] = [
+    "Run Language Servers of the Repository",
+    "Keep Language Servers of the Repository Out",
+];
 
 impl Composed {
     /// The workspace on screen, once the list holds it.
@@ -232,7 +242,8 @@ impl Composed {
             | RequestKind::GetAttachment
             | RequestKind::ListClis
             | RequestKind::CompareForReview
-            | RequestKind::ListConsents => {
+            | RequestKind::ListConsents
+            | RequestKind::ExportVersion => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
@@ -719,7 +730,8 @@ impl Composed {
                 | RequestKind::GetAttachment
                 | RequestKind::ListClis
                 | RequestKind::CompareForReview
-                | RequestKind::ListConsents => {
+                | RequestKind::ListConsents
+                | RequestKind::ExportVersion => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
@@ -1088,6 +1100,10 @@ fn walk_the_silent_keys(
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends.is_none())
+        // The keys of the list of references work in the list, which opens only through the
+        // Navigator: the Window program's package of slice 8 takes this filter away and has
+        // the walk open the list first.
+        .filter(|control| control.place != Place::In(yaar_review_pane::REFERENCES_CONTEXT))
         .collect();
     // Quit comes last: in the app nothing comes after it. The test platform does not
     // end the app, so the window is still there to close the step.
