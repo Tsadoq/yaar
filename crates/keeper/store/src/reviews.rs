@@ -937,6 +937,41 @@ impl Store {
         })
     }
 
+    /// Whether the credits of the recorded state `state` of `workspace` were kept with
+    /// [`Store::put_credits`], none among them: a state of a worktree with nothing
+    /// uncommitted is kept with no credit, and is told from a state nothing was kept with,
+    /// as one recorded at a send. Every call of `put_credits` keeps this mark in its own
+    /// transaction.
+    pub fn credits_were_kept(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+    ) -> Result<bool, StoreError> {
+        let _ = (workspace, state);
+        todo!("whether a state's credits were kept")
+    }
+
+    /// Keeps that round `round` of `review` was sent in the turn `turn` of its session, in
+    /// place of what was kept before. Refused for a review or a round the Store does not
+    /// hold. Returns when it is on the drive.
+    pub fn set_round_turn(
+        &self,
+        review: &ReviewId,
+        round: u32,
+        turn: &str,
+    ) -> Result<(), StoreError> {
+        let _ = (review, round, turn);
+        todo!("the turn a round was sent in")
+    }
+
+    /// The turn each round of `review` was sent in, as [`Store::set_round_turn`] kept it, by
+    /// the number of the round, ordered by it; a round with none is left out. Empty for a
+    /// review the Store does not hold.
+    pub fn round_turns(&self, review: &ReviewId) -> Result<Vec<(u32, String)>, StoreError> {
+        let _ = review;
+        todo!("the turns the rounds of a review were sent in")
+    }
+
     /// Flushes the drive now: every draft saved so far is then on it. The writer does
     /// this by itself after a pause in the typing, and when the last clone of the Store is
     /// dropped, as when the Keeper stops and lets its parts go.

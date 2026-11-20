@@ -649,6 +649,13 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
             RequestKind::GetAttachment => Request::GetAttachment {
                 review: yaar_link::ReviewId::new("1".repeat(32)),
             },
+            RequestKind::ListClis => Request::ListClis,
+            RequestKind::CompareForReview => Request::CompareForReview {
+                workspace: workspace.clone(),
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+                from: "a".repeat(40),
+                to: "b".repeat(40),
+            },
         };
         assert_eq!(
             window.ask(request),

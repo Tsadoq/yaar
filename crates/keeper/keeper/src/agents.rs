@@ -41,7 +41,6 @@ use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use yaar_adapter_claude::ClaudeCode;
 use yaar_agent::{
     Adapter, Asked, Asks, CliSession, Event, Phase, Report, Reported, ShellEntry, WriteTool,
 };
@@ -292,7 +291,7 @@ impl Agents {
         watching: Arc<Watching>,
         shared: Weak<Shared>,
     ) -> Agents {
-        let adapters: Vec<Box<dyn Adapter>> = vec![Box::new(ClaudeCode::new())];
+        let adapters: Vec<Box<dyn Adapter>> = crate::adapters();
         let companions = options.companions.clone().unwrap_or_else(|| {
             std::env::current_exe()
                 .ok()
@@ -369,6 +368,14 @@ impl Agents {
     /// What every shell of the app gets from the Adapters, in the Dock's words.
     pub(crate) fn entries(&self) -> Vec<yaar_dock::Entry> {
         self.core.entries.clone()
+    }
+
+    /// The variable `yaar_link::PATH_FIRST_VARIABLE` naming, parted by `:`, the folders
+    /// the Adapters' entries put first on the search path, for every shell of the app;
+    /// none when no entry puts one first. A hook of the contract of slice 7 that gives none,
+    /// for the package of the Keeper's sessions to fill.
+    pub(crate) fn path_first(&self) -> Option<yaar_dock::Entry> {
+        None
     }
 
     /// The runs of bytes every terminal is watched for: the marks of every Adapter, one
@@ -501,7 +508,8 @@ impl Agents {
             .ok_or_else(|| Refusal::Failed {
                 reason: format!("the app knows no agent CLI named {}", record.agent),
             })?;
-        Ok(adapter.resume(&CliSession(record.cli_session)))
+        let kept_at = self.core.kept_place(kept, &id);
+        Ok(adapter.resume(&CliSession(record.cli_session), kept_at.as_deref()))
     }
 
     /// The instruction on how to answer each thread of the CLI named `agent`, its
@@ -620,6 +628,15 @@ impl Drop for Agents {
 }
 
 impl Core {
+    /// Where the CLI of `session` keeps its record, as its reports last named it and the
+    /// Store kept it: what its Adapter's command for bringing it back is given. A hook of
+    /// the contract of slice 7 that names none, for the package of the Keeper's sessions
+    /// to fill with `Store::session_kept`.
+    pub(crate) fn kept_place(&self, kept: &Kept, session: &SessionId) -> Option<PathBuf> {
+        let _ = (kept, session);
+        None
+    }
+
     /// Works the queue, an item at a time, until told to stop or until there is nobody to
     /// give work.
     fn work_the(&self, work: &Receiver<Work>) {

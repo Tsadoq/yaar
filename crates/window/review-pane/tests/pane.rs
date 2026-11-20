@@ -910,9 +910,13 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // The keys of Flow and follow are walked here too. `shift-l` and `shift-g` act only
     // while Flow is on screen: with Changes on screen the key and the action change nothing
     // and send nothing, which the walk shows first, and then it shows Flow and their effect.
+    // The key of slice 7 is left out until the package that builds the offer's choice
+    // teaches the walk its effect, and takes this filter away.
+    const OF_SLICE_7: [&str; 1] = ["ctrl-n"];
     for control in controls()
         .into_iter()
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
+        .filter(|control| !OF_SLICE_7.contains(&control.keystroke))
     {
         // Back on the line the threads follow, where the keys that act on a thread find
         // them: the keys before this one moved the reviewer.

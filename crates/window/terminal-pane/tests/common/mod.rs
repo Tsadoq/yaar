@@ -121,6 +121,8 @@ struct Standing {
 #[derive(Default)]
 struct Inner {
     agents: Vec<WorkspaceAgents>,
+    /// What every `ListClis` is answered with: none until a test sets them.
+    clis: Vec<yaar_link::AgentCli>,
     terminals: Vec<TerminalInfo>,
     /// By workspace; a workspace with none set has a history with no entry.
     histories: HashMap<WorkspaceId, History>,
@@ -202,6 +204,9 @@ impl Standing {
                 let reply = Reply::Agents(inner.agents.clone());
                 inner.agents_held.offer(id, reply)
             }
+            // The Window asks once for each connection, at a moment the test does not
+            // choose: answered here, as the agents are.
+            Request::ListClis => Heard::Answer(Ok(Reply::Clis(inner.clis.clone()))),
             Request::ListTerminals => {
                 inner.asked.terminals += 1;
                 let reply = Reply::Terminals(inner.terminals.clone());
@@ -480,6 +485,12 @@ impl TestKeeper {
     /// Window nothing: a test that wants it to read them tells `Fact::AgentsChanged`.
     pub fn set_agents(&self, agents: Vec<WorkspaceAgents>) {
         self.standing.lock().agents = agents;
+    }
+
+    /// Sets the agent CLIs every `ListClis` is answered with from now on: the Window asks
+    /// when it connects, so a test sets them before.
+    pub fn set_clis(&self, clis: Vec<yaar_link::AgentCli>) {
+        self.standing.lock().clis = clis;
     }
 
     /// Sets the terminals every `ListTerminals` is answered with from now on.

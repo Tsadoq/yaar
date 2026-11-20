@@ -67,6 +67,7 @@ fn round(number: u32, state: Option<char>, edited: bool) -> Round {
         state: state.map(version),
         sent_by: SentBy::Delivered,
         edited,
+        turn: None,
     }
 }
 

@@ -73,6 +73,10 @@ fn documented() -> BTreeSet<String> {
             "cmd-alt-v",
             "cmd-alt-x",
             "cmd-alt-a",
+            // The launchers and the resume control of the terminal pane, of slice 7.
+            "cmd-shift-t",
+            "cmd-alt-t",
+            "cmd-shift-r",
         ]);
     } else {
         keys.extend(["ctrl-shift-c", "ctrl-shift-v"]);

@@ -8,7 +8,8 @@
 //! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
 //! until one is taken, the review shown changes, the workspace changes, what is attached
 //! goes, or the review's session runs. Taking one, by its control or by
-//! [`crate::StartAgent`] (the first CLI offered; with none offered the notice says so),
+//! [`crate::StartAgent`] (the chosen CLI, the first offered until
+//! [`crate::NextOfferedAgent`] chooses the next; with none offered the notice says so),
 //! asks the terminal pane, through the shared list of terminals
 //! (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to open that
 //! CLI's launcher for the review: no pane calls another.
@@ -31,7 +32,7 @@ use yaar_link::{
 
 use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
-use crate::{AttachReview, AttachThread, DetachReview, ReviewPane, StartAgent};
+use crate::{AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReviewPane, StartAgent};
 
 /// The CLIs one attach offered to start, and what they were offered for.
 struct Offer {
@@ -282,6 +283,24 @@ impl ReviewPane {
             link.ask(Request::DetachReview { review }, cx)
         });
         self.report(asked, cx);
+    }
+
+    /// The CLI of the offer that [`StartAgent`] starts: the first offered until
+    /// [`NextOfferedAgent`] chooses another, drawn with `review-offer-chosen-<agent>` over
+    /// its control; none while nothing is offered. A new offer chooses its first again.
+    pub fn offer_chosen(&self) -> Option<AgentCli> {
+        todo!("the CLI of the offer that Start Agent starts")
+    }
+
+    /// [`NextOfferedAgent`]: the next CLI of the offer is the chosen one, after the last the
+    /// first; with none offered the notice says so. A hook of the contract of slice 7 that
+    /// does nothing.
+    pub(crate) fn next_offered_agent(
+        &mut self,
+        _: &NextOfferedAgent,
+        _: &mut Window,
+        _: &mut Context<Self>,
+    ) {
     }
 
     /// [`StartAgent`]: the first CLI offered; with none offered the notice says so.

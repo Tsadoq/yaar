@@ -219,7 +219,9 @@ impl Adapter for ClaudeCode {
         self.memory.answer(asked, answer)
     }
 
-    fn resume(&self, session: &CliSession) -> String {
+    /// Claude Code brings a session back by its id alone: `kept` is not read.
+    fn resume(&self, session: &CliSession, kept: Option<&Path>) -> String {
+        let _ = kept;
         deliver::resume(session)
     }
 }

@@ -6,9 +6,10 @@
 //! their bytes both ways, and leaves when it is asked to or when nothing needs it any
 //! more: no Window is attached and no program runs.
 //!
-//! Surface: [`run`] with its [`Options`], and the [`Exit`] it returns. The program
-//! `yaar-keeper` is this function behind a command line. Everything else a Window can
-//! reach, it reaches over the Link.
+//! Surface: [`run`] with its [`Options`], and the [`Exit`] it returns; and [`adapters`],
+//! the Adapters of the agent CLIs the Keeper supports, the one place of the app that names
+//! them. The program `yaar-keeper` is this function behind a command line. Everything else
+//! a Window can reach, it reaches over the Link.
 //!
 //! A piece of the app inside an agent CLI connects to the same socket: it says hello,
 //! sends one request of the origin `yaar_link::Origin::Agent`, and is let go once that is
@@ -40,6 +41,16 @@ use yaar_link::{
 };
 
 use wiring::{Answered, Answerer, Outcome, Parts};
+
+/// The Adapters of every agent CLI the Keeper supports, in the order the app offers them:
+/// Claude Code, then pi. The one list of the app that names a CLI: adding one is a line
+/// here, beside its own integration module.
+pub fn adapters() -> Vec<Box<dyn yaar_agent::Adapter>> {
+    vec![
+        Box::new(yaar_adapter_claude::ClaudeCode::new()),
+        Box::new(yaar_adapter_pi::Pi::new()),
+    ]
+}
 
 /// How long a Window may take to say who it is.
 const HELLO_TIMEOUT: Duration = Duration::from_secs(5);

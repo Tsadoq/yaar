@@ -241,7 +241,7 @@ fn the_result_of_a_reply_says_whether_it_was_addressed_and_how_long_it_was() {
 #[test]
 fn the_resume_command_of_the_adapter_is_the_one_of_claude_code() {
     assert_eq!(
-        ClaudeCode::new().resume(&CliSession("abc-123".to_owned())),
+        ClaudeCode::new().resume(&CliSession("abc-123".to_owned()), None),
         "claude --resume 'abc-123'"
     );
 }

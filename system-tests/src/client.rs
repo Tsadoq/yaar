@@ -599,6 +599,34 @@ impl Client {
         }
     }
 
+    /// Asks what `review` shows of the change from `from` to the recorded state `to`, each
+    /// file with the sessions credited with it, as the review pane asks at a turn's end.
+    pub fn compare_for_review(
+        &mut self,
+        workspace: &WorkspaceId,
+        review: &ReviewId,
+        from: &str,
+        to: &str,
+    ) -> Result<Vec<CreditedFile>, Refusal> {
+        match self.request(Request::CompareForReview {
+            workspace: workspace.clone(),
+            review: review.clone(),
+            from: from.to_owned(),
+            to: to.to_owned(),
+        })? {
+            Reply::ComparedForReview(files) => Ok(files),
+            other => panic!("asked what a review shows of a change, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Asks for the agent CLIs the Keeper has an Adapter for, in its order.
+    pub fn clis(&mut self) -> Result<Vec<AgentCli>, Refusal> {
+        match self.request(Request::ListClis)? {
+            Reply::Clis(clis) => Ok(clis),
+            other => panic!("asked for the agent CLIs, the Keeper answered {other:?}"),
+        }
+    }
+
     /// Asks for one turn with its steps.
     pub fn turn(&mut self, turn: &TurnId) -> Result<Turn, Refusal> {
         match self.request(Request::GetTurn { turn: turn.clone() })? {

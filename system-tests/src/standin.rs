@@ -21,9 +21,42 @@
 //! killed and written down so. That command is the app's own hook
 //! program, which reports to the Keeper over its socket: the stand-in knows neither the
 //! Keeper, nor the Link, nor the socket. As `otheragent` it runs no hook at all: a CLI the
-//! app does not support, that only edits files. As `pi` it refuses to start in slice 4,
-//! saying the pi dialect comes in slice 7. With [`IGNORE_PIECES`] set it runs no hook
+//! app does not support, that only edits files. With [`IGNORE_PIECES`] set it runs no hook
 //! either, as a CLI started around the app's pieces.
+//!
+//! Started as `pi` it behaves as pi does with the app's extension loaded: the pi dialect,
+//! built by the stand-in's package of slice 7 (until then it refuses to start as `pi`). It
+//! is found as the next `pi` on the search path by the app's wrapper, which runs it with
+//! `-e` and the extension's path before the user's arguments: it writes its arguments down
+//! as they came, and runs as pi only when they hold `-e`, as a pi given no extension
+//! reports nothing. It cannot run the extension, which is TypeScript: it does what the
+//! extension does instead, and only that. For each moment of its script it runs the
+//! reporting program the wrapper names in `YAAR_PI_REPORT`, with no shell between, so that
+//! the program's parent is the stand-in, as it is pi for the extension; it writes the
+//! report's payload on the program's standard input, in the shape the crate doc of
+//! `yaar-adapter-pi` gives (the `event`, `sessionId`, `sessionFile`, `cwd` and the keys of
+//! the event), and waits for it to end, at most 10 s, and writes down
+//! `Did::Hook { event: <pi's event>, answer: <what the program printed> }`. With no
+//! `YAAR_PI_REPORT`, or with [`IGNORE_PIECES`], it reports nothing. Its session's id is one
+//! it makes, or the one `--session <id>` names, as `pi --session` resumes it; its session
+//! file is `<id>.jsonl` in the folder `--session-dir` names, else in
+//! `<HOME>/.pi/agent/sessions/standin`, written nowhere. The moments, by step:
+//! its start `session_start` (`reason` `startup`); [`Step::Turn`], at the line's Enter,
+//! `input` (`source` `interactive`, `streamingBehavior` null), the review of its answer kept
+//! as the last review received, then `agent_start`; [`Step::SelfTurn`] `input` with `source`
+//! `extension`, then `agent_start`; [`Step::Read`], [`Step::Edit`], [`Step::Write`] and
+//! [`Step::Shell`] `tool_call` and `tool_result` of `read`, `edit` (with `details.patch`, the
+//! one hunk of the line it added), `write` and `bash`, the file or the command really read,
+//! changed, written or run between; [`Step::End`] `agent_settled` with `aborted` false, and
+//! an Esc during a turn `agent_settled` with `aborted` true and nothing printed, the
+//! script going on after the next `end`; [`Step::Exit`] `session_shutdown` (`reason`
+//! `quit`); [`Step::Reply`] the call of the reply tool, `reply_to_thread` with `--tool`,
+//! written down as `Did::Tool` with what the program printed. A line typed during a
+//! [`Step::Hold`] inside a turn is a message pi queues: `input` with `streamingBehavior`
+//! `followUp` at its Enter, its review kept, and the message goes with the run that is
+//! open. [`Step::Ask`] is no step of pi's, which asks no permission: a script that holds
+//! one is refused at its line, as a script line it cannot read. It prints no progress
+//! sequence and no interrupt mark: pi reports both itself.
 //!
 //! Its script is a file, named by [`SCRIPT_VARIABLE`], of [`Step`]s, one to a line. It
 //! decides nothing: it follows the script and the keys. What reached it, every byte read

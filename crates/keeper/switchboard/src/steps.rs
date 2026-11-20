@@ -35,6 +35,7 @@ impl Desk {
             terminal: Some(format!("terminal-{cli}")),
             pid,
             folder: Some(PathBuf::from("/work/project")),
+            kept: None,
             event,
         };
         self.board.take(AGENT, reported, &mut || {

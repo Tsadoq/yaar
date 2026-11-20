@@ -11,7 +11,10 @@
 //! - [`State`], what a session is doing, and [`shown`], the one state a workspace with
 //!   several sessions shows;
 //! - [`Known`], a session as the Switchboard holds it; [`SessionId`] and [`TurnId`], the
-//!   app's names for a session and a turn.
+//!   app's names for a session and a turn;
+//! - [`Resumable`], the offer to resume a session the Keeper's stop cut off, with its
+//!   Adapter's command for it, made by a [`ResumeCommand`]:
+//!   [`Switchboard::remember_resumable`] and [`Switchboard::resumable`].
 //!
 //! The Switchboard decides nothing for the user and answers nothing a CLI asks: it
 //! listens. It keeps sessions in memory; the Keeper keeps what must outlive it in the
@@ -19,7 +22,7 @@
 //! by name: an Adapter's name is a text to it.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use yaar_agent::{CliSession, Event, Phase, Reported, TurnEnd};
 
@@ -91,6 +94,26 @@ pub struct Known {
     /// Its open turn, with the number of steps told in it so far; none between turns.
     pub turn: Option<(TurnId, u32)>,
 }
+
+/// The offer to resume one session that was running when the Keeper stopped: what the
+/// Window's control for it carries, and what that control runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Resumable {
+    /// The app's id of the session.
+    pub session: SessionId,
+    /// The name of the Adapter of its CLI.
+    pub agent: String,
+    /// The CLI's own name for it: what its command brings back.
+    pub cli: CliSession,
+    /// What a terminal runs in the user's shell to bring it back: its Adapter's command,
+    /// as the caller of [`Switchboard::resumable`] made it.
+    pub command: String,
+}
+
+/// What makes the command that brings a session back, as [`Switchboard::resumable`] is
+/// given it: from the name of its Adapter, its CLI's id and where its CLI keeps it, the
+/// Adapter's `yaar_agent::Adapter::resume`; none for an Adapter the caller does not have.
+pub type ResumeCommand = dyn Fn(&str, &CliSession, Option<&Path>) -> Option<String>;
 
 /// What changed, in the order it happened. The Keeper keeps it and tells the Windows.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +303,35 @@ impl Switchboard {
         if self.find(agent, &cli).is_none() {
             self.sessions.push(Entry::kept(session, agent, cli));
         }
+    }
+
+    /// A session the Keeper kept from an earlier run that was running when that Keeper
+    /// stopped, as the Store says: not running, as [`Switchboard::remember`] holds it, and
+    /// offered to resume ([`Switchboard::resumable`]) until a report of it is heard, which
+    /// starts it as its CLI resuming it. `kept` is where its CLI keeps its record, as its
+    /// reports last named it ([`yaar_agent::Reported::kept`]), which its command may need.
+    /// A session this Switchboard holds already is left as it is.
+    pub fn remember_resumable(
+        &mut self,
+        session: SessionId,
+        agent: &str,
+        cli: CliSession,
+        kept: Option<PathBuf>,
+    ) {
+        let _ = (session, agent, cli, kept);
+        todo!("a session cut off by the Keeper's stop, offered to resume")
+    }
+
+    /// The offers to resume: each session remembered with
+    /// [`Switchboard::remember_resumable`] that no report has been heard of since, in the
+    /// order they were remembered, with the command `command` gives for its Adapter's name,
+    /// its CLI's id and where its CLI keeps it. A session for whose Adapter `command` gives
+    /// none, as one of a CLI the Keeper has no Adapter for, is not offered. A session that
+    /// ran again and ended, by its CLI's word or as its process went, is not offered: only
+    /// a stop of the Keeper cuts a session off.
+    pub fn resumable(&self, command: &ResumeCommand) -> Vec<Resumable> {
+        let _ = command;
+        todo!("the offers to resume")
     }
 
     /// Takes one event of the Adapter named `agent`, and gives what it changed, in order.
@@ -510,6 +562,7 @@ mod tests {
             terminal: Some(format!("terminal-{cli}")),
             pid,
             folder: Some(PathBuf::from("/work/project")),
+            kept: None,
             event,
         }
     }

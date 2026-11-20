@@ -6,7 +6,7 @@
 //! calls of slice 1 do: a step is a few bytes, and an agent takes a few steps a second.
 
 use std::ops::RangeInclusive;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use rusqlite::{OptionalExtension, Row, params};
 
@@ -183,6 +183,25 @@ impl Store {
             )?;
             Ok(keeping.commit()?)
         })
+    }
+
+    /// Keeps where the CLI of `session` keeps its record, as its reports last named it
+    /// (`yaar_agent::Reported::kept`), in place of what was kept before; none takes it
+    /// away. Refused for a session the Store does not hold. Returns when it is on the drive.
+    pub fn set_session_kept(
+        &self,
+        session: &SessionId,
+        kept: Option<&Path>,
+    ) -> Result<(), StoreError> {
+        let _ = (session, kept);
+        todo!("where a session's CLI keeps its record")
+    }
+
+    /// Where the CLI of `session` keeps its record, as [`Store::set_session_kept`] last kept
+    /// it; none where nothing was kept, and for a session the Store does not hold.
+    pub fn session_kept(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
+        let _ = session;
+        todo!("where a session's CLI keeps its record, read back")
     }
 
     /// The session by its id.

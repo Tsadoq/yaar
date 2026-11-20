@@ -37,7 +37,9 @@
 //! state each turn's change counts from and the settings; version 5 adds what a review
 //! round of an agent needs: a round whose state is recorded after its send and whether
 //! its agent edited since, where each thread sits now, what is attached to the next
-//! message, and who is credited with each path of a recorded state. A database
+//! message, and who is credited with each path of a recorded state; version 6 adds where
+//! a session's CLI keeps its record, the turn a round was sent in, and which recorded
+//! states had their credits kept, none among them. A database
 //! of an older version is brought forward step by step when it is opened, and before the
 //! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
 //! step that goes wrong loses nothing. A database of a newer version is refused, and left
@@ -249,6 +251,26 @@ const TABLES_5: &str = "
         PRIMARY KEY (workspace, state, path, session)
     ) STRICT;
     PRAGMA user_version = 5;
+";
+
+/// What version 6 adds: where a session's CLI keeps its record, null where its reports
+/// named none, which pi's command for bringing it back needs; the turn of its review's
+/// session a round was sent in, null for a copy and for a round kept before; and a row for
+/// each recorded state whose credits were kept, so that a state kept with no credits, as
+/// that of a worktree with nothing uncommitted, is told from one nothing was kept with.
+/// Every state a version 5 database holds credits of was kept with them.
+#[expect(dead_code, reason = "version 6 is the Store package's of slice 7")]
+const TABLES_6: &str = "
+    ALTER TABLE session ADD COLUMN kept BLOB;
+    ALTER TABLE round ADD COLUMN turn TEXT;
+    CREATE TABLE state_kept (
+        workspace TEXT NOT NULL,
+        state TEXT NOT NULL,
+        PRIMARY KEY (workspace, state)
+    ) STRICT;
+    INSERT OR IGNORE INTO state_kept (workspace, state)
+        SELECT DISTINCT workspace, state FROM state_credit;
+    PRAGMA user_version = 6;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its

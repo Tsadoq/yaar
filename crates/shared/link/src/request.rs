@@ -163,6 +163,10 @@ request_kinds! {
     ResolveAddressed = 31, User;
     /// See [`Request::GetAttachment`].
     GetAttachment = 32, Window;
+    /// See [`Request::ListClis`].
+    ListClis = 33, Window;
+    /// See [`Request::CompareForReview`].
+    CompareForReview = 34, Window;
 }
 
 impl RequestKind {
@@ -522,6 +526,30 @@ pub enum Request {
         /// The review.
         review: ReviewId,
     },
+    /// Every agent CLI the Keeper has an Adapter for, in the order of its Adapters: what
+    /// the terminal pane offers a launcher of, next to the shell. Answered by
+    /// [`Reply::Clis`]. The list does not change while a Keeper runs: a Window asks once
+    /// for each connection.
+    ListClis,
+    /// What a review shows of the change between two versions of its workspace: the files
+    /// that differ from `from` to `to`, as [`Request::CompareVersions`] lists them, left out
+    /// those credited to sessions other than the review's own and to no session of no
+    /// agent; each with who is credited with it, so that a file two sessions changed is
+    /// marked. For the review of no agent, every file. Who is credited with a file is what
+    /// the Keeper kept with the states recorded after `from` up to `to`. Answered by
+    /// [`Reply::ComparedForReview`], ordered by path; refused with
+    /// [`Refusal::UnknownWorkspace`], [`Refusal::UnknownReview`] and
+    /// [`Refusal::UnknownRevision`], as [`Request::CompareVersions`] is.
+    CompareForReview {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The review whose files are asked for.
+        review: ReviewId,
+        /// The version the change is counted from.
+        from: String,
+        /// The recorded state the change leads to.
+        to: String,
+    },
 }
 
 impl Request {
@@ -560,6 +588,8 @@ impl Request {
             Self::ReopenThread { .. } => RequestKind::ReopenThread,
             Self::ResolveAddressed { .. } => RequestKind::ResolveAddressed,
             Self::GetAttachment { .. } => RequestKind::GetAttachment,
+            Self::ListClis => RequestKind::ListClis,
+            Self::CompareForReview { .. } => RequestKind::CompareForReview,
         }
     }
 }
@@ -644,6 +674,11 @@ pub enum Reply {
         /// The text.
         text: String,
     },
+    /// Every agent CLI the Keeper has an Adapter for, in the order of its Adapters.
+    Clis(Vec<AgentCli>),
+    /// The files a review shows of the change between two versions, ordered by path, each
+    /// with the sessions credited with it.
+    ComparedForReview(Vec<CreditedFile>),
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -988,6 +1023,18 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(review.as_str());
             out.text(thread.as_str());
         }
+        Request::ListClis => {}
+        Request::CompareForReview {
+            workspace,
+            review,
+            from,
+            to,
+        } => {
+            out.text(workspace.as_str());
+            out.text(review.as_str());
+            out.text(from);
+            out.text(to);
+        }
     }
 }
 
@@ -1114,6 +1161,13 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::GetAttachment => Request::GetAttachment {
             review: ReviewId::new(input.text()?),
         },
+        RequestKind::ListClis => Request::ListClis,
+        RequestKind::CompareForReview => Request::CompareForReview {
+            workspace: WorkspaceId::new(input.text()?),
+            review: ReviewId::new(input.text()?),
+            from: input.text()?,
+            to: input.text()?,
+        },
     };
     Ok((id, request))
 }
@@ -1205,6 +1259,14 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::Attachment { text } => {
                     out.u16(19);
                     out.text(text);
+                }
+                Reply::Clis(clis) => {
+                    out.u16(20);
+                    out.list(clis, write_agent_cli);
+                }
+                Reply::ComparedForReview(files) => {
+                    out.u16(21);
+                    out.list(files, write_credited);
                 }
             }
         }
@@ -1328,6 +1390,8 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             19 => Reply::Attachment {
                 text: input.text()?,
             },
+            20 => Reply::Clis(input.list(read_agent_cli)?),
+            21 => Reply::ComparedForReview(input.list(read_credited)?),
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {

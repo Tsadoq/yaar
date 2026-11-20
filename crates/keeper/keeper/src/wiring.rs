@@ -33,6 +33,8 @@
 //! | `AttachTerminal` | `Dock::attach` adds the Window to the terminal's route, then `Dock::resize` and `Dock::redraw` | none |
 //! | `GetSettings` | `settings::get`, from the Store | none |
 //! | `SetSetting` | `settings::set`, into the Store | `SettingChanged` with the setting |
+//! | `ListClis` | `Agents::supported`, the Adapters' names and titles | none |
+//! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -230,6 +232,11 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => Answerer::InOrder,
+        // The Adapters' names, which never change while the Keeper runs.
+        RequestKind::ListClis => Answerer::Here,
+        // git in the state store and the Store's credits of each state in the range: as a
+        // comparison of two versions.
+        RequestKind::CompareForReview => Answerer::Apart,
     }
 }
 
@@ -306,6 +313,9 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         | RequestKind::ReopenThread
         | RequestKind::ResolveAddressed
         | RequestKind::GetAttachment => false,
+        // No fact carries what they read: the CLIs never change, and a Window told of a
+        // turn's end or of a change of reviews asks again for what a review shows.
+        RequestKind::ListClis | RequestKind::CompareForReview => false,
     }
 }
 
@@ -555,6 +565,17 @@ impl Parts {
             Request::GetAttachment { review } => {
                 crate::reviewing::attachment(kept, &self.agents, &review)
             }
+            // The requests of slice 7: the CLIs to offer a launcher of, and what a review
+            // shows of a change with its credits.
+            Request::ListClis => Ok(Reply::Clis(self.agents.supported())),
+            Request::CompareForReview {
+                workspace,
+                review,
+                from,
+                to,
+            } => self
+                .agents
+                .compare_for_review(kept, &workspace, &review, &from, &to),
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -633,6 +654,9 @@ impl Parts {
             },
         ];
         entries.extend(self.agents.entries());
+        // The folders the entries put first, named again for a start-up file of the user's
+        // that sets the search path anew (`yaar_link::PATH_FIRST_VARIABLE`).
+        entries.extend(self.agents.path_first());
         let mut start = start.with(&entries);
         // Every terminal is watched for the marks of every agent CLI, for the same reason.
         start.marks = self.agents.marks();
@@ -1454,6 +1478,9 @@ fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
                     SentBy::Delivered => yaar_link::SentBy::Delivered,
                 },
                 edited: round.edited,
+                // The turn a round was sent in comes from the Store: filled by the package
+                // of slice 7 that keeps it (`Store::round_turns`).
+                turn: None,
             })
             .collect(),
     }

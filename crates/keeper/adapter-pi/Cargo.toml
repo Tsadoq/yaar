@@ -6,5 +6,28 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+# The program pi's extension runs for each report: pi's own piece of the app that speaks
+# the Link, kept in pi's integration module, since the folder of pi's companion holds no
+# crate.
+[[bin]]
+name = "yaar-pi-report"
+path = "src/bin/yaar-pi-report.rs"
+
+[dependencies]
+yaar-agent.workspace = true
+# The reporting program speaks the Link to the Keeper.
+yaar-link.workspace = true
+# Reads what pi's extension reports and writes what it is answered.
+serde_json.workspace = true
+
+[dev-dependencies]
+# The recorded events of pi, which the tests of the mapping replay.
+yaar-system-tests.workspace = true
+
+# Used by the packages of slice 7 that build the reporting program and the mapping: named
+# here until they do.
+[package.metadata.cargo-machete]
+ignored = ["yaar-link", "serde_json", "yaar-system-tests"]
+
 [lints]
 workspace = true

@@ -11,9 +11,12 @@
 //! - [`standin`], the stand-in agent CLI, `standin-agent`, and the script a test hands
 //!   it; [`World::agents_on_path`] puts it in a world's shells;
 //! - [`recorded`], the recorded events of the real agent CLIs, which the tests of the
-//!   Adapters, the Companion and the Workspaces replay, also from crates of their own.
+//!   Adapters, the Companion and the Workspaces replay, also from crates of their own;
+//! - [`Dialect`], the CLI a stand-in speaks as, by which one test of the driver `agent`
+//!   runs for Claude Code and for pi.
 
 mod client;
+mod dialect;
 mod processes;
 pub mod recorded;
 pub mod standin;
@@ -30,15 +33,18 @@ use std::time::{Duration, Instant, SystemTime};
 use yaar_link::{Hello, handshake};
 
 pub use client::{Client, DEADLINE};
+pub use dialect::Dialect;
 pub use processes::{Descriptor, descendants_of, descriptors_of};
 pub use world::{OutsideAgent, Repo, Tap, World, without_agent_clis};
 
 /// The programs the Keeper finds beside itself: its companions, the hook program and the
-/// reply tool's server of Claude Code, and the stand-in agent.
-const KEEPER_SET: [&str; 4] = [
+/// reply tool's server of Claude Code and the reporting program of pi, and the stand-in
+/// agent.
+const KEEPER_SET: [&str; 5] = [
     "yaar-keeper",
     "yaar-claude-hook",
     "yaar-claude-tools",
+    "yaar-pi-report",
     "standin-agent",
 ];
 
@@ -107,6 +113,8 @@ fn build_programs(profile_dir: &Path) {
         "yaar-window",
         "-p",
         "yaar-companion-claude",
+        "-p",
+        "yaar-adapter-pi",
         "-p",
         "yaar-system-tests",
     ]);

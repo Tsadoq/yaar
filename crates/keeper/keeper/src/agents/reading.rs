@@ -101,6 +101,24 @@ impl Agents {
             })
     }
 
+    /// `Request::CompareForReview`: what `review` shows of the change from `from` to the
+    /// recorded state `to` of `workspace`, as `Reviews::credited_change` lists it, each
+    /// path with its status as `Request::CompareVersions` gives it and the sessions credited
+    /// with it, in the order of the paths. Refused as `Request::CompareVersions` is, and with
+    /// `Refusal::UnknownReview` for a review the Keeper does not hold or of another
+    /// workspace.
+    pub(crate) fn compare_for_review(
+        &self,
+        kept: &Kept,
+        workspace: &WorkspaceId,
+        review: &yaar_link::ReviewId,
+        from: &str,
+        to: &str,
+    ) -> Result<Reply, Refusal> {
+        let _ = (kept, workspace, review, from, to);
+        todo!("what a review shows of a change, with its credits")
+    }
+
     /// `Request::ReadVersions`: each side at its own path, in a version of the state store
     /// or on disk.
     pub(crate) fn read_versions(

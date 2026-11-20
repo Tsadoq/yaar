@@ -10,21 +10,28 @@
 
 use gpui_kit::*;
 use yaar_link::{
-    Fact, Reply, Request, Session, SessionId, SessionState, TerminalId, TerminalInfo,
+    AgentCli, Fact, Reply, Request, Session, SessionId, SessionState, TerminalId, TerminalInfo,
     WorkspaceAgents, WorkspaceId,
 };
 
 use crate::link_model::{KeeperLink, LinkStatus};
 
-/// The agent sessions of every workspace in which one reported, as the Keeper told them.
+/// The agent sessions of every workspace in which one reported, as the Keeper told them,
+/// and the agent CLIs the Keeper has an Adapter for.
 ///
-/// When the link connects it asks `Request::ListAgents` and takes the answer; each
+/// When the link connects it asks `Request::ListClis`, once for each connection, since the
+/// Keeper's CLIs never change while it runs, and keeps the answer; a refusal leaves none.
+/// When the link connects it asks `Request::ListAgents` too and takes the answer; each
 /// `Fact::AgentsChanged` replaces the entry of its workspace, or adds it. Of two answers,
 /// only that to the last question counts, and a fact heard while a question is on its way
 /// has the question asked again, as [`crate::WorkspaceList`] does.
 pub struct AgentList {
     link: Entity<KeeperLink>,
     agents: Vec<WorkspaceAgents>,
+    /// The agent CLIs of the Keeper, in the order of its Adapters.
+    clis: Vec<AgentCli>,
+    /// The question for the CLIs, while it is on its way.
+    listing_clis: Option<Task<()>>,
     /// The last question for the list. A new one takes its place, which drops the answer
     /// to the old one.
     listing: Option<Task<()>>,
@@ -40,6 +47,7 @@ impl AgentList {
         cx.observe(&link, |list, link, cx| {
             if matches!(link.read(cx).status(), LinkStatus::Connected(_)) {
                 list.refresh(cx);
+                list.ask_clis(cx);
             }
         })
         .detach();
@@ -60,13 +68,41 @@ impl AgentList {
         let mut list = Self {
             link,
             agents: Vec::new(),
+            clis: Vec::new(),
+            listing_clis: None,
             listing: None,
             awaits_list: false,
         };
         if connected {
             list.refresh(cx);
+            list.ask_clis(cx);
         }
         list
+    }
+
+    /// Asks the Keeper for its agent CLIs, and keeps the answer.
+    fn ask_clis(&mut self, cx: &mut Context<Self>) {
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::ListClis, cx));
+        self.listing_clis = Some(cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            list.update(cx, |list, cx| {
+                if let Ok(Reply::Clis(clis)) = answer
+                    && clis != list.clis
+                {
+                    list.clis = clis;
+                    cx.notify();
+                }
+            })
+            .ok();
+        }));
+    }
+
+    /// The agent CLIs the Keeper has an Adapter for, in the order of its Adapters: what the
+    /// terminal pane offers a launcher of. Empty until the Keeper answers.
+    pub fn clis(&self) -> &[AgentCli] {
+        &self.clis
     }
 
     /// Asks the Keeper for every workspace's agents, and takes the answer unless a later

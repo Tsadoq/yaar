@@ -32,6 +32,7 @@ yaar-terminal-pane = { path = "crates/window/terminal-pane" }
 yaar-agent = { path = "crates/shared/agent" }
 yaar-switchboard = { path = "crates/keeper/switchboard" }
 yaar-adapter-claude = { path = "crates/keeper/adapter-claude" }
+yaar-adapter-pi = { path = "crates/keeper/adapter-pi" }
 yaar-system-tests = { path = "system-tests" }
 # GPUI through the fork's kit, at an exact version: raised by hand, with the patch script
 # of patches/ and the speed check on the reference Mac.

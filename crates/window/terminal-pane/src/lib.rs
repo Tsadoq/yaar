@@ -2,6 +2,9 @@
 //!
 //! Owns: the terminal emulator and its drawing, several terminals, launchers, the attachment shown at the agent's terminal.
 //!
+//! Next to the shell it offers a launcher for each agent CLI the Keeper names, and a
+//! control that resumes each session a restart cut off (`launchers.rs`).
+//!
 //! Surface:
 //! - [`entry`], the pane as the Window program registers it, with [`pane`], which builds
 //!   it for the Frame, and [`controls`], its actions with their keys;
@@ -24,6 +27,7 @@ mod attachment;
 mod draw;
 mod emulator;
 mod keys;
+mod launchers;
 mod modes;
 mod mouse;
 mod view;
@@ -83,6 +87,15 @@ actions!(
         /// terminal with the focus, while a review is attached to its next message and it
         /// shows no permission prompt; the user presses Enter.
         AddressEachComment,
+        /// Opens a new terminal for the workspace on screen that runs the launcher of the
+        /// chosen agent CLI, and gives it the focus.
+        NewAgentTerminal,
+        /// Makes the next agent CLI the Keeper names the chosen one, whose launcher
+        /// New Agent Terminal opens; after the last, the first.
+        NextAgentCli,
+        /// Opens a terminal that resumes the next session of the workspace on screen that
+        /// a restart cut off, with its CLI's own command.
+        ResumeAgent,
     ]
 );
 
@@ -132,7 +145,10 @@ pub fn pane() -> BuildPane {
 /// [`NewTerminal`] sends [`RequestKind::OpenTerminal`]. [`Copy`], [`Paste`],
 /// [`ScrollPageUp`] and [`ScrollPageDown`] are kept keys: they work inside a terminal
 /// only, on a key no program is given. Copy and paste are Cmd-C and Cmd-V on macOS and
-/// Ctrl-Shift-C and Ctrl-Shift-V elsewhere.
+/// Ctrl-Shift-C and Ctrl-Shift-V elsewhere. [`NewAgentTerminal`] (`secondary-shift-t`),
+/// [`NextAgentCli`] (`secondary-alt-t`) and [`ResumeAgent`] (`secondary-shift-r`) work
+/// anywhere; the first and the last send [`RequestKind::OpenTerminal`], of a launcher and
+/// of a session's resume.
 pub fn controls() -> Vec<Control> {
     let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
     let nothing = |title, action: fn() -> Box<dyn Action>, keystroke, place| Control {
@@ -222,6 +238,28 @@ pub fn controls() -> Vec<Control> {
             "secondary-alt-a",
             Place::Anywhere,
         ),
+        Control {
+            title: "New Agent Terminal",
+            action: || Box::new(NewAgentTerminal),
+            keystroke: "secondary-shift-t",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
+        nothing(
+            "Next Agent CLI",
+            || Box::new(NextAgentCli),
+            "secondary-alt-t",
+            Place::Anywhere,
+        ),
+        Control {
+            title: "Resume Agent",
+            action: || Box::new(ResumeAgent),
+            keystroke: "secondary-shift-r",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
     ]
 }
 
@@ -371,6 +409,8 @@ pub struct TerminalPane {
     /// What the pane shows of the reviews attached to its agents' next messages: its own
     /// state, chosen by the package that builds it (`attachment.rs`).
     attachments: attachment::Attachments,
+    /// The chosen launcher and the resumes opened: the state of `launchers.rs`.
+    launchers: launchers::Launchers,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -385,6 +425,9 @@ impl TerminalPane {
         models.routes.route(&pane, Self::view_attachment);
         models.routes.route(&pane, Self::detach_attachment);
         models.routes.route(&pane, Self::address_each_comment);
+        models.routes.route(&pane, Self::new_agent_terminal);
+        models.routes.route(&pane, Self::next_agent_cli);
+        models.routes.route(&pane, Self::resume_agent);
 
         let focus = cx.focus_handle();
         let handed_on = cx.on_focus(&focus, window, |pane, window, cx| {
@@ -432,6 +475,7 @@ impl TerminalPane {
             window_title: None,
             attaching: HashMap::new(),
             attachments: attachment::Attachments::default(),
+            launchers: launchers::Launchers::default(),
             _subscriptions: vec![
                 handed_on, keys, facts, workspaces, agents, terminals, wanted,
             ],
@@ -1087,5 +1131,8 @@ impl Render for TerminalPane {
             }))
             .children(empty)
             .child(div().flex_1().min_h_0().flex().flex_row().children(slots))
+            // The launchers and the resume controls lie over the top of the pane, taking
+            // no room from a terminal (`launchers.rs`).
+            .children(self.render_launchers(cx))
     }
 }

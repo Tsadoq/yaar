@@ -253,6 +253,12 @@ pub struct Round {
     /// tool, since the comments were sent: set on the newest round only, at the first such
     /// edit. Until then the review pane shows the round as sent.
     pub edited: bool,
+    /// The turn of the review's session the round was sent in: for a review delivered with
+    /// a message, the turn that message started or, for a message the CLI queued, the turn
+    /// that ran. None for a copy, and for a round of a Keeper of an earlier slice. While
+    /// that turn runs, the newest state of the history is older than the round's own, and
+    /// what changed since the round cannot be counted to it.
+    pub turn: Option<TurnId>,
 }
 
 /// What of a review goes with the user's next message to its agent.
@@ -475,6 +481,7 @@ fn write_round(out: &mut Out, round: &Round) {
         SentBy::Delivered => 1,
     });
     write_flag(out, round.edited);
+    out.optional(round.turn.as_ref(), |out, turn| out.text(turn.as_str()));
 }
 
 fn read_round(input: &mut In<'_>) -> Result<Round, LinkError> {
@@ -487,6 +494,7 @@ fn read_round(input: &mut In<'_>) -> Result<Round, LinkError> {
             _ => return Err(LinkError::Malformed("a round sent in an unknown way")),
         },
         edited: read_flag(input)?,
+        turn: input.optional(|input| input.text().map(TurnId::new))?,
     })
 }
 

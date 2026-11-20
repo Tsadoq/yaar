@@ -186,6 +186,7 @@ impl Core {
             .send_attached(&review, SentBy::Delivered, &mut *delivery)
         {
             Ok(Some((bytes, sent))) => {
+                self.round_sent_in(kept, &review, sent.round.number, &session);
                 told.reviews_changed(&session.workspace);
                 // The state of the worktree is recorded after, off the agent's way.
                 told.round_to_record(&session.workspace, &review, sent.round.number);
@@ -198,6 +199,21 @@ impl Core {
                 Reply::Done
             }
         }
+    }
+
+    /// Round `round` of `review` was just sent with a message of `session`: the turn of
+    /// that session that runs now, the one the message started or, for a message the CLI
+    /// queued, the one that ran, is kept as the round's (`Store::set_round_turn`), so that
+    /// the Window can tell whether that turn has ended. A hook of the contract of slice 7
+    /// that keeps nothing, for the package of the Keeper's reading and delivery to fill.
+    pub(crate) fn round_sent_in(
+        &self,
+        kept: &Kept,
+        review: &yaar_store::ReviewId,
+        round: u32,
+        session: &SessionRecord,
+    ) {
+        let _ = (kept, review, round, session);
     }
 
     /// The session `report` is of: the one the report's CLI names, except where that one

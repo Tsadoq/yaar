@@ -90,8 +90,9 @@ use wire::{In, Out};
 /// step. 7: attaching a review and what a piece of an agent CLI is answered with, the
 /// agent's replies, the states of a thread and where it sits now, rounds whose state is
 /// recorded after the send, the launcher of a CLI for a review and the resumption of a
-/// session.
-pub const PROTOCOL_VERSION: u16 = 7;
+/// session. 8: the agent CLIs the Keeper has an Adapter for, what a review shows of a
+/// change with who is credited with each file, and the turn a round was sent in.
+pub const PROTOCOL_VERSION: u16 = 8;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -108,6 +109,13 @@ pub const SOCKET_VARIABLE: &str = "YAAR_SOCKET";
 /// the app inside an agent CLI passes it on, so that the Keeper knows which terminal the
 /// CLI runs in.
 pub const TERMINAL_VARIABLE: &str = "YAAR_TERMINAL";
+
+/// The variable that names, in every shell of the app, the folders the app put first on
+/// its search path, parted by `:`, as `PATH` lists folders: where a CLI's wrapper lies.
+/// A login shell reads the start-up files of the system and of the user, and one of them
+/// may set the search path anew; a start-up file of the user's that puts this variable's
+/// folders first again keeps the app's pieces loaded in the CLI typed by its name.
+pub const PATH_FIRST_VARIABLE: &str = "YAAR_PATH";
 
 const MAGIC: [u8; 4] = *b"YAAR";
 const KIND_HELLO: u8 = 1;
@@ -1084,6 +1092,13 @@ mod tests {
             Request::GetAttachment {
                 review: review_id(),
             },
+            Request::ListClis,
+            Request::CompareForReview {
+                workspace: workspace.clone(),
+                review: review_id(),
+                from: COMMIT.to_owned(),
+                to: "e".repeat(40),
+            },
         ];
         // The launcher of a CLI started for a review, a session resumed, and the review
         // attached whole.
@@ -1319,6 +1334,34 @@ mod tests {
             Reply::Attachment {
                 text: "Answer each thread.\n\n## Thread 5555".to_owned(),
             },
+            Reply::Clis(vec![
+                AgentCli {
+                    agent: "claude".to_owned(),
+                    title: "Claude Code".to_owned(),
+                },
+                AgentCli {
+                    agent: "pi".to_owned(),
+                    title: "pi".to_owned(),
+                },
+            ]),
+            Reply::Clis(Vec::new()),
+            Reply::ComparedForReview(vec![
+                CreditedFile {
+                    file: ChangedFile {
+                        path: PathBuf::from("src/both.rs"),
+                        status: FileStatus::Modified,
+                    },
+                    by: vec![SessionId::new("a-session"), SessionId::new("b-session")],
+                },
+                CreditedFile {
+                    file: ChangedFile {
+                        path: PathBuf::from("by-hand.txt"),
+                        status: FileStatus::Added,
+                    },
+                    by: Vec::new(),
+                },
+            ]),
+            Reply::ComparedForReview(Vec::new()),
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1735,18 +1778,21 @@ mod tests {
                             state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Copied,
                             edited: false,
+                            turn: None,
                         },
                         Round {
                             number: 2,
                             state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Delivered,
                             edited: true,
+                            turn: Some(TurnId::new("d".repeat(32))),
                         },
                         Round {
                             number: 3,
                             state: None,
                             sent_by: SentBy::Delivered,
                             edited: false,
+                            turn: Some(TurnId::new("e".repeat(32))),
                         },
                     ],
                 },
@@ -1865,6 +1911,10 @@ mod tests {
             // What the control that views an attachment shows is read to be shown; the
             // control itself sends nothing a user starts.
             RequestKind::GetAttachment,
+            // The launchers offered are read to be drawn, and what a review shows of a
+            // change is read to be shown.
+            RequestKind::ListClis,
+            RequestKind::CompareForReview,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

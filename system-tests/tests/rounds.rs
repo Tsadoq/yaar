@@ -659,7 +659,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     let workspace = open(&mut client, &repo);
 
     // No agent ran here: the review is of no agent. Attaching a draft of it offers every
-    // supported CLI of this slice.
+    // supported CLI, Claude Code and pi.
     let reviews = client.reviews(&workspace).reviews;
     let [no_agent] = &reviews[..] else {
         panic!("not exactly one review: {reviews:?}");
@@ -681,7 +681,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
             .iter()
             .map(|cli| cli.agent.as_str())
             .collect::<Vec<_>>(),
-        ["claude"]
+        ["claude", "pi"]
     );
 
     // Accepting it starts the CLI in the workspace, and its session has the review.

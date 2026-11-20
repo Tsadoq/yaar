@@ -21,6 +21,7 @@ yaar-review-engine.workspace = true
 yaar-agent.workspace = true
 yaar-switchboard.workspace = true
 yaar-adapter-claude.workspace = true
+yaar-adapter-pi.workspace = true
 
 [dev-dependencies]
 # The hook program of Claude Code, built, and the recorded hooks it is run with in the
