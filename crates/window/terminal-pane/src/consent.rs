@@ -86,16 +86,21 @@ impl TerminalPane {
                 .rounded_sm()
                 .cursor_pointer()
                 .text_xs();
+            // The words get a selector built from the text drawn, so that a test reads
+            // which words a control shows and not only how wide they are.
+            let words = div()
+                .debug_selector(move || format!("{name}-label:{label}"))
+                .child(label);
             if primary {
                 button
                     .bg(theme.primary)
                     .text_color(theme.primary_foreground)
-                    .child(label)
+                    .child(words)
             } else {
                 button
                     .bg(theme.secondary)
                     .text_color(theme.secondary_foreground)
-                    .child(label)
+                    .child(words)
             }
         };
         Some(

@@ -227,6 +227,16 @@ fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_n
     // control is wider than its words is its padding, the same for both.
     assert_eq!(YES_LABEL, "Install");
     assert_eq!(NO_LABEL, "No");
+    // The pane names the words each control draws in a selector built from the very text
+    // it draws, so a control that draws other words than its constant's is not found.
+    assert!(
+        drawn(&format!("terminal-consent-yes-label:{YES_LABEL}"), &mut cx).is_some(),
+        "the control that answers yes does not draw {YES_LABEL:?}"
+    );
+    assert!(
+        drawn(&format!("terminal-consent-no-label:{NO_LABEL}"), &mut cx).is_some(),
+        "the control that answers no does not draw {NO_LABEL:?}"
+    );
     let padding_of_yes = yes - text_width(YES_LABEL, &mut cx);
     let padding_of_no = no - text_width(NO_LABEL, &mut cx);
     assert!(
