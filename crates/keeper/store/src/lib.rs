@@ -1409,13 +1409,16 @@ mod tests {
 
     /// Makes a database of version 6, as the build of slice 7 made them: the version 5
     /// database with the CLI's record of session `s-1`, the turn round 2 of review `v-1`
-    /// was sent in, and the states whose credits were kept.
+    /// was sent in, the states whose credits were kept and two files marked viewed, so
+    /// that every table of the file holds a row.
     fn version_six(file: &Path) -> Connection {
         let old = version_five(file);
         old.execute_batch(TABLES_6).expect("make the tables of 6");
         old.execute_batch(
             "UPDATE session SET cli_record = x'2f732f6f6e652e6a736f6e6c' WHERE id = 's-1';
-             UPDATE round SET turn = 't-2' WHERE number = 2;",
+             UPDATE round SET turn = 't-2' WHERE number = 2;
+             INSERT INTO viewed (workspace, path, content)
+                 VALUES ('w-1', x'612e7273', 'abc'), ('w-2', x'622e7273', 'def');",
         )
         .expect("fill what version 6 added");
         old
@@ -1549,10 +1552,11 @@ mod tests {
                 "step",
                 "thread",
                 "turn",
+                "viewed",
                 "workspace",
                 "workspace_setting"
             ],
-            "the tables version 6 holds rows of, `viewed` having none"
+            "the tables version 6 holds rows of"
         );
     }
 
