@@ -349,6 +349,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "is not an absolute path")]
+    fn a_path_that_is_not_absolute_has_no_address() {
+        file_uri(Path::new("src/main.rs"));
+    }
+
+    #[test]
     fn an_address_that_is_not_a_file_gives_no_path() {
         assert_eq!(path_of_uri("untitled:Untitled-1"), None);
         assert_eq!(path_of_uri("https://example.com/a.rs"), None);

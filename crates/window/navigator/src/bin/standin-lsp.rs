@@ -153,6 +153,9 @@ struct Server {
     options: Options,
     out: Mutex<io::Stdout>,
     log: Option<Mutex<File>>,
+    /// Set by the first thread to become ready, before it logs it.
+    becoming_ready: AtomicBool,
+    /// Set once the log says so: what answers reads this.
     ready: AtomicBool,
 }
 
@@ -202,10 +205,12 @@ impl Server {
     /// Becomes ready, once: logs it, answers from now on, shows it as the command line
     /// says, and dies if it was asked to.
     fn become_ready(&self) {
-        if self.ready.swap(true, Ordering::SeqCst) {
+        if self.becoming_ready.swap(true, Ordering::SeqCst) {
             return;
         }
+        // The line first: whoever is answered from now on finds it in the log.
         self.log(json!({"event": "ready"}));
+        self.ready.store(true, Ordering::SeqCst);
         match self.options.ready {
             Readiness::Answer => {}
             Readiness::Progress => self.notify(
@@ -542,6 +547,7 @@ fn main() {
         options,
         out: Mutex::new(io::stdout()),
         log,
+        becoming_ready: AtomicBool::new(false),
         ready: AtomicBool::new(false),
     });
 
