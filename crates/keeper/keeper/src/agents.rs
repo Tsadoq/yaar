@@ -1377,7 +1377,12 @@ impl Core {
                 .iter()
                 .find(|review| review.agent.as_deref() == Some(record.id.as_str()));
             let review = held.map(|review| ReviewId::new(review.id.as_str()));
-            if state == State::NotRunning && review.is_none() {
+            let offered = offers
+                .iter()
+                .any(|offer| offer.session.0 == record.id.as_str());
+            // A session still offered stays listed: the Window draws its resume control
+            // from the list, though another session has taken over its review.
+            if state == State::NotRunning && review.is_none() && !offered {
                 continue;
             }
             let title = self
@@ -1409,9 +1414,7 @@ impl Core {
                     .and_then(|review| review.attached.as_ref())
                     .map(attachment_of),
                 turn_from_user,
-                resumable: offers
-                    .iter()
-                    .any(|offer| offer.session.0 == record.id.as_str()),
+                resumable: offered,
             });
         }
         Ok(Some(WorkspaceAgents {

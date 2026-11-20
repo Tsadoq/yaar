@@ -1155,13 +1155,14 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     // The session reports: its CLI has it, and it is offered no more, though the terminal
     // of the resume still runs.
     scratch.pi_report(pi.0.id(), first.payload_bytes());
-    let running = window.agents_until(&workspace, "the session runs", |agents| {
+    // Picked by its id: the other session's report that served as a barrier also lists one
+    // that runs and is not offered.
+    window.agents_until(&workspace, "the session runs", |agents| {
         agents
             .sessions
             .iter()
-            .any(|s| s.state == SessionState::Idle && !s.resumable)
+            .any(|s| s.id == session && s.state == SessionState::Idle && !s.resumable)
     });
-    assert_eq!(running.sessions.len(), 1);
 
     // The resume's terminal ends, and with it the hold: only the report keeps the session
     // from being brought back now. The report of the other session is the barrier again.
@@ -1246,6 +1247,46 @@ fn the_end_of_another_terminal_does_not_free_a_session_a_resume_terminal_is_open
         panic!("no list of terminals");
     };
     assert_eq!(terminals.len(), 1, "only the resume's terminal runs");
+    window.stop(keeper);
+}
+
+#[test]
+fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_the_workspace() {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    let session = started.sessions[0].id.clone();
+    window.stop(keeper);
+
+    // After the restart another session of pi starts in the workspace and takes over the
+    // review the first held. The first is still offered, so the Window must still be told of
+    // it: its resume control is drawn from this list.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let another = a_cli_process();
+    scratch.pi_report(
+        another.0.id(),
+        records[129].in_project(&repo).payload_bytes(),
+    );
+    let both = window.agents_until(&workspace, "the new session", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.id != session && s.state == SessionState::Idle)
+    });
+    let offered = both
+        .sessions
+        .iter()
+        .find(|s| s.id == session)
+        .expect("the session still offered is listed");
+    assert_eq!(offered.state, SessionState::NotRunning);
+    assert!(offered.resumable);
     window.stop(keeper);
 }
 
