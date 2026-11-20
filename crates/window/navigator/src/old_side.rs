@@ -10,8 +10,9 @@
 //! The Keeper writes it and the Frame hands the answer back ([`exported`]). On success,
 //! for every row's `old_side.link`, each folder of that name the worktree holds, at any
 //! depth but inside `.git` and inside a folder already linked, is linked into the export
-//! at the same relative path, where the export holds the folder above it; then
-//! `answers::export_ready`. On failure, the folder is removed if it is there, the reason
+//! at the same relative path, where the export holds the folder above it (the walk goes
+//! down only folders the export holds too, so a build folder the version lacks costs
+//! nothing); then `answers::export_ready`. On failure, the folder is removed if it is there, the reason
 //! written to the standard error, and `answers::export_failed`; the next ask about that
 //! version asks again. Meanwhile every ask about the old side is answered by text match
 //! over the worktree, marked (`answers.rs`).
@@ -249,7 +250,9 @@ fn link_dependencies(core: &Core, workspace: &WorkspaceId, export: &Path) {
 }
 
 /// Walks the folder `relative` of `worktree`: a folder whose name is in `names` is linked into
-/// `export` at the same place, and not entered; any other real folder but `.git` is entered.
+/// `export` at the same place, and not entered; any other real folder but `.git` is entered
+/// only when the export holds a real folder at the same place, so that the walk never goes
+/// down a tree the version lacks (build output, caches), where no link could be made.
 /// `inside` is `export` with its links resolved.
 fn link_in(names: &BTreeSet<&str>, worktree: &Path, relative: &Path, export: &Path, inside: &Path) {
     let Ok(entries) = std::fs::read_dir(worktree.join(relative)) else {
@@ -264,7 +267,10 @@ fn link_in(names: &BTreeSet<&str>, worktree: &Path, relative: &Path, export: &Pa
             if std::fs::metadata(entry.path()).is_ok_and(|meta| meta.is_dir()) {
                 link(&worktree.join(&here), &export.join(&here), inside);
             }
-        } else if name != ".git" && entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+        } else if name != ".git"
+            && entry.file_type().is_ok_and(|kind| kind.is_dir())
+            && std::fs::symlink_metadata(export.join(&here)).is_ok_and(|meta| meta.is_dir())
+        {
             link_in(names, worktree, &here, export, inside);
         }
     }

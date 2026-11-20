@@ -22,8 +22,8 @@ use serde_json::Value;
 use support::*;
 use yaar_link::WorkspaceId;
 use yaar_navigator::{
-    Answered, Ask, AskId, Clock, ExportAsk, FileKind, Location, Place, STOP_AFTER, ServerState,
-    State, Told, Tree, WorkspaceRoot,
+    Answered, Ask, AskId, Clock, ExportAsk, FileKind, Location, NavigatorConfig, Place, STOP_AFTER,
+    ServerState, State, Told, Tree, WorkspaceRoot,
 };
 
 /// Every line of a stand-in's log, as the JSON it is; none when the log is not there.
@@ -463,6 +463,133 @@ fn a_workspace_whose_worktree_is_gone_loses_its_export() {
     running.end();
 }
 
+/// What ends the old side's server and drops its export in [`export_outlives_its_server`].
+enum Drops {
+    /// Another change is selected.
+    AnotherChange,
+    /// The workspace leaves the list.
+    WorkspaceLeaves,
+    /// The workspace's worktree is gone.
+    WorktreeGone,
+    /// The Navigator ends.
+    NavigatorEnds,
+}
+
+/// `text` in single quotes, for a `/bin/sh` script.
+fn sh_quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\\''"))
+}
+
+/// Uses the old side with a server that is a script of the test: it runs the stand-in as its
+/// child, and when the child has ended it writes a line `<its working folder> present` or
+/// `... gone` into a file, by whether that folder is still there, and ends as its child did.
+/// Then `drops` ends the old side. The export may be removed only after the server's process
+/// has ended, which only the server's own end can show: a surface of the Navigator does not
+/// tell the order of two things done before it answers.
+fn export_outlives_its_server(drops: Drops) {
+    let scratch = Scratch::new();
+    let repo = removed_line_repository(&scratch);
+    let second = commit_a_second(&repo);
+    let log = scratch.root.join("standin.log");
+    let ends = scratch.root.join("ends");
+    let wrapper = scratch.root.join("bin").join("standin-ends");
+    let script = format!(
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"--version\" ]; then exec {standin} \"$@\"; fi\n\
+         here=$(pwd -P)\n\
+         {standin} \"$@\"\n\
+         code=$?\n\
+         if [ -d \"$here\" ]; then echo \"$here present\" >> {ends}; else echo \"$here gone\" >> {ends}; fi\n\
+         exit $code\n",
+        standin = sh_quoted(&standin().display().to_string()),
+        ends = sh_quoted(&ends.display().to_string()),
+    );
+    std::fs::write(&wrapper, script).expect("write the script");
+    std::fs::set_permissions(
+        &wrapper,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .expect("make it executable");
+    let text = row(&log, "");
+    let wrapped = text.replace(
+        "machine = [\"standin-lsp\"]",
+        "machine = [\"standin-ends\"]",
+    );
+    assert_ne!(wrapped, text, "the row names the stand-in's own program");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&wrapped));
+    running.show(&repo, &ws, &repository);
+    running.ask(Ask::OldSide {
+        workspace: ws.clone(),
+        version: Some(repo.base.clone()),
+    });
+    let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+    let old_pid = old.pid.expect("the old side runs");
+    let export = std::fs::canonicalize(&asked.into).expect("the export is there");
+
+    match drops {
+        Drops::AnotherChange => {
+            running.ask(Ask::OldSide {
+                workspace: ws.clone(),
+                version: Some(second),
+            });
+            running.ask(Ask::OnScreen(Some(ws.clone())));
+            settled(&mut running);
+        }
+        Drops::WorkspaceLeaves => {
+            running.ask(Ask::Workspaces(vec![]));
+            running.ask(Ask::OnScreen(None));
+            settled(&mut running);
+        }
+        Drops::WorktreeGone => {
+            running.ask(Ask::Workspaces(vec![WorkspaceRoot {
+                id: ws.clone(),
+                repository,
+                folder: None,
+            }]));
+            settled(&mut running);
+        }
+        Drops::NavigatorEnds => {}
+    }
+    if !matches!(drops, Drops::NavigatorEnds) {
+        assert!(!is_alive(old_pid), "the old side's server still runs");
+    }
+    running.end();
+
+    assert!(!asked.into.exists(), "the export is still there");
+    let ends: Vec<String> = std::fs::read_to_string(&ends)
+        .expect("the server's script wrote when it ended")
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    let of_the_export = |state: &str| format!("{} {state}", export.display());
+    assert!(
+        ends.contains(&of_the_export("present")),
+        "the export was removed before the old side's server ended: {ends:#?}"
+    );
+    assert!(!ends.contains(&of_the_export("gone")), "{ends:#?}");
+}
+
+#[test]
+fn the_old_servers_folder_is_there_when_its_process_ends_after_another_change_is_selected() {
+    export_outlives_its_server(Drops::AnotherChange);
+}
+
+#[test]
+fn the_old_servers_folder_is_there_when_its_process_ends_with_its_workspace_leaving_the_list() {
+    export_outlives_its_server(Drops::WorkspaceLeaves);
+}
+
+#[test]
+fn the_old_servers_folder_is_there_when_its_process_ends_with_its_worktree_gone() {
+    export_outlives_its_server(Drops::WorktreeGone);
+}
+
+#[test]
+fn the_old_servers_folder_is_there_when_its_process_ends_with_the_navigator() {
+    export_outlives_its_server(Drops::NavigatorEnds);
+}
+
 // ---------------------------------------------------------------------------------------
 // NAV-11: the servers of the workspace on screen run; off screen for the set time they stop.
 // ---------------------------------------------------------------------------------------
@@ -507,8 +634,10 @@ fn server_in(
 #[test]
 fn the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_for_the_set_time_the_old_side_included()
  {
-    // "10 minutes with nothing set".
+    // "10 minutes with nothing set": the constant, and the configuration the Window hands the
+    // Navigator, which only computes its folders from the environment.
     assert_eq!(STOP_AFTER, Duration::from_secs(600));
+    assert_eq!(NavigatorConfig::for_this_user().stop_after, STOP_AFTER);
     let scratch = Scratch::new();
     let shown = removed_line_repository(&scratch);
     let other = scratch.repository("other", &[("readme.txt", "nothing\n")]);
@@ -847,6 +976,52 @@ fn an_export_links_the_folders_its_row_names_to_the_worktrees_and_removing_it_le
             "{file} of the worktree was removed with the export"
         );
     }
+    running.end();
+}
+
+#[test]
+fn a_folder_the_version_lacks_is_neither_linked_into_nor_made_for_a_link_however_deep_it_lies() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    // The base holds `a/b`, two folders deep.
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def alpha\nuse legacy\n"),
+            ("a/b/lib.sil", "def lib\n"),
+        ],
+    );
+    // The worktree holds a `deps` inside `a/b`, and an untracked tree, as a build leaves one,
+    // with a `deps` far down it.
+    for file in [
+        "a/b/deps/x.sil",
+        "target/debug/build/crate/deps/y.sil",
+        "a/c/cache/deps/z.sil",
+    ] {
+        let file = repo.root.join(file);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "def x\n").unwrap();
+    }
+    let log = scratch.root.join("standin.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_linking_deps(&log)));
+    running.show(&repo, &ws, &repository);
+    let (asked, _) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+
+    let export = &asked.into;
+    assert_eq!(
+        link_target(&export.join("a/b/deps")),
+        Some(repo.root.join("a/b/deps")),
+        "the folder two folders down in the version is not linked"
+    );
+    assert!(
+        std::fs::symlink_metadata(export.join("target")).is_err(),
+        "a folder the version does not hold was made for a link"
+    );
+    assert!(
+        std::fs::symlink_metadata(export.join("a/c")).is_err(),
+        "a folder of a folder the version holds, which it lacks itself, was made for a link"
+    );
     running.end();
 }
 
