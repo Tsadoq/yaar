@@ -580,6 +580,22 @@ fn write_user_row(scratch: &Scratch, command: &[String]) {
     .expect("write the user's file");
 }
 
+/// Waits until the stand-in's log holds a `notification` line for `method`: a repeated look
+/// at one fact that stays true once it is.
+fn wait_for_notification(log: &Path, method: &str) {
+    let until = Instant::now() + DEADLINE;
+    while !events(log, "notification")
+        .iter()
+        .any(|line| line["method"] == method)
+    {
+        assert!(
+            Instant::now() < until,
+            "the server was not sent `{method}` in {DEADLINE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
 #[test]
 fn a_registered_server_shows_as_starting_and_then_as_ready() {
     let scratch = Scratch::new();
@@ -606,8 +622,16 @@ fn a_registered_server_shows_as_starting_and_then_as_ready() {
     });
     assert!(starting.registered);
     assert_eq!(starting.server.as_deref(), Some("mine"));
-    // The server is not ready: it waits for a file the test has not made.
+    // The server is not ready: it waits for a file the test has not made. Its answer to
+    // initialize and the `initialized` that follows have been through the driver once the
+    // log holds that notification, so a Ready the row's rule would give, or one given at the
+    // answer alone, is already in the Navigator's channel; the list told for the barrier
+    // comes after it.
+    wait_for_notification(&log, "initialized");
     assert!(events(&log, "ready").is_empty());
+    let list = barrier(&mut running, &ws);
+    let still = standin_in(&list, &ws).unwrap();
+    assert_eq!((still.state, still.pid), (State::Starting, starting.pid));
 
     std::fs::write(&go, "").expect("make the file the server waits for");
     let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
@@ -801,9 +825,13 @@ fn a_candidate_whose_trial_run_does_not_end_in_time_is_killed_and_passed_over() 
     running.show(&repo, &ws, &repository);
 
     // The trial gets `yaar_navigator::TRIAL_DEADLINE` of real time.
-    let ready = running.wait_state(&ws, "standin", None, SERVER_DEADLINE, |state| {
-        state.state == State::Ready
-    });
+    let ready = running.wait_state(
+        &ws,
+        "standin",
+        None,
+        yaar_navigator::TRIAL_DEADLINE + DEADLINE,
+        |state| state.state == State::Ready,
+    );
     assert_eq!(ready.program, Some(good));
     let pid = noted_process(&noted);
     assert!(

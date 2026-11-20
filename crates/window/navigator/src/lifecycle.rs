@@ -408,8 +408,10 @@ pub(crate) fn consents(core: &mut Core, consents: Vec<RepositoryConsent>) {
 }
 
 /// What a server's reading thread told: ready, an answer (handed to
-/// `answers::server_answered`), or its exit (handed to `answers::server_gone`, then the
-/// next candidate is tried). An event of an earlier generation of the key is dropped.
+/// `answers::server_answered`), or its exit. Only the exit of a server that had been ready
+/// is handed to `answers::server_gone`, since only such a server was ever sent a request;
+/// after any exit of the server a key was running, the next candidate is tried. An event of
+/// an earlier generation of the key is dropped.
 pub(crate) fn server_event(core: &mut Core, key: ServerKey, generation: u64, event: ServerEvent) {
     let Some(keyed) = core.life.keys.get_mut(&key) else {
         return;
