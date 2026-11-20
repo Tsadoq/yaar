@@ -2277,10 +2277,17 @@ fn no_hook_run(name: &str, variable: Option<(&str, &str)>) {
 
 // The stand-in as pi.
 
-/// The shell level the stand-in as pi is started with: the reporting program is a script of
-/// bash, which adds one to it, and sees that one and no more when the stand-in runs it
-/// itself.
+/// The shell level the stand-in as pi is started with: the body of the reporting program is a
+/// script of bash, which adds one to it, and sees that one and no more when the stand-in
+/// runs the program itself.
 const SHLVL_OF_THE_STAND_IN: u32 = 40;
+
+/// The working folder the stand-in as pi is started with, in `PWD`, which names no folder.
+/// Every POSIX shell, bash and dash alike, sets `PWD` to the real folder when it starts and
+/// exports it, so a program that sees this value was run with no shell between. A shell
+/// that execs a lone command leaves the shell level and the parent as the stand-in's own
+/// and does not leave this.
+const PWD_OF_THE_STAND_IN: &str = "/no/folder/of/this/name";
 
 /// What a test as pi has: an extension file, the reporting program of the test's own, which
 /// records what it is given and prints an answer the test chose, and the files they live in.
@@ -2304,6 +2311,9 @@ struct Report {
     /// of its own, adds another, and a shell that execs the program leaves the parent as
     /// the stand-in all the same.
     level: u32,
+    /// Whether the `PWD` the program was started with was still `PWD_OF_THE_STAND_IN`: read
+    /// by an interpreter that is no shell, before any shell of the program could set it.
+    pwd_kept: bool,
     /// Whether it was run with `--tool`.
     tool: bool,
     /// Whether `s.txt` was in the folder it ran in when it ran.
@@ -2329,11 +2339,29 @@ impl PiKit {
         // and the program fails every report.
         let folder = root.join("report $x");
         fs::create_dir_all(&folder).expect("make the folder");
-        let (program, reports) = (folder.join("report.sh"), root.join("reports"));
+        let (program, body, reports) = (
+            folder.join("report"),
+            folder.join("body.sh"),
+            root.join("reports"),
+        );
+        // The program itself is a script of perl, which is no shell and leaves `PWD` as it
+        // was given: it writes the value down for the body and becomes it, as the same
+        // process, so that the parent the body sees is the parent of the program.
+        fs::write(
+            &program,
+            format!(
+                "#!/usr/bin/perl\n\
+                 $ENV{{YAAR_TEST_PWD_SEEN}} = $ENV{{PWD}} // '';\n\
+                 exec {{'/bin/bash'}} 'bash', '{body}', @ARGV or die \"no bash: $!\";\n",
+                body = body.display()
+            ),
+        )
+        .expect("write the program");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("make it run");
         // An answer for a steered message comes before one for any message, and each
         // answer is a file of the test's, there or not.
         fs::write(
-            &program,
+            &body,
             format!(
                 r#"#!/bin/bash
 tool=no
@@ -2341,7 +2369,9 @@ tool=no
 payload=$(cat)
 there=no
 [ -e s.txt ] && there=yes
-printf '%s %s %s %s %s\n' "$PPID" "$SHLVL" "$tool" "$there" "$payload" >> '{reports}'
+pwd_kept=no
+[ "$YAAR_TEST_PWD_SEEN" = '{sentinel}' ] && pwd_kept=yes
+printf '%s %s %s %s %s %s\n' "$PPID" "$SHLVL" "$pwd_kept" "$tool" "$there" "$payload" >> '{reports}'
 case "$payload" in
   *'"event":"input"'*)
     if [ -f '{root}/answer-steer' ] && case "$payload" in *'"streamingBehavior":"steer"'*) true ;; *) false ;; esac; then
@@ -2356,10 +2386,11 @@ exit 0
 "#,
                 reports = reports.display(),
                 root = root.display(),
+                sentinel = PWD_OF_THE_STAND_IN,
             ),
         )
-        .expect("write the program");
-        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("make it run");
+        .expect("write the body");
+        fs::set_permissions(&body, fs::Permissions::from_mode(0o755)).expect("make it run");
         PiKit {
             root,
             extension,
@@ -2418,6 +2449,7 @@ exit 0
             .env
             .push(("YAAR_PI_REPORT", self.program.display().to_string()));
         start.env.push(("SHLVL", SHLVL_OF_THE_STAND_IN.to_string()));
+        start.env.push(("PWD", PWD_OF_THE_STAND_IN.to_owned()));
         start
     }
 
@@ -2427,13 +2459,14 @@ exit 0
             .unwrap_or_default()
             .lines()
             .map(|line| {
-                let words: Vec<&str> = line.splitn(5, ' ').collect();
+                let words: Vec<&str> = line.splitn(6, ' ').collect();
                 Report {
                     parent: words[0].parse().expect("a process id"),
                     level: words[1].parse().expect("a shell level"),
-                    tool: words[2] == "yes",
-                    s_there: words[3] == "yes",
-                    payload: serde_json::from_str(words[4]).expect("a payload is JSON"),
+                    pwd_kept: words[2] == "yes",
+                    tool: words[3] == "yes",
+                    s_there: words[4] == "yes",
+                    payload: serde_json::from_str(words[5]).expect("a payload is JSON"),
                 }
             })
             .collect()
@@ -2574,6 +2607,7 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
         // `--tool`.
         assert_eq!(report.parent, log.pid);
         assert_eq!(report.level, SHLVL_OF_THE_STAND_IN + 1);
+        assert!(report.pwd_kept, "a shell set PWD before the program saw it");
         assert!(!report.tool);
     }
     let payload = |at: usize| &reports[at].payload;
@@ -3140,6 +3174,10 @@ fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_b
         );
         assert_eq!(reports[at].parent, run.log().pid);
         assert_eq!(reports[at].level, SHLVL_OF_THE_STAND_IN + 1);
+        assert!(
+            reports[at].pwd_kept,
+            "a shell set PWD before the program saw it"
+        );
     }
     let sent = |at: usize| reports[at].payload["arguments"].clone();
     assert_eq!(
