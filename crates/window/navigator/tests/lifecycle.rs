@@ -580,17 +580,14 @@ fn write_user_row(scratch: &Scratch, command: &[String]) {
     .expect("write the user's file");
 }
 
-/// Waits until the stand-in's log holds a `notification` line for `method`: a repeated look
-/// at one fact that stays true once it is.
-fn wait_for_notification(log: &Path, method: &str) {
+/// Waits until the stand-in's log holds the `configuration` line of its request: a repeated
+/// look at one fact that stays true once it is.
+fn wait_for_configuration(log: &Path) {
     let until = Instant::now() + DEADLINE;
-    while !events(log, "notification")
-        .iter()
-        .any(|line| line["method"] == method)
-    {
+    while events(log, "configuration").is_empty() {
         assert!(
             Instant::now() < until,
-            "the server was not sent `{method}` in {DEADLINE:?}"
+            "the server was not answered its configuration in {DEADLINE:?}"
         );
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -609,6 +606,8 @@ fn a_registered_server_shows_as_starting_and_then_as_ready() {
             "notification".to_owned(),
             "--ready-when".to_owned(),
             go.display().to_string(),
+            "--ask-configuration".to_owned(),
+            "standin".to_owned(),
             "--log".to_owned(),
             log.display().to_string(),
         ],
@@ -622,12 +621,13 @@ fn a_registered_server_shows_as_starting_and_then_as_ready() {
     });
     assert!(starting.registered);
     assert_eq!(starting.server.as_deref(), Some("mine"));
-    // The server is not ready: it waits for a file the test has not made. Its answer to
-    // initialize and the `initialized` that follows have been through the driver once the
-    // log holds that notification, so a Ready the row's rule would give, or one given at the
-    // answer alone, is already in the Navigator's channel; the list told for the barrier
-    // comes after it.
-    wait_for_notification(&log, "initialized");
+    // The server is not ready: it waits for a file the test has not made. The stand-in asks
+    // for its configuration after `initialized`, and the driver's reading thread answers that
+    // request only after it handled the answer to `initialize`, which includes telling the
+    // Navigator a Ready the row's rule would give, or one given at the answer alone. So once
+    // the log holds the configuration, that Ready is already in the Navigator's channel, and
+    // the list told for the barrier comes after it.
+    wait_for_configuration(&log);
     assert!(events(&log, "ready").is_empty());
     let list = barrier(&mut running, &ws);
     let still = standin_in(&list, &ws).unwrap();
