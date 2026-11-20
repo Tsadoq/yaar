@@ -63,7 +63,7 @@
 //! "The next candidate left": the head of the key's list is taken off it; one inside the
 //! repository is skipped as step 1 says; one whose server names `trial` is tried, any other
 //! started. An empty list is "none left". Any phase goes when the key is stopped
-//! ([`stop`]): its server stopped, the key forgotten.
+//! ([`stop`]): its server stopped, or its trial run killed, the key forgotten.
 //!
 //! # Stopping
 //!
@@ -78,11 +78,12 @@
 //! `<cache>/targets/<workspace>`, removed. [`close`] stops every server.
 //!
 //! Every stop here is done before the function that does it returns: [`stop`] calls
-//! `Server::stop` with [`crate::STOP_DEADLINE`], which returns once the process is reaped,
-//! and only then forgets the key and publishes. So [`look_at_the_clock`], [`workspaces`],
-//! [`close`], and `old_side.rs` through [`stop`], have every process they stop gone when
-//! they return, and a [`crate::Told::Servers`] told after them names no process that
-//! still runs. Nothing here waits for a server's answer or its readiness: those come as
+//! `Server::stop` with [`crate::STOP_DEADLINE`], which returns once the process is reaped
+//! (a trial run on its way is killed and reaped the same way, so that none outlives the key
+//! or the Navigator), and only then forgets the key and publishes. So
+//! [`look_at_the_clock`], [`workspaces`], [`close`], and `old_side.rs` through [`stop`], have
+//! every process they stop gone when they return, and a [`crate::Told::Servers`] told after
+//! them names no process that still runs. Nothing here waits for a server's answer or its readiness: those come as
 //! events.
 //!
 //! # What other modules call
@@ -94,7 +95,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use yaar_link::{RepositoryId, WorkspaceId};
@@ -155,8 +157,12 @@ struct Running {
 
 /// The phases of a key.
 enum Phase {
-    /// A trial run of the candidate is on its way.
-    Trying { candidate: Candidate },
+    /// A trial run of the candidate is on its way. Its process is shared with the thread
+    /// that waits for it, so that stopping the key can end it too.
+    Trying {
+        candidate: Candidate,
+        process: Arc<Mutex<Option<Child>>>,
+    },
     /// The server runs and its rule of readiness is not met.
     Starting { running: Running },
     /// The server runs and is ready.
@@ -461,7 +467,7 @@ pub(crate) fn trial_ended(
         return;
     };
     let current = keyed.generation == generation
-        && matches!(&keyed.phase, Phase::Trying { candidate: tried } if *tried == candidate);
+        && matches!(&keyed.phase, Phase::Trying { candidate: tried, .. } if *tried == candidate);
     if current {
         if passed {
             match start(core, &key, &keyed, candidate) {
@@ -594,14 +600,23 @@ fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     true
 }
 
-/// Stops the server of the key's phase, if one runs, and waits for its process to be
-/// reaped; the phase is none left after.
+/// Stops the server of the key's phase, or kills the trial run that is on its way, if
+/// there is one, and waits for its process to be reaped; the phase is none left after.
 fn end_server(keyed: &mut Keyed) {
     match std::mem::replace(&mut keyed.phase, Phase::NoneLeft) {
         Phase::Starting { running } | Phase::Ready { running } => {
             running.server.stop(STOP_DEADLINE);
         }
-        _ => {}
+        Phase::Trying { process, .. } => {
+            // Taken out first, so that the thread that waits for it finds it gone and the
+            // lock is not held while the process is reaped.
+            let taken = process
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .take();
+            kill_and_reap(taken);
+        }
+        Phase::NoneLeft | Phase::Downloading { .. } => {}
     }
 }
 
@@ -694,7 +709,7 @@ fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
             .map(|server| server.name.clone())
     };
     let (server, program, pid) = match &keyed.phase {
-        Phase::Trying { candidate } => (name(candidate), None, None),
+        Phase::Trying { candidate, .. } => (name(candidate), None, None),
         Phase::Starting { running } | Phase::Ready { running } => (
             name(&running.candidate),
             Some(running.candidate.program.clone()),
@@ -876,7 +891,8 @@ fn server_of<'a>(
     Ok((row, server))
 }
 
-/// Runs the trial of `candidate` on a thread of its own, which tells [`Event::Trial`].
+/// Starts the trial run of `candidate`, and a thread of its own that waits for it and tells
+/// [`Event::Trial`]. The process belongs to the phase too, so that stopping the key ends it.
 fn try_out(
     core: &Core,
     key: &ServerKey,
@@ -893,33 +909,43 @@ fn try_out(
         .map(|arg| expander.text(arg))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|reason| trial_fault(&candidate, &reason))?;
+    let child =
+        spawn_trial(&launch, &args).map_err(|error| trial_fault(&candidate, &error.to_string()))?;
+    let process = Arc::new(Mutex::new(Some(child)));
 
     let events = core.events.clone();
     let (key, generation, tried) = (key.clone(), keyed.generation, candidate.clone());
-    std::thread::Builder::new()
+    let waited_for = Arc::clone(&process);
+    let thread = std::thread::Builder::new()
         .name("navigator-trial".to_owned())
         .spawn(move || {
-            let passed = run_trial(&launch, &args);
+            let passed = wait_for_trial(&waited_for);
             let _ = events.send(Event::Trial {
                 key,
                 generation,
                 candidate: tried,
                 passed,
             });
-        })
-        .map_err(|error| format!("cannot start a thread for a trial run: {error}"))?;
-    Ok(Phase::Trying { candidate })
+        });
+    if let Err(error) = thread {
+        let taken = process
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        kill_and_reap(taken);
+        return Err(format!("cannot start a thread for a trial run: {error}"));
+    }
+    Ok(Phase::Trying { candidate, process })
 }
 
 fn trial_fault(candidate: &Candidate, reason: &str) -> String {
     format!("{} cannot be tried: {reason}", candidate.program.display())
 }
 
-/// Runs the program of `launch` once with `args`, in its environment and its folder, and
-/// says whether it ended with success within [`TRIAL_DEADLINE`]; a run that takes longer is
-/// killed.
-fn run_trial(launch: &Launch, args: &[String]) -> bool {
-    let child = Command::new(&launch.program)
+/// Starts the program of `launch` once with `args`, in its environment and its folder.
+fn spawn_trial(launch: &Launch, args: &[String]) -> std::io::Result<Child> {
+    let mut command = Command::new(&launch.program);
+    command
         .args(args)
         .current_dir(&launch.root)
         .env_clear()
@@ -931,30 +957,80 @@ fn run_trial(launch: &Launch, args: &[String]) -> bool {
         )
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn();
-    let Ok(mut child) = child else {
-        return false;
-    };
+        .stderr(Stdio::null());
+    end_with_the_window(&mut command);
+    command.spawn()
+}
+
+/// Asks the kernel to end the trial run with the thread that starts it, on Linux, as the
+/// driver does for a server. On macOS nothing ends a run whose Window crashed, and a trial is
+/// short.
+#[cfg(target_os = "linux")]
+fn end_with_the_window(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+
+    // SAFETY: `getpid` has no preconditions.
+    let parent = unsafe { libc::getpid() };
+    // SAFETY: between the fork and the exec the closure calls `prctl`, `getppid` and `_exit`
+    // only, which are safe there, and touches no memory of this process's.
+    unsafe {
+        command.pre_exec(move || {
+            // SAFETY: as above.
+            unsafe {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may have ended before the request took effect: its signal
+                // would never come.
+                if libc::getppid() != parent {
+                    libc::_exit(1);
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn end_with_the_window(_command: &mut Command) {}
+
+/// Kills the trial run, if there is one, and waits until it is reaped.
+fn kill_and_reap(child: Option<Child>) {
+    if let Some(mut child) = child {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
+/// Waits for the trial run in `process`, and says whether it ended with success within
+/// [`TRIAL_DEADLINE`]; a run that takes longer is killed. A run the key's stop took away is
+/// no success.
+fn wait_for_trial(process: &Mutex<Option<Child>>) -> bool {
     let until = Instant::now() + TRIAL_DEADLINE;
     // A repeated look at one fact that stays true once it is: the process ended. A trial is
-    // short, so the first looks come quickly.
+    // short, so the first looks come quickly. The lock is held for a look only.
     let mut pause = Duration::from_millis(1);
     loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return status.success(),
-            Ok(None) => {}
-            Err(_) => break,
-        }
-        if Instant::now() >= until {
-            break;
+        {
+            let mut held = process.lock().unwrap_or_else(PoisonError::into_inner);
+            let Some(child) = held.as_mut() else {
+                return false;
+            };
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    held.take();
+                    return status.success();
+                }
+                Ok(None) if Instant::now() < until => {}
+                _ => {
+                    kill_and_reap(held.take());
+                    return false;
+                }
+            }
         }
         std::thread::sleep(pause);
         pause = (pause * 2).min(Duration::from_millis(20));
     }
-    let _ = child.kill();
-    let _ = child.wait();
-    false
 }
 
 /// Starts the server of `candidate`: the phase is starting.

@@ -65,6 +65,17 @@ fn barrier(running: &mut Running, workspace: &WorkspaceId) -> Vec<ServerState> {
     }
 }
 
+/// Asserts that the state shows no candidate tried or started: no server named, no program,
+/// no process. The Navigator sets all three when it tries or starts a candidate, before the
+/// trial run has left any trace.
+fn assert_not_begun(state: &ServerState) {
+    assert_eq!(
+        (&state.server, &state.program, state.pid),
+        (&None, &None, None),
+        "a candidate was tried or started: {state:#?}"
+    );
+}
+
 /// The state of the stand-in's server of `workspace` in a list.
 fn standin_in(list: &[ServerState], workspace: &WorkspaceId) -> Option<ServerState> {
     list.iter()
@@ -156,14 +167,17 @@ fn a_server_inside_a_repository_does_not_run_before_the_user_said_yes() {
             program: program.clone()
         }
     );
+    assert_not_begun(&asking);
 
     // Everything the ask for the workspace made the Navigator do is done: the list this
-    // ask makes comes after it. The server was neither tried nor run.
+    // ask makes comes after it. The server was neither tried nor run. A trial run is on a
+    // thread of its own and may leave its line after this list, so the clause is read from
+    // what the Navigator says of the key in the list: a trial shows the server's name, a
+    // start its program and its process.
     let list = barrier(&mut running, &ws);
-    assert!(
-        matches!(standin_in(&list, &ws).unwrap().state, State::Asking { .. }),
-        "{list:#?}"
-    );
+    let still = standin_in(&list, &ws).unwrap();
+    assert!(matches!(still.state, State::Asking { .. }), "{list:#?}");
+    assert_not_begun(&still);
     assert_eq!(runs(&program), Vec::<String>::new());
     assert!(!log.exists(), "the server ran and wrote its log");
 
@@ -276,6 +290,80 @@ fn a_no_passes_the_server_over_for_good() {
         standin_in(&list, &ws).unwrap().state,
         State::Missing { offer: None }
     );
+    assert_eq!(runs(&program), Vec::<String>::new());
+    assert!(!log.exists());
+
+    // The no is kept for the repository: another worktree of it, shown later, passes the
+    // server over without a question. Its copy of the program is the same script, which
+    // records into the one file.
+    let second = scratch.root.join("repos").join("second");
+    repo.git(&[
+        "worktree",
+        "add",
+        "--quiet",
+        "-b",
+        "second",
+        second.to_str().unwrap(),
+    ]);
+    let (ws2, told_before) = (workspace_id('2'), running.told.len());
+    running.ask(Ask::Workspaces(vec![
+        root_of(&ws, &repository, &repo.root),
+        root_of(&ws2, &repository, &second),
+    ]));
+    running.ask(Ask::OnScreen(Some(ws2.clone())));
+    let missing = running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state == (State::Missing { offer: None })
+    });
+    assert_not_begun(&missing);
+    let list = barrier(&mut running, &ws2);
+    assert_eq!(
+        standin_in(&list, &ws2).unwrap().state,
+        State::Missing { offer: None }
+    );
+    for told in &running.told[told_before..] {
+        if let Told::Servers(list) = told {
+            assert!(
+                !list
+                    .iter()
+                    .any(|state| state.workspace == ws2
+                        && !matches!(state.state, State::Missing { .. })),
+                "the second worktree was asked about, or began a candidate: {list:#?}"
+            );
+        }
+    }
+    assert_eq!(runs(&program), Vec::<String>::new());
+    assert!(!log.exists());
+    running.end();
+}
+
+#[test]
+fn a_no_told_before_the_workspace_is_shown_passes_the_server_over_with_no_question() {
+    let scratch = Scratch::new();
+    let (repo, program) = repository_with_its_own_server(&scratch);
+    let log = scratch.root.join("run-g.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&project_row(&log)));
+    running.ask(Ask::Consents(vec![consent(&repository, false)]));
+    running.show(&repo, &ws, &repository);
+    let missing = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == (State::Missing { offer: None })
+    });
+    assert_not_begun(&missing);
+    let list = barrier(&mut running, &ws);
+    assert_eq!(
+        standin_in(&list, &ws).unwrap().state,
+        State::Missing { offer: None }
+    );
+    for told in &running.told {
+        if let Told::Servers(list) = told {
+            assert!(
+                !list
+                    .iter()
+                    .any(|state| !matches!(state.state, State::Missing { .. })),
+                "a question was shown, or a candidate begun: {list:#?}"
+            );
+        }
+    }
     assert_eq!(runs(&program), Vec::<String>::new());
     assert!(!log.exists());
     running.end();
@@ -417,6 +505,53 @@ fn a_no_ends_the_question_and_the_key_shows_the_server_it_runs() {
     assert_eq!(ready.pid, meanwhile.pid);
     assert_eq!(ready.program, Some(on_the_machine));
     assert_eq!(runs(&program), Vec::<String>::new());
+    running.end();
+}
+
+/// [`project_and_machine_row`] with no trial run: each candidate is started at once, so that
+/// the key a yes searches again is starting, not trying, when the old server's exit is
+/// handled.
+fn project_and_machine_row_without_a_trial(log: &Path) -> String {
+    row_with(&format!(
+        "project = [\"tools/standin-lsp\"]\n\
+         machine = [\"standin-lsp\"]\n\
+         args = [\"--log\", {}]\n\
+         ready = {{ kind = \"answer\" }}",
+        qp(log)
+    ))
+}
+
+#[test]
+fn the_exit_of_the_server_a_yes_replaced_is_not_taken_for_the_exit_of_the_one_that_follows() {
+    let scratch = Scratch::new();
+    let (repo, program) = repository_with_its_own_server(&scratch);
+    let on_the_machine = scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let log = scratch.root.join("run-h.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running =
+        Running::start(scratch.config(&project_and_machine_row_without_a_trial(&log)));
+    running.show(&repo, &ws, &repository);
+    let meanwhile = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        matches!(state.state, State::Asking { .. }) && state.pid.is_some()
+    });
+    assert_eq!(meanwhile.program, Some(on_the_machine));
+    let old = meanwhile.pid.unwrap();
+
+    // The yes stops the machine's copy and starts the project's at once. The machine's copy
+    // ends while the key is starting the other: that exit is of an earlier search, and
+    // taken for the exit of the one starting, the key would pass the project's copy over.
+    running.ask(Ask::Consents(vec![consent(&repository, true)]));
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(ready.program, Some(program));
+    assert_ne!(ready.pid, Some(old));
+    assert!(!is_alive(old), "the server that came after still runs");
+
+    // Nothing the replaced server left behind moves the key later.
+    let list = barrier(&mut running, &ws);
+    let still = standin_in(&list, &ws).unwrap();
+    assert_eq!((still.state, still.pid), (State::Ready, ready.pid));
     running.end();
 }
 
@@ -657,15 +792,7 @@ fn a_candidate_whose_trial_run_does_not_end_in_time_is_killed_and_passed_over() 
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let bin = scratch.root.join("bin");
     // Notes its process, then becomes `sleep`, which outlasts any deadline.
-    let hung = bin.join("standin-hung");
-    let noted = scratch.root.join("hung.pid");
-    std::fs::write(
-        &hung,
-        format!("#!/bin/sh\necho $$ > {}\nexec sleep 600\n", noted.display()),
-    )
-    .expect("write the script");
-    std::fs::set_permissions(&hung, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("make it executable");
+    let noted = put_hung(&bin, "standin-hung");
     let good = scratch.put_standin(&bin, "standin-lsp");
     let log = scratch.root.join("lsp02-hung.log");
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
@@ -678,15 +805,92 @@ fn a_candidate_whose_trial_run_does_not_end_in_time_is_killed_and_passed_over() 
         state.state == State::Ready
     });
     assert_eq!(ready.program, Some(good));
-    let pid: u32 = std::fs::read_to_string(&noted)
-        .expect("the script noted its process")
-        .trim()
-        .parse()
-        .expect("a process id");
+    let pid = noted_process(&noted);
     assert!(
         !is_alive(pid),
         "the trial run that took too long still runs"
     );
+    running.end();
+}
+
+/// Writes `<bin>/<name>`, a candidate whose trial run never ends: it notes its process id in
+/// a file, then becomes `sleep`, which outlasts any deadline. Gives that file.
+fn put_hung(bin: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(bin).expect("make the folder");
+    let hung = bin.join(name);
+    let noted = bin.join(format!("{name}.pid"));
+    std::fs::write(
+        &hung,
+        format!("#!/bin/sh\necho $$ > {}\nexec sleep 600\n", noted.display()),
+    )
+    .expect("write the script");
+    std::fs::set_permissions(&hung, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("make it executable");
+    noted
+}
+
+/// The process id a script of [`put_hung`] noted, waiting for it to be there: a repeated
+/// look at one fact that stays true once it is.
+fn noted_process(noted: &Path) -> u32 {
+    let until = Instant::now() + DEADLINE;
+    loop {
+        if let Some(pid) = std::fs::read_to_string(noted)
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < until,
+            "the script did not note its process in {DEADLINE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+}
+
+/// The row and the file of a scratch whose one candidate is a trial run that never ends.
+fn row_with_a_hung_trial(scratch: &Scratch) -> (String, PathBuf) {
+    let noted = put_hung(&scratch.root.join("bin"), "standin-hung");
+    let row = machine_row(&["standin-hung"], &scratch.root.join("hung.log"));
+    (row, noted)
+}
+
+#[test]
+fn a_trial_run_on_its_way_is_killed_when_the_navigator_ends() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let (row, noted) = row_with_a_hung_trial(&scratch);
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let running = Running::start(scratch.config(&row));
+    running.show(&repo, &ws, &repository);
+    let pid = noted_process(&noted);
+    assert!(is_alive(pid), "the trial run is on its way");
+    running.end();
+    assert!(!is_alive(pid), "the trial run outlived the Navigator");
+}
+
+#[test]
+fn a_trial_run_on_its_way_is_killed_when_its_workspace_leaves_the_list() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let (row, noted) = row_with_a_hung_trial(&scratch);
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row));
+    running.show(&repo, &ws, &repository);
+    // Every list told so far is read, up to the one that holds the key: the lists the empty
+    // workspaces told before it are not the one the wait below is for.
+    running.wait_state(&ws, "standin", None, DEADLINE, |_| true);
+    let pid = noted_process(&noted);
+    assert!(is_alive(pid), "the trial run is on its way");
+
+    running.ask(Ask::Workspaces(vec![]));
+    running.wait_told(
+        "the list with no server",
+        DEADLINE,
+        |told| matches!(told, Told::Servers(list) if list.is_empty()),
+    );
+    // The stop reaped it before the list was told.
+    assert!(!is_alive(pid), "the trial run outlived its key");
     running.end();
 }
 
