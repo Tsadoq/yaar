@@ -1102,7 +1102,15 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     let Ok(Reply::TerminalOpened { terminal }) = resume(&mut window) else {
         panic!("the resume was refused");
     };
-    scratch.launched_with();
+    // The session was reported once, by its start (line 1), and the Keeper was stopped: the
+    // record its resume carries is the one that start named, in the folder pi kept it in.
+    let kept_by_the_start = first.payload["sessionFile"]
+        .as_str()
+        .expect("the start names the session's file");
+    assert_eq!(
+        scratch.launched_with()[3],
+        pi_resume(kept_by_the_start, records[1].session())
+    );
 
     // While its terminal runs the session is not brought back a second time. It is still
     // offered, since nothing of it was reported. The list read after the refusal, on the
@@ -1118,9 +1126,11 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     assert_eq!(terminals.len(), 1, "{terminals:?}");
     assert!(window.agents()[0].sessions[0].resumable);
 
-    // The terminal ends with its program: the session may be brought back again. A look
-    // repeated until the Keeper has taken the end of the terminal, which it tells to the
-    // agents' side after the Windows.
+    // The terminal ends with its program: the session may be brought back again. The Keeper
+    // queued that end for the agents' side before it told the Windows, so a report of another
+    // session of pi, on the same queue and answered once it is worked out, is the barrier:
+    // what the end changes is changed when it is answered.
+    let another = a_cli_process();
     window.type_into(&terminal, b"\x04");
     window.until("the end of the resume's terminal", |fact| match fact {
         Fact::TerminalEnded {
@@ -1128,19 +1138,19 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
         } if *ended == terminal => Some(()),
         _ => None,
     });
+    scratch.pi_report(
+        another.0.id(),
+        records[129].in_project(&repo).payload_bytes(),
+    );
     scratch.forget_the_launch();
-    let deadline = Instant::now() + DEADLINE;
-    let second = loop {
-        match resume(&mut window) {
-            Ok(Reply::TerminalOpened { terminal }) => break terminal,
-            Err(Refusal::Failed { .. }) if Instant::now() < deadline => {
-                std::thread::sleep(Duration::from_millis(10));
-            }
-            other => panic!("the resume after its terminal ended: {other:?}"),
-        }
+    let Ok(Reply::TerminalOpened { terminal: second }) = resume(&mut window) else {
+        panic!("the resume after its terminal ended was refused");
     };
     assert_ne!(second, terminal);
-    scratch.launched_with();
+    assert_eq!(
+        scratch.launched_with()[3],
+        pi_resume(kept_by_the_start, records[1].session())
+    );
 
     // The session reports: its CLI has it, and it is offered no more, though the terminal
     // of the resume still runs.
@@ -1152,6 +1162,23 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
             .any(|s| s.state == SessionState::Idle && !s.resumable)
     });
     assert_eq!(running.sessions.len(), 1);
+
+    // The resume's terminal ends, and with it the hold: only the report keeps the session
+    // from being brought back now. The report of the other session is the barrier again.
+    window.type_into(&second, b"\x04");
+    window.until(
+        "the end of the second resume's terminal",
+        |fact| match fact {
+            Fact::TerminalEnded {
+                terminal: ended, ..
+            } if *ended == second => Some(()),
+            _ => None,
+        },
+    );
+    scratch.pi_report(
+        another.0.id(),
+        records[129].in_project(&repo).payload_bytes(),
+    );
     let refused = resume(&mut window);
     assert!(
         matches!(refused, Err(Refusal::Failed { .. })),
@@ -1160,7 +1187,7 @@ fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_an
     let Ok(Reply::Terminals(terminals)) = window.ask(Request::ListTerminals) else {
         panic!("no list of terminals");
     };
-    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert!(terminals.is_empty(), "{terminals:?}");
     window.stop(keeper);
 }
 

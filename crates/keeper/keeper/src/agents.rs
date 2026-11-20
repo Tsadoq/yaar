@@ -806,6 +806,8 @@ impl Core {
         });
         let given = std::mem::take(&mut *lock(&given));
         let adapters = lock(&self.adapters);
+        // Paired by position: the Switchboard calls the maker once for each offer it gives,
+        // in the order of its result, and gives no offer for a session the maker refused.
         for (offer, (cli, record)) in offers.iter_mut().zip(given) {
             if let Some(adapter) = adapters.iter().find(|a| a.name() == offer.agent) {
                 offer.command = adapter.resume(&cli, record.as_deref());
