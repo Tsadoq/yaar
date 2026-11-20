@@ -158,6 +158,44 @@ fn a_new_thread_on_a_file_outside_the_worktree_is_kept_with_no_state_and_no_vers
 }
 
 #[test]
+fn a_thread_on_a_file_outside_the_worktree_is_kept_on_the_new_side_whatever_the_save_gave() {
+    // A file outside the worktree has one side: there is no old version of it to be on.
+    let world = World::new();
+    write(&world.repo, "ignored.log", "one\ntwo\n");
+    for (n, path, line, code) in [
+        (1, world.outside(), 3, "fn 3"),
+        // The same for a file of the worktree that the Window names by its absolute path.
+        (2, world.repo.join("ignored.log"), 2, "two"),
+    ] {
+        world
+            .reviews
+            .save_draft(
+                None,
+                &world.review,
+                &save_on(n, None, &path, Side::Old, (line, line), code),
+            )
+            .expect("save the draft");
+
+        assert_eq!(
+            world.thread(n).anchor.side,
+            Side::New,
+            "the save of {} said Old",
+            path.display()
+        );
+    }
+    // A relative path keeps the side it was given: the rule is about the outside only.
+    world
+        .reviews
+        .save_draft(
+            Some(&world.worktree),
+            &world.review,
+            &save_on(3, None, Path::new("a.txt"), Side::Old, (1, 1), "line 1"),
+        )
+        .expect("save on the old side of a file of the worktree");
+    assert_eq!(world.thread(3).anchor.side, Side::Old);
+}
+
+#[test]
 fn a_new_thread_on_a_file_outside_the_worktree_needs_no_worktree() {
     let world = World::new();
 

@@ -958,7 +958,8 @@ impl World {
     ///
     /// The commands are `git status --porcelain=v2 --ignored --untracked-files=all`,
     /// `git ls-files --cached --others --exclude-standard` and `git ls-files --others
-    /// --ignored --exclude-standard`, each run as [`Repo::git`] runs git. A line names a file
+    /// --ignored --exclude-standard`, each run as [`Repo::git`] runs git, but taking no
+    /// optional lock, so that the check leaves the index as it was. A line names a file
     /// of the app when a part of a path it holds is a name of [`APP_FILE_NAMES`] or starts
     /// with one of [`APP_FILE_STARTS`], case aside, or is a review file the Claude Code
     /// Adapter writes, `<32 hexadecimal digits>-<number>.md`.

@@ -2302,6 +2302,45 @@ fn the_keepers_export_refuses_a_folder_that_exists_and_leaves_it_as_it_was() {
 }
 
 #[test]
+fn the_keepers_export_refuses_a_version_that_is_not_a_full_commit_id() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);
+    let full = repo.git(&["rev-parse", "HEAD"]);
+    assert_eq!(full.len(), 40, "the control: a full id is 40 characters");
+    // Each of these names the commit for git, and none is what the Keeper is asked with.
+    let not_full = [
+        ("an abbreviated id", full[..12].to_owned()),
+        ("a name of the commit", "HEAD".to_owned()),
+        ("an id and one digit more", format!("{full}0")),
+        (
+            "an id of 40 characters that are not all digits",
+            format!("{}g", &full[..39]),
+        ),
+        ("nothing", String::new()),
+    ];
+    for (what, version) in not_full {
+        let into = scratch
+            .root
+            .join("navigator")
+            .join("old")
+            .join(format!("{}", version.len()));
+
+        let reason = exported(&repo, &version, &into)
+            .unwrap_or_else(|| panic!("{what} ({version:?}) was exported"));
+
+        assert!(
+            reason.contains("40"),
+            "the reason of {what} says what a version is: {reason}"
+        );
+        assert!(!into.exists(), "{what}: nothing was written");
+    }
+    // The control: the full id is exported into a folder of its own, by the same helper.
+    let into = scratch.root.join("navigator").join("old").join("full");
+    assert_eq!(exported(&repo, &full, &into), None);
+    assert!(into.join("main.sil").is_file());
+}
+
+#[test]
 fn the_keepers_export_whose_write_fails_leaves_no_folder_behind() {
     let scratch = Scratch::new();
     let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);

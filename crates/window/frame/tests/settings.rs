@@ -391,3 +391,89 @@ fn of_two_answers_for_the_settings_only_the_one_to_the_last_question_counts_and_
     // Ended, so that the Window's thread is not left on a socket nobody reads.
     keeper.shutdown(Shutdown::Both).ok();
 }
+
+#[gpui_kit::test]
+fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_set_changed(
+    cx: &mut TestAppContext,
+) {
+    let link = cx.new(|_| KeeperLink::new());
+    let list: Entity<SettingList> = cx.new(|cx| SettingList::new(link.clone(), cx));
+    let mut keeper = KeeperEnd::attach_deaf(&link, cx);
+    let (first, request) = next_request(&mut keeper, cx);
+    assert_eq!(request, Request::GetSettings);
+
+    // The user chooses a form while the answer is on its way: the list shows it at once
+    // and the Keeper is asked to keep it.
+    let chosen = form('1', FlowForm::LiveDiff);
+    list.update(cx, |list, cx| list.set(chosen.clone(), cx));
+
+    // The answer comes now, made before the Keeper heard of the set: it holds another
+    // setting the Keeper keeps, and not the one just chosen. A round trip after it shows the
+    // Window took it in. What the Window sends before the round trip is read on the way: the
+    // set is answered as kept, and the question for the list the Window asks again after the
+    // set is kept to be answered below.
+    let other = form('2', FlowForm::LiveDiff);
+    let stale = Message::Reply {
+        to: first,
+        reply: Ok(Reply::Settings(vec![other.clone()])),
+    };
+    write_message(&mut keeper, &stale).expect("answer late");
+    let barrier = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+    let mut asked_again = None;
+    let mut set_heard = false;
+    let barrier_id = loop {
+        let (asked, request) = next_request(&mut keeper, cx);
+        match request {
+            Request::ListWorkspaces => break asked,
+            Request::SetSetting { setting } => {
+                assert_eq!(setting, chosen);
+                set_heard = true;
+                let kept = Message::Reply {
+                    to: asked,
+                    reply: Ok(Reply::Done),
+                };
+                write_message(&mut keeper, &kept).expect("answer the set");
+            }
+            Request::GetSettings => {
+                // One question asked before the set would be answered by a Keeper that has
+                // not kept the chosen setting yet.
+                assert!(
+                    set_heard,
+                    "the list is asked for again before the Keeper heard the set"
+                );
+                asked_again = Some(asked);
+            }
+            _ => {}
+        }
+    };
+    let answered = Message::Reply {
+        to: barrier_id,
+        reply: Ok(Reply::Workspaces(Vec::new())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the barrier");
+    answer(barrier, cx).expect("the barrier is answered");
+
+    assert_eq!(
+        list.read_with(cx, |list, _| list.all().to_vec()),
+        std::slice::from_ref(&chosen),
+        "the answer that knew nothing of the set was held"
+    );
+    assert_eq!(
+        list.read_with(cx, |list, _| list.flow_form(&id('1'))),
+        FlowForm::LiveDiff
+    );
+
+    // The list is asked for again after the set, and what answers that question is held: the
+    // other setting the Keeper keeps shows beside the one chosen.
+    let asked_again = asked_again.expect("the list is asked for again after the set");
+    let kept_both = vec![other, chosen];
+    let answered = Message::Reply {
+        to: asked_again,
+        reply: Ok(Reply::Settings(kept_both.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the new question");
+    wait_until(cx, "the answer to the question asked after the set", |cx| {
+        list.read_with(cx, |list, _| list.all() == kept_both)
+    });
+    keeper.shutdown(Shutdown::Both).ok();
+}

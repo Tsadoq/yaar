@@ -737,26 +737,34 @@ fn a_server_that_fails_initialize_is_told_exited_and_never_ready() {
 fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and_never_ready() {
     let scratch = Scratch::new();
     let (root, _) = project(&scratch, "def a\n");
-    let mut given = launch(&scratch, &root, &["--fail-initialize"]);
-    given.ready = Ready::Notification {
-        method: "standin/status".to_owned(),
-        matches: serde_json::from_value(json!({"ready": true})).unwrap(),
-    };
     // The shell writes the status frame and only then becomes the stand-in, so the frame is
     // in the pipe before the stand-in has started and before it answers `initialize`: a
     // pipe keeps its order, so the driver reads the status first, with nothing to race.
     let status = json!({"jsonrpc": "2.0", "method": "standin/status", "params": {"ready": true}});
-    given.args = [
-        "-c",
-        "printf 'Content-Length: %d\\r\\n\\r\\n%s' ${#1} \"$1\"; shift; exec \"$0\" \"$@\"",
-        standin().to_str().unwrap(),
-        &status.to_string(),
-        "--fail-initialize",
-    ]
-    .map(str::to_owned)
-    .to_vec();
-    given.program = PathBuf::from("/bin/sh");
-    let mut run = Run::start(given);
+    let with_status_first = |standin_args: &[&str]| {
+        let mut given = launch(&scratch, &root, &[]);
+        given.ready = Ready::Notification {
+            method: "standin/status".to_owned(),
+            matches: serde_json::from_value(json!({"ready": true})).unwrap(),
+        };
+        given.args = [
+            "-c",
+            "printf 'Content-Length: %d\\r\\n\\r\\n%s' ${#1} \"$1\"; shift; exec \"$0\" \"$@\"",
+            standin().to_str().unwrap(),
+            &status.to_string(),
+        ]
+        .into_iter()
+        // The stand-in says `standin/status` again after it was initialized, so a second
+        // `Ready` has a notification to be told on if the driver tells it more than once.
+        .chain(["--ready", "notification"])
+        .chain(standin_args.iter().copied())
+        .map(str::to_owned)
+        .collect();
+        given.program = PathBuf::from("/bin/sh");
+        given
+    };
+
+    let mut run = Run::start(with_status_first(&["--fail-initialize"]));
     // `Exited` is the barrier: the status frame was read before it.
     run.exited();
     assert!(
@@ -765,6 +773,36 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
         run.told
     );
     assert!(!run.server.is_ready());
+
+    // The control: the same wrapper and the same frame, and the stand-in answers initialize.
+    // The frame was parsed and the rule was met, so exactly one `Ready` comes, once the
+    // answer did, though the stand-in says `standin/status` twice more; so the first half is
+    // not passing because the frame never arrived.
+    let mut control = Run::start(with_status_first(&[]));
+    control.ready();
+    assert!(control.server.is_ready());
+    let Run {
+        server,
+        events,
+        mut told,
+    } = control;
+    server.stop(STOP);
+    // `Exited` is the last event and is waited for, up to the deadline: a second `Ready`
+    // would be before it.
+    loop {
+        let event = events
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|_| panic!("no `Exited` within {DEADLINE:?}; told: {told:?}"));
+        let exited = matches!(event, ServerEvent::Exited { .. });
+        told.push(event);
+        if exited {
+            break;
+        }
+    }
+    assert_eq!(
+        told,
+        [ServerEvent::Ready, ServerEvent::Exited { code: Some(0) }]
+    );
 }
 
 #[test]

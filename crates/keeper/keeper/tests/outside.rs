@@ -316,6 +316,28 @@ fn a_thread_on_a_file_outside_the_worktree_is_saved_with_no_version_and_given_ba
 }
 
 #[test]
+fn a_thread_on_a_file_outside_the_worktree_saved_on_the_old_side_is_given_back_on_the_new() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let library = scratch.library_file();
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (workspace, review) = window.open(&repo);
+    let on_old_side = Anchor {
+        side: Side::Old,
+        ..anchor_on(None, &library, 3, "fn 3")
+    };
+
+    assert_eq!(window.start(&review, 1, on_old_side), Ok(Reply::Done));
+
+    let (thread, _) = ids(1);
+    let kept = window.thread(&workspace, &thread);
+    assert_eq!(kept.anchor.side, Side::New, "a file outside has one side");
+    assert_eq!(kept.anchor.path, library);
+    window.stop(keeper);
+}
+
+#[test]
 fn a_thread_on_a_file_of_the_worktree_still_records_a_state_and_is_carried_while_the_outside_thread_has_no_place()
  {
     let scratch = Scratch::new();
