@@ -2380,7 +2380,7 @@ exit 0
     }
 
     /// Settings that list the extension, with other keys beside it, in a layout no JSON
-    /// writer produces (keys out of order, mixed indentation, spaces before the colons, a
+    /// writer produces (keys out of order, mixed indentation, a space before one colon, a
     /// closing line and a blank one), so that a stand-in that parsed and wrote them back
     /// would change bytes.
     fn list_extension(&self) {
@@ -2749,6 +2749,7 @@ fn an_extension_given_with_dash_e_is_found_where_the_settings_list_none_and_afte
     start.args = vec!["-e".into(), kit.extension.display().to_string()];
     let mut run = start.start();
     assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
     assert_eq!(
         run.log().extensions,
         [kit.extension.clone(), kit.extension.clone()]
