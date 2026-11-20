@@ -30,9 +30,14 @@
 //! line, and every such key is searched again too: a download shows missing with its offer
 //! again, an update keeps the version that ran.
 //!
-//! The [`crate::download::Downloader`] is made at the first download
-//! ([`crate::download::Downloader::new`]); when it cannot be made, the download fails with
+//! The [`crate::download::Downloader`] is made once, by the thread of the first download
+//! ([`crate::download::Downloader::new`] reads the system's certificates, and the
+//! Navigator's thread waits for nothing); when it cannot be made, the download fails with
 //! its sentence as the reason.
+//!
+//! A download that ends well also searches again the keys of the row that show the offer
+//! then: a workspace shown while the download was on its way found nothing, and would
+//! otherwise offer what is installed.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
