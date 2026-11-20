@@ -854,14 +854,59 @@ fn a_report_for_an_agent_the_keeper_does_not_have_is_refused() {
 }
 
 #[test]
-fn a_report_from_outside_the_apps_terminals_is_answered_and_followed_no_further() {
+fn a_report_from_outside_the_apps_terminals_is_answered_and_followed_by_its_folder() {
     let mut setup = Setup::new();
     let dialogs = recorded::hook_events(DIALOGS);
     let outside = dialogs[0].in_project(&setup.repo);
     // From a CLI outside the app: no terminal.
     setup.scratch.hook(None, &outside.input_bytes());
+    let told = setup.agents_until("the session of the CLI outside the app", |agents| {
+        !agents.sessions.is_empty()
+    });
+    assert_eq!(told.sessions.len(), 1);
+    assert_eq!(told.sessions[0].workspace, setup.workspace);
+    assert_eq!(told.sessions[0].terminal, None, "it runs in no terminal");
+    assert!(
+        told.sessions[0].review.is_some(),
+        "it holds a review as any session does"
+    );
+
+    // Then one inside a terminal of the app: both are listed, each as it ran.
+    let records = recorded::hook_events(TOOLS);
+    setup.hooks(&records, &[1]);
+    let running = setup.terminal.clone();
+    setup.agents_until("the session of the app's terminal", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.terminal.as_ref() == Some(&running))
+    });
+    let listed = setup.window.agents();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].sessions.len(), 2, "{listed:?}");
+    let mut terminals: Vec<_> = listed[0].sessions.iter().map(|s| &s.terminal).collect();
+    terminals.sort();
+    assert_eq!(terminals, [&None, &Some(setup.terminal.clone())]);
+    let _ = setup.finish();
+}
+
+#[test]
+fn a_report_from_outside_the_apps_terminals_whose_folder_no_workspace_holds_is_followed_no_further()
+{
+    let mut setup = Setup::new();
+    let dialogs = recorded::hook_events(DIALOGS);
+    let elsewhere = setup.scratch.0.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("make the folder");
+    let outside = dialogs[0].in_project(&elsewhere);
+    // No terminal, and the terminal of the app that is not held: neither has a worktree
+    // that holds the folder.
+    setup.scratch.hook(None, &outside.input_bytes());
+    setup.scratch.hook(
+        Some(&TerminalId::new("not-a-terminal")),
+        &outside.input_bytes(),
+    );
     // Then one inside it. Reports are worked out in the order they came, so that when
-    // this one is told, the first was passed over.
+    // this one is told, the first two were passed over.
     let records = recorded::hook_events(TOOLS);
     setup.hooks(&records, &[1]);
     setup.agents_until("the session is idle", is_state(SessionState::Idle));
@@ -968,14 +1013,22 @@ fn a_session_in_a_folder_that_holds_worktrees_but_is_in_none_belongs_to_the_work
 }
 
 #[test]
-fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_no_further() {
+fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_by_its_folder() {
     let mut setup = Setup::new();
     let dialogs = recorded::hook_events(DIALOGS);
     let records = recorded::hook_events(TOOLS);
 
     // A terminal the Keeper never opened, in the folder of a worktree it holds.
     setup.hook_in(&TerminalId::new("not-a-terminal"), &dialogs[0]);
-    // A terminal it opened, whose program has ended and which it holds no more.
+    let first = setup.agents_until("the session of the terminal that is not held", |agents| {
+        !agents.sessions.is_empty()
+    });
+    assert_eq!(first.sessions.len(), 1);
+    assert_eq!(first.sessions[0].workspace, setup.workspace);
+    assert_eq!(first.sessions[0].terminal, None, "none the app knows");
+
+    // A terminal it opened, whose program has ended and which it holds no more: the same
+    // session reports from it, and is the one session still.
     let ended = setup.window.open_terminal(&setup.workspace);
     setup.window.type_into(&ended, b"exit\r");
     setup
@@ -986,8 +1039,7 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_no_further() {
         });
     setup.hook_in(&ended, &dialogs[0]);
 
-    // A report from the terminal that runs, after both: when it is told, they were passed
-    // over.
+    // A report from the terminal that runs, after both: when it is told, they were taken.
     setup.hooks(&records, &[1]);
     let running = setup.terminal.clone();
     let told = setup.agents_until("the session of the terminal that runs", |agents| {
@@ -996,12 +1048,14 @@ fn a_report_from_a_terminal_the_keeper_does_not_hold_is_followed_no_further() {
             .iter()
             .any(|s| s.terminal.as_ref() == Some(&running))
     });
-    assert_eq!(
-        told.sessions.len(),
-        1,
-        "only the session of the app's terminal"
-    );
-    assert_eq!(setup.window.agents()[0].sessions.len(), 1);
+    assert_eq!(told.sessions.len(), 2, "{told:?}");
+    let held: Vec<_> = told
+        .sessions
+        .iter()
+        .filter(|s| s.terminal.is_some())
+        .collect();
+    assert_eq!(held.len(), 1, "the other two reports were one session");
+    assert_eq!(setup.window.agents()[0].sessions.len(), 2);
     let _ = setup.finish();
 }
 
