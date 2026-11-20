@@ -237,17 +237,17 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
         }
     }
 
-    old_side::close(&mut core);
+    // `old_side::close` goes first here once its body is written: it is a `todo!()` now, and
+    // a call to it would end this thread before a server was stopped.
     lifecycle::close(&mut core);
 }
 
 /// Hands an ask to the module that owns it.
 fn dispatch(core: &mut Core, ask: Ask) {
     match ask {
-        Ask::Workspaces(roots) => {
-            lifecycle::workspaces(core, roots);
-            old_side::workspaces_changed(core);
-        }
+        // `old_side::workspaces_changed` follows here once its body is written: it is a
+        // `todo!()` now, and a call to it would end this thread at the first list.
+        Ask::Workspaces(roots) => lifecycle::workspaces(core, roots),
         Ask::OnScreen(workspace) => lifecycle::on_screen(core, workspace),
         Ask::Consents(consents) => lifecycle::consents(core, consents),
         Ask::Download { language } => fetch::download(core, &language),
