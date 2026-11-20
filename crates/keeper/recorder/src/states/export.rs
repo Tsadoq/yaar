@@ -149,14 +149,21 @@ impl StateStore {
 }
 
 /// Gives `command` the settings that turn each driver off, as git's own environment
-/// settings, numbered after those the command already carries: a driver's name can hold
-/// any character, an equals sign too, which `-c` would cut at.
+/// settings, numbered after those the command already carries or, when it carries none,
+/// after those this process's environment holds and the command inherits: a driver's name
+/// can hold any character, an equals sign too, which `-c` would cut at.
 fn turn_off_drivers(command: &mut std::process::Command, drivers: &BTreeSet<Vec<u8>>) {
-    let before: usize = command
+    let set = command
         .get_envs()
         .find(|(name, _)| *name == OsStr::new("GIT_CONFIG_COUNT"))
-        .and_then(|(_, value)| value?.to_str()?.parse().ok())
-        .unwrap_or(0);
+        .map(|(_, value)| value.and_then(|value| value.to_str()?.parse().ok()));
+    let before: usize = match set {
+        Some(count) => count.unwrap_or(0),
+        None => std::env::var("GIT_CONFIG_COUNT")
+            .ok()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or(0),
+    };
     let mut next = before;
     for driver in drivers {
         for (key, value) in [("smudge", ""), ("process", ""), ("required", "false")] {

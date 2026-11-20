@@ -405,3 +405,50 @@ fn line_end_conversions_of_the_attributes_apply_as_in_a_checkout() {
         }
     );
 }
+
+#[test]
+fn settings_the_environment_hands_git_still_apply_when_drivers_are_turned_off() {
+    let scratch = Scratch::new();
+    let repo = scratch.join("repo");
+    init(&repo);
+    let mark = scratch.join("a-driver-ran");
+    let global = scratch.join("gitconfig");
+    // SAFETY: as in `Scratch::new`: no other thread exists yet in this test's process.
+    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &global) };
+    write(&repo, ".gitattributes", "*.bin filter=big\n");
+    write(&repo, "a.bin", "stored\n");
+    write(&repo, "a.txt", "one\ntwo\n");
+    let commit = commit_all(&repo, "one");
+    // The driver is added after the commit, which a driver that must run would fail.
+    std::fs::write(
+        &global,
+        format!(
+            "[filter \"big\"]\n\tsmudge = touch {}\n\trequired = true\n",
+            mark.display()
+        ),
+    )
+    .expect("write the configuration");
+    let worktree = open(&repo);
+    let store = store(&scratch);
+
+    // A setting handed over in the environment, as a shell or an outer git does: with
+    // line ends converted as git on Windows would, the text file is written with CRLF.
+    // The settings that turn the drivers off are numbered after it and replace nothing.
+    // SAFETY: as above.
+    unsafe {
+        std::env::set_var("GIT_CONFIG_COUNT", "1");
+        std::env::set_var("GIT_CONFIG_KEY_0", "core.autocrlf");
+        std::env::set_var("GIT_CONFIG_VALUE_0", "true");
+    }
+
+    let into = scratch.join("old");
+    store
+        .export(Some(&worktree), &commit, &into)
+        .expect("export");
+    let found = entries(&into);
+    assert_eq!(found["a.txt"], file("one\r\ntwo\r\n"));
+    // The conversion reaches the file a driver would have handled as well: only the
+    // driver is off.
+    assert_eq!(found["a.bin"], file("stored\r\n"));
+    assert!(!mark.exists(), "a driver ran its program");
+}
