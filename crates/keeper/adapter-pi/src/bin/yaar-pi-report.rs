@@ -22,5 +22,5 @@ fn main() -> ExitCode {
     let _ = std::io::stdin().read_to_end(&mut payload);
     let answer = pass_on(&payload, &ReportPlace::of_this_process(), tool);
     let _ = std::io::stdout().write_all(&answer.printed);
-    ExitCode::from(u8::try_from(answer.status).unwrap_or(1))
+    ExitCode::SUCCESS
 }

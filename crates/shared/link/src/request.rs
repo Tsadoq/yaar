@@ -532,10 +532,11 @@ pub enum Request {
     /// for each connection.
     ListClis,
     /// What a review shows of the change between two versions of its workspace: the files
-    /// that differ from `from` to `to`, as [`Request::CompareVersions`] lists them, left out
-    /// those credited to sessions other than the review's own and to no session of no
-    /// agent; each with who is credited with it, so that a file two sessions changed is
-    /// marked. For the review of no agent, every file. Who is credited with a file is what
+    /// that differ from `from` to `to`, as [`Request::CompareVersions`] lists them, leaving
+    /// out each file whose credits name only sessions other than the review's own. A file
+    /// credited to the review's session, alone or with others, and a file credited to no
+    /// session, a change no agent made, are listed; each with who is credited with it, so
+    /// that a file two sessions changed is marked. For the review of no agent, every file. Who is credited with a file is what
     /// the Keeper kept with the states recorded after `from` up to `to`. Answered by
     /// [`Reply::ComparedForReview`], ordered by path; refused with
     /// [`Refusal::UnknownWorkspace`], [`Refusal::UnknownReview`] and

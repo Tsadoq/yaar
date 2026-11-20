@@ -473,11 +473,17 @@ impl Agents {
         );
     }
 
-    /// What a terminal runs in the user's shell to bring back `session`, a session of the
-    /// Store that ran when its Keeper stopped and runs no more: its Adapter's
-    /// `Adapter::resume` with the CLI's own id of it. Refused with [`Refusal::Failed`] for
-    /// a session the Store does not hold, one that runs, and one of a CLI the Keeper has
-    /// no Adapter for.
+    /// What a terminal runs in the user's shell to bring back `session`: the `command` of
+    /// the session's offer in `yaar_switchboard::Switchboard::resumable`, the one place the
+    /// command is made, from the Adapter's `Adapter::resume` with the CLI's own id and the
+    /// CLI's own record of the session that the Keeper's start handed the Switchboard.
+    /// Refused with [`Refusal::Failed`] for a session that has no offer (the Store does not
+    /// hold it, it runs, its CLI ended it, or no Adapter has its CLI) and for one a resume
+    /// terminal is open for, until that terminal ends or the session reports.
+    ///
+    /// A hook of the contract of slice 7 in part: until the package of the Keeper's
+    /// sessions takes the command from the offer, it makes it from the Store, as slice 6
+    /// did, with no record of the CLI's.
     pub(crate) fn resume_command(
         &self,
         kept: &Kept,
@@ -508,8 +514,7 @@ impl Agents {
             .ok_or_else(|| Refusal::Failed {
                 reason: format!("the app knows no agent CLI named {}", record.agent),
             })?;
-        let kept_at = self.core.kept_place(kept, &id);
-        Ok(adapter.resume(&CliSession(record.cli_session), kept_at.as_deref()))
+        Ok(adapter.resume(&CliSession(record.cli_session), None))
     }
 
     /// The instruction on how to answer each thread of the CLI named `agent`, its
@@ -628,15 +633,6 @@ impl Drop for Agents {
 }
 
 impl Core {
-    /// Where the CLI of `session` keeps its record, as its reports last named it and the
-    /// Store kept it: what its Adapter's command for bringing it back is given. A hook of
-    /// the contract of slice 7 that names none, for the package of the Keeper's sessions
-    /// to fill with `Store::session_kept`.
-    pub(crate) fn kept_place(&self, kept: &Kept, session: &SessionId) -> Option<PathBuf> {
-        let _ = (kept, session);
-        None
-    }
-
     /// Works the queue, an item at a time, until told to stop or until there is nobody to
     /// give work.
     fn work_the(&self, work: &Receiver<Work>) {

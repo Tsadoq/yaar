@@ -46,15 +46,17 @@
 //! as the last review received, then `agent_start`; [`Step::SelfTurn`] `input` with `source`
 //! `extension`, then `agent_start`; [`Step::Read`], [`Step::Edit`], [`Step::Write`] and
 //! [`Step::Shell`] `tool_call` and `tool_result` of `read`, `edit` (with `details.patch`, the
-//! one hunk of the line it added), `write` and `bash`, the file or the command really read,
-//! changed, written or run between; [`Step::End`] `agent_settled` with `aborted` false, and
+//! one hunk of the line it added and no line of context: pi's own patch carries up to four
+//! lines of context on each side, so pi names a wider range of lines for the same edit, as
+//! the recordings show), `write` and `bash`, the file or the command really read, changed,
+//! written or run between; [`Step::End`] `agent_settled` with `aborted` false, and
 //! an Esc during a turn `agent_settled` with `aborted` true and nothing printed, the
 //! script going on after the next `end`; [`Step::Exit`] `session_shutdown` (`reason`
 //! `quit`); [`Step::Reply`] the call of the reply tool, `reply_to_thread` with `--tool`,
 //! written down as `Did::Tool` with what the program printed. A line typed during a
-//! [`Step::Hold`] inside a turn is a message pi queues: `input` with `streamingBehavior`
-//! `followUp` at its Enter, its review kept, and the message goes with the run that is
-//! open. [`Step::Ask`] is no step of pi's, which asks no permission: a script that holds
+//! [`Step::Hold`] inside a turn is a message pi takes while it works, as Enter during a tool
+//! does in pi: `input` with `streamingBehavior` `steer` at its Enter, its review kept, and
+//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks no permission: a script that holds
 //! one is refused at its line, as a script line it cannot read. It prints no progress
 //! sequence and no interrupt mark: pi reports both itself.
 //!

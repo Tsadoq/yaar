@@ -185,21 +185,22 @@ impl Store {
         })
     }
 
-    /// Keeps where the CLI of `session` keeps its record, as its reports last named it
-    /// (`yaar_agent::Reported::kept`), in place of what was kept before; none takes it
-    /// away. Refused for a session the Store does not hold. Returns when it is on the drive.
-    pub fn set_session_kept(
+    /// Keeps the CLI's own record of `session`, a file, as its reports last named it
+    /// (`yaar_agent::Reported::cli_record`), in place of what was kept before; none takes
+    /// it away. Refused for a session the Store does not hold. Returns when it is on the
+    /// drive.
+    pub fn set_session_cli_record(
         &self,
         session: &SessionId,
-        kept: Option<&Path>,
+        cli_record: Option<&Path>,
     ) -> Result<(), StoreError> {
-        let _ = (session, kept);
+        let _ = (session, cli_record);
         todo!("where a session's CLI keeps its record")
     }
 
-    /// Where the CLI of `session` keeps its record, as [`Store::set_session_kept`] last kept
+    /// The CLI's own record of `session`, as [`Store::set_session_cli_record`] last kept
     /// it; none where nothing was kept, and for a session the Store does not hold.
-    pub fn session_kept(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
+    pub fn session_cli_record(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
         let _ = session;
         todo!("where a session's CLI keeps its record, read back")
     }

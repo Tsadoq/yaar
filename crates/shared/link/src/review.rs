@@ -255,9 +255,10 @@ pub struct Round {
     pub edited: bool,
     /// The turn of the review's session the round was sent in: for a review delivered with
     /// a message, the turn that message started or, for a message the CLI queued, the turn
-    /// that ran. None for a copy, and for a round of a Keeper of an earlier slice. While
-    /// that turn runs, the newest state of the history is older than the round's own, and
-    /// what changed since the round cannot be counted to it.
+    /// that ran. None for a copy, and for a round kept before the Keeper kept the turn of
+    /// each round (a Store of version 5 or older). While that turn runs, the newest state
+    /// of the history is older than the round's own, and what changed since the round
+    /// cannot be counted to it.
     pub turn: Option<TurnId>,
 }
 

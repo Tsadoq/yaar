@@ -41,10 +41,10 @@ impl Delivery for ToPi {
 }
 
 /// The command that brings `session` back in the user's shell, as pi measured it: `pi
-/// --session-dir '<the folder of kept>' --session '<id>'` when `kept`, the session's file,
-/// names a folder, else `pi --session '<id>'`; each word single-quoted for `sh` (a `'`
-/// inside written `'\''`).
-pub(crate) fn resume(session: &CliSession, kept: Option<&Path>) -> String {
-    let _ = (session, kept);
+/// --session-dir '<the folder of cli_record>' --session '<id>'` when `cli_record`, the
+/// session's file, names a folder, else `pi --session '<id>'`; each word single-quoted for
+/// `sh` (a `'` inside written `'\''`).
+pub(crate) fn resume(session: &CliSession, cli_record: Option<&Path>) -> String {
+    let _ = (session, cli_record);
     todo!("pi's command for bringing a session back")
 }

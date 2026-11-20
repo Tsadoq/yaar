@@ -7,7 +7,8 @@
 // its test. It decides nothing: every report goes, as it is, to the reporting program the
 // wrapper names in YAAR_PI_REPORT, and the app's answer comes back from it. What each
 // report holds and what it is answered is written down in the crate doc of
-// `yaar-adapter-pi`; this file follows that doc.
+// `yaar-adapter-pi`; this file follows that doc. It reads YAAR_PI_REPORT at each report,
+// not once when pi loads it, and every handler awaits its own report to its end.
 //
 // It registers no handler for the trust of a folder, nor for any dialog of pi's: the user
 // answers them.
@@ -36,9 +37,10 @@ export const REPORTED = [
 ] as const;
 
 /**
- * Runs the reporting program with `payload` on its standard input, after every report
- * started before it has ended, and gives what it printed: nothing, an empty text, when
- * the program cannot be run or no YAAR_PI_REPORT is set. `tool` passes `--tool`.
+ * Runs the reporting program YAAR_PI_REPORT names now, with `payload` on its standard
+ * input, after every report started before it has ended, and gives what it printed once
+ * the program has ended: nothing, an empty text, when the program cannot be run or no
+ * YAAR_PI_REPORT is set. `tool` passes `--tool`.
  */
 export function report(payload: Record<string, unknown>, tool: boolean): Promise<string> {
   void payload;

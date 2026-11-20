@@ -10,7 +10,7 @@
 //!   command runs, so that a write the watcher sees can be credited to the session whose
 //!   command was running;
 //! - [`Reported`], an event with the CLI's own session and the terminal and process it
-//!   came from, and where the CLI keeps the session's record; [`CliSession`], the CLI's
+//!   came from, and the CLI's own record of the session; [`CliSession`], the CLI's
 //!   own name for a session;
 //! - [`Report`], what a piece of the app inside the CLI passed on, as the Keeper hands it
 //!   to the Adapter;
@@ -162,12 +162,12 @@ pub struct Reported {
     /// hook's input. The Keeper finds the session's workspace from it, and from the
     /// terminal where it names none.
     pub folder: Option<PathBuf>,
-    /// Where the CLI keeps the session's own record, as its report named it: for pi the
+    /// The CLI's own record of the session, a file, as its report named it: for pi the
     /// session file, which its command for bringing the session back needs. None where
     /// the report names none, and for a CLI whose resume needs only the session's id, as
     /// Claude Code's. The Keeper keeps the last one a session's reports named, so that
     /// [`Adapter::resume`] is given it after a restart.
-    pub kept: Option<PathBuf>,
+    pub cli_record: Option<PathBuf>,
     /// What happened.
     pub event: Event,
 }
@@ -413,10 +413,10 @@ pub trait Adapter: Send {
 
     /// What a terminal runs in the user's shell to bring back `session`, as the user would
     /// type it: the CLI's own command for that, with the session's id quoted for the
-    /// shell, as `claude --resume '<id>'`. `kept` is where the CLI keeps the session's
-    /// record, as the session's reports last named it ([`Reported::kept`]); none where
-    /// they named none. A CLI whose command needs only the id leaves it unread.
-    fn resume(&self, session: &CliSession, kept: Option<&Path>) -> String;
+    /// shell, as `claude --resume '<id>'`. `cli_record` is the CLI's own record of the
+    /// session, as the session's reports last named it ([`Reported::cli_record`]); none
+    /// where they named none. A CLI whose command needs only the id leaves it unread.
+    fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String;
 }
 
 #[cfg(test)]

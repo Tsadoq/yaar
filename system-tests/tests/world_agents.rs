@@ -344,8 +344,10 @@ fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_a
 #[cfg(target_os = "macos")]
 #[test]
 fn a_login_shell_of_a_world_keeps_a_folder_the_program_that_started_it_put_first() {
-    // macOS's system profile only adds to what a shell was started with, so what the
-    // app puts first on the path of a terminal's shell is still there after the login.
+    // macOS's system profile runs `path_helper`, which keeps every folder the shell was
+    // started with but puts the folders of `/etc/paths` and `/etc/paths.d` ahead of them:
+    // what the app puts first on the path of a terminal's shell is still there after the
+    // login, no longer first. Only that it is kept is asserted here.
     let world = World::new();
     let put_first = world.home().join("put-first");
     std::fs::create_dir_all(&put_first).expect("make the folder");

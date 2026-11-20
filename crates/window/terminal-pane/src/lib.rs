@@ -146,7 +146,7 @@ pub fn pane() -> BuildPane {
 /// [`ScrollPageUp`] and [`ScrollPageDown`] are kept keys: they work inside a terminal
 /// only, on a key no program is given. Copy and paste are Cmd-C and Cmd-V on macOS and
 /// Ctrl-Shift-C and Ctrl-Shift-V elsewhere. [`NewAgentTerminal`] (`secondary-shift-t`),
-/// [`NextAgentCli`] (`secondary-alt-t`) and [`ResumeAgent`] (`secondary-shift-r`) work
+/// [`NextAgentCli`] (`secondary-alt-c`) and [`ResumeAgent`] (`secondary-shift-r`) work
 /// anywhere; the first and the last send [`RequestKind::OpenTerminal`], of a launcher and
 /// of a session's resume.
 pub fn controls() -> Vec<Control> {
@@ -249,7 +249,9 @@ pub fn controls() -> Vec<Control> {
         nothing(
             "Next Agent CLI",
             || Box::new(NextAgentCli),
-            "secondary-alt-t",
+            // Not Ctrl-Alt-T, which the Linux desktops give to opening a terminal of
+            // their own before the app sees it.
+            "secondary-alt-c",
             Place::Anywhere,
         ),
         Control {
@@ -1011,6 +1013,10 @@ impl Render for TerminalPane {
         let (border, muted) = (theme.border, theme.muted_foreground);
         let (warning, warning_text) = (theme.warning, theme.warning_foreground);
         let shown = self.shown();
+        // The launchers and the resume controls take a row of their own at the top
+        // (`launchers.rs`), so that no terminal's first rows lie under them; the room the
+        // canvas measures is what lies below them.
+        let launchers = self.render_launchers(cx);
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             // The name comes from the entry the view is taken from, so that no view is
             // drawn under the name of another terminal.
@@ -1112,27 +1118,33 @@ impl Render for TerminalPane {
         )
         .absolute()
         .size_full();
+        let notice = self.notice.clone().map(|notice| {
+            div()
+                .flex_none()
+                .px_3()
+                .py_1()
+                .text_sm()
+                .text_color(cx.theme().danger)
+                .child(notice)
+        });
         div()
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus)
             .size_full()
-            .relative()
             .flex()
             .flex_col()
-            .child(room)
-            .children(self.notice.clone().map(|notice| {
+            .children(launchers)
+            .child(
                 div()
-                    .flex_none()
-                    .px_3()
-                    .py_1()
-                    .text_sm()
-                    .text_color(cx.theme().danger)
-                    .child(notice)
-            }))
-            .children(empty)
-            .child(div().flex_1().min_h_0().flex().flex_row().children(slots))
-            // The launchers and the resume controls lie over the top of the pane, taking
-            // no room from a terminal (`launchers.rs`).
-            .children(self.render_launchers(cx))
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .child(room)
+                    .children(notice)
+                    .children(empty)
+                    .child(div().flex_1().min_h_0().flex().flex_row().children(slots)),
+            )
     }
 }

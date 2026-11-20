@@ -23,10 +23,12 @@
 //! The line goes with the last resumable session, as the Keeper tells the agents again
 //! when a resumed session reports.
 //!
-//! Neither line takes the room of a terminal: they lie over the top of the pane's slots
-//! when there is one and over the line that says how to open one when there is none, so
-//! that the room the terminals are laid out in, and the sizes the Keeper is told, are
-//! those of slice 6.
+//! The two lines are a row of their own at the top of the pane, above the notice, the line
+//! that says how to open a terminal and the terminals, so that no terminal's first rows lie
+//! under them. The room the terminals are laid out in, which the pane's canvas measures and
+//! a terminal attached before any is laid out is sized from, is what lies below that row:
+//! every terminal has the height of the pane less the row, and the resume line, which comes
+//! and goes, changes it as a window made smaller does.
 
 use gpui_kit::*;
 use yaar_link::{AgentCli, SessionId};
@@ -64,8 +66,9 @@ impl TerminalPane {
         todo!("the sessions offered to resume")
     }
 
-    /// The two lines of the module's doc, drawn over the top of the pane; none while
-    /// neither has anything to offer. A hook of the contract that draws nothing.
+    /// The two lines of the module's doc, as the pane's top row (`terminal-launchers`, and
+    /// `terminal-resume` under it while there is a session to resume). A hook of the
+    /// contract that draws nothing.
     pub(crate) fn render_launchers(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let _ = cx;
         None

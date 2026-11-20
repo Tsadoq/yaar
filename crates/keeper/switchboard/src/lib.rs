@@ -111,7 +111,7 @@ pub struct Resumable {
 }
 
 /// What makes the command that brings a session back, as [`Switchboard::resumable`] is
-/// given it: from the name of its Adapter, its CLI's id and where its CLI keeps it, the
+/// given it: from the name of its Adapter, its CLI's id and its CLI's own record of it, the
 /// Adapter's `yaar_agent::Adapter::resume`; none for an Adapter the caller does not have.
 pub type ResumeCommand = dyn Fn(&str, &CliSession, Option<&Path>) -> Option<String>;
 
@@ -308,24 +308,25 @@ impl Switchboard {
     /// A session the Keeper kept from an earlier run that was running when that Keeper
     /// stopped, as the Store says: not running, as [`Switchboard::remember`] holds it, and
     /// offered to resume ([`Switchboard::resumable`]) until a report of it is heard, which
-    /// starts it as its CLI resuming it. `kept` is where its CLI keeps its record, as its
-    /// reports last named it ([`yaar_agent::Reported::kept`]), which its command may need.
+    /// starts it as its CLI resuming it. `cli_record` is its CLI's own record of it, as its
+    /// reports last named it ([`yaar_agent::Reported::cli_record`]), which its command may
+    /// need.
     /// A session this Switchboard holds already is left as it is.
     pub fn remember_resumable(
         &mut self,
         session: SessionId,
         agent: &str,
         cli: CliSession,
-        kept: Option<PathBuf>,
+        cli_record: Option<PathBuf>,
     ) {
-        let _ = (session, agent, cli, kept);
+        let _ = (session, agent, cli, cli_record);
         todo!("a session cut off by the Keeper's stop, offered to resume")
     }
 
     /// The offers to resume: each session remembered with
     /// [`Switchboard::remember_resumable`] that no report has been heard of since, in the
     /// order they were remembered, with the command `command` gives for its Adapter's name,
-    /// its CLI's id and where its CLI keeps it. A session for whose Adapter `command` gives
+    /// its CLI's id and its CLI's own record of it. A session for whose Adapter `command` gives
     /// none, as one of a CLI the Keeper has no Adapter for, is not offered. A session that
     /// ran again and ended, by its CLI's word or as its process went, is not offered: only
     /// a stop of the Keeper cuts a session off.
@@ -562,7 +563,7 @@ mod tests {
             terminal: Some(format!("terminal-{cli}")),
             pid,
             folder: Some(PathBuf::from("/work/project")),
-            kept: None,
+            cli_record: None,
             event,
         }
     }

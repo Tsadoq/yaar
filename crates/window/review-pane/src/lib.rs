@@ -527,6 +527,9 @@ pub fn controls() -> Vec<Control> {
         control("Original Line", || Box::new(ShowOriginal), "w"),
         control("Since Round", || Box::new(SinceRound), "shift-s"),
         control("Start Agent", || Box::new(StartAgent), "shift-n"),
+        // A key vim gives a line down too, as `j` and Down do: every plain and shifted letter
+        // is vim's or the pane's, Ctrl-K starts the app's chords on Linux, and an Option
+        // letter is a dead key on macOS, so no free key is nearer.
         control(
             "Next Offered Agent",
             || Box::new(NextOfferedAgent),

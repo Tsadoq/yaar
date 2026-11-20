@@ -42,6 +42,15 @@
 //! output; the program passes the payload on, unread, to the Keeper as one
 //! `yaar_link::Request::Report` of the Adapter [`NAME`] ([`pass_on`]). A pi with no
 //! [`REPORT_VARIABLE`] in its environment, one started outside the app, reports nothing.
+//! The extension reads the variable at each report, not once when pi loads it: in pi the
+//! two are the same, and the extension's test sets it between two reports of one process.
+//!
+//! Every handler awaits the end of its own report, the program's exit, before it returns,
+//! as Claude Code's hooks are run to their end before Claude Code goes on. pi runs a tool
+//! only once the `tool_call` handlers have returned: so the app is told that a shell
+//! command begins before it runs, and a file it writes at once is credited to its session,
+//! not to no agent. A report that fails (no program, no Keeper, a deadline) still ends the
+//! handler, which then returns as if nothing were answered.
 //!
 //! A payload is one JSON object with the keys pi's own events and context give, in pi's
 //! words, so that a recorded line of `system-tests/recorded/pi/` is a payload as it is (the
@@ -60,8 +69,11 @@
 //!
 //! `sessionId` is `ctx.sessionManager.getSessionId()`, `sessionFile` its
 //! `getSessionFile()` (a path, or null for a session pi keeps in no file), `cwd` is
-//! `ctx.cwd`: every report names its session and its folder. A message's text, a file's
-//! content and an edit's texts are not sent: the Adapter reads none of them.
+//! `ctx.cwd`: every report names its session and its folder. Not sent: the message's text
+//! and images, a write's `content`, and an edit's `edits` (the texts it replaced and put
+//! in), none of which the Adapter reads. An edit's `details.patch` is sent: its hunk
+//! headers give the lines the Adapter reports, and its lines hold what the edit took out
+//! and put in.
 //!
 //! # What it is answered
 //!
@@ -75,7 +87,7 @@
 //! | `input` | nothing | returns `{"action": "continue"}` |
 //! | [`REPLY_EVENT`] | `{"text": "recorded reply to <thread> (addressed\|open, <n> characters)"}` | gives the agent that text as the tool's result |
 //! | [`REPLY_EVENT`] | `{"error": "<why>"}` | throws an error with `why`, which pi shows the agent as the tool's failure |
-//! | any other | anything | nothing: the handler returns once the report is passed on |
+//! | any other | anything | nothing: the handler returns once the program has ended |
 //!
 //! # What the events are
 //!
@@ -100,7 +112,7 @@
 //! (a message pi queues, which goes with the run that is open: the app's account of the
 //! turn is not split), any other tool, [`REPLY_EVENT`]. A path is given absolute: a relative
 //! `input.path` is joined to `cwd`. Every event carries `cwd` as the session's folder and
-//! `sessionFile` as [`yaar_agent::Reported::kept`]. pi asks no permission: no event is ever
+//! `sessionFile` as [`yaar_agent::Reported::cli_record`]. pi asks no permission: no event is ever
 //! [`yaar_agent::Event::Permission`], and its sessions never wait for the user's answer.
 //! pi reports an interrupt itself (`agent_settled` with `aborted`): [`Adapter::marks`] is
 //! empty. A read through an `@` mention or through a shell command runs no read tool and
@@ -270,7 +282,7 @@ impl Adapter for Pi {
         self.memory.answer(asked, answer)
     }
 
-    fn resume(&self, session: &CliSession, kept: Option<&Path>) -> String {
-        deliver::resume(session, kept)
+    fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String {
+        deliver::resume(session, cli_record)
     }
 }

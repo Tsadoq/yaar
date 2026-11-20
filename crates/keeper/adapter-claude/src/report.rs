@@ -108,7 +108,7 @@ impl Remembered {
                 terminal: report.terminal.map(str::to_owned),
                 pid: report.pid,
                 folder: text(&input, "cwd").map(PathBuf::from),
-                kept: None,
+                cli_record: None,
                 event,
             })
             .collect())
@@ -161,7 +161,7 @@ impl Remembered {
                 terminal: Some(terminal.to_owned()),
                 pid: open.pid,
                 folder: open.folder.clone(),
-                kept: None,
+                cli_record: None,
                 event,
             })
             .collect()

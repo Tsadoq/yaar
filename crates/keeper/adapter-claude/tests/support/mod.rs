@@ -59,7 +59,7 @@ pub fn told(record: &HookRecord, event: Event) -> Reported {
         terminal: record.terminal().map(str::to_owned),
         pid: record.parent,
         folder: Some(PathBuf::from(recorded::PROJECT)),
-        kept: None,
+        cli_record: None,
         event,
     }
 }

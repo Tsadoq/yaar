@@ -75,7 +75,7 @@ fn documented() -> BTreeSet<String> {
             "cmd-alt-a",
             // The launchers and the resume control of the terminal pane, of slice 7.
             "cmd-shift-t",
-            "cmd-alt-t",
+            "cmd-alt-c",
             "cmd-shift-r",
         ]);
     } else {

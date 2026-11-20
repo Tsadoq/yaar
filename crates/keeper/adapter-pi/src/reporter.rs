@@ -21,6 +21,10 @@
 //! for `yaar_link::Reply::Done`, the Keeper's reason for a refusal, "the app did not answer
 //! in time" past the deadline, and "the app is not running" with no Keeper or one of another
 //! protocol. It ends with 0 in every case.
+//!
+//! It leaves as soon as it has what it prints: a Keeper that answered and keeps its end of
+//! the socket open does not hold it until the deadline, since pi's extension runs the next
+//! report only once this one has ended.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -54,13 +58,12 @@ impl ReportPlace {
     }
 }
 
-/// What the program gives pi back.
+/// What the program gives pi back. It ends with 0 whatever became of the report, so its
+/// exit says nothing: the extension reads only what it printed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReportAnswer {
     /// What it prints on its standard output, as the module's doc says.
     pub printed: Vec<u8>,
-    /// Its exit status: 0, whatever became of the report.
-    pub status: i32,
 }
 
 /// Passes `payload` to the Keeper at `place` as one report of pi, and gives what the
