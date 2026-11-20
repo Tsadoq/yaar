@@ -426,8 +426,9 @@ fn edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_a
         client.agents()
     );
     // No offer to attach: no session lists the attachment at a terminal of the workspace,
-    // neither program ran a hook that could carry it into a message, and the comment waits
-    // where it was, attached and not sent.
+    // and the comment waits where it was, attached and not sent. The two programs never run
+    // a hook, whatever the app does, so the check of their logs confirms the setup; the
+    // attached and unsent comment is what shows the app attached nothing.
     for started in [&unsupported, &around] {
         let log = started.log(&world);
         assert!(

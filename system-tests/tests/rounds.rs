@@ -244,6 +244,12 @@ fn checked_out(repo: &Repo) -> (String, String) {
     )
 }
 
+/// What git says of the worktree and the index of `repo`: nothing is staged and no file of
+/// the app is there, so the only lines are the changes the agent wrote itself.
+fn worktree_status(repo: &Repo) -> String {
+    repo.git(&["status", "--porcelain"])
+}
+
 /// The history of `workspace` holds no commit: nobody committed.
 fn assert_no_commit_was_made(client: &mut Client, workspace: &WorkspaceId) {
     let history = client.history(workspace).expect("the history");
@@ -274,6 +280,7 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
         &[("notes.txt", "alpha\nbeta\n"), ("b.txt", "b\n")],
     );
     let checked_out_at_the_start = checked_out(&repo);
+    assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
 
@@ -408,6 +415,7 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
     wait_for_exit(&world, "default");
 
     assert_eq!(checked_out(&repo), checked_out_at_the_start);
+    assert_eq!(worktree_status(&repo), " M notes.txt");
     assert_no_commit_was_made(&mut client, &workspace);
     end(world, client);
 }
@@ -461,6 +469,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
         ],
     );
     let checked_out_at_the_start = checked_out(&repo);
+    assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let launcher = client
@@ -609,6 +618,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
 
     // Nobody committed.
     assert_eq!(checked_out(&repo), checked_out_at_the_start);
+    assert_eq!(worktree_status(&repo), " M notes.txt");
     assert_no_commit_was_made(&mut client, &workspace);
     wait_for_exit(&world, "default");
     end(world, client);
@@ -620,6 +630,7 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
  {
     let (world, repo) = World::with_standin("default", &script(&["turn", "end", "exit"]));
     let checked_out_at_the_start = checked_out(&repo);
+    assert_eq!(worktree_status(&repo), "", "all is committed");
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
 
@@ -817,5 +828,6 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     assert_eq!(carried(&answers[0]), "");
     wait_for_exit(&world, "default");
     assert_eq!(checked_out(&repo), checked_out_at_the_start);
+    assert_eq!(worktree_status(&repo), "");
     end(world, client);
 }
