@@ -20,7 +20,7 @@
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
 //! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
 //!
-//! One of a repository the Store does not hold is refused, and a row of one it no longer
+//! A setting of a repository the Store does not hold is refused, and a row of one it no longer
 //! holds is not listed. Settings of repositories come last in [`Store::settings`], after
 //! those of the workspaces, in the order the repositories were first kept.
 //!

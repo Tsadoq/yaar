@@ -1053,7 +1053,8 @@ impl Drop for Running {
 /// files with `checkout-index` from its own store, so the export attributes of a repository
 /// that `git archive` applies here (`export-ignore`, `export-subst`) do not reach its export;
 /// and it turns off the filter drivers it finds in the configuration it reads, which
-/// `git archive` runs here. The fixtures of the tests have none of these.
+/// `git archive` runs here. It also refuses a 64-character id of a SHA-256 repository,
+/// which the real Keeper takes; the fixtures of the tests have none of these.
 fn write_version(repo: &Repo, version: &str, into: &Path) -> Result<(), String> {
     if version.len() != 40 || !version.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!(
