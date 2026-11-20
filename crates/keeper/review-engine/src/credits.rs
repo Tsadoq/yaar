@@ -59,10 +59,13 @@ impl Reviews {
     ///
     /// Who is credited with a path is the union, in the order first credited, of what was
     /// kept for it with each state recorded after `from` up to `to`, in the order of the
-    /// state store's list (`yaar_recorder::StateStore::states`). A state with no credits
-    /// kept, as one recorded at a send between two turn ends, counts with the first state
+    /// state store's list (`yaar_recorder::StateStore::states`). A state nothing was kept
+    /// with, as one recorded at a send between two turn ends, counts with the first state
     /// after it, even past `to`, that has credits kept: the turn end that follows a send
-    /// keeps the credits of the writes before the send too. A path none of those names is
+    /// keeps the credits of the writes before the send too. A state kept with no credit,
+    /// as the end of a turn that left the worktree clean (`Store::credits_were_kept`), is
+    /// told from it: it counts for itself and waits for nothing, since the credits a later
+    /// turn keeps are not those of the changes up to it. A path none of those names is
     /// one no agent made. A version that is no state of the list, as a commit kept in the
     /// store, counts from the first state when it is `from`, and to the newest when it is
     /// `to`.
@@ -85,8 +88,8 @@ impl Reviews {
         let last = place(to).unwrap_or(listed.len().saturating_sub(1));
 
         let mut by: BTreeMap<PathBuf, Vec<String>> = BTreeMap::new();
-        // The states in range with no credits kept, which count with the next state that
-        // has some.
+        // The states in range that nothing was kept with, which count with the next state
+        // that has some kept.
         let mut waiting = false;
         for (at, state) in listed.iter().enumerate().skip(first) {
             if at > last && !waiting {
@@ -95,7 +98,14 @@ impl Reviews {
             let kept = self
                 .store
                 .credits_of(review.workspace(), state.id.as_str())?;
-            if kept.is_empty() {
+            // A state kept with none, as a turn end on a clean worktree, is a state with
+            // credits kept: it settles that nothing was credited, and what a later turn
+            // keeps is not its.
+            if kept.is_empty()
+                && !self
+                    .store
+                    .credits_were_kept(review.workspace(), state.id.as_str())?
+            {
                 waiting |= at <= last;
                 continue;
             }
