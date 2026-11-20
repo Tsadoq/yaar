@@ -417,6 +417,9 @@ fn everything_killed_as_a_restart_of_the_machine_would_leaves_the_review_its_tur
 fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_notice_and_leaves_one_thread_addressed_and_one_waiting_and_none_resolved()
  {
     // The second turn holds until the test makes the file, then rewrites line 2 of notes.txt.
+    // The steps the test waits for, by their place in the script below.
+    const HOLD: usize = 4;
+    const WRITE: usize = 5;
     // Replies name threads by their number in the review the agent was handed.
     let (world, _) = World::with_standin("default", &Script(vec![]));
     let gate = world
@@ -502,7 +505,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
             .agent_log("default")
             .did
             .iter()
-            .any(|did| matches!(did, Did::Began { step: 4, .. }))),
+            .any(|did| matches!(did, Did::Began { step: HOLD, .. }))),
         "{:?}",
         world.agent_log("default")
     );
@@ -525,7 +528,7 @@ fn a_second_round_shows_as_sent_until_the_first_edit_moves_the_thread_with_its_n
             .agent_log("default")
             .did
             .iter()
-            .any(|did| matches!(did, Did::Done { step: 5, .. }))),
+            .any(|did| matches!(did, Did::Done { step: WRITE, .. }))),
         "{:?}",
         world.agent_log("default")
     );
@@ -662,8 +665,17 @@ fn accepting_the_offer_made_on_attaching_starts_the_cli_in_the_workspace_with_th
     assert_eq!(started.terminal, Some(launcher.clone()));
     assert_eq!(started.review, Some(review.clone()));
     assert_eq!(started.attached, Some(Attachment::Review));
-    // Nothing went to it yet: the hook has not run for a message.
-    assert!(prompt_answers(&world.agent_log("default")).is_empty());
+    // Nothing went to it before its first message: the hook of the session's start was
+    // answered before the stand-in printed its prompt, and it answered nothing.
+    let log = world.agent_log("default");
+    assert!(prompt_answers(&log).is_empty(), "{log:?}");
+    assert!(
+        log.did.iter().all(|did| match did {
+            Did::Hook { answer, .. } => answer.is_empty(),
+            _ => true,
+        }),
+        "{log:?}"
+    );
 
     // Its first message carries the review, and the comment is sent.
     client.type_line(&launcher, "go");
