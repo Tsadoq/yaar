@@ -19,8 +19,8 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Consent, ConsentAnswer, Fact, Hello, Message, Program, Refusal, Reply, Request, RequestId,
-    TerminalId, TerminalSize, WorkspaceId, handshake, read_message, write_message,
+    AgentReport, Consent, ConsentAnswer, Fact, Hello, Message, Program, Refusal, Reply, Request,
+    RequestId, TerminalId, TerminalSize, WorkspaceId, handshake, read_message, write_message,
 };
 
 /// How long a test waits for the Keeper before it fails.
@@ -497,10 +497,40 @@ fn a_window_that_connects_after_a_no_is_told_nothing_either_and_the_list_says_no
 }
 
 #[test]
+fn a_piece_of_a_cli_is_not_told_the_question_before_the_reply_to_its_report() {
+    let scratch = Scratch::new();
+    scratch.pi_is_installed();
+    let keeper = scratch.keeper();
+
+    // A Window waits for the answer, so that the question does wait.
+    let mut watcher = scratch.window();
+    let id = watcher.send(Request::ListWorkspaces);
+    assert_eq!(
+        of(&watcher.consents_told(), PI).answer,
+        ConsentAnswer::NotAsked
+    );
+    assert!(matches!(watcher.next(), Message::Reply { to, .. } if to == id));
+
+    // The reporting program's connection: its reply is the very next frame. The payload
+    // is one the Keeper cannot read, which it answers all the same.
+    let mut piece = scratch.window();
+    let report = AgentReport {
+        agent: PI.to_owned(),
+        terminal: None,
+        pid: std::process::id(),
+        payload: b"not what pi reports".to_vec(),
+    };
+    assert_eq!(piece.ask(Request::Report { report }), Ok(Reply::Done));
+
+    watcher.stop(keeper);
+}
+
+#[test]
 fn with_pi_not_installed_no_question_is_listed_or_told_and_a_yes_is_refused_and_writes_nothing() {
     let scratch = Scratch::new();
-    let keeper = scratch.keeper();
+    // Read before the Keeper starts, so that a write at its start would show.
     let at_the_start = tree(&scratch.home());
+    let keeper = scratch.keeper();
 
     let mut first = scratch.window();
     // The first request is answered with nothing told before it.
