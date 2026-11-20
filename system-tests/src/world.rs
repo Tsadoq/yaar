@@ -10,6 +10,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::net::Shutdown;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,8 @@ use std::time::{Duration, Instant};
 use yaar_link::{APP_FOLDER, Hello, MAX_FRAME, Message, Request, handshake, read_message};
 
 use crate::client::{Client, DEADLINE};
-use crate::standin::{LOG_VARIABLE, SCRIPT_VARIABLE};
+use crate::descendants_of;
+use crate::standin::{LOG_VARIABLE, PROMPT, SCRIPT_VARIABLE};
 
 /// How long the Keeper a world starts stays with no Window attached: longer than any
 /// test. It ends with its world, not by itself in the middle of a test that has no
@@ -326,6 +328,122 @@ impl World {
         answering.expect("the Keeper answered")
     }
 
+    /// Kills everything a restart of the machine would end, and empties what a restart
+    /// empties: every process the Keeper this world started has started, and their
+    /// descendants, the shells and agents of its terminals and every hook among them, and
+    /// then the Keeper, each with the kill signal; returns once all are gone, the Keeper
+    /// collected, and the world's runtime folder (`XDG_RUNTIME_DIR`) and temporary folder
+    /// (`TMPDIR`) emptied, the folders themselves kept. Nothing of theirs runs: no stop, no
+    /// `SessionEnd`, no close of the Keeper's database. What a restart keeps stays: the
+    /// home and the app's data folder (the Store, the state stores, the Adapters' folders),
+    /// the repositories, the stand-ins' scripts and logs, and the Keeper's socket file,
+    /// stale as a killed Keeper leaves it. The world may start another Keeper on them.
+    /// Panics when no Keeper of this world runs.
+    pub fn kill_everything(&mut self) {
+        let keeper = self
+            .keeper_pid()
+            .expect("no Keeper of this world runs to kill everything under");
+        // Frozen first, so that what the Keeper and its programs start meanwhile is found:
+        // a process whose parent dies is taken in by the system and is no longer found
+        // below that parent. The list is taken again, each time with what was started
+        // since, until a look finds no one new.
+        let mut doomed = vec![keeper];
+        let mut frozen = 0;
+        loop {
+            for pid in &doomed[frozen..] {
+                // SAFETY: a plain signal to a process of this world.
+                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGSTOP) };
+            }
+            frozen = doomed.len();
+            for pid in descendants_of(keeper) {
+                if !doomed.contains(&pid) {
+                    doomed.push(pid);
+                }
+            }
+            if doomed.len() == frozen {
+                break;
+            }
+        }
+        for pid in &doomed[1..] {
+            // SAFETY: a plain signal to a process of this world.
+            unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+        }
+        assert!(self.end_keeper(), "the killed Keeper is still there");
+        assert!(
+            crate::wait_until(DEADLINE, || doomed.iter().all(|pid| !crate::is_alive(*pid))),
+            "still running after the kill: {:?}",
+            doomed
+                .iter()
+                .filter(|pid| crate::is_alive(**pid))
+                .collect::<Vec<_>>()
+        );
+        for folder in ["run", "tmp"] {
+            let folder = self.root.join(folder);
+            for entry in fs::read_dir(&folder).expect("read a folder of the world") {
+                let path = entry.expect("read an entry").path();
+                // A link, a socket or a file goes as it is; only a real folder is entered.
+                let result = if path.is_dir() && !path.is_symlink() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                result.unwrap_or_else(|why| panic!("empty {}: {why}", path.display()));
+            }
+        }
+    }
+
+    /// Starts the stand-in agent `name` as a user would start it outside every terminal of
+    /// the app, in `folder`: in a pseudo-terminal the world opens itself, with the world's
+    /// environment for programs (`World::command`), `YAAR_TERMINAL` unset, and
+    /// `CLAUDE_CODE_PLUGIN_DIRS` naming the plugin folder the world's Keeper wrote, as a
+    /// user who points Claude Code at the app's plugin by hand would. It reports over the
+    /// Keeper's socket from no terminal the Keeper holds. Its script is `script`; its log
+    /// is `agent_log(name)`.
+    pub fn start_agent_outside(
+        &self,
+        name: &str,
+        script: &crate::standin::Script,
+        folder: &Path,
+    ) -> OutsideAgent {
+        let agents = self
+            .agents
+            .as_ref()
+            .expect("put the stand-ins on the search path first (World::agents_on_path)");
+        // Where the Adapter of Claude Code writes its plugin, once the Keeper runs.
+        let plugin = self.data_dir().join("agents").join("claude").join("plugin");
+        assert!(
+            plugin.join("hooks/hooks.json").exists(),
+            "the Keeper of this world wrote no plugin at {}: start it first",
+            plugin.display()
+        );
+        let script_file = self.agent_script(name, script);
+        let (master, slave) = open_terminal();
+        let stdio = |terminal: &OwnedFd| {
+            Stdio::from(terminal.try_clone().expect("duplicate the terminal's end"))
+        };
+        // Started by its name, as a shell finds it, which the stand-in reads its dialect from.
+        let child = self
+            .command(&agents.join(name))
+            .env(SCRIPT_VARIABLE, script_file)
+            .env(LOG_VARIABLE, self.agent_file(name, "log"))
+            .env("CLAUDE_CODE_PLUGIN_DIRS", plugin)
+            .current_dir(folder)
+            .stdin(stdio(&slave))
+            .stdout(stdio(&slave))
+            .stderr(stdio(&slave))
+            .spawn()
+            .unwrap_or_else(|why| panic!("start the stand-in {name}: {why}"));
+        // The program holds the slave end now; the world's copy would keep the terminal
+        // open for ever.
+        drop(slave);
+        OutsideAgent {
+            child,
+            terminal: fs::File::from(master),
+            output: Vec::new(),
+            seen: 0,
+        }
+    }
+
     /// Kills the Keeper this world started with the kill signal, as a crash or the system
     /// does, and returns once it is gone and collected; the world may then start another
     /// on the same folders. Nothing of the Keeper's own runs: no stop, no close of its
@@ -551,6 +669,119 @@ impl World {
             stop,
             accepting: Some(accepting),
         }
+    }
+}
+
+/// A stand-in agent that runs outside every terminal of the app, in a pseudo-terminal of
+/// the world's own (`World::start_agent_outside`). Dropping it kills it and waits for it.
+pub struct OutsideAgent {
+    child: std::process::Child,
+    /// The pseudo-terminal's end the test types into and reads.
+    terminal: std::fs::File,
+    /// Everything the agent wrote, as far as it was read.
+    output: Vec<u8>,
+    /// How far of `output` the prompts waited for so far reach.
+    seen: usize,
+}
+
+impl OutsideAgent {
+    /// Its process.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+
+    /// Types `text` and Enter into its terminal.
+    pub fn type_line(&mut self, text: &str) {
+        self.terminal
+            .write_all(format!("{text}\r").as_bytes())
+            .expect("type into the terminal of the agent");
+    }
+
+    /// Waits, until [`crate::DEADLINE`], for its prompt `standin> ` in what it wrote since
+    /// it started, read in `poll` and never with a sleep between looks; panics, naming
+    /// what it wrote, when it does not come. A prompt that an earlier wait found is not
+    /// found again: each call waits for one the agent printed after the last.
+    pub fn wait_for_prompt(&mut self) {
+        let deadline = Instant::now() + DEADLINE;
+        let prompt = PROMPT.as_bytes();
+        loop {
+            let unseen = &self.output[self.seen..];
+            if let Some(at) = unseen.windows(prompt.len()).position(|w| w == prompt) {
+                self.seen += at + prompt.len();
+                return;
+            }
+            assert!(
+                self.read_some(deadline),
+                "the agent printed no prompt after byte {}; it wrote {:?}",
+                self.seen,
+                String::from_utf8_lossy(&self.output)
+            );
+        }
+    }
+
+    /// Reads what the agent has written, waiting in `poll` for it until `deadline`. Gives
+    /// false when nothing came in time, or its terminal is closed.
+    fn read_some(&mut self, deadline: Instant) -> bool {
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            // Rounded up, so that a part of a millisecond left is a wait and not none.
+            let wait = i32::try_from(left.as_micros().div_ceil(1000)).unwrap_or(i32::MAX);
+            let mut poll = libc::pollfd {
+                fd: self.terminal.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY: one valid `pollfd`.
+            let ready = unsafe { libc::poll(&mut poll, 1, wait) };
+            if ready < 0 && io::Error::last_os_error().kind() == io::ErrorKind::Interrupted {
+                continue;
+            }
+            if ready <= 0 || poll.revents & libc::POLLIN == 0 {
+                return false;
+            }
+            let mut buffer = [0u8; 8192];
+            match self.terminal.read(&mut buffer) {
+                Ok(n) if n > 0 => {
+                    self.output.extend_from_slice(&buffer[..n]);
+                    return true;
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+                // Closed: nothing more will come.
+                _ => return false,
+            }
+        }
+    }
+}
+
+/// A pseudo-terminal of the world's own: the end a test reads and types into, and the end
+/// a program runs on. Neither is inherited by what the world starts, but for the one it
+/// duplicates the slave into.
+fn open_terminal() -> (OwnedFd, OwnedFd) {
+    let (mut master, mut slave) = (0, 0);
+    // SAFETY: both are valid places for a descriptor, and the rest may be null.
+    let opened = unsafe {
+        libc::openpty(
+            &mut master,
+            &mut slave,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        )
+    };
+    assert_eq!(opened, 0, "openpty: {}", io::Error::last_os_error());
+    for fd in [master, slave] {
+        // SAFETY: `fd` was just opened by `openpty`.
+        let marked = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+        assert_eq!(marked, 0, "mark the terminal's end close-on-exec");
+    }
+    // SAFETY: both descriptors are open and owned by nobody else.
+    unsafe { (OwnedFd::from_raw_fd(master), OwnedFd::from_raw_fd(slave)) }
+}
+
+impl Drop for OutsideAgent {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 

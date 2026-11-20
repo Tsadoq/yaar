@@ -1,0 +1,64 @@
+//! A round shown as sent until its agent's first edit, and what changed since a round's
+//! comments were sent. Built by the engine's package "rounds and what changed since" of
+//! slice 6.
+
+use yaar_recorder::{ChangedPath, Worktree};
+use yaar_store::{ReviewId, SessionId};
+
+use crate::engine::{EngineError, Reviews};
+use crate::review::{Review, ReviewError};
+
+impl Reviews {
+    /// The agent of `session` reported an edit, with its edit or its write tool: the newest
+    /// round of its review counts as edited from now on, by
+    /// [`crate::Review::agent_edited`], and that is kept. Gives the review and the round
+    /// when one changed; none when none did, and for a session with no review.
+    pub fn agent_edited(
+        &self,
+        session: &SessionId,
+    ) -> Result<Option<(ReviewId, u32)>, EngineError> {
+        let _turn = self.turn();
+        let Some(kept) = self.store.session(session)? else {
+            return Ok(None);
+        };
+        let Some(record) = self
+            .store
+            .reviews_of(&kept.workspace)?
+            .into_iter()
+            .find(|review| review.agent.as_deref() == Some(session.as_str()))
+        else {
+            return Ok(None);
+        };
+        let mut review = Review::from_record(record);
+        let Some(round) = review.agent_edited() else {
+            return Ok(None);
+        };
+        self.store.set_round_edited(review.id(), round)?;
+        Ok(Some((review.id().clone(), round)))
+    }
+
+    /// What changed since the comments of round `round` of `review` were sent: the paths
+    /// that differ between the state recorded at that send and the state of `worktree`,
+    /// the worktree of the review's workspace, recorded now, renames paired as git pairs
+    /// them. Refused with [`crate::ReviewError::UnknownRound`] for a round the review does
+    /// not hold or whose state is not recorded yet. The call records a state of the
+    /// worktree, so, as at any recorded state, the threads follow the code to it and their
+    /// placements are kept.
+    pub fn changed_since_round(
+        &self,
+        worktree: &Worktree,
+        review: &ReviewId,
+        round: u32,
+    ) -> Result<Vec<ChangedPath>, EngineError> {
+        let current = self.review(review)?;
+        let sent = current
+            .rounds()
+            .iter()
+            .find(|held| held.number == round)
+            .and_then(|held| held.state.clone())
+            .ok_or(ReviewError::UnknownRound(round))?;
+        let states = self.states_of(current.workspace())?;
+        let now = self.record_state(current.workspace(), worktree)?;
+        Ok(states.changed_paths(&sent, now.id.as_str())?)
+    }
+}

@@ -60,6 +60,7 @@ fn review_with_a_thread(store: &Store, workspace: &WorkspaceId, n: u128) -> Revi
             text: "Why is this here?".to_owned(),
             round: None,
         }],
+        now: None,
     };
     let empty = ReviewRecord {
         id: ReviewId::new(id(n)),
@@ -68,6 +69,7 @@ fn review_with_a_thread(store: &Store, workspace: &WorkspaceId, n: u128) -> Revi
         reviewed: None,
         threads: vec![],
         rounds: vec![],
+        attached: None,
     };
     store.put_review(&empty).expect("put the review");
     store
@@ -90,6 +92,7 @@ fn review_with_no_thread(store: &Store, workspace: &WorkspaceId, n: u128) {
             reviewed: None,
             threads: vec![],
             rounds: vec![],
+            attached: None,
         })
         .expect("put the review");
 }

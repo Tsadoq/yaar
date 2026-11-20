@@ -27,8 +27,8 @@ use alacritty_terminal::term::Term;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 use yaar_link::{
-    ChangedFile, Changes, CommentId, CreditedFile, DraftOn, Fact, FileSides, FileStatus, Hello,
-    History, Message, Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId,
+    AgentCli, ChangedFile, Changes, CommentId, CreditedFile, DraftOn, Fact, FileSides, FileStatus,
+    Hello, History, Message, Program, Refusal, Reply, Repository, RepositoryId, Request, RequestId,
     ReviewId, TerminalId, TerminalInfo, TerminalSize, ThreadId, Turn, TurnId, WorkspaceAgents,
     WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
 };
@@ -438,6 +438,95 @@ impl Client {
                 Ok(terminal)
             }
             other => panic!("asked to open a launcher, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Attaches a review, or one of its threads alone, to the user's next message to its
+    /// agent: gives the CLIs the Window would offer to start.
+    pub fn attach_review(
+        &mut self,
+        review: &ReviewId,
+        thread: Option<&ThreadId>,
+    ) -> Result<Vec<AgentCli>, Refusal> {
+        match self.request(Request::AttachReview {
+            review: review.clone(),
+            thread: thread.cloned(),
+        })? {
+            Reply::AttachedReview { start } => Ok(start),
+            other => panic!("asked to attach a review, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Takes away what is attached of a review.
+    pub fn detach_review(&mut self, review: &ReviewId) -> Result<(), Refusal> {
+        match self.request(Request::DetachReview {
+            review: review.clone(),
+        })? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to detach a review, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Resolves a thread, or reopens it when `resolved` is false.
+    pub fn resolve_thread(
+        &mut self,
+        review: &ReviewId,
+        thread: &ThreadId,
+        resolved: bool,
+    ) -> Result<(), Refusal> {
+        let (review, thread) = (review.clone(), thread.clone());
+        let request = match resolved {
+            true => Request::ResolveThread { review, thread },
+            false => Request::ReopenThread { review, thread },
+        };
+        match self.request(request)? {
+            Reply::Done => Ok(()),
+            other => panic!("asked to resolve or reopen a thread, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Resolves every addressed thread of a review.
+    pub fn resolve_addressed(&mut self, review: &ReviewId) -> Result<(), Refusal> {
+        match self.request(Request::ResolveAddressed {
+            review: review.clone(),
+        })? {
+            Reply::Done => Ok(()),
+            other => {
+                panic!("asked to resolve the addressed threads, the Keeper answered {other:?}")
+            }
+        }
+    }
+
+    /// What the user's next message would carry of a review, as the control that views
+    /// the attachment shows it.
+    pub fn attachment(&mut self, review: &ReviewId) -> Result<String, Refusal> {
+        match self.request(Request::GetAttachment {
+            review: review.clone(),
+        })? {
+            Reply::Attachment { text } => Ok(text),
+            other => panic!("asked for an attachment, the Keeper answered {other:?}"),
+        }
+    }
+
+    /// Opens a terminal of a workspace with `program`, as the offer made on attaching does
+    /// with `Program::AgentFor` and the resume control with `Program::Resume`, at `size`,
+    /// and gives its id.
+    pub fn open_program(
+        &mut self,
+        workspace: &WorkspaceId,
+        program: Program,
+        size: TerminalSize,
+    ) -> Result<TerminalId, Refusal> {
+        match self.request(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program,
+            size,
+        })? {
+            Reply::TerminalOpened { terminal } => {
+                self.output.entry(terminal.clone()).or_default();
+                Ok(terminal)
+            }
+            other => panic!("asked to open a terminal, the Keeper answered {other:?}"),
         }
     }
 

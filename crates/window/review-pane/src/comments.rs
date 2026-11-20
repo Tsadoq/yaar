@@ -11,7 +11,7 @@ use yaar_link::{
 };
 
 use crate::saves::{Save, apply, new_id};
-use crate::threads::{link_side, pane_side, path_in};
+use crate::threads::{link_side, pane_side, path_in, place_of};
 use crate::tree::Source;
 use crate::{
     Comment, CommentBox, DeleteDraft, EditDraft, NextThread, PaneRow, Position, PreviousThread,
@@ -152,6 +152,7 @@ impl ReviewPane {
         for save in &self.saves {
             apply(&mut shown, save);
         }
+        self.attaching.reviews_read(&shown);
         self.reviews = Some(shown);
         // Read anew, the reviews may add or take rows above what the reviewer reads.
         self.rebuild_steady(cx);
@@ -228,9 +229,11 @@ impl ReviewPane {
     }
 
     /// The threads of the review that sit on the line the reviewer is on, those of the
-    /// reviewer's own side first. An unchanged line is one row with a line on each side,
-    /// and a thread of either side sits there: the reviewer stands on it by one side
-    /// whichever the thread is on.
+    /// reviewer's own side first. A thread sits where the pane draws it
+    /// ([`crate::threads::place_of`]): on the lines the Keeper carried it to when it has
+    /// moved, not on the lines it was written on, which are other code by then. An
+    /// unchanged line is one row with a line on each side, and a thread of either side
+    /// sits there: the reviewer stands on it by one side whichever the thread is on.
     fn threads_on(&self, position: &Position) -> Vec<&Thread> {
         let Some(&index) = self.by_path.get(&position.path) else {
             return Vec::new();
@@ -245,21 +248,28 @@ impl ReviewPane {
         let Some(review) = self.review() else {
             return Vec::new();
         };
+        let shown = self.new_side_shown();
         let mut threads: Vec<&Thread> = review
             .threads
             .iter()
             .filter(|thread| {
-                let side = pane_side(thread.anchor.side);
+                let Some(place) = place_of(thread, shown.as_deref()) else {
+                    return false;
+                };
+                let (path, link_side, last) = place.at();
+                let side = pane_side(link_side);
                 let line = match on_both_sides {
                     Some(row) => row.line(side),
                     None => (side == position.side).then_some(position.line),
                 };
-                path_in(file, side) == thread.anchor.path
-                    && line.is_some_and(|line| thread.anchor.lines.last == line + 1)
+                path_in(file, side) == path && line.is_some_and(|line| last == line + 1)
             })
             .collect();
         // Stable: threads of one side keep the order the Keeper holds them in.
-        threads.sort_by_key(|thread| pane_side(thread.anchor.side) != position.side);
+        threads.sort_by_key(|thread| {
+            let side = place_of(thread, shown.as_deref()).map(|place| pane_side(place.at().1));
+            side != Some(position.side)
+        });
         threads
     }
 

@@ -29,6 +29,9 @@ fn session(name: char, workspace: char, terminal: Option<char>, state: SessionSt
         state,
         turn: None,
         review: None,
+        attached: None,
+        resumable: false,
+        turn_from_user: false,
     }
 }
 

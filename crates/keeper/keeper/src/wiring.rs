@@ -21,7 +21,7 @@
 //! | `MarkReviewed` | `Reviews::mark_reviewed` | `ReviewsChanged` of its workspace |
 //! | `SetViewed` | `Reviews::set_viewed` | `ReviewsChanged` of that workspace |
 //! | `Commit` | `Worktree::commit_all`, the worktree from `Workspaces::worktree` | `ChangesChanged` of that workspace |
-//! | `Report` | `Agents::report`: queued, then answered; what it means on the agents' own thread | later `AgentsChanged`, `Step`, `TurnEnded` |
+//! | `Report` | `Agents::report`: queued, and answered once the agents' own thread has taken it (`Answer` or `Done`) | later `AgentsChanged`, `Step`, `TurnEnded`, `ReviewsChanged` |
 //! | `ListAgents` | `Agents::list` | none |
 //! | `GetHistory` | `Agents::history` | none |
 //! | `GetUncommitted` | `Agents::uncommitted` | none |
@@ -200,8 +200,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // The user's own git, with their hooks, which may run for minutes: neither the
         // Window's typing nor its saves may wait for it.
         RequestKind::Commit => Answerer::Apart,
-        // A CLI waits for its piece, which waits for this answer: it is given at once,
-        // before anything the report leads to.
+        // A CLI waits for its piece, which waits for this answer: it is given on the
+        // piece's own connection as soon as the agents' side has taken the report, and that
+        // connection has nothing else to answer meanwhile.
         RequestKind::Report => Answerer::Here,
         // Read from what the Keeper holds and the Store.
         RequestKind::ListAgents | RequestKind::GetTurn | RequestKind::ListTerminals => {
@@ -221,6 +222,14 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // One read or one write of the Store, which a user's key waits for no longer than
         // the drive takes.
         RequestKind::GetSettings | RequestKind::SetSetting => Answerer::Here,
+        // They change a review, or read what it would carry: in the order of the
+        // Window's other requests of reviews, so that a save typed before is in it.
+        RequestKind::AttachReview
+        | RequestKind::DetachReview
+        | RequestKind::ResolveThread
+        | RequestKind::ReopenThread
+        | RequestKind::ResolveAddressed
+        | RequestKind::GetAttachment => Answerer::InOrder,
     }
 }
 
@@ -272,7 +281,8 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // agents' side tells its facts under the same turn.
         RequestKind::ListAgents => true,
         // It leads to facts only later, from the agents' own thread, which takes the turn
-        // to tell them.
+        // to tell them; and its answer waits for that thread, which the turn held here would
+        // keep waiting for ever.
         RequestKind::Report => false,
         // What these read, a fact makes a Window read again.
         RequestKind::GetHistory
@@ -287,6 +297,15 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // what that fact carries: read between two settings kept and sent after the fact
         // of the second, it would be taken for the newer list.
         RequestKind::GetSettings | RequestKind::SetSetting => true,
+        // As the other requests of reviews: their facts name a workspace, and a Window
+        // told one asks again. What attaching tells of the sessions is told by the agents'
+        // side under the Keeper's turn.
+        RequestKind::AttachReview
+        | RequestKind::DetachReview
+        | RequestKind::ResolveThread
+        | RequestKind::ReopenThread
+        | RequestKind::ResolveAddressed
+        | RequestKind::GetAttachment => false,
     }
 }
 
@@ -402,7 +421,7 @@ impl Parts {
                 program,
                 size: at,
             } => self
-                .open_terminal(workspaces, window, &workspace, &program, at)
+                .open_terminal(kept, window, &workspace, &program, at)
                 .map(|(reply, release)| {
                     then = Some(release);
                     reply
@@ -477,7 +496,9 @@ impl Parts {
                     }),
                 };
             }
-            Request::Report { report } => return Answered::Now(self.agents.report(kept, report)),
+            // Answered once the agents' side has taken it, by work that runs after the
+            // parts are let go: that side takes them to work the report out.
+            Request::Report { report } => return self.agents.report(kept, report),
             Request::ListAgents => self.agents.list(kept),
             Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
             Request::GetUncommitted { workspace, review } => {
@@ -515,6 +536,25 @@ impl Parts {
             }
             Request::GetSettings => crate::settings::get(kept),
             Request::SetSetting { setting } => crate::settings::set(kept, setting, &mut facts),
+            // The requests of slice 6 on reviews: `reviewing.rs`.
+            Request::AttachReview { review, thread } => {
+                crate::reviewing::attach(kept, &self.agents, &review, thread.as_ref(), &mut facts)
+            }
+            Request::DetachReview { review } => {
+                crate::reviewing::detach(kept, &self.agents, &review, &mut facts)
+            }
+            Request::ResolveThread { review, thread } => {
+                crate::reviewing::resolve(kept, &review, &thread, true, &mut facts)
+            }
+            Request::ReopenThread { review, thread } => {
+                crate::reviewing::resolve(kept, &review, &thread, false, &mut facts)
+            }
+            Request::ResolveAddressed { review } => {
+                crate::reviewing::resolve_addressed(kept, &review, &mut facts)
+            }
+            Request::GetAttachment { review } => {
+                crate::reviewing::attachment(kept, &self.agents, &review)
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -524,13 +564,13 @@ impl Parts {
     /// program through: until the reply is queued, nothing of it is sent.
     fn open_terminal(
         &self,
-        workspaces: &Workspaces,
+        kept: &Kept,
         window: &Arc<Window>,
         workspace: &yaar_link::WorkspaceId,
         program: &Program,
         at: TerminalSize,
     ) -> Result<(Reply, Step), Refusal> {
-        let folder = list(workspaces)?
+        let folder = list(&kept.workspaces)?
             .into_iter()
             .flat_map(|repository| repository.workspaces)
             .find(|found| found.id == *workspace)
@@ -543,16 +583,40 @@ impl Parts {
             reason: format!("no name for the terminal could be made: {error}"),
         })?;
         let terminal = yaar_link::TerminalId::new(id.as_str());
-        let start = match program {
-            Program::Shell => Start::shell(folder, size(at)),
-            Program::Agent { agent } => match self.agents.launcher(agent) {
-                Some(command) => Start::launcher(folder, size(at), command),
-                None => {
+        // A launcher for a review is refused, as for an Adapter the Keeper does not have,
+        // before anything is listed or started: the terminal would bind a review nobody holds.
+        if let Program::AgentFor { review, .. } = program {
+            let held = kept
+                .reviews
+                .review(&yaar_review_engine::ReviewId::new(review.as_str()));
+            match held {
+                Ok(_) => {}
+                Err(yaar_review_engine::EngineError::UnknownReview(_)) => {
                     return Err(Refusal::Failed {
-                        reason: format!("the app knows no agent CLI named {agent}"),
+                        reason: format!("the app holds no review {review}"),
                     });
                 }
-            },
+                Err(error) => return Err(engine_refusal(error)),
+            }
+        }
+        let start = match program {
+            Program::Shell => Start::shell(folder, size(at)),
+            Program::Agent { agent } | Program::AgentFor { agent, .. } => {
+                match self.agents.launcher(agent) {
+                    Some(command) => Start::launcher(folder, size(at), command),
+                    None => {
+                        return Err(Refusal::Failed {
+                            reason: format!("the app knows no agent CLI named {agent}"),
+                        });
+                    }
+                }
+            }
+            // The CLI's own command for bringing the session back, through the user's
+            // shell as a launcher's command.
+            Program::Resume { session } => {
+                let command = self.agents.resume_command(kept, session)?;
+                Start::launcher(folder, size(at), &command)
+            }
         };
         // Every shell of the app is told where the Keeper listens and which terminal it
         // is in, so that a piece of an agent CLI started in it finds its way back, and
@@ -601,6 +665,9 @@ impl Parts {
         // Told before the program starts: a CLI in it reports from its first moment, and
         // is followed only in a terminal the agents' side holds.
         self.agents.terminal_opened(&terminal, workspace);
+        if let Program::AgentFor { review, .. } = program {
+            self.agents.terminal_opened_for(&terminal, review);
+        }
         if let Err(error) = self.dock.open(id, start, events) {
             self.agents.terminal_ended(&terminal);
             self.terminals.remove(&terminal);
@@ -1347,6 +1414,20 @@ fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
                 },
                 resolved: thread.resolved,
                 addressed: thread.addressed,
+                state: crate::reviewing::thread_state(review, &thread.id),
+                now: thread.now.as_ref().map(|now| yaar_link::Placed {
+                    tree: now.tree.clone(),
+                    path: now.path.clone(),
+                    side: side(now.side),
+                    lines: yaar_link::Lines {
+                        first: now.first,
+                        last: now.last,
+                    },
+                    notice: now.notice.map(|notice| match notice {
+                        yaar_review_engine::NoticeRecord::Changed => yaar_link::Notice::Changed,
+                        yaar_review_engine::NoticeRecord::Deleted => yaar_link::Notice::Deleted,
+                    }),
+                }),
                 comments: thread
                     .comments
                     .iter()
@@ -1372,6 +1453,7 @@ fn review(review: &yaar_review_engine::Review) -> yaar_link::Review {
                     SentBy::Copied => yaar_link::SentBy::Copied,
                     SentBy::Delivered => yaar_link::SentBy::Delivered,
                 },
+                edited: round.edited,
             })
             .collect(),
     }

@@ -10,13 +10,12 @@ use yaar_recorder::{
     ChangedPath, CommitId, Git, GitError, RecordError, RecordedState, StateId, StateStore, Worktree,
 };
 use yaar_store::{
-    Anchor, CommentId, ReviewId, SentBy, SessionId, SessionRecord, Side, Store, StoreError,
-    ThreadId, WorkspaceId,
+    Anchor, CommentId, ReviewId, SessionId, SessionRecord, Side, Store, StoreError, ThreadId,
+    WorkspaceId,
 };
 
-use crate::review::{Review, ReviewError, Scope};
+use crate::review::{Review, ReviewError};
 use crate::takeover::{Takeover, takeover};
-use crate::text::{COPY_INSTRUCTION, as_text};
 use crate::viewed::{ViewedFiles, fingerprint};
 use crate::workspace::with_review_of_no_agent;
 
@@ -115,6 +114,8 @@ pub enum EngineError {
     /// The Store holds no review of this session: it holds no such session, or the
     /// session was never told to the engine as started.
     NoReviewOfSession(SessionId),
+    /// What was to hand out a review that rides with a message failed: nothing was sent.
+    HandOut(std::io::Error),
 }
 
 impl fmt::Display for EngineError {
@@ -131,6 +132,7 @@ impl fmt::Display for EngineError {
             Self::NoReviewOfSession(session) => {
                 write!(f, "there is no review of the session {session}")
             }
+            Self::HandOut(e) => write!(f, "the review could not be handed out: {e}"),
         }
     }
 }
@@ -177,7 +179,7 @@ impl From<GitError> for EngineError {
 /// first use and kept.
 #[derive(Debug)]
 pub struct Reviews {
-    store: Store,
+    pub(crate) store: Store,
     git: Git,
     states: PathBuf,
     // The state store of each workspace, once opened.
@@ -452,36 +454,6 @@ impl Reviews {
         Ok(())
     }
 
-    /// Copies a review as text and sends it, as a submit does: the text holds every unsent
-    /// comment on an unresolved thread, after [`crate::COPY_INSTRUCTION`]; the state of
-    /// `worktree`, the worktree of the review's workspace, is recorded; the copied comments
-    /// are sent in a new round, recorded at that state, in one transaction of the Store.
-    /// Refused, with nothing recorded, when there is nothing to send.
-    pub fn copy_as_text(
-        &self,
-        worktree: &Worktree,
-        review: &ReviewId,
-    ) -> Result<Copied, EngineError> {
-        let before = self.review(review)?;
-        if before.unsent(Scope::Everything).is_empty() {
-            return Err(ReviewError::NothingToSend.into());
-        }
-        let state = self.record_state(before.workspace(), worktree)?;
-
-        let _turn = self.turn();
-        let mut current = self.review(review)?;
-        let rendered = as_text(&current, Scope::Everything, COPY_INSTRUCTION);
-        if rendered.comments.is_empty() {
-            return Err(ReviewError::NothingToSend.into());
-        }
-        let sent = current.send(Scope::Everything, state.id.as_str(), SentBy::Copied)?;
-        self.store.put_round(review, &sent.round, &sent.comments)?;
-        Ok(Copied {
-            text: rendered.text,
-            round: sent.round.number,
-        })
-    }
-
     /// Marks the change reviewed: records the state of `worktree`, the worktree of the
     /// review's workspace, as it is now and makes it the reviewed state of the review,
     /// from which the next review starts. No commit is made. Gives the state.
@@ -561,7 +533,7 @@ impl Reviews {
 
     // Records the state of `worktree` in the state store of `workspace` and tells the watch
     // of it: every state the engine takes goes through here.
-    fn record_state(
+    pub(crate) fn record_state(
         &self,
         workspace: &WorkspaceId,
         worktree: &Worktree,
@@ -570,11 +542,14 @@ impl Reviews {
         if let Some(watch) = &self.watch {
             watch.state_taken(workspace, &state.id);
         }
+        // Every thread of the workspace is carried to each state the engine takes, one
+        // state at a time.
+        self.followed(workspace, &state.id);
         Ok(state)
     }
 
     // The turn: held while a call reads what it changes and keeps the change.
-    fn turn(&self) -> MutexGuard<'_, ()> {
+    pub(crate) fn turn(&self) -> MutexGuard<'_, ()> {
         self.writing.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
@@ -644,7 +619,7 @@ fn holds_lines(content: &[u8], at: &NewAnchor) -> bool {
 }
 
 // 32 lowercase hexadecimal digits from the random numbers of the system.
-fn random_id() -> Result<String, EngineError> {
+pub(crate) fn random_id() -> Result<String, EngineError> {
     let mut bytes = [0u8; 16];
     std::fs::File::open("/dev/urandom")
         .and_then(|mut from| from.read_exact(&mut bytes))

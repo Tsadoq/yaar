@@ -20,6 +20,7 @@
 //!
 //! It depends on the Frame and on no other pane.
 
+mod attachment;
 mod draw;
 mod emulator;
 mod keys;
@@ -39,6 +40,7 @@ use yaar_link::{
     TerminalSize, WorkspaceId,
 };
 
+pub use attachment::ADDRESS_EACH_COMMENT;
 pub use emulator::{
     Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
 };
@@ -70,6 +72,17 @@ actions!(
         ScrollPageUp,
         /// Scrolls the history of the terminal with the focus one screen down.
         ScrollPageDown,
+        /// Shows, over the agent's terminal with the focus, what the next message will
+        /// carry of the review attached to it, as the agent will receive it; again, hides
+        /// it.
+        ViewAttachment,
+        /// Takes away the review attached to the next message of the agent of the
+        /// terminal with the focus.
+        DetachAttachment,
+        /// Types the sentence "Address each comment." at the prompt of the agent of the
+        /// terminal with the focus, while a review is attached to its next message and it
+        /// shows no permission prompt; the user presses Enter.
+        AddressEachComment,
     ]
 );
 
@@ -188,6 +201,26 @@ pub fn controls() -> Vec<Control> {
             || Box::new(ScrollPageDown),
             "shift-pagedown",
             in_a_terminal,
+        ),
+        nothing(
+            "View Attachment",
+            || Box::new(ViewAttachment),
+            "secondary-alt-v",
+            Place::Anywhere,
+        ),
+        Control {
+            title: "Detach Review",
+            action: || Box::new(DetachAttachment),
+            keystroke: "secondary-alt-x",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::DetachReview)),
+            asks: Asks::Nothing,
+        },
+        nothing(
+            "Address Each Comment",
+            || Box::new(AddressEachComment),
+            "secondary-alt-a",
+            Place::Anywhere,
         ),
     ]
 }
@@ -335,6 +368,9 @@ pub struct TerminalPane {
     window_title: Option<String>,
     /// The terminals the pane asked the Keeper to attach and has no answer for.
     attaching: HashMap<TerminalId, Attaching>,
+    /// What the pane shows of the reviews attached to its agents' next messages: its own
+    /// state, chosen by the package that builds it (`attachment.rs`).
+    attachments: attachment::Attachments,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -346,6 +382,9 @@ impl TerminalPane {
         models.routes.route(&pane, Self::next_terminal);
         models.routes.route(&pane, Self::previous_terminal);
         models.routes.route(&pane, Self::toggle_split);
+        models.routes.route(&pane, Self::view_attachment);
+        models.routes.route(&pane, Self::detach_attachment);
+        models.routes.route(&pane, Self::address_each_comment);
 
         let focus = cx.focus_handle();
         let handed_on = cx.on_focus(&focus, window, |pane, window, cx| {
@@ -368,6 +407,14 @@ impl TerminalPane {
         let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
         // A terminal the list gains is attached.
         let terminals = cx.observe(&models.terminals, |pane, _, cx| pane.attach_missing(cx));
+        // A terminal another pane wants is opened here.
+        let wanted = cx.subscribe_in(
+            &models.terminals,
+            window,
+            |pane, _, wanted: &yaar_frame::Wanted, window, cx| {
+                pane.agent_wanted(wanted, window, cx);
+            },
+        );
         let on_screen = models.workspaces.read(cx).selected().cloned();
         let mut pane = Self {
             models: models.clone(),
@@ -384,7 +431,10 @@ impl TerminalPane {
             frames_until: None,
             window_title: None,
             attaching: HashMap::new(),
-            _subscriptions: vec![handed_on, keys, facts, workspaces, agents, terminals],
+            attachments: attachment::Attachments::default(),
+            _subscriptions: vec![
+                handed_on, keys, facts, workspaces, agents, terminals, wanted,
+            ],
         };
         pane.attach_missing(cx);
         pane
@@ -521,22 +571,28 @@ impl TerminalPane {
         // The pane is held weakly, so a pane that is gone takes no answer.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
-            pane.update(cx, |pane, cx| pane.opened(workspace, answer, cx))
-                .ok();
+            pane.update(cx, |pane, cx| {
+                pane.opened(workspace, Program::Shell, answer, cx)
+            })
+            .ok();
         })
         .detach();
         cx.notify();
     }
 
-    /// Takes the Keeper's answer to the question for a new terminal of `workspace`.
+    /// Takes the Keeper's answer to the question for a new terminal of `workspace` that
+    /// runs `program`.
     fn opened(
         &mut self,
         workspace: WorkspaceId,
+        program: Program,
         answer: Result<Reply, AskError>,
         cx: &mut Context<Self>,
     ) {
         match answer {
-            Ok(Reply::TerminalOpened { terminal }) => self.add_opened(workspace, terminal, cx),
+            Ok(Reply::TerminalOpened { terminal }) => {
+                self.add_opened(workspace, program, terminal, cx);
+            }
             Ok(_) => self.notice = Some(AskError::Unexpected.to_string()),
             Err(error) => self.notice = Some(error.to_string()),
         }
@@ -571,10 +627,16 @@ impl TerminalPane {
         view
     }
 
-    /// Adds a terminal the Keeper opened for this Window: it is shown in the slot that has
-    /// the focus and takes the focus, and joins the shared list of terminals, which does
-    /// not attach to it.
-    fn add_opened(&mut self, workspace: WorkspaceId, id: TerminalId, cx: &mut Context<Self>) {
+    /// Adds a terminal the Keeper opened for this Window to run `program`: it is shown in
+    /// the slot that has the focus and takes the focus, and joins the shared list of
+    /// terminals, as that program, which does not attach to it.
+    fn add_opened(
+        &mut self,
+        workspace: WorkspaceId,
+        program: Program,
+        id: TerminalId,
+        cx: &mut Context<Self>,
+    ) {
         if self.entry(&id).is_some() {
             return;
         }
@@ -587,7 +649,7 @@ impl TerminalPane {
         let info = TerminalInfo {
             id,
             workspace: workspace.clone(),
-            program: Program::Shell,
+            program,
         };
         self.models
             .terminals
@@ -963,9 +1025,16 @@ impl Render for TerminalPane {
                 .debug_selector(move || format!("terminal-{name}"))
                 .size_full()
                 .child(view);
+            // The review attached to the agent's next message, with its controls, over the
+            // bottom of its terminal.
+            let attached = self.render_attachment(n, id, cx);
             Some((
                 divider,
-                slot.relative().child(named).children(cut).children(mark),
+                slot.relative()
+                    .child(named)
+                    .children(cut)
+                    .children(mark)
+                    .children(attached),
             ))
         });
         let slots = slots.flat_map(|(divider, slot)| divider.into_iter().chain([slot]));

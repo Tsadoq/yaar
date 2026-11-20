@@ -131,10 +131,60 @@ pub struct Thread {
     pub anchor: Anchor,
     /// Whether the reviewer resolved it.
     pub resolved: bool,
-    /// Whether the agent said it addressed it.
+    /// Whether the agent said it addressed it, in its last reply.
     pub addressed: bool,
     /// Its comments, in the order they were first kept.
     pub comments: Vec<Comment>,
+    /// Where it sits now, in the newest state it was carried to; none while it sits where
+    /// its anchor says.
+    pub now: Option<ThreadPlace>,
+}
+
+/// Where a thread sits now, after the code it was written on changed: kept by
+/// [`Store::set_places`], read back with the thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ThreadPlace {
+    /// The version it sits in now: the full id of a recorded state.
+    pub tree: String,
+    /// The path of the file in that version.
+    pub path: PathBuf,
+    /// The side, as the anchor's.
+    pub side: Side,
+    /// The first line, counted from 1.
+    pub first: u32,
+    /// The last line.
+    pub last: u32,
+    /// What became of the lines it was written on; none when they only moved.
+    pub notice: Option<NoticeRecord>,
+}
+
+/// What became of the lines a thread was written on, as the Store keeps it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoticeRecord {
+    /// They were rewritten.
+    Changed,
+    /// They were deleted.
+    Deleted,
+}
+
+/// What of a review is attached to the user's next message, as the Store keeps it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachedRecord {
+    /// The review.
+    Review,
+    /// One thread alone.
+    Thread(ThreadId),
+}
+
+/// Who is credited with one uncommitted path at a recorded state, as the Store keeps it
+/// with that state: see [`Store::put_credits`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreditRecord {
+    /// The path, relative to the folder of the worktree.
+    pub path: PathBuf,
+    /// The sessions it is credited to, by their ids, in the order given; empty for a
+    /// change no agent made.
+    pub sessions: Vec<String>,
 }
 
 /// How the comments of a round left the app.
@@ -151,10 +201,14 @@ pub enum SentBy {
 pub struct Round {
     /// Its number, from 1.
     pub number: u32,
-    /// The full id of the state of the worktree recorded at the send.
-    pub state: String,
+    /// The full id of the state of the worktree recorded at the send; none until it is,
+    /// as for a round delivered with a message, whose state is recorded after the
+    /// message was handed to the agent ([`Store::set_round_state`]).
+    pub state: Option<String>,
     /// How the comments left.
     pub sent_by: SentBy,
+    /// Whether the agent reported an edit since the send ([`Store::set_round_edited`]).
+    pub edited: bool,
 }
 
 /// One review, whole: what [`Store::reviews_of`] and [`Store::review`] give.
@@ -173,6 +227,8 @@ pub struct ReviewRecord {
     pub threads: Vec<Thread>,
     /// Its rounds, by number.
     pub rounds: Vec<Round>,
+    /// What is attached to the user's next message; none while nothing is.
+    pub attached: Option<AttachedRecord>,
 }
 
 /// A file marked viewed: the mark holds for the content it had.
@@ -363,7 +419,8 @@ impl Store {
         })
     }
 
-    /// Deletes a draft; a thread left with no comment goes with it. A comment that was
+    /// Deletes a draft; a thread left with no comment goes with it, and with it the
+    /// attachment of that thread alone. A comment that was
     /// sent, or that is not kept, is left alone and refused. Returns when it is on the
     /// drive.
     pub fn delete_draft(&self, comment: &CommentId) -> Result<(), StoreError> {
@@ -388,13 +445,22 @@ impl Store {
                 &thread,
             )? {
                 deleting.execute("DELETE FROM thread WHERE id = ?1", [&thread])?;
+                // A thread attached alone has nothing left to attach.
+                deleting.execute(
+                    "UPDATE review SET attached = NULL, attached_thread = NULL
+                     WHERE attached_thread = ?1",
+                    [&thread],
+                )?;
             }
             Ok(deleting.commit()?)
         })
     }
 
     /// Keeps a new round of a review and marks these comments sent in it, in one
-    /// transaction: either all of it is kept or none. The round's number must be the next
+    /// transaction: either all of it is kept or none. Every thread one of whose comments it
+    /// sends loses its addressed mark in the same transaction: the agent has a follow-up to
+    /// answer. A round may be kept with no state, which [`Store::set_round_state`] gives it
+    /// later. The round's number must be the next
     /// of the review, and every comment a draft of the review. Returns when it is on the
     /// drive and the write-ahead file has been moved into the database file. When that
     /// move could not be made, because another connection reads the file, the call fails
@@ -405,6 +471,18 @@ impl Store {
         review: &ReviewId,
         round: &Round,
         comments: &[CommentId],
+    ) -> Result<(), StoreError> {
+        self.send_round(review, round, comments, false)
+    }
+
+    /// The one send behind [`Store::put_round`] and [`Store::put_round_detached`]: `detach`
+    /// takes the review's attachment away in the same transaction.
+    fn send_round(
+        &self,
+        review: &ReviewId,
+        round: &Round,
+        comments: &[CommentId],
+        detach: bool,
     ) -> Result<(), StoreError> {
         let (review, round) = (review.0.clone(), round.clone());
         let comments: Vec<String> = comments.iter().map(|c| c.0.clone()).collect();
@@ -447,6 +525,18 @@ impl Store {
                         "comment {comment} is not a draft of review {review}, and is not sent"
                     ));
                 }
+                // The agent has a follow-up to answer, whatever it said of the thread.
+                sending.execute(
+                    "UPDATE thread SET addressed = 0
+                     WHERE id = (SELECT thread FROM comment WHERE id = ?1)",
+                    [comment],
+                )?;
+            }
+            if detach {
+                sending.execute(
+                    "UPDATE review SET attached = NULL, attached_thread = NULL WHERE id = ?1",
+                    [&review],
+                )?;
             }
             sending.commit()?;
             // The sent comments reach the database file before the call returns, so
@@ -548,6 +638,305 @@ impl Store {
         })
     }
 
+    /// Keeps a new round of a review as [`Store::put_round`] does, and takes away what of
+    /// the review is attached to the user's next message, all in the same transaction:
+    /// the send of what was attached. Either all of it is kept or none, so that a Keeper
+    /// killed in between never leaves a review attached whose comments were sent. Refused
+    /// as `put_round` is.
+    pub fn put_round_detached(
+        &self,
+        review: &ReviewId,
+        round: &Round,
+        comments: &[CommentId],
+    ) -> Result<(), StoreError> {
+        self.send_round(review, round, comments, true)
+    }
+
+    /// Keeps what of a review is attached to the user's next message, in place of what
+    /// was; none takes the attachment away. Returns when it is on the drive. Refused for a
+    /// review that is not kept, and for a thread the review does not hold.
+    pub fn set_attached(
+        &self,
+        review: &ReviewId,
+        attached: Option<&AttachedRecord>,
+    ) -> Result<(), StoreError> {
+        let (review, attached) = (review.0.clone(), attached.cloned());
+        self.try_ask(move |connection| {
+            let keeping = connection.transaction()?;
+            if !exists(&keeping, "SELECT 1 FROM review WHERE id = ?1", &review)? {
+                return refused(format!("review {review} is not kept"));
+            }
+            let (kind, thread) = match &attached {
+                None => (None, None),
+                Some(AttachedRecord::Review) => (Some(0), None),
+                Some(AttachedRecord::Thread(thread)) => {
+                    if !keeping
+                        .prepare("SELECT 1 FROM thread WHERE id = ?1 AND review = ?2")?
+                        .exists([&thread.0, &review])?
+                    {
+                        return refused(format!("review {review} holds no thread {thread}"));
+                    }
+                    (Some(1), Some(thread.0.clone()))
+                }
+            };
+            keeping.execute(
+                "UPDATE review SET attached = ?2, attached_thread = ?3 WHERE id = ?1",
+                params![review, kind, thread],
+            )?;
+            Ok(keeping.commit()?)
+        })
+    }
+
+    /// Keeps a reply of the agent in a thread, and whether it marked the thread addressed,
+    /// in one transaction: either both are kept or neither. The comment's author is the
+    /// agent and its round the number given, which must be a round of the thread's
+    /// review. Returns when it is on the drive. Refused for a thread that is not kept, an
+    /// id that is taken, and a comment of the reviewer.
+    pub fn put_reply(
+        &self,
+        thread: &ThreadId,
+        reply: &Comment,
+        addressed: bool,
+    ) -> Result<(), StoreError> {
+        if reply.author != Author::Agent {
+            return Err(refusal(format!(
+                "comment {} is the reviewer's, and a reply is the agent's",
+                reply.id
+            )));
+        }
+        let Some(round) = reply.round else {
+            return Err(refusal(format!(
+                "reply {} names no round, and a reply belongs to one",
+                reply.id
+            )));
+        };
+        let (thread, reply) = (thread.0.clone(), reply.clone());
+        self.try_ask(move |connection| {
+            let keeping = connection.transaction()?;
+            let review: Option<String> = keeping
+                .query_row(
+                    "SELECT review FROM thread WHERE id = ?1",
+                    [&thread],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(review) = review else {
+                return refused(format!("thread {thread} is not kept"));
+            };
+            if exists(&keeping, "SELECT 1 FROM comment WHERE id = ?1", &reply.id.0)? {
+                return refused(format!("comment {} is kept already", reply.id));
+            }
+            if !keeping
+                .prepare("SELECT 1 FROM round WHERE review = ?1 AND number = ?2")?
+                .exists(params![review, round])?
+            {
+                return refused(format!(
+                    "review {review} has no round {round}, which reply {} names",
+                    reply.id
+                ));
+            }
+            insert_comment(&keeping, &thread, &reply)?;
+            keeping.execute(
+                "UPDATE thread SET addressed = ?2 WHERE id = ?1",
+                params![thread, addressed],
+            )?;
+            Ok(keeping.commit()?)
+        })
+    }
+
+    /// Resolves each of `threads`, in one transaction. Returns when it is on the drive.
+    /// Refused, with nothing changed, when one is not kept.
+    pub fn resolve_threads(&self, threads: &[ThreadId]) -> Result<(), StoreError> {
+        let threads: Vec<String> = threads.iter().map(|t| t.0.clone()).collect();
+        self.try_ask(move |connection| {
+            let resolving = connection.transaction()?;
+            for thread in &threads {
+                let changed =
+                    resolving.execute("UPDATE thread SET resolved = 1 WHERE id = ?1", [thread])?;
+                if changed == 0 {
+                    return refused(format!("thread {thread} is not kept"));
+                }
+            }
+            Ok(resolving.commit()?)
+        })
+    }
+
+    /// Keeps the state recorded for a round that was kept with none. Returns when it is on
+    /// the drive. Refused for a round that is not kept, and one that has a state already.
+    pub fn set_round_state(
+        &self,
+        review: &ReviewId,
+        round: u32,
+        state: &str,
+    ) -> Result<(), StoreError> {
+        let (review, state) = (review.0.clone(), state.to_owned());
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE round SET state = ?3 WHERE review = ?1 AND number = ?2 AND state IS NULL",
+                params![review, round, state],
+            )?;
+            if changed == 0 {
+                return refused(if exists_round(connection, &review, round)? {
+                    format!("round {round} of review {review} has a state already")
+                } else {
+                    format!("review {review} has no round {round}")
+                });
+            }
+            Ok(())
+        })
+    }
+
+    /// Marks a round as one its agent has edited since. Returns when it is on the drive.
+    /// Refused for a round that is not kept.
+    pub fn set_round_edited(&self, review: &ReviewId, round: u32) -> Result<(), StoreError> {
+        let review = review.0.clone();
+        self.try_ask(move |connection| {
+            let changed = connection.execute(
+                "UPDATE round SET edited = 1 WHERE review = ?1 AND number = ?2",
+                params![review, round],
+            )?;
+            if changed == 0 {
+                return refused(format!("review {review} has no round {round}"));
+            }
+            Ok(())
+        })
+    }
+
+    /// Keeps where each thread of `places` sits now, in place of where it sat, in one
+    /// transaction: either all are kept or none. None puts a thread back on its anchor.
+    /// Following carries every thread of a workspace to each state it records, so one
+    /// write to the drive serves them all. Returns when it is on the drive. Refused, with
+    /// nothing kept, when one thread is not kept.
+    pub fn set_places(&self, places: &[(ThreadId, Option<ThreadPlace>)]) -> Result<(), StoreError> {
+        for (thread, place) in places {
+            if let Some(place) = place
+                && (place.first < 1 || place.last < place.first)
+            {
+                return Err(refusal(format!(
+                    "thread {thread} is placed on the lines {} to {}, and lines count from 1, the last not before the first",
+                    place.first, place.last
+                )));
+            }
+        }
+        let places = places.to_vec();
+        self.try_ask(move |connection| {
+            let placing = connection.transaction()?;
+            for (thread, place) in &places {
+                let changed = match place {
+                    Some(place) => placing.execute(
+                        "UPDATE thread SET now_tree = ?2, now_path = ?3, now_side = ?4,
+                                now_first = ?5, now_last = ?6, notice = ?7
+                         WHERE id = ?1",
+                        params![
+                            thread.0,
+                            place.tree,
+                            bytes(&place.path),
+                            side_number(place.side),
+                            place.first,
+                            place.last,
+                            place.notice.map(notice_number)
+                        ],
+                    )?,
+                    None => placing.execute(
+                        "UPDATE thread SET now_tree = NULL, now_path = NULL, now_side = NULL,
+                                now_first = NULL, now_last = NULL, notice = NULL
+                         WHERE id = ?1",
+                        [&thread.0],
+                    )?,
+                };
+                if changed == 0 {
+                    return refused(format!("thread {thread} is not kept"));
+                }
+            }
+            Ok(placing.commit()?)
+        })
+    }
+
+    /// Keeps, with the recorded state `state` of `workspace`, who is credited with each
+    /// path of `credits`, in place of what was kept for that state: every uncommitted
+    /// change of the worktree, as Workspaces credited them when the state was recorded.
+    /// Returns when it is on the drive.
+    pub fn put_credits(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+        credits: &[CreditRecord],
+    ) -> Result<(), StoreError> {
+        // An empty session id is how the table says that no agent made the change.
+        if credits
+            .iter()
+            .any(|c| c.sessions.iter().any(String::is_empty))
+        {
+            return Err(refusal(
+                "a credit names a session with an empty id, which stands for no session".to_owned(),
+            ));
+        }
+        let (workspace, state, credits) = (workspace.0.clone(), state.to_owned(), credits.to_vec());
+        self.try_ask(move |connection| {
+            let keeping = connection.transaction()?;
+            keeping.execute(
+                "DELETE FROM state_credit WHERE workspace = ?1 AND state = ?2",
+                params![workspace, state],
+            )?;
+            // A path named twice, or a session twice for it, is kept once.
+            let mut insert = keeping.prepare(
+                "INSERT OR IGNORE INTO state_credit (workspace, state, path, session)
+                 VALUES (?1, ?2, ?3, ?4)",
+            )?;
+            for credit in &credits {
+                let path = bytes(&credit.path);
+                if credit.sessions.is_empty() {
+                    insert.execute(params![workspace, state, path, ""])?;
+                }
+                for session in &credit.sessions {
+                    insert.execute(params![workspace, state, path, session])?;
+                }
+            }
+            drop(insert);
+            Ok(keeping.commit()?)
+        })
+    }
+
+    /// Who is credited with each path kept with the recorded state `state` of `workspace`,
+    /// ordered by the bytes of the paths; empty for a state nothing was kept with.
+    pub fn credits_of(
+        &self,
+        workspace: &WorkspaceId,
+        state: &str,
+    ) -> Result<Vec<CreditRecord>, StoreError> {
+        let (workspace, state) = (workspace.0.clone(), state.to_owned());
+        self.ask(move |connection| {
+            // The sessions of a path come in the order they were kept.
+            let rows = connection
+                .prepare(
+                    "SELECT path, session FROM state_credit
+                     WHERE workspace = ?1 AND state = ?2 ORDER BY path, rowid",
+                )?
+                .query_map([workspace, state], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut credits: Vec<CreditRecord> = Vec::new();
+            for (file, session) in rows {
+                let file = path(file);
+                if credits.last().is_none_or(|last| last.path != file) {
+                    credits.push(CreditRecord {
+                        path: file,
+                        sessions: Vec::new(),
+                    });
+                }
+                if !session.is_empty() {
+                    credits
+                        .last_mut()
+                        .expect("just pushed")
+                        .sessions
+                        .push(session);
+                }
+            }
+            Ok(credits)
+        })
+    }
+
     /// Flushes the drive now: every draft saved so far is then on it. The writer does
     /// this by itself after a pause in the typing, and when the last clone of the Store is
     /// dropped, as when the Keeper stops and lets its parts go.
@@ -569,6 +958,13 @@ pub(crate) fn refused<T>(sentence: String) -> Result<T, Failed> {
 /// Whether a query that takes one id finds a row.
 pub(crate) fn exists(connection: &Connection, query: &str, id: &str) -> rusqlite::Result<bool> {
     connection.prepare(query)?.exists([id])
+}
+
+/// Whether a review holds a round of this number.
+fn exists_round(connection: &Connection, review: &str, round: u32) -> rusqlite::Result<bool> {
+    connection
+        .prepare("SELECT 1 FROM round WHERE review = ?1 AND number = ?2")?
+        .exists(params![review, round])
 }
 
 /// What to say of a comment that is not a draft that is kept: that it is not kept, or
@@ -614,21 +1010,43 @@ fn insert_comment(
 fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<ReviewRecord>> {
     let head = connection
         .query_row(
-            "SELECT workspace, agent, reviewed FROM review WHERE id = ?1",
+            "SELECT workspace, agent, reviewed, attached, attached_thread
+             FROM review WHERE id = ?1",
             [id],
-            |row| Ok((row.get::<_, String>(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                ))
+            },
         )
         .optional()?;
-    let Some((workspace, agent, reviewed)) = head else {
+    let Some((workspace, agent, reviewed, attached, attached_thread)) = head else {
         return Ok(None);
     };
 
     let mut threads: Vec<Thread> = connection
         .prepare(
-            "SELECT id, tree, path, side, first_line, last_line, text, resolved, addressed
+            "SELECT id, tree, path, side, first_line, last_line, text, resolved, addressed,
+                    now_tree, now_path, now_side, now_first, now_last, notice
              FROM thread WHERE review = ?1 ORDER BY seq",
         )?
         .query_map([id], |row| {
+            // A thread sits on its anchor while it has no place of its own.
+            let now = match row.get::<_, Option<String>>(9)? {
+                None => None,
+                Some(tree) => Some(ThreadPlace {
+                    tree,
+                    path: path(row.get(10)?),
+                    side: side_of(row.get(11)?),
+                    first: row.get(12)?,
+                    last: row.get(13)?,
+                    notice: row.get::<_, Option<i64>>(14)?.map(notice_of),
+                }),
+            };
             Ok(Thread {
                 id: ThreadId(row.get(0)?),
                 anchor: Anchor {
@@ -642,6 +1060,7 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
                 resolved: row.get(7)?,
                 addressed: row.get(8)?,
                 comments: Vec::new(),
+                now,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -674,12 +1093,15 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
     }
 
     let rounds = connection
-        .prepare("SELECT number, state, sent_by FROM round WHERE review = ?1 ORDER BY number")?
+        .prepare(
+            "SELECT number, state, sent_by, edited FROM round WHERE review = ?1 ORDER BY number",
+        )?
         .query_map([id], |row| {
             Ok(Round {
                 number: row.get(0)?,
                 state: row.get(1)?,
                 sent_by: sent_by_of(row.get(2)?),
+                edited: row.get(3)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -691,10 +1113,15 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
         reviewed,
         threads,
         rounds,
+        attached: attached.map(|kind| match (kind, attached_thread) {
+            (1, Some(thread)) => AttachedRecord::Thread(ThreadId(thread)),
+            _ => AttachedRecord::Review,
+        }),
     }))
 }
 
-// Sides, authors and ways of sending are kept as the numbers `TABLES_2` says.
+// Sides, authors and ways of sending are kept as the numbers `TABLES_2` says, and the
+// notice of a thread's place as `TABLES_5` says.
 
 fn side_number(side: Side) -> i64 {
     match side {
@@ -719,6 +1146,21 @@ fn author_of(number: i64) -> Author {
         Author::Reviewer
     } else {
         Author::Agent
+    }
+}
+
+fn notice_number(notice: NoticeRecord) -> i64 {
+    match notice {
+        NoticeRecord::Changed => 0,
+        NoticeRecord::Deleted => 1,
+    }
+}
+
+fn notice_of(number: i64) -> NoticeRecord {
+    if number == 0 {
+        NoticeRecord::Changed
+    } else {
+        NoticeRecord::Deleted
     }
 }
 

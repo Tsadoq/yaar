@@ -628,6 +628,27 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                     form: yaar_link::FlowForm::LiveDiff,
                 },
             },
+            RequestKind::AttachReview => Request::AttachReview {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+                thread: None,
+            },
+            RequestKind::DetachReview => Request::DetachReview {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+            },
+            RequestKind::ResolveThread => Request::ResolveThread {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+                thread: yaar_link::ThreadId::new("2".repeat(32)),
+            },
+            RequestKind::ReopenThread => Request::ReopenThread {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+                thread: yaar_link::ThreadId::new("2".repeat(32)),
+            },
+            RequestKind::ResolveAddressed => Request::ResolveAddressed {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+            },
+            RequestKind::GetAttachment => Request::GetAttachment {
+                review: yaar_link::ReviewId::new("1".repeat(32)),
+            },
         };
         assert_eq!(
             window.ask(request),

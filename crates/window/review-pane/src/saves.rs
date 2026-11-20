@@ -55,6 +55,9 @@ pub(crate) fn apply(reviews: &mut WorkspaceReviews, save: &Save) -> bool {
             resolved: false,
             addressed: false,
             comments: vec![draft(save)],
+            // A thread the pane started itself holds its draft and sits on its anchor.
+            state: yaar_link::ThreadState::Draft,
+            now: None,
         });
         true
     } else {

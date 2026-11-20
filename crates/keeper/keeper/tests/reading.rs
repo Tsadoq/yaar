@@ -1435,10 +1435,11 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
         writes_of(0, &repo, &["a-only.txt", "both.txt"]),
         writes_of(1, &repo, &["b-only.txt", "both.txt"]),
     ];
-    // One connection for each report: a piece of a CLI leaves once it is answered.
+    // One connection for each report: a piece of a CLI leaves once it is answered, and
+    // reads past the facts told before its answer.
     for (session, payloads) in reports.into_iter().enumerate() {
         for payload in payloads {
-            let answered = scratch.window().ask(Request::Report {
+            let answered = scratch.window().ask_past_facts(Request::Report {
                 report: AgentReport {
                     agent: "claude".to_owned(),
                     terminal: Some(terminals[session].clone()),

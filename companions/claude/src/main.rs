@@ -4,7 +4,8 @@
 //! yaar-claude-hook < <the hook's input>
 //! ```
 //!
-//! It passes the input to the Keeper and prints Claude Code nothing: see
+//! It passes the input to the Keeper and prints what the Keeper answers, the bytes of its
+//! `yaar_link::Reply::Answer` and nothing for any other reply: see
 //! `yaar_companion_claude::run_hook`.
 
 use std::io::{Read, Write};

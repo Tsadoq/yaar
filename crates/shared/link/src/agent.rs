@@ -12,7 +12,7 @@ use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use crate::LinkError;
-use crate::review::{ReviewId, SessionId, TurnId};
+use crate::review::{Attachment, ReviewId, SessionId, TurnId, read_attachment, write_attachment};
 use crate::terminal::{Program, TerminalId, read_program, write_program};
 use crate::wire::{In, Out};
 use crate::workspace::{
@@ -81,6 +81,28 @@ pub struct Session {
     /// The review that belongs to it; none once the next session of its CLI took that
     /// review over.
     pub review: Option<ReviewId>,
+    /// What of that review goes with the user's next message to the session: the review,
+    /// or one thread of it alone; none while nothing is attached. The agent's terminal
+    /// shows it, with the controls that view and detach it.
+    pub attached: Option<Attachment>,
+    /// Whether the turn that runs began with a message of the user: false for a turn the
+    /// CLI started by itself, as Claude Code does when a background task ends, and while
+    /// no turn runs. Only a message of the user switches the review pane to Flow.
+    pub turn_from_user: bool,
+    /// Whether the session ran when its Keeper stopped, as at a restart of the machine,
+    /// and has not run since: the Window offers to resume it, with its CLI's own command
+    /// for bringing a session back.
+    pub resumable: bool,
+}
+
+/// An agent CLI the app supports, as the Window offers to start it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCli {
+    /// Its Adapter, by its name: `claude`. A launcher of it is
+    /// [`crate::Program::Agent`] or [`crate::Program::AgentFor`] with this name.
+    pub agent: String,
+    /// The name a person reads: `Claude Code`.
+    pub title: String,
 }
 
 /// The agent sessions of one workspace, and the state the workspace shows.
@@ -271,6 +293,9 @@ fn write_session(out: &mut Out, session: &Session) {
     out.optional(session.review.as_ref(), |out, review| {
         out.text(review.as_str())
     });
+    out.optional(session.attached.as_ref(), write_attachment);
+    write_flag(out, session.turn_from_user);
+    write_flag(out, session.resumable);
 }
 
 fn read_session(input: &mut In<'_>) -> Result<Session, LinkError> {
@@ -283,6 +308,33 @@ fn read_session(input: &mut In<'_>) -> Result<Session, LinkError> {
         state: read_state(input)?,
         turn: input.optional(|input| Ok(TurnId::new(input.text()?)))?,
         review: input.optional(|input| Ok(ReviewId::new(input.text()?)))?,
+        attached: input.optional(read_attachment)?,
+        turn_from_user: read_flag(input)?,
+        resumable: read_flag(input)?,
+    })
+}
+
+fn write_flag(out: &mut Out, flag: bool) {
+    out.u8(u8::from(flag));
+}
+
+fn read_flag(input: &mut In<'_>) -> Result<bool, LinkError> {
+    match input.u8()? {
+        0 => Ok(false),
+        1 => Ok(true),
+        _ => Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+    }
+}
+
+pub(crate) fn write_agent_cli(out: &mut Out, cli: &AgentCli) {
+    out.text(&cli.agent);
+    out.text(&cli.title);
+}
+
+pub(crate) fn read_agent_cli(input: &mut In<'_>) -> Result<AgentCli, LinkError> {
+    Ok(AgentCli {
+        agent: input.text()?,
+        title: input.text()?,
     })
 }
 

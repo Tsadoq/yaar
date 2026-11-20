@@ -1470,7 +1470,11 @@ fn a_redraw_reaches_the_foreground_process_group_and_not_the_shell_or_a_job_in_t
          while :; do sleep 100 & wait $!; done\n",
     );
     // The shell hands the terminal to a job after it has started it: the job says its
-    // number when it is in front, which is when its process group is the terminal's.
+    // number when it is in front, which is when its process group is the terminal's. It
+    // then waits in a loop of short sleeps in the foreground, not in `wait` on a sleep in
+    // the background: a shell that gets a signal in the moment before `wait` begins runs
+    // its trap only when the sleep ends, a hundred seconds later, while after each short
+    // sleep it runs any trap that is pending.
     let foreground = scratch.script(
         "foreground",
         "trap 'echo front' WINCH\n\
@@ -1485,7 +1489,7 @@ fn a_redraw_reaches_the_foreground_process_group_and_not_the_shell_or_a_job_in_t
            sleep 0.05\n\
          done\n\
          echo fg $$\n\
-         while :; do sleep 100 & wait $!; done\n",
+         while :; do sleep 0.05; done\n",
     );
     let script = scratch.script(
         "groups",

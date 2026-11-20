@@ -89,6 +89,8 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
     // One round, the first, sent by a copy.
     assert_eq!(after.rounds().len(), 1);
     let round = &after.rounds()[0];
+    // A copy records its state before the round: it has one.
+    let round_state = round.state.clone().expect("a copied round has its state");
     assert_eq!(round.number, 1);
     assert_eq!(round.sent_by, SentBy::Copied);
 
@@ -96,22 +98,22 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
     // at the copy, the new line included.
     let states = reviews_again.states_of(&w).expect("the state store");
     let listed = states.states().expect("list the states");
-    assert!(!before_states.iter().any(|s| s.id.as_str() == round.state));
+    assert!(!before_states.iter().any(|s| s.id.as_str() == round_state));
     assert_eq!(listed.len(), before_states.len() + 1);
-    assert_eq!(listed.last().expect("a state").id.as_str(), round.state);
-    let held = states.paths(&round.state).expect("the files of the state");
+    assert_eq!(listed.last().expect("a state").id.as_str(), round_state);
+    let held = states.paths(&round_state).expect("the files of the state");
     let on_disk = files_of(&repo);
     assert_eq!(held, on_disk.keys().cloned().collect::<Vec<PathBuf>>());
     for (path, content) in &on_disk {
         assert_eq!(
-            states.content(&round.state, path).expect("read"),
+            states.content(&round_state, path).expect("read"),
             Some(content.clone()),
             "{}",
             path.display()
         );
     }
     let changed = states
-        .content(&round.state, std::path::Path::new("a.txt"))
+        .content(&round_state, std::path::Path::new("a.txt"))
         .expect("read")
         .expect("a.txt is in the state");
     assert!(
@@ -124,7 +126,7 @@ fn copying_a_review_marks_the_copied_comments_sent_starts_a_round_and_records_th
     // every send takes gives.
     let mut expected = Review::from_record(before.record().clone());
     let sent = expected
-        .send(Scope::Everything, &round.state, SentBy::Copied)
+        .send(Scope::Everything, &round_state, SentBy::Copied)
         .expect("send");
     assert_eq!(
         sent.comments,

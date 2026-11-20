@@ -5,12 +5,14 @@ it changes it. You run Claude Code or pi in its terminal, read the diff beside i
 on lines, and send the comments back to the agent.
 
 **Pre-release.** Today the app opens a git repository, shows what a branch changed, lets
-you comment on any line of the diff and keeps those comments, copies the review as text to
-paste to an agent, and runs terminals beside the diff. It hears Claude Code, which you run in
-one of those terminals as always: the sidebar shows whether it works, waits for you or has
-finished a turn, Flow shows what it does as it works, and Changes shows what the turn
-changed. It does not deliver comments to the agent by itself yet: you hand it the copied
-review by hand. pi runs in a terminal as any program does, and the app does not hear it yet.
+you comment on any line of the diff and keeps those comments, and runs terminals beside the
+diff. It hears Claude Code, which you run in one of those terminals as always: the sidebar
+shows whether it works, waits for you or has finished a turn, Flow shows what it does as it
+works, and Changes shows what the turn changed. A review round with Claude Code works end to
+end: you attach your comments to your next message, Claude Code receives them with the
+message you submit, answers each thread with a tool of the app, and the threads follow the
+code it rewrites. You still press Enter yourself. pi runs in a terminal as any program does,
+and the app does not hear it yet.
 
 ## What it does now
 
@@ -32,6 +34,54 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
   thread, each with its path, its lines and the code it sits on, under an instruction for
   the agent. The copied comments then count as sent in a new round, cannot be edited, and
   the state of the worktree at that moment is recorded.
+- **Attaches a review to your next message.** `a` in the review pane attaches every unsent
+  comment on an unresolved thread; `t` attaches the thread on your line alone, and such a
+  send counts as a round too. While a review is attached you can still edit its comments and
+  a new draft joins it, but not when one thread is attached alone. Attaching works while the
+  agent works and while it waits at a permission prompt. The review stays attached until a
+  message you typed carries it: the answer to a permission prompt carries nothing, and nor
+  does a turn Claude Code starts by itself. `shift-d` detaches it, and every comment stays a
+  draft.
+- **Shows the attachment at the agent's terminal.** While a review is attached, a line over
+  the bottom of the agent's terminal says so, with three controls: View (Cmd-Alt-V), which
+  shows exactly the text Claude Code will receive and keeps it up to date while you edit;
+  Detach (Cmd-Alt-X); and "Address each comment." (Cmd-Alt-A), which types that sentence at
+  the prompt, for you to submit or to word your own request after. The app writes nothing
+  else at the prompt and never presses Enter. The sentence is offered while the agent works
+  too, and not while it waits at a permission prompt.
+- **Delivers the review whole, to the agent it belongs to.** When you submit the message, the
+  review goes with it as Claude Code takes it: under the prompt Claude Code shows
+  `yaar: review round 1 attached (2 threads)`. The instruction on how to answer each thread
+  always comes first, whatever you wrote. A review whose text, with the instruction, fits in
+  10,000 UTF-16 units is in the hook's answer; a longer one is a file in the app's own folder
+  that Claude Code reads with its read tool, which the app lets through without a dialog for
+  that one file. A review goes only to the session it belongs to, never to another session in
+  the same worktree. A message you queue while Claude Code works carries the review as Claude
+  Code takes the queued message.
+  The comments count as sent, in a new round, when Claude Code takes the message.
+- **Lets the agent reply, and only you resolve.** Claude Code answers each thread with the
+  tool `reply_to_thread`, which the app's plugin gives it as `plugin:yaar-review:yaar`. The
+  tool has no way to resolve. A reply may mark the thread addressed. The app lets the tool run
+  without a dialog and answers no other prompt.
+- **Lists every thread with its state**: draft, sent, addressed, waiting for you (the agent
+  replied and did not mark it addressed) or resolved. `x` resolves the thread on your line,
+  `u` reopens it, Shift-X resolves every addressed thread.
+- **Shows rounds.** A line above the tree names each round and says it is sent until Claude
+  Code's first edit after it, then answered. A round's control, or Shift-S, shows in Changes
+  what changed since that round's comments were sent.
+- **Moves a thread to the code that replaced its line.** A thread whose line only moved follows
+  it with no notice. When Claude Code rewrote the line the thread sits on the new code and
+  says the code changed, and when it deleted the line the thread sits at the point of
+  deletion and says so; `w` shows the line you wrote the comment on.
+- **Offers to start an agent for a review.** Attaching a review whose agent is not running
+  offers to start Claude Code in the worktree with that review (its control, or Shift-N); the
+  new session takes that review and its first message carries it. The review of no agent
+  offers each CLI the app supports.
+- **Follows an agent that runs in no terminal of the app** by its folder, and delivers to it
+  and hears its replies as to any other.
+- **Keeps reviews through a restart.** After a quit, a crash or a restart of the machine every
+  review is as it was left: threads, drafts, rounds, turns and what is attached. A session
+  that was running is listed as one to resume.
 - **Marks a file viewed**, which the app forgets when the file changes, and **marks the
   change reviewed**, which records the worktree as it is and starts the next review from
   it. Neither makes a commit.
@@ -50,7 +100,8 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
   is not running; with several sessions in a worktree it shows the first of these in that
   order. An agent that waits at a permission prompt carries the same mark on its terminal.
   The app never answers a prompt or any other dialog of the agent: you answer in the
-  terminal. A program that is not Claude Code, a CLI that was not started with the app's
+  terminal. The one thing it lets through is what its own plugin asks for: the reply tool and
+  the read of one review file. A program that is not Claude Code, a CLI that was not started with the app's
   pieces, and an agent the app does not support are not heard: their changes show as changes
   no agent made.
 - **Tells you when a turn ends elsewhere.** When a turn ends in a worktree that is not on
@@ -80,7 +131,8 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
 - **Follows the agent.** Follow is on in every new window and stays on until you turn it off
   with its control in the bar or with Shift-F. While it is on and the agent works, Flow
   moves to each step as it happens, to a file the agent reads as to a file it writes. When
-  you send the agent a message while follow is on, the review pane switches to Flow.
+  you send the agent a message while follow is on, the review pane switches to Flow; a turn
+  Claude Code starts by itself, as at the end of a background task, does not switch it.
   Scrolling, clicking or typing in the pane while a turn runs pauses follow: the line under
   the bar counts the steps you miss, and Shift-G, or its button, jumps to the newest step and
   follows again. The bar and the keys `f`, Shift-L, Shift-F and Shift-G pause nothing, and
@@ -114,7 +166,10 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
   the app sets `CLAUDE_CODE_PLUGIN_DIRS`, after any value you have, to a plugin folder in
   the app's own data folder, and sets `YAAR_SOCKET` and `YAAR_TERMINAL`. The plugin, named
   `yaar-review`, runs the hook program `yaar-claude-hook`, which passes what Claude Code
-  reports to the Keeper and decides nothing: `/hooks` lists them as the plugin's. Nothing
+  reports to the Keeper and prints what the Keeper answers, and decides nothing: `/hooks`
+  lists them as the plugin's. It also names the tool server `yaar-claude-tools` in its
+  `.mcp.json`, which `/mcp` lists as `plugin:yaar-review:yaar` with the one tool
+  `reply_to_thread`. Nothing
   is written into your Claude Code settings, your `~/.claude` or your worktree, the app
   reads no credential of any CLI, and it does not use Claude Code's editor connection:
   variables that name one are left out of the shell. A `claude` started outside the app
@@ -122,11 +177,17 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
 
 ### Not there yet
 
-- A settings screen: the form of Flow is the one setting kept, and Shift-L sets it.
+- pi: it runs in a terminal, and the app hears no session, turn or permission prompt of it
+  yet, nor does it give pi any piece of the app: no delivery, no reply tool.
+- The mark on a path two sessions changed. The app keeps who is credited with each path, but
+  the diff draws no mark yet, and when a turn ends Changes still selects the worktree's whole
+  change since you last reviewed, not only that session's paths.
+- A button on the agent's terminal that resumes a session that was running when the machine
+  restarted. The Keeper lists such a session as one to resume and can start it again with the
+  CLI's own resume command, but the Window has no control for it yet.
+- Hover and go to definition, a settings screen (the form of Flow is the one setting kept,
+  and Shift-L sets it), and creating a worktree.
 - Follow is not kept: every new window starts with it on, however you left the last one.
-- Claude Code's own turns: a turn Claude Code starts by itself, as at the end of a
-  background task, switches the pane to Flow as a message of yours does, since the app
-  cannot tell the two apart yet.
 - Older turns in the timeline: it holds the turns the window has seen in this worktree,
   or the newest one when it opens. An earlier turn cannot be picked.
 - A file the agent reads through an `@` mention or a shell command is in neither the
@@ -136,22 +197,42 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
   counts from the state the worktree was in when that turn started.
 - The live diff finds its files with one `git status` for each question, one question at a
   time, so on a large repository it can lag behind the writes by about a second.
-- Delivering a review to an agent: the app cannot send a comment by itself, and no tool of
-  the agent hands it one. Copy the review and paste it.
-- pi: it runs in a terminal, and the app hears no session, turn or permission prompt of it
-  yet, nor does it give pi any piece of the app.
-- A control that starts an agent for you: type `claude` in a shell of the app.
 - The hook program is not packaged yet: the Mac app and the `.deb` hold the Window and the
-  Keeper only. Build the workspace, which puts `yaar-claude-hook` beside `yaar-keeper`.
+  Keeper only. Build the workspace, which puts `yaar-claude-hook` and `yaar-claude-tools`
+  beside `yaar-keeper`.
 - The state of a session that waits for permission stays on until the tool ends: after you
   approve a long command at its dialog, the mark stays until the command finishes.
 - A workspace with one idle session and one that ended shows "not running" while the
   ended session still holds its review, and no mark once another session has taken that
   review over, since the ended session is then no longer listed. A session that is idle,
   with nothing to review, draws no mark.
-- Resolving a thread, and a list of the threads with their states.
 - Comments on a range of lines, and on a line reached through a definition.
 - Two worktrees that share one id at different paths: the app refuses the second.
+
+Known limits of what is there:
+
+- Claude Code reports a permission prompt and no other dialog, so the sentence control is
+  offered while another dialog, such as the trust dialog, is up. Nothing is typed until you
+  press the control.
+- A review whose text, with the instruction, is longer than 10,000 UTF-16 units is a file, and
+  only Claude Code's read tool gets it without a dialog. If the model reads it with a shell command, a search or a glob, Claude
+  Code asks you as it asks for any such call.
+- A message you queue while Claude Code works fires its hook when you press Enter, and the app
+  takes that for a new turn: the account of the running turn ends there as interrupted, and a
+  second turn starts. The review is delivered right either way.
+- A hook program gives up after two seconds, and the app keeps its answer within 1.5 seconds
+  of the report reaching it. If the answer then takes more than the half second left to reach
+  the hook program, the comments show as sent and Claude Code never had them.
+  A message whose report waited longer than 1.5 seconds is sent no review: the review stays
+  attached and goes with the next message.
+- The text of an attachment and a review that Claude Code takes inline ride in one frame of
+  the Link, at most 16 MiB. A longer text is refused with the reason.
+- Between a send and the end of the turn it starts, the pane counts a round's changes to the
+  newest state it knows, which can be older than the round's own: it then shows the change
+  between the two backward, and nothing when nothing changed in between, which is the usual
+  case. It is right once the turn ends.
+- With more than one supported CLI, Shift-N starts the first; only the controls choose
+  another. There is one in this release.
 
 | On macOS | On Linux | Does | Works |
 | --- | --- | --- | --- |
@@ -170,6 +251,9 @@ review by hand. pi runs in a terminal as any program does, and the app does not 
 | Cmd-Q | Ctrl-Q | Quits; the agents and terminals go on | anywhere |
 | Cmd-Alt-Q | Ctrl-Alt-Q | Quits and stops every agent and program the app holds | anywhere |
 | Cmd-Alt-N | Ctrl-Alt-N | Shows the worktree where an agent just finished a turn | anywhere |
+| Cmd-Alt-V | Ctrl-Alt-V | Shows, or closes, what will be sent of the review attached at the agent's terminal | anywhere; acts on the terminal that has the focus in the pane |
+| Cmd-Alt-X | Ctrl-Alt-X | Detaches the review attached at the agent's terminal | anywhere |
+| Cmd-Alt-A | Ctrl-Alt-A | Types "Address each comment." at the agent's prompt, with no Enter | anywhere, while the agent waits at no permission prompt |
 | `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
 | `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
 
@@ -200,6 +284,15 @@ is the app's own choice.
 | Shift-F | Turns follow on and off, in both views | the app; neither has the action |
 | Shift-L | Switches Flow between the timeline and the live diff, and keeps the form for the worktree; in Flow only, in Changes it does nothing | the app; neither has the action |
 | Shift-G | Resumes follow at the newest step; in Flow only, in Changes it does nothing | vim, last line; tuicr, last file |
+| `a` | Attaches the review to your next message to its agent; offers to start the agent when it does not run | the app; neither vim nor tuicr has the action |
+| `t` | Attaches the thread on your line alone | the app; neither has the action |
+| Shift-D | Detaches what is attached, and keeps every draft | the app; vim's `D` deletes to the line's end |
+| `x` | Resolves the thread on your line | the app; tuicr resolves remote threads through a command only |
+| `u` | Reopens the resolved thread on your line | the app; vim's `u` undoes, the nearest action |
+| Shift-X | Resolves every addressed thread of the review | the app; neither has the action |
+| `w` | Shows the line a moved thread's comment was written on, and hides it again | the app; neither has the action |
+| Shift-S | Shows in Changes what changed since a round was sent: the newest round that has a state, then the round before at each press, and after the first round the newest again | the app; vim's `S` substitutes a line |
+| Shift-N | Starts the agent the offer after an attach names, the first CLI when it names several | the app; neither has the action |
 
 In the tree of Changes, as plain keys:
 
@@ -216,8 +309,10 @@ On macOS the field where you type a base takes Cmd-Alt-Down and Cmd-Alt-Up for i
 it has the focus, so those two keys do not change the worktree there; they do again once
 the focus is elsewhere.
 
-On Linux the keys of the app are those of the Mac with Ctrl in place of Cmd. With nothing
-pinned, the sidebar is a rail in a window narrower than 1000 px.
+On Linux the keys of the app are those of the Mac with Ctrl in place of Cmd. The three keys
+at the agent's terminal act on the terminal that has the focus in the pane, and work from the
+review pane, as every key of the app does there. With nothing pinned, the sidebar is a rail
+in a window narrower than 1000 px.
 
 ### Keys in a terminal
 
@@ -230,7 +325,7 @@ as GPUI writes them.
 | `ctrl-tab`, `ctrl-shift-tab`: the next and the previous pane | the same |
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others
@@ -269,9 +364,11 @@ a program the app does not hear. Who made an uncommitted change is remembered un
 Keeper ends; a change made before it started again shows as one no agent made.
 
 It keeps the opened repositories, the bases you set, and every review with its comments,
-drafts and rounds in one database, in `~/Library/Application Support/yaar-review/` on macOS
-and in `$XDG_DATA_HOME/yaar-review/` or `~/.local/share/yaar-review/` on Linux, which also
-holds the plugin folder for Claude Code. The states of
+drafts, replies, rounds and attachments in one database, in
+`~/Library/Application Support/yaar-review/` on macOS and in `$XDG_DATA_HOME/yaar-review/` or
+`~/.local/share/yaar-review/` on Linux, which also holds the plugin folder for Claude Code and
+the files of the long reviews it delivered, under `agents/claude/reviews/`, kept as a record
+of what was sent. The states of
 a worktree that the app records for its reviews are kept beside it, in a git repository of
 the app's own under `states/`, never in yours. In the git folder of every worktree of an
 opened repository it writes one small file, `ade-id`, by which it knows the worktree again
@@ -342,10 +439,12 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 | `packaging` | The Mac app, the `.deb`, the archive, the apt repository, the install script |
 
 Built so far: the Link and the diff; in the Keeper, the reading of git, the recording of
-states and the commit, the database, the workspaces with their watcher, the review engine,
-the terminals (the Dock), the Switchboard that follows each agent session with the steps it
-takes, and the adapter and the companion of Claude Code; in the Window, the frame with its
-sidebar and its settings, the review pane with Changes and Flow, and the terminal pane.
+states and the commit, the database, the workspaces with their watcher, the review engine
+(threads, rounds, the send, the follower that moves threads), the terminals (the Dock), the
+Switchboard that follows each agent session with the steps it takes, and the adapter and the
+companion of Claude Code with its hook program and its tool server; in the Window, the frame
+with its sidebar and its settings, the review pane with Changes and Flow, and the terminal
+pane with the attachment at the agent's terminal.
 Every other crate is still a shell that says in its `lib.rs` which part of the app it will
 hold.
 

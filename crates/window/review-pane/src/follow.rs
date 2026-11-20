@@ -48,9 +48,12 @@
 //! it is. A turn that starts in the workspace ends a pause, with nothing missed.
 //!
 //! A message of the user to the agent. A `Fact::AgentsChanged` of the workspace on screen
-//! in which a session holds a turn (`Session::turn`) that follow has not met is the start
-//! of a turn, which the user's message to the agent starts. Follow meets the turns of the
-//! workspace on screen three ways, none of which starts anything: [`ReviewPane::follow_workspace`]
+//! in which a session holds a turn (`Session::turn`) that follow has not met, and whose
+//! session says the turn came from a message of the user (`Session::turn_from_user`), is the
+//! start of a turn, which the user's message to the agent starts. A turn the CLI started
+//! itself (a task it finished, a hook it ran) is met but starts nothing. Follow meets the
+//! turns of the workspace on screen three ways, none of which starts anything:
+//! [`ReviewPane::follow_workspace`]
 //! (at the end of `ReviewPane::new` and whenever the changes model changes) forgets the
 //! turns met and meets those the agents model shows for the workspace on screen now;
 //! [`ReviewPane::follow_agents`] (at the end of `ReviewPane::new` and whenever the agents
@@ -251,6 +254,8 @@ impl ReviewPane {
             self.follow.workspace = now;
             self.follow.met.clear();
             self.follow.offer = None;
+            // An offer to start an agent was made for a review of the workspace before.
+            self.attaching.forget();
             if matches!(self.following, Following::Paused { .. }) {
                 self.following = Following::On;
             }
@@ -397,18 +402,19 @@ impl ReviewPane {
         self.follow.met.extend(turns);
     }
 
-    /// The agents of the workspace on screen changed: a turn follow has not met is a turn
-    /// that starts, which a message of the user to the agent does. The offer of the turn
-    /// before goes; with follow on or paused the pane shows Flow and follow is on, with
-    /// nothing missed; with follow off nothing else changes.
+    /// The agents of the workspace on screen changed: a turn follow has not met whose
+    /// session says it came from a message of the user is a turn that starts. The offer of
+    /// the turn before goes; with follow on or paused the pane shows Flow and follow is on,
+    /// with nothing missed; with follow off nothing else changes. A turn the CLI started
+    /// itself is met and starts nothing: the user did not ask for it, and Changes stays
+    /// where the reviewer reads.
     fn follow_starts(&mut self, agents: &WorkspaceAgents, cx: &mut Context<Self>) {
         let mut started = false;
-        for turn in agents
-            .sessions
-            .iter()
-            .filter_map(|session| session.turn.clone())
-        {
-            started |= self.follow.met.insert(turn);
+        for session in &agents.sessions {
+            let Some(turn) = session.turn.clone() else {
+                continue;
+            };
+            started |= self.follow.met.insert(turn) && session.turn_from_user;
         }
         if !started {
             return;

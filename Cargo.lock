@@ -8935,6 +8935,7 @@ version = "0.1.0"
 name = "yaar-companion-claude"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "yaar-link",
  "yaar-system-tests",
 ]
@@ -9001,6 +9002,9 @@ version = "0.1.0"
 name = "yaar-review-engine"
 version = "0.1.0"
 dependencies = [
+ "ruzstd",
+ "yaar-agent",
+ "yaar-diff",
  "yaar-recorder",
  "yaar-store",
 ]

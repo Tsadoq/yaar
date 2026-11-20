@@ -16,8 +16,10 @@
 //!   to; [`AgentReport`], what a piece of the app inside an agent CLI reports;
 //!   [`WorkspaceAgents`] with its [`Session`]s and their [`SessionState`]; [`Turn`]s with
 //!   their [`Step`]s; [`History`] with its [`HistoryEntry`]s and [`CreditedFile`]s;
-//!   [`TerminalInfo`], a terminal the Keeper holds; and [`Setting`], a setting the user
-//!   set, as the [`FlowForm`] of a workspace;
+//!   [`TerminalInfo`], a terminal the Keeper holds; [`Setting`], a setting the user
+//!   set, as the [`FlowForm`] of a workspace; and what slice 6 adds to reviews: the
+//!   [`ThreadState`] of a thread, where it sits now ([`Placed`]) and the [`Notice`] of
+//!   code that changed under it, and the [`AgentCli`]s offered when a review is attached;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -57,13 +59,14 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use agent::{
-    AgentReport, CreditedFile, History, HistoryEntry, Session, SessionState, Step, TerminalInfo,
-    Turn, TurnEnd, WorkspaceAgents,
+    AgentCli, AgentReport, CreditedFile, History, HistoryEntry, Session, SessionState, Step,
+    TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
 };
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use review::{
-    Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Review, ReviewId, Round,
-    SentBy, SessionId, Side, Thread, ThreadId, TurnId, WorkspaceReviews,
+    Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Notice, Placed, Review,
+    ReviewId, Round, SentBy, SessionId, Side, Thread, ThreadId, ThreadState, TurnId,
+    WorkspaceReviews,
 };
 pub use setting::{FlowForm, Setting};
 pub use terminal::{Ending, Program, TerminalId, TerminalSize};
@@ -84,8 +87,11 @@ use wire::{In, Out};
 /// sessions, turns and steps, the history of a worktree, a terminal's launcher of an agent,
 /// and attaching to a terminal that still runs. 6: the user's settings, the form of Flow of
 /// a workspace among them, the state a turn's change counts from, and the workspace of a
-/// step.
-pub const PROTOCOL_VERSION: u16 = 6;
+/// step. 7: attaching a review and what a piece of an agent CLI is answered with, the
+/// agent's replies, the states of a thread and where it sits now, rounds whose state is
+/// recorded after the send, the launcher of a CLI for a review and the resumption of a
+/// session.
+pub const PROTOCOL_VERSION: u16 = 7;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -1057,7 +1063,55 @@ mod tests {
                     form: FlowForm::LiveDiff,
                 },
             },
+            Request::AttachReview {
+                review: review_id(),
+                thread: Some(ThreadId::new("55555555555555555555555555555555")),
+            },
+            Request::DetachReview {
+                review: review_id(),
+            },
+            Request::ResolveThread {
+                review: review_id(),
+                thread: ThreadId::new("55555555555555555555555555555555"),
+            },
+            Request::ReopenThread {
+                review: review_id(),
+                thread: ThreadId::new("55555555555555555555555555555555"),
+            },
+            Request::ResolveAddressed {
+                review: review_id(),
+            },
+            Request::GetAttachment {
+                review: review_id(),
+            },
         ];
+        // The launcher of a CLI started for a review, a session resumed, and the review
+        // attached whole.
+        let for_a_review = Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::AgentFor {
+                agent: "claude".to_owned(),
+                review: review_id(),
+            },
+            size: TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        };
+        let resumed = Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Resume {
+                session: session_id(),
+            },
+            size: TerminalSize {
+                columns: 80,
+                rows: 24,
+            },
+        };
+        let the_whole_review = Request::AttachReview {
+            review: review_id(),
+            thread: None,
+        };
         // A launcher, a report from outside the app's terminals, the files on disk as the
         // new side, no workspace on screen, and the uncommitted list of no review named.
         let launcher = Request::OpenTerminal {
@@ -1251,6 +1305,20 @@ mod tests {
                 },
             ]),
             Reply::Settings(Vec::new()),
+            Reply::Answer {
+                bytes: b"{\"systemMessage\": \"\xc3\xa9\"}\n".to_vec(),
+            },
+            Reply::Answer { bytes: Vec::new() },
+            Reply::AttachedReview {
+                start: vec![AgentCli {
+                    agent: "claude".to_owned(),
+                    title: "Claude Code".to_owned(),
+                }],
+            },
+            Reply::AttachedReview { start: Vec::new() },
+            Reply::Attachment {
+                text: "Answer each thread.\n\n## Thread 5555".to_owned(),
+            },
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1380,6 +1448,12 @@ mod tests {
                 request,
             });
         }
+        for request in [for_a_review, resumed, the_whole_review] {
+            messages.push(Message::Request {
+                id: RequestId(u32::MAX - 3),
+                request,
+            });
+        }
         for reply in replies {
             messages.push(Message::Reply {
                 to: RequestId(u32::MAX),
@@ -1458,6 +1532,13 @@ mod tests {
                     )
                     .then(turn_id),
                     review: (n != 0).then(review_id),
+                    attached: match n {
+                        1 => Some(Attachment::Review),
+                        2 => Some(Attachment::Thread(ThreadId::new("a".repeat(32)))),
+                        _ => None,
+                    },
+                    turn_from_user: *state == SessionState::Works,
+                    resumable: *state == SessionState::NotRunning,
                 })
                 .collect(),
         }
@@ -1587,6 +1668,14 @@ mod tests {
                                 comment('c', Author::Agent, Some(1)),
                                 comment('d', Author::Reviewer, None),
                             ],
+                            state: ThreadState::Draft,
+                            now: Some(Placed {
+                                tree: COMMIT.to_owned(),
+                                path: PathBuf::from("src/renamed.rs"),
+                                side: Side::New,
+                                lines: Lines { first: 3, last: 4 },
+                                notice: Some(Notice::Changed),
+                            }),
                         },
                         Thread {
                             id: ThreadId::new("e".repeat(32)),
@@ -1594,18 +1683,70 @@ mod tests {
                             resolved: true,
                             addressed: false,
                             comments: vec![comment('f', Author::Reviewer, None)],
+                            state: ThreadState::Resolved,
+                            now: None,
+                        },
+                        Thread {
+                            id: ThreadId::new("1".repeat(32)),
+                            anchor: anchor(Some(COMMIT), Side::New),
+                            resolved: false,
+                            addressed: false,
+                            comments: vec![
+                                comment('2', Author::Reviewer, Some(2)),
+                                comment('3', Author::Agent, Some(2)),
+                            ],
+                            state: ThreadState::WaitsForReviewer,
+                            now: Some(Placed {
+                                tree: COMMIT.to_owned(),
+                                path: PathBuf::from("src/gone.rs"),
+                                side: Side::New,
+                                lines: Lines { first: 1, last: 1 },
+                                notice: Some(Notice::Deleted),
+                            }),
+                        },
+                        Thread {
+                            id: ThreadId::new("4".repeat(32)),
+                            anchor: anchor(Some(COMMIT), Side::New),
+                            resolved: false,
+                            addressed: true,
+                            comments: vec![comment('5', Author::Reviewer, Some(2))],
+                            state: ThreadState::Addressed,
+                            now: Some(Placed {
+                                tree: COMMIT.to_owned(),
+                                path: PathBuf::from("src/lib.rs"),
+                                side: Side::New,
+                                lines: Lines { first: 9, last: 9 },
+                                notice: None,
+                            }),
+                        },
+                        Thread {
+                            id: ThreadId::new("6".repeat(32)),
+                            anchor: anchor(Some(COMMIT), Side::New),
+                            resolved: false,
+                            addressed: false,
+                            comments: vec![comment('7', Author::Reviewer, Some(2))],
+                            state: ThreadState::Sent,
+                            now: None,
                         },
                     ],
                     rounds: vec![
                         Round {
                             number: 1,
-                            state: COMMIT.to_owned(),
+                            state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Copied,
+                            edited: false,
                         },
                         Round {
                             number: 2,
-                            state: COMMIT.to_owned(),
+                            state: Some(COMMIT.to_owned()),
                             sent_by: SentBy::Delivered,
+                            edited: true,
+                        },
+                        Round {
+                            number: 3,
+                            state: None,
+                            sent_by: SentBy::Delivered,
+                            edited: false,
                         },
                     ],
                 },
@@ -1645,7 +1786,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; nine kinds are tried a second time.
+        // One of each, in the order of the table; ten kinds are tried a second time, and the
+        // opening of a terminal a third and a fourth, for each kind of program.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
@@ -1659,6 +1801,9 @@ mod tests {
                 RequestKind::ReadVersions,
                 RequestKind::ShowWorkspace,
                 RequestKind::GetUncommitted,
+                RequestKind::OpenTerminal,
+                RequestKind::OpenTerminal,
+                RequestKind::AttachReview,
             ]
         );
     }
@@ -1687,6 +1832,11 @@ mod tests {
                 RequestKind::SetViewed,
                 RequestKind::Commit,
                 RequestKind::SetSetting,
+                RequestKind::AttachReview,
+                RequestKind::DetachReview,
+                RequestKind::ResolveThread,
+                RequestKind::ReopenThread,
+                RequestKind::ResolveAddressed,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
@@ -1712,6 +1862,9 @@ mod tests {
             RequestKind::AttachTerminal,
             RequestKind::GetUncommitted,
             RequestKind::GetSettings,
+            // What the control that views an attachment shows is read to be shown; the
+            // control itself sends nothing a user starts.
+            RequestKind::GetAttachment,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

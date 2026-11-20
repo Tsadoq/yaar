@@ -1,11 +1,23 @@
 //! One review and its rules, with no file and no process: what can be done to its threads
 //! and comments, what is attached, and what a send carries.
+//!
+//! The rules slice 6 adds are in child modules, one for each package that builds them:
+//! attaching with the offer to start an agent, and a send whose state is recorded later
+//! (`attaching.rs`); the agent's replies and the states of a thread (`answers.rs`); and
+//! the round its agent has edited since (`rounds.rs`).
+
+mod answers;
+mod attaching;
+mod rounds;
+
+pub use answers::ThreadState;
+pub use attaching::{Offer, SessionNow};
 
 use std::fmt;
 
 use yaar_store::{
-    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, Thread, ThreadId,
-    WorkspaceId,
+    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, SessionId, Thread,
+    ThreadId, WorkspaceId,
 };
 
 /// What of a review goes with the user's next message to its agent.
@@ -75,6 +87,12 @@ pub enum ReviewError {
     BadAnchor,
     /// A send was asked for with nothing to carry.
     NothingToSend,
+    /// A reply of an agent came from a session the review does not belong to.
+    OtherSession(SessionId),
+    /// The review holds no round by this number.
+    UnknownRound(u32),
+    /// The round has its state already: a round's state is given once.
+    RoundHasState(u32),
 }
 
 impl fmt::Display for ReviewError {
@@ -97,6 +115,11 @@ impl fmt::Display for ReviewError {
             }
             Self::BadAnchor => write!(f, "the lines of the comment are not a range of lines"),
             Self::NothingToSend => write!(f, "there is nothing to send"),
+            Self::OtherSession(session) => {
+                write!(f, "the review does not belong to the session {session}")
+            }
+            Self::UnknownRound(round) => write!(f, "there is no round {round} to change"),
+            Self::RoundHasState(round) => write!(f, "round {round} has its state already"),
         }
     }
 }
@@ -130,15 +153,18 @@ impl Review {
             reviewed: None,
             threads: Vec::new(),
             rounds: Vec::new(),
+            attached: None,
         })
     }
 
-    /// The review the Store kept, with nothing attached: the Store keeps no attachment yet.
+    /// The review the Store kept, with what the Store keeps attached. What [`Review::attach`]
+    /// and [`Review::detach`] change later is the review's, until the caller keeps it.
     pub fn from_record(record: ReviewRecord) -> Review {
-        Review {
-            record,
-            attached: None,
-        }
+        let attached = record.attached.as_ref().map(|attached| match attached {
+            yaar_store::AttachedRecord::Review => Attachment::Review,
+            yaar_store::AttachedRecord::Thread(thread) => Attachment::Thread(thread.clone()),
+        });
+        Review { record, attached }
     }
 
     /// The review as the Store keeps it.
@@ -234,6 +260,7 @@ impl Review {
                 text: text.to_string(),
                 round: None,
             }],
+            now: None,
         });
         Ok(())
     }
@@ -405,8 +432,9 @@ impl Review {
         }
         let round = Round {
             number,
-            state: state.to_string(),
+            state: Some(state.to_string()),
             sent_by,
+            edited: false,
         };
         self.record.rounds.push(round.clone());
         if scope == Scope::Attached {
@@ -743,8 +771,9 @@ mod tests {
             sent.round,
             Round {
                 number: 1,
-                state: "S1".to_string(),
+                state: Some("S1".to_string()),
                 sent_by: SentBy::Copied,
+                edited: false,
             }
         );
         assert_eq!(sent.comments, vec![comment_id(101)]);
@@ -781,7 +810,7 @@ mod tests {
             .send(Scope::Everything, "abc", SentBy::Copied)
             .expect("send");
         assert_eq!(review.rounds().first(), Some(&sent.round));
-        assert_eq!(review.rounds()[0].state, "abc");
+        assert_eq!(review.rounds()[0].state.as_deref(), Some("abc"));
     }
 
     #[test]

@@ -35,22 +35,33 @@ pub const PROJECT: &str = "/home/reviewer/project";
 /// The working names the recordings carry, and the app's names a test reads in their
 /// place: the variable that named the terminal in the experiment's shells and the app's,
 /// and the names of the experiment's plugin and tool server and the app's, the plugin
-/// `yaar-review` and its server `yaar`. A variable that only the experiment's logger read
-/// is dropped, which the empty name says.
+/// `yaar-review` and its server `yaar`, as a tool's name (`mcp__plugin_<plugin>_<server>__`)
+/// and as the server's name in a hook's input (`plugin:<plugin>:<server>`). A variable that
+/// only the experiment's tools read is dropped, which the empty name says.
 ///
-/// It covers every working name of the files slice 4 reads. The files of the reply tool
-/// and of the review read also carry `ADE_RUN`, `ADE_REPLY_LOG`, `ADE_INJECT_*`,
-/// `ADE_ALLOW_DIR` and the plugin folders `ade-full` and `ade-d-inline`: the slice that
-/// reads them grows this table or drops them here.
-pub const RENAMED: [(&str, &str); 5] = [
+/// It covers every working name a test reads: the hooks' inputs and the variables of
+/// `claude/*.jsonl`. The folders of the experiment's plugins (`ade-full`, `ade-d`,
+/// `ade-d-inline`, `ade-full-inline`) stay in the values of variables no test reads,
+/// `CLAUDE_CODE_PLUGIN_DIRS`, `CLAUDE_PLUGIN_ROOT` and `CLAUDE_PLUGIN_DATA`, and in the
+/// text of the experiment's own review inside a tool's response, which no test reads
+/// either; and the tool server's trace, `claude/reply-tool-mcp.jsonl`, names the
+/// experiment's server `ade` only in what the server answered, which [`mcp_messages`] gives
+/// as it was and no test compares with the app's.
+pub const RENAMED: [(&str, &str); 11] = [
     ("ADE_TERM_ID", yaar_link::TERMINAL_VARIABLE),
     ("ADE_HOOK_LOG", ""),
     ("ADE_X", ""),
+    ("ADE_RUN", ""),
+    ("ADE_REPLY_LOG", ""),
+    ("ADE_INJECT_FILE", ""),
+    ("ADE_INJECT_MODE", ""),
+    ("ADE_ALLOW_DIR", ""),
     (
         "mcp__plugin_ade-full_ade__",
         "mcp__plugin_yaar-review_yaar__",
     ),
     ("mcp__plugin_ade_ade__", "mcp__plugin_yaar-review_yaar__"),
+    ("plugin:ade-full:ade", "plugin:yaar-review:yaar"),
 ];
 
 /// One recorded hook of Claude Code: what the hook program received, and the environment
@@ -185,6 +196,105 @@ pub fn hook_events(name: &str) -> Vec<HookRecord> {
         .collect()
 }
 
+/// One answer of a hook as Claude Code reads it, in the shapes written by hand: what a
+/// hook of the event `answers` prints on its standard output.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnswerShape {
+    /// The hook whose answer it is, as `UserPromptSubmit`.
+    pub answers: String,
+    /// The JSON the hook prints. Its texts are placeholders: a test compares its keys and
+    /// the kinds of their values.
+    pub stdout: serde_json::Value,
+}
+
+/// The answers of the shape written by hand `name`, in [`HAND_MADE`], in the order of its
+/// lines, the first, which says why, left out. Panics as [`hand_made_hook_events`] does,
+/// and on a later line that is no answer's shape, naming its number.
+pub fn hand_made_answers(name: &str) -> Vec<AnswerShape> {
+    let path = hand_made(name);
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
+    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
+    let says_why = lines
+        .next()
+        .and_then(|first| serde_json::from_str::<serde_json::Value>(first).ok())
+        .is_some_and(|first| {
+            first["hand_made"]
+                .as_str()
+                .is_some_and(|why| !why.is_empty())
+        });
+    assert!(
+        says_why,
+        "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
+    );
+    lines
+        .enumerate()
+        .map(|(number, line)| {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!(
+                    "line {} of the hand-made shape {name} is not JSON: {e}",
+                    number + 1
+                )
+            });
+            match (value["answers"].as_str(), value.get("stdout")) {
+                (Some(answers), Some(stdout)) => AnswerShape {
+                    answers: answers.to_owned(),
+                    stdout: stdout.clone(),
+                },
+                _ => panic!(
+                    "line {} of the hand-made shape {name} is no answer's shape",
+                    number + 1
+                ),
+            }
+        })
+        .collect()
+}
+
+/// Which way a message of a tool server's trace went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    /// From Claude Code to the server.
+    In,
+    /// From the server to Claude Code.
+    Out,
+}
+
+/// One message of the trace of a tool server, as `claude/reply-tool-mcp.jsonl` holds it:
+/// what Claude Code sent the experiment's server, and what it answered.
+#[derive(Debug, Clone, PartialEq)]
+pub struct McpMessage {
+    /// Which way it went.
+    pub direction: Direction,
+    /// The JSON-RPC message, as it was.
+    pub message: serde_json::Value,
+}
+
+/// Every message of the tool server's trace `name`, in the order of its lines. A test that
+/// plays Claude Code to the app's tool server sends the messages that went [`Direction::In`]
+/// and names facts of what it reads back: the answers the experiment's server gave are its
+/// own, not the app's. Panics as [`path`] does, and on a line that is no message of a
+/// trace, naming its number.
+pub fn mcp_messages(name: &str) -> Vec<McpMessage> {
+    lines(name)
+        .iter()
+        .enumerate()
+        .map(|(number, line)| {
+            let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| {
+                panic!("line {number} of the recording {name} is not JSON: {e}")
+            });
+            let direction = match value["dir"].as_str() {
+                Some("in") => Direction::In,
+                Some("out") => Direction::Out,
+                _ => panic!("line {number} of the recording {name} goes no known way"),
+            };
+            McpMessage {
+                direction,
+                message: value["msg"].clone(),
+            }
+        })
+        .collect()
+}
+
 /// The chunks of a terminal's output in the recording `name`, as
 /// `claude/interrupt-mark.jsonl` holds them, each as the bytes the program wrote.
 pub fn terminal_chunks(name: &str) -> Vec<Vec<u8>> {
@@ -284,7 +394,12 @@ fn moved(text: &str, root: &str) -> String {
 fn rename_in(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::String(text) => {
-            for (from, to) in RENAMED.iter().filter(|(from, _)| from.starts_with("mcp__")) {
+            // The names of tools and servers, which are parts of a text; the variables are
+            // keys, renamed where the environment is read.
+            for (from, to) in RENAMED
+                .iter()
+                .filter(|(from, _)| from.starts_with("mcp__") || from.starts_with("plugin:"))
+            {
                 if text.contains(from) {
                     *text = text.replace(from, to);
                 }
@@ -376,6 +491,61 @@ mod tests {
         );
         assert_eq!(records[2].input["tool_name"], "Bash");
         assert_eq!(records[2].input["cwd"], PROJECT);
+    }
+
+    #[test]
+    fn the_working_names_of_the_reply_tool_and_its_server_are_mapped_and_the_tools_variables_dropped()
+     {
+        let line = r#"{"env": {"ADE_RUN": "r", "ADE_REPLY_LOG": "/x", "ADE_INJECT_FILE": "/y", "ADE_INJECT_MODE": "json", "ADE_ALLOW_DIR": "/z", "CLAUDE_PID": "7"}, "event": "PreToolUse", "pid": 8, "ppid": 7, "t_start_ns": "5", "stdin": {"tool_name": "mcp__plugin_ade-full_ade__reply_to_thread", "mcp_server": {"name": "plugin:ade-full:ade", "source": "plugin"}}}"#;
+        let record = hook_record(line).expect("a hook's record");
+        assert_eq!(record.env.keys().collect::<Vec<_>>(), ["CLAUDE_PID"]);
+        assert_eq!(
+            record.input["tool_name"],
+            "mcp__plugin_yaar-review_yaar__reply_to_thread"
+        );
+        assert_eq!(
+            record.input["mcp_server"]["name"],
+            "plugin:yaar-review:yaar"
+        );
+    }
+
+    #[test]
+    fn the_shapes_of_two_answers_written_by_hand_say_so_first() {
+        let answers = hand_made_answers("claude-hook-answers.jsonl");
+        let hooks: Vec<&str> = answers.iter().map(|shape| shape.answers.as_str()).collect();
+        assert_eq!(hooks, ["UserPromptSubmit", "PreToolUse"]);
+        assert!(answers[0].stdout["hookSpecificOutput"]["additionalContext"].is_string());
+        assert_eq!(
+            answers[1].stdout["hookSpecificOutput"]["permissionDecision"],
+            "allow"
+        );
+    }
+
+    #[test]
+    fn a_typed_message_after_one_claude_code_started_itself_is_a_shape_written_by_hand() {
+        let records = hand_made_hook_events("claude-typed-after-self-started.jsonl");
+        let prompts: Vec<bool> = records
+            .iter()
+            .filter(|record| record.event == "UserPromptSubmit")
+            .map(|record| {
+                record.input["prompt"]
+                    .as_str()
+                    .expect("a prompt")
+                    .starts_with("<task-notification>")
+            })
+            .collect();
+        assert_eq!(prompts, [false, true, false]);
+    }
+
+    #[test]
+    fn the_trace_of_the_tool_server_goes_both_ways_in_order() {
+        let messages = mcp_messages("claude/reply-tool-mcp.jsonl");
+        assert_eq!(messages.len(), 17);
+        assert_eq!(messages[2].direction, Direction::In);
+        assert_eq!(messages[2].message["method"], "initialize");
+        assert_eq!(messages[3].direction, Direction::Out);
+        assert_eq!(messages[7].message["method"], "tools/call");
+        assert_eq!(messages[7].message["params"]["name"], "reply_to_thread");
     }
 
     #[test]

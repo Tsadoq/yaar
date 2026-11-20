@@ -69,6 +69,10 @@ fn documented() -> BTreeSet<String> {
             "cmd-[",
             "cmd-d",
             "cmd-q",
+            // The controls of a review attached at an agent's terminal, of slice 6.
+            "cmd-alt-v",
+            "cmd-alt-x",
+            "cmd-alt-a",
         ]);
     } else {
         keys.extend(["ctrl-shift-c", "ctrl-shift-v"]);

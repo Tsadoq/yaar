@@ -8,8 +8,8 @@
 //!   follow-up is a draft reply in the same thread; a resolved thread is sent no more; what
 //!   is attached to the next message, and what a send carries; the reviewed state. It
 //!   holds no file and starts no process;
-//! - [`as_text`], the review rendered as text, with the [`COPY_INSTRUCTION`] that goes with
-//!   a review copied by hand;
+//! - [`as_text`], the review rendered as text after the instruction of a way of
+//!   delivering it (`yaar_agent::Delivery`);
 //! - [`ViewedFiles`], the files marked viewed, each mark holding for the content it was
 //!   given;
 //! - [`with_review_of_no_agent`], the rule that a workspace with no review of an agent
@@ -28,17 +28,43 @@
 //! - the records it reads and writes, from the Store: [`Anchor`], [`Thread`], [`Comment`],
 //!   [`Round`], [`SessionRecord`] and their ids.
 //!
+//! - what slice 6 adds: attaching a review with the [`Offer`] to start its agent, given
+//!   the [`SessionNow`] of the workspace's sessions; the one general send,
+//!   [`Reviews::send`], which renders what a scope carries after a way of delivering's
+//!   instruction and hands it to that way, a `yaar_agent::Delivery`, and its two uses, the
+//!   send of what is attached ([`Reviews::send_attached`]), whose round's state is
+//!   recorded after ([`Reviews::record_round`]), and the copy as text
+//!   ([`Reviews::copy_as_text`]); the agent's replies ([`ThreadReply`]) and the
+//!   [`ThreadState`] of a thread; resolving, reopening, and resolving every addressed
+//!   thread; a round shown as sent until its agent's first edit, and what changed since a
+//!   round; who is credited with each path of a recorded state, and what one review shows
+//!   of a change ([`CreditedChange`]); and the thread follower, [`follow`], with its
+//!   [`Placed`], [`Place`], [`Notice`] and [`FileStep`], which every state the engine
+//!   records carries the threads to.
+//!
 //! It knows nothing of what kind of change a tree is: a recorded state and a commit are
 //! both a tree, named by an id, and only the Recorder tells them apart. It holds no
 //! interface code and opens no database: the Store keeps, the Recorder records.
 
+mod attaching;
+mod credits;
 mod engine;
+pub mod follow;
+mod following;
+mod replies;
 mod review;
+mod rounds;
+mod sending;
 mod takeover;
 mod text;
 mod uncommitted;
 mod viewed;
 mod workspace;
+
+pub use credits::CreditedChange;
+pub use follow::{FileStep, MOVED_BLOCK, Notice, Place, Placed, carry, carry_file};
+pub use replies::ThreadReply;
+pub use review::{Offer, SessionNow, ThreadState};
 
 pub use engine::{
     Copied, DraftOn, DraftSave, EngineError, NewAnchor, Reviews, Saved, StateWatch, TurnEnded,
@@ -46,11 +72,11 @@ pub use engine::{
 };
 pub use review::{Attachment, Review, ReviewError, Scope, Sent, Unsent};
 pub use takeover::{Takeover, takeover};
-pub use text::{COPY_INSTRUCTION, ReviewText, as_text};
+pub use text::{ReviewText, as_text};
 pub use uncommitted::{Credited, uncommitted_of};
 pub use viewed::{ViewedFiles, fingerprint};
 pub use workspace::with_review_of_no_agent;
 pub use yaar_store::{
-    Anchor, Author, Comment, CommentId, ReviewId, ReviewRecord, Round, SentBy, SessionId,
-    SessionRecord, Side, Thread, ThreadId, WorkspaceId,
+    Anchor, AttachedRecord, Author, Comment, CommentId, NoticeRecord, ReviewId, ReviewRecord,
+    Round, SentBy, SessionId, SessionRecord, Side, Thread, ThreadId, ThreadPlace, WorkspaceId,
 };

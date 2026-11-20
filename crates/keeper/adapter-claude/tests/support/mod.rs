@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use yaar_adapter_claude::ClaudeCode;
-use yaar_agent::{Adapter, CliSession, Event, Report, Reported};
+use yaar_agent::{Adapter, Asked, CliSession, Event, Report, Reported};
 use yaar_system_tests::recorded::{self, HookRecord};
 
 /// Gives the hook of `record` to the Adapter as the Keeper would hand it.
@@ -20,6 +20,23 @@ pub fn feed(adapter: &mut ClaudeCode, record: &HookRecord) -> Vec<Reported> {
             payload: &record.input_bytes(),
         })
         .expect("a recorded hook is a report")
+}
+
+/// Gives the hook of `record` to the Adapter as the Keeper does: the report first, then the
+/// question of what it waits for, with the Adapter's own `folder`. Returns the answer to
+/// the question.
+pub fn feed_asked(adapter: &mut ClaudeCode, folder: &Path, record: &HookRecord) -> Option<Asked> {
+    feed(adapter, record);
+    adapter
+        .asked(
+            folder,
+            &Report {
+                terminal: record.terminal(),
+                pid: record.parent,
+                payload: &record.input_bytes(),
+            },
+        )
+        .expect("a recorded hook can be asked about")
 }
 
 /// The events of every line of the recording `name`, fed in order to one Adapter, with the

@@ -5,30 +5,36 @@
 //!
 //! Surface: [`run_hook`], what the hook program `yaar-claude-hook` does, with
 //! [`HookPlace`], where it finds the Keeper and what it says of its CLI, [`HookAnswer`],
-//! what it gives Claude Code back, and [`DEADLINE`].
+//! what it gives Claude Code back, and [`DEADLINE`]; and [`serve`], what the reply tool's
+//! server `yaar-claude-tools` does, with [`ToolPlace`], [`tool`], [`TOOL`],
+//! [`SERVER_NAME`] and [`TOOL_DEADLINE`] (`tools.rs`).
 //!
 //! Claude Code runs the hook program for every hook the app's plugin asks for, with the
 //! hook's input on its standard input. The program passes that input on, unread, to the
 //! Keeper as one `yaar_link::Request::Report`, with the terminal id its environment names
-//! and its parent process, which is Claude Code. Its answer to Claude Code is empty: it
-//! decides nothing, a permission request least of all, so Claude Code shows the user its
-//! own dialog and the user answers it there. A Keeper that is not there, or that does not
-//! answer within [`DEADLINE`], changes nothing of that: the program prints nothing and
-//! succeeds, and Claude Code goes on as without the app.
-//!
-//! In slice 6 the same program answers the submit hook with the review that rides along,
-//! and the reply tool server and the allow hooks join it.
+//! and its parent process, which is Claude Code, and prints what the Keeper answers: the
+//! bytes of `yaar_link::Reply::Answer`, as the Keeper's Adapter of Claude Code wrote them,
+//! and nothing for `yaar_link::Reply::Done`. It decides nothing itself, a permission
+//! request least of all: the Keeper never answers one, so Claude Code shows the user its
+//! own dialog and the user answers it there. What the Keeper answers is a review that
+//! rides with the user's message, and the allowing of the read of a review file the app
+//! wrote and of a call of the app's own reply tool. A Keeper that is not there, or that
+//! does not answer within [`DEADLINE`], changes nothing of that: the program prints
+//! nothing and succeeds, and Claude Code goes on as without the app.
 
-use std::error::Error;
 use std::io;
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    AgentReport, Hello, Message, Request, RequestId, TERMINAL_VARIABLE, TerminalId, connect,
-    handshake, read_message, socket_path, write_message,
+    AgentReport, Hello, LinkError, Message, Refusal, Reply, Request, RequestId, TERMINAL_VARIABLE,
+    TerminalId, connect, handshake, read_message, socket_path, write_message,
 };
+
+mod tools;
+
+pub use tools::{SERVER_NAME, TOOL, TOOL_DEADLINE, ToolPlace, serve, tool};
 
 /// The Adapter the reports are for.
 const AGENT: &str = "claude";
@@ -70,57 +76,128 @@ impl HookPlace {
 /// What the hook program gives Claude Code back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HookAnswer {
-    /// What it prints on its standard output. Empty: no decision, nothing added.
+    /// What it prints on its standard output: the bytes of the Keeper's
+    /// `yaar_link::Reply::Answer`, and nothing for any other reply or none.
     pub printed: Vec<u8>,
     /// Its exit status: 0, whatever became of the report.
     pub status: i32,
 }
 
 /// Passes `input`, the hook's input as Claude Code gave it, to the Keeper at `place` as
-/// one report of the Adapter `claude`, and gives the answer for Claude Code. Waits at
-/// most [`DEADLINE`] for the Keeper.
+/// one report of the Adapter `claude`, and gives the answer for Claude Code: what the
+/// Keeper's `yaar_link::Reply::Answer` holds, byte for byte, and nothing for any other
+/// reply. Waits at most [`DEADLINE`] for the Keeper; an answer that came in time and was
+/// not whole is not printed.
 pub fn run_hook(input: &[u8], place: &HookPlace) -> HookAnswer {
+    let sent = report_to_keeper(
+        &Reporter {
+            socket: &place.socket,
+            who: concat!("yaar-claude-hook ", env!("CARGO_PKG_VERSION")),
+            terminal: place.terminal.as_deref(),
+            parent: place.parent,
+        },
+        input,
+        Instant::now() + DEADLINE,
+    );
     // Whatever went wrong, Claude Code is better served by a hook that said nothing than
     // by one that held the user up or failed: the report is a courtesy to the app.
-    let _ = pass_on(input, place, Instant::now() + DEADLINE);
-    HookAnswer {
-        printed: Vec::new(),
-        status: 0,
-    }
+    let printed = match sent {
+        Ok(Ok(Reply::Answer { bytes })) => bytes,
+        _ => Vec::new(),
+    };
+    HookAnswer { printed, status: 0 }
 }
 
-/// Sends the report and reads until the Keeper's reply to it, all before `deadline`.
-fn pass_on(input: &[u8], place: &HookPlace, deadline: Instant) -> Result<(), Box<dyn Error>> {
-    let mut stream = connect(&place.socket)?;
-    let hello = Hello::for_this_process(concat!("yaar-claude-hook ", env!("CARGO_PKG_VERSION")));
-    limit(&stream, deadline)?;
-    let keeper = handshake(&mut stream, &hello)?;
+/// Who a report comes from and where it goes: what the hook program and the tool server
+/// each say of themselves.
+struct Reporter<'a> {
+    socket: &'a Path,
+    /// What the program calls itself in its hello.
+    who: &'a str,
+    terminal: Option<&'a str>,
+    parent: u32,
+}
+
+/// Why a report got no reply from the Keeper.
+#[derive(Debug)]
+enum Unanswered {
+    /// No Keeper was reached, or the one reached speaks another protocol: nothing was sent.
+    NotRunning,
+    /// The report was sent, or was to be, and the deadline came first.
+    TooLate,
+    /// The report could not be sent whole, or the connection broke before the reply.
+    Failed,
+}
+
+/// What the Keeper answered one report with: its reply or its refusal.
+type Answered = Result<Reply, Refusal>;
+
+/// Sends `payload` as one report of the Adapter `claude` and reads until the Keeper's reply
+/// to it, all before `deadline`.
+fn report_to_keeper(
+    from: &Reporter<'_>,
+    payload: &[u8],
+    deadline: Instant,
+) -> Result<Answered, Unanswered> {
+    let mut stream = connect(from.socket).map_err(|_| Unanswered::NotRunning)?;
+    let hello = Hello::for_this_process(from.who);
+    limit(&stream, deadline).map_err(late)?;
+    let keeper = handshake(&mut stream, &hello).map_err(|e| match e {
+        LinkError::Io(e) if is_late(&e) => Unanswered::TooLate,
+        _ => Unanswered::NotRunning,
+    })?;
     if !hello.speaks_with(&keeper) {
         // A Keeper of another version of the app: it would refuse the request, and the
         // report means nothing to it.
-        return Err("the Keeper speaks another protocol".into());
+        return Err(Unanswered::NotRunning);
     }
     let report = AgentReport {
         agent: AGENT.to_owned(),
-        terminal: place.terminal.clone().map(TerminalId::new),
-        pid: place.parent,
-        payload: input.to_vec(),
+        terminal: from.terminal.map(TerminalId::new),
+        pid: from.parent,
+        payload: payload.to_vec(),
     };
-    limit(&stream, deadline)?;
+    limit(&stream, deadline).map_err(late)?;
     write_message(
         &mut stream,
         &Message::Request {
             id: REQUEST,
             request: Request::Report { report },
         },
-    )?;
+    )
+    .map_err(late)?;
     loop {
         // Set again for each frame: a Keeper that keeps telling facts must not stretch
         // the deadline a read at a time.
-        limit(&stream, deadline)?;
-        if let Message::Reply { to: REQUEST, .. } = read_message(&mut stream)? {
-            return Ok(());
+        limit(&stream, deadline).map_err(late)?;
+        if let Message::Reply { to: REQUEST, reply } =
+            read_message(&mut stream).map_err(link_failure)?
+        {
+            return Ok(reply);
         }
+    }
+}
+
+/// Whether `error` is a read or write that gave up at its timeout.
+fn is_late(error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+    )
+}
+
+fn late(error: io::Error) -> Unanswered {
+    if is_late(&error) {
+        Unanswered::TooLate
+    } else {
+        Unanswered::Failed
+    }
+}
+
+fn link_failure(error: LinkError) -> Unanswered {
+    match error {
+        LinkError::Io(e) => late(e),
+        _ => Unanswered::Failed,
     }
 }
 
@@ -130,6 +207,14 @@ fn limit(stream: &UnixStream, deadline: Instant) -> io::Result<()> {
         .checked_duration_since(Instant::now())
         .filter(|left| !left.is_zero())
         .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "the deadline is over"))?;
-    stream.set_read_timeout(Some(left))?;
-    stream.set_write_timeout(Some(left))
+    match stream
+        .set_read_timeout(Some(left))
+        .and_then(|()| stream.set_write_timeout(Some(left)))
+    {
+        // macOS refuses a timeout on a socket whose peer has closed. Nothing can then block
+        // a read, which gives what is still buffered and then the end, and a write gives a
+        // broken pipe: the frames the Keeper left must still be read.
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => Ok(()),
+        done => done,
+    }
 }

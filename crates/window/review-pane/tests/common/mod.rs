@@ -693,6 +693,9 @@ pub fn session(digit: char, title: &str, state: SessionState, review: Option<Rev
         state,
         turn: None,
         review,
+        attached: None,
+        resumable: false,
+        turn_from_user: false,
     }
 }
 
@@ -702,12 +705,22 @@ pub fn turn_id(digit: char) -> TurnId {
 }
 
 /// The same session, working on `turn`, as the agents model shows a session whose turn
-/// runs.
+/// runs: a turn a message of the user started.
 pub fn working_on(session: Session, turn: TurnId) -> Session {
     Session {
         state: SessionState::Works,
         turn: Some(turn),
+        turn_from_user: true,
         ..session
+    }
+}
+
+/// The same session, working on `turn` that the CLI started itself, as the agents model
+/// shows a session whose turn is no message of the user: a task it finished, a hook it ran.
+pub fn self_started(session: Session, turn: TurnId) -> Session {
+    Session {
+        turn_from_user: false,
+        ..working_on(session, turn)
     }
 }
 
