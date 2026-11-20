@@ -189,6 +189,19 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('e'), agent("claude"), &mut cx);
+
+    // The keys are kept on macOS, where they work with the focus in a terminal too.
+    if cfg!(target_os = "macos") {
+        panes.click_slot(0, &mut cx);
+        assert_eq!(panes.focused_terminal(&mut cx), Some(terminal('e')));
+        cx.simulate_keystrokes(common::key_of::<NewAgentTerminal>());
+        panes.answer_open(&terminal('f'), agent("claude"), &mut cx);
+        panes.click_slot(0, &mut cx);
+        cx.simulate_keystrokes(common::key_of::<NextAgentCli>());
+        assert_eq!(chosen(&panes, &mut cx), Some(pi()));
+        cx.simulate_keystrokes(common::key_of::<NewAgentTerminal>());
+        panes.answer_open(&terminal('g'), agent("pi"), &mut cx);
+    }
     assert!(panes.keeper.no_input_waits());
 }
 
@@ -540,6 +553,19 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     });
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('d'), resume(&b), &mut cx);
+
+    // The key is kept on macOS, where it works with the focus in a terminal too.
+    if cfg!(target_os = "macos") {
+        let next = session('e', "pi", &one, true);
+        tell_agents(&panes, &one, vec![b.clone(), next.clone()]);
+        wait_drawn(&mut cx, "the second session offered", |cx| {
+            offered(&panes, cx) == [b.id.clone(), next.id.clone()]
+        });
+        panes.click_slot(0, &mut cx);
+        assert_eq!(panes.focused_terminal(&mut cx), Some(terminal('d')));
+        cx.simulate_keystrokes(common::key_of::<ResumeAgent>());
+        panes.answer_open(&terminal('e'), resume(&next), &mut cx);
+    }
 }
 
 #[gpui_kit::test]
