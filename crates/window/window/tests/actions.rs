@@ -13,17 +13,19 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{Action, TestAppContext, VisualTestContext};
 use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{
-    CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting, Workspace,
+    Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
+    ThreadId, ThreadState, Workspace,
 };
-use yaar_review_pane::View;
-use yaar_system_tests::{DEADLINE, Repo, descendants_of, is_alive};
+use yaar_review_pane::{PaneRow, View};
+use yaar_system_tests::standin::{Did, Script};
+use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, give_an_identity, wait_until};
+use common::{Composed, RunningAgent, give_an_identity, key_of, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -49,7 +51,28 @@ enum Answer {
 /// a tap on its link, and checks that every pane of the Window's list is in it, as well as
 /// in the table of controls.
 fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
-    let (window, cx) = common::open_composed(cx, Vec::new());
+    check_the_panes(common::open_composed(cx, Vec::new()))
+}
+
+/// [`open_composed`] in a world whose agent CLI is the stand-in, with a script that runs and
+/// does nothing until the test makes the file `gate` of the world: the session the walk
+/// of the reviews starts, and ends at the gate.
+fn open_composed_with_an_agent(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
+    let mut world = World::new();
+    world.agents_on_path();
+    let script = Script::parse(&format!("hold {}\nexit", gate_of(&world).display()));
+    world.agent_script("default", &script);
+    world.start_keeper();
+    check_the_panes(common::open_composed_in(world, cx, Vec::new()))
+}
+
+/// The file outside the worktrees that holds the stand-in until the test makes it.
+fn gate_of(world: &World) -> PathBuf {
+    world.home().with_file_name("gate")
+}
+
+fn check_the_panes(opened: (Composed, VisualTestContext)) -> (Composed, VisualTestContext) {
+    let (window, cx) = opened;
     let listed: Vec<&str> = yaar_window::panes().iter().map(|pane| pane.name).collect();
     assert_eq!(
         window.frame.read_with(&cx, |frame, _| frame.panes()),
@@ -129,7 +152,10 @@ impl Composed {
     /// still recording a state or running git for its answer leaves the folder of its copy
     /// of git's list of files in the system's temp folder, outside the world. The requests of the reviews are answered one after
     /// the other, so waiting for the last of them covers those before it.
-    fn settle(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
+    ///
+    /// `passed` is the request the step waited for: for the kinds that act on a review it
+    /// says what the step has to see done.
+    fn settle(&mut self, kind: RequestKind, passed: &Request, cx: &mut VisualTestContext) {
         match kind {
             RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
                 cx.read_from_clipboard()
@@ -189,16 +215,60 @@ impl Composed {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
-            // The forward walk leaves the kinds of slice 6 out until the package that builds
-            // the composed Window of slice 6 teaches it them (`OF_SLICE_6`).
-            RequestKind::AttachReview
-            | RequestKind::DetachReview
-            | RequestKind::ResolveThread
-            | RequestKind::ReopenThread
-            | RequestKind::ResolveAddressed => {
-                panic!("the walk does not know {kind:?} yet")
+            RequestKind::AttachReview => {
+                let attached = match passed {
+                    Request::AttachReview {
+                        thread: Some(thread),
+                        ..
+                    } => Attachment::Thread(thread.clone()),
+                    _ => Attachment::Review,
+                };
+                self.wait_for_attachment(Some(attached), cx);
             }
+            RequestKind::DetachReview => self.wait_for_attachment(None, cx),
+            RequestKind::ResolveThread => self.wait_for_thread(ThreadState::Resolved, true, cx),
+            RequestKind::ReopenThread => self.wait_for_thread(ThreadState::Resolved, false, cx),
+            // No thread of the walk is addressed, so the request changes nothing to wait
+            // for: the Keeper answers it from the review it holds, with no git and no
+            // file, so that nothing is left half done when the stop frame ends it.
+            RequestKind::ResolveAddressed => {}
         }
+    }
+
+    /// Waits until the review of the agent shows what is attached to it as `attached` says,
+    /// in the review pane and in the agents' list, which the agent's terminal reads.
+    fn wait_for_attachment(&mut self, attached: Option<Attachment>, cx: &mut VisualTestContext) {
+        let terminal = self.agent().terminal.clone();
+        wait_until(cx, "what is attached to show as the step did it", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.review().map(|review| review.attached.clone())
+            }) == Some(attached.clone())
+                && self
+                    .terminals
+                    .read_with(cx, |pane, cx| pane.attachment(&terminal, cx))
+                    == attached
+        });
+    }
+
+    /// Waits until the thread of the walk is in `state` (`is` true) or not in it.
+    fn wait_for_thread(&mut self, state: ThreadState, is: bool, cx: &mut VisualTestContext) {
+        let thread = self
+            .agent()
+            .thread
+            .clone()
+            .expect("the walk wrote a thread");
+        wait_until(cx, "the thread in the state the step put it in", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.thread_states()
+                    .iter()
+                    .any(|(id, now)| *id == thread && (*now == state) == is)
+            })
+        });
+    }
+
+    /// The agent the walk started.
+    fn agent(&self) -> &RunningAgent {
+        self.agent.as_ref().expect("the walk started an agent")
     }
 
     /// The review the review pane shows, once it holds one.
@@ -220,6 +290,17 @@ impl Composed {
     /// such row. Returns the review and the draft once the pane's model shows the draft
     /// with its whole text.
     fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
+        self.write_a_draft_lower(0, cx)
+    }
+
+    /// [`Composed::write_a_draft`] on the line `down` lines below the first: a line no
+    /// earlier thread of the walk sits on, so that the keys that act on the thread on the
+    /// reviewer's line find this one.
+    fn write_a_draft_lower(
+        &mut self,
+        down: usize,
+        cx: &mut VisualTestContext,
+    ) -> (ReviewId, CommentId) {
         self.show_changes(cx);
         // The reviewer waits for the pane to show the reviews and a line to be on.
         self.review_shown(cx);
@@ -228,6 +309,9 @@ impl Composed {
                 .read_with(cx, |pane, _| pane.position().is_some())
         });
         self.click_into(cx, "review-row-0");
+        for _ in 0..down {
+            cx.simulate_keystrokes("j");
+        }
         cx.simulate_keystrokes("c");
         wait_until(cx, "the comment box", |cx| {
             self.review
@@ -320,20 +404,6 @@ impl Composed {
                 control.title
             ),
         }
-    }
-
-    /// Clicks at the left end of an element, once it is drawn.
-    fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
-        let mut found = None;
-        wait_until(cx, selector, |cx| {
-            found = cx.debug_bounds(selector);
-            found.is_some()
-        });
-        let found = found.expect("the element is drawn");
-        cx.simulate_click(
-            point(found.left() + px(2.), found.center().y),
-            Modifiers::none(),
-        );
     }
 
     /// Presses the key of `control` where it works, as a user does. Fails when the
@@ -541,12 +611,37 @@ impl Composed {
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
                 }
-                RequestKind::AttachReview
-                | RequestKind::DetachReview
-                | RequestKind::ResolveThread
-                | RequestKind::ReopenThread
-                | RequestKind::ResolveAddressed => {
-                    panic!("the walk does not know {kind:?} yet")
+                RequestKind::AttachReview => {
+                    let (review, thread) = self.agent_with_a_thread(cx);
+                    // The thread is attached alone from the line it is on; the review whole
+                    // by the other key.
+                    let request = Request::AttachReview {
+                        review,
+                        thread: (control.title == "Attach Thread").then_some(thread),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::DetachReview => {
+                    let (review, _) = self.agent_with_a_thread(cx);
+                    // Both controls detach what is attached: the one at the agent's terminal
+                    // is drawn, and acts, only while something is.
+                    self.make_sure_it_is_attached(cx);
+                    let request = Request::DetachReview { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::ResolveThread | RequestKind::ReopenThread => {
+                    let (review, thread) = self.agent_with_a_thread(cx);
+                    let request = if kind == RequestKind::ResolveThread {
+                        Request::ResolveThread { review, thread }
+                    } else {
+                        Request::ReopenThread { review, thread }
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::ResolveAddressed => {
+                    let (review, _) = self.agent_with_a_thread(cx);
+                    let request = Request::ResolveAddressed { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
                 }
             };
 
@@ -556,8 +651,8 @@ impl Composed {
             // is on its way by now. The folder and the branch are new with each step,
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
-            self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
-            self.settle(kind, cx);
+            let passed = self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
+            self.settle(kind, &passed, cx);
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
@@ -565,6 +660,124 @@ impl Composed {
                 self.wait_until_on_screen(folder, cx);
             }
         }
+    }
+
+    /// The control of the Window titled `title`.
+    fn control_titled(title: &str) -> Control {
+        yaar_window::controls()
+            .into_iter()
+            .find(|control| control.title == title)
+            .unwrap_or_else(|| panic!("no control is titled {title:?}"))
+    }
+
+    /// The review of the agent and a thread of it with a draft, the reviewer on its line:
+    /// the agent is started and the draft written the first time this is asked.
+    fn agent_with_a_thread(&mut self, cx: &mut VisualTestContext) -> (ReviewId, ThreadId) {
+        if self.agent.is_none() {
+            self.start_an_agent(cx);
+        }
+        if self.agent().thread.is_none() {
+            // The kinds before wrote a thread on the first line.
+            let (review, comment) = self.write_a_draft_lower(1, cx);
+            assert_eq!(
+                review,
+                self.agent().review,
+                "the draft is in the agent's review"
+            );
+            let thread = self.review.read_with(cx, |pane, _| {
+                pane.review()
+                    .and_then(|review| {
+                        review
+                            .threads
+                            .iter()
+                            .find(|thread| thread.comments.iter().any(|c| c.id == comment))
+                    })
+                    .map(|thread| thread.id.clone())
+            });
+            let thread = thread.expect("the review holds the thread of the draft");
+            self.agent.as_mut().expect("started").thread = Some(thread);
+        }
+        let agent = self.agent();
+        (
+            agent.review.clone(),
+            agent.thread.clone().expect("the thread was written"),
+        )
+    }
+
+    /// Attaches the review of the agent by the key of Attach Review when nothing is
+    /// attached to it, and waits until the review pane and the agent's terminal show it.
+    fn make_sure_it_is_attached(&mut self, cx: &mut VisualTestContext) {
+        let attached = self
+            .review
+            .read_with(cx, |pane, _| pane.review().and_then(|r| r.attached.clone()));
+        if attached.is_none() {
+            self.press(&Self::control_titled("Attach Review"), cx);
+            self.wait_for_attachment(Some(Attachment::Review), cx);
+        }
+    }
+
+    /// Puts the reviewer on the line the agent's thread sits on, by the keys a user uses:
+    /// Changes shown, the pane focused, then Line Down or Line Up until the thread's row
+    /// follows the row the reviewer is on. A key of an earlier step may have moved the
+    /// reviewer, and a click on the first row would not put it back, since a click on a
+    /// row that holds no line leaves the position where it was. The keys that act on the
+    /// thread on the line find it only there.
+    fn put_the_reviewer_on_the_thread(&mut self, cx: &mut VisualTestContext) {
+        let thread = self
+            .agent()
+            .thread
+            .clone()
+            .expect("the walk wrote a thread");
+        self.show_changes(cx);
+        self.click_into_the_review_pane(cx);
+        // The row of the thread, once the pane draws it, and the row the reviewer is on.
+        let rows_of = |window: &Self, cx: &mut VisualTestContext| {
+            window.review.read_with(cx, |pane, _| {
+                let of_thread = pane.rows().iter().position(
+                    |row| matches!(row, PaneRow::Thread { thread: held } if *held == thread),
+                );
+                (pane.position_row(), of_thread)
+            })
+        };
+        wait_until(cx, "the thread's row and the reviewer on a line", |cx| {
+            matches!(rows_of(self, cx), (Some(_), Some(_)))
+        });
+        let (line_down, line_up) = (key_of("Line Down"), key_of("Line Up"));
+        let rows = self.review.read_with(&*cx, |pane, _| pane.rows().len());
+        for _ in 0..rows {
+            let (Some(on), Some(thread_row)) = rows_of(self, cx) else {
+                break;
+            };
+            if on + 1 == thread_row {
+                break;
+            }
+            cx.simulate_keystrokes(if on + 1 < thread_row {
+                &line_down
+            } else {
+                &line_up
+            });
+            cx.run_until_parked();
+        }
+        wait_until(
+            cx,
+            "the reviewer on the line of the thread",
+            |cx| matches!(rows_of(self, cx), (Some(on), Some(thread_row)) if on + 1 == thread_row),
+        );
+    }
+
+    /// Ends the agent the walk started: the gate is made, and the stand-in ends its session
+    /// and itself.
+    fn end_the_agent(&mut self) {
+        std::fs::write(gate_of(&self.world), "").expect("make the gate");
+        let world = &self.world;
+        assert!(
+            yaar_system_tests::wait_until(DEADLINE, || world
+                .agent_log("default")
+                .did
+                .iter()
+                .any(|did| matches!(did, Did::Exited { .. }))),
+            "the agent did not end at the gate"
+        );
     }
 
     /// The last step of the walk: every control that says it sends the stop-everything
@@ -666,59 +879,31 @@ impl Composed {
 
 #[gpui_kit::test]
 fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestAppContext) {
-    let (mut window, mut cx) = open_composed(cx);
+    let (mut window, mut cx) = open_composed_with_an_agent(cx);
 
     // A workspace is on screen before the walk, whichever kind the walk meets first:
     // without one there is nothing to set a base for.
     window.walk(RequestKind::OpenFolder, &mut cx);
 
-    // The kinds of slice 6 are left out until the package that builds the composed Window
-    // of slice 6 teaches the walk them, and takes this filter away.
-    const OF_SLICE_6: [RequestKind; 5] = [
-        RequestKind::AttachReview,
-        RequestKind::DetachReview,
-        RequestKind::ResolveThread,
-        RequestKind::ReopenThread,
-        RequestKind::ResolveAddressed,
-    ];
-    for kind in RequestKind::started_by_user().filter(|kind| !OF_SLICE_6.contains(kind)) {
+    // Every kind there is, the kinds of the reviews among them: the first of those starts
+    // the agent whose review they act on.
+    for kind in RequestKind::started_by_user() {
         window.walk(kind, &mut cx);
     }
+    window.end_the_agent();
 
     // The stop frame is no request. It ends the Keeper, so it is pressed last.
     window.walk_the_stop(&mut cx);
 }
 
-#[gpui_kit::test]
-fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut TestAppContext) {
-    // What a control says it sends is something a user starts.
-    for control in yaar_window::controls() {
-        match control.sends {
-            Some(Sends::Request(kind)) => assert_eq!(
-                kind.origin(),
-                Origin::User,
-                "{} says it sends {kind:?}",
-                control.title
-            ),
-            // The stop-everything frame is no request, and has no origin to check. Its
-            // control is pressed by the forward walk, last, where the tap sees the frame.
-            Some(Sends::StopEverything) => {}
-            None => {}
-        }
-    }
-
-    let (mut window, mut cx) = open_composed(cx);
-    // Two workspaces, so that the keys that change the one on screen have one to change
-    // to, and so set off the questions the Window asks by itself.
-    window.walk(RequestKind::OpenFolder, &mut cx);
-    window.walk(RequestKind::OpenFolder, &mut cx);
-    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
-    // terminal pane have a terminal to act on and the focus is inside one.
-    window.walk(RequestKind::OpenTerminal, &mut cx);
-    wait_until(&mut cx, "the terminal on screen", |cx| {
-        cx.debug_bounds("terminal-slot-0").is_some()
-    });
-
+/// Presses the key of every control that names no message, one step for each, and checks
+/// that none of them sent a request a user starts. `ready` puts the Window where the keys
+/// act, before each step: a key of an earlier step may have moved the Window on.
+fn walk_the_silent_keys(
+    window: &mut Composed,
+    cx: &mut VisualTestContext,
+    mut ready: impl FnMut(&mut Composed, &mut VisualTestContext),
+) {
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends.is_none())
@@ -759,23 +944,24 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
             "{} asks the user for something, and the walk does not know what to give",
             control.title
         );
+        ready(window, cx);
         let before = window.tap.requests().len();
         if in_changes {
-            window.show_changes(&mut cx);
+            window.show_changes(cx);
         }
-        window.press(&control, &mut cx);
+        window.press(&control, cx);
         // Checked before the step is closed: the closing types into the field for the
         // base, and would hand a field this key had opened its line all the same.
-        window.assert_asks_nothing(&control, &mut cx);
+        window.assert_asks_nothing(&control, cx);
         // The keys of Comment, Edit Draft and Reply may open the box, which takes the
         // focus: the keys of the steps after would be typed into it as text. Nothing was
         // typed, so no save went out.
         if window
             .review
-            .read_with(&cx, |pane, _| pane.comment_box().is_some())
+            .read_with(&*cx, |pane, _| pane.comment_box().is_some())
         {
             cx.simulate_keystrokes("escape");
-            wait_until(&mut cx, "the comment box to close", |cx| {
+            wait_until(cx, "the comment box to close", |cx| {
                 window
                     .review
                     .read_with(cx, |pane, _| pane.comment_box().is_none())
@@ -786,8 +972,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         // The stop frame is no request, so the loop below does not see it. A key that
         // sent it would end the Keeper, and the request that closes the step would never
         // pass: the step is closed on that frame as well, and it is told apart here.
-        let Some(closed) = window.set_base(&format!("after-{}-{step}", control.key()), &mut cx)
-        else {
+        let Some(closed) = window.set_base(&format!("after-{}-{step}", control.key()), cx) else {
             panic!(
                 "the key {} of {} names no message and sent the stop-everything frame",
                 control.key(),
@@ -808,7 +993,65 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
 
     // The window stood through the walk with what it was opened with.
     assert_eq!(
-        window.frame.read_with(&cx, |frame, _| frame.panes().len()),
+        window.frame.read_with(&*cx, |frame, _| frame.panes().len()),
         yaar_window::panes().len()
     );
+}
+
+#[gpui_kit::test]
+fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut TestAppContext) {
+    // What a control says it sends is something a user starts.
+    for control in yaar_window::controls() {
+        match control.sends {
+            Some(Sends::Request(kind)) => assert_eq!(
+                kind.origin(),
+                Origin::User,
+                "{} says it sends {kind:?}",
+                control.title
+            ),
+            // The stop-everything frame is no request, and has no origin to check. Its
+            // control is pressed by the forward walk, last, where the tap sees the frame.
+            Some(Sends::StopEverything) => {}
+            None => {}
+        }
+    }
+
+    let (mut window, mut cx) = open_composed(cx);
+    // Two workspaces, so that the keys that change the one on screen have one to change
+    // to, and so set off the questions the Window asks by itself.
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
+    // terminal pane have a terminal to act on and the focus is inside one.
+    window.walk(RequestKind::OpenTerminal, &mut cx);
+    wait_until(&mut cx, "the terminal on screen", |cx| {
+        cx.debug_bounds("terminal-slot-0").is_some()
+    });
+    walk_the_silent_keys(&mut window, &mut cx, |_, _| {});
+}
+
+#[gpui_kit::test]
+fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts_where_an_agent_runs_with_a_review_attached(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, mut cx) = open_composed_with_an_agent(cx);
+    // One workspace: the keys that change the workspace on screen would take the agent away
+    // from the keys after them. The agent runs in it, its review has a draft on a thread
+    // and is attached, so that the keys of attaching and of the agent's terminal are
+    // pressed where they act and not where they have nothing to do.
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    window.agent_with_a_thread(&mut cx);
+    window.make_sure_it_is_attached(&mut cx);
+
+    // A key of an earlier step may have gone on to another review, closed the view of the
+    // attachment or the like: the review of the agent is back, and attached, before each.
+    walk_the_silent_keys(&mut window, &mut cx, |window, cx| {
+        let session = window.agent().session.clone();
+        window.show_the_review_of(&session, cx);
+        window.make_sure_it_is_attached(cx);
+        // The keys that act on the thread on the reviewer's line, Original Line, Comment,
+        // Edit Draft and Reply among them, are pressed with the reviewer on it.
+        window.put_the_reviewer_on_the_thread(cx);
+    });
+    window.end_the_agent();
 }

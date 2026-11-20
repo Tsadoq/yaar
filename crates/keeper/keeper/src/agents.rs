@@ -1179,6 +1179,8 @@ impl Core {
                 return;
             }
         };
+        // The review now names the session: a Window that holds it reads it again.
+        told.reviews_changed(&record.workspace);
         let previous = before
             .iter()
             .find(|held| held.id == review)
