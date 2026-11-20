@@ -14,6 +14,7 @@
 
 mod support;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -23,13 +24,14 @@ use yaar_navigator::{BUILTIN, Location, State, Tree};
 /// What one fixed project is asked: a name, at a line of a file of its change, and where the
 /// name is defined and used.
 struct Probe {
-    fixture: Fixture,
-    /// The row's name.
+    /// The row that serves the file.
     language: &'static str,
     /// The file, relative to the worktree, and the line of the name in it, from 1.
     file: &'static str,
     line: u32,
     name: &'static str,
+    /// What the hover holds: the name's signature.
+    signature: &'static str,
     /// The file and line of the definition.
     defined: (&'static str, u32),
     /// Files and lines that refer to the name, the definition's among them.
@@ -37,44 +39,59 @@ struct Probe {
 }
 
 const TYPESCRIPT: Probe = Probe {
-    fixture: Fixture::TypeScript,
     language: "typescript",
     file: "src/main.ts",
     line: 5,
-    name: "titleCase",
-    defined: ("src/text/case.ts", 1),
+    name: "perimeter",
+    signature: "function perimeter(sides: number[]): number",
+    defined: ("src/geometry.ts", 1),
     used: &[
-        ("src/text/case.ts", 1),
-        ("src/main.ts", 2),
+        ("src/geometry.ts", 1),
+        ("src/main.ts", 1),
         ("src/main.ts", 5),
     ],
 };
 
+/// A JavaScript file of the same project: the row of TypeScript serves it too.
+const JAVASCRIPT: Probe = Probe {
+    language: "typescript",
+    file: "src/report.js",
+    line: 4,
+    name: "double",
+    signature: "function double(n: any): number",
+    defined: ("src/helpers.js", 1),
+    used: &[
+        ("src/helpers.js", 1),
+        ("src/report.js", 1),
+        ("src/report.js", 4),
+    ],
+};
+
 const PYTHON: Probe = Probe {
-    fixture: Fixture::Python,
     language: "python",
     file: "app/main.py",
     line: 6,
-    name: "title_case",
-    defined: ("app/text/case.py", 1),
+    name: "perimeter",
+    signature: "def perimeter(sides: list[int]) -> int",
+    defined: ("app/geometry.py", 1),
     used: &[
-        ("app/text/case.py", 1),
-        ("app/main.py", 2),
+        ("app/geometry.py", 1),
+        ("app/main.py", 1),
         ("app/main.py", 6),
     ],
 };
 
 const RUST: Probe = Probe {
-    fixture: Fixture::Rust,
     language: "rust",
     file: "src/report.rs",
-    line: 6,
-    name: "title_case",
-    defined: ("src/text.rs", 1),
+    line: 5,
+    name: "perimeter",
+    signature: "pub fn perimeter(sides: &[u32]) -> u32",
+    defined: ("src/geometry.rs", 1),
     used: &[
-        ("src/text.rs", 1),
-        ("src/report.rs", 2),
-        ("src/report.rs", 6),
+        ("src/geometry.rs", 1),
+        ("src/report.rs", 1),
+        ("src/report.rs", 5),
     ],
 };
 
@@ -102,11 +119,12 @@ fn wait_for_npm_install(scratch: &Scratch) -> Vec<String> {
     }
 }
 
-/// Runs the probe's server over its fixed project and checks that it left nothing behind.
-fn leaves_nothing_behind(probe: Probe) {
+/// Runs the server of `probes` over the fixed project `fixture`, asks each probe, and checks
+/// that nothing is left behind.
+fn leaves_nothing_behind(fixture: Fixture, probes: &[Probe]) {
     let servers = real_servers();
     let scratch = Scratch::new();
-    let repo = scratch.fixture(probe.fixture);
+    let repo = scratch.fixture(fixture);
     let before = repo.status();
     assert!(
         !repo.root.join("target").exists(),
@@ -118,11 +136,17 @@ fn leaves_nothing_behind(probe: Probe) {
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(config);
     running.show(&repo, &ws, &repository);
-    running.wait_state(&ws, probe.language, None, SERVER_DEADLINE, |state| {
-        state.state == State::Ready
-    });
+    for language in probes
+        .iter()
+        .map(|probe| probe.language)
+        .collect::<BTreeSet<_>>()
+    {
+        running.wait_state(&ws, language, None, SERVER_DEADLINE, |state| {
+            state.state == State::Ready
+        });
+    }
 
-    if matches!(probe.fixture, Fixture::TypeScript) {
+    if matches!(fixture, Fixture::TypeScript) {
         // A file outside every project, where a server that acquires types would run npm,
         // asked about first.
         let outside = running.hover(
@@ -140,36 +164,38 @@ fn leaves_nothing_behind(probe: Probe) {
         assert!(!outside.guessed, "{outside:#?}");
     }
 
-    let at = || {
-        place(
-            &repo,
-            &ws,
-            Tree::Worktree,
-            probe.file,
-            probe.line,
-            probe.name,
-            0,
-        )
-    };
-    let hover = running.hover(at(), SERVER_DEADLINE);
-    assert!(!hover.guessed, "{hover:#?}");
-    let text = hover
-        .value
-        .expect("the server reports something for the name");
-    assert!(text.contains(probe.name), "{text}");
-    let definition = running.definition(at(), SERVER_DEADLINE);
-    assert!(!definition.guessed, "{definition:#?}");
-    assert!(
-        holds(&definition.value, &repo, probe.defined.0, probe.defined.1),
-        "{definition:#?}"
-    );
-    let references = running.references(at(), SERVER_DEADLINE);
-    assert!(!references.guessed, "{references:#?}");
-    for (file, line) in probe.used {
+    for probe in probes {
+        let at = || {
+            place(
+                &repo,
+                &ws,
+                Tree::Worktree,
+                probe.file,
+                probe.line,
+                probe.name,
+                0,
+            )
+        };
+        let hover = running.hover(at(), SERVER_DEADLINE);
+        assert!(!hover.guessed, "{hover:#?}");
+        let text = hover
+            .value
+            .unwrap_or_else(|| panic!("the server reports something for {}", probe.name));
+        assert!(text.contains(probe.signature), "{text}");
+        let definition = running.definition(at(), SERVER_DEADLINE);
+        assert!(!definition.guessed, "{definition:#?}");
         assert!(
-            holds(&references.value, &repo, file, *line),
-            "{file}:{line} in {references:#?}"
+            holds(&definition.value, &repo, probe.defined.0, probe.defined.1),
+            "{definition:#?}"
         );
+        let references = running.references(at(), SERVER_DEADLINE);
+        assert!(!references.guessed, "{references:#?}");
+        for (file, line) in probe.used {
+            assert!(
+                holds(&references.value, &repo, file, *line),
+                "{file}:{line} in {references:#?}"
+            );
+        }
     }
     running.end();
 
@@ -181,7 +207,7 @@ fn leaves_nothing_behind(probe: Probe) {
         !repo.root.join("target").exists(),
         "a build folder came into the project"
     );
-    if matches!(probe.fixture, Fixture::Rust) {
+    if matches!(fixture, Fixture::Rust) {
         let own: PathBuf = scratch
             .root
             .join("navigator")
@@ -203,17 +229,17 @@ fn leaves_nothing_behind(probe: Probe) {
 
 #[test]
 fn typescript_leaves_nothing_in_the_repository_and_runs_no_package_manager() {
-    leaves_nothing_behind(TYPESCRIPT);
+    leaves_nothing_behind(Fixture::TypeScript, &[TYPESCRIPT, JAVASCRIPT]);
 }
 
 #[test]
 fn python_leaves_nothing_in_the_repository_and_runs_no_package_manager() {
-    leaves_nothing_behind(PYTHON);
+    leaves_nothing_behind(Fixture::Python, &[PYTHON]);
 }
 
 #[test]
 fn rust_leaves_nothing_in_the_repository_and_builds_into_the_apps_cache() {
-    leaves_nothing_behind(RUST);
+    leaves_nothing_behind(Fixture::Rust, &[RUST]);
 }
 
 /// The built-in table without the three tables that turn off tsgo's acquisition of types:
