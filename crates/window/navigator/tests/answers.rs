@@ -17,10 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use support::*;
-use yaar_link::{RepositoryId, WorkspaceId};
-use yaar_navigator::{
-    Answered, Ask, AskId, FileKind, Location, RepositoryConsent, State, Told, Tree, WorkspaceRoot,
-};
+use yaar_navigator::{Answered, Ask, AskId, FileKind, Location, State, Told, Tree};
 
 /// `text` as a TOML string.
 fn q(text: impl AsRef<str>) -> String {
@@ -289,9 +286,7 @@ fn on_a_past_change_a_file_gone_from_disk_is_answered_by_text_match() {
         version: repo.base.clone(),
         text: Arc::from(past),
     };
-    let mut answered = place(&repo, &ws, tree.clone(), "gone.sil", 1, "alpha", 0);
-    answered.path = PathBuf::from("gone.sil");
-    let hover = running.hover(answered, DEADLINE);
+    let hover = running.hover(place(&repo, &ws, tree, "gone.sil", 1, "alpha", 0), DEADLINE);
     assert_eq!(
         hover,
         Answered {
@@ -543,14 +538,54 @@ fn a_file_opened_through_an_answer_is_told_with_what_it_is() {
     running.end();
 }
 
-// Used by the tests above that name workspaces and repositories.
-#[allow(dead_code)]
-fn _kept(
-    _: (
-        &RepositoryConsent,
-        &WorkspaceRoot,
-        &WorkspaceId,
-        &RepositoryId,
-    ),
-) {
+#[test]
+fn a_name_after_wide_characters_is_asked_at_its_utf16_column_and_answered_in_bytes() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    // Four characters of four bytes and two UTF-16 units each in front of the name: its
+    // byte column is 21 and its UTF-16 column 13, past the end of a line of 18 units.
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("lib.sil", "def alpha\n"),
+            (
+                "main.sil",
+                "use \u{1D11E}\u{1D11E}\u{1D11E}\u{1D11E} alpha\n",
+            ),
+        ],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+
+    let at_alpha = || place(&repo, &ws, Tree::Worktree, "main.sil", 1, "alpha", 0);
+    assert_eq!(at_alpha().column, 21);
+    let hover = running.hover(at_alpha(), DEADLINE);
+    assert_eq!(
+        hover,
+        Answered {
+            value: Some("standin: alpha".to_owned()),
+            guessed: false
+        }
+    );
+    let references = running.references(at_alpha(), DEADLINE);
+    assert_eq!(
+        references,
+        Answered {
+            value: vec![
+                at(&repo.root.join("lib.sil"), 1, 4, "def alpha"),
+                at(
+                    &repo.root.join("main.sil"),
+                    1,
+                    21,
+                    "use \u{1D11E}\u{1D11E}\u{1D11E}\u{1D11E} alpha"
+                ),
+            ],
+            guessed: false
+        }
+    );
+    running.end();
 }
