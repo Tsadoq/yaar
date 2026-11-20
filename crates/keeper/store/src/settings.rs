@@ -20,10 +20,9 @@
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
 //! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
 //!
-//! A setting of one repository is one row of `repository_setting`, by the repository and
-//! its name; one of a repository the Store does not hold is refused, and a row of one it no
-//! longer holds is not listed. Settings of repositories come last in [`Store::settings`],
-//! after those of the workspaces, in the order the repositories were first kept.
+//! A setting of a repository the Store does not hold is refused, and a row of one it no longer
+//! holds is not listed. Settings of repositories come last in [`Store::settings`], after
+//! those of the workspaces, in the order the repositories were first kept.
 //!
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.

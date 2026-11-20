@@ -22,7 +22,8 @@ use crate::link_model::{AskError, KeeperLink, LinkStatus};
 /// [`SettingList::set`] takes a setting at once, so that what the user chose shows before
 /// the Keeper answered, and asks the Keeper to keep it with `Request::SetSetting`, which is
 /// the user's request. A refusal has the list asked again, so that the model shows what
-/// the Keeper keeps.
+/// the Keeper keeps; so does a set made while an answer for the list is on its way, whose
+/// answer is not held, since the Keeper made it before it heard of the set.
 ///
 /// The Keeper tells `SettingChanged` to every Window, this one too, after it answered the
 /// set. Each fact is taken as it comes, the echo of this window's own set included: two
@@ -152,6 +153,12 @@ impl SettingList {
         let asked = self
             .link
             .update(cx, |link, cx| link.ask(Request::SetSetting { setting }, cx));
+        // An answer still on its way was made before the Keeper heard of this set, and
+        // would take the setting off the list. It is dropped, and the question is asked
+        // again, after the set, as for a fact.
+        if self.awaits_list {
+            self.refresh(cx);
+        }
         cx.spawn(async move |list, cx| {
             // A Keeper that refuses, or answers with anything but `Done`, leaves the list
             // showing a setting it may not keep: ask for what it does keep. A link that is
