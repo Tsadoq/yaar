@@ -125,7 +125,9 @@ impl TerminalPane {
     }
 
     /// Sends the user's `answer` to the questions for leave, through the shared model, and
-    /// says in the notice when there is none to answer or the Keeper refused.
+    /// says in the notice when there is none to answer or the Keeper refused. The notice is
+    /// the pane's one, so the newest answer's outcome replaces whatever it said before, a
+    /// terminal's failure included.
     fn answer(&mut self, answer: ConsentAnswer, cx: &mut Context<Self>) {
         self.notice = None;
         let task = self

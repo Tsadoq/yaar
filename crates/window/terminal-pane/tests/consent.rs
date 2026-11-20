@@ -147,8 +147,10 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
 ) {
     let (panes, mut cx) = open_panes(cx);
     // No spaces: the test platform measures a space differently from a letter. The words
-    // are told twice with one length each; the Adapter's name is the same both times, so
-    // only the words can make the drawn text change its width.
+    // are told twice, and the question's and the problem's lengths cross between the two
+    // tells: only a question drawn with the question's words and a problem drawn with the
+    // problem's can make the two widths change in opposite ways. The Adapter's name is the
+    // same both times.
     let short = "Shortwords";
     let long = "Somewhatlongerwordsoftheadapterhere";
     let told = |words: &str, problem: &str| {
@@ -159,12 +161,12 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
     };
     let ratio = long.chars().count() as f32 / short.chars().count() as f32;
 
-    tell(&panes, told(short, short), &mut cx);
+    tell(&panes, told(short, long), &mut cx);
     let question_short = width("terminal-consent-question-0", &mut cx);
-    let problem_short = width("terminal-consent-problem-0", &mut cx);
-    tell(&panes, told(long, long), &mut cx);
-    let question_long = width("terminal-consent-question-0", &mut cx);
     let problem_long = width("terminal-consent-problem-0", &mut cx);
+    tell(&panes, told(long, short), &mut cx);
+    let question_long = width("terminal-consent-question-0", &mut cx);
+    let problem_short = width("terminal-consent-problem-0", &mut cx);
 
     // A width is rounded to a pixel, hence the margin.
     assert!(question_short > 0.0 && problem_short > 0.0);
@@ -177,6 +179,32 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
         (problem_long / problem_short - ratio).abs() < 0.1,
         "the problem drawn is {ratio} times as wide for words that long: \
          {problem_short} and {problem_long}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_no(
+    cx: &mut TestAppContext,
+) {
+    let (panes, mut cx) = open_panes(cx);
+    tell(
+        &panes,
+        vec![consent("pi", ConsentAnswer::NotAsked)],
+        &mut cx,
+    );
+    // Both controls have the same padding and the same text size, so the widths differ
+    // by the characters of their labels, and "Install" has more than "No": a swapped or
+    // a repeated label shows as the wrong order or as no difference.
+    let yes = width("terminal-consent-yes", &mut cx);
+    let no = width("terminal-consent-no", &mut cx);
+    assert!(
+        yes > no,
+        "the control that answers yes is {yes} wide and the one that answers no {no}"
+    );
+    let per_character = (yes - no) / ("Install".len() - "No".len()) as f32;
+    assert!(
+        per_character > 1.0,
+        "a character of a label is {per_character} wide"
     );
 }
 
