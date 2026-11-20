@@ -22,5 +22,10 @@ Three small projects, one for each built-in row: `typescript` (with JavaScript f
 acquires types for a file outside every project would do it for this one. The JavaScript
 files are `src/helpers.js` and `src/report.js`.
 
-The projects use no item of a standard library in what the tests ask about, so that the
-Rust server answers them with no source of the standard library installed.
+Every name whose answer a test checks is a function or a type of the project or of its
+hand-written dependency, called outside any macro. The Rust server expands a macro of the
+standard library, `format!` among them, only when the source of the standard library is
+installed, and the toolchain the repository pins installs none (its profile is
+`minimal`): a name inside such a macro would answer nothing there. The Rust probes were
+tried with the toolchain's library source hidden from rust-analyzer (its `cargo.sysroot`
+set to a copy of the toolchain's folder without `lib/rustlib/src`), and each answered.

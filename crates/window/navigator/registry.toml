@@ -197,10 +197,10 @@ trial = ["--version"]
 args = ["lsp"]
 ready = { kind = "answer" }
 
-# Rust: rust-analyzer. The toolchain's own, through rustup's program of that name on the
-# search path, which runs the project's toolchain, comes first; then any other on the
-# machine; then the one the app downloaded. It needs the machine's Rust toolchain, which no
-# row can supply.
+# Rust: rust-analyzer, with no copy of the project's own: the program of that name found on
+# the search path, in the path's order (rustup's, which runs the toolchain the project
+# pins, wherever it lies in that order), then the one the app downloaded. It needs the
+# machine's Rust toolchain, which no row can supply.
 [rust]
 title = "Rust"
 markers = ["Cargo.toml"]
@@ -228,8 +228,11 @@ cargo = { targetDir = "{target}" }
 checkOnSave = false
 cargo = { targetDir = "{target}" }
 
+# Cargo, which the server runs to read the project, fetches nothing: no crate index and no
+# crate reaches the user's cargo folder because a review looked at the code.
 [rust.server.environment]
 CARGO_TARGET_DIR = "{target}"
+CARGO_NET_OFFLINE = "true"
 
 [[rust.server.download]]
 platform = "darwin-arm64"

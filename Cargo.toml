@@ -100,6 +100,32 @@ opt-level = 3
 [profile.dev.package.yaar-diff]
 opt-level = 3
 
+# Text match has a time limit a test holds it to too (TEXT-03): the walk and the search are
+# built as the app ships them.
+[profile.dev.package.yaar-text-search]
+opt-level = 3
+
+[profile.dev.package.ignore]
+opt-level = 3
+
+[profile.dev.package.globset]
+opt-level = 3
+
+[profile.dev.package.grep-searcher]
+opt-level = 3
+
+[profile.dev.package.grep-regex]
+opt-level = 3
+
+[profile.dev.package.grep-matcher]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.memchr]
+opt-level = 3
+
 [profile.release]
 opt-level = 3
 debug = false

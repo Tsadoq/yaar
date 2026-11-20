@@ -24,7 +24,7 @@
 //!
 //! | Key | Type | What it is | When left out |
 //! | --- | --- | --- | --- |
-//! | `name` | string | the server's name, as the offer and the line of its state name it, and the folder its download is unpacked into | required |
+//! | `name` | string | the server's name, as the offer and the line of its state name it, and the folder its download is unpacked into | required in the built-in table; in the user's file, the row's name |
 //! | `command` | array of strings | the user's own server: its program, then its arguments. Only in the user's file, where every server must name it | no registered server |
 //! | `project` | array of strings | the project's own copy: paths relative to the worktree's root | none |
 //! | `machine` | array of strings | names of a copy installed on the machine: each file of that name in every folder of the search path, in the path's order | none |
@@ -45,11 +45,15 @@
 //!   of `method` arrives whose `params` hold every key of `match` with an equal value.
 //!
 //! A download (`[[<row>.server.download]]`) holds: `platform`, one of [`Platform`]'s
-//! names; `version`; `url`, the publisher's own address; `sha256`, the digest of the bytes
-//! fetched, 64 lowercase hexadecimal digits; `archive`, `tar.gz` or `gz` ([`Archive`]);
-//! `strip`, the number of leading parts of each path dropped from a `tar.gz` (0 when left
-//! out); `program`, the server's program inside the unpacked folder, or for `gz` the name
-//! the one file is written as; `size`, the number of bytes fetched.
+//! names; `version`, a string that is not empty and holds no `/`; `url`, the publisher's
+//! own address; `sha256`, the digest of the bytes fetched, exactly 64 lowercase
+//! hexadecimal digits; `archive`, `tar.gz` or `gz` ([`Archive`]); `strip`, the number of
+//! leading parts of each path dropped from a `tar.gz` (0 when left out); `program`, the
+//! server's program inside the unpacked folder, or for `gz` the name the one file is
+//! written as; `size`, the number of bytes fetched, above 0. Every key but `strip` is
+//! required: a download that lacks one, or whose `sha256` is not 64 lowercase hexadecimal
+//! digits, is an error of its row, so that no row can download what no digest guards.
+//! Two downloads of one server for the same platform are an error of the row too.
 //!
 //! The strings of a server's `command`, `project`, `args`, `capabilities`,
 //! `initialization_options`, `settings` and `environment`, and of the row's `old_side`, may
@@ -67,7 +71,15 @@
 //! user's row names none: the user's servers are the only ones tried for those files, and
 //! none is ever downloaded (FR-073). A user's row with a new name adds a language. Every
 //! server of a user's row must name `command`, and none may name `download`; a row with a
-//! server that breaks either rule is reported and passed over. A user's server may name
+//! server that breaks either rule is reported and passed over. A user's server that names
+//! no `name` is named as its row, so that the least a user writes for a language the
+//! built-in table knows is its command:
+//!
+//! ```toml
+//! [[rust.server]]
+//! command = ["/path/to/rust-analyzer"]
+//! ```
+//! A user's server may name
 //! `project` and `machine` too, tried after every registered command in the order of
 //! FR-060. A user's row is [`Row::registered`].
 //!

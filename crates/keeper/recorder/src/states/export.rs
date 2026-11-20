@@ -17,7 +17,13 @@ impl StateStore {
     /// of the store's own made for this call in a temporary file and removed after: git's
     /// `read-tree` of the version into that index, then `checkout-index --all
     /// --prefix=<into>/`, both run in the state store with the real repository's objects as
-    /// alternates, every hook off as for every other call here. A file's mode is kept, an
+    /// alternates, every hook off as for every other call here. No filter driver runs: for
+    /// each driver the repository's configuration defines (`git config --get-regexp
+    /// '^filter\..*\.(smudge|process|required)$'`, read as the hooks to turn off are read),
+    /// `checkout-index` is given `-c filter.<driver>.smudge=`, `-c filter.<driver>.process=`
+    /// and `-c filter.<driver>.required=false`, so that a file is written as git stores it
+    /// (a large-file pointer stays a pointer) and no driver reaches a server of its own.
+    /// Line-end conversions of the attributes apply as in any checkout. A file's mode is kept, an
     /// executable one stays executable; a link is written as a link. The folder holds no
     /// `.git` and is no repository. The real repository gains nothing: no worktree, no ref,
     /// no file, no change of its index; the store gains at most the commit it copied, as a

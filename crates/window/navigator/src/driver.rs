@@ -8,8 +8,9 @@
 //! [`Launch::environment`] (no variable of this process leaks in), its standard input and
 //! output piped to the driver and its standard error written to [`Launch::log`]. On Linux
 //! it is also asked to end when this process ends (`PR_SET_PDEATHSIG`), so that no server
-//! outlives a Window that crashed; on macOS a server that reads its input to its end ends
-//! with the Window.
+//! outlives a Window that crashed. On macOS nothing ends a server whose Window crashed:
+//! some servers end when their input closes, rust-analyzer does not. A Window that quits
+//! stops every server itself.
 //!
 //! The driver sends `initialize` with `processId` this process, `rootUri` and one
 //! workspace folder of `root`, `initializationOptions`, and these client capabilities,

@@ -3,18 +3,23 @@
 //!
 //! # Which server answers a place
 //!
-//! The row is `Core::registry.for_path(place.path)`; a file of a language no row knows is
-//! always answered by text match (DEC-047). By the place's tree:
+//! The row is `Core::registry.for_path(place.path)`, by the file's extension; a file of a
+//! language no row knows is always answered by text match over the worktree (DEC-047). By
+//! the place's tree:
 //!
 //! | Tree | Key | Root, and the file asked about |
 //! | --- | --- | --- |
-//! | `Worktree` | the row's new side | the worktree's folder; the file on disk |
-//! | `Version(v)` | the row's old side of `v` | the export of `v`, `old_side::root`; while it is being written the ask waits, and is taken up again by [`export_ready`] or answered by text match over the worktree, marked, by [`export_failed`] |
+//! | `Worktree`, a relative path | the row's new side | the worktree's folder; the file on disk |
+//! | `Worktree`, an absolute path: a file outside the worktree, or ignored in it, opened through an answer | the row's new side | the worktree's folder; the file at that path, as the server is asked about it. Text match runs over the worktree |
+//! | `Version(v)` | the row's old side of `v` | the export of `v`, once `old_side::root` gives it. While it is being written, the ask is answered at once by text match over the worktree, marked: no server is ready for the file (FR-068) |
 //! | `Past { version, text }` | the row's new side | the worktree's folder. The line is carried from `text` to the file on disk through the diff of the two (`yaar_diff::FileDiff`): a line no hunk touches is asked at its line on disk; any other line, and a file no longer on disk, by text match over the worktree, marked (OLD-07, ADR-016 point 6) |
 //!
-//! `lifecycle::ensure` gives the key's state. While it is anything but ready, the place is
-//! answered by text match over the root ([`found`]) and the answer marked guessed. When it
-//! is ready, the file's text as the root holds it now is handed to the server
+//! `lifecycle::ensure` makes sure the key is looked for; `lifecycle::ready_server` says
+//! whether a server of the key runs and is ready, and that alone decides: a server ready
+//! answers even while the state shown is the question of an earlier candidate
+//! ([`crate::State::Asking`]), since the later candidates run meanwhile. With none ready,
+//! the place is answered by text match over the root ([`found`]) and the answer marked
+//! guessed. When one is ready, the file's text as the root holds it now is handed to the server
 //! (`Server::open`), and the request sent at the place: `textDocument/hover`,
 //! `textDocument/definition`, or `textDocument/references` with `includeDeclaration` true;
 //! line less one, column in UTF-16 units of the line read from the file
@@ -121,15 +126,18 @@ pub(crate) fn server_gone(core: &mut Core, key: &ServerKey) {
     todo!()
 }
 
-/// The export of `version` of `workspace` is written, at `root`: the asks that waited for
-/// it are taken up again.
+/// The export of `version` of `workspace` is written, at `root`: every row asked about on
+/// that old side while it was written has its old side's key ensured
+/// (`lifecycle::ensure`, the export as its root). No ask waits for an export: each was
+/// answered by text match when it came.
 pub(crate) fn export_ready(core: &mut Core, workspace: &WorkspaceId, version: &str, root: &Path) {
     let _ = (core, workspace, version, root);
     todo!()
 }
 
-/// The export of `version` of `workspace` could not be written: the asks that waited for
-/// it are answered by text match over the worktree, marked.
+/// The export of `version` of `workspace` could not be written: nothing waits for it, and
+/// the rows asked about are forgotten; the next ask about that old side asks for the
+/// export again.
 pub(crate) fn export_failed(core: &mut Core, workspace: &WorkspaceId, version: &str) {
     let _ = (core, workspace, version);
     todo!()

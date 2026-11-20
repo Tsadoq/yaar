@@ -3,10 +3,11 @@
 //!
 //! | Event | Handled by |
 //! | --- | --- |
-//! | [`Ask::Workspaces`], [`Ask::OnScreen`], [`Ask::Consents`], [`Ask::Download`], [`Ask::Update`] | `lifecycle.rs` |
+//! | [`Ask::Workspaces`], [`Ask::OnScreen`], [`Ask::Consents`] | `lifecycle.rs` |
+//! | [`Ask::Download`], [`Ask::Update`], [`Event::Downloaded`] | `fetch.rs` |
 //! | [`Ask::OldSide`], [`Ask::Exported`] | `old_side.rs` |
 //! | [`Ask::Hover`], [`Ask::Definition`], [`Ask::References`], [`Ask::Open`], [`Ask::Cancel`], [`Ask::FilesChanged`] | `answers.rs` |
-//! | [`Event::Server`], [`Event::Trial`], [`Event::Downloaded`] | `lifecycle.rs`, which hands an answer of a server to `answers.rs` |
+//! | [`Event::Server`], [`Event::Trial`] | `lifecycle.rs`, which hands an answer of a server to `answers.rs` |
 //! | [`Event::Found`] | `answers.rs` |
 //! | [`Event::Tick`], and before every event | `lifecycle::look_at_the_clock` |
 //!
@@ -16,11 +17,12 @@
 //! then `lifecycle::close` stops every server and waits for each to be gone.
 //!
 //! [`Core`] is the state every module reads; each module keeps what is its own in its own
-//! part of it ([`Core::life`], [`Core::answers`], [`Core::old`]), whose fields only that
+//! part of it ([`Core::life`], [`Core::fetch`], [`Core::answers`], [`Core::old`]), whose fields only that
 //! module touches. A module reaches another only through the `pub(crate)` functions the
 //! other's doc lists.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use yaar_link::WorkspaceId;
@@ -31,7 +33,7 @@ use crate::driver::ServerEvent;
 use crate::port::{Ask, AskId, PortEnd, RepositoryConsent, Told, WorkspaceRoot};
 use crate::registry::Registry;
 use crate::search::Candidate;
-use crate::{LOOK_EVERY, NavigatorConfig, answers, lifecycle, old_side};
+use crate::{LOOK_EVERY, NavigatorConfig, answers, fetch, lifecycle, old_side};
 
 /// Which files a server serves.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -117,10 +119,12 @@ pub(crate) struct Core {
     pub(crate) on_screen: Option<WorkspaceId>,
     /// Every answer on the servers inside a repository, as last told.
     pub(crate) consents: Vec<RepositoryConsent>,
-    /// Where this Navigator's own cache lies: `<cache>/<pid>`.
+    /// Where this Navigator's own cache lies: `<cache>/<pid>-<k>` ([`own_cache`]).
     pub(crate) own_cache: PathBuf,
     /// What `lifecycle.rs` keeps.
     pub(crate) life: lifecycle::Life,
+    /// What `fetch.rs` keeps.
+    pub(crate) fetch: fetch::Fetches,
     /// What `answers.rs` keeps.
     pub(crate) answers: answers::Answers,
     /// What `old_side.rs` keeps.
@@ -141,6 +145,19 @@ impl Core {
             .find(|root| &root.id == workspace)
             .and_then(|root| root.folder.clone())
     }
+}
+
+/// Counts the Navigators started in this process, for [`own_cache`].
+static STARTED: AtomicU64 = AtomicU64::new(1);
+
+/// The folder of a new Navigator's own cache: `<cache>/<pid>-<k>`, `<pid>` this process and
+/// `<k>` counting the Navigators this process started, from 1, so that two Navigators of one
+/// process (two windows, or two in one test) never share their exports or their logs. At
+/// its start a Navigator removes every such folder whose `<pid>`, the part before the `-`,
+/// names no process that runs.
+pub(crate) fn own_cache(cache: &std::path::Path) -> PathBuf {
+    let k = STARTED.fetch_add(1, Ordering::Relaxed);
+    cache.join(format!("{}-{k}", std::process::id()))
 }
 
 /// The Navigator's thread: reads the registry, then takes events until the asks end.
@@ -176,7 +193,7 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
         })
         .expect("start the navigator's clock");
 
-    let own_cache = config.cache.join(std::process::id().to_string());
+    let own_cache = own_cache(&config.cache);
     let mut core = Core {
         registry: Registry::default(),
         told: end.told,
@@ -186,6 +203,7 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
         consents: Vec::new(),
         own_cache,
         life: lifecycle::Life::default(),
+        fetch: fetch::Fetches::default(),
         answers: answers::Answers::default(),
         old: old_side::OldSides::default(),
         config,
@@ -212,7 +230,7 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
                 passed,
             } => lifecycle::trial_ended(&mut core, key, generation, candidate, passed),
             Event::Downloaded { language, outcome } => {
-                lifecycle::downloaded(&mut core, language, outcome)
+                fetch::downloaded(&mut core, language, outcome)
             }
             Event::Found { id, found } => answers::found(&mut core, id, found),
             Event::Tick => {}
@@ -232,8 +250,8 @@ fn dispatch(core: &mut Core, ask: Ask) {
         }
         Ask::OnScreen(workspace) => lifecycle::on_screen(core, workspace),
         Ask::Consents(consents) => lifecycle::consents(core, consents),
-        Ask::Download { language } => lifecycle::download(core, &language),
-        Ask::Update { language } => lifecycle::update(core, &language),
+        Ask::Download { language } => fetch::download(core, &language),
+        Ask::Update { language } => fetch::update(core, &language),
         Ask::OldSide { workspace, version } => old_side::shown(core, workspace, version),
         Ask::Exported { asked, failed } => old_side::exported(core, asked, failed),
         Ask::FilesChanged { workspace, paths } => answers::files_changed(core, &workspace, &paths),

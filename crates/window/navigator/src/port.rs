@@ -61,7 +61,10 @@ pub struct Place {
     /// The files the place lies in.
     pub tree: Tree,
     /// The file, relative to the folder of the worktree: its path in the version of
-    /// `tree`.
+    /// `tree`. With [`Tree::Worktree`] only, it may be absolute instead: a file outside the
+    /// worktree, or inside it and ignored by git, that the reviewer reached through an
+    /// answer ([`FileKind::Outside`]); the server of the files on disk of the row of its
+    /// extension is asked about it.
     pub path: PathBuf,
     /// The line, counted from 1, as the Link counts lines.
     pub line: u32,
@@ -164,7 +167,8 @@ pub enum State {
     },
     /// The first server found lies inside a repository whose answer the Navigator has not
     /// been told: it is passed over, and the user is asked. The later candidates are tried
-    /// meanwhile; their state is not shown while this one is.
+    /// meanwhile, and one of them that is ready answers; their state is not shown while
+    /// this one is: the question takes the line until it is answered.
     Asking {
         /// The repository the server lies in.
         repository: RepositoryId,

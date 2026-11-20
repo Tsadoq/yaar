@@ -10,9 +10,11 @@
 //! Navigator.
 //!
 //! Every server a test starts runs with [`Scratch::environment`]: a home, cache, config,
-//! data and temporary folder of the scratch's own, a cargo home of its own, and a search
-//! path whose first folder holds a recorder named `npm` ([`Scratch::npm_ran`]). Nothing a
-//! server writes reaches the user's folders. A test that ends its Navigator with
+//! data and temporary folder of the scratch's own, a cargo home of its own, a search path
+//! whose first folder holds a recorder named `npm` ([`Scratch::npm_ran`]), and the proxy
+//! variables naming a listener of the scratch's own ([`Scratch::proxy_heard`]). Nothing a
+//! server writes reaches the user's folders, and a server that honours the proxy
+//! variables reaches nothing beyond this machine. A test that ends its Navigator with
 //! [`Running::end`] has every server's process proved gone.
 
 // Each test program takes what it needs of this.
@@ -98,11 +100,13 @@ impl Repo {
 
 /// One test's scratch folder, under the system's temporary folder, its links resolved:
 /// `home`, `cache`, `config`, `data`, `tmp`, `cargo`, `bin` (the recorder `npm`), `repos`,
-/// `servers` (the app's downloads of this test) and `navigator` (its cache). Removed when
+/// `servers` (the app's downloads of this test) and `navigator` (its cache); and a
+/// [`Loopback`] serving nothing, which the servers' proxy variables name. Removed when
 /// dropped.
 pub struct Scratch {
     /// The folder.
     pub root: PathBuf,
+    proxy: Loopback,
 }
 
 impl Scratch {
@@ -119,8 +123,10 @@ impl Scratch {
     /// by (from `CARGO`, which Cargo sets for a test), then `/usr/bin` and `/bin`;
     /// `RUSTUP_HOME` and `RUSTUP_TOOLCHAIN` as this process has them, where set, so that a
     /// rustup proxy finds the toolchain the repository pins and installs none
-    /// (`RUSTUP_AUTO_INSTALL=0`); `CARGO_NET_OFFLINE=true`; `LANG=C.UTF-8`. Nothing else of
-    /// this process's environment.
+    /// (`RUSTUP_AUTO_INSTALL=0`); `CARGO_NET_OFFLINE=true`; `LANG=C.UTF-8`; `HTTP_PROXY`,
+    /// `HTTPS_PROXY`, `ALL_PROXY`, `http_proxy`, `https_proxy` and `all_proxy` the address
+    /// `http://127.0.0.1:<port>` of the scratch's own [`Loopback`], and no `NO_PROXY`.
+    /// Nothing else of this process's environment.
     pub fn environment(&self) -> Vec<(OsString, OsString)> {
         todo!()
     }
@@ -154,6 +160,12 @@ impl Scratch {
     /// package manager.
     pub fn npm_ran(&self) -> Vec<String> {
         todo!()
+    }
+
+    /// Every request the scratch's own [`Loopback`], which the servers' proxy variables
+    /// name, heard: a connection a server opened through a proxy variable.
+    pub fn proxy_heard(&self) -> Vec<Heard> {
+        self.proxy.heard()
     }
 
     /// Every file under the scratch's `home`, `cache`, `config`, `data` and `tmp`, and
@@ -201,13 +213,30 @@ impl Scratch {
         todo!()
     }
 
-    /// A script `<folder>/<name>` that ends with `code` whatever it is asked, made
-    /// executable: a candidate that fails its trial run, or a registered command that
-    /// fails.
+    /// A script `<folder>/<name>`, `folder` made first, made executable, that appends its
+    /// arguments (`"$@"`, joined by one space) as one line to `<folder>/<name>.runs` and
+    /// then ends with `code` whatever it is asked: a candidate that fails its trial run, or
+    /// a registered command that fails. [`runs`] reads what it recorded. Gives its path.
     pub fn put_failing(&self, folder: &Path, name: &str, code: i32) -> PathBuf {
         let _ = (folder, name, code);
         todo!()
     }
+
+    /// A script `<folder>/<name>`, `folder` made first, made executable, that appends its
+    /// arguments (`"$@"`, joined by one space) as one line to `<folder>/<name>.runs` and
+    /// then runs the stand-in with them (`exec`): a candidate whose every run, the trial
+    /// run included, leaves a line ([`runs`]). Gives its path.
+    pub fn put_recording(&self, folder: &Path, name: &str) -> PathBuf {
+        let _ = (folder, name);
+        todo!()
+    }
+}
+
+/// The lines a script of [`Scratch::put_failing`] or [`Scratch::put_recording`] at
+/// `program` recorded, one a run, in order; empty when it never ran (no `.runs` file).
+pub fn runs(program: &Path) -> Vec<String> {
+    let _ = program;
+    todo!()
 }
 
 /// The ids a test names its workspaces and repositories by: `digit` 32 times.
@@ -354,9 +383,10 @@ pub struct Heard {
 
 /// A listener on `127.0.0.1` of the test's own that serves downloads: what a publisher's
 /// address is in every test of the downloader but LSP-01. It answers `GET /<name>` with the
-/// bytes set for `name` and status 200, a name set as a redirect with 302 and its
-/// `Location`, anything else with 404; and keeps every request it heard. Stopped when
-/// dropped.
+/// bytes set for `name` and status 200, a name set as a redirect ([`Loopback::redirect`])
+/// with 302 and its `Location`, any other request, whatever its method, with 404; and keeps
+/// every request it heard. It reads one request a connection and closes it after the
+/// answer. Stopped when dropped.
 pub struct Loopback {
     port: u16,
 }
@@ -365,6 +395,12 @@ impl Loopback {
     /// A listener on a free port of `127.0.0.1`, serving `files` (name, bytes).
     pub fn serve(files: Vec<(String, Vec<u8>)>) -> Loopback {
         let _ = files;
+        todo!()
+    }
+
+    /// From now on, `GET /<name>` is answered 302 with `Location: <location>`, as written.
+    pub fn redirect(&self, name: &str, location: &str) {
+        let _ = (name, location);
         todo!()
     }
 

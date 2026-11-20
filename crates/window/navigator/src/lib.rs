@@ -78,19 +78,21 @@
 //! | --- | --- |
 //! | `<data>/language-servers.toml` | the user's registry, [`USER_FILE`] |
 //! | `<data>/language-servers/<server>/<version>/` | a server the app downloaded; `<data>/language-servers/<server>/installed.toml` names the version in use |
-//! | `<cache>/navigator/<pid>/old/<n>/` | an export of an old side, while it is used |
-//! | `<cache>/navigator/<pid>/logs/<n>.log` | what a server wrote on its standard error |
-//! | `<cache>/navigator/targets/<workspace>/<side>/` | the build folder a row's `{target}` names, `new` or `old`, kept between runs |
+//! | `<cache>/navigator/<pid>-<k>/old/<n>/` | an export of an old side, while it is used |
+//! | `<cache>/navigator/<pid>-<k>/logs/<n>.log` | what a server wrote on its standard error |
+//! | `<cache>/navigator/targets/<workspace>/<side>/` | the build folder a row's `{target}` names, `new` or `old`, kept between runs of the Window, removed when its workspace leaves the list of workspaces |
 //!
 //! `<data>` is `yaar_link::data_dir()` and `<cache>` `yaar_link::cache_dir()`; `<pid>` the
-//! Window's process. At its start the Navigator removes every `<cache>/navigator/<pid>`
-//! whose process no longer runs. Nothing the Navigator, or a server it starts from a
-//! built-in row, writes lies in a worktree (NFR-021).
+//! Window's process and `<k>` the Navigator's number in it, from 1. At its start a
+//! Navigator removes every `<cache>/navigator/<pid>-<k>` whose `<pid>` names no process
+//! that runs. Nothing the Navigator, or a server it starts from a built-in row, writes lies
+//! in a worktree (NFR-021).
 
 mod answers;
 mod clock;
 pub mod download;
 pub mod driver;
+mod fetch;
 mod lifecycle;
 pub mod lsp;
 mod navigator;
@@ -147,7 +149,8 @@ pub struct NavigatorConfig {
     /// The Navigator's cache folder: `<cache>/navigator`.
     pub cache: PathBuf,
     /// The folders a server "installed on the machine" is looked for in, in order: the
-    /// Window's own search path.
+    /// Window's own search path. A Window started from the Finder or the Dock on macOS has
+    /// the system's short search path, not the user's shell's.
     pub search_path: Vec<PathBuf>,
     /// The whole environment every server, and every trial run, runs in: the Window's own.
     /// A server gets these variables and no other, with its server's `environment` added.
