@@ -17,8 +17,11 @@ use gpui_kit::{
     point, px,
 };
 use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wanted};
-use yaar_link::{ReviewId, SessionId, TerminalId, ThreadId};
+use yaar_link::{
+    ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
+};
 use yaar_review_pane::ReviewPane;
+use yaar_system_tests::standin::{Script, Step};
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
 use yaar_terminal_pane::TerminalPane;
 
@@ -247,6 +250,111 @@ pub fn give_an_identity(repository: &Repo) {
     repository.git(&["config", "user.email", "test@example.invalid"]);
 }
 
+/// A new repository of `world` with something to review: on a branch that left `main` with
+/// one commit, and with one more change that is not committed.
+pub fn repository_to_review(world: &World, name: &str) -> Repo {
+    let repository = world.repository(name);
+    give_an_identity(&repository);
+    repository.git(&["checkout", "--quiet", "-b", "work"]);
+    repository.write("notes.txt", "one\ntwo\nthree\n");
+    repository.commit("Add the notes");
+    repository.write("notes.txt", "one\n2\nthree\n");
+    repository
+}
+
+/// What [`a_session_cut_off`] leaves: the workspace, the session of Claude Code a restart cut
+/// off, and the id that CLI gave the session.
+pub struct CutOff {
+    /// The repository of the workspace, opened in the Keeper.
+    pub repo: Repo,
+    /// The workspace the session worked in.
+    pub workspace: WorkspaceId,
+    /// The session, listed resumable by the Keeper that started after the kill.
+    pub session: SessionId,
+    /// The id the CLI gave its session, which its resume command names.
+    pub cli_session: String,
+    /// The file that, once made, lets a stand-in that follows the world's `default` script
+    /// end. Nobody makes it before the test does.
+    pub gate: PathBuf,
+}
+
+/// The size of the terminals a client of the world opens.
+const CLIENT_SIZE: TerminalSize = TerminalSize {
+    columns: 100,
+    rows: 30,
+};
+
+/// Brings `world` to the state a restart of the machine leaves: a workspace with a session
+/// of Claude Code that was running when everything was killed, and a Keeper started again
+/// on what the first one kept, which lists the session as resumable. A client of the world
+/// opens the repository and its launcher, as a Window would, and is gone before the
+/// Keeper is killed; the stand-in on the world's search path follows the script `default`,
+/// which holds at [`CutOff::gate`] and then ends. The world has a Keeper running when this
+/// returns, and no Window is open on it.
+pub fn a_session_cut_off(world: &mut World) -> CutOff {
+    world.agents_on_path();
+    let gate = world.home().with_file_name("cut-off-gate");
+    world.agent_script(
+        "default",
+        &Script(vec![Step::Hold(gate.clone()), Step::Exit]),
+    );
+    world.start_keeper();
+    let repo = repository_to_review(world, "cut-off");
+    let mut client = world.client();
+    let (_, workspace) = client
+        .open_folder(repo.path())
+        .expect("the Keeper opens the folder");
+    client
+        .open_launcher(&workspace, "claude", CLIENT_SIZE)
+        .expect("the Keeper opens the launcher");
+    let session = session_where(&mut client, &workspace, |session| {
+        session.state != SessionState::NotRunning
+    });
+    // The id the CLI gave itself is written down when the stand-in starts.
+    assert!(
+        wait_for(DEADLINE, || !world.agent_log("default").session.is_empty()),
+        "the stand-in wrote down no session id"
+    );
+    let cli_session = world.agent_log("default").session;
+    drop(client);
+    world.kill_everything();
+    world.start_keeper();
+    let mut client = world.client();
+    session_where(&mut client, &workspace, |listed| {
+        listed.id == session.id && listed.resumable
+    });
+    drop(client);
+    CutOff {
+        repo,
+        workspace,
+        session: session.id,
+        cli_session,
+        gate,
+    }
+}
+
+/// The session of `workspace` that `wanted` accepts, once the Keeper lists one: the list is
+/// asked for again until it does.
+fn session_where(
+    client: &mut yaar_system_tests::Client,
+    workspace: &WorkspaceId,
+    mut wanted: impl FnMut(&yaar_link::Session) -> bool,
+) -> yaar_link::Session {
+    let mut found = None;
+    let came = wait_for(DEADLINE, || {
+        found = client
+            .agents()
+            .into_iter()
+            .filter(|agents| agents.workspace == *workspace)
+            .flat_map(|agents| agents.sessions)
+            .find(|session| wanted(session));
+        found.is_some()
+    });
+    found
+        .filter(|_| came)
+        .unwrap_or_else(|| panic!("no such session came: {:?}", client.agents()))
+}
+
 /// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
 pub fn wait_until(
     cx: &mut VisualTestContext,
@@ -391,12 +499,7 @@ impl Composed {
     /// the workspace is on screen and the review pane draws its first row.
     pub fn open_a_folder(&mut self, cx: &mut VisualTestContext) -> PathBuf {
         let name = format!("opened-{}", self.next());
-        let repository = self.world.repository(&name);
-        give_an_identity(&repository);
-        repository.git(&["checkout", "--quiet", "-b", "work"]);
-        repository.write("notes.txt", "one\ntwo\nthree\n");
-        repository.commit("Add the notes");
-        repository.write("notes.txt", "one\n2\nthree\n");
+        let repository = repository_to_review(&self.world, &name);
         let folder = repository.path().to_owned();
         self.repositories.push(repository);
         self.open_this_folder(&folder, cx);
