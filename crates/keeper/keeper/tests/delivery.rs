@@ -1147,3 +1147,71 @@ fn after_a_clear_a_reply_naming_the_cleared_session_from_another_process_is_refu
     );
     setup.stop();
 }
+
+#[test]
+fn a_reply_naming_a_session_that_has_ended_with_its_review_is_kept_in_the_session_of_its_process_that_runs()
+ {
+    let mut setup = Setup::new();
+    let first = recorded::hook_events(REVIEW_FILE);
+    let second = recorded::hook_events(TURN_TOOLS);
+    let cli_a = first[0].session().to_owned();
+    let cli_b = second[1].session().to_owned();
+    // Two sessions of one process, each with a review and a thread.
+    let (review_a, _, _) = setup.session_with_a_draft(&first[0], "For A.");
+    let (review_b, thread_b, _) = setup.session_with_a_draft(&second[1], "For B.");
+    setup.hook(&second[2]);
+    setup.changes(2);
+
+    // The recorded end of A, whose reason is not `clear`: A runs no more and keeps its
+    // review, which only a session that starts later may take.
+    assert_eq!(first[7].event, "SessionEnd");
+    assert_ne!(first[7].input["reason"], "clear");
+    setup.hook(&first[7]);
+    assert_eq!(setup.review_of(&cli_a).id, review_a.id);
+
+    // A server that still names A, from the process B runs in: the report is of B, so the
+    // thread of B's review is found, which A's review does not hold.
+    let mut tools = Tools::start(&setup, &cli_a);
+    let result = tools.reply(&thread_b, "For the one that runs.", Some(true));
+    assert!(!told(&result).0, "{result}");
+    setup.changes(1);
+    let kept_b = setup.review_of(&cli_b);
+    assert_eq!(kept_b.id, review_b.id);
+    assert_eq!(agent_comments(&kept_b).len(), 1);
+    assert_eq!(agent_comments(&setup.review_of(&cli_a)).len(), 0);
+    setup.stop();
+}
+
+#[test]
+fn a_reply_naming_a_session_that_runs_with_no_review_is_kept_in_the_session_of_its_process_that_has_one()
+ {
+    let mut setup = Setup::new();
+    let first = recorded::hook_events(REVIEW_FILE);
+    let second = recorded::hook_events(TURN_TOOLS);
+    let cli_a = first[0].session().to_owned();
+    let cli_b = second[1].session().to_owned();
+    let (review_a, thread_a, _) = setup.session_with_a_draft(&first[0], "For A.");
+    let (review_b, ..) = setup.session_with_a_draft(&second[1], "For B.");
+    // A's comment is sent, which a reply to its thread needs.
+    setup.hook(&first[2]);
+    setup.changes(2);
+
+    // B runs, and its review is of no agent: the Store allows the state, the app makes it
+    // nowhere today, and the Keeper's rule says whose a report that names B then is.
+    setup
+        .scratch
+        .store()
+        .set_review_agent(&yaar_store::ReviewId::new(review_b.id.as_str()), None)
+        .expect("give B's review to no agent");
+
+    // A server that names B, from the process A runs in as well: B has no review, so the
+    // report is of A.
+    let mut tools = Tools::start(&setup, &cli_b);
+    let result = tools.reply(&thread_a, "For the one that has a review.", Some(true));
+    assert!(!told(&result).0, "{result}");
+    setup.changes(1);
+    let kept_a = setup.review_of(&cli_a);
+    assert_eq!(kept_a.id, review_a.id);
+    assert_eq!(agent_comments(&kept_a).len(), 1);
+    setup.stop();
+}

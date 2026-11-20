@@ -16,8 +16,9 @@
 //!   and the report's `Asked`), and the bytes it gives are the answer,
 //!   `Reply::Answer`. The review's workspace's reviews changed, and the round is to be
 //!   recorded. A report that reached the Keeper more than `DELIVER_BY` (1.5 s) before this
-//!   runs is sent nothing and answered `Reply::Done`, its attachment kept: the hook program
-//!   gives up at 2 s, and a review marked sent that no agent received would be lost.
+//!   runs is sent nothing and answered `Reply::Done`, its attachment kept, and a line on
+//!   standard error says how long it waited: the hook program gives up at 2 s, and a review
+//!   marked sent that no agent received would be lost.
 //! - `Asks::ReadOwnFile`, `Asks::OwnTool`: `Adapter::answer` with `Answer::Allow`.
 //! - `Asks::Reply`: `Reviews::agent_replied` for the session, answered with
 //!   `Answer::Replied` (the thread, the mark, the reply's length in characters) or, when
@@ -29,7 +30,11 @@
 //! `/clear` ended. So when the named CLI session does not run, or has no review, and a
 //! running session of the same CLI has the report's process (`AgentReport::pid`, the CLI
 //! itself, whose process a `/clear` keeps), that running session is the one the report is
-//! of. Every other report is of the session it names.
+//! of. Every other report is of the session it names. Each condition has its own case: a
+//! session that ended without a `/clear` keeps its review while another session of its
+//! process runs, and a running session whose review is of no agent (the app gives every
+//! session that starts a review, so that state is one the Store allows and the app does not
+//! yet make).
 
 use std::time::{Duration, Instant};
 
@@ -53,6 +58,14 @@ const DELIVER_BY: Duration = Duration::from_millis(1500);
 /// Whether a report that reached the Keeper at `at` is too old at `now` to be sent a review.
 fn late(at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(at) > DELIVER_BY
+}
+
+/// How long a report that reached the Keeper at `at` has waited, when that is too long for
+/// it to be sent a review; none otherwise. The one place that reads the clock for `late`, so
+/// that its two instants are never given in the wrong order at the call.
+fn waited_too_long(at: Instant) -> Option<Duration> {
+    let now = Instant::now();
+    late(at, now).then(|| now.saturating_duration_since(at))
 }
 
 impl Core {
@@ -159,7 +172,12 @@ impl Core {
             return Reply::Done;
         };
         // Checked last, as near the send as it can be.
-        if late(at, Instant::now()) {
+        if let Some(waited) = waited_too_long(at) {
+            eprintln!(
+                "yaar-keeper: {}: a message waited {waited:?} for its answer, more than {DELIVER_BY:?}: \
+                 nothing was sent and the review stays attached",
+                report.agent
+            );
             return Reply::Done;
         }
         let mut delivery = adapter.delivery(folder, asked);
@@ -236,6 +254,16 @@ mod tests {
         assert!(!late(at, at + DELIVER_BY));
         assert!(late(at, at + DELIVER_BY + Duration::from_millis(1)));
         assert!(late(at, at + Duration::from_secs(10)));
+    }
+
+    #[test]
+    fn the_wait_of_a_report_is_given_when_it_is_too_long_and_not_otherwise() {
+        assert_eq!(waited_too_long(Instant::now()), None);
+        let old = Instant::now()
+            .checked_sub(DELIVER_BY * 2)
+            .expect("the machine has been up for longer than three seconds");
+        let waited = waited_too_long(old).expect("a report that waited twice the limit is late");
+        assert!(waited >= DELIVER_BY * 2, "{waited:?}");
     }
 
     #[test]
