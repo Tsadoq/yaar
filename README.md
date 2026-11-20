@@ -223,6 +223,8 @@ Known limits of what is there:
 - A hook program gives up after two seconds, and the app keeps its answer within 1.5 seconds
   of the report reaching it. If the answer then takes more than the half second left to reach
   the hook program, the comments show as sent and Claude Code never had them.
+  A message whose report waited longer than 1.5 seconds is sent no review: the review stays
+  attached and goes with the next message.
 - The text of an attachment and a review that Claude Code takes inline ride in one frame of
   the Link, at most 16 MiB. A longer text is refused with the reason.
 - Between a send and the end of the turn it starts, the pane counts a round's changes to the
