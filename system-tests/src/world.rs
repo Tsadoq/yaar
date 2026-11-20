@@ -414,6 +414,9 @@ impl World {
     /// added to its `extensions` and keeps its other keys; no file is made, with the folder
     /// it lies in, holding the entry alone.
     ///
+    /// The file the world writes is compact JSON, not the layout the app keeps: a test that
+    /// compares a user's settings byte for byte gives the Keeper's yes first.
+    ///
     /// Panics when the world's Keeper wrote no plugin, or no extension, to point at: start
     /// the Keeper first.
     pub fn start_agent_outside(

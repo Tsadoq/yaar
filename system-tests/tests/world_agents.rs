@@ -1486,6 +1486,45 @@ fn a_pi_started_outside_runs_in_a_terminal_of_the_world_with_the_extension_of_it
 }
 
 #[test]
+fn the_first_report_of_a_pi_started_outside_makes_the_keeper_follow_it_as_a_session_of_no_terminal()
+{
+    let mut world = World::new();
+    world.agents_on_path();
+    world.install_pi();
+    world.start_keeper();
+    let repo = world.repository("app");
+    let mut client = world.client();
+    let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
+    // Told apart from a session of the app's own terminal: the world has none open.
+    assert!(client.terminals().is_empty());
+
+    let script = Script(vec![Step::Turn, Step::End, Step::Exit]);
+    let mut agent = world.start_agent_outside(Dialect::Pi, &script, repo.path());
+    agent.wait_for_prompt();
+
+    // The stand-in reported its start through the program the world named: the Keeper follows
+    // pi as a session of the workspace the stand-in works in, which runs in no terminal of
+    // the app.
+    let mut seen = Vec::new();
+    let followed = wait_until(DEADLINE, || {
+        seen = client.agents();
+        seen.iter().any(|agents| {
+            agents.workspace == workspace
+                && agents
+                    .sessions
+                    .iter()
+                    .any(|session| session.agent == "pi" && session.terminal.is_none())
+        })
+    });
+    assert!(followed, "{seen:?}");
+    let sessions: Vec<_> = seen.iter().flat_map(|agents| &agents.sessions).collect();
+    assert_eq!(sessions.len(), 1, "{seen:?}");
+    assert_eq!(sessions[0].workspace, workspace);
+    assert_eq!(sessions[0].state, SessionState::Idle, "{seen:?}");
+    drop(agent);
+}
+
+#[test]
 fn the_reporting_program_a_pi_started_outside_is_given_is_the_one_the_shells_of_the_app_name() {
     let (world, mut client, terminal) = world_with_a_shell();
     client.type_line(
@@ -1685,9 +1724,14 @@ fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_la
         let mut world = World::new();
         world.agents_on_path();
         let extension = write_the_extension_by_hand(&world);
-        world.install_pi();
-        if let Some(before) = before {
-            std::fs::write(world.pi_settings(), before).expect("write the settings");
+        let folder = world.home().join(".pi/agent");
+        match before {
+            Some(before) => {
+                world.install_pi();
+                std::fs::write(world.pi_settings(), before).expect("write the settings");
+            }
+            // Pi never ran in this world: there is no folder for the file yet.
+            None => assert!(!folder.exists()),
         }
         let repo = world.repository("app");
         let agent = world.start_agent_outside(Dialect::Pi, &Script(vec![Step::Exit]), repo.path());
@@ -1718,7 +1762,7 @@ fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_la
             _ => assert_eq!(settings.as_object().map(|o| o.len()), Some(1)),
         }
         // The folder was made for the file where there was none.
-        assert!(world.home().join(".pi/agent").is_dir());
+        assert!(folder.is_dir(), "{what}");
         drop(agent);
     }
 
@@ -1759,8 +1803,20 @@ fn consents_peer(
     replies: Vec<Vec<Consent>>,
 ) -> std::thread::JoinHandle<Vec<Request>> {
     let listener = UnixListener::bind(world.socket()).expect("listen");
+    listener.set_nonblocking(true).expect("poll the listener");
     std::thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("a client");
+        // No client within the deadline: the peer gives what it was asked, which is nothing,
+        // so the test fails on that and not on a join that never returns.
+        let mut stream = None;
+        wait_until(DEADLINE, || {
+            stream = listener.accept().ok().map(|(stream, _)| stream);
+            stream.is_some()
+        });
+        let Some(mut stream) = stream else {
+            return Vec::new();
+        };
+        // A socket taken from a polled listener may carry the flag on some systems.
+        stream.set_nonblocking(false).expect("block on the client");
         handshake(&mut stream, &Hello::for_this_process("scripted-keeper")).expect("hello");
         let mut asked = Vec::new();
         for consents in replies {
