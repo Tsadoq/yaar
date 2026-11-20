@@ -655,6 +655,17 @@ impl TestKeeper {
         terminal: &TerminalId,
         cx: &mut TestAppContext,
     ) -> (WorkspaceId, TerminalSize) {
+        self.open_running(terminal, yaar_link::Program::Shell, cx)
+    }
+
+    /// [`TestKeeper::open`] for a terminal that has to run `program`: a launcher's or a
+    /// resume's.
+    pub fn open_running(
+        &mut self,
+        terminal: &TerminalId,
+        wanted: yaar_link::Program,
+        cx: &mut TestAppContext,
+    ) -> (WorkspaceId, TerminalSize) {
         let (id, request) = self.request(cx);
         let Request::OpenTerminal {
             workspace,
@@ -664,7 +675,7 @@ impl TestKeeper {
         else {
             panic!("the Window sent {request:?}, and a terminal was asked for");
         };
-        assert_eq!(program, yaar_link::Program::Shell);
+        assert_eq!(program, wanted);
         self.reply(
             id,
             Ok(Reply::TerminalOpened {
@@ -870,13 +881,26 @@ impl Panes {
     /// Waits until the pane holds the terminal.
     pub fn open_terminal(&mut self, id: &TerminalId, cx: &mut VisualTestContext) {
         self.press_in_the_app::<yaar_terminal_pane::NewTerminal>(cx);
-        let (_, size) = self.keeper.open(id, cx);
+        self.answer_open(id, yaar_link::Program::Shell, cx);
+    }
+
+    /// Answers the next request, which has to ask for a terminal that runs `program`, with
+    /// `id`, and waits until the pane holds the terminal. Gives the workspace and the size
+    /// the request asked for.
+    pub fn answer_open(
+        &mut self,
+        id: &TerminalId,
+        program: yaar_link::Program,
+        cx: &mut VisualTestContext,
+    ) -> (WorkspaceId, TerminalSize) {
+        let (workspace, size) = self.keeper.open_running(id, program, cx);
         self.opened.insert(id.clone(), size);
         let pane = self.pane.clone();
         let id = id.clone();
         wait_until(cx, "the terminal in the pane", move |cx| {
             pane.read_with(cx, |pane, _| pane.terminals().contains(&id))
         });
+        (workspace, size)
     }
 
     /// Presses the key of a control of the terminal pane, after a click in the pane
