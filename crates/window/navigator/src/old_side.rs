@@ -33,9 +33,9 @@
 //! [`workspaces_changed`] does the same for a workspace that left the list or whose
 //! worktree is gone, and [`close`] for every one, and then removes `<own cache>`; the loop
 //! calls it once every server is stopped, so that no export is removed under a process that
-//! reads it. An
-//! idle workspace's old servers stop by the rule of `lifecycle.rs`; its export stays until
-//! another change is shown or the workspace closes.
+//! reads it. An idle workspace's old servers stop by the rule of `lifecycle.rs`; its export
+//! stays until another change is shown or the workspace closes, and the old side's server
+//! starts again at the next ask about it, in the export that stayed.
 //!
 //! Nothing here writes into a worktree: links are made in the export, pointing at the
 //! worktree's folders.
