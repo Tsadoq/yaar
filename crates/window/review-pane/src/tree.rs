@@ -45,6 +45,34 @@ pub(crate) struct Credits {
     pub(crate) files: Vec<CreditedFile>,
 }
 
+/// What the list of a change that starts at a version and ends at another was made for. It
+/// says whether the list is a review's own, and so is made again when another review is
+/// shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ListedFor {
+    /// No review: what changed since a round, a turn end of a session the pane holds no
+    /// review of, an entry or a range of the tree, the files on disk. It stays as it is when
+    /// another review is shown.
+    NoReview,
+    /// The review of a session, through `CompareForReview`: only the files it shows, each
+    /// with its credits.
+    Review(ReviewId),
+    /// The review of no agent, through `CompareVersions`, as the review of a session that
+    /// was shown before it left the change on screen. A session's review shown next lists
+    /// the change again for itself.
+    NoAgentReview,
+}
+
+impl ListedFor {
+    /// The review `CompareForReview` is asked for, if it is.
+    fn review(&self) -> Option<&ReviewId> {
+        match self {
+            Self::Review(review) => Some(review),
+            Self::NoReview | Self::NoAgentReview => None,
+        }
+    }
+}
+
 /// What the pane holds of the tree of Changes.
 pub(crate) struct Tree {
     /// The workspace the history and the uncommitted changes are of.
@@ -75,10 +103,10 @@ pub(crate) struct Tree {
     pub(crate) first_picture: bool,
     /// Where the files of `shown` come from.
     pub(crate) wanted: Source,
-    /// The review the list of `wanted` was asked for, none for a list made by
-    /// `CompareVersions`. It is kept with `wanted` and not read off `credits`, which hold the
-    /// review of the list last answered, not of the request still on its way.
-    pub(crate) wanted_for: Option<ReviewId>,
+    /// What the list of `wanted` was asked for. It is kept with `wanted` and not read off
+    /// `credits`, which hold the review of the list last answered, not of the request still
+    /// on its way.
+    pub(crate) wanted_for: ListedFor,
     /// The question for the files of an entry or a range, while one is on its way.
     pub(crate) listing: Option<Task<()>>,
     /// What a turn end offered while the pane kept the selection; selecting anything
@@ -103,7 +131,7 @@ impl Tree {
             shown: ChangeShown::Comparison,
             first_picture: false,
             wanted: Source::Comparison,
-            wanted_for: None,
+            wanted_for: ListedFor::NoReview,
             listing: None,
             offer: None,
         }
@@ -324,20 +352,26 @@ impl ReviewPane {
         self.list_again_for_review_shown(cx);
     }
 
-    /// A change listed for the review of a session is that review's own list. When another
-    /// review is shown, the change shown is listed again for it: through `CompareForReview`
-    /// for another session's review, through `CompareVersions` for the review of no agent.
-    /// A change listed with no review, as what changed since a round is, stays as it is.
+    /// A change listed for a review is that review's own list, the review of no agent's
+    /// included. When another review is shown, the change shown is listed again for it:
+    /// through `CompareForReview` for a session's review, through `CompareVersions` for the
+    /// review of no agent. A change listed with no review, as what changed since a round is,
+    /// stays as it is.
     fn list_again_for_review_shown(&mut self, cx: &mut Context<Self>) {
-        let (ChangeShown::Since { from, to }, Some(asked_for), Some(review)) = (
-            self.tree.shown.clone(),
-            self.tree.wanted_for.clone(),
-            self.review(),
-        ) else {
+        let (ChangeShown::Since { from, to }, Some(review)) =
+            (self.tree.shown.clone(), self.review())
+        else {
             return;
         };
-        let now = review.agent.is_some().then(|| review.id.clone());
-        if now.as_ref() != Some(&asked_for) {
+        if self.tree.wanted_for == ListedFor::NoReview {
+            return;
+        }
+        let now = if review.agent.is_some() {
+            ListedFor::Review(review.id.clone())
+        } else {
+            ListedFor::NoAgentReview
+        };
+        if now != self.tree.wanted_for {
             self.select_since_for(from, to, now, cx);
         }
     }
@@ -380,7 +414,7 @@ impl ReviewPane {
         self.tree.first_picture = !by_reviewer;
         self.tree.shown = ChangeShown::Entries { first, last };
         cx.notify();
-        self.list_change(workspace, old, new, None, cx);
+        self.list_change(workspace, old, new, ListedFor::NoReview, cx);
         true
     }
 
@@ -392,18 +426,17 @@ impl ReviewPane {
         to: String,
         cx: &mut Context<Self>,
     ) {
-        self.select_since_for(from, to, None, cx);
+        self.select_since_for(from, to, ListedFor::NoReview, cx);
     }
 
-    /// Selects what changed between two versions as `select_since` does, listed for the
-    /// review of an agent session when `review` is one: only the files it shows, each with
-    /// its credits. With none, which is all the review of no agent has, every file is listed
-    /// with none.
+    /// Selects what changed between two versions as `select_since` does, listed for
+    /// `listed_for`: for the review of an agent session, only the files it shows, each with
+    /// its credits; for the review of no agent, which has none, every file with none.
     pub(crate) fn select_since_for(
         &mut self,
         from: Option<String>,
         to: String,
-        review: Option<ReviewId>,
+        listed_for: ListedFor,
         cx: &mut Context<Self>,
     ) {
         let Some(workspace) = self.tree.of.clone() else {
@@ -416,18 +449,18 @@ impl ReviewPane {
             to: to.clone(),
         };
         cx.notify();
-        self.list_change(workspace, from, Some(to), review, cx);
+        self.list_change(workspace, from, Some(to), listed_for, cx);
     }
 
     /// Lists the files of the change from `old` to `new`, none for the files on disk, and
-    /// shows them, unless they are shown already. With a `review` the list is the one
-    /// `CompareForReview` makes for it, and its credits are kept beside the files.
+    /// shows them, unless they are shown already. For a review of a session the list is the
+    /// one `CompareForReview` makes for it, and its credits are kept beside the files.
     fn list_change(
         &mut self,
         workspace: WorkspaceId,
         old: Option<String>,
         new: Option<String>,
-        review: Option<ReviewId>,
+        listed_for: ListedFor,
         cx: &mut Context<Self>,
     ) {
         let source = Source::Versions {
@@ -435,20 +468,24 @@ impl ReviewPane {
             new: new.clone(),
         };
         // `CompareForReview` names both versions: the files on disk are listed for no review.
-        let review = review.filter(|_| new.is_some());
+        let listed_for = match listed_for {
+            ListedFor::Review(_) if new.is_none() => ListedFor::NoReview,
+            other => other,
+        };
+        let review = listed_for.review().cloned();
         // The same two versions listed for another review are another list, also while the
         // request for the one before is still on its way. A list for a review that the
         // Keeper refused is asked for again.
-        let listed_for = self.tree.credits.as_ref().map(|credits| &credits.review);
+        let credited_for = self.tree.credits.as_ref().map(|credits| &credits.review);
         if self.tree.wanted == source
             && self.listed.as_ref() == Some(&source)
-            && self.tree.wanted_for == review
-            && (review.is_none() || listed_for == review.as_ref())
+            && self.tree.wanted_for == listed_for
+            && (review.is_none() || credited_for == review.as_ref())
         {
             return;
         }
         self.tree.wanted = source.clone();
-        self.tree.wanted_for = review.clone();
+        self.tree.wanted_for = listed_for;
         self.tree.listing = None;
         let Some(from) = old else {
             // The Keeper compares two versions: with none before the change, there is
@@ -523,7 +560,7 @@ impl ReviewPane {
         self.tree.credits = None;
         self.tree.first_picture = false;
         self.tree.wanted = source.clone();
-        self.tree.wanted_for = None;
+        self.tree.wanted_for = ListedFor::NoReview;
         self.tree.listing = None;
         let files: Vec<ChangedFile> = self
             .tree
@@ -542,7 +579,7 @@ impl ReviewPane {
         self.tree.credits = None;
         self.tree.first_picture = false;
         self.tree.wanted = Source::Comparison;
-        self.tree.wanted_for = None;
+        self.tree.wanted_for = ListedFor::NoReview;
         self.tree.listing = None;
         match self.changes.clone() {
             Some(changes) => self.show(changes, cx),

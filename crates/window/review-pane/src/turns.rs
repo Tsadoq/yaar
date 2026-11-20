@@ -7,6 +7,7 @@ use gpui_kit::*;
 use yaar_link::{ReviewId, SessionId};
 
 use crate::draw::ROW_HEIGHT;
+use crate::tree::ListedFor;
 use crate::{ChangeShown, ReviewPane, TakeOffer, ToggleKeepSelection};
 
 /// What a turn end offered while the pane kept the selection.
@@ -98,7 +99,8 @@ impl ReviewPane {
         let ChangeShown::Since { from, to } = offer.change else {
             return;
         };
-        self.select_since_for(from, to, offer.review, cx);
+        let listed_for = offer.review.map_or(ListedFor::NoReview, ListedFor::Review);
+        self.select_since_for(from, to, listed_for, cx);
     }
 
     /// What [`TakeOffer`] does: shows what a turn end offered, and the review of its

@@ -809,15 +809,24 @@ fn a_comparison_the_keeper_refuses_for_a_review_shows_no_file_and_no_mark_and_sa
 /// model, shows the change from `s1` to `s2` listed for the review of `s`, and returns
 /// with its files read.
 fn the_list_of_s_is_shown(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
-    let (mut stage, mut cx) = open_with(
+    the_list_of_s_is_shown_among(
         vec![
             (review_s(), Some(session_s())),
             (review_t(), Some(session_t())),
         ],
         &review_s(),
-        Vec::new(),
         cx,
-    );
+    )
+}
+
+/// The same, with these reviews held, the first of which the pane shows before the turn end
+/// chooses the review of `s`.
+fn the_list_of_s_is_shown_among(
+    reviews: Vec<(ReviewId, Option<SessionId>)>,
+    first_shown: &ReviewId,
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = open_with(reviews, first_shown, Vec::new(), cx);
     let sessions = vec![
         session('5', "Claude Code 1", SessionState::Works, Some(review_s())),
         session('6', "Claude Code 2", SessionState::Works, Some(review_t())),
@@ -1012,4 +1021,245 @@ fn a_turn_end_back_to_the_review_asked_for_before_is_asked_again_while_another_r
         Some(session_s())
     );
     assert!(marked(&stage, "s.txt", &mut cx));
+}
+
+/// What a Keeper lists for the review of no agent: every file of the change, none credited.
+fn the_files_of_the_change() -> Vec<yaar_link::ChangedFile> {
+    vec![
+        file("b.txt", FileStatus::Modified),
+        file("h.txt", FileStatus::Modified),
+        file("s.txt", FileStatus::Modified),
+        file("t.txt", FileStatus::Modified),
+    ]
+}
+
+/// The pane shows the list of `s`, then the review of no agent through the session bar's
+/// last entry, whose list is every file with no credit; returns with that list read.
+fn the_list_of_s_and_then_the_review_of_no_agent(
+    cx: &mut TestAppContext,
+) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = the_list_of_s_is_shown_among(
+        vec![
+            (review_s(), Some(session_s())),
+            (review_t(), Some(session_t())),
+            (review_of_no_agent(), None),
+        ],
+        &review_of_no_agent(),
+        cx,
+    );
+    click("review-session-2", &mut cx);
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s1(),
+            to: Some(s2()),
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Compared(the_files_of_the_change())));
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+            ("t.txt", "t\n", "t2\n"),
+        ],
+        &mut cx,
+    );
+    assert!(!marked(&stage, "s.txt", &mut cx));
+    (stage, cx)
+}
+
+/// After a move through the review of no agent, the review of `s` lists its own files again,
+/// with the credits and the mark: what the pane asks for and shows.
+fn back_to_the_list_of_s(stage: &mut Stage, cx: &mut VisualTestContext) {
+    listed_for(stage, &review_s(), &s1(), &s2(), the_list_of_s(), cx);
+    read_files(
+        stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        cx,
+    );
+    assert_eq!(
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.review_session().cloned()),
+        Some(session_s())
+    );
+    assert!(marked(stage, "s.txt", cx));
+    assert!(!marked(stage, "b.txt", cx));
+}
+
+#[gpui_kit::test]
+fn a_click_back_from_the_review_of_no_agent_lists_the_change_again_for_the_session_s_review(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = the_list_of_s_and_then_the_review_of_no_agent(cx);
+
+    click("review-session-0", &mut cx);
+    back_to_the_list_of_s(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn shift_a_back_from_the_review_of_no_agent_lists_the_change_again_for_the_session_s_review(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = the_list_of_s_and_then_the_review_of_no_agent(cx);
+
+    // The next review after the last one is the first: the review of `s`.
+    cx.simulate_keystrokes("shift-a");
+    back_to_the_list_of_s(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn the_cycle_of_shift_a_through_every_review_ends_on_the_list_of_the_review_it_started_at(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = the_list_of_s_is_shown_among(
+        vec![
+            (review_s(), Some(session_s())),
+            (review_t(), Some(session_t())),
+            (review_of_no_agent(), None),
+        ],
+        &review_of_no_agent(),
+        cx,
+    );
+    click("review-session-0", &mut cx);
+    cx.simulate_keystrokes("shift-a");
+    listed_for(
+        &mut stage,
+        &review_t(),
+        &s1(),
+        &s2(),
+        vec![credited("a.txt", vec![session_t()])],
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[("a.txt", "a\n", "a2\n")],
+        &mut cx,
+    );
+    cx.simulate_keystrokes("shift-a");
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s1(),
+            to: Some(s2()),
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Compared(the_files_of_the_change())));
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+            ("t.txt", "t\n", "t2\n"),
+        ],
+        &mut cx,
+    );
+    cx.simulate_keystrokes("shift-a");
+    back_to_the_list_of_s(&mut stage, &mut cx);
+}
+
+#[gpui_kit::test]
+fn reviews_that_arrive_after_a_turn_end_chose_a_session_s_review_list_the_change_for_it(
+    cx: &mut TestAppContext,
+) {
+    // The pane holds only the review of no agent when the turn of `s` ends: the agents
+    // model already names `s`'s review, the Keeper's list of reviews does not yet.
+    let (mut stage, mut cx) = open_with(
+        vec![(review_of_no_agent(), None)],
+        &review_of_no_agent(),
+        Vec::new(),
+        cx,
+    );
+    let sessions = vec![session(
+        '5',
+        "Claude Code 1",
+        SessionState::Works,
+        Some(review_s()),
+    )];
+    stage.keeper.tell_agents(agents_of(sessions.clone()));
+    wait_until(&mut cx, "the sessions in the pane", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.sessions() == sessions)
+    });
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    listed_for(
+        &mut stage,
+        &review_s(),
+        &s1(),
+        &s2(),
+        the_list_of_s(),
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+
+    // The reviews are read again and still lack the review of `s`: the review of no agent
+    // is the one shown, so its list is every file with no credit.
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('1') });
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s1(),
+            to: Some(s2()),
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .reply(asked, Ok(Reply::Compared(the_files_of_the_change())));
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+            ("t.txt", "t\n", "t2\n"),
+        ],
+        &mut cx,
+    );
+
+    // The review of `s` arrives: it is the one the turn end chose, and its list is made.
+    stage.keeper.set_reviews(reviews_of(vec![
+        common::review_with(review_of_no_agent(), None, Some(s1())),
+        common::review_with(review_s(), Some(session_s()), Some(s1())),
+    ]));
+    stage
+        .keeper
+        .tell(Fact::ReviewsChanged { workspace: id('1') });
+    back_to_the_list_of_s(&mut stage, &mut cx);
 }
