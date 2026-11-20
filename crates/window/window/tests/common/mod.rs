@@ -453,11 +453,22 @@ impl Composed {
             self.focus_is_in("Program", cx)
         });
 
-        // The review: Next Review, from the review pane, until the pane shows the
-        // session's, which it need not at first. At most once for each review there is.
+        self.show_the_review_of(&session.id, cx);
+        self.agent = Some(RunningAgent {
+            terminal,
+            session: session.id,
+            review,
+            thread: None,
+        });
+    }
+
+    /// Brings the review of `session` into the review pane by Next Review, from the pane:
+    /// the pane need not show it at first, and a key that went through the reviews has left
+    /// another one up. At most once for each review there is.
+    pub fn show_the_review_of(&mut self, session: &SessionId, cx: &mut VisualTestContext) {
         wait_until(cx, "the session among those the review pane names", |cx| {
             self.review.read_with(cx, |pane, _| {
-                pane.review().is_some() && pane.sessions().iter().any(|s| s.id == session.id)
+                pane.review().is_some() && pane.sessions().iter().any(|s| s.id == *session)
             })
         });
         self.click_into_the_review_pane(cx);
@@ -465,7 +476,7 @@ impl Composed {
             window
                 .review
                 .read_with(cx, |pane, _| pane.review_session().cloned())
-                == Some(session.id.clone())
+                == Some(session.clone())
         };
         let reviews = self
             .review
@@ -482,11 +493,5 @@ impl Composed {
             "the review of the agent's session in the review pane",
             |cx| shows(self, cx),
         );
-        self.agent = Some(RunningAgent {
-            terminal,
-            session: session.id,
-            review,
-            thread: None,
-        });
     }
 }

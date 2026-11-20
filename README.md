@@ -52,11 +52,12 @@ and the app does not hear it yet.
 - **Delivers the review whole, to the agent it belongs to.** When you submit the message, the
   review goes with it as Claude Code takes it: under the prompt Claude Code shows
   `yaar: review round 1 attached (2 threads)`. The instruction on how to answer each thread
-  always comes first, whatever you wrote. A review of up to 10,000 characters is in the hook's
-  answer; a longer one is a file in the app's own folder that Claude Code reads with its read
-  tool, which the app lets through without a dialog for that one file. A review goes only to
-  the session it belongs to, never to another session in the same worktree. A message you
-  queue while Claude Code works carries the review as Claude Code takes the queued message.
+  always comes first, whatever you wrote. A review whose text, with the instruction, fits in
+  10,000 UTF-16 units is in the hook's answer; a longer one is a file in the app's own folder
+  that Claude Code reads with its read tool, which the app lets through without a dialog for
+  that one file. A review goes only to the session it belongs to, never to another session in
+  the same worktree. A message you queue while Claude Code works carries the review as Claude
+  Code takes the queued message.
   The comments count as sent, in a new round, when Claude Code takes the message.
 - **Lets the agent reply, and only you resolve.** Claude Code answers each thread with the
   tool `reply_to_thread`, which the app's plugin gives it as `plugin:yaar-review:yaar`. The
@@ -213,14 +214,15 @@ Known limits of what is there:
 - Claude Code reports a permission prompt and no other dialog, so the sentence control is
   offered while another dialog, such as the trust dialog, is up. Nothing is typed until you
   press the control.
-- A review longer than 10,000 characters is a file, and only Claude Code's read tool gets it
-  without a dialog. If the model reads it with a shell command, a search or a glob, Claude
+- A review whose text, with the instruction, is longer than 10,000 UTF-16 units is a file, and
+  only Claude Code's read tool gets it without a dialog. If the model reads it with a shell command, a search or a glob, Claude
   Code asks you as it asks for any such call.
 - A message you queue while Claude Code works fires its hook when you press Enter, and the app
   takes that for a new turn: the account of the running turn ends there as interrupted, and a
   second turn starts. The review is delivered right either way.
-- A hook program gives up after two seconds. If the app's answer is more than half a second
-  late, the comments show as sent and Claude Code never had them.
+- A hook program gives up after two seconds, and the app keeps its answer within 1.5 seconds
+  of the report reaching it. If the answer then takes more than the half second left to reach
+  the hook program, the comments show as sent and Claude Code never had them.
 - The text of an attachment and a review that Claude Code takes inline ride in one frame of
   the Link, at most 16 MiB. A longer text is refused with the reason.
 - Between a send and the end of the turn it starts, the pane counts a round's changes to the

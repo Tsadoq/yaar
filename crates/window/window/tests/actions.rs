@@ -847,36 +847,14 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
     window.walk_the_stop(&mut cx);
 }
 
-#[gpui_kit::test]
-fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut TestAppContext) {
-    // What a control says it sends is something a user starts.
-    for control in yaar_window::controls() {
-        match control.sends {
-            Some(Sends::Request(kind)) => assert_eq!(
-                kind.origin(),
-                Origin::User,
-                "{} says it sends {kind:?}",
-                control.title
-            ),
-            // The stop-everything frame is no request, and has no origin to check. Its
-            // control is pressed by the forward walk, last, where the tap sees the frame.
-            Some(Sends::StopEverything) => {}
-            None => {}
-        }
-    }
-
-    let (mut window, mut cx) = open_composed(cx);
-    // Two workspaces, so that the keys that change the one on screen have one to change
-    // to, and so set off the questions the Window asks by itself.
-    window.walk(RequestKind::OpenFolder, &mut cx);
-    window.walk(RequestKind::OpenFolder, &mut cx);
-    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
-    // terminal pane have a terminal to act on and the focus is inside one.
-    window.walk(RequestKind::OpenTerminal, &mut cx);
-    wait_until(&mut cx, "the terminal on screen", |cx| {
-        cx.debug_bounds("terminal-slot-0").is_some()
-    });
-
+/// Presses the key of every control that names no message, one step for each, and checks
+/// that none of them sent a request a user starts. `ready` puts the Window where the keys
+/// act, before each step: a key of an earlier step may have moved the Window on.
+fn walk_the_silent_keys(
+    window: &mut Composed,
+    cx: &mut VisualTestContext,
+    mut ready: impl FnMut(&mut Composed, &mut VisualTestContext),
+) {
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends.is_none())
@@ -917,23 +895,24 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
             "{} asks the user for something, and the walk does not know what to give",
             control.title
         );
+        ready(window, cx);
         let before = window.tap.requests().len();
         if in_changes {
-            window.show_changes(&mut cx);
+            window.show_changes(cx);
         }
-        window.press(&control, &mut cx);
+        window.press(&control, cx);
         // Checked before the step is closed: the closing types into the field for the
         // base, and would hand a field this key had opened its line all the same.
-        window.assert_asks_nothing(&control, &mut cx);
+        window.assert_asks_nothing(&control, cx);
         // The keys of Comment, Edit Draft and Reply may open the box, which takes the
         // focus: the keys of the steps after would be typed into it as text. Nothing was
         // typed, so no save went out.
         if window
             .review
-            .read_with(&cx, |pane, _| pane.comment_box().is_some())
+            .read_with(&*cx, |pane, _| pane.comment_box().is_some())
         {
             cx.simulate_keystrokes("escape");
-            wait_until(&mut cx, "the comment box to close", |cx| {
+            wait_until(cx, "the comment box to close", |cx| {
                 window
                     .review
                     .read_with(cx, |pane, _| pane.comment_box().is_none())
@@ -944,8 +923,7 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
         // The stop frame is no request, so the loop below does not see it. A key that
         // sent it would end the Keeper, and the request that closes the step would never
         // pass: the step is closed on that frame as well, and it is told apart here.
-        let Some(closed) = window.set_base(&format!("after-{}-{step}", control.key()), &mut cx)
-        else {
+        let Some(closed) = window.set_base(&format!("after-{}-{step}", control.key()), cx) else {
             panic!(
                 "the key {} of {} names no message and sent the stop-everything frame",
                 control.key(),
@@ -966,7 +944,62 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut T
 
     // The window stood through the walk with what it was opened with.
     assert_eq!(
-        window.frame.read_with(&cx, |frame, _| frame.panes().len()),
+        window.frame.read_with(&*cx, |frame, _| frame.panes().len()),
         yaar_window::panes().len()
     );
+}
+
+#[gpui_kit::test]
+fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts(cx: &mut TestAppContext) {
+    // What a control says it sends is something a user starts.
+    for control in yaar_window::controls() {
+        match control.sends {
+            Some(Sends::Request(kind)) => assert_eq!(
+                kind.origin(),
+                Origin::User,
+                "{} says it sends {kind:?}",
+                control.title
+            ),
+            // The stop-everything frame is no request, and has no origin to check. Its
+            // control is pressed by the forward walk, last, where the tap sees the frame.
+            Some(Sends::StopEverything) => {}
+            None => {}
+        }
+    }
+
+    let (mut window, mut cx) = open_composed(cx);
+    // Two workspaces, so that the keys that change the one on screen have one to change
+    // to, and so set off the questions the Window asks by itself.
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    // A terminal on screen, opened by its key as a user opens one, so that the keys of the
+    // terminal pane have a terminal to act on and the focus is inside one.
+    window.walk(RequestKind::OpenTerminal, &mut cx);
+    wait_until(&mut cx, "the terminal on screen", |cx| {
+        cx.debug_bounds("terminal-slot-0").is_some()
+    });
+    walk_the_silent_keys(&mut window, &mut cx, |_, _| {});
+}
+
+#[gpui_kit::test]
+fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts_where_an_agent_runs_with_a_review_attached(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, mut cx) = open_composed_with_an_agent(cx);
+    // One workspace: the keys that change the workspace on screen would take the agent away
+    // from the keys after them. The agent runs in it, its review has a draft on a thread
+    // and is attached, so that the keys of attaching and of the agent's terminal are
+    // pressed where they act and not where they have nothing to do.
+    window.walk(RequestKind::OpenFolder, &mut cx);
+    window.agent_with_a_thread(&mut cx);
+    window.make_sure_it_is_attached(&mut cx);
+
+    // A key of an earlier step may have gone on to another review, closed the view of the
+    // attachment or the like: the review of the agent is back, and attached, before each.
+    walk_the_silent_keys(&mut window, &mut cx, |window, cx| {
+        let session = window.agent().session.clone();
+        window.show_the_review_of(&session, cx);
+        window.make_sure_it_is_attached(cx);
+    });
+    window.end_the_agent();
 }
