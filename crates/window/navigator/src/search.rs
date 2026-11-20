@@ -877,10 +877,9 @@ mod tests {
         );
     }
 
-    /// Waits for `download::installed` (P8): it has no body until then, and a row
-    /// with a download calls it. The folder is written as `download.rs` documents it.
+    /// A row with a download calls `download::installed`. The folder is written as
+    /// `download.rs` documents it.
     #[test]
-    #[ignore = "waits for download::installed, which package 8 writes"]
     fn look_finds_the_version_the_app_downloaded_for_each_server_that_has_one() {
         let scratch = Scratch::new("downloaded");
         let registry = builtin();
