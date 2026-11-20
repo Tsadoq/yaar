@@ -1198,3 +1198,31 @@ fn the_credits_kept_with_a_turns_state_name_the_session_for_the_file_its_edit_to
     expected.sort();
     assert_eq!(by, expected);
 }
+
+#[test]
+fn a_session_that_takes_over_the_review_of_no_agent_tells_the_reviews_changed() {
+    let mut setup = Setup::new();
+    // A Window that read the reviews holds the review of no agent.
+    let held = setup.window.reviews(&setup.workspace).reviews;
+    let [review] = &held[..] else {
+        panic!("not exactly one review: {held:?}");
+    };
+    assert_eq!(review.agent, None);
+    let review = review.id.clone();
+    // Nothing told before this point answers the wait below.
+    setup.window.looked_at = setup.window.facts.len();
+
+    let terminal = setup.window.open_terminal(&setup.workspace);
+    let records = recorded::hook_events(DIALOGS);
+    setup.hook_in(&terminal, &records, 0);
+    let workspace = setup.workspace.clone();
+    setup.window.until("the reviews told as changed", |fact| {
+        matches!(fact, Fact::ReviewsChanged { workspace: told } if *told == workspace)
+            .then_some(())
+    });
+
+    // A Window that reads them again, as the fact asks, finds the session its owner.
+    let session = setup.sessions()[0].id.clone();
+    assert_eq!(setup.review(&review).agent, Some(session));
+    let _ = setup.finish();
+}
