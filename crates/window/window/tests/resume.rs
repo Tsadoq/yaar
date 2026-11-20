@@ -34,7 +34,7 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         window
             .terminals
             .read_with(&cx, |pane, cx| pane.resumable(cx)),
-        [cut_off.session.clone()]
+        std::slice::from_ref(&cut_off.session)
     );
     assert!(drawn("terminal-resume-1", &mut cx).is_none(), "one control");
     assert_eq!(

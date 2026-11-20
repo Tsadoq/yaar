@@ -52,6 +52,8 @@ pub struct Composed {
     pub repositories: Vec<Repo>,
     /// The agent the walk of the reviews started, once it did.
     pub agent: Option<RunningAgent>,
+    /// The session a restart cut off, when the test made one before it opened the Window.
+    pub cut_off: Option<CutOff>,
     /// Counts what the test makes, for names of its own.
     made: u32,
     _waiting: WaitingForPrograms,
@@ -234,6 +236,7 @@ fn open_composed_with(
             _watching_the_keys: watching,
             repositories: Vec::new(),
             agent: None,
+            cut_off: None,
             made: 0,
             _waiting: WaitingForPrograms { started },
         },
