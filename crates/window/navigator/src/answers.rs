@@ -739,3 +739,347 @@ fn rank(path: &Path, pointer: &Path, shown: &[PathBuf]) -> usize {
 fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::mpsc::{Receiver, channel};
+    use std::time::Duration;
+
+    use super::*;
+    use crate::port::RepositoryConsent;
+    use crate::registry::Registry;
+    use crate::{NavigatorConfig, SystemClock, fetch, lifecycle};
+    use yaar_link::RepositoryId;
+
+    fn hit(path: &str, line: u32, text: &str) -> Found {
+        Found {
+            path: PathBuf::from(path),
+            line,
+            column: 4,
+            text: text.to_owned(),
+        }
+    }
+
+    fn place(path: &str, line: u32, shown: &[&str]) -> Place {
+        Place {
+            workspace: WorkspaceId::new("1".repeat(32)),
+            tree: Tree::Worktree,
+            path: PathBuf::from(path),
+            line,
+            column: 0,
+            name: "name".to_owned(),
+            shown: shown.iter().map(PathBuf::from).collect(),
+        }
+    }
+
+    #[test]
+    fn a_line_no_hunk_touches_moves_with_the_lines_added_or_removed_before_it() {
+        // A line added in front, `b` changed, `c` unchanged after both.
+        let (past, now) = ("a\nb\nc\n", "x\na\nb2\nc\n");
+        assert_eq!(carry(past, now, 0), Some(1));
+        assert_eq!(carry(past, now, 1), None, "a changed line is not carried");
+        assert_eq!(carry(past, now, 2), Some(3));
+        // A line removed in front moves the ones after it up.
+        assert_eq!(carry("a\nb\n", "b\n", 0), None);
+        assert_eq!(carry("a\nb\n", "b\n", 1), Some(0));
+        // A line added after it moves nothing.
+        assert_eq!(carry("a\n", "a\nb\n", 0), Some(0));
+        // A file that did not change.
+        assert_eq!(carry("a\nb\n", "a\nb\n", 1), Some(1));
+        // A line the past text does not have.
+        assert_eq!(carry("a\n", "a\n", 1), None);
+        assert_eq!(carry("", "a\n", 0), None);
+    }
+
+    #[test]
+    fn matches_come_by_the_file_under_the_pointer_then_the_files_on_screen_then_path_and_line() {
+        let list = vec![
+            hit("/w/z.sil", 1, "z"),
+            hit("/w/b.sil", 7, "b7"),
+            hit("/w/a.sil", 2, "a2"),
+            hit("/w/b.sil", 3, "b3"),
+            hit("/w/pointer.sil", 9, "p9"),
+            hit("/w/c.sil", 1, "c"),
+        ];
+        let reply = by_match(
+            Question::References,
+            &place("pointer.sil", 9, &["z.sil", "b.sil"]),
+            Path::new("/w"),
+            Some(9),
+            list,
+        );
+        let order: Vec<(String, u32)> = reply
+            .places
+            .iter()
+            .map(|place| (place.path.display().to_string(), place.line))
+            .collect();
+        assert_eq!(
+            order,
+            [
+                ("/w/pointer.sil".to_owned(), 9),
+                ("/w/z.sil".to_owned(), 1),
+                ("/w/b.sil".to_owned(), 3),
+                ("/w/b.sil".to_owned(), 7),
+                ("/w/a.sil".to_owned(), 2),
+                ("/w/c.sil".to_owned(), 1),
+            ]
+        );
+        // The pointer's own line stays in a list of places: every match is one.
+        assert_eq!(reply.places[0].text, "p9");
+    }
+
+    #[test]
+    fn a_hover_by_text_match_is_three_lines_other_than_the_places_own() {
+        let list = vec![
+            hit("/w/main.sil", 2, "  use total  "),
+            hit("/w/lib.sil", 1, "def total"),
+            hit("/w/lib.sil", 5, "total()"),
+            hit("/w/zeta.sil", 3, "use total"),
+            hit("/w/zeta.sil", 4, "use total again"),
+        ];
+        let at = place("main.sil", 2, &[]);
+        let root = Path::new("/w");
+        let hover = by_match(Question::Hover, &at, root, Some(2), list.clone()).hover;
+        assert_eq!(
+            hover.as_deref(),
+            Some("lib.sil:1: def total\nlib.sil:5: total()\nzeta.sil:3: use total")
+        );
+        // A place whose line is not a line of the files searched leaves nothing out, and a
+        // line is trimmed.
+        let hover = by_match(Question::Hover, &at, root, None, list).hover;
+        assert_eq!(
+            hover.as_deref(),
+            Some("main.sil:2: use total\nlib.sil:1: def total\nlib.sil:5: total()")
+        );
+        // Only the place's own line: nothing to show.
+        let only = vec![hit("/w/main.sil", 2, "use total")];
+        assert_eq!(
+            by_match(Question::Hover, &at, root, Some(2), only).hover,
+            None
+        );
+        assert_eq!(
+            by_match(Question::Hover, &at, root, Some(2), vec![]).hover,
+            None
+        );
+    }
+
+    #[test]
+    fn places_are_told_in_bytes_from_the_line_and_references_are_sorted() {
+        // `é` is two bytes and one unit, the clef four bytes and two.
+        let lines = ["use é 𝄞 name", "name"];
+        let mut line_of = |path: &Path, line: u32| {
+            (path == Path::new("/w/a.sil"))
+                .then(|| lines.get(line as usize).map(|text| (*text).to_owned()))
+                .flatten()
+        };
+        let spots = vec![
+            Spot {
+                path: PathBuf::from("/w/b.sil"),
+                line: 0,
+                character: 2,
+            },
+            Spot {
+                path: PathBuf::from("/w/a.sil"),
+                line: 1,
+                character: 0,
+            },
+            Spot {
+                path: PathBuf::from("/w/a.sil"),
+                line: 0,
+                character: 9,
+            },
+        ];
+        let sorted = locations(&spots, &mut line_of, true);
+        let shown: Vec<(&str, u32, u32, &str)> = sorted
+            .iter()
+            .map(|at| {
+                (
+                    at.path.to_str().unwrap(),
+                    at.line,
+                    at.column,
+                    at.text.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            shown,
+            [
+                // 4 + 2 (é) + 1 + 4 (the clef) + 1 = 12 bytes before `name`.
+                ("/w/a.sil", 1, 12, "use é 𝄞 name"),
+                ("/w/a.sil", 2, 0, "name"),
+                // A file that cannot be read: the spot's own column, no text.
+                ("/w/b.sil", 1, 2, ""),
+            ]
+        );
+        // A definition keeps the server's order.
+        let kept = locations(&spots, &mut line_of, false);
+        assert_eq!(kept[0].path, PathBuf::from("/w/b.sil"));
+    }
+
+    #[test]
+    fn a_file_is_the_worktrees_unless_git_ignores_it_and_is_outside_in_any_other_case() {
+        let (one, two) = (
+            WorkspaceId::new("1".repeat(32)),
+            WorkspaceId::new("2".repeat(32)),
+        );
+        let folders = vec![
+            (one.clone(), PathBuf::from("/w/one")),
+            (two.clone(), PathBuf::from("/w/one/nested")),
+        ];
+        let ignored = |_: &Path, path: &Path| path.starts_with("/w/one/vendor");
+        assert_eq!(
+            worktree_kind(Path::new("/w/one/src/a.rs"), &folders, ignored),
+            FileKind::Worktree {
+                workspace: one.clone(),
+                relative: PathBuf::from("src/a.rs")
+            }
+        );
+        assert_eq!(
+            worktree_kind(Path::new("/w/one/vendor/a.rs"), &folders, ignored),
+            FileKind::Outside
+        );
+        // A folder inside another is the other's too: the first one that holds the file
+        // and does not ignore it.
+        let nested_ignored = |folder: &Path, _: &Path| folder == Path::new("/w/one");
+        assert_eq!(
+            worktree_kind(Path::new("/w/one/nested/a.rs"), &folders, nested_ignored),
+            FileKind::Worktree {
+                workspace: two,
+                relative: PathBuf::from("a.rs")
+            }
+        );
+        assert_eq!(
+            worktree_kind(Path::new("/elsewhere/a.rs"), &folders, ignored),
+            FileKind::Outside
+        );
+        // A path that is only named like the folder, not inside it.
+        assert_eq!(
+            worktree_kind(Path::new("/w/one-more/a.rs"), &folders, ignored),
+            FileKind::Outside
+        );
+    }
+
+    #[test]
+    fn changed_paths_are_joined_with_the_folder_and_told_once_each() {
+        let paths = vec![
+            PathBuf::from("a.rs"),
+            PathBuf::from("/elsewhere/b.rs"),
+            PathBuf::from("a.rs"),
+            PathBuf::from("/w/a.rs"),
+        ];
+        assert_eq!(
+            joined(Path::new("/w"), &paths),
+            [PathBuf::from("/w/a.rs"), PathBuf::from("/elsewhere/b.rs")]
+        );
+        assert_eq!(joined(Path::new("/w"), &[]), Vec::<PathBuf>::new());
+    }
+
+    /// A Navigator's core with no row and one workspace whose folder is not there, and the
+    /// ends of its channels.
+    fn core() -> (Core, Receiver<Event>, async_channel::Receiver<Told>) {
+        let (events, inbox) = channel();
+        let (told, heard) = async_channel::unbounded();
+        let workspace = WorkspaceRoot {
+            id: WorkspaceId::new("1".repeat(32)),
+            repository: RepositoryId::new("1".repeat(32)),
+            folder: Some(PathBuf::from("/no-such-folder-of-the-answers-tests")),
+        };
+        let core = Core {
+            config: NavigatorConfig {
+                builtin: String::new(),
+                user_file: PathBuf::new(),
+                servers: PathBuf::new(),
+                cache: PathBuf::new(),
+                search_path: Vec::new(),
+                environment: Vec::new(),
+                platform: None,
+                stop_after: Duration::from_secs(1),
+                clock: Arc::new(SystemClock),
+            },
+            registry: Registry::default(),
+            told,
+            events,
+            workspaces: vec![workspace],
+            on_screen: None,
+            consents: Vec::<RepositoryConsent>::new(),
+            own_cache: PathBuf::new(),
+            life: lifecycle::Life::default(),
+            fetch: fetch::Fetches::default(),
+            answers: Answers::default(),
+            old: crate::old_side::OldSides::default(),
+        };
+        (core, inbox, heard)
+    }
+
+    /// The outcome of the text search an ask started.
+    fn searched(inbox: &Receiver<Event>) -> (AskId, Result<Vec<Found>, String>) {
+        match inbox
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the search ends")
+        {
+            Event::Found { id, found } => (id, found),
+            _ => panic!("the search tells its outcome as an event of its own"),
+        }
+    }
+
+    #[test]
+    fn a_cancelled_ask_is_never_answered_and_one_whose_search_failed_is_answered_empty_and_marked()
+    {
+        let (mut core, inbox, heard) = core();
+        let at = place("notes.txt", 1, &[]);
+        ask(&mut core, AskId(1), Question::Hover, at.clone());
+        ask(&mut core, AskId(2), Question::Hover, at);
+
+        // The first is cancelled while its search runs; its outcome comes after.
+        cancel(&mut core, AskId(1));
+        let mut outcomes = [searched(&inbox), searched(&inbox)];
+        outcomes.sort_by_key(|(id, _)| *id);
+        for (id, outcome) in outcomes {
+            found(&mut core, id, outcome);
+        }
+        // The folder is not there: the second is answered with nothing, marked.
+        match heard.try_recv().expect("the second ask is answered") {
+            Told::Hover { id, answer } => {
+                assert_eq!(id, AskId(2));
+                assert_eq!(
+                    answer,
+                    Answered {
+                        value: None,
+                        guessed: true
+                    }
+                );
+            }
+            other => panic!("told {other:?}"),
+        }
+        assert!(heard.try_recv().is_err(), "the cancelled ask was answered");
+        // An outcome for an ask that was answered is dropped.
+        found(&mut core, AskId(2), Ok(Vec::new()));
+        assert!(heard.try_recv().is_err());
+    }
+
+    #[test]
+    fn an_ask_about_a_workspace_with_no_worktree_is_answered_at_once_with_nothing_marked() {
+        let (mut core, _inbox, heard) = core();
+        core.workspaces[0].folder = None;
+        ask(
+            &mut core,
+            AskId(3),
+            Question::References,
+            place("a.sil", 1, &[]),
+        );
+        match heard.try_recv().expect("answered at once") {
+            Told::References { id, answer } => {
+                assert_eq!(id, AskId(3));
+                assert_eq!(
+                    answer,
+                    Answered {
+                        value: Vec::new(),
+                        guessed: true
+                    }
+                );
+            }
+            other => panic!("told {other:?}"),
+        }
+    }
+}
