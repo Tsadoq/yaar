@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use yaar_adapter_claude::ClaudeCode;
 use yaar_agent::{
-    Adapter, Asked, CliSession, Event, Phase, Report, Reported, ShellEntry, WriteTool,
+    Adapter, Asked, Asks, CliSession, Event, Phase, Report, Reported, ShellEntry, WriteTool,
 };
 use yaar_link::{
     AgentReport, Fact, Refusal, Reply, ReviewId, Session, SessionState, Step, TerminalId,
@@ -90,6 +90,12 @@ struct Core {
     // whoever opens a terminal before its program starts, taken out in queue order when its
     // end is worked out. A report from any other terminal is followed no further.
     terminals: Mutex<HashMap<String, WorkspaceId>>,
+    // The review each terminal the app opened for a CLI was opened for, until the first
+    // session that starts there takes it (or the terminal ends).
+    opened_for: Mutex<HashMap<String, yaar_store::ReviewId>>,
+    // Per session, whether the turn it has now began with a message of the user. Kept in
+    // memory: a Keeper that starts has no turn running.
+    turns_from_user: Mutex<HashMap<String, bool>>,
     // Called from the one thread that works the queue.
     adapters: Mutex<Vec<Box<dyn Adapter>>>,
     switchboard: Mutex<Switchboard>,
@@ -193,6 +199,28 @@ impl Cause {
             Cause::Own => Instant::now(),
         }
     }
+}
+
+/// What a CLI's report was, as far as the changes it led to depend on it.
+#[derive(Clone, Copy)]
+struct Starting<'a> {
+    /// The workspace a session that may be new starts in.
+    workspace: &'a WorkspaceId,
+    /// The event that led to the changes.
+    event: &'a Event,
+    /// Whether the report waited for a message of the user: a turn it starts came from the
+    /// user.
+    from_user: bool,
+}
+
+/// What a session that starts is, as its first event tells it.
+struct Beginning<'a> {
+    /// The name of its CLI's Adapter.
+    agent: &'a str,
+    /// The CLI's own name for it.
+    cli: &'a CliSession,
+    /// The terminal of the app it runs in, none outside the ones the Keeper holds.
+    terminal: Option<String>,
 }
 
 /// What one item of the queue left to tell, in the order it is told: the workspaces whose
@@ -310,6 +338,8 @@ impl Agents {
             described,
             entries,
             terminals: Mutex::new(HashMap::new()),
+            opened_for: Mutex::new(HashMap::new()),
+            turns_from_user: Mutex::new(HashMap::new()),
             adapters: Mutex::new(adapters),
             switchboard: Mutex::new(switchboard),
             recorders: Mutex::new(HashMap::new()),
@@ -430,8 +460,10 @@ impl Agents {
     /// starts in it takes that review (`Reviews::session_started_for`), and its first
     /// message carries what is attached. Called right after [`Agents::terminal_opened`].
     pub(crate) fn terminal_opened_for(&self, terminal: &TerminalId, review: &ReviewId) {
-        let _ = (terminal, review);
-        todo!()
+        lock(&self.core.opened_for).insert(
+            terminal.as_str().to_owned(),
+            yaar_store::ReviewId::new(review.as_str()),
+        );
     }
 
     /// What a terminal runs in the user's shell to bring back `session`, a session of the
@@ -444,8 +476,30 @@ impl Agents {
         kept: &Kept,
         session: &yaar_link::SessionId,
     ) -> Result<String, Refusal> {
-        let _ = (kept, session);
-        todo!()
+        let id = SessionId::new(session.as_str());
+        let record = kept
+            .store
+            .session(&id)
+            .map_err(failed)?
+            .ok_or_else(|| Refusal::Failed {
+                reason: format!("the app holds no session {session}"),
+            })?;
+        let runs = lock(&self.core.switchboard)
+            .session(&yaar_switchboard::SessionId(id.as_str().to_owned()))
+            .is_some_and(|known| known.state != State::NotRunning);
+        if record.running || runs {
+            return Err(Refusal::Failed {
+                reason: format!("session {session} runs: there is nothing to bring back"),
+            });
+        }
+        let adapters = lock(&self.core.adapters);
+        let adapter = adapters
+            .iter()
+            .find(|adapter| adapter.name() == record.agent)
+            .ok_or_else(|| Refusal::Failed {
+                reason: format!("the app knows no agent CLI named {}", record.agent),
+            })?;
+        Ok(adapter.resume(&CliSession(record.cli_session)))
     }
 
     /// The instruction on how to answer each thread of the CLI named `agent`, its
@@ -731,6 +785,7 @@ impl Core {
     fn terminal_gone(&self, kept: &Kept, terminal: &TerminalId, told: &mut Told) {
         // Held no more: what its CLI still reports is followed no further.
         lock(&self.terminals).remove(terminal.as_str());
+        lock(&self.opened_for).remove(terminal.as_str());
         let mut pids = Vec::new();
         for known in lock(&self.switchboard).sessions() {
             if known.state != State::NotRunning
@@ -791,17 +846,17 @@ impl Core {
         cause: Cause,
         told: &mut Told,
     ) {
-        // Read by the package of slice 6 that keeps whether a turn came from the user.
-        let _ = asked;
-        for reported in events {
-            // A CLI outside the app's terminals, or in one the Keeper does not hold, is
-            // followed no further in this version.
-            let Some(terminal) = reported.terminal.clone() else {
-                continue;
-            };
-            let Some(of_terminal) = lock(&self.terminals).get(&terminal).cloned() else {
-                continue;
-            };
+        let from_user = asked.is_some_and(|asked| asked.asks == Asks::Message);
+        for mut reported in events {
+            // A terminal the Keeper does not hold counts for none: such a CLI is followed
+            // by the folder it works in alone, and is in no terminal of the app.
+            let of_terminal = reported
+                .terminal
+                .as_ref()
+                .and_then(|terminal| lock(&self.terminals).get(terminal).cloned());
+            if of_terminal.is_none() {
+                reported.terminal = None;
+            }
             let workspace = match kept.store.session_of_cli(agent, &reported.session.0) {
                 Ok(Some(record)) => Some(record.workspace),
                 Ok(None) => self.workspace_of(kept, reported.folder.as_deref(), of_terminal),
@@ -815,18 +870,23 @@ impl Core {
             };
             let event = reported.event.clone();
             let changes = lock(&self.switchboard).take(agent, reported, &mut random_id_text);
-            self.apply(kept, changes, Some((&workspace, &event)), cause, told);
+            let starting = Starting {
+                workspace: &workspace,
+                event: &event,
+                from_user,
+            };
+            self.apply(kept, changes, Some(starting), cause, told);
         }
     }
 
     /// The workspace a session that is new belongs to: the one whose worktree holds the
     /// folder its CLI works in, the deepest if several do; else `of_terminal`, the one its
-    /// terminal was opened in.
+    /// terminal was opened in, none for a CLI in no terminal the Keeper holds.
     fn workspace_of(
         &self,
         kept: &Kept,
         folder: Option<&Path>,
-        of_terminal: WorkspaceId,
+        of_terminal: Option<WorkspaceId>,
     ) -> Option<WorkspaceId> {
         if let Some(folder) = folder {
             let records = kept.store.workspaces().ok()?;
@@ -849,24 +909,25 @@ impl Core {
                 return Some(workspace);
             }
         }
-        Some(of_terminal)
+        of_terminal
     }
 
     /// Keeps each change in the Store, then gives it to Workspaces and the engine, and
-    /// notes what is to be told. `starting` is the workspace a session that may be new
-    /// starts in, and the event that led to the changes; the workspace of any other
-    /// session is the one the Store keeps it in.
+    /// notes what is to be told. `starting` says what the report that led to the changes
+    /// was, none for a change the Keeper made itself; the workspace of any session but a
+    /// new one is the one the Store keeps it in.
     fn apply(
         &self,
         kept: &Kept,
         changes: Vec<Change>,
-        starting: Option<(&WorkspaceId, &Event)>,
+        starting: Option<Starting<'_>>,
         cause: Cause,
         told: &mut Told,
     ) {
         for change in changes {
             let session = session_of(&change);
-            let Some(workspace) = self.workspace_for(kept, &session, starting.map(|s| s.0)) else {
+            let Some(workspace) = self.workspace_for(kept, &session, starting.map(|s| s.workspace))
+            else {
                 continue;
             };
             // What a step or the end of a shell command changes is no part of what a Window
@@ -882,9 +943,20 @@ impl Core {
                     cli,
                     terminal,
                     ..
-                } => self.session_starts(kept, &workspace, &session, &agent, &cli, terminal),
+                } => {
+                    let beginning = Beginning {
+                        agent: &agent,
+                        cli: &cli,
+                        terminal,
+                    };
+                    self.session_starts(kept, &workspace, &session, beginning, told);
+                }
                 Change::State { .. } => {}
                 Change::TurnStarted { session, turn } => {
+                    lock(&self.turns_from_user).insert(
+                        session.0.clone(),
+                        starting.is_some_and(|starting| starting.from_user),
+                    );
                     let number = turns_of_session(kept, &workspace, &session) + 1;
                     let id = TurnId::new(turn.0);
                     let start = self.start_of(kept, &workspace, &id);
@@ -909,7 +981,7 @@ impl Core {
                     // The end the CLI reported is stamped with its report; one the
                     // Switchboard made for a turn or a session that ended is made now.
                     let reported = matches!(
-                        starting.map(|(_, event)| event),
+                        starting.map(|starting| starting.event),
                         Some(Event::Command {
                             phase: Phase::Ended,
                             ..
@@ -1028,17 +1100,28 @@ impl Core {
     }
 
     /// A session starts, or its CLI resumes it: it is kept as running, takes its review,
-    /// and its worktree is watched while it runs.
+    /// and its worktree is watched while it runs. The review it takes is the one its
+    /// terminal was opened for, when there is one; a session that took the review of
+    /// another is the one that session's unreviewed mark goes with.
     fn session_starts(
         &self,
         kept: &Kept,
         workspace: &WorkspaceId,
         session: &yaar_switchboard::SessionId,
-        agent: &str,
-        cli: &CliSession,
-        terminal: Option<String>,
+        beginning: Beginning<'_>,
+        told: &mut Told,
     ) {
+        let Beginning {
+            agent,
+            cli,
+            terminal,
+        } = beginning;
         let id = SessionId::new(session.0.clone());
+        // Whichever session starts first in a terminal opened for a review is the one that
+        // review waits for.
+        let opened_for = terminal
+            .as_ref()
+            .and_then(|terminal| lock(&self.opened_for).remove(terminal));
         // A session the Store holds is one its CLI resumed.
         if matches!(kept.store.session(&id), Ok(Some(_))) {
             keep(kept.store.set_running(&id, terminal.as_deref()));
@@ -1064,12 +1147,45 @@ impl Core {
             );
         }
         match kept.store.session(&id) {
-            Ok(Some(record)) => keep(kept.reviews.session_started(&record).map(|_| ())),
+            Ok(Some(record)) => self.takes_review(kept, &record, opened_for.as_ref(), told),
             Ok(None) => {}
             Err(e) => eprintln!("yaar-keeper: a session could not be read: {e}"),
         }
         self.watching
             .agent_runs(kept, &yaar_link::WorkspaceId::new(workspace.as_str()), true);
+    }
+
+    /// The session `record` that started takes its review, `opened_for` first if its
+    /// terminal was opened for one. The session whose review it took over has nothing
+    /// unreviewed any more: it holds no review to be unreviewed in.
+    fn takes_review(
+        &self,
+        kept: &Kept,
+        record: &SessionRecord,
+        opened_for: Option<&yaar_store::ReviewId>,
+        told: &mut Told,
+    ) {
+        let before = kept.store.reviews_of(&record.workspace).unwrap_or_default();
+        let taken = match opened_for {
+            Some(review) => kept.reviews.session_started_for(record, review),
+            None => kept.reviews.session_started(record),
+        };
+        let review = match taken {
+            Ok(review) => review,
+            Err(e) => {
+                eprintln!("yaar-keeper: {e}");
+                return;
+            }
+        };
+        let previous = before
+            .iter()
+            .find(|held| held.id == review)
+            .and_then(|held| held.agent.clone())
+            .filter(|holder| holder != record.id.as_str());
+        if let Some(previous) = previous {
+            let changes = lock(&self.switchboard).reviewed(&yaar_switchboard::SessionId(previous));
+            self.apply(kept, changes, None, Cause::Own, told);
+        }
     }
 
     /// The agent took a step in a turn: it is kept, then handed to Workspaces when it names
@@ -1130,7 +1246,19 @@ impl Core {
         );
         match feed {
             Feed::Nothing => {}
-            Feed::Wrote(path) => kept.workspaces.agent_wrote(workspace, &session.0, path),
+            Feed::Wrote(path) => {
+                kept.workspaces.agent_wrote(workspace, &session.0, path);
+                // The round the review was sent in counts as edited from the first edit
+                // its agent reports after it.
+                match kept
+                    .reviews
+                    .agent_edited(&SessionId::new(session.0.clone()))
+                {
+                    Ok(Some(_)) => told.reviews_changed(workspace),
+                    Ok(None) => {}
+                    Err(e) => eprintln!("yaar-keeper: {e}"),
+                }
+            }
             Feed::Began => kept
                 .workspaces
                 .command_began(workspace, &session.0, cause.at()),
@@ -1165,10 +1293,10 @@ impl Core {
             let state = known
                 .as_ref()
                 .map_or(State::NotRunning, |known| known.state);
-            let review = reviews
+            let held = reviews
                 .iter()
-                .find(|review| review.agent.as_deref() == Some(record.id.as_str()))
-                .map(|review| ReviewId::new(review.id.as_str()));
+                .find(|review| review.agent.as_deref() == Some(record.id.as_str()));
+            let review = held.map(|review| ReviewId::new(review.id.as_str()));
             if state == State::NotRunning && review.is_none() {
                 continue;
             }
@@ -1178,6 +1306,12 @@ impl Core {
                 .find(|adapter| adapter.name == record.agent)
                 .map_or(record.agent.as_str(), |adapter| adapter.title);
             shown.push(state);
+            let turn = known.as_ref().and_then(|known| known.turn.clone());
+            let turn_from_user = turn.is_some()
+                && lock(&self.turns_from_user)
+                    .get(record.id.as_str())
+                    .copied()
+                    .unwrap_or(false);
             sessions.push(Session {
                 id: yaar_link::SessionId::new(record.id.as_str()),
                 agent: record.agent.clone(),
@@ -1189,16 +1323,14 @@ impl Core {
                     .and_then(|known| known.terminal.as_deref())
                     .map(TerminalId::new),
                 state: state_of(state),
-                turn: known
-                    .and_then(|known| known.turn)
-                    .map(|(turn, _)| yaar_link::TurnId::new(turn.0)),
+                turn: turn.map(|(turn, _)| yaar_link::TurnId::new(turn.0)),
                 review,
-                // Slice 6's agents' side fills these: the attachment of the session's
-                // review, whether its turn began with a message of the user, and whether
-                // it ran when its Keeper stopped.
-                attached: None,
-                turn_from_user: false,
-                resumable: false,
+                attached: held
+                    .and_then(|review| review.attached.as_ref())
+                    .map(attachment_of),
+                turn_from_user,
+                resumable: state == State::NotRunning
+                    && record.ended_by == Some(EndedBy::KeeperStopped),
             });
         }
         Ok(Some(WorkspaceAgents {
@@ -1278,7 +1410,12 @@ impl Core {
             let Some(kept) = parts.as_ref().and_then(Parts::kept) else {
                 return;
             };
-            record_state(kept, recording)
+            let recorded = record_state(kept, recording);
+            // The credits go with the state once it is kept, off the agents' thread.
+            if let Some(state) = &recorded.0 {
+                keep_credits(kept, &recording.workspace, state);
+            }
+            recorded
         };
         let _turn = lock(&shared.turn);
         let parts = shared.parts.read().unwrap_or_else(PoisonError::into_inner);
@@ -1333,6 +1470,30 @@ fn record_state(kept: &Kept, recording: &Recording) -> (Option<String>, Option<S
             (None, None)
         }
     }
+}
+
+/// Keeps with the recorded state `state` who is credited with every uncommitted path of
+/// the worktree of `workspace`. Written down when it cannot be done: the state stands
+/// without credits, which over-shows and hides nothing.
+fn keep_credits(kept: &Kept, workspace: &WorkspaceId, state: &str) {
+    let credits = match kept
+        .workspaces
+        .credits(&yaar_workspaces::WorkspaceId::new(workspace.as_str()))
+    {
+        Ok(credits) => credits,
+        Err(e) => {
+            eprintln!("yaar-keeper: the credits of {workspace} could not be read: {e}");
+            return;
+        }
+    };
+    let credits: Vec<yaar_review_engine::Credited> = credits
+        .into_iter()
+        .map(|credit| yaar_review_engine::Credited {
+            path: credit.path,
+            by: credit.by,
+        })
+        .collect();
+    keep(kept.reviews.keep_credits(workspace, state, &credits));
 }
 
 /// The newest state recorded for `workspace`: one `git for-each-ref` of its state store.
@@ -1433,6 +1594,16 @@ fn state_of(state: State) -> SessionState {
         State::Works => SessionState::Works,
         State::NotRunning => SessionState::NotRunning,
         State::Idle => SessionState::Idle,
+    }
+}
+
+/// What is attached of a review as the Store keeps it, in the Link's words.
+fn attachment_of(attached: &yaar_store::AttachedRecord) -> yaar_link::Attachment {
+    match attached {
+        yaar_store::AttachedRecord::Review => yaar_link::Attachment::Review,
+        yaar_store::AttachedRecord::Thread(thread) => {
+            yaar_link::Attachment::Thread(yaar_link::ThreadId::new(thread.as_str()))
+        }
     }
 }
 
