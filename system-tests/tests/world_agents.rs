@@ -16,13 +16,14 @@ use std::process::Command;
 use std::time::Duration;
 
 use yaar_link::{
-    ChangedFile, CreditedFile, Fact, FileStatus, Hello, History, Message, Program, Refusal, Reply,
-    Request, ReviewId, SessionState, TerminalId, TerminalInfo, TerminalSize, Turn, TurnId,
-    WorkspaceAgents, WorkspaceId, handshake, read_message, write_message,
+    ChangedFile, Consent, ConsentAnswer, CreditedFile, Fact, FileStatus, Hello, History, Message,
+    Program, Refusal, Reply, Request, ReviewId, SessionState, TerminalId, TerminalInfo,
+    TerminalSize, Turn, TurnId, WorkspaceAgents, WorkspaceId, handshake, read_message,
+    write_message,
 };
 use yaar_system_tests::standin::{Did, Script, Step};
 use yaar_system_tests::{
-    Client, DEADLINE, Place, World, descendants_of, is_alive, program, wait_until,
+    Client, DEADLINE, Dialect, Place, World, descendants_of, is_alive, program, wait_until,
     without_agent_clis,
 };
 
@@ -1304,7 +1305,7 @@ fn an_agent_started_outside_runs_in_a_terminal_of_the_worlds_with_the_worlds_plu
         Step::End,
         Step::Exit,
     ]);
-    let mut agent = world.start_agent_outside("claude", &script, repo.path());
+    let mut agent = world.start_agent_outside(Dialect::ClaudeCode, &script, repo.path());
     let pid = agent.pid();
     agent.wait_for_prompt();
     agent.type_line("go");
@@ -1363,7 +1364,7 @@ fn each_wait_for_the_prompt_of_an_agent_outside_waits_for_one_it_printed_after_t
         Step::End,
         Step::Exit,
     ]);
-    let mut agent = world.start_agent_outside("claude", &script, repo.path());
+    let mut agent = world.start_agent_outside(Dialect::ClaudeCode, &script, repo.path());
     agent.wait_for_prompt();
     agent.type_line("one");
     let held = wait_until(DEADLINE, || {
@@ -1395,6 +1396,515 @@ fn each_wait_for_the_prompt_of_an_agent_outside_waits_for_one_it_printed_after_t
     });
     assert!(ended);
     assert_eq!(world.agent_log("claude").received, b"one\rtwo\r");
+}
+
+// pi installed in a world, its yes, and pi started outside the app's terminals.
+
+/// The text of a shell's `env` line for `name`, the value alone.
+fn value_of<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(n, _)| n == name)
+        .map(|(_, value)| value.as_str())
+}
+
+/// Where the Keeper of `world` writes the extension of pi, which pi's settings list.
+fn extension_of(world: &World) -> PathBuf {
+    world.data_dir().join("agents/pi/extension/yaar.ts")
+}
+
+#[test]
+fn a_pi_started_outside_runs_in_a_terminal_of_the_world_with_the_extension_of_its_settings_and_no_terminal_of_the_app()
+ {
+    let mut world = World::new();
+    world.agents_on_path();
+    world.install_pi();
+    world.start_keeper();
+    let repo = world.repository("app");
+    let extension = extension_of(&world);
+    assert!(extension.is_file(), "the Keeper wrote the extension");
+    // The user said no, or was never asked: nothing of pi's is written but by hand below.
+    assert!(!world.pi_settings().exists());
+
+    let script = Script(vec![
+        Step::Turn,
+        Step::Shell("env > env.out".into()),
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut agent = world.start_agent_outside(Dialect::Pi, &script, repo.path());
+    let pid = agent.pid();
+    agent.wait_for_prompt();
+    agent.type_line("go");
+    let ended = wait_until(DEADLINE, || {
+        world
+            .agent_log("pi")
+            .did
+            .iter()
+            .any(|did| matches!(did, Did::Exited { status: 0 }))
+    });
+    let log = world.agent_log("pi");
+    assert!(ended, "{log:?}");
+    assert_eq!(log.pid, pid);
+    assert_eq!(log.received, b"go\r");
+
+    // It found the extension in pi's settings, which list it and nothing else, and it was
+    // started by no `-e`.
+    assert_eq!(log.extensions, std::slice::from_ref(&extension));
+    assert!(log.args.is_empty(), "{:?}", log.args);
+    let settings: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(world.pi_settings()).expect("pi's settings"))
+            .expect("JSON");
+    assert_eq!(settings, serde_json::json!({"extensions": [extension]}));
+    // It reported, through the program the world named: the stand-in as pi writes what the
+    // program printed under pi's event.
+    assert!(log.did.iter().any(|did| matches!(
+        did,
+        Did::Hook { event, killed: false, .. } if event == "session_start"
+    )));
+
+    // What it started its shell command with is its own environment: no terminal of the
+    // app, the reporting program the Keeper's shells name, and nothing that puts a folder
+    // ahead on the search path for pi.
+    let env = variables_in(&std::fs::read_to_string(repo.path().join("env.out")).expect("env.out"));
+    assert_eq!(value_of(&env, "YAAR_TERMINAL"), None, "{env:?}");
+    assert_eq!(
+        value_of(&env, "YAAR_PI_REPORT"),
+        program("yaar-pi-report").to_str()
+    );
+    assert_eq!(value_of(&env, "CLAUDE_CODE_PLUGIN_DIRS"), None, "{env:?}");
+    assert_eq!(value_of(&env, "HOME"), world.home().to_str());
+    assert_eq!(value_of(&env, "YAAR_SOCKET"), world.socket().to_str());
+    let search = value_of(&env, "PATH").expect("a search path");
+    let agents = world.agents_dir().expect("the stand-ins");
+    assert!(
+        search.starts_with(agents.to_str().expect("text")),
+        "{env:?}"
+    );
+
+    drop(agent);
+    assert!(!is_alive(pid));
+}
+
+#[test]
+fn the_first_report_of_a_pi_started_outside_makes_the_keeper_follow_it_as_a_session_of_no_terminal()
+{
+    let mut world = World::new();
+    world.agents_on_path();
+    world.install_pi();
+    world.start_keeper();
+    let repo = world.repository("app");
+    let mut client = world.client();
+    let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
+    // Told apart from a session of the app's own terminal: the world has none open.
+    assert!(client.terminals().is_empty());
+
+    let script = Script(vec![Step::Turn, Step::End, Step::Exit]);
+    let mut agent = world.start_agent_outside(Dialect::Pi, &script, repo.path());
+    agent.wait_for_prompt();
+
+    // The stand-in reported its start through the program the world named: the Keeper follows
+    // pi as a session of the workspace the stand-in works in, which runs in no terminal of
+    // the app.
+    let mut seen = Vec::new();
+    let followed = wait_until(DEADLINE, || {
+        seen = client.agents();
+        seen.iter().any(|agents| {
+            agents.workspace == workspace
+                && agents
+                    .sessions
+                    .iter()
+                    .any(|session| session.agent == "pi" && session.terminal.is_none())
+        })
+    });
+    assert!(followed, "{seen:?}");
+    let sessions: Vec<_> = seen.iter().flat_map(|agents| &agents.sessions).collect();
+    assert_eq!(sessions.len(), 1, "{seen:?}");
+    assert_eq!(sessions[0].workspace, workspace);
+    assert_eq!(sessions[0].state, SessionState::Idle, "{seen:?}");
+    drop(agent);
+}
+
+#[test]
+fn the_reporting_program_a_pi_started_outside_is_given_is_the_one_the_shells_of_the_app_name() {
+    let (world, mut client, terminal) = world_with_a_shell();
+    client.type_line(
+        &terminal,
+        "printf 'reporter=%s\\n' \"$YAAR_PI_REPORT\"; printf 'done%s\\n' -mark",
+    );
+    let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
+        lines_of(bytes).iter().any(|line| line == "done-mark")
+    });
+    let named = lines_of(&heard)
+        .into_iter()
+        .find_map(|line| line.strip_prefix("reporter=").map(str::to_owned))
+        .filter(|named| named.starts_with('/'))
+        .expect("a shell of the app names the reporting program");
+    assert_eq!(named, program("yaar-pi-report").to_str().expect("text"));
+    drop((world, client));
+}
+
+/// The requests a peer at the world's socket took, which answers every one with `Done` and
+/// takes each from a connection of its own, as the reporting program makes them.
+struct Reports {
+    taken: std::sync::Arc<std::sync::Mutex<Vec<Request>>>,
+    socket: PathBuf,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Reports {
+    /// Listens at the socket of `world`, which no Keeper holds.
+    fn at(world: &World) -> Reports {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::{Arc, Mutex};
+        let listener = UnixListener::bind(world.socket()).expect("listen");
+        let taken = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let (taken, stop) = (Arc::clone(&taken), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    let Ok(mut stream) = stream else { continue };
+                    if handshake(&mut stream, &Hello::for_this_process("a-peer")).is_err() {
+                        continue;
+                    }
+                    if let Ok(Message::Request { id, request }) = read_message(&mut stream) {
+                        taken
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .push(request);
+                        let reply = Message::Reply {
+                            to: id,
+                            reply: Ok(Reply::Done),
+                        };
+                        let _ = write_message(&mut stream, &reply);
+                    }
+                }
+            })
+        };
+        Reports {
+            taken,
+            socket: world.socket(),
+            stop,
+            thread: Some(thread),
+        }
+    }
+
+    fn taken(&self) -> Vec<Request> {
+        self.taken
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Drop for Reports {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        // The thread sits in `accept`: a connection wakes it.
+        let _ = std::os::unix::net::UnixStream::connect(&self.socket);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// Writes the file the Keeper of `world` would write as pi's extension, for a test that
+/// starts no Keeper.
+fn write_the_extension_by_hand(world: &World) -> PathBuf {
+    let extension = extension_of(world);
+    std::fs::create_dir_all(extension.parent().expect("a folder")).expect("make the folder");
+    std::fs::write(&extension, "// stands for the extension\n").expect("write it");
+    extension
+}
+
+#[test]
+fn what_a_pi_started_outside_reports_reaches_the_socket_of_the_world_from_no_terminal_with_the_standin_as_its_process()
+ {
+    let mut world = World::new();
+    world.agents_on_path();
+    write_the_extension_by_hand(&world);
+    let repo = world.repository("app");
+    let reports = Reports::at(&world);
+    let script = Script(vec![Step::Turn, Step::End, Step::Exit]);
+    let mut agent = world.start_agent_outside(Dialect::Pi, &script, repo.path());
+    let pid = agent.pid();
+    agent.wait_for_prompt();
+    agent.type_line("go");
+    // Every report is waited for by the stand-in, which does not go on before the program
+    // that carried it has left, and the peer keeps a request before it answers: after the
+    // end of the stand-in all five are in.
+    let ended = wait_until(DEADLINE, || {
+        world
+            .agent_log("pi")
+            .did
+            .iter()
+            .any(|did| matches!(did, Did::Exited { status: 0 }))
+    });
+    assert!(ended, "{:?}", world.agent_log("pi"));
+
+    let mut events = Vec::new();
+    for request in reports.taken() {
+        let Request::Report { report } = request else {
+            panic!("the program sent {request:?}");
+        };
+        assert_eq!(report.agent, "pi");
+        assert_eq!(report.terminal, None, "from no terminal of the app");
+        assert_eq!(report.pid, pid, "its parent is the stand-in");
+        let payload: serde_json::Value = serde_json::from_slice(&report.payload).expect("JSON");
+        events.push(payload["event"].as_str().expect("an event").to_owned());
+    }
+    assert_eq!(
+        events,
+        [
+            "session_start",
+            "input",
+            "agent_start",
+            "agent_settled",
+            "session_shutdown"
+        ]
+    );
+    drop(agent);
+}
+
+#[test]
+fn pi_installed_in_a_world_is_a_folder_with_nothing_in_it_and_a_world_that_never_installed_it_has_no_pi_after_a_keeper_ran()
+ {
+    let mut installed = World::new();
+    installed.install_pi();
+    let folder = installed.home().join(".pi/agent");
+    assert!(folder.is_dir());
+    assert_eq!(installed.pi_settings(), folder.join("settings.json"));
+    assert!(tree_of(&folder).is_empty());
+    let before = tree_of(&installed.home());
+    installed.start_keeper();
+    // The Keeper listens, so its pieces are written: the folder of pi is as it was, and
+    // nothing of pi's is in the home beside it.
+    assert!(tree_of(&folder).is_empty(), "{:?}", tree_of(&folder));
+    assert!(!installed.pi_settings().exists());
+    let after = tree_of(&installed.home());
+    assert!(
+        before.iter().all(|path| after.contains(path)),
+        "{before:?} {after:?}"
+    );
+    assert!(
+        after
+            .iter()
+            .filter(|path| path.starts_with(".pi"))
+            .eq(before.iter().filter(|path| path.starts_with(".pi"))),
+        "{after:?}"
+    );
+
+    let mut never = World::new();
+    never.start_keeper();
+    let mut client = never.client();
+    // Answered, so the Keeper is past its start.
+    client.workspaces();
+    assert!(!never.home().join(".pi").exists());
+    assert!(!never.pi_settings().exists());
+}
+
+#[test]
+fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_lack_it_and_leaves_them_alone_where_they_list_it()
+ {
+    // Settings where the entry is missing, in three shapes: no file at all, a file with
+    // other keys and another extension, and a file with an empty array.
+    let cases: [(&str, Option<&str>); 3] = [
+        ("no file", None),
+        (
+            "other keys",
+            Some("{\"theme\": \"dark\", \"extensions\": [\"/x/other.ts\"]}"),
+        ),
+        ("an empty array", Some("{\"extensions\": []}")),
+    ];
+    for (what, before) in cases {
+        let mut world = World::new();
+        world.agents_on_path();
+        let extension = write_the_extension_by_hand(&world);
+        let folder = world.home().join(".pi/agent");
+        match before {
+            Some(before) => {
+                world.install_pi();
+                std::fs::write(world.pi_settings(), before).expect("write the settings");
+            }
+            // Pi never ran in this world: there is no folder for the file yet.
+            None => assert!(!folder.exists()),
+        }
+        let repo = world.repository("app");
+        let agent = world.start_agent_outside(Dialect::Pi, &Script(vec![Step::Exit]), repo.path());
+        let settings: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(world.pi_settings()).expect("settings"))
+                .expect("JSON");
+        let listed = settings["extensions"].as_array().expect("a list");
+        assert_eq!(
+            listed.last().and_then(|entry| entry.as_str()),
+            extension.to_str(),
+            "{what}: {settings}"
+        );
+        assert_eq!(
+            listed
+                .iter()
+                .filter(|e| e.as_str() == extension.to_str())
+                .count(),
+            1,
+            "{what}: {settings}"
+        );
+        // Everything that was there stays.
+        match what {
+            "other keys" => {
+                assert_eq!(settings["theme"], "dark");
+                assert_eq!(listed[0], "/x/other.ts");
+            }
+            "an empty array" => assert_eq!(listed.len(), 1),
+            _ => assert_eq!(settings.as_object().map(|o| o.len()), Some(1)),
+        }
+        // The folder was made for the file where there was none.
+        assert!(folder.is_dir(), "{what}");
+        drop(agent);
+    }
+
+    // Settings that list it already, as the Keeper writes them after a yes, laid out as a
+    // user's editor would: the same bytes after the stand-in started.
+    let mut world = World::new();
+    world.agents_on_path();
+    let extension = write_the_extension_by_hand(&world);
+    world.install_pi();
+    let text = format!(
+        "{{\n\t\"extensions\": [ \"{}\" ],\n\t\"theme\" : \"dark\"\n}}\n",
+        extension.display()
+    );
+    std::fs::write(world.pi_settings(), &text).expect("write the settings");
+    let repo = world.repository("app");
+    let agent = world.start_agent_outside(Dialect::Pi, &Script(vec![Step::Exit]), repo.path());
+    assert_eq!(
+        std::fs::read_to_string(world.pi_settings()).expect("settings"),
+        text
+    );
+    drop(agent);
+}
+
+#[test]
+#[should_panic(expected = "wrote no extension of pi")]
+fn a_pi_started_outside_before_the_keeper_wrote_its_extension_is_refused_naming_the_path() {
+    let mut world = World::new();
+    world.agents_on_path();
+    let repo = world.repository("app");
+    let _ = world.start_agent_outside(Dialect::Pi, &Script(vec![Step::Exit]), repo.path());
+}
+
+/// A peer at the socket of `world`, which no Keeper holds, that answers the requests of one
+/// client, in order, each with `Consents` of the next of `replies`, and gives what it was
+/// asked once the client has gone.
+fn consents_peer(
+    world: &World,
+    replies: Vec<Vec<Consent>>,
+) -> std::thread::JoinHandle<Vec<Request>> {
+    let listener = UnixListener::bind(world.socket()).expect("listen");
+    listener.set_nonblocking(true).expect("poll the listener");
+    std::thread::spawn(move || {
+        // No client within the deadline: the peer gives what it was asked, which is nothing,
+        // so the test fails on that and not on a join that never returns.
+        let mut stream = None;
+        wait_until(DEADLINE, || {
+            stream = listener.accept().ok().map(|(stream, _)| stream);
+            stream.is_some()
+        });
+        let Some(mut stream) = stream else {
+            return Vec::new();
+        };
+        // A socket taken from a polled listener may carry the flag on some systems.
+        stream.set_nonblocking(false).expect("block on the client");
+        handshake(&mut stream, &Hello::for_this_process("scripted-keeper")).expect("hello");
+        let mut asked = Vec::new();
+        for consents in replies {
+            let Ok(Message::Request { id, request }) = read_message(&mut stream) else {
+                break;
+            };
+            asked.push(request);
+            let reply = Message::Reply {
+                to: id,
+                reply: Ok(Reply::Consents(consents)),
+            };
+            write_message(&mut stream, &reply).expect("reply");
+        }
+        while read_message(&mut stream).is_ok() {}
+        asked
+    })
+}
+
+/// What `allow_pi_extension` of `world` panicked with.
+fn allowing_panics(world: &World) -> String {
+    let said =
+        catch_unwind(AssertUnwindSafe(|| world.allow_pi_extension())).expect_err("the call panics");
+    said.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| said.downcast_ref::<&str>().map(|text| (*text).to_owned()))
+        .expect("a message")
+}
+
+fn question_of_pi(answer: ConsentAnswer, problem: Option<&str>) -> Consent {
+    Consent {
+        agent: "pi".to_owned(),
+        question: "May the app write into pi's settings?".to_owned(),
+        answer,
+        problem: problem.map(str::to_owned),
+    }
+}
+
+#[test]
+fn the_yes_of_the_world_is_sent_for_pi_and_waited_for_until_the_keeper_lists_it() {
+    // The reply to the answer says not asked, and so does the first look after it: the call
+    // goes on looking, and gives once the Keeper lists the yes.
+    let world = World::new();
+    let not_yet = || vec![question_of_pi(ConsentAnswer::NotAsked, None)];
+    let peer = consents_peer(
+        &world,
+        vec![
+            not_yet(),
+            not_yet(),
+            vec![question_of_pi(ConsentAnswer::Yes, None)],
+        ],
+    );
+    world.allow_pi_extension();
+    // The client the call used is gone when it returns, so the peer's wait for it ends.
+    assert_eq!(
+        peer.join().expect("the peer"),
+        [
+            Request::AnswerConsent {
+                agent: "pi".to_owned(),
+                answer: ConsentAnswer::Yes
+            },
+            Request::ListConsents,
+            Request::ListConsents,
+        ]
+    );
+}
+
+#[test]
+fn the_yes_of_a_world_with_no_question_of_pi_or_a_settings_file_the_keeper_could_not_change_panics_saying_why()
+ {
+    // A Keeper with no question of pi: pi is not installed in that world.
+    let world = World::new();
+    let peer = consents_peer(&world, vec![Vec::new()]);
+    let said = allowing_panics(&world);
+    assert!(said.contains("install_pi"), "{said}");
+    peer.join().expect("the peer");
+
+    // A settings file it could not change: its problem is what the call says.
+    let world = World::new();
+    let peer = consents_peer(
+        &world,
+        vec![vec![question_of_pi(
+            ConsentAnswer::NotAsked,
+            Some("settings.json holds no JSON"),
+        )]],
+    );
+    let said = allowing_panics(&world);
+    assert!(said.contains("settings.json holds no JSON"), "{said}");
+    peer.join().expect("the peer");
 }
 
 #[test]
