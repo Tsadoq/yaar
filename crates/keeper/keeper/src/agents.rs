@@ -40,7 +40,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex, PoisonError, Weak};
-use std::thread::{JoinHandle, ThreadId};
+use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_agent::{
@@ -120,12 +120,8 @@ struct Core {
 struct Hold {
     /// The app's id of the session.
     session: String,
-    /// The thread that asked for the command. The terminal is opened by that same thread,
-    /// right after, and is told to [`Agents::terminal_opened`] there: that is how the hold
-    /// finds its terminal, since the request carries none.
-    thread: ThreadId,
-    /// The terminal, once it is opened.
-    terminal: Option<String>,
+    /// The terminal the resume runs in, whose end frees the session.
+    terminal: String,
 }
 
 /// The recordings of a workspace's turn ends and the turns that wait for them.
@@ -461,7 +457,8 @@ impl Agents {
     /// The Keeper opens `terminal` in `workspace`. Called before the program of the terminal
     /// starts, so that no report from it can come first: a report is followed only when its
     /// terminal is one the Keeper holds, and a session whose folder no worktree holds belongs
-    /// to the workspace of its terminal.
+    /// to the workspace of its terminal. A terminal that resumes a session has nothing more
+    /// to be told: [`Agents::resume_command`] bound its hold to the terminal's id.
     pub(crate) fn terminal_opened(
         &self,
         terminal: &TerminalId,
@@ -471,14 +468,6 @@ impl Agents {
             terminal.as_str().to_owned(),
             WorkspaceId::new(workspace.as_str()),
         );
-        // The terminal a resume was asked for a moment ago on this thread is that resume's.
-        let thread = std::thread::current().id();
-        if let Some(hold) = lock(&self.core.resuming)
-            .iter_mut()
-            .find(|hold| hold.terminal.is_none() && hold.thread == thread)
-        {
-            hold.terminal = Some(terminal.as_str().to_owned());
-        }
     }
 
     /// The Keeper opened `terminal` for `review`, the launcher of a CLI offered when the
@@ -501,16 +490,14 @@ impl Agents {
     /// no Adapter has its CLI) and for one a resume terminal is open for, until that
     /// terminal ends or the session reports.
     ///
-    /// The terminal is the one the calling thread opens next, as `terminal_opened` is told
-    /// it: the caller opens the terminal as soon as it has the command, and a terminal that
-    /// cannot start is told as ended.
+    /// The session is held for `terminal`, the one the caller made for the resume and is
+    /// about to open: a refusal leaves no hold, and the end of that terminal, told as ended
+    /// also when it cannot start, frees the session.
     pub(crate) fn resume_command(
         &self,
-        kept: &Kept,
         session: &yaar_link::SessionId,
+        terminal: &yaar_link::TerminalId,
     ) -> Result<String, Refusal> {
-        // The Store is not read again: what the Window was offered is what runs.
-        let _ = kept;
         let mut holds = lock(&self.core.resuming);
         let offer = self
             .core
@@ -528,14 +515,9 @@ impl Agents {
                 reason: format!("a terminal is bringing session {session} back already"),
             });
         }
-        let thread = std::thread::current().id();
-        // A hold this thread made and never gave a terminal is the stale one of a caller that
-        // did not open it: one is enough.
-        holds.retain(|hold| hold.terminal.is_some() || hold.thread != thread);
         holds.push(Hold {
             session: session.as_str().to_owned(),
-            thread,
-            terminal: None,
+            terminal: terminal.as_str().to_owned(),
         });
         Ok(offer.command)
     }
@@ -856,7 +838,7 @@ impl Core {
         lock(&self.terminals).remove(terminal.as_str());
         lock(&self.opened_for).remove(terminal.as_str());
         // A resume that ran in it is over: the session may be brought back again.
-        lock(&self.resuming).retain(|hold| hold.terminal.as_deref() != Some(terminal.as_str()));
+        lock(&self.resuming).retain(|hold| hold.terminal != terminal.as_str());
         let mut pids = Vec::new();
         for known in lock(&self.switchboard).sessions() {
             if known.state != State::NotRunning

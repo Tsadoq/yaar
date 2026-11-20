@@ -662,7 +662,7 @@ impl Parts {
             // The CLI's own command for bringing the session back, through the user's
             // shell as a launcher's command.
             Program::Resume { session } => {
-                let command = self.agents.resume_command(kept, session)?;
+                let command = self.agents.resume_command(session, &terminal)?;
                 Start::launcher(folder, size(at), &command)
             }
         };
