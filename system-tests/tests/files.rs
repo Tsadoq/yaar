@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::SystemTime;
 
-use yaar_link::{SessionState, TerminalSize};
+use yaar_link::{ConsentAnswer, SessionState, TerminalSize};
 use yaar_system_tests::standin::{Did, Script};
 use yaar_system_tests::{Client, DEADLINE, Dialect, World, descendants_of, is_alive, wait_until};
 
@@ -339,10 +339,17 @@ fn settings_are_unchanged(dialect: Dialect) {
     );
 
     if dialect == Dialect::Pi {
-        // pi is installed here, so the Keeper asks its question, and asking writes nothing.
-        // The user's yes then changes pi's settings and nothing else of the home (what it
-        // writes there is CONSENT-01's), and it is the home after it that the turn must
-        // leave as it is: no yes is given by the turn.
+        // pi is installed here, so the Keeper asks its question, at the first request of a
+        // Window, and asking writes nothing. The user's yes then changes pi's settings and
+        // nothing else of the home (what it writes there is CONSENT-01's), and it is the
+        // home after it that the turn must leave as it is: no yes is given by the turn.
+        let asked = world.client().consents().expect("the list of questions");
+        let pi = asked.iter().find(|consent| consent.agent == "pi");
+        assert_eq!(
+            pi.map(|consent| consent.answer),
+            Some(ConsentAnswer::NotAsked),
+            "the Keeper does not list pi's question as not yet answered: {asked:?}"
+        );
         assert_eq!(
             differences(&before, &record(&home, &data)),
             Vec::<String>::new()
@@ -629,13 +636,33 @@ fn credential_lines(trace: &str) -> Vec<&str> {
 /// app gives it, and as its last word: the temporary file has a longer name.
 fn replaces_the_settings_of_pi(trace: &str) -> bool {
     calls(trace).iter().any(|call| {
+        let Some((arguments, result)) = call.rest.rsplit_once(" = ") else {
+            return false;
+        };
         call.name.starts_with("rename")
-            && call.rest.contains(".pi/agent/settings.json\"")
-            && call
-                .rest
-                .rsplit_once(" = ")
-                .is_some_and(|(_, result)| result.starts_with('0'))
+            && result.starts_with('0')
+            && strings(arguments)
+                .last()
+                .is_some_and(|destination| destination.ends_with("/.pi/agent/settings.json"))
     })
+}
+
+/// Every string of a call's text, as strace writes them: in double quotes, a quote or a
+/// backslash inside one escaped with a backslash.
+fn strings(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut current: Option<String> = None;
+    let mut chars = text.chars();
+    while let Some(c) = chars.next() {
+        match (&mut current, c) {
+            (None, '"') => current = Some(String::new()),
+            (Some(_), '"') => found.extend(current.take()),
+            (Some(string), '\\') => string.extend(chars.next()),
+            (Some(string), c) => string.push(c),
+            (None, _) => {}
+        }
+    }
+    found
 }
 
 #[test]
@@ -707,6 +734,9 @@ fn the_settings_of_pi_are_replaced_by_a_rename_that_succeeded_onto_their_path_an
         "9001  openat(AT_FDCWD, \"/h/.pi/agent/settings.json\", O_RDONLY) = 3</h/.pi/agent/settings.json>\n",
         "9001  mkdir(\"/h/.pi/agent/settings.json.lock\", 0777) = 0\n",
         "9001  rename(\"/h/x\", \"/h/.pi/agent/settings.json.tmp1\") = 0\n",
+        // The settings moved away are not replaced: they are the source, not the destination.
+        "9001  rename(\"/h/.pi/agent/settings.json\", \"/h/.pi/agent/settings.json.bak\") = 0\n",
+        "9001  renameat2(AT_FDCWD, \"/h/.pi/agent/settings.json\", AT_FDCWD, \"/h/.pi/agent/old.json\", RENAME_NOREPLACE) = 0\n",
     ] {
         assert!(!replaces_the_settings_of_pi(trace), "{trace}");
     }
