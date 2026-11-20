@@ -733,6 +733,20 @@ mod tests {
     }
 
     #[test]
+    fn the_downloader_waits_30_seconds_to_connect_and_60_for_each_read_and_uses_no_proxy() {
+        let downloader = Downloader::new().expect("a downloader");
+        let config = downloader.agent.config();
+
+        // The figures are the decision's; the constants are what the agent is given.
+        assert_eq!(CONNECT_WITHIN, Duration::from_secs(30));
+        assert_eq!(READ_WITHIN, Duration::from_secs(60));
+        assert_eq!(config.timeouts().connect, Some(CONNECT_WITHIN));
+        assert_eq!(config.timeout_per_read(), Some(READ_WITHIN));
+        // The library's default reads the proxy variables of the environment.
+        assert!(config.proxy().is_none(), "a proxy is set");
+    }
+
+    #[test]
     fn a_server_that_stops_sending_ends_the_download_when_the_wait_for_a_read_is_over() {
         use std::net::TcpListener;
         use std::sync::mpsc::{RecvTimeoutError, channel};
