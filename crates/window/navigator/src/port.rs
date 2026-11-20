@@ -276,7 +276,8 @@ pub enum Ask {
     /// Every answer the user gave on the servers inside a repository, as the Keeper keeps
     /// them; a repository not listed has no answer.
     Consents(Vec<RepositoryConsent>),
-    /// Files of a workspace changed on disk: the servers of the files on disk are told.
+    /// Files of a workspace changed on disk: the servers of the files on disk are told. A
+    /// path may be told again, and may no longer exist.
     FilesChanged {
         /// The workspace.
         workspace: WorkspaceId,
