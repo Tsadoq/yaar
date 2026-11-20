@@ -22,13 +22,13 @@ use yaar_frame::{
     SidebarRow, controls,
 };
 use yaar_link::{
-    Fact, Hello, PROTOCOL_VERSION, Session, SessionId, SessionState, TurnId, WorkspaceAgents,
-    WorkspaceId,
+    Fact, Hello, PROTOCOL_VERSION, Reply, Request, Session, SessionId, SessionState, TurnId,
+    WorkspaceAgents, WorkspaceId,
 };
 
 use common::{
-    Shown, drawn, id, open_frame, open_frame_staged, open_frame_with_keeper, pressed, repository,
-    wait_until, workspace,
+    Shown, answer, drawn, id, open_frame, open_frame_staged, open_frame_with_keeper, pressed,
+    repository, wait_until, workspace,
 };
 
 /// The size the app's window opens at: wide enough for the full list.
@@ -112,7 +112,43 @@ fn listed(mut shown: Shown, mut cx: VisualTestContext) -> (Shown, VisualTestCont
     wait_until(&mut cx, "the five workspaces in the sidebar", |cx| {
         rows(&shown, cx).len() == 6
     });
+    // The Window asks for the agents when it reaches the Keeper, and the Keeper played here
+    // answers from what the test set, which holds no fact told since. A fact told while
+    // that answer is still on its way is lost for good: the answer, or the one to the
+    // question asked again for it, replaces the list. So no test tells a fact before the
+    // first answer for the agents was taken.
+    wait_until(
+        &mut cx,
+        "the Keeper to hear the question for the agents",
+        |_| shown.keeper.agents_asked() >= 1,
+    );
+    barrier(&mut shown, &mut cx);
     (shown, cx)
+}
+
+/// A barrier through the Keeper: returns when the Keeper has heard everything the Window
+/// sent before it and the Window has taken everything the Keeper sent before the answer to
+/// it. The Window asks for the list of workspaces on the link, the Keeper answers it, and
+/// the answer is waited for: the Keeper reads what it is sent in the order it was sent, and
+/// writes what it answers in the order it answered, so a later question and its answer
+/// have both come after what went before. The other requests the Window made on the way
+/// are left unanswered.
+fn barrier(shown: &mut Shown, cx: &mut VisualTestContext) {
+    let link = shown
+        .models
+        .settings
+        .read_with(cx, |settings, _| settings.link().clone());
+    let asked = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+    let to = loop {
+        let (to, request) = shown.keeper.request(cx);
+        if request == Request::ListWorkspaces {
+            break to;
+        }
+    };
+    shown
+        .keeper
+        .reply(to, Ok(Reply::Workspaces(repositories())));
+    answer(asked, cx).expect("the Keeper answered the barrier");
 }
 
 fn rows(shown: &Shown, cx: &mut TestAppContext) -> Vec<SidebarRow> {
@@ -499,7 +535,9 @@ fn the_key_of_the_notice_with_no_notice_changes_nothing_and_a_turn_of_a_session_
         notice_text(&shown, &mut cx).as_deref(),
         Some("An agent finished a turn in docs")
     );
-    // The key did nothing before: no workspace was told to the Keeper by it.
+    // The key did nothing before: no workspace was told to the Keeper by it. What the Window
+    // sent is read once the Keeper has heard it all: the barrier follows the key.
+    barrier(&mut shown, &mut cx);
     assert_eq!(shown.keeper.shown_workspace(), Some(id('1')));
 }
 
