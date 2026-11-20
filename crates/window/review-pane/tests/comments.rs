@@ -1972,3 +1972,114 @@ fn with_a_draft_in_the_thread_of_each_side_of_an_unchanged_line_the_draft_of_the
     );
     stage.keeper.reply(asked, Ok(Reply::Done));
 }
+
+/// Opens the pane on `src/lib.rs` and `src/other.rs`, which hold the same two versions: a
+/// line number of one file is a line the other has, and its row is drawn there too. The
+/// pane has the focus, as after a click on the first line of the diff.
+fn open_on_two_files_of_one_diff(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![
+            file("src/lib.rs", FileStatus::Modified),
+            file("src/other.rs", FileStatus::Modified),
+        ],
+    );
+    stage
+        .keeper
+        .show(&changes, |_| texts(LIB_OLD, LIB_NEW), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    let first_line = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(first_line, Modifiers::none());
+    cx.update(|window, _| assert!(stage.focus.is_focused(window)));
+    (stage, cx)
+}
+
+#[gpui_kit::test]
+fn a_thread_of_one_file_is_found_from_its_line_and_from_the_same_line_of_no_other_file(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_on_two_files_of_one_diff(cx);
+    room_for_the_rounds_line(&mut cx);
+    let pane = stage.pane.clone();
+    // In the first file a sent comment is on the added line, and a draft on the removed
+    // line. The second file has both lines, and no thread.
+    let reviews = reviews_with(vec![
+        thread(
+            'a',
+            "src/lib.rs",
+            LinkSide::New,
+            11,
+            vec![sent('1', "is this needed", 1)],
+        ),
+        thread(
+            'b',
+            "src/lib.rs",
+            LinkSide::Old,
+            5,
+            vec![draft('2', "still writing")],
+        ),
+    ]);
+    give(&mut stage, &reviews, &mut cx);
+    let other = PathBuf::from("src/other.rs");
+    let removed = |path: &PathBuf| Position {
+        path: path.clone(),
+        side: Side::Old,
+        line: 4,
+    };
+    let added = |path: &PathBuf| Position {
+        path: path.clone(),
+        side: Side::New,
+        line: 10,
+    };
+
+    // On the removed line of the second file there is no draft to edit and none to
+    // delete. Each key is read on its own notice: the walk before it takes the one before
+    // away, and the two notices say different things.
+    walk_to(&removed(&other), "j", &pane, &mut cx);
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("i");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert_eq!(
+        notice(&pane, &mut cx).as_deref(),
+        Some("There is no draft of yours on this line to edit")
+    );
+    cx.simulate_keystrokes("d d");
+    assert_eq!(
+        notice(&pane, &mut cx).as_deref(),
+        Some("There is no draft of yours on this line to delete")
+    );
+
+    // On the added line of the second file there is no thread to reply in.
+    walk_to(&added(&other), "j", &pane, &mut cx);
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("o");
+    assert_eq!(comment_box(&pane, &mut cx), None);
+    assert_eq!(
+        notice(&pane, &mut cx).as_deref(),
+        Some("There is no thread on this line to reply in")
+    );
+
+    // The same lines of the first file hold the threads.
+    walk_to(&added(&lib()), "k", &pane, &mut cx);
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("o");
+    let reply = comment_box(&pane, &mut cx).expect("a reply box");
+    assert_eq!(reply.thread, thread_id('a'));
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("escape");
+    walk_to(&removed(&lib()), "k", &pane, &mut cx);
+    cx.simulate_keystrokes("i");
+    let edited = comment_box(&pane, &mut cx).expect("the draft is open");
+    assert_eq!(edited.thread, thread_id('b'));
+    assert_eq!(edited.comment, comment_id('2'));
+    assert_eq!(notice(&pane, &mut cx), None);
+    cx.simulate_keystrokes("escape");
+
+    // The barrier: no key above sent a request, so the first one that follows is the save
+    // of this new comment. A deletion of the draft would have come before it.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("a");
+    let (_, next) = stage.keeper.request(&mut cx);
+    assert!(matches!(next, Request::SaveDraft { .. }), "{next:?}");
+}
