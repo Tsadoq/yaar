@@ -726,7 +726,8 @@ struct ShownDiff {
 /// The tree of Changes above the rows carries `review-history-<index>` on the entry at
 /// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
 /// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
-/// row>`.
+/// row>`; the heading of a file that a session other than the review's own is credited with
+/// too carries `review-shared-<index of its row>`.
 /// The line above the tree that names the agent sessions whose reviews there are carries
 /// `review-session` for the one session there is, or `review-session-<index>` on each of
 /// several, which a click shows the review of; the line that says the pane keeps the

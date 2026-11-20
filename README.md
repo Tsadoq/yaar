@@ -273,10 +273,11 @@ Known limits of what is there:
   attached and goes with the next message.
 - The text of an attachment and a review that Claude Code takes inline ride in one frame of
   the Link, at most 16 MiB. A longer text is refused with the reason.
-- Between a send and the end of the turn it starts, the pane counts a round's changes to the
-  newest state it knows, which can be older than the round's own: it then shows the change
-  between the two backward, and nothing when nothing changed in between, which is the usual
-  case. It is right once the turn ends.
+- A round sent in a turn that still runs is not counted: asking for what changed since it
+  says in a notice that the turn still runs and selects nothing, and the next press passes to
+  the round before. Once the turn ends, the round is counted to the newest state like any
+  other. Until the pane has read the history at all, no round is counted and the notice says
+  that no state is recorded to count to yet.
 - After a yes, pi's subagents read the same settings, so each subagent loads the extension
   and reports a session of its own, from its parent's terminal; its writes are credited to it,
   not to no agent. The app does not tell a subagent from a session you started.

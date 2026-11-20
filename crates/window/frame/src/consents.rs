@@ -1,11 +1,11 @@
 //! The shared model of the questions for leave: an Adapter that writes into the user's own
 //! settings of its CLI only with the user's yes, and how that stands.
 //!
-//! The Keeper tells a Window `Fact::ConsentsChanged` at its connect when a question waits
-//! for an answer, and every Window after each answer. The model asks nothing when the link
-//! connects: a Window told nothing has nothing to ask. The terminal pane draws the questions
-//! and sends the user's answers through it; it names no CLI, and shows each question in the
-//! Adapter's own words.
+//! The Keeper tells a Window `Fact::ConsentsChanged` when the Window first asks it something,
+//! before it answers that request, if a question waits for an answer, and every Window after
+//! each answer. The model asks nothing when the link connects: a Window told nothing has
+//! nothing to ask. The terminal pane draws the questions and sends the user's answers
+//! through it; it names no CLI, and shows each question in the Adapter's own words.
 
 use gpui_kit::*;
 use yaar_link::{Consent, ConsentAnswer, Fact, Reply, Request};

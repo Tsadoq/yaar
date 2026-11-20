@@ -411,8 +411,8 @@ impl World {
     /// settings ([`World::pi_settings`]) list the extension the world's Keeper wrote, which
     /// the Keeper's yes is not needed for. A settings file that lists it already, after
     /// [`World::allow_pi_extension`], is left as it is; one that does not has the entry
-    /// added to its `extensions` and keeps its other keys; no file is made, with the folder
-    /// it lies in, holding the entry alone.
+    /// added to its `extensions` and keeps its other keys; where there is no file, one is
+    /// made, with the folder it lies in, holding the entry alone.
     ///
     /// The file the world writes is compact JSON, not the layout the app keeps: a test that
     /// compares a user's settings byte for byte gives the Keeper's yes first.
