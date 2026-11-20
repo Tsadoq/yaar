@@ -38,6 +38,11 @@ impl Remembered {
     pub(crate) fn report(&mut self, report: &Report<'_>) -> Result<Vec<Reported>, ReportError> {
         let input: Value = serde_json::from_slice(report.payload)
             .map_err(|why| ReportError::Unreadable(why.to_string()))?;
+        // A call of the reply tool is no hook: it tells the app nothing of the session
+        // but what `asked` reads, so it gives no event and no error.
+        if input.get("tool_server").is_some() {
+            return Ok(Vec::new());
+        }
         let hook = text(&input, "hook_event_name")
             .ok_or_else(|| unreadable("it names no hook_event_name"))?;
         let session = CliSession(
