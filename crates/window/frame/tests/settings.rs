@@ -407,16 +407,19 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
     let chosen = form('1', FlowForm::LiveDiff);
     list.update(cx, |list, cx| list.set(chosen.clone(), cx));
 
-    // The answer comes now, made before the Keeper heard of the set, so it holds none of
-    // it. A round trip after it shows the Window took it in. What the Window sends before
-    // the round trip is read on the way: the set is answered as kept, anything else (a new
-    // question for the list, if the Window asks one) is left unanswered.
+    // The answer comes now, made before the Keeper heard of the set: it holds another
+    // setting the Keeper keeps, and not the one just chosen. A round trip after it shows the
+    // Window took it in. What the Window sends before the round trip is read on the way: the
+    // set is answered as kept, and the question for the list the Window asks again after the
+    // set is kept to be answered below.
+    let other = form('2', FlowForm::LiveDiff);
     let stale = Message::Reply {
         to: first,
-        reply: Ok(Reply::Settings(Vec::new())),
+        reply: Ok(Reply::Settings(vec![other.clone()])),
     };
     write_message(&mut keeper, &stale).expect("answer late");
     let barrier = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
+    let mut asked_again = None;
     let barrier_id = loop {
         let (asked, request) = next_request(&mut keeper, cx);
         match request {
@@ -429,6 +432,7 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
                 };
                 write_message(&mut keeper, &kept).expect("answer the set");
             }
+            Request::GetSettings => asked_again = Some(asked),
             _ => {}
         }
     };
@@ -448,5 +452,18 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
         list.read_with(cx, |list, _| list.flow_form(&id('1'))),
         FlowForm::LiveDiff
     );
+
+    // The list is asked for again after the set, and what answers that question is held: the
+    // other setting the Keeper keeps shows beside the one chosen.
+    let asked_again = asked_again.expect("the list is asked for again after the set");
+    let kept_both = vec![other, chosen];
+    let answered = Message::Reply {
+        to: asked_again,
+        reply: Ok(Reply::Settings(kept_both.clone())),
+    };
+    write_message(&mut keeper, &answered).expect("answer the new question");
+    wait_until(cx, "the answer to the question asked after the set", |cx| {
+        list.read_with(cx, |list, _| list.all() == kept_both)
+    });
     keeper.shutdown(Shutdown::Both).ok();
 }
