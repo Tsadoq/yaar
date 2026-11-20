@@ -564,10 +564,12 @@ const TOOL_WAIT: Duration = Duration::from_secs(15);
 /// report.
 const REPORT_VARIABLE: &str = "YAAR_PI_REPORT";
 
-/// pi's settings under the home, and where pi keeps the sessions of a stand-in that is told
-/// no folder of its own: nothing is ever written in either.
+/// pi's settings under the home: nothing is ever written in it.
 const PI_SETTINGS: &str = ".pi/agent/settings.json";
-const PI_SESSIONS: &str = ".pi/agent/sessions/standin";
+
+/// Where, under the home, the stand-in as pi keeps the files of its sessions when it is told
+/// no folder of its own: the folder pi's resume command names for them.
+pub const PI_SESSIONS: &str = ".pi/agent/sessions/standin";
 
 /// The prompt of a turn Claude Code starts itself when a background task ends.
 const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>standin-task</task-id>\n\

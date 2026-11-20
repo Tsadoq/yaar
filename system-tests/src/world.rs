@@ -540,8 +540,9 @@ impl World {
         self.home().join(".pi").join("agent")
     }
 
-    /// Where the Adapter of pi writes its extension, once the Keeper runs.
-    fn pi_extension(&self) -> PathBuf {
+    /// Where the Adapter of pi writes its extension, once the Keeper runs: the file the
+    /// stand-in as pi finds in pi's settings and reports as having loaded.
+    pub fn pi_extension(&self) -> PathBuf {
         self.data_dir()
             .join("agents")
             .join("pi")

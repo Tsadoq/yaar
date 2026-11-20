@@ -21,7 +21,7 @@ use yaar_link::{
     Lines, Notice, Placed, Program, Review, ReviewId, SentBy, Session, SessionState, Side,
     TerminalId, TerminalSize, ThreadId, ThreadState, WorkspaceId,
 };
-use yaar_system_tests::standin::{Did, Script, Step};
+use yaar_system_tests::standin::{Did, PI_SESSIONS, Script, Step};
 use yaar_system_tests::{
     Client, DEADLINE, Dialect, Repo, World, descendants_of, is_alive, wait_until,
 };
@@ -300,7 +300,7 @@ fn resume_arguments(world: &World, dialect: Dialect, cli_session: &str) -> Vec<S
             "--session-dir".to_owned(),
             world
                 .home()
-                .join(".pi/agent/sessions/standin")
+                .join(PI_SESSIONS)
                 .to_str()
                 .expect("a path of text")
                 .to_owned(),
@@ -458,8 +458,7 @@ fn everything_killed(dialect: Dialect) {
     if dialect == Dialect::Pi {
         // It found the extension in pi's settings, as pi does after the yes given before
         // the kill, which the restart kept: no other way gave it one (no `-e`, above).
-        let extension = world.data_dir().join("agents/pi/extension/yaar.ts");
-        assert_eq!(log.extensions, [extension], "{log:?}");
+        assert_eq!(log.extensions, [world.pi_extension()], "{log:?}");
     }
     // The same session runs again, with its review and the attachment, and no other
     // session came.
@@ -797,6 +796,11 @@ fn accepting_the_offer(dialect: Dialect) {
         .expect("accept the offer");
     client.wait_for_prompt(&launcher, 0);
     let started = session_where(&mut client, &workspace, |s| s.state == SessionState::Idle);
+    assert_eq!(
+        started.agent,
+        dialect.name(),
+        "a launcher started the other CLI than the one accepted"
+    );
     assert_eq!(started.terminal, Some(launcher.clone()));
     assert_eq!(started.review, Some(review.clone()));
     assert_eq!(started.attached, Some(Attachment::Review));
@@ -916,6 +920,11 @@ fn accepting_the_offer(dialect: Dialect) {
     let launched = session_where(&mut client, &other, |s| {
         s.terminal.as_ref() == Some(&second_launcher)
     });
+    assert_eq!(
+        launched.agent,
+        dialect.name(),
+        "a launcher started the other CLI than the one accepted"
+    );
     assert_eq!(launched.review, Some(left.clone()));
     assert_eq!(launched.attached, Some(Attachment::Review));
     // The running session and the session that ended last keep their own reviews.
