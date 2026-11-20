@@ -422,13 +422,98 @@ fn a_state_recorded_at_a_send_after_a_clean_turn_end_still_waits_for_the_next_st
     reviews.keep_credits(&w, &s1, &[]).expect("keep none");
     write(&repo, "b.txt", "by A\n");
     let sent = record(&reviews, &w, &worktree);
+    // The turn goes on with a write of its own, so its end is a state of its own, not the
+    // state of the send again (the Recorder gives back the newest state of an unchanged
+    // tree).
+    write(&repo, "c.txt", "by A\n");
     let s3 = record(&reviews, &w, &worktree);
+    assert_ne!(sent, s3, "the turn end is a state after the send");
     reviews
-        .keep_credits(&w, &s3, &[credited("b.txt", &[&a])])
+        .keep_credits(
+            &w,
+            &s3,
+            &[credited("b.txt", &[&a]), credited("c.txt", &[&a])],
+        )
         .expect("keep");
 
     assert_eq!(
         reviews.credited_change(&r.a, &s1, &sent).expect("A"),
         [listed("b.txt", Change::Added, &[&a], false)]
+    );
+}
+
+// REV-24
+#[test]
+fn a_state_recorded_at_a_send_does_not_wait_past_a_clean_turn_end_for_the_credits_of_another_turn()
+{
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, &["x.txt"]);
+    let worktree = open(&repo);
+    let w = workspace();
+    let b = session_id(2);
+    let store = store(&scratch);
+    let reviews = engine(&scratch, store.clone());
+    let r = reviewers(&reviews, &store);
+    let s0 = record(&reviews, &w, &worktree);
+
+    // A's tool writes b.txt and the reviewer sends: that state keeps nothing.
+    write(&repo, "b.txt", "by A\n");
+    let sent = record(&reviews, &w, &worktree);
+    // A's turn then writes c.txt and commits everything: it ends on a clean worktree, so
+    // it keeps no credit. A commit alone leaves the tree as it was; the write before it
+    // makes this a state of its own.
+    write(&repo, "c.txt", "by A\n");
+    commit_all(&repo, "A's commit");
+    let s2 = record(&reviews, &w, &worktree);
+    assert_ne!(sent, s2, "the clean turn end is a state after the send");
+    reviews.keep_credits(&w, &s2, &[]).expect("keep none");
+    // B's turn changes b.txt and keeps its credit.
+    write(&repo, "b.txt", "by B\n");
+    let s3 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s3, &[credited("b.txt", &[&b])])
+        .expect("keep");
+
+    // The send waits only for the end of the turn it was in, which kept none: b.txt is
+    // no agent's up to it, shown to both reviews, and not B's.
+    let added = [listed("b.txt", Change::Added, &[], false)];
+    assert_eq!(reviews.credited_change(&r.a, &s0, &sent).expect("A"), added);
+    assert_eq!(reviews.credited_change(&r.b, &s0, &sent).expect("B"), added);
+}
+
+// REV-24
+#[test]
+fn a_session_credited_with_a_path_in_two_states_is_listed_once_and_the_path_is_not_shared() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, &["x.txt"]);
+    let worktree = open(&repo);
+    let w = workspace();
+    let a = session_id(1);
+    let store = store(&scratch);
+    let reviews = engine(&scratch, store.clone());
+    let r = reviewers(&reviews, &store);
+    let s0 = record(&reviews, &w, &worktree);
+
+    write(&repo, "x.txt", "first\n");
+    let s1 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s1, &[credited("x.txt", &[&a])])
+        .expect("keep");
+    write(&repo, "x.txt", "second\n");
+    let s2 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s2, &[credited("x.txt", &[&a])])
+        .expect("keep");
+
+    // A is credited at both states and is one session: not two, so not shared.
+    assert_eq!(
+        reviews.credited_change(&r.a, &s0, &s2).expect("A"),
+        [listed("x.txt", Change::Modified, &[&a], false)]
+    );
+    assert!(
+        reviews
+            .credited_change(&r.b, &s0, &s2)
+            .expect("B")
+            .is_empty()
     );
 }

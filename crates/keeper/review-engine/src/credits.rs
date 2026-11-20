@@ -34,7 +34,9 @@ impl Reviews {
     /// them once the state was recorded. What was kept with that state before is replaced.
     /// The Keeper calls it at each turn's end; the other states the engine records (at a
     /// send, a mark of reviewed, a new thread's first save, a worktree's first watch) keep
-    /// none, and [`Reviews::credited_change`] says how they count.
+    /// nothing, no call being made for them. A call with no credit marks the state as kept
+    /// with none, as a turn end on a clean worktree, which [`Reviews::credited_change`]
+    /// counts for itself and tells from a state nothing was kept with.
     pub fn keep_credits(
         &self,
         workspace: &WorkspaceId,
