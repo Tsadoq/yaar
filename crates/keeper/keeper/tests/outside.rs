@@ -151,6 +151,11 @@ impl Drop for Scratch {
 }
 
 fn git(folder: &Path, args: &[&str]) {
+    git_prints(folder, args);
+}
+
+/// What git prints on its standard output, without the line end.
+fn git_prints(folder: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
         .arg(folder)
@@ -163,6 +168,10 @@ fn git(folder: &Path, args: &[&str]) {
         "git {args:?} failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    String::from_utf8(output.stdout)
+        .expect("text")
+        .trim_end()
+        .to_owned()
 }
 
 /// One end of the Link, as a Window holds it.
@@ -307,7 +316,7 @@ fn a_thread_on_a_file_outside_the_worktree_is_saved_with_no_version_and_given_ba
 }
 
 #[test]
-fn a_thread_on_a_file_of_the_worktree_still_records_a_state_and_the_outside_thread_is_not_carried_to_it()
+fn a_thread_on_a_file_of_the_worktree_still_records_a_state_and_is_carried_while_the_outside_thread_has_no_place()
  {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
@@ -332,9 +341,40 @@ fn a_thread_on_a_file_of_the_worktree_still_records_a_state_and_the_outside_thre
         .tree
         .expect("a thread of the worktree sits on a state");
     assert_eq!(recorded.len(), 40, "{recorded}");
+    assert_ne!(
+        recorded,
+        git_prints(&repo, &["rev-parse", "HEAD"]),
+        "a state of the files on disk, not the commit"
+    );
+
+    // The files change and a third thread of the worktree records a second state, to which
+    // the engine carries the threads that have a version. The inside thread moving shows
+    // that the carrying ran. That the outside thread is never a candidate for it is shown
+    // by the engine's own tests: a carrying that failed on it would leave it with no place
+    // as well, and only a line on the Keeper's standard error would tell.
+    std::fs::write(repo.join("a.txt"), format!("zero\n{FIVE_LINES}")).expect("change the file");
+    assert_eq!(
+        window.start(&review, 3, anchor_on(None, Path::new("a.txt"), 1, "zero")),
+        Ok(Reply::Done)
+    );
+    let (third, _) = ids(3);
+    let second = window
+        .thread(&workspace, &third)
+        .anchor
+        .tree
+        .expect("the third thread sits on the second state");
+    assert_ne!(second, recorded);
+    let moved = window
+        .thread(&workspace, &inside)
+        .now
+        .expect("the thread of the worktree was carried");
+    assert_eq!(moved.tree, second);
+    assert_eq!(moved.lines, Lines { first: 4, last: 4 });
+
     let (outside, _) = ids(1);
     let outside = window.thread(&workspace, &outside);
     assert_eq!(outside.anchor.tree, None);
+    assert_eq!(outside.anchor.lines, Lines { first: 3, last: 3 });
     assert_eq!(outside.now, None, "no place, no notice");
     window.stop(keeper);
 }
@@ -360,6 +400,41 @@ fn a_thread_outside_the_worktree_is_kept_when_the_worktree_is_gone() {
         "{refused:?}"
     );
 
+    let (thread, _) = ids(1);
+    assert_eq!(window.thread(&workspace, &thread).anchor.path, library);
+    window.stop(keeper);
+}
+
+#[test]
+fn a_thread_outside_the_worktree_is_saved_though_the_worktree_cannot_be_looked_up() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let library = scratch.library_file();
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (workspace, review) = window.open(&repo);
+    // The file that holds the worktree's id becomes a folder: the lookup of the worktree
+    // fails with an error of its own, and the worktree is not gone.
+    let id_file = repo.join(".git").join(yaar_workspaces::ID_FILE);
+    let id = std::fs::read(&id_file).expect("read the id");
+    std::fs::remove_file(&id_file).expect("remove the id file");
+    std::fs::create_dir(&id_file).expect("make a folder of it");
+
+    assert_eq!(
+        window.start(&review, 1, anchor_on(None, &library, 2, "fn 2")),
+        Ok(Reply::Done),
+        "no lookup is made for a file outside the worktree"
+    );
+    // The control: a thread of the files on disk does look the worktree up, and is refused
+    // with that error, so the first save did not pass for want of a lookup that fails.
+    let refused = window.start(&review, 2, anchor_on(None, Path::new("a.txt"), 1, "one"));
+    assert!(
+        matches!(&refused, Err(Refusal::Failed { reason }) if !reason.contains("worktree is gone")),
+        "{refused:?}"
+    );
+
+    std::fs::remove_dir(&id_file).expect("remove the folder");
+    std::fs::write(&id_file, id).expect("write the id back");
     let (thread, _) = ids(1);
     assert_eq!(window.thread(&workspace, &thread).anchor.path, library);
     window.stop(keeper);

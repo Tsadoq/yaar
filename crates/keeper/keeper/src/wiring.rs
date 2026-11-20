@@ -1191,7 +1191,8 @@ fn save_draft(
 ) -> Result<Reply, Refusal> {
     let review = ReviewId::new(review.as_str());
     // Only a thread that starts here is put on the files of the worktree, and needs it; one
-    // on a file outside the worktree, which has an absolute path, is put on nothing.
+    // on a file outside the worktree, which has an absolute path, is put on nothing, and the
+    // worktree is not even looked up: the lookup may fail, and the save does not depend on it.
     let worktree = match &save.on {
         yaar_review_engine::DraftOn::NewThread(at) if !at.path.is_absolute() => {
             worktree_of_review(workspaces, reviews, &review)?.1

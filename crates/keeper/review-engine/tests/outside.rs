@@ -386,6 +386,29 @@ fn a_thread_outside_the_worktree_takes_replies_and_edits_as_any_thread() {
     );
     assert_eq!(world.thread(1).comments[0].text, "edited");
     assert_eq!(world.thread(1).anchor.tree, "");
+
+    // Once the comment is sent, the thread takes a reply.
+    world
+        .reviews
+        .copy_as_text(&world.worktree, &world.review)
+        .expect("send the comment");
+    let reply = DraftSave {
+        thread: save.thread.clone(),
+        comment: CommentId::new(id(2000)),
+        on: DraftOn::Thread,
+        text: "a reply".to_owned(),
+    };
+    assert_eq!(
+        world
+            .reviews
+            .save_draft(None, &world.review, &reply)
+            .expect("reply"),
+        Saved::Made
+    );
+    let kept = world.thread(1);
+    assert_eq!(kept.comments.len(), 2);
+    assert_eq!(kept.comments[1].text, "a reply");
+    assert_eq!(kept.anchor.tree, "");
 }
 
 #[test]
@@ -401,5 +424,8 @@ fn a_thread_outside_the_worktree_is_still_there_after_a_restart() {
 
     let thread = view.reviews[0].thread(&ThreadId::new(id(1))).expect("kept");
     assert_eq!(thread.anchor.path, world.outside());
+    assert_eq!((thread.anchor.first, thread.anchor.last), (3, 3));
     assert_eq!(thread.anchor.text, "fn 3");
+    assert_eq!(thread.anchor.tree, "");
+    assert_eq!(thread.now, None);
 }
