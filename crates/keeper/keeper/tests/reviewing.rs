@@ -455,8 +455,9 @@ impl Window {
     }
 
     /// Reads until an `AgentsChanged` of `workspace` has come after the first `mark`
-    /// facts: the agents' side tells what it was handed in the order it was handed it, so
-    /// what an earlier request would have told is in front of it.
+    /// facts, for a request that is known to tell the agents. It closes no count: an
+    /// `AgentsChanged` that a request wrongly caused looks the same as the one it waits
+    /// for, so a test that counts them ends on [`Window::agents_in_state_since`] instead.
     fn agents_told_since(&mut self, mark: usize, workspace: &WorkspaceId) {
         while self.agents_changed_since(mark, workspace) == 0 {
             self.read("the sessions told again");
@@ -818,7 +819,7 @@ fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and
 fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tells_nobody_and_leaves_what_was_attached()
  {
     let mut setup = Setup::new();
-    let (_, review, _) = setup.session();
+    let (_, review, terminal) = setup.session();
     let (resolved, _) = setup.window.draft(&review, 1, 1, "to resolve");
     assert_eq!(
         setup.window.ask(Request::ResolveThread {
@@ -870,24 +871,17 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         })
     );
 
-    // The barrier: a draft and an attach that succeed. Whatever the refusals told came
-    // before it, on the lane of requests and on the agents' queue.
-    let (kept, _) = setup.window.draft(&review, 2, 2, "to keep");
+    // A draft and an attach that succeed: each tells, and the refusals before them did not.
+    setup.window.draft(&review, 2, 2, "to keep");
     assert_eq!(
         setup.attach(&review, None),
         Ok(Reply::AttachedReview { start: Vec::new() })
     );
     setup.window.flush();
-    setup.window.agents_told_since(mark, &setup.workspace);
     assert_eq!(
         setup.window.reviews_changed_since(mark, &setup.workspace),
         2,
         "the draft and the attach tell, the refusals do not"
-    );
-    assert_eq!(
-        setup.window.agents_changed_since(mark, &setup.workspace),
-        1,
-        "only the attach tells the agents"
     );
 
     // A refused attach leaves what was attached as it was.
@@ -905,7 +899,27 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         text.contains("to keep") && !text.contains("to resolve"),
         "{text}"
     );
-    let _ = kept;
+
+    // The barrier for the agents: a permission request of the session changes its state,
+    // answers nothing even with a review attached, and goes through the agents' side after
+    // everything asked before it; its hook returns once the agents' side took the report.
+    // The `AgentsChanged` that shows the state is the last one the attach and the refusals
+    // could have caused, and only the attach's is before it.
+    let records = recorded::hook_events(DIALOGS);
+    assert_eq!(records[4].event, "PermissionRequest");
+    setup.hook_in(&terminal, &records, 4);
+    let end = setup.window.agents_in_state_since(
+        mark,
+        &setup.workspace,
+        SessionState::WaitsForPermission,
+    );
+    assert_eq!(
+        setup
+            .window
+            .agents_changed_between(mark, end - 1, &setup.workspace),
+        1,
+        "only the attach tells the agents"
+    );
     let _ = setup.finish();
 }
 
