@@ -1046,3 +1046,87 @@ fn edit_delete_resolve_and_attach_act_on_a_thread_that_moved_from_the_line_it_si
         .keeper
         .reply(asked, Ok(Reply::AttachedReview { start: Vec::new() }));
 }
+
+#[gpui_kit::test]
+fn in_a_comparison_of_versions_a_moved_thread_is_acted_on_from_where_that_version_draws_it_and_from_no_line_in_a_third_version(
+    cx: &mut TestAppContext,
+) {
+    // Written on line 3 in the version `4`, carried to line 5 in the version `5`.
+    let moved = carried(
+        thread_at('7', Some(version('4')), 3, "c"),
+        version('5'),
+        5,
+        5,
+        None,
+    );
+    let (mut stage, mut cx) = open_on_story(
+        review_of_a(vec![round(1, Some('4'), true)], vec![moved]),
+        history_of("456"),
+        "",
+        "a\nb\nc\nd\ne\nf\n",
+        cx,
+    );
+    let the = thread_id('7');
+    let select =
+        |stage: &mut Stage, entry: usize, from: String, to: String, cx: &mut VisualTestContext| {
+            click(&format!("review-history-{entry}"), cx);
+            compared(
+                stage,
+                from.clone(),
+                Some(to.clone()),
+                vec![file("story.txt", FileStatus::Modified)],
+                cx,
+            );
+            read_story(stage, Some(from), Some(to), ("", "a\nb\nc\nd\ne\nf\n"), cx);
+            wait_for_files(&stage.pane, cx);
+        };
+    // What the key does on this line: the thread it opens a reply box in, if any.
+    let reply_from = |line: u32, stage: &Stage, cx: &mut VisualTestContext| {
+        go_to_new_line(line, stage, cx);
+        cx.simulate_keystrokes("o");
+        let opened = stage.pane.read_with(cx, |pane, _| pane.comment_box());
+        if opened.is_some() {
+            cx.simulate_keystrokes("escape");
+        } else {
+            let said = stage
+                .pane
+                .read_with(cx, |pane, _| pane.notice())
+                .unwrap_or_else(|| panic!("o on line {line} opened nothing and said nothing"));
+            assert!(said.contains("no thread"), "line {line}: {said}");
+        }
+        opened.map(|opened| opened.thread)
+    };
+    let resolve_from = |line: u32, stage: &Stage, cx: &mut VisualTestContext| {
+        go_to_new_line(line, stage, cx);
+        cx.simulate_keystrokes("x");
+        let said = stage
+            .pane
+            .read_with(cx, |pane, _| pane.notice())
+            .unwrap_or_else(|| panic!("x on line {line} said nothing"));
+        assert!(said.contains("no thread"), "line {line}: {said}");
+    };
+
+    // The new side is the version the thread was written in: the pane draws it on the
+    // line it was written on, and that is where a key finds it, not on the line `now` says.
+    select(&mut stage, 0, COMMIT.to_owned(), version('4'), &mut cx);
+    assert_eq!(reply_from(3, &stage, &mut cx), Some(the.clone()));
+    assert_eq!(reply_from(5, &stage, &mut cx), None);
+    resolve_from(5, &stage, &mut cx);
+
+    // The new side is a third version, which the thread was neither written in nor carried
+    // to: it is under Threads elsewhere, and no key finds it from either line.
+    select(&mut stage, 2, version('5'), version('6'), &mut cx);
+    assert!(stage.pane.read_with(&cx, |pane, _| {
+        pane.rows().contains(&PaneRow::ThreadsElsewhere)
+    }));
+    assert_eq!(reply_from(3, &stage, &mut cx), None);
+    assert_eq!(reply_from(5, &stage, &mut cx), None);
+    resolve_from(3, &stage, &mut cx);
+    resolve_from(5, &stage, &mut cx);
+
+    // The new side is the version it was carried to: on the line `now` says, and not on
+    // the one it was written on.
+    select(&mut stage, 1, version('4'), version('5'), &mut cx);
+    assert_eq!(reply_from(5, &stage, &mut cx), Some(the));
+    assert_eq!(reply_from(3, &stage, &mut cx), None);
+}
