@@ -241,6 +241,30 @@ impl Window {
         }
     }
 
+    /// Reads frames until `count` turns have ended with a state recorded, whatever else
+    /// comes, and gives the sessions they were of with those states, in the order they were
+    /// told. A turn's end is told after the state was recorded and its credits kept.
+    fn until_turns_ended(&mut self, count: usize) -> Vec<(SessionId, String)> {
+        let mut ended = Vec::new();
+        // The read timeout is for one frame: unrelated facts must not keep the wait going.
+        let deadline = Instant::now() + DEADLINE;
+        while ended.len() < count {
+            assert!(
+                Instant::now() < deadline,
+                "{count} turns did not end with a state within {DEADLINE:?}: {ended:?}"
+            );
+            if let Message::Fact(Fact::TurnEnded {
+                session,
+                state: Some(state),
+                ..
+            }) = read_message(&mut self.stream).expect("a frame from the Keeper")
+            {
+                ended.push((session, state));
+            }
+        }
+        ended
+    }
+
     fn stop(mut self, keeper: JoinHandle<std::io::Result<Exit>>) {
         write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
         assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
@@ -1493,6 +1517,384 @@ fn a_session_lists_the_changes_it_made_and_those_no_agent_made_and_one_made_by_t
             credited("b-only.txt", FileStatus::Added, &[b]),
             credited("both.txt", FileStatus::Added, &[a, b]),
             credited("nobody.txt", FileStatus::Added, &[]),
+        ]))
+    );
+    window.stop(keeper);
+}
+
+/// Two sessions that run in one workspace, each with the review the Keeper gives it, and two
+/// states of its worktree between which they are compared: the first of a clean worktree,
+/// the second of a worktree with every kind of change in it, kept with who made each.
+struct Compared {
+    workspace: yaar_store::WorkspaceId,
+    review_a: ReviewId,
+    review_b: ReviewId,
+    review_elsewhere: ReviewId,
+    elsewhere: yaar_store::WorkspaceId,
+    first: String,
+    second: String,
+}
+
+fn compared(scratch: &Scratch, kept: &Kept) -> Compared {
+    let repo = scratch.repository("repo");
+    // Several lines, so that git pairs the rename by what the file holds.
+    let moved = "the file that is moved\nfrom one place\nto another\nand keeps its lines\n";
+    write(&repo, "kept.txt", "kept\n");
+    write(&repo, "removed.txt", "removed\n");
+    write(&repo, "moved.txt", moved);
+    commit_all(&repo, "files");
+    let (workspace, worktree) = kept.open(&repo);
+    let [a, b] = [1, 2].map(|n| {
+        let record = SessionRecord {
+            id: yaar_store::SessionId::new(format!("session-{n}")),
+            workspace: workspace.clone(),
+            agent: "claude".to_owned(),
+            cli_session: format!("cli-{n}"),
+            terminal: Some(format!("terminal-{n}")),
+            number: n,
+            running: true,
+            ended: None,
+            ended_by: None,
+        };
+        kept.store.put_session(&record).expect("keep the session");
+        let review = kept.reviews.session_started(&record).expect("its review");
+        ReviewId::new(review.as_str())
+    });
+    let first = kept.state(&workspace, &worktree);
+
+    write(&repo, "kept.txt", "changed\n");
+    write(&repo, "added-a.txt", "a\n");
+    write(&repo, "added-b.txt", "b\n");
+    write(&repo, "shared.txt", "shared\n");
+    write(&repo, "nobody.txt", "nobody\n");
+    std::fs::remove_file(repo.join("removed.txt")).expect("remove a file");
+    std::fs::rename(repo.join("moved.txt"), repo.join("renamed.txt")).expect("move a file");
+    let second = kept.state(&workspace, &worktree);
+    // What the Keeper keeps at a turn's end: who is credited with each path. `nobody.txt`
+    // is credited to no one, and so is not named.
+    let by = |path: &str, sessions: &[&str]| yaar_review_engine::Credited {
+        path: PathBuf::from(path),
+        by: sessions
+            .iter()
+            .map(|session| (*session).to_owned())
+            .collect(),
+    };
+    kept.reviews
+        .keep_credits(
+            &workspace,
+            &second,
+            &[
+                by("added-a.txt", &["session-1"]),
+                by("added-b.txt", &["session-2"]),
+                by("kept.txt", &["session-1"]),
+                by("removed.txt", &["session-2"]),
+                by("renamed.txt", &["session-1"]),
+                by("shared.txt", &["session-1", "session-2"]),
+            ],
+        )
+        .expect("keep the credits");
+
+    // The review of no agent of another workspace, which the first one's review is not of.
+    let other = scratch.repository("other");
+    let (elsewhere, _) = kept.open(&other);
+    let review_elsewhere = kept
+        .reviews
+        .of_workspace(&elsewhere, None)
+        .expect("its review")
+        .reviews[0]
+        .id()
+        .clone();
+    Compared {
+        workspace,
+        review_a: a,
+        review_b: b,
+        review_elsewhere: ReviewId::new(review_elsewhere.as_str()),
+        elsewhere,
+        first,
+        second,
+    }
+}
+
+fn compare_for_review(
+    window: &mut Window,
+    workspace: &yaar_store::WorkspaceId,
+    review: &ReviewId,
+    from: &str,
+    to: &str,
+) -> Result<Reply, Refusal> {
+    window.ask(Request::CompareForReview {
+        workspace: link_workspace(workspace),
+        review: review.clone(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+    })
+}
+
+#[test]
+fn a_review_lists_the_paths_of_its_session_and_those_no_agent_made_each_with_its_status_and_credits()
+ {
+    let scratch = Scratch::new();
+    let kept = Kept::new(&scratch);
+    let c = compared(&scratch, &kept);
+    drop(kept);
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (one, two) = ("session-1", "session-2");
+
+    // The first session's review: its own paths and the one no agent made, a path both made
+    // whole with both sessions, and nothing of the other session alone.
+    assert_eq!(
+        compare_for_review(&mut window, &c.workspace, &c.review_a, &c.first, &c.second),
+        Ok(Reply::ComparedForReview(vec![
+            credited("added-a.txt", FileStatus::Added, &[one]),
+            credited("kept.txt", FileStatus::Modified, &[one]),
+            credited("nobody.txt", FileStatus::Added, &[]),
+            credited(
+                "renamed.txt",
+                FileStatus::Renamed {
+                    from: PathBuf::from("moved.txt")
+                },
+                &[one]
+            ),
+            credited("shared.txt", FileStatus::Added, &[one, two]),
+        ]))
+    );
+    assert_eq!(
+        compare_for_review(&mut window, &c.workspace, &c.review_b, &c.first, &c.second),
+        Ok(Reply::ComparedForReview(vec![
+            credited("added-b.txt", FileStatus::Added, &[two]),
+            credited("nobody.txt", FileStatus::Added, &[]),
+            credited("removed.txt", FileStatus::Deleted, &[two]),
+            credited("shared.txt", FileStatus::Added, &[one, two]),
+        ]))
+    );
+    // The same version on both sides differs in nothing.
+    assert_eq!(
+        compare_for_review(&mut window, &c.workspace, &c.review_a, &c.second, &c.second),
+        Ok(Reply::ComparedForReview(Vec::new()))
+    );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_comparison_for_a_review_is_refused_for_an_unknown_review_workspace_or_version_as_a_comparison_is()
+ {
+    let scratch = Scratch::new();
+    let kept = Kept::new(&scratch);
+    let c = compared(&scratch, &kept);
+    drop(kept);
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+
+    let unknown = ReviewId::new("no-such-review");
+    assert_eq!(
+        compare_for_review(&mut window, &c.workspace, &unknown, &c.first, &c.second),
+        Err(Refusal::UnknownReview { review: unknown })
+    );
+    // A review of another workspace names no change of this one.
+    assert_eq!(
+        compare_for_review(
+            &mut window,
+            &c.workspace,
+            &c.review_elsewhere,
+            &c.first,
+            &c.second
+        ),
+        Err(Refusal::UnknownReview {
+            review: c.review_elsewhere.clone()
+        })
+    );
+    assert_eq!(
+        compare_for_review(&mut window, &c.elsewhere, &c.review_a, &c.first, &c.second),
+        Err(Refusal::UnknownReview {
+            review: c.review_a.clone()
+        })
+    );
+    let nobody = yaar_store::WorkspaceId::new("no-such-workspace");
+    assert_eq!(
+        compare_for_review(&mut window, &nobody, &c.review_a, &c.first, &c.second),
+        Err(Refusal::UnknownWorkspace {
+            workspace: link_workspace(&nobody)
+        })
+    );
+    let missing = "0".repeat(40);
+    for version in ["HEAD", "not-an-id", &missing] {
+        let refused = Err(Refusal::UnknownRevision {
+            revision: version.to_owned(),
+        });
+        assert_eq!(
+            compare_for_review(&mut window, &c.workspace, &c.review_a, version, &c.second),
+            refused,
+            "{version} as the first"
+        );
+        assert_eq!(
+            compare_for_review(&mut window, &c.workspace, &c.review_a, &c.first, version),
+            refused,
+            "{version} as the second"
+        );
+    }
+    window.stop(keeper);
+}
+
+/// The reports of the Claude Code session `session` of the recording of two sessions in one
+/// folder: its start, its prompt, a write of each of `paths` with its own tool, and the end
+/// of its turn, as `writes_of` gives them, read as if the recording was made in `repo`.
+fn claude_turn(session: usize, repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
+    let events = yaar_system_tests::recorded::hook_events("claude/two-sessions-files.jsonl");
+    let mut sessions: Vec<&str> = Vec::new();
+    for event in events.iter().filter(|event| event.event == "SessionStart") {
+        if !sessions.contains(&event.session()) {
+            sessions.push(event.session());
+        }
+    }
+    let stop = events
+        .iter()
+        .find(|event| event.event == "Stop" && event.session() == sessions[session])
+        .expect("the session's turn ends in the recording");
+    let mut payloads = writes_of(session, repo, paths);
+    payloads.push(stop.in_project(repo).input_bytes());
+    payloads
+}
+
+/// The reports of a pi session, from the recording `pi/turn-tools.jsonl`: its start (line 1),
+/// its message (53), a write with its own tool for each of `paths` (64, whose `input.path`
+/// is the one field changed, since the recording wrote one file of its own), and the end of
+/// its run (76), as if the recording was made in `repo`.
+fn pi_turn(repo: &Path, paths: &[&str]) -> Vec<Vec<u8>> {
+    let events = yaar_system_tests::recorded::pi_events("pi/turn-tools.jsonl");
+    let of = |line: usize| events[line].in_project(repo);
+    let mut payloads = vec![of(1).payload_bytes(), of(53).payload_bytes()];
+    for path in paths {
+        let mut write = of(64);
+        assert_eq!(write.event, "tool_result");
+        assert_eq!(write.payload["toolName"], "write");
+        write.payload["input"]["path"] = (*path).into();
+        payloads.push(write.payload_bytes());
+    }
+    payloads.push(of(76).payload_bytes());
+    payloads
+}
+
+#[test]
+fn a_claude_code_and_a_pi_session_in_one_worktree_are_each_shown_their_own_paths_those_no_agent_made_and_the_shared_one_with_both()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let kept = Kept::new(&scratch);
+    let (workspace, _) = kept.open(&repo);
+    let from = git(&repo, &["rev-parse", "HEAD"]);
+    drop(kept);
+    for (name, text) in [
+        ("claude-only.txt", "a\n"),
+        ("pi-only.txt", "b\n"),
+        ("both.txt", "both\n"),
+        ("nobody.txt", "nobody\n"),
+    ] {
+        write(&repo, name, text);
+    }
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    // Each session runs in a shell of the app of its own. The Windows that open them are
+    // kept to the end: the output of a shell goes to the one that opened it.
+    let size = TerminalSize {
+        columns: 80,
+        rows: 24,
+    };
+    let mut openers = Vec::new();
+    let mut terminals: Vec<TerminalId> = Vec::new();
+    for _ in 0..2 {
+        let mut opener = scratch.window();
+        let Ok(Reply::TerminalOpened { terminal }) = opener.ask(Request::OpenTerminal {
+            workspace: link_workspace(&workspace),
+            program: Program::Shell,
+            size,
+        }) else {
+            panic!("no terminal");
+        };
+        terminals.push(terminal);
+        openers.push(opener);
+    }
+    // Two processes that are alive for as long as the test runs: this one and its parent.
+    // SAFETY: `getppid` takes no argument and cannot fail.
+    let pids = [
+        std::process::id(),
+        unsafe { libc::getppid() }.unsigned_abs(),
+    ];
+    let reports = [
+        (
+            "claude",
+            claude_turn(0, &repo, &["claude-only.txt", "both.txt"]),
+        ),
+        ("pi", pi_turn(&repo, &["pi-only.txt", "both.txt"])),
+    ];
+    // One connection for each report: a piece of a CLI leaves once it is answered, and
+    // reads past the facts told before its answer.
+    for (session, (agent, payloads)) in reports.into_iter().enumerate() {
+        for payload in payloads {
+            let answered = scratch.window().ask_past_facts(Request::Report {
+                report: AgentReport {
+                    agent: agent.to_owned(),
+                    terminal: Some(terminals[session].clone()),
+                    pid: pids[session],
+                    payload,
+                },
+            });
+            assert_eq!(answered, Ok(Reply::Done), "{agent}");
+        }
+    }
+    // The barrier: both turns ended, each with a state and the credits kept with it.
+    let ended = window.until_turns_ended(2);
+    let newest = &ended[1].1;
+
+    let Ok(Reply::Agents(agents)) = window.ask_past_facts(Request::ListAgents) else {
+        panic!("no list of agents");
+    };
+    let sessions = &agents
+        .iter()
+        .find(|listed| listed.workspace == link_workspace(&workspace))
+        .expect("the workspace has sessions")
+        .sessions;
+    let of = |agent: &str| {
+        sessions
+            .iter()
+            .find(|session| session.agent == agent)
+            .unwrap_or_else(|| panic!("no session of {agent}: {sessions:?}"))
+    };
+    let (claude, pi) = (of("claude"), of("pi"));
+    let (review_claude, review_pi) = (
+        claude
+            .review
+            .clone()
+            .expect("Claude Code's session has a review"),
+        pi.review.clone().expect("pi's session has a review"),
+    );
+    assert_ne!(review_claude, review_pi);
+    let (c, p) = (claude.id.as_str(), pi.id.as_str());
+
+    // From the commit the worktree started on, which the state store does not hold yet, to
+    // the state the last turn ended on.
+    let compare_review = |window: &mut Window, review: &ReviewId| {
+        window.ask_past_facts(Request::CompareForReview {
+            workspace: link_workspace(&workspace),
+            review: review.clone(),
+            from: from.clone(),
+            to: newest.clone(),
+        })
+    };
+    assert_eq!(
+        compare_review(&mut window, &review_claude),
+        Ok(Reply::ComparedForReview(vec![
+            credited("both.txt", FileStatus::Added, &[c, p]),
+            credited("claude-only.txt", FileStatus::Added, &[c]),
+            credited("nobody.txt", FileStatus::Added, &[]),
+        ]))
+    );
+    assert_eq!(
+        compare_review(&mut window, &review_pi),
+        Ok(Reply::ComparedForReview(vec![
+            credited("both.txt", FileStatus::Added, &[c, p]),
+            credited("nobody.txt", FileStatus::Added, &[]),
+            credited("pi-only.txt", FileStatus::Added, &[p]),
         ]))
     );
     window.stop(keeper);

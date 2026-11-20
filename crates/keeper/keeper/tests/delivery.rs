@@ -23,13 +23,14 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Anchor, Author, CommentId, DraftOn, Fact, Hello, Lines, Message, Program, Refusal, Reply,
-    Request, RequestId, Review, SOCKET_VARIABLE, SentBy, Side, TERMINAL_VARIABLE, TerminalId,
-    TerminalSize, ThreadId, WorkspaceId, WorkspaceReviews, handshake, read_message, write_message,
+    AgentReport, Anchor, Author, CommentId, DraftOn, Fact, Hello, Lines, Message, Program, Refusal,
+    Reply, Request, RequestId, Review, SOCKET_VARIABLE, SentBy, Side, TERMINAL_VARIABLE,
+    TerminalId, TerminalSize, ThreadId, TurnId, WorkspaceId, WorkspaceReviews, handshake,
+    read_message, write_message,
 };
 use yaar_store::Store;
 use yaar_system_tests::program;
-use yaar_system_tests::recorded::{self, HookRecord};
+use yaar_system_tests::recorded::{self, HookRecord, PiRecord};
 
 /// How long a test waits for the Keeper before it fails: longer than the plan's ten
 /// seconds, as every test file of this crate has it, since a Keeper starts git and shells
@@ -57,6 +58,18 @@ const REPLY_HOOKS: &str = "claude/reply-tool-hooks.jsonl";
 /// `claude/reply-tool-mcp.jsonl`: what Claude Code sent a tool server; line 7 is a call of
 /// the reply tool.
 const REPLY_TRACE: &str = "claude/reply-tool-mcp.jsonl";
+
+/// `pi/turn-tools.jsonl`: a session's start (line 1) and its first message (3), the end of
+/// its run (28), its end by `/new` (127) and the start of the session that follows in the
+/// same terminal and process (129).
+const PI_TURN_TOOLS: &str = "pi/turn-tools.jsonl";
+/// `pi/queued-message.jsonl`: a session's start (line 1), a message of the user while it is
+/// idle (19) and a message pi's own extension queued while a run was open (31).
+const PI_QUEUED: &str = "pi/queued-message.jsonl";
+/// What the user types while pi works, typed by hand: records 0 to 3 open a run with a shell
+/// command that is running, record 4 is the user's message typed then, record 12 the end of
+/// the run.
+const PI_TYPED_WHILE_WORKING: &str = "pi-typed-while-working.jsonl";
 
 /// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
@@ -386,6 +399,23 @@ impl Window {
         }
     }
 
+    /// Reads until the end of the turn `turn` is told, and gives the state it ended on.
+    fn until_turn_ended(&mut self, turn: &TurnId) -> Option<String> {
+        loop {
+            while self.looked_at < self.facts.len() {
+                self.looked_at += 1;
+                if let Fact::TurnEnded {
+                    turn: ended, state, ..
+                } = &self.facts[self.looked_at - 1]
+                    && ended == turn
+                {
+                    return state.clone();
+                }
+            }
+            self.read("the end of a turn");
+        }
+    }
+
     fn open(&mut self, folder: &Path) -> WorkspaceId {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -599,12 +629,44 @@ impl Setup {
             .hook(&self.terminal, &record.in_project(&self.repo).input_bytes())
     }
 
+    /// Reports one event of pi, as its reporting program does: the payload as the extension
+    /// writes it, from the terminal of the app, of the process of this test. A connection of
+    /// its own, as the program makes one for each report, so that the facts this Window
+    /// waits for are not read by it.
+    fn pi(&self, record: &PiRecord) -> Reply {
+        self.pi_from(&self.terminal, std::process::id(), record)
+    }
+
+    /// [`Setup::pi`] from another terminal and process.
+    fn pi_from(&self, terminal: &TerminalId, pid: u32, record: &PiRecord) -> Reply {
+        self.pi_payload(terminal, pid, record.in_project(&self.repo).payload_bytes())
+    }
+
+    fn pi_payload(&self, terminal: &TerminalId, pid: u32, payload: Vec<u8>) -> Reply {
+        self.scratch
+            .window()
+            .ask(Request::Report {
+                report: AgentReport {
+                    agent: yaar_adapter_pi::NAME.to_owned(),
+                    terminal: Some(terminal.clone()),
+                    pid,
+                    payload,
+                },
+            })
+            .unwrap_or_else(|refused| panic!("the report was refused: {refused:?}"))
+    }
+
     /// The review of the session that Claude Code names `cli`.
     fn review_of(&mut self, cli: &str) -> Review {
+        self.review_of_agent(yaar_adapter_claude::NAME, cli)
+    }
+
+    /// The review of the session that the CLI `agent` names `cli`.
+    fn review_of_agent(&mut self, agent: &str, cli: &str) -> Review {
         let session = self
             .scratch
             .store()
-            .session_of_cli(yaar_adapter_claude::NAME, cli)
+            .session_of_cli(agent, cli)
             .expect("read the session")
             .unwrap_or_else(|| panic!("the Keeper holds no session {cli}"));
         let reviews = self.window.reviews(&self.workspace);
@@ -689,6 +751,33 @@ impl Setup {
         (review, thread, comment)
     }
 
+    /// [`Setup::session_with_a_draft`] for a session of pi, started by its recorded start.
+    fn pi_session_with_a_draft(
+        &mut self,
+        start: &PiRecord,
+        text: &str,
+    ) -> (Review, ThreadId, CommentId) {
+        assert_eq!(self.pi(start), Reply::Done);
+        let review = self.review_of_agent(yaar_adapter_pi::NAME, start.session());
+        let (thread, comment) = self.draft(&review, text);
+        self.attach(&review);
+        (review, thread, comment)
+    }
+
+    /// The turn of `review`'s session that runs now, as `ListAgents` tells it; none between
+    /// turns.
+    fn open_turn_of(&mut self, review: &Review) -> Option<TurnId> {
+        let Ok(Reply::Agents(agents)) = self.window.ask(Request::ListAgents) else {
+            panic!("no list of agents");
+        };
+        agents
+            .into_iter()
+            .flat_map(|listed| listed.sessions)
+            .find(|session| session.review.as_ref() == Some(&review.id))
+            .unwrap_or_else(|| panic!("no session has the review {}", review.id))
+            .turn
+    }
+
     /// Waits for the Keeper to tell that the reviews changed `times` times: the send and
     /// then the state of its round each tell one.
     fn changes(&mut self, times: usize) {
@@ -701,9 +790,14 @@ impl Setup {
     /// a repeated look at a fact that only becomes true: the recording thread keeps it off the
     /// agents' way, and no change of the reviews is a barrier for it.
     fn wait_for_states(&mut self, cli: &str) {
+        self.wait_for_states_of(yaar_adapter_claude::NAME, cli);
+    }
+
+    /// [`Setup::wait_for_states`] for a session of the CLI `agent`.
+    fn wait_for_states_of(&mut self, agent: &str, cli: &str) {
         let deadline = Instant::now() + DEADLINE;
         loop {
-            let review = self.review_of(cli);
+            let review = self.review_of_agent(agent, cli);
             if !review.rounds.is_empty()
                 && review
                     .rounds
@@ -1244,4 +1338,364 @@ fn a_reply_naming_a_session_that_runs_with_no_review_is_kept_in_the_session_of_i
     assert_eq!(kept_a.id, review_a.id);
     assert_eq!(agent_comments(&kept_a).len(), 1);
     setup.stop();
+}
+
+/// The one round `review` holds, sent by delivery.
+fn delivered_round(review: &Review) -> &yaar_link::Round {
+    let [round] = &review.rounds[..] else {
+        panic!("not one round: {:?}", review.rounds);
+    };
+    assert_eq!((round.number, round.sent_by), (1, SentBy::Delivered));
+    round
+}
+
+#[test]
+fn a_message_of_a_pi_session_is_answered_with_the_attached_review_after_the_instruction_and_its_comments_are_sent_in_the_turn_it_opened()
+ {
+    let mut setup = Setup::new();
+    let run = recorded::pi_events(PI_TURN_TOOLS);
+    let (review, _, comment) = setup.pi_session_with_a_draft(&run[1], "Why is this `one`?");
+    // What the view control shows, read before the message.
+    let shown = setup.attachment(&review);
+    assert!(shown.starts_with(yaar_adapter_pi::INSTRUCTION), "{shown}");
+    assert!(shown.contains("Why is this `one`?"), "{shown}");
+    assert_eq!(setup.open_turn_of(&review), None);
+
+    // The user's message: the recorded `input`, which opens the run.
+    assert_eq!(run[3].event, "input");
+    let Reply::Answer { bytes } = setup.pi(&run[3]) else {
+        panic!("the message was not answered with the review");
+    };
+    let answer: Value = serde_json::from_slice(&bytes).expect("the answer is JSON");
+    assert_eq!(answer, json!({ "review": shown }));
+
+    // The comments are sent, in round one, whose turn is the one the message opened.
+    let sent = setup.review_of_agent(yaar_adapter_pi::NAME, run[1].session());
+    let round = delivered_round(&sent);
+    assert_eq!(comment_of(&sent, &comment).round, Some(1));
+    assert_eq!(sent.attached, None);
+    let opened = setup
+        .open_turn_of(&review)
+        .expect("the message opened a turn");
+    assert_eq!(round.turn, Some(opened));
+    setup.stop();
+}
+
+#[test]
+fn the_round_of_a_message_of_claude_code_is_sent_in_the_turn_the_message_opened_and_a_copy_has_none()
+ {
+    let mut setup = Setup::new();
+    let session = recorded::hook_events(REVIEW_FILE);
+    let (review, ..) = setup.session_with_a_draft(&session[0], "Why is this `one`?");
+    assert_eq!(setup.open_turn_of(&review), None);
+    setup.hook(&session[2]);
+    setup.settled(session[0].session());
+    let sent = setup.review_of(session[0].session());
+    let opened = setup
+        .open_turn_of(&review)
+        .expect("the message opened a turn");
+    assert_eq!(delivered_round(&sent).turn, Some(opened));
+
+    // A second draft, copied as text: no turn runs the copy, whatever turn is open.
+    setup.draft(&sent, "And this?");
+    let Ok(Reply::Copied { round, .. }) = setup.window.ask(Request::CopyReview {
+        review: review.id.clone(),
+    }) else {
+        panic!("the review was not copied");
+    };
+    assert_eq!(round, 2);
+    let copied = setup.review_of(session[0].session());
+    let [first, second] = &copied.rounds[..] else {
+        panic!("not two rounds: {:?}", copied.rounds);
+    };
+    assert_eq!(
+        (first.turn.clone(), second.sent_by),
+        (sent.rounds[0].turn.clone(), SentBy::Copied)
+    );
+    assert!(first.turn.is_some());
+    assert_eq!(second.turn, None);
+    setup.stop();
+}
+
+/// The hand-made records of a message typed while pi works, with the review attached after
+/// the run opened, and what the Keeper answers the message with: the run opened by record 1,
+/// the answer to record 4, and the Window after the whole run, which is told the run's end.
+/// `behavior` is the one field of record 4 changed, `streamingBehavior`, where it is given.
+fn a_message_typed_while_pi_works(behavior: Option<&str>) {
+    let mut setup = Setup::new();
+    let records = recorded::hand_made_pi_events(PI_TYPED_WHILE_WORKING);
+    assert_eq!(records[4].event, "input");
+    let mut typed = records[4].clone();
+    if let Some(behavior) = behavior {
+        typed.payload["streamingBehavior"] = json!(behavior);
+    }
+    assert_eq!(
+        typed.payload["streamingBehavior"],
+        behavior.unwrap_or("steer")
+    );
+
+    // The run is open, a shell command of it running: the session start, the message that
+    // opened it (nothing was attached), the run's start and the call of the tool.
+    assert_eq!(setup.pi(&records[0]), Reply::Done);
+    let review = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
+    for record in &records[1..=3] {
+        assert_eq!(setup.pi(record), Reply::Done, "{}", record.event);
+    }
+    let run = setup
+        .open_turn_of(&review)
+        .expect("the first message opened a turn");
+    // The review is attached while pi works.
+    let (_, comment) = setup.draft(&review, "Look at this while you work.");
+    setup.attach(&review);
+    let shown = setup.attachment(&review);
+
+    // The message typed then goes with the review, at the report that pi took it.
+    let Reply::Answer { bytes } = setup.pi(&typed) else {
+        panic!("the message that pi queued was not answered with the review");
+    };
+    let answer: Value = serde_json::from_slice(&bytes).expect("the answer is JSON");
+    assert_eq!(answer, json!({ "review": shown }));
+    assert!(shown.starts_with(yaar_adapter_pi::INSTRUCTION), "{shown}");
+    // Marked sent now, when pi reported the message: the rest of the run is not reported
+    // yet. The round's turn is the run that was open, and no turn started for the message.
+    let sent = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
+    let round = delivered_round(&sent);
+    assert_eq!(comment_of(&sent, &comment).round, Some(1));
+    assert_eq!(sent.attached, None);
+    assert_eq!(round.turn, Some(run.clone()));
+    assert_eq!(setup.open_turn_of(&review), Some(run.clone()));
+
+    // The rest of the run, which asks and gives nothing, up to the end of the run.
+    for record in &records[5..=12] {
+        assert_eq!(setup.pi(record), Reply::Done, "{}", record.event);
+    }
+    assert_eq!(records[12].event, "agent_settled");
+    assert!(
+        setup.window.until_turn_ended(&run).is_some(),
+        "the run that was open ended with a state"
+    );
+    let after = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
+    // The state of the round is recorded off the agent's way, so it is not compared.
+    assert_eq!(
+        delivered_round(&after).turn,
+        Some(run),
+        "no other round was sent"
+    );
+    assert_eq!(setup.open_turn_of(&review), None);
+    setup.stop();
+}
+
+#[test]
+fn a_message_pi_takes_while_it_works_carries_the_review_and_the_comments_are_sent_at_its_report() {
+    a_message_typed_while_pi_works(None);
+}
+
+#[test]
+fn a_message_pi_queues_for_after_its_run_carries_the_review_the_same_way() {
+    a_message_typed_while_pi_works(Some("followUp"));
+}
+
+#[test]
+fn a_message_pi_queued_by_its_own_extension_is_answered_nothing_and_the_attachment_stays_for_the_users_next()
+ {
+    let mut setup = Setup::new();
+    let queued = recorded::pi_events(PI_QUEUED);
+    let (review, _, comment) = setup.pi_session_with_a_draft(&queued[1], "Name this.");
+    let shown = setup.attachment(&review);
+
+    assert_eq!(queued[31].payload["source"], "extension");
+    assert_eq!(setup.pi(&queued[31]), Reply::Done);
+    // The report was taken when it was answered: the review is as it was.
+    let kept = setup.review_of_agent(yaar_adapter_pi::NAME, queued[1].session());
+    assert_eq!(kept.attached, Some(yaar_link::Attachment::Review));
+    assert!(kept.rounds.is_empty());
+    assert_eq!(comment_of(&kept, &comment).round, None);
+
+    // The user's own message then carries it, which also shows the nothing was not a
+    // failure of the delivery.
+    assert_eq!(queued[19].payload["source"], "interactive");
+    let Reply::Answer { bytes } = setup.pi(&queued[19]) else {
+        panic!("the user's message was not answered with the review");
+    };
+    assert_eq!(
+        serde_json::from_slice::<Value>(&bytes).expect("JSON"),
+        json!({ "review": shown })
+    );
+    setup.stop();
+}
+
+/// The payload of a call of pi's reply tool, as the extension writes it, in the session `of`
+/// names.
+fn reply_payload(of: &PiRecord, setup: &Setup, thread: &ThreadId, body: &str) -> Vec<u8> {
+    let of = of.in_project(&setup.repo);
+    serde_json::to_vec(&json!({
+        "event": yaar_adapter_pi::REPLY_EVENT,
+        "sessionId": of.session(),
+        "sessionFile": of.session_file(),
+        "cwd": of.payload["cwd"],
+        "toolCallId": "call_1",
+        "arguments": { "thread": thread.as_str(), "body": body, "addressed": true },
+    }))
+    .expect("a payload")
+}
+
+/// What the app answered a call of the reply tool, as the extension reads it.
+fn tool_answer(reply: Reply) -> Value {
+    let Reply::Answer { bytes } = reply else {
+        panic!("the call was answered with no bytes: {reply:?}");
+    };
+    serde_json::from_slice(&bytes).expect("the answer is JSON")
+}
+
+#[test]
+fn a_reply_of_pi_is_kept_in_its_thread_and_answered_with_its_result_and_one_naming_another_sessions_thread_is_answered_with_an_error()
+ {
+    let mut setup = Setup::new();
+    let first = recorded::pi_events(PI_TURN_TOOLS);
+    let second = recorded::pi_events(PI_QUEUED);
+    // Two sessions in two terminals, each with a thread of its own, A's comment sent.
+    let (review_a, thread_a, _) = setup.pi_session_with_a_draft(&first[1], "For A.");
+    let other_terminal = setup.window.open_terminal(&setup.workspace);
+    // Another process that is alive for as long as the test runs: this one's parent.
+    // SAFETY: `getppid` takes no argument and cannot fail.
+    let other_pid = unsafe { libc::getppid() }.unsigned_abs();
+    assert_eq!(
+        setup.pi_from(&other_terminal, other_pid, &second[1]),
+        Reply::Done
+    );
+    let review_b = setup.review_of_agent(yaar_adapter_pi::NAME, second[1].session());
+    let (thread_b, _) = setup.draft(&review_b, "For B.");
+    setup.attach(&review_b);
+    assert!(matches!(setup.pi(&first[3]), Reply::Answer { .. }));
+    assert!(matches!(
+        setup.pi_from(&other_terminal, other_pid, &second[19]),
+        Reply::Answer { .. }
+    ));
+
+    // A reply with a hostile body, kept as it was written.
+    let body = "Done: `rename`, \"quoted\", $(touch PWNED)\nsecond line\\";
+    let answered = tool_answer(setup.pi_payload(
+        &setup.terminal.clone(),
+        std::process::id(),
+        reply_payload(&first[1], &setup, &thread_a, body),
+    ));
+    assert_eq!(
+        answered,
+        json!({
+            "text": format!(
+                "recorded reply to {thread_a} (addressed, {} characters)",
+                body.chars().count()
+            )
+        })
+    );
+    let kept = setup.review_of_agent(yaar_adapter_pi::NAME, first[1].session());
+    assert_eq!(kept.id, review_a.id);
+    let [reply] = &agent_comments(&kept)[..] else {
+        panic!("not one reply: {:?}", agent_comments(&kept));
+    };
+    assert_eq!(reply.text, body);
+    let thread = kept
+        .threads
+        .iter()
+        .find(|thread| thread.id == thread_a)
+        .expect("the thread");
+    assert!(thread.addressed);
+    assert!(!thread.resolved, "a reply never resolves");
+
+    // A reply of B's session naming A's thread: an error for the tool, nothing kept.
+    let refused = tool_answer(setup.pi_payload(
+        &other_terminal,
+        other_pid,
+        reply_payload(&second[1], &setup, &thread_a, "Not mine."),
+    ));
+    assert_eq!(
+        refused,
+        json!({ "error": format!("there is no thread {thread_a}") })
+    );
+    assert_eq!(
+        agent_comments(&setup.review_of_agent(yaar_adapter_pi::NAME, second[1].session())).len(),
+        0
+    );
+    assert_eq!(
+        agent_comments(&setup.review_of_agent(yaar_adapter_pi::NAME, first[1].session())).len(),
+        1
+    );
+    // Its own thread is kept, so the refusal was not a Keeper that cannot be reached.
+    let kept_b = tool_answer(setup.pi_payload(
+        &other_terminal,
+        other_pid,
+        reply_payload(&second[1], &setup, &thread_b, "Mine."),
+    ));
+    assert!(kept_b["text"].is_string(), "{kept_b}");
+    assert!(!setup.repo.join("PWNED").exists());
+    setup.stop();
+}
+
+#[test]
+fn after_pis_new_a_reply_of_the_new_session_is_kept_in_the_review_it_took_over() {
+    let mut setup = Setup::new();
+    let run = recorded::pi_events(PI_TURN_TOOLS);
+    let (review, thread, _) = setup.pi_session_with_a_draft(&run[1], "Before the new session.");
+    assert!(matches!(setup.pi(&run[3]), Reply::Answer { .. }));
+    assert_eq!(setup.pi(&run[28]), Reply::Done);
+
+    // The recorded end of that session by `/new`, and the start of the session that follows
+    // in the same terminal and process.
+    assert_eq!(run[127].event, "session_shutdown");
+    assert_eq!(run[127].payload["reason"], "new");
+    assert_eq!(setup.pi(&run[127]), Reply::Done);
+    assert_eq!(run[129].event, "session_start");
+    assert_ne!(run[129].session(), run[1].session());
+    assert_eq!(setup.pi(&run[129]), Reply::Done);
+    let taken = setup.review_of_agent(yaar_adapter_pi::NAME, run[129].session());
+    assert_eq!(taken.id, review.id, "the new session took the review over");
+
+    // The agent calls the tool in the new session: its id is the new one.
+    let answered = tool_answer(setup.pi_payload(
+        &setup.terminal.clone(),
+        std::process::id(),
+        reply_payload(&run[129], &setup, &thread, "After the new session."),
+    ));
+    assert!(answered["text"].is_string(), "{answered}");
+    let kept = setup.review_of_agent(yaar_adapter_pi::NAME, run[129].session());
+    assert_eq!(kept.id, review.id);
+    let [reply] = &agent_comments(&kept)[..] else {
+        panic!("not one reply: {:?}", agent_comments(&kept));
+    };
+    assert_eq!(reply.text, "After the new session.");
+    setup.stop();
+}
+
+#[test]
+fn the_turn_a_round_was_sent_in_is_told_again_after_the_keeper_is_started_again() {
+    let mut setup = Setup::new();
+    let run = recorded::pi_events(PI_TURN_TOOLS);
+    let (review, ..) = setup.pi_session_with_a_draft(&run[1], "Why is this `one`?");
+    assert!(matches!(setup.pi(&run[3]), Reply::Answer { .. }));
+    let turn = delivered_round(&setup.review_of_agent(yaar_adapter_pi::NAME, run[1].session()))
+        .turn
+        .clone()
+        .expect("the round has a turn");
+    // The state of the round is recorded off the agent's way, and a Keeper stopped before it
+    // is would show none: wait for it, so that what is read after is the whole round.
+    setup.wait_for_states_of(yaar_adapter_pi::NAME, run[1].session());
+    let Setup {
+        scratch,
+        keeper,
+        window,
+        workspace,
+        ..
+    } = setup;
+    window.stop(keeper);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let reviews = window.reviews(&workspace);
+    let kept = reviews
+        .reviews
+        .iter()
+        .find(|held| held.id == review.id)
+        .expect("the review is kept");
+    assert_eq!(delivered_round(kept).turn, Some(turn));
+    window.stop(keeper);
 }

@@ -203,9 +203,10 @@ impl Core {
 
     /// Round `round` of `review` was just sent with a message of `session`: the turn of
     /// that session that runs now, the one the message started or, for a message the CLI
-    /// queued, the one that ran, is kept as the round's (`Store::set_round_turn`), so that
-    /// the Window can tell whether that turn has ended. A hook of the contract of slice 7
-    /// that keeps nothing, for the package of the Keeper's reading and delivery to fill.
+    /// took while it works, the one that ran, is kept as the round's
+    /// (`Store::set_round_turn`), so that the Window can tell whether that turn has ended.
+    /// Nothing is kept for a session with no turn open, which the Window then counts as
+    /// it counts a copy.
     pub(crate) fn round_sent_in(
         &self,
         kept: &Kept,
@@ -213,7 +214,15 @@ impl Core {
         round: u32,
         session: &SessionRecord,
     ) {
-        let _ = (kept, review, round, session);
+        let open = lock(&self.switchboard)
+            .session(&yaar_switchboard::SessionId(session.id.as_str().to_owned()))
+            .and_then(|known| known.turn);
+        let Some((turn, _)) = open else {
+            return;
+        };
+        if let Err(e) = kept.store.set_round_turn(review, round, &turn.0) {
+            eprintln!("yaar-keeper: the turn of round {round} was not kept: {e}");
+        }
     }
 
     /// The session `report` is of: the one the report's CLI names, except where that one
