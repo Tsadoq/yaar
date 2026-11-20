@@ -52,6 +52,11 @@ const TYPED: &str = "claude/review-file-read.jsonl";
 /// A session that starts (line 0) and nothing else of use here.
 const AT_MENTION: &str = "claude/at-mention.jsonl";
 
+/// The recording of pi's session with its four tools: its first session starts (line 1,
+/// `session_start`, its file `.../e7/2026-05-23T19-20-32-010Z_0000001f-....jsonl`) and
+/// ends (127); a second one starts after it (129).
+const PI_TOOLS: &str = "pi/turn-tools.jsonl";
+
 /// What `a.txt` of every repository holds, a line each.
 const LINES: [&str; 3] = ["one", "two", "three"];
 
@@ -275,6 +280,24 @@ impl Scratch {
             .expect("hand it the hook's input");
         let status = child.wait().expect("wait for the hook program");
         assert!(status.success(), "the hook program failed");
+    }
+}
+
+impl Scratch {
+    /// Reports `payload` as the extension of pi would, on a connection of its own as the
+    /// reporting program's is, for the CLI process `pid` in no terminal of the app: the
+    /// folder of the payload says where it belongs. The Keeper answers it `Done`.
+    fn pi_report(&self, pid: u32, payload: Vec<u8>) {
+        let report = AgentReport {
+            agent: yaar_adapter_pi::NAME.to_owned(),
+            terminal: None,
+            pid,
+            payload,
+        };
+        assert_eq!(
+            self.window().ask(Request::Report { report }),
+            Ok(Reply::Done)
+        );
     }
 }
 
@@ -940,6 +963,314 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         .expect("the session that runs");
     assert_eq!(runs.state, SessionState::Idle);
     assert!(!runs.resumable);
+    window.stop(keeper);
+}
+
+/// A process of its own for a CLI to name as its process in a report: it runs until the test
+/// ends, so that the Keeper does not take the session for gone.
+fn a_cli_process() -> Process {
+    Process(
+        Command::new("sleep")
+            .arg("600")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("start a process"),
+    )
+}
+
+/// What pi's resume runs for a session whose last record of itself is the file
+/// `record_file`: the folder of the record, and the session's own id, each word in single
+/// quotes for the shell.
+fn pi_resume(record_file: &str, id: &str) -> String {
+    let folder = Path::new(record_file).parent().expect("a file in a folder");
+    format!("pi --session-dir '{}' --session '{id}'", folder.display())
+}
+
+impl Scratch {
+    /// Takes away the arguments the shell was last run with, so that what [`launched_with`]
+    /// reads next is what the next launch wrote.
+    ///
+    /// [`launched_with`]: Scratch::launched_with
+    fn forget_the_launch(&self) {
+        match std::fs::remove_file(self.shell_log()) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => panic!("the log of the shell could not be taken away: {e}"),
+        }
+    }
+}
+
+#[test]
+fn a_pi_session_that_ran_when_its_keeper_stopped_is_resumable_after_each_restart_and_its_resume_runs_pi_with_the_folder_of_its_last_record_and_its_id()
+ {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+
+    // The session starts (line 1): it runs, and is not offered.
+    let first = records[1].in_project(&repo);
+    scratch.pi_report(pi.0.id(), first.payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    assert_eq!(started.sessions.len(), 1);
+    assert_eq!(started.sessions[0].agent, "pi");
+    assert!(!started.sessions[0].resumable, "it runs");
+    let session = started.sessions[0].id.clone();
+
+    // Its next report names another file as the session's record (line 3, the one field
+    // `sessionFile` changed: pi moves a session's file when it forks it), and a later one
+    // names none (line 16, the field taken out): the last one named is the one kept.
+    let moved = "/moved/sessions/2026-05-23T19-21-00-000Z_0000001f.jsonl";
+    let mut turn = records[3].in_project(&repo);
+    turn.payload["sessionFile"] = serde_json::json!(moved);
+    scratch.pi_report(pi.0.id(), turn.payload_bytes());
+    window.agents_until(&workspace, "the turn", is_state(SessionState::Works));
+    let mut read = records[16].in_project(&repo);
+    read.payload
+        .as_object_mut()
+        .expect("a record is an object")
+        .remove("sessionFile");
+    scratch.pi_report(pi.0.id(), read.payload_bytes());
+    window.stop(keeper);
+
+    // After the restart the session is offered, and its resume is pi's own command for it:
+    // the folder of the record kept and the id pi gave it.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let listed = window.agents();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].sessions.len(), 1);
+    assert_eq!(listed[0].sessions[0].id, session);
+    assert_eq!(listed[0].sessions[0].state, SessionState::NotRunning);
+    assert!(listed[0].sessions[0].resumable);
+    scratch.forget_the_launch();
+    window.open_program(
+        &workspace,
+        Program::Resume {
+            session: session.clone(),
+        },
+    );
+    let launched = scratch.launched_with();
+    assert_eq!(launched[..3], ["-l", "-i", "-c"]);
+    assert_eq!(launched[3], pi_resume(moved, records[1].session()));
+    window.stop(keeper);
+
+    // Offered again after a second restart in which nothing brought it back, and with the
+    // same command.
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    assert!(window.agents()[0].sessions[0].resumable);
+    scratch.forget_the_launch();
+    window.open_program(&workspace, Program::Resume { session });
+    assert_eq!(
+        scratch.launched_with()[3],
+        pi_resume(moved, records[1].session())
+    );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_resume_is_refused_while_its_terminal_runs_and_allowed_again_when_it_ends_and_never_once_the_session_reports()
+ {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    let first = records[1].in_project(&repo);
+    scratch.pi_report(pi.0.id(), first.payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    let session = started.sessions[0].id.clone();
+    window.stop(keeper);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let resume = |window: &mut Window| {
+        window.ask(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Resume {
+                session: session.clone(),
+            },
+            size: SIZE,
+        })
+    };
+    let Ok(Reply::TerminalOpened { terminal }) = resume(&mut window) else {
+        panic!("the resume was refused");
+    };
+    scratch.launched_with();
+
+    // While its terminal runs the session is not brought back a second time. It is still
+    // offered, since nothing of it was reported. The list read after the refusal, on the
+    // same connection, holds the one terminal.
+    let refused = resume(&mut window);
+    assert!(
+        matches!(refused, Err(Refusal::Failed { .. })),
+        "{refused:?}"
+    );
+    let Ok(Reply::Terminals(terminals)) = window.ask(Request::ListTerminals) else {
+        panic!("no list of terminals");
+    };
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    assert!(window.agents()[0].sessions[0].resumable);
+
+    // The terminal ends with its program: the session may be brought back again. A look
+    // repeated until the Keeper has taken the end of the terminal, which it tells to the
+    // agents' side after the Windows.
+    window.type_into(&terminal, b"\x04");
+    window.until("the end of the resume's terminal", |fact| match fact {
+        Fact::TerminalEnded {
+            terminal: ended, ..
+        } if *ended == terminal => Some(()),
+        _ => None,
+    });
+    scratch.forget_the_launch();
+    let deadline = Instant::now() + DEADLINE;
+    let second = loop {
+        match resume(&mut window) {
+            Ok(Reply::TerminalOpened { terminal }) => break terminal,
+            Err(Refusal::Failed { .. }) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            other => panic!("the resume after its terminal ended: {other:?}"),
+        }
+    };
+    assert_ne!(second, terminal);
+    scratch.launched_with();
+
+    // The session reports: its CLI has it, and it is offered no more, though the terminal
+    // of the resume still runs.
+    scratch.pi_report(pi.0.id(), first.payload_bytes());
+    let running = window.agents_until(&workspace, "the session runs", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.state == SessionState::Idle && !s.resumable)
+    });
+    assert_eq!(running.sessions.len(), 1);
+    let refused = resume(&mut window);
+    assert!(
+        matches!(refused, Err(Refusal::Failed { .. })),
+        "{refused:?}"
+    );
+    let Ok(Reply::Terminals(terminals)) = window.ask(Request::ListTerminals) else {
+        panic!("no list of terminals");
+    };
+    assert_eq!(terminals.len(), 1, "{terminals:?}");
+    window.stop(keeper);
+}
+
+#[test]
+fn the_end_of_another_terminal_does_not_free_a_session_a_resume_terminal_is_open_for() {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    let session = started.sessions[0].id.clone();
+    window.stop(keeper);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let resume = |window: &mut Window| {
+        window.ask(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Resume {
+                session: session.clone(),
+            },
+            size: SIZE,
+        })
+    };
+    assert!(matches!(
+        resume(&mut window),
+        Ok(Reply::TerminalOpened { .. })
+    ));
+    // Another terminal opens and ends while the resume's runs.
+    let other = window.open_program(
+        &workspace,
+        Program::Agent {
+            agent: yaar_adapter_claude::NAME.to_owned(),
+        },
+    );
+    window.type_into(&other, b"\x04");
+    window.until("the end of the other terminal", |fact| match fact {
+        Fact::TerminalEnded { terminal, .. } if *terminal == other => Some(()),
+        _ => None,
+    });
+    // The Keeper queued that end for the agents' side before it told the Windows. A report
+    // of another session of pi, on the same queue and answered once it is worked out, is
+    // the barrier: what the end changes is changed when it is answered.
+    scratch.pi_report(pi.0.id(), records[129].in_project(&repo).payload_bytes());
+
+    let refused = resume(&mut window);
+    assert!(
+        matches!(refused, Err(Refusal::Failed { .. })),
+        "{refused:?}"
+    );
+    let Ok(Reply::Terminals(terminals)) = window.ask(Request::ListTerminals) else {
+        panic!("no list of terminals");
+    };
+    assert_eq!(terminals.len(), 1, "only the resume's terminal runs");
+    window.stop(keeper);
+}
+
+#[test]
+fn a_pi_session_its_cli_ended_is_not_resumable_and_its_resume_is_refused_with_the_reason_before_and_after_a_restart()
+ {
+    let scratch = Scratch::with_launcher_shell();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    let session = started.sessions[0].id.clone();
+    // Its CLI ends it (line 127).
+    scratch.pi_report(pi.0.id(), records[127].in_project(&repo).payload_bytes());
+    let ended = window.agents_until(
+        &workspace,
+        "the session ended",
+        is_state(SessionState::NotRunning),
+    );
+    assert!(!ended.sessions[0].resumable, "its CLI ended it");
+
+    let refused_in = |window: &mut Window| {
+        let asked = window.ask(Request::OpenTerminal {
+            workspace: workspace.clone(),
+            program: Program::Resume {
+                session: session.clone(),
+            },
+            size: SIZE,
+        });
+        let Err(Refusal::Failed { reason }) = asked else {
+            panic!("the resume was not refused with a reason: {asked:?}");
+        };
+        assert!(!reason.is_empty());
+        // The reply came after all the Keeper does for the request: no terminal is listed
+        // and the user's shell never ran.
+        assert_eq!(
+            window.ask(Request::ListTerminals),
+            Ok(Reply::Terminals(vec![]))
+        );
+        assert!(!scratch.shell_log().exists(), "a launcher ran");
+    };
+    refused_in(&mut window);
+    window.stop(keeper);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    assert!(!window.agents()[0].sessions[0].resumable);
+    refused_in(&mut window);
     window.stop(keeper);
 }
 

@@ -332,7 +332,10 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
         commands.push(command);
     }
     assert_eq!(commands.len(), 2);
-    assert_ne!(commands[0], commands[1], "each CLI has a command of its own");
+    assert_ne!(
+        commands[0], commands[1],
+        "each CLI has a command of its own"
+    );
 
     // An agent no Adapter has is refused, and no terminal is made for it: the list read
     // after the refusal, on the same connection, is the one before.
@@ -344,7 +347,10 @@ fn a_launcher_starts_the_start_command_its_adapter_names_in_a_new_terminal() {
         },
         size: SIZE,
     });
-    assert!(matches!(refused, Err(Refusal::Failed { .. })), "{refused:?}");
+    assert!(
+        matches!(refused, Err(Refusal::Failed { .. })),
+        "{refused:?}"
+    );
     assert_eq!(window.terminals(), before);
     assert_eq!(before.len(), clis.len());
     window.stop(keeper);
