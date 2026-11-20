@@ -1,9 +1,10 @@
 //! The user's settings, between the Link and the Store: what a Window reads when it
 //! connects, and what it keeps when the user sets one.
 //!
-//! The Store keeps every setting the user set, those of the whole app and those of each
-//! workspace; the Link carries the kinds a Window sets so far, which in slice 5 is the form
-//! of Flow of a workspace. A setting the Store keeps that the Link has no word for yet is
+//! The Store keeps every setting the user set, those of the whole app, those of each
+//! workspace and those of each repository; the Link carries the kinds a Window sets so
+//! far: the form of Flow of a workspace, and the answer on the language servers inside a
+//! repository. A setting the Store keeps that the Link has no word for yet is
 //! not sent: the settings screen of slice 9 adds the words, and nothing here changes for
 //! them but one arm of each mapping.
 //!
@@ -28,11 +29,15 @@ pub(crate) fn get(kept: &Kept) -> Result<Reply, Refusal> {
 /// `Request::SetSetting`: keeps `setting` in the Store, answers `Reply::Done` once it is
 /// there, and puts `Fact::SettingChanged` with it into `facts`, for every Window. A
 /// setting of a workspace the Keeper does not know is refused with
-/// `Refusal::UnknownWorkspace`, and nothing is kept or told.
+/// `Refusal::UnknownWorkspace`, and one of a repository it does not know with
+/// `Refusal::Failed`, and nothing is kept or told.
 pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
     let (workspace, form) = match &setting {
         Setting::FlowForm { workspace, form } => (workspace, form),
-        Setting::ServersInRepository { .. } => return set_of_repository(kept, setting, facts),
+        Setting::ServersInRepository {
+            repository,
+            allowed,
+        } => return set_of_repository(kept, repository, *allowed, facts),
     };
     let store_workspace = yaar_store::WorkspaceId::new(workspace.as_str());
     let known = kept.store.workspaces().map_err(failed)?;
@@ -54,14 +59,32 @@ pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Resul
 /// `Request::SetSetting` of a setting of a repository: keeps the user's answer on the
 /// language servers inside it in the Store, answers `Reply::Done` once it is there, and puts
 /// `Fact::SettingChanged` with it into `facts`. A repository the Keeper does not know is
-/// refused with `Refusal::Failed` naming it, and nothing is kept or told.
+/// refused with `Refusal::Failed` naming it, and nothing is kept or told. The answer is the
+/// repository's, whichever of its worktrees the Window has on screen.
 fn set_of_repository(
     kept: &Kept,
-    setting: Setting,
+    repository: &yaar_link::RepositoryId,
+    allowed: bool,
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
-    let _ = (kept, setting, facts);
-    todo!()
+    let store_repository = yaar_store::RepositoryId::new(repository.as_str());
+    let known = kept.store.repositories().map_err(failed)?;
+    if !known.iter().any(|known| known.id == store_repository) {
+        return Err(Refusal::Failed {
+            reason: format!("the repository {repository} is not known"),
+        });
+    }
+    kept.store
+        .set_setting(&yaar_store::Setting::ServersInRepository {
+            repository: store_repository,
+            allowed,
+        })
+        .map_err(failed)?;
+    facts.push(Fact::SettingChanged(Setting::ServersInRepository {
+        repository: repository.clone(),
+        allowed,
+    }));
+    Ok(Reply::Done)
 }
 
 /// A setting of the Store in the Link's words; none for a kind the Link has no word for.
@@ -74,7 +97,13 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
                 yaar_store::FlowForm::LiveDiff => FlowForm::LiveDiff,
             },
         }),
-        yaar_store::Setting::ServersInRepository { .. } => todo!(),
+        yaar_store::Setting::ServersInRepository {
+            repository,
+            allowed,
+        } => Some(Setting::ServersInRepository {
+            repository: yaar_link::RepositoryId::new(repository.as_str()),
+            allowed: *allowed,
+        }),
         yaar_store::Setting::TurnEnd(_)
         | yaar_store::Setting::StopAfter { .. }
         | yaar_store::Setting::Theme(_)
