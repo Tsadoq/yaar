@@ -10,10 +10,11 @@
 
 mod common;
 
-use gpui_kit::{TestAppContext, VisualTestContext};
+use gpui_kit::{TestAppContext, VisualTestContext, Window};
 use yaar_link::{Consent, ConsentAnswer, Fact, Program, Refusal, Reply, Request};
 use yaar_terminal_pane::{
-    InstallAgentExtensions, KeepAgentExtensionsOut, NOTHING_TO_INSTALL, NewTerminal,
+    InstallAgentExtensions, KeepAgentExtensionsOut, NO_LABEL, NOTHING_TO_INSTALL, NewTerminal,
+    YES_LABEL,
 };
 
 use common::{Panes, click_in, drawn, key_of, open_panes, terminal, wait_drawn, wait_until};
@@ -182,6 +183,19 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
     );
 }
 
+/// The width the text system gives `text` at the size of the controls' text, `text_xs`: a
+/// control is that wide and its padding.
+fn text_width(text: &str, cx: &mut VisualTestContext) -> f32 {
+    cx.update(|window: &mut Window, _| {
+        let size = window.rem_size() * 0.75;
+        let run = window.text_style().to_run(text.len());
+        let shaped = window
+            .text_system()
+            .shape_line(text.to_owned().into(), size, &[run], None);
+        f32::from(shaped.width)
+    })
+}
+
 #[gpui_kit::test]
 fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_no(
     cx: &mut TestAppContext,
@@ -205,6 +219,25 @@ fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_n
     assert!(
         per_character > 1.0,
         "a character of a label is {per_character} wide"
+    );
+
+    // The words are the pane's two constants: the one of the control that sends the yes
+    // is "Install" and the other's is "No". The test platform gives no text, only widths,
+    // so each drawn control is held to the width its constant's words make it: what a
+    // control is wider than its words is its padding, the same for both.
+    assert_eq!(YES_LABEL, "Install");
+    assert_eq!(NO_LABEL, "No");
+    let padding_of_yes = yes - text_width(YES_LABEL, &mut cx);
+    let padding_of_no = no - text_width(NO_LABEL, &mut cx);
+    assert!(
+        padding_of_yes > 0.0 && padding_of_no > 0.0,
+        "a control is no wider than its words: {padding_of_yes} and {padding_of_no} over them"
+    );
+    assert!(
+        (padding_of_yes - padding_of_no).abs() < 1.0,
+        "the control that answers yes is {yes} wide and the one that answers no {no}, \
+         which leaves {padding_of_yes} and {padding_of_no} over the words {YES_LABEL:?} \
+         and {NO_LABEL:?}"
     );
 }
 

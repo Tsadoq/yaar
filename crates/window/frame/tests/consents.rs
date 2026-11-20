@@ -352,3 +352,49 @@ fn a_refusal_of_the_first_answer_still_takes_the_list_of_the_others(cx: &mut Tes
     ));
     assert_eq!(asked(&list, cx), ["a"]);
 }
+
+#[gpui_kit::test]
+fn an_answer_when_every_question_held_is_answered_already_asks_the_list_first(
+    cx: &mut TestAppContext,
+) {
+    let (list, mut keeper) = linked(cx);
+    // The model holds an Adapter, but none of its questions is shown: it was answered, and
+    // went without a problem. The answer is for the Adapters the Keeper lists, not for the
+    // questions the model shows, of which there is none.
+    tell(
+        &list,
+        &mut keeper,
+        vec![consent("a", ConsentAnswer::No)],
+        cx,
+    );
+    assert_eq!(asked(&list, cx), Vec::<String>::new());
+    let sent = list.update(cx, |list, cx| list.answer_all(ConsentAnswer::Yes, cx));
+    let sent = start(sent, cx);
+
+    let asking = keeper.expect(Request::ListConsents, cx);
+    keeper.reply(
+        asking,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::No),
+            consent("b", ConsentAnswer::NotAsked),
+        ])),
+    );
+    let first = keeper.expect(answering("a", ConsentAnswer::Yes), cx);
+    keeper.reply(
+        first,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::Yes),
+            consent("b", ConsentAnswer::NotAsked),
+        ])),
+    );
+    let second = keeper.expect(answering("b", ConsentAnswer::Yes), cx);
+    keeper.reply(
+        second,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::Yes),
+            consent("b", ConsentAnswer::Yes),
+        ])),
+    );
+    assert!(matches!(finished(&sent, cx), Ok(true)));
+    assert_eq!(asked(&list, cx), Vec::<String>::new());
+}

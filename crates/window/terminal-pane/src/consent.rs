@@ -7,8 +7,8 @@
 //! Adapters, it shows the Adapter's own words as they are (`terminal-consent-question-<n>`,
 //! n counted from 0), and under them, in the colour of a failure, what went wrong where the
 //! CLI's settings could not be changed (`terminal-consent-problem-<n>`). After the last,
-//! two controls answer every question shown: `terminal-consent-yes`, "Install", which is
-//! [`crate::InstallAgentExtensions`], and `terminal-consent-no`, "No", which is
+//! two controls answer every question shown: `terminal-consent-yes`, [`YES_LABEL`], which is
+//! [`crate::InstallAgentExtensions`], and `terminal-consent-no`, [`NO_LABEL`], which is
 //! [`crate::KeepAgentExtensionsOut`]. The pane names no CLI: the words are the Adapter's.
 //!
 //! The question is not modal: every terminal, launcher and key works while it is up, and a
@@ -29,6 +29,14 @@ use gpui_kit::*;
 use yaar_link::{Consent, ConsentAnswer};
 
 use crate::{InstallAgentExtensions, KeepAgentExtensionsOut, TerminalPane};
+
+/// The label of the control that answers yes to every question shown, `terminal-consent-yes`:
+/// what [`crate::InstallAgentExtensions`] does, said in a word.
+pub const YES_LABEL: &str = "Install";
+
+/// The label of the control that answers no to every question shown, `terminal-consent-no`:
+/// what [`crate::KeepAgentExtensionsOut`] does.
+pub const NO_LABEL: &str = "No";
 
 /// The notice when the user answers and no Adapter needs leave.
 pub const NOTHING_TO_INSTALL: &str = "No agent CLI asks to install anything.";
@@ -109,16 +117,16 @@ impl TerminalPane {
                         .flex()
                         .flex_row()
                         .gap_2()
-                        .child(control("terminal-consent-yes", "Install", true).on_click(
+                        .child(control("terminal-consent-yes", YES_LABEL, true).on_click(
                             cx.listener(|pane, _: &ClickEvent, _, cx| {
                                 pane.answer(ConsentAnswer::Yes, cx)
                             }),
                         ))
-                        .child(
-                            control("terminal-consent-no", "No", false).on_click(cx.listener(
-                                |pane, _: &ClickEvent, _, cx| pane.answer(ConsentAnswer::No, cx),
-                            )),
-                        ),
+                        .child(control("terminal-consent-no", NO_LABEL, false).on_click(
+                            cx.listener(|pane, _: &ClickEvent, _, cx| {
+                                pane.answer(ConsentAnswer::No, cx)
+                            }),
+                        )),
                 )
                 .into_any_element(),
         )
