@@ -19,13 +19,13 @@ use yaar_link::{
     Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
     ThreadId, ThreadState, Workspace,
 };
-use yaar_review_pane::View;
+use yaar_review_pane::{PaneRow, View};
 use yaar_system_tests::standin::{Did, Script};
 use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, RunningAgent, give_an_identity, wait_until};
+use common::{Composed, RunningAgent, give_an_identity, key_of, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -716,6 +716,55 @@ impl Composed {
         }
     }
 
+    /// Puts the reviewer on the line the agent's thread sits on, by the keys a user uses:
+    /// Changes shown, the pane focused, then Line Down or Line Up until the thread's row
+    /// follows the row the reviewer is on. A key of an earlier step may have moved the
+    /// reviewer, and a click on the first row would not put it back, since a click on a
+    /// row that holds no line leaves the position where it was. The keys that act on the
+    /// thread on the line find it only there.
+    fn put_the_reviewer_on_the_thread(&mut self, cx: &mut VisualTestContext) {
+        let thread = self
+            .agent()
+            .thread
+            .clone()
+            .expect("the walk wrote a thread");
+        self.show_changes(cx);
+        self.click_into_the_review_pane(cx);
+        // The row of the thread, once the pane draws it, and the row the reviewer is on.
+        let rows_of = |window: &Self, cx: &mut VisualTestContext| {
+            window.review.read_with(cx, |pane, _| {
+                let of_thread = pane.rows().iter().position(
+                    |row| matches!(row, PaneRow::Thread { thread: held } if *held == thread),
+                );
+                (pane.position_row(), of_thread)
+            })
+        };
+        wait_until(cx, "the thread's row and the reviewer on a line", |cx| {
+            matches!(rows_of(self, cx), (Some(_), Some(_)))
+        });
+        let (line_down, line_up) = (key_of("Line Down"), key_of("Line Up"));
+        let rows = self.review.read_with(&*cx, |pane, _| pane.rows().len());
+        for _ in 0..rows {
+            let (Some(on), Some(thread_row)) = rows_of(self, cx) else {
+                break;
+            };
+            if on + 1 == thread_row {
+                break;
+            }
+            cx.simulate_keystrokes(if on + 1 < thread_row {
+                &line_down
+            } else {
+                &line_up
+            });
+            cx.run_until_parked();
+        }
+        wait_until(
+            cx,
+            "the reviewer on the line of the thread",
+            |cx| matches!(rows_of(self, cx), (Some(on), Some(thread_row)) if on + 1 == thread_row),
+        );
+    }
+
     /// Ends the agent the walk started: the gate is made, and the stand-in ends its session
     /// and itself.
     fn end_the_agent(&mut self) {
@@ -1000,6 +1049,9 @@ fn no_key_of_a_control_that_names_no_message_sends_what_a_user_starts_where_an_a
         let session = window.agent().session.clone();
         window.show_the_review_of(&session, cx);
         window.make_sure_it_is_attached(cx);
+        // The keys that act on the thread on the reviewer's line, Original Line, Comment,
+        // Edit Draft and Reply among them, are pressed with the reviewer on it.
+        window.put_the_reviewer_on_the_thread(cx);
     });
     window.end_the_agent();
 }
