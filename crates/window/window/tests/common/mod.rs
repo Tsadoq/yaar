@@ -17,6 +17,7 @@ use gpui_kit::{
     point, px,
 };
 use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane};
+use yaar_link::{ReviewId, SessionId, TerminalId, ThreadId};
 use yaar_review_pane::ReviewPane;
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
 use yaar_terminal_pane::TerminalPane;
@@ -46,9 +47,24 @@ pub struct Composed {
     _watching_the_keys: Subscription,
     /// The repositories the test made, each opened as a workspace.
     pub repositories: Vec<Repo>,
+    /// The agent the walk of the reviews started, once it did.
+    pub agent: Option<RunningAgent>,
     /// Counts what the test makes, for names of its own.
     made: u32,
     _waiting: WaitingForPrograms,
+}
+
+/// An agent a test started in a terminal of the workspace on screen, and what the walk of
+/// the reviews holds of it.
+pub struct RunningAgent {
+    /// The terminal it runs in.
+    pub terminal: TerminalId,
+    /// Its session.
+    pub session: SessionId,
+    /// The review of that session, which the review pane shows.
+    pub review: ReviewId,
+    /// The thread the walk wrote, once it wrote one.
+    pub thread: Option<ThreadId>,
 }
 
 /// The processes the Keeper started, listed while it still runs: dropping this reads them
@@ -214,6 +230,7 @@ fn open_composed_with(
             ran,
             _watching_the_keys: watching,
             repositories: Vec::new(),
+            agent: None,
             made: 0,
             _waiting: WaitingForPrograms { started },
         },

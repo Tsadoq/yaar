@@ -14,16 +14,18 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
-use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
+use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends, Wanted as Launcher};
 use yaar_link::{
-    CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting, Workspace,
+    Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
+    ThreadId, ThreadState, Workspace,
 };
 use yaar_review_pane::View;
-use yaar_system_tests::{DEADLINE, Repo, descendants_of, is_alive};
+use yaar_system_tests::standin::{Did, Script};
+use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, give_an_identity, wait_until};
+use common::{Composed, RunningAgent, give_an_identity, wait_until};
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -49,7 +51,28 @@ enum Answer {
 /// a tap on its link, and checks that every pane of the Window's list is in it, as well as
 /// in the table of controls.
 fn open_composed(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
-    let (window, cx) = common::open_composed(cx, Vec::new());
+    check_the_panes(common::open_composed(cx, Vec::new()))
+}
+
+/// [`open_composed`] in a world whose agent CLI is the stand-in, with a script that runs and
+/// does nothing until the test makes the file `gate` of the world: the session the walk
+/// of the reviews starts, and ends at the gate.
+fn open_composed_with_an_agent(cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
+    let mut world = World::new();
+    world.agents_on_path();
+    let script = Script::parse(&format!("hold {}\nexit", gate_of(&world).display()));
+    world.agent_script("default", &script);
+    world.start_keeper();
+    check_the_panes(common::open_composed_in(world, cx, Vec::new()))
+}
+
+/// The file outside the worktrees that holds the stand-in until the test makes it.
+fn gate_of(world: &World) -> PathBuf {
+    world.home().with_file_name("gate")
+}
+
+fn check_the_panes(opened: (Composed, VisualTestContext)) -> (Composed, VisualTestContext) {
+    let (window, cx) = opened;
     let listed: Vec<&str> = yaar_window::panes().iter().map(|pane| pane.name).collect();
     assert_eq!(
         window.frame.read_with(&cx, |frame, _| frame.panes()),
@@ -129,7 +152,10 @@ impl Composed {
     /// still recording a state or running git for its answer leaves the folder of its copy
     /// of git's list of files in the system's temp folder, outside the world. The requests of the reviews are answered one after
     /// the other, so waiting for the last of them covers those before it.
-    fn settle(&mut self, kind: RequestKind, cx: &mut VisualTestContext) {
+    ///
+    /// `passed` is the request the step waited for: for the kinds that act on a review it
+    /// says what the step has to see done.
+    fn settle(&mut self, kind: RequestKind, passed: &Request, cx: &mut VisualTestContext) {
         match kind {
             RequestKind::CopyReview => wait_until(cx, "the copied review on the clipboard", |cx| {
                 cx.read_from_clipboard()
@@ -189,16 +215,60 @@ impl Composed {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
-            // The forward walk leaves the kinds of slice 6 out until the package that builds
-            // the composed Window of slice 6 teaches it them (`OF_SLICE_6`).
-            RequestKind::AttachReview
-            | RequestKind::DetachReview
-            | RequestKind::ResolveThread
-            | RequestKind::ReopenThread
-            | RequestKind::ResolveAddressed => {
-                panic!("the walk does not know {kind:?} yet")
+            RequestKind::AttachReview => {
+                let attached = match passed {
+                    Request::AttachReview {
+                        thread: Some(thread),
+                        ..
+                    } => Attachment::Thread(thread.clone()),
+                    _ => Attachment::Review,
+                };
+                self.wait_for_attachment(Some(attached), cx);
             }
+            RequestKind::DetachReview => self.wait_for_attachment(None, cx),
+            RequestKind::ResolveThread => self.wait_for_thread(ThreadState::Resolved, true, cx),
+            RequestKind::ReopenThread => self.wait_for_thread(ThreadState::Resolved, false, cx),
+            // No thread of the walk is addressed, so the request changes nothing to wait
+            // for: the Keeper answers it from the review it holds, with no git and no
+            // file, so that nothing is left half done when the stop frame ends it.
+            RequestKind::ResolveAddressed => {}
         }
+    }
+
+    /// Waits until the review of the agent shows what is attached to it as `attached` says,
+    /// in the review pane and in the agents' list, which the agent's terminal reads.
+    fn wait_for_attachment(&mut self, attached: Option<Attachment>, cx: &mut VisualTestContext) {
+        let terminal = self.agent().terminal.clone();
+        wait_until(cx, "what is attached to show as the step did it", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.review().map(|review| review.attached.clone())
+            }) == Some(attached.clone())
+                && self
+                    .terminals
+                    .read_with(cx, |pane, cx| pane.attachment(&terminal, cx))
+                    == attached
+        });
+    }
+
+    /// Waits until the thread of the walk is in `state` (`is` true) or not in it.
+    fn wait_for_thread(&mut self, state: ThreadState, is: bool, cx: &mut VisualTestContext) {
+        let thread = self
+            .agent()
+            .thread
+            .clone()
+            .expect("the walk wrote a thread");
+        wait_until(cx, "the thread in the state the step put it in", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.thread_states()
+                    .iter()
+                    .any(|(id, now)| *id == thread && (*now == state) == is)
+            })
+        });
+    }
+
+    /// The agent the walk started.
+    fn agent(&self) -> &RunningAgent {
+        self.agent.as_ref().expect("the walk started an agent")
     }
 
     /// The review the review pane shows, once it holds one.
@@ -220,6 +290,17 @@ impl Composed {
     /// such row. Returns the review and the draft once the pane's model shows the draft
     /// with its whole text.
     fn write_a_draft(&mut self, cx: &mut VisualTestContext) -> (ReviewId, CommentId) {
+        self.write_a_draft_lower(0, cx)
+    }
+
+    /// [`Composed::write_a_draft`] on the line `down` lines below the first: a line no
+    /// earlier thread of the walk sits on, so that the keys that act on the thread on the
+    /// reviewer's line find this one.
+    fn write_a_draft_lower(
+        &mut self,
+        down: usize,
+        cx: &mut VisualTestContext,
+    ) -> (ReviewId, CommentId) {
         self.show_changes(cx);
         // The reviewer waits for the pane to show the reviews and a line to be on.
         self.review_shown(cx);
@@ -228,6 +309,9 @@ impl Composed {
                 .read_with(cx, |pane, _| pane.position().is_some())
         });
         self.click_into(cx, "review-row-0");
+        for _ in 0..down {
+            cx.simulate_keystrokes("j");
+        }
         cx.simulate_keystrokes("c");
         wait_until(cx, "the comment box", |cx| {
             self.review
@@ -541,12 +625,37 @@ impl Composed {
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
                 }
-                RequestKind::AttachReview
-                | RequestKind::DetachReview
-                | RequestKind::ResolveThread
-                | RequestKind::ReopenThread
-                | RequestKind::ResolveAddressed => {
-                    panic!("the walk does not know {kind:?} yet")
+                RequestKind::AttachReview => {
+                    let (review, thread) = self.agent_with_a_thread(cx);
+                    // The thread is attached alone from the line it is on; the review whole
+                    // by the other key.
+                    let request = Request::AttachReview {
+                        review,
+                        thread: (control.title == "Attach Thread").then_some(thread),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::DetachReview => {
+                    let (review, _) = self.agent_with_a_thread(cx);
+                    // Both controls detach what is attached: the one at the agent's terminal
+                    // is drawn, and acts, only while something is.
+                    self.make_sure_it_is_attached(cx);
+                    let request = Request::DetachReview { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::ResolveThread | RequestKind::ReopenThread => {
+                    let (review, thread) = self.agent_with_a_thread(cx);
+                    let request = if kind == RequestKind::ResolveThread {
+                        Request::ResolveThread { review, thread }
+                    } else {
+                        Request::ReopenThread { review, thread }
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::ResolveAddressed => {
+                    let (review, _) = self.agent_with_a_thread(cx);
+                    let request = Request::ResolveAddressed { review };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
                 }
             };
 
@@ -556,8 +665,8 @@ impl Composed {
             // is on its way by now. The folder and the branch are new with each step,
             // and a terminal is asked for by this step alone: no request of an earlier
             // step answers this wait.
-            self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
-            self.settle(kind, cx);
+            let passed = self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
+            self.settle(kind, &passed, cx);
 
             // A folder that was opened comes on screen. The next step starts once it
             // has, so that it finds the workspace it acts on.
@@ -565,6 +674,161 @@ impl Composed {
                 self.wait_until_on_screen(folder, cx);
             }
         }
+    }
+
+    /// The control of the Window titled `title`.
+    fn control_titled(title: &str) -> Control {
+        yaar_window::controls()
+            .into_iter()
+            .find(|control| control.title == title)
+            .unwrap_or_else(|| panic!("no control is titled {title:?}"))
+    }
+
+    /// Starts the stand-in in a launcher terminal of the workspace on screen, as the offer
+    /// made on attaching does, and has the Window show what the keys of the reviews act on:
+    /// that terminal focused, and the review of its session in the review pane.
+    fn start_the_agent(&mut self, cx: &mut VisualTestContext) {
+        let workspace = self
+            .on_screen(cx)
+            .expect("a workspace is on screen before the walk starts an agent")
+            .id;
+        // What the review pane asks for when its offer to start an agent is taken: the
+        // launcher of the CLI for the review shown, the one of no agent for now. The pane
+        // of the terminals opens it and gives it the focus.
+        let review_of_no_agent = self.review_shown(cx);
+        self.models.terminals.update(cx, |list, cx| {
+            list.want(
+                Launcher::AgentFor {
+                    workspace,
+                    agent: "claude".to_owned(),
+                    review: review_of_no_agent,
+                },
+                cx,
+            )
+        });
+        let mut found = None;
+        wait_until(
+            cx,
+            "the session in the terminal that took the focus, with its review",
+            |cx| {
+                found = self
+                    .terminals
+                    .read_with(cx, |pane, _| pane.focused())
+                    .and_then(|terminal| {
+                        self.models
+                            .agents
+                            .read_with(cx, |agents, _| agents.in_terminal(&terminal).cloned())
+                    });
+                found
+                    .as_ref()
+                    .is_some_and(|session| session.review.is_some())
+            },
+        );
+        let session = found.expect("the agents list the session");
+        let review = session.review.clone().expect("it has a review");
+        let terminal = session.terminal.clone().expect("it runs in a terminal");
+        wait_until(cx, "the focus in the launcher's terminal", |cx| {
+            self.focus_is_in("Program", cx)
+        });
+
+        // The review: Next Review until the pane shows the session's, which it need not at
+        // first, and checked.
+        wait_until(cx, "the session among those the review pane names", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.review().is_some() && pane.sessions().iter().any(|s| s.id == session.id)
+            })
+        });
+        let reviews = self
+            .review
+            .read_with(cx, |pane, _| pane.sessions().len() + 1);
+        let next_review = Self::control_titled("Next Review");
+        for _ in 0..reviews {
+            if self
+                .review
+                .read_with(cx, |pane, _| pane.review_session().cloned())
+                == Some(session.id.clone())
+            {
+                break;
+            }
+            self.press(&next_review, cx);
+            cx.run_until_parked();
+        }
+        wait_until(
+            cx,
+            "the review of the agent's session in the review pane",
+            |cx| {
+                self.review
+                    .read_with(cx, |pane, _| pane.review_session().cloned())
+                    == Some(session.id.clone())
+            },
+        );
+        self.agent = Some(RunningAgent {
+            terminal,
+            session: session.id,
+            review,
+            thread: None,
+        });
+    }
+
+    /// The review of the agent and a thread of it with a draft, the reviewer on its line:
+    /// the agent is started and the draft written the first time this is asked.
+    fn agent_with_a_thread(&mut self, cx: &mut VisualTestContext) -> (ReviewId, ThreadId) {
+        if self.agent.is_none() {
+            self.start_the_agent(cx);
+        }
+        if self.agent().thread.is_none() {
+            // The kinds before wrote a thread on the first line.
+            let (review, comment) = self.write_a_draft_lower(1, cx);
+            assert_eq!(
+                review,
+                self.agent().review,
+                "the draft is in the agent's review"
+            );
+            let thread = self.review.read_with(cx, |pane, _| {
+                pane.review()
+                    .and_then(|review| {
+                        review
+                            .threads
+                            .iter()
+                            .find(|thread| thread.comments.iter().any(|c| c.id == comment))
+                    })
+                    .map(|thread| thread.id.clone())
+            });
+            let thread = thread.expect("the review holds the thread of the draft");
+            self.agent.as_mut().expect("started").thread = Some(thread);
+        }
+        let agent = self.agent();
+        (
+            agent.review.clone(),
+            agent.thread.clone().expect("the thread was written"),
+        )
+    }
+
+    /// Attaches the review of the agent by the key of Attach Review when nothing is
+    /// attached to it, and waits until the review pane and the agent's terminal show it.
+    fn make_sure_it_is_attached(&mut self, cx: &mut VisualTestContext) {
+        let attached = self
+            .review
+            .read_with(cx, |pane, _| pane.review().and_then(|r| r.attached.clone()));
+        if attached.is_none() {
+            self.press(&Self::control_titled("Attach Review"), cx);
+            self.wait_for_attachment(Some(Attachment::Review), cx);
+        }
+    }
+
+    /// Ends the agent the walk started: the gate is made, and the stand-in ends its session
+    /// and itself.
+    fn end_the_agent(&mut self) {
+        std::fs::write(gate_of(&self.world), "").expect("make the gate");
+        let world = &self.world;
+        assert!(
+            yaar_system_tests::wait_until(DEADLINE, || world
+                .agent_log("default")
+                .did
+                .iter()
+                .any(|did| matches!(did, Did::Exited { .. }))),
+            "the agent did not end at the gate"
+        );
     }
 
     /// The last step of the walk: every control that says it sends the stop-everything
@@ -666,24 +930,18 @@ impl Composed {
 
 #[gpui_kit::test]
 fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestAppContext) {
-    let (mut window, mut cx) = open_composed(cx);
+    let (mut window, mut cx) = open_composed_with_an_agent(cx);
 
     // A workspace is on screen before the walk, whichever kind the walk meets first:
     // without one there is nothing to set a base for.
     window.walk(RequestKind::OpenFolder, &mut cx);
 
-    // The kinds of slice 6 are left out until the package that builds the composed Window
-    // of slice 6 teaches the walk them, and takes this filter away.
-    const OF_SLICE_6: [RequestKind; 5] = [
-        RequestKind::AttachReview,
-        RequestKind::DetachReview,
-        RequestKind::ResolveThread,
-        RequestKind::ReopenThread,
-        RequestKind::ResolveAddressed,
-    ];
-    for kind in RequestKind::started_by_user().filter(|kind| !OF_SLICE_6.contains(kind)) {
+    // Every kind there is, the kinds of the reviews among them: the first of those starts
+    // the agent whose review they act on.
+    for kind in RequestKind::started_by_user() {
         window.walk(kind, &mut cx);
     }
+    window.end_the_agent();
 
     // The stop frame is no request. It ends the Keeper, so it is pressed last.
     window.walk_the_stop(&mut cx);
