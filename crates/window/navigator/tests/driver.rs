@@ -754,6 +754,9 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
             &status.to_string(),
         ]
         .into_iter()
+        // The stand-in says `standin/status` again after it was initialized, so a second
+        // `Ready` has a notification to be told on if the driver tells it more than once.
+        .chain(["--ready", "notification"])
         .chain(standin_args.iter().copied())
         .map(str::to_owned)
         .collect();
@@ -773,16 +776,31 @@ fn a_server_that_says_it_is_ready_before_its_initialize_fails_is_told_exited_and
 
     // The control: the same wrapper and the same frame, and the stand-in answers initialize.
     // The frame was parsed and the rule was met, so exactly one `Ready` comes, once the
-    // answer did; so the first half is not passing because the frame never arrived.
+    // answer did, though the stand-in says `standin/status` twice more; so the first half is
+    // not passing because the frame never arrived.
     let mut control = Run::start(with_status_first(&[]));
     control.ready();
     assert!(control.server.is_ready());
-    control.server.stop(STOP);
-    // `Exited` is told before `stop` returns and is the last event: a second `Ready` would
-    // be before it.
-    control.told.extend(control.events.try_iter());
+    let Run {
+        server,
+        events,
+        mut told,
+    } = control;
+    server.stop(STOP);
+    // `Exited` is the last event and is waited for, up to the deadline: a second `Ready`
+    // would be before it.
+    loop {
+        let event = events
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|_| panic!("no `Exited` within {DEADLINE:?}; told: {told:?}"));
+        let exited = matches!(event, ServerEvent::Exited { .. });
+        told.push(event);
+        if exited {
+            break;
+        }
+    }
     assert_eq!(
-        control.told,
+        told,
         [ServerEvent::Ready, ServerEvent::Exited { code: Some(0) }]
     );
 }
