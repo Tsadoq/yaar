@@ -762,12 +762,7 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_an
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     assert!(mark_is_over("pi", &["claude"], &mut cx));
-    assert!(
-        stage
-            .pane
-            .read_with(&cx, |pane, _| pane.notice())
-            .is_none()
-    );
+    assert!(stage.pane.read_with(&cx, |pane, _| pane.notice()).is_none());
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     assert!(mark_is_over("claude", &["pi"], &mut cx));
