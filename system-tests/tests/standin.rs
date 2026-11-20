@@ -1,7 +1,8 @@
 //! Tests of the stand-in agent: the built `standin-agent`, run in a pseudo-terminal the
 //! test opens, with a plugin folder of the test's own whose hooks write down what they
-//! were given. No Keeper, no app: the stand-in knows only Claude Code's side of the plugin
-//! contract.
+//! were given. No Keeper, no app: as Claude Code the stand-in knows that CLI's side of the
+//! plugin contract, and as pi it reports through a reporting program of the test's own, in a
+//! home of the test's own.
 
 use std::cell::RefCell;
 use std::ffi::CString;
@@ -2276,6 +2277,11 @@ fn no_hook_run(name: &str, variable: Option<(&str, &str)>) {
 
 // The stand-in as pi.
 
+/// The shell level the stand-in as pi is started with: the reporting program is a script of
+/// bash, which adds one to it, and sees that one and no more when the stand-in runs it
+/// itself.
+const SHLVL_OF_THE_STAND_IN: u32 = 40;
+
 /// What a test as pi has: an extension file, the reporting program of the test's own, which
 /// records what it is given and prints an answer the test chose, and the files they live in.
 /// Each test gives pi a home of its own, the folder of its place, so that nothing under the
@@ -2293,6 +2299,11 @@ struct PiKit {
 struct Report {
     /// The program's parent: the process that ran it.
     parent: u32,
+    /// The shell level the program saw: `SHLVL_OF_THE_STAND_IN` and the one level its own
+    /// interpreter adds. A shell between the stand-in and the program, which sets the level
+    /// of its own, adds another, and a shell that execs the program leaves the parent as
+    /// the stand-in all the same.
+    level: u32,
     /// Whether it was run with `--tool`.
     tool: bool,
     /// Whether `s.txt` was in the folder it ran in when it ran.
@@ -2324,13 +2335,13 @@ impl PiKit {
         fs::write(
             &program,
             format!(
-                r#"#!/bin/sh
+                r#"#!/bin/bash
 tool=no
 [ "$1" = "--tool" ] && tool=yes
 payload=$(cat)
 there=no
 [ -e s.txt ] && there=yes
-printf '%s %s %s %s\n' "$PPID" "$tool" "$there" "$payload" >> '{reports}'
+printf '%s %s %s %s %s\n' "$PPID" "$SHLVL" "$tool" "$there" "$payload" >> '{reports}'
 case "$payload" in
   *'"event":"input"'*)
     if [ -f '{root}/answer-steer' ] && case "$payload" in *'"streamingBehavior":"steer"'*) true ;; *) false ;; esac; then
@@ -2406,6 +2417,7 @@ exit 0
         start
             .env
             .push(("YAAR_PI_REPORT", self.program.display().to_string()));
+        start.env.push(("SHLVL", SHLVL_OF_THE_STAND_IN.to_string()));
         start
     }
 
@@ -2415,12 +2427,13 @@ exit 0
             .unwrap_or_default()
             .lines()
             .map(|line| {
-                let words: Vec<&str> = line.splitn(4, ' ').collect();
+                let words: Vec<&str> = line.splitn(5, ' ').collect();
                 Report {
                     parent: words[0].parse().expect("a process id"),
-                    tool: words[1] == "yes",
-                    s_there: words[2] == "yes",
-                    payload: serde_json::from_str(words[3]).expect("a payload is JSON"),
+                    level: words[1].parse().expect("a shell level"),
+                    tool: words[2] == "yes",
+                    s_there: words[3] == "yes",
+                    payload: serde_json::from_str(words[4]).expect("a payload is JSON"),
                 }
             })
             .collect()
@@ -2560,6 +2573,7 @@ fn pi_with_the_extension_reports_each_moment_of_its_script_in_order_with_the_pay
         // The program is run by the stand-in itself, with no shell between, and not with
         // `--tool`.
         assert_eq!(report.parent, log.pid);
+        assert_eq!(report.level, SHLVL_OF_THE_STAND_IN + 1);
         assert!(!report.tool);
     }
     let payload = |at: usize| &reports[at].payload;
@@ -3125,6 +3139,7 @@ fn a_reply_runs_the_program_with_tool_and_the_arguments_of_the_thread_byte_for_b
             reports[at].payload
         );
         assert_eq!(reports[at].parent, run.log().pid);
+        assert_eq!(reports[at].level, SHLVL_OF_THE_STAND_IN + 1);
     }
     let sent = |at: usize| reports[at].payload["arguments"].clone();
     assert_eq!(
@@ -3175,7 +3190,12 @@ fn a_review_that_rides_with_a_queued_message_is_the_one_a_reply_names_as_pi() {
     let place = Place::new();
     let kit = PiKit::new(&place);
     kit.list_extension();
-    // The first message is answered with no review; the one typed while the tool runs is.
+    // Both messages are answered with a review: the one typed while the tool runs comes
+    // later, and its review replaces the first one's.
+    kit.answer(
+        "input",
+        &json!({"review": review_of(&["first-1"])}).to_string(),
+    );
     kit.answer(
         "steer",
         &json!({"review": review_of(&["queued-1"])}).to_string(),
