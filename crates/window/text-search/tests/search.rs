@@ -459,10 +459,13 @@ fn is_ignored_agrees_with_what_the_search_finds_in_every_file() {
         b"*.log\n/build\ndocs/*.md\n!docs/keep.md\n",
     );
     write(&root, ".git/info/exclude", b"private/\n");
-    write(&root, "src/.gitignore", b"gen_*\n");
+    // A deeper file takes back what a shallower one leaves out, so the order the rules are
+    // weighed in shows: the deepest first.
+    write(&root, "src/.gitignore", b"gen_*\n!keep.log\n");
     let files = [
         "a.rs",
         "x.log",
+        "src/keep.log",
         "build/o.txt",
         "src/build/o.txt",
         "docs/a.md",
@@ -486,6 +489,11 @@ fn is_ignored_agrees_with_what_the_search_finds_in_every_file() {
             "{file}: ignored exactly when the search does not find it ({searched:?})"
         );
     }
+    assert!(
+        searched.iter().any(|s| s == "src/keep.log"),
+        "the deeper .gitignore's re-inclusion is searched ({searched:?})"
+    );
+    assert!(!is_ignored(&root, &root.join("src/keep.log")));
     assert!(
         searched.len() > 2 && searched.len() < files.len(),
         "the files hold both kinds"
@@ -524,7 +532,9 @@ fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_reposi
     let inner = linked.join("vendor/inner");
     write(&linked, "vendor/inner/placeholder", b"");
     scratch.init(&inner);
-    write(&inner, ".git/info/exclude", b"hid.txt\n");
+    // It also takes back the name the main repository's exclude file leaves out: the
+    // deepest exclude file is weighed first.
+    write(&inner, ".git/info/exclude", b"hid.txt\n!secret.txt\n");
     let files = [
         "a.rs",
         "secret.txt",
@@ -562,7 +572,12 @@ fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_reposi
     ] {
         assert!(is_ignored(&linked, &linked.join(left_out)), "{left_out}");
     }
-    for kept in ["a.rs", "hid.txt", "vendor/inner/code.txt"] {
+    for kept in [
+        "a.rs",
+        "hid.txt",
+        "vendor/inner/code.txt",
+        "vendor/inner/secret.txt",
+    ] {
         assert!(!is_ignored(&linked, &linked.join(kept)), "{kept}");
     }
 }
@@ -591,4 +606,20 @@ fn a_relative_folder_gives_matches_by_absolute_paths() {
         list[0].path.canonicalize().expect("the file"),
         root.join("file.txt")
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_link_to_a_folder_is_no_folder_to_a_rule_that_names_folders() {
+    let scratch = Scratch::new();
+    let root = scratch.repository();
+    scratch.init(&root);
+    write(&root, ".gitignore", b"linked/\n");
+    write(&root, "real/file.txt", b"needle\n");
+    std::os::unix::fs::symlink("real", root.join("linked")).expect("make the link");
+    // Git is the authority: a pattern of folders leaves out no link, which is no folder.
+    let status = scratch.git(&root, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(status.contains("?? linked"), "git keeps the link: {status}");
+    assert!(!is_ignored(&root, &root.join("linked")));
+    assert_eq!(files_with(&root, "needle"), ["real/file.txt"]);
 }

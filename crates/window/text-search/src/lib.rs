@@ -195,7 +195,10 @@ pub fn is_ignored(folder: &Path, path: &Path) -> bool {
         }
 
         let here = folder_now.join(part);
-        let is_folder = depth + 1 < components.len() || here.is_dir();
+        // The walk does not follow a link and git counts none as a folder, so a link to a
+        // folder is no folder to a rule that names folders.
+        let is_folder = depth + 1 < components.len()
+            || std::fs::symlink_metadata(&here).is_ok_and(|kind| kind.is_dir());
         let verdict = gitignores
             .iter()
             .rev()
@@ -247,8 +250,9 @@ fn exclude_file(dir: &Path) -> Option<PathBuf> {
 /// The name of git's own folder, which is never searched.
 const GIT_FOLDER: &str = ".git";
 
-/// The walk of `folder` by git's rules and on `threads` threads, as `search` and
-/// `is_ignored` both read them.
+/// The walk of `folder` by git's rules and on `threads` threads, which is `search`'s. It
+/// follows no link, so the files below a link to a folder are never searched;
+/// `is_ignored` builds the same rules by hand, one folder at a time.
 fn walker(folder: &Path, threads: usize) -> ignore::WalkParallel {
     WalkBuilder::new(folder)
         .git_ignore(true)
