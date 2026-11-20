@@ -1042,7 +1042,8 @@ const LISTINGS: [&[&str]; 3] = [
 ];
 
 /// Runs git in `folder` as [`Repo::git`] runs it, with the world at `world`: what it
-/// printed, or what it wrote when it failed.
+/// printed, or what it wrote when it failed. It takes no optional lock, so that a check which
+/// only reads does not refresh the index of the repository it reads.
 fn git_in(world: &Path, folder: &Path, args: &[&str]) -> Result<String, String> {
     let mut git = Command::new("git");
     git.env_clear();
@@ -1051,6 +1052,7 @@ fn git_in(world: &Path, folder: &Path, args: &[&str]) -> Result<String, String> 
     }
     let output = git
         .current_dir(folder)
+        .arg("--no-optional-locks")
         .args(args)
         .env("HOME", world.join("home"))
         .env("TMPDIR", world.join("tmp"))
@@ -1140,7 +1142,8 @@ pub const APP_FILE_STARTS: [&str; 2] = ["yaar-", ".yaar"];
 impl Drop for World {
     fn drop(&mut self) {
         // STORE-04: a world with the stand-in on its path ends with the check, before the
-        // Keeper is. Its panic waits until the Keeper is ended and the folder removed, or a
+        // Keeper is, so that a file a process of the app removes when the Keeper dies is
+        // still seen. Its panic waits until the Keeper is ended and the folder removed, or a
         // test that fails here would leave a Keeper that lingers for an hour. A test that
         // is failing already is left to say why: a panic in a drop while unwinding aborts.
         let left = if self.agents.is_some() && !std::thread::panicking() {
