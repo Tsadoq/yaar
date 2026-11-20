@@ -177,8 +177,10 @@ impl Reviews {
                         },
                     ),
                 };
-                // Forward only: a tree that is a state is carried from when it is older
-                // than `to`; a tree that is not one is a commit, carried from to any state.
+                // Forward only: a thread that sits in a state is carried only to a newer
+                // one. A tree the list does not hold is a commit: only a thread still on
+                // its anchor sits in one, and the check below sends it only to the newest
+                // state.
                 if from == to.as_str() || order.get(&from).is_some_and(|&n| n >= to_at) {
                     continue;
                 }

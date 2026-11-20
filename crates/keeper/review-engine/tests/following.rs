@@ -733,6 +733,85 @@ fn threads_followed_to_one_state_by_calls_at_once_are_given_by_one_call_each() {
 }
 
 #[test]
+fn a_thread_resolved_while_a_state_is_followed_is_not_carried_and_keeps_the_place_it_had_when_it_was_resolved()
+ {
+    // A follow reads the threads, diffs without the engine's turn and then takes the turn
+    // to read them again: a thread the reviewer resolved in between must be left out. No
+    // timing decides the outcome. Whenever a resolve lands, the thread's place read right
+    // after it returned is the place it has when every call has ended; a call that kept the
+    // place it computed for a thread resolved meanwhile writes it after that read, in the
+    // rounds where a resolve lands between the call's reading and its turn, which the long
+    // file and the many resolves make the most of them.
+    const LINES: u32 = 3000;
+    const THREADS: u128 = 30;
+    const CALLERS: usize = 4;
+    const ROUNDS: u128 = 4;
+    let world = World::new(LINES);
+    world.record();
+    for round in 1..=ROUNDS {
+        // The file is as the newest state has it: the threads sit on it, and no state is
+        // recorded for them.
+        for n in 1..=THREADS {
+            world.thread_on(round * 100 + n, (n * 90) as u32);
+        }
+        let mut lines = numbered(LINES);
+        for (at, line) in lines.iter_mut().enumerate() {
+            if at % 3 == 0 {
+                *line = format!("round {round} line {at}");
+            }
+        }
+        for above in 0..round {
+            lines.insert(0, format!("above {above}"));
+        }
+        world.rewrite(&lines);
+        let state = world.record();
+
+        let start = std::sync::Barrier::new(CALLERS + THREADS as usize);
+        let at_resolve: Vec<(u128, Option<ThreadPlace>)> = std::thread::scope(|scope| {
+            let calls: Vec<_> = (0..CALLERS)
+                .map(|_| {
+                    scope.spawn(|| {
+                        start.wait();
+                        world.reviews.follow(&workspace(), &state).expect("follow");
+                    })
+                })
+                .collect();
+            let resolves: Vec<_> = (1..=THREADS)
+                .map(|n| {
+                    let thread = round * 100 + n;
+                    let (world, start) = (&world, &start);
+                    scope.spawn(move || {
+                        start.wait();
+                        world
+                            .reviews
+                            .resolve(&world.review, &ThreadId::new(id(thread)))
+                            .expect("resolve");
+                        (thread, thread_of(&world.reviews, &world.review, thread).now)
+                    })
+                })
+                .collect();
+            for call in calls {
+                call.join().expect("the call ends");
+            }
+            resolves
+                .into_iter()
+                .map(|resolve| resolve.join().expect("the resolve ends"))
+                .collect()
+        });
+
+        let reviews = world.second_engine();
+        for (thread, then) in at_resolve {
+            let after = thread_of(&reviews, &world.review, thread);
+            assert!(after.resolved, "round {round}, thread {thread}");
+            assert_eq!(
+                after.now, then,
+                "round {round}, thread {thread}: a follow moved it after it was resolved"
+            );
+        }
+    }
+}
+
+#[test]
 fn a_resolved_thread_and_a_thread_on_the_old_side_stay_and_a_reopened_one_catches_up() {
     let world = World::new(10);
     let first = world.record();
