@@ -1023,6 +1023,8 @@ fn a_process_left_behind_that_keeps_writing_does_not_keep_the_end_from_being_tol
     // write up half way, so that a line of one can come in the middle of a line of the
     // other. The job's number therefore goes to a file, not to the terminal.
     let pid_file = scratch.path().join("job");
+    // A run that was killed can have left a file here with another run's number.
+    let _ = std::fs::remove_file(&pid_file);
     let script = scratch.script(
         "chatters",
         &format!(
