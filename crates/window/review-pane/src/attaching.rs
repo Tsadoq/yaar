@@ -8,9 +8,10 @@
 //! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
 //! until one is taken, the review shown changes, the workspace changes, what is attached
 //! goes, or the review's session runs. Taking one, by its control or by
-//! [`crate::StartAgent`] (the first CLI offered; with none offered the notice says so), asks the terminal pane, through the shared list
-//! of terminals (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to
-//! open that CLI's launcher for the review: no pane calls another.
+//! [`crate::StartAgent`] (the first CLI offered; with none offered the notice says so),
+//! asks the terminal pane, through the shared list of terminals
+//! (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to open that
+//! CLI's launcher for the review: no pane calls another.
 //! [`crate::DetachReview`] sends `Request::DetachReview`. A refusal is said in the pane's
 //! notice.
 //!

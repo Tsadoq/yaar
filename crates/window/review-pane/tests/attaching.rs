@@ -401,7 +401,7 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     // A pane that opens on a review that was attached before: as after a restart.
     let (mut stage, mut cx) = open_on_story(
         review_of_a(threads.clone(), Some(Attachment::Review)),
-        SessionState::Idle,
+        SessionState::NotRunning,
         cx,
     );
     assert!(is_drawn("review-attached:review", &mut cx));
@@ -414,6 +414,30 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
             .is_empty()
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
+
+    // Attaching it again gives the offer, as it does for a review attached in this
+    // session: the agent does not run, and the Keeper names the CLI to start.
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    cx.simulate_keystrokes("a");
+    let asked = stage.keeper.expect(
+        Request::AttachReview {
+            review: review_id(),
+            thread: None,
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::AttachedReview {
+            start: vec![claude()],
+        }),
+    );
+    wait_until(&mut cx, "the offer", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.offer_to_start() == [claude()])
+    });
+    assert!(is_drawn("review-offer-start-claude", &mut cx));
 
     // One thread alone.
     tell_reviews(

@@ -51,8 +51,9 @@
 //! in which a session holds a turn (`Session::turn`) that follow has not met, and whose
 //! session says the turn came from a message of the user (`Session::turn_from_user`), is the
 //! start of a turn, which the user's message to the agent starts. A turn the CLI started
-//! itself (a task it finished, a hook it ran) is met but starts nothing. Follow meets the turns of the
-//! workspace on screen three ways, none of which starts anything: [`ReviewPane::follow_workspace`]
+//! itself (a task it finished, a hook it ran) is met but starts nothing. Follow meets the
+//! turns of the workspace on screen three ways, none of which starts anything:
+//! [`ReviewPane::follow_workspace`]
 //! (at the end of `ReviewPane::new` and whenever the changes model changes) forgets the
 //! turns met and meets those the agents model shows for the workspace on screen now;
 //! [`ReviewPane::follow_agents`] (at the end of `ReviewPane::new` and whenever the agents
