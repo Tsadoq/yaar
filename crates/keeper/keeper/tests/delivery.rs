@@ -33,7 +33,9 @@ use yaar_store::{AttachedRecord, Store};
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails.
+/// How long a test waits for the Keeper before it fails: longer than the plan's ten
+/// seconds, as every test file of this crate has it, since a Keeper starts git and shells
+/// of its own and a throttled machine runs them slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -698,6 +700,38 @@ impl Setup {
         }
     }
 
+    /// Waits until every round of the review of the session `cli` holds its state, which is
+    /// a repeated look at a fact that only becomes true: the recording thread keeps it off the
+    /// agents' way, and no change of the reviews is a barrier for it.
+    fn wait_for_states(&mut self, cli: &str) {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let review = self.review_of(cli);
+            if !review.rounds.is_empty()
+                && review
+                    .rounds
+                    .iter()
+                    .all(|round| round.state.as_ref().is_some_and(|state| !state.is_empty()))
+            {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the rounds of {cli} hold no state: {:?}",
+                review.rounds
+            );
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Waits until the message of the session `cli` is sent and the state of its round is
+    /// kept: the two changes the send tells, and then the fact itself, which holds whatever
+    /// else was told before them.
+    fn settled(&mut self, cli: &str) {
+        self.changes(2);
+        self.wait_for_states(cli);
+    }
+
     fn stop(self) {
         self.window.stop(self.keeper);
     }
@@ -763,12 +797,9 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
     assert_eq!(comment_of(&after_the_send, &comment).round, Some(1));
     assert_eq!(after_the_send.attached, None);
     // Whether the state is kept already when the reading above is made depends on how fast the
-    // recording thread is, so the reading above shows the send only. The state is told by a
-    // change of its own: the second one, after which the round has it.
-    setup.changes(1);
-    let cli = session[0].session();
-    let kept = setup.review_of(cli).rounds[0].state.clone();
-    assert!(kept.is_some_and(|state| !state.is_empty()));
+    // recording thread is, so the reading above shows the send only. The state is looked at
+    // until it is there, not counted from the changes that were told.
+    setup.wait_for_states(session[0].session());
     setup.stop();
 }
 
@@ -875,7 +906,7 @@ fn a_message_carries_only_the_review_of_its_own_session() {
     let context = setup.hook(&first[2]).context();
     assert_eq!(context, shown_a);
     assert!(context.contains(thread_a.as_str()));
-    setup.changes(2);
+    setup.settled(first[0].session());
     assert!(setup.review_of(second[1].session()).rounds.is_empty());
     setup.stop();
 }
@@ -994,7 +1025,7 @@ fn a_reply_of_the_tool_server_is_kept_in_its_thread_and_answered_with_its_result
     let (review, first, _) = setup.session_with_a_draft(&session[0], "First.");
     let (second, _) = setup.draft(&review, "Second.");
     setup.hook(&session[2]);
-    setup.changes(2);
+    setup.settled(&cli);
 
     let mut tools = Tools::start(&setup, &cli);
     // A body with quotes, a line break and characters that are more bytes than they are
@@ -1067,6 +1098,8 @@ fn a_reply_naming_the_thread_of_another_sessions_review_is_answered_with_an_erro
     setup.hook(&first[2]);
     setup.hook(&second[2]);
     setup.changes(4);
+    setup.wait_for_states(&cli_a);
+    setup.wait_for_states(&cli_b);
 
     // A's server names B's thread.
     let mut tools = Tools::start(&setup, &cli_a);
@@ -1097,7 +1130,7 @@ fn after_a_clear_a_reply_of_the_server_that_names_the_cleared_session_is_kept_in
     assert_ne!(cleared, new);
     let (review, thread, _) = setup.session_with_a_draft(&session[0], "Before the clear.");
     setup.hook(&session[2]);
-    setup.changes(2);
+    setup.settled(&cleared);
 
     // The recorded end of that session by `/clear`, and the start of the session that
     // follows in the same terminal and process.
@@ -1129,7 +1162,7 @@ fn after_a_clear_a_reply_naming_the_cleared_session_from_another_process_is_refu
     let cleared = session[0].session().to_owned();
     let (_, thread, _) = setup.session_with_a_draft(&session[0], "Before the clear.");
     setup.hook(&session[2]);
-    setup.changes(2);
+    setup.settled(&cleared);
     setup.hook(&session[13]);
     setup.hook(&session[14]);
 
@@ -1160,7 +1193,7 @@ fn a_reply_naming_a_session_that_has_ended_with_its_review_is_kept_in_the_sessio
     let (review_a, _, _) = setup.session_with_a_draft(&first[0], "For A.");
     let (review_b, thread_b, _) = setup.session_with_a_draft(&second[1], "For B.");
     setup.hook(&second[2]);
-    setup.changes(2);
+    setup.settled(&cli_b);
 
     // The recorded end of A, whose reason is not `clear`: A runs no more and keeps its
     // review, which only a session that starts later may take.
@@ -1194,7 +1227,7 @@ fn a_reply_naming_a_session_that_runs_with_no_review_is_kept_in_the_session_of_i
     let (review_b, ..) = setup.session_with_a_draft(&second[1], "For B.");
     // A's comment is sent, which a reply to its thread needs.
     setup.hook(&first[2]);
-    setup.changes(2);
+    setup.settled(&cli_a);
 
     // B runs, and its review is of no agent: the Store allows the state, the app makes it
     // nowhere today, and the Keeper's rule says whose a report that names B then is.
