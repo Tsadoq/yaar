@@ -1361,6 +1361,89 @@ fn a_session_still_offered_stays_listed_when_a_new_session_of_its_cli_starts_in_
 }
 
 #[test]
+fn a_session_listed_only_because_it_is_offered_decides_the_state_its_workspace_shows_when_no_other_session_is_listed()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
+    let started = window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    let session = started.sessions[0].id.clone();
+    let review = started.sessions[0]
+        .review
+        .clone()
+        .expect("a session holds a review");
+    window.stop(keeper);
+
+    // The session holds no review and no other session is kept. The app makes that state
+    // nowhere today (a review only ever passes to a session that starts, which is then
+    // listed), but the Store allows it, so the Keeper's rule is held through the database.
+    scratch
+        .store()
+        .set_review_agent(&yaar_store::ReviewId::new(review.as_str()), None)
+        .expect("give the review to no agent");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let listed = window.agents();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].sessions.len(), 1);
+    assert_eq!(listed[0].sessions[0].id, session);
+    assert_eq!(listed[0].sessions[0].review, None);
+    assert!(listed[0].sessions[0].resumable);
+    assert_eq!(listed[0].shown, Some(SessionState::NotRunning));
+    window.stop(keeper);
+}
+
+#[test]
+fn a_session_that_ended_and_holds_a_review_decides_the_state_its_workspace_shows_beside_another_session()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("repo");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&repo);
+    let dialogs = recorded::hook_events(DIALOGS);
+
+    // A session of Claude Code starts and its CLI ends it: not running, and it keeps its
+    // review.
+    scratch.hook(None, &dialogs[0].in_project(&repo).input_bytes());
+    window.agents_until(&workspace, "the session", is_state(SessionState::Idle));
+    scratch.hook(None, &dialogs[13].in_project(&repo).input_bytes());
+    let ended = window.agents_until(
+        &workspace,
+        "the session ended",
+        is_state(SessionState::NotRunning),
+    );
+    let ended_session = ended.sessions[0].id.clone();
+
+    // A session of pi starts in the same workspace and is idle.
+    let records = recorded::pi_events(PI_TOOLS);
+    let pi = a_cli_process();
+    scratch.pi_report(pi.0.id(), records[1].in_project(&repo).payload_bytes());
+    let both = window.agents_until(&workspace, "the session of pi", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.agent == yaar_adapter_pi::NAME && s.state == SessionState::Idle)
+    });
+    let kept = both
+        .sessions
+        .iter()
+        .find(|s| s.id == ended_session)
+        .expect("the session that ended is still listed");
+    assert_eq!(kept.state, SessionState::NotRunning);
+    assert!(kept.review.is_some(), "it holds its review");
+    // It is listed for its review, so it counts: the workspace shows not running, as it
+    // shows it when the session that ended is the only one.
+    assert_eq!(both.shown, Some(SessionState::NotRunning));
+    window.stop(keeper);
+}
+
+#[test]
 fn a_pi_session_its_cli_ended_is_not_resumable_and_its_resume_is_refused_with_the_reason_before_and_after_a_restart()
  {
     let scratch = Scratch::with_launcher_shell();
