@@ -1680,6 +1680,50 @@ fn a_line_typed_before_a_self_started_turn_is_the_next_turns_message_and_the_sel
 }
 
 #[test]
+fn an_esc_typed_after_the_line_of_the_next_turn_interrupts_that_turn_as_it_would_claude_code() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go) = (root.join("events"), root.join("go"));
+    let script = Script(vec![
+        Step::Hold(go.clone()),
+        Step::Turn,
+        Step::Read(path("a.txt")),
+        Step::Edit(path("a.txt"), "never".into()),
+        Step::End,
+        Step::Turn,
+        Step::End,
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["UserPromptSubmit"], &events)
+        .start();
+    fs::write(run.work.join("a.txt"), "seed\n").expect("seed");
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    // A whole line, and then an Esc, each read before the next is typed. With no turn
+    // open the line is not submitted, as the hold has not ended; Claude Code would have
+    // started its turn at the Enter, and the Esc is then that turn's.
+    run.pty.send(b"first\r");
+    run.wait_log("the line", |log| log.received == b"first\r");
+    run.pty.send(b"\x1b");
+    run.wait_log("the Esc", |log| log.received == b"first\r\x1b");
+    fs::write(&go, "").expect("make the file");
+    let marked = run.pty.wait_for(INTERRUPT_MARK, 0);
+    run.say(marked, "second");
+    assert!(run.wait_exit().success());
+    assert_eq!(prompts_in(&events), ["first", "second"]);
+    // The turn the line began was interrupted before its edit.
+    assert_eq!(
+        fs::read_to_string(run.work.join("a.txt")).unwrap(),
+        "seed\n"
+    );
+    let story = story(&run.log());
+    assert!(
+        story.iter().any(|did| did.starts_with("interrupted")),
+        "{story:?}"
+    );
+}
+
+#[test]
 fn a_dialog_after_a_hold_outside_a_turn_sets_aside_what_was_typed_during_it() {
     let place = Place::new();
     let go = root_of(&place).join("go");

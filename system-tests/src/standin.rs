@@ -89,7 +89,8 @@ pub enum Step {
     /// the next without a prompt printed. A line typed during a [`Step::Hold`], which
     /// stands for a tool that runs, is a message Claude Code queues: `UserPromptSubmit`
     /// runs for it at once, when Enter is read, and the message goes with the turn that
-    /// runs; it starts no turn of its own and is not held for the next `turn`.
+    /// runs; it starts no turn of its own and is not held for the next `turn`. An Esc read
+    /// after the line's Enter and before the turn starts is that turn's: it interrupts it.
     Turn,
     /// Starts a turn by itself, as Claude Code does when a background task ends: prints
     /// nothing at the prompt, reads nothing, and runs `UserPromptSubmit` with a prompt
@@ -915,7 +916,8 @@ impl Standin {
             }
         };
         out(b"\r\n");
-        self.input.forget_esc();
+        // An Esc read after this line's Enter is left pending: Claude Code starts the turn
+        // at the Enter, and the Esc interrupts it. An Esc before the Enter went with the line.
         self.in_turn = true;
         self.submit(&line);
         out(WORKING);
