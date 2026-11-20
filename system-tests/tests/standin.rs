@@ -685,6 +685,21 @@ fn a_script_comes_back_from_its_text_as_it_was() {
 }
 
 #[test]
+fn a_hold_at_the_start_comes_back_from_the_script_as_it_was() {
+    let script = Script(vec![
+        Step::HoldAtStart(path("a folder/go")),
+        Step::HoldAtStart(path("second")),
+        Step::Exit,
+    ]);
+    let text = script.text();
+    assert_eq!(
+        text,
+        "hold-at-start a folder/go\nhold-at-start second\nexit\n"
+    );
+    assert_eq!(Script::parse(&text), script);
+}
+
+#[test]
 fn a_text_with_a_carriage_return_comes_back_from_the_script_as_it_was() {
     let script = Script(vec![
         Step::Write(path("a.txt"), "ends in one\r".into()),
@@ -3367,6 +3382,91 @@ fn a_shell_command_that_fails_is_a_result_with_is_error_and_an_edit_of_an_empty_
 }
 
 // Sessions, the terminal, the log.
+
+#[test]
+fn a_hold_at_the_start_keeps_claude_code_from_reporting_its_start_until_its_file_is_there() {
+    let place = Place::new();
+    let root = root_of(&place);
+    let (events, go, then) = (root.join("events"), root.join("go"), root.join("then"));
+    let script = Script(vec![
+        Step::HoldAtStart(go.clone()),
+        Step::HoldAtStart(then.clone()),
+        Step::Exit,
+    ]);
+    let mut run = Start::new(place, "claude", script)
+        .recording(&["SessionStart", "SessionEnd"], &events)
+        .start();
+    // The program is up, with its arguments and its session written down, and held at the
+    // first of the two.
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    let log = run.wait_log("the first hold begun", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 0, .. }))
+    });
+    assert!(!log.session.is_empty(), "{log:?}");
+    assert!(hooked(&log).is_empty(), "{:?}", story(&log));
+    assert!(!events.exists());
+
+    // The first file lets it on to the second hold, not to its start.
+    fs::write(&go, "").expect("make the file");
+    let log = run.wait_log("the second hold begun", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 1, .. }))
+    });
+    assert!(hooked(&log).is_empty(), "{:?}", story(&log));
+    assert!(!events.exists());
+
+    // The last file: it reports its start, and then goes on to its end.
+    fs::write(&then, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    let seen = events_in(&events);
+    assert_eq!(names(&seen), ["SessionStart", "SessionEnd"]);
+    assert_eq!(
+        story(&run.log()),
+        [
+            "began 0 at 0",
+            "done 0 at 0",
+            "began 1 at 0",
+            "done 1 at 0",
+            "hook SessionStart",
+            "began 2 at 0",
+            "hook SessionEnd",
+            "done 2 at 0",
+            "exited 0",
+        ]
+    );
+}
+
+#[test]
+fn a_hold_at_the_start_keeps_pi_from_reporting_its_start_until_its_file_is_there() {
+    let place = Place::new();
+    let kit = PiKit::new(&place);
+    kit.list_extension();
+    let go = root_of(&place).join("go");
+    let script = Script(vec![Step::HoldAtStart(go.clone()), Step::Exit]);
+    let mut run = kit.start(place, script).start();
+    run.pty.wait_for("● Hold ".as_bytes(), 0);
+    let log = run.wait_log("the hold begun", |log| {
+        log.did
+            .iter()
+            .any(|did| matches!(did, Did::Began { step: 0, .. }))
+    });
+    assert!(!log.extensions.is_empty(), "{log:?}");
+    assert!(
+        kit.reports().is_empty(),
+        "pi reported before its file was there"
+    );
+
+    fs::write(&go, "").expect("make the file");
+    assert!(run.wait_exit().success());
+    kit.assert_settings_kept();
+    assert_eq!(
+        events_of(&kit.reports()),
+        ["session_start", "session_shutdown"]
+    );
+}
 
 #[test]
 fn a_resume_argument_names_the_session_and_its_source() {

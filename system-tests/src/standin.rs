@@ -67,6 +67,11 @@
 //! written down with what it printed, which is nothing then, and the script goes on, as pi
 //! goes on when the extension's report fails.
 //!
+//! The report of its start, as Claude Code's `SessionStart` or as pi's `session_start`, is the
+//! first thing it does after it reads its arguments; a [`Step::HoldAtStart`] at the head of
+//! its script holds it before that, which is how a test sees the app with a CLI that is
+//! started and has not reported.
+//!
 //! Its script is a file, named by [`SCRIPT_VARIABLE`], of [`Step`]s, one to a line. It
 //! decides nothing: it follows the script and the keys. What reached it, every byte read
 //! from its terminal, every hook's answer and its own arguments, it writes down in the
@@ -168,6 +173,12 @@ pub enum Step {
     /// and answers only keys typed once its question is up. A line ended by Enter during
     /// a hold inside a turn is a queued message (see [`Step::Turn`]).
     Hold(PathBuf),
+    /// Holds the stand-in before it reports its start, until the file exists: the session
+    /// is not known to the app until then. It is a step at the head of a script, and
+    /// several there are held one after the other; one anywhere else is a fault of the
+    /// script that stops the program at it. A test that wants to look at what the app shows
+    /// of a CLI that is started and has not reported yet makes the file when it has looked.
+    HoldAtStart(PathBuf),
     /// Writes this many numbered lines into its terminal as fast as it can, and writes
     /// down in its log the longest a single write waited.
     Flood(u32),
@@ -260,6 +271,7 @@ impl Step {
             Step::Shell(command) => format!("shell {}", escape(command)),
             Step::Ask(path, text) => format!("ask {} {}", word(path), escape(text)),
             Step::Hold(path) => format!("hold {}", whole(path)),
+            Step::HoldAtStart(path) => format!("hold-at-start {}", whole(path)),
             Step::Flood(lines) => format!("flood {lines}"),
             Step::End => "end".into(),
             Step::Mark => "mark".into(),
@@ -309,6 +321,7 @@ impl Step {
             "shell" => unescape(rest).map(Step::Shell),
             "ask" => path_and_text().map(|(path, text)| Step::Ask(path, text)),
             "hold" => path().map(Step::Hold),
+            "hold-at-start" => path().map(Step::HoldAtStart),
             "flood" => rest
                 .parse()
                 .map(Step::Flood)
@@ -862,6 +875,21 @@ impl Standin {
 
     /// Runs the script, and what follows it. Gives the exit status.
     fn go(&mut self, script: &Script) -> i32 {
+        let steps = &script.0;
+        // The holds at the head of the script come before the start is reported.
+        let mut at = 0;
+        while let Some(Step::HoldAtStart(path)) = steps.get(at) {
+            self.log.did(
+                "began",
+                json!({"step": at, "received": self.input.received}),
+            );
+            if matches!(self.hold(at, path), Ended::Closed) {
+                return self.closed();
+            }
+            self.log
+                .did("done", json!({"step": at, "received": self.input.received}));
+            at += 1;
+        }
         if self.pi.is_some() {
             // `pi --session` starts as any other pi does: the Keeper holds the session id it
             // expects for the resume.
@@ -870,10 +898,8 @@ impl Standin {
             let source = if self.resumed { "resume" } else { "startup" };
             self.hook("SessionStart", None, json!({"source": source}));
         }
-        let steps = &script.0;
         // After an interruption the steps up to and with the next `end` are skipped.
         let mut skipping = false;
-        let mut at = 0;
         while at < steps.len() {
             if self.input.closed {
                 return self.closed();
@@ -978,6 +1004,7 @@ impl Standin {
             }
             Step::Ask(path, text) => self.ask(at, path, text),
             Step::Hold(path) => self.hold(at, path),
+            Step::HoldAtStart(_) => panic!("`hold-at-start` is a step at the head of a script"),
             Step::Flood(lines) => {
                 self.flood(at, *lines);
                 Ended::Done
@@ -1355,6 +1382,7 @@ impl Standin {
             }
             Step::Ask(..) => unreachable!("a script with `ask` is refused before pi starts"),
             Step::Hold(path) => return self.hold(at, path),
+            Step::HoldAtStart(_) => panic!("`hold-at-start` is a step at the head of a script"),
             Step::Flood(lines) => self.flood(at, *lines),
             Step::End => {
                 self.in_turn = false;

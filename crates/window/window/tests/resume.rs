@@ -10,7 +10,7 @@ mod common;
 
 use gpui_kit::{Modifiers, TestAppContext};
 use yaar_link::{Program, Request, SessionState};
-use yaar_system_tests::standin::Did;
+use yaar_system_tests::standin::{Did, Script, Step};
 use yaar_system_tests::{DEADLINE, World, wait_until as wait_for};
 
 use common::{a_session_cut_off, drawn, wait_until};
@@ -43,18 +43,70 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
         "nothing runs before the click"
     );
 
+    // The resumed stand-in is held before it reports its start, so that the order of what
+    // follows is made by the test and not by how fast a login shell, the stand-in and its
+    // hook program start: until the test lets it go, the session has not reported.
+    let start_gate = window.world.home().with_file_name("resume-start-gate");
+    window.world.agent_script(
+        "default",
+        &Script(vec![
+            Step::HoldAtStart(start_gate.clone()),
+            Step::Hold(cut_off.gate.clone()),
+            Step::Exit,
+        ]),
+    );
+
     // A click runs the CLI's own resume command with the session's id: the stand-in is
     // started with exactly those arguments.
     let at = window.point_in("terminal-resume-0", &mut cx);
     cx.simulate_click(at, Modifiers::none());
+    let wanted = ["--resume".to_owned(), cut_off.cli_session.clone()];
+    assert!(
+        wait_for(DEADLINE, || window.world.agent_log("default").args
+            == wanted),
+        "the stand-in was not started with {wanted:?}: {:?}",
+        window.world.agent_log("default")
+    );
+    assert_eq!(
+        window.world.agent_log("default").session,
+        cut_off.cli_session
+    );
+    wait_until(&mut cx, "the terminal the click opened", |cx| {
+        window
+            .terminals
+            .read_with(cx, |pane, _| pane.terminals().len() == 1)
+    });
+    assert!(
+        window
+            .world
+            .agent_log("default")
+            .did
+            .iter()
+            .all(|did| !matches!(did, Did::Hook { .. })),
+        "the stand-in reported while it was held: {:?}",
+        window.world.agent_log("default")
+    );
+
     // The line stands for as long as the Keeper lists the session resumable, not only until
-    // the click: from the click on, whenever the model still lists it, the control is drawn.
-    // The test makes that true of every look it takes, and makes it fail when no look found
-    // the session listed with its line (below). What it only expects is the order: that the
-    // first look comes before the resumed session reports, which needs a login shell, the
-    // stand-in and its hook program, while the look follows the click at once. A report
-    // before the first look fails the test instead of passing it with nothing seen.
-    let mut seen_with_its_line = false;
+    // the click: with the terminal open and the stand-in running but not yet reported, the
+    // Keeper lists the session resumable and the control is drawn. This look is taken
+    // while the stand-in is held, so it is a look that finds both, whatever the speed of the
+    // machine.
+    let listed = window.models.agents.read_with(&cx, |agents, _| {
+        agents
+            .session(&cut_off.session)
+            .is_some_and(|session| session.resumable)
+    });
+    let line = drawn("terminal-resume-0", &mut cx).is_some();
+    assert!(
+        listed && line,
+        "no look after the click found the session listed with its line: listed {listed}, line {line}"
+    );
+
+    // The stand-in goes on and reports: from then on, whenever the model still lists the
+    // session resumable, the control is drawn, and it goes when the session is listed so
+    // no more.
+    std::fs::write(&start_gate, "").expect("let the stand-in report");
     wait_until(
         &mut cx,
         "the session to be listed resumable no more",
@@ -69,24 +121,8 @@ fn the_resume_control_of_a_session_a_restart_cut_off_runs_its_cli_s_resume_and_g
                 !listed || line,
                 "the control went before the session was listed resumable no more"
             );
-            seen_with_its_line |= listed && line;
             !listed
         },
-    );
-    assert!(
-        seen_with_its_line,
-        "no look after the click found the session listed with its line: its report came before the first look"
-    );
-    let wanted = ["--resume".to_owned(), cut_off.cli_session.clone()];
-    assert!(
-        wait_for(DEADLINE, || window.world.agent_log("default").args
-            == wanted),
-        "the stand-in was not started with {wanted:?}: {:?}",
-        window.world.agent_log("default")
-    );
-    assert_eq!(
-        window.world.agent_log("default").session,
-        cut_off.cli_session
     );
 
     // One click asked for one resume, and the Keeper refused nothing.
