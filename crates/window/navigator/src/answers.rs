@@ -1082,4 +1082,36 @@ mod tests {
             other => panic!("told {other:?}"),
         }
     }
+
+    #[test]
+    fn an_old_side_asked_about_while_its_export_was_written_is_ensured_when_it_is_ready() {
+        let (mut core, _inbox, _heard) = core();
+        let workspace = WorkspaceId::new("1".repeat(32));
+        let key = |version: &str| ServerKey {
+            workspace: workspace.clone(),
+            language: "standin".to_owned(),
+            side: Side::Old {
+                version: version.to_owned(),
+            },
+        };
+        for version in ["v1", "v2", "v3"] {
+            core.answers
+                .old
+                .insert((workspace.clone(), version.to_owned(), "standin".to_owned()));
+        }
+
+        // Nothing runs for an old side before its export is ready.
+        assert_eq!(lifecycle::state_of(&core, &key("v1")), None);
+        export_ready(&mut core, &workspace, "v1", Path::new("/export/1"));
+        assert!(lifecycle::state_of(&core, &key("v1")).is_some());
+        assert_eq!(lifecycle::state_of(&core, &key("v2")), None);
+
+        // An export that failed is forgotten: its row is ensured by no later export.
+        export_failed(&mut core, &workspace, "v2");
+        export_ready(&mut core, &workspace, "v2", Path::new("/export/2"));
+        assert_eq!(lifecycle::state_of(&core, &key("v2")), None);
+        // The one not heard of yet still waits.
+        export_ready(&mut core, &workspace, "v3", Path::new("/export/3"));
+        assert!(lifecycle::state_of(&core, &key("v3")).is_some());
+    }
 }
