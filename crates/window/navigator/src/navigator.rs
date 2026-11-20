@@ -13,8 +13,9 @@
 //!
 //! Nothing a handler does waits: a server, a trial run, a download and a text search run
 //! on threads of their own and send their outcome to [`Core::events`]. When the asks end
-//! (every [`crate::Port`] dropped), the loop ends: `old_side::close` removes every export,
-//! then `lifecycle::close` stops every server and waits for each to be gone.
+//! (every [`crate::Port`] dropped), the loop ends: `lifecycle::close` stops every server and
+//! waits for each to be gone, then `old_side::close` removes every export and the Navigator's
+//! own cache, so that no export is removed under a process that reads it.
 //!
 //! [`Core`] is the state every module reads; each module keeps what is its own in its own
 //! part of it ([`Core::life`], [`Core::fetch`], [`Core::answers`], [`Core::old`]), whose fields only that
@@ -237,17 +238,19 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
         }
     }
 
-    // `old_side::close` goes first here once its body is written: it is a `todo!()` now, and
-    // a call to it would end this thread before a server was stopped.
+    // The servers first, each reaped: an export is removed only once no process reads it.
     lifecycle::close(&mut core);
+    old_side::close(&mut core);
 }
 
 /// Hands an ask to the module that owns it.
 fn dispatch(core: &mut Core, ask: Ask) {
     match ask {
-        // `old_side::workspaces_changed` follows here once its body is written: it is a
-        // `todo!()` now, and a call to it would end this thread at the first list.
-        Ask::Workspaces(roots) => lifecycle::workspaces(core, roots),
+        Ask::Workspaces(roots) => {
+            // The servers of a workspace gone are stopped first, then its export removed.
+            lifecycle::workspaces(core, roots);
+            old_side::workspaces_changed(core);
+        }
         Ask::OnScreen(workspace) => lifecycle::on_screen(core, workspace),
         Ask::Consents(consents) => lifecycle::consents(core, consents),
         Ask::Download { language } => fetch::download(core, &language),
