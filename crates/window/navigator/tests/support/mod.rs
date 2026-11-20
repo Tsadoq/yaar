@@ -1043,10 +1043,23 @@ impl Drop for Running {
 
 /// Writes `version` of `repo` into `into`, which is made, as plain files.
 ///
-/// As the Keeper writes an export: `into` must not exist, its parents are made, and a write
-/// that fails leaves no folder. A Navigator that asks twice for one folder, or reuses one
-/// left over, is refused here as it is by the Keeper.
+/// As the Keeper writes an export: `version` must be a full commit id, 40 hexadecimal
+/// characters, `into` must not exist, its parents are made, and a write that fails leaves no
+/// folder. A Navigator that asks twice for one folder, or reuses one left over, is refused
+/// here as it is by the Keeper.
+///
+/// What the real Keeper does that this does not, so that no test leans on the difference:
+/// it writes into a cache folder it keeps, and refuses a folder outside it; it writes the
+/// files with `checkout-index` from its own store, so the export attributes of a repository
+/// that `git archive` applies here (`export-ignore`, `export-subst`) do not reach its export;
+/// and it turns off the filter drivers it finds in the configuration it reads, which
+/// `git archive` runs here. The fixtures of the tests have none of these.
 fn write_version(repo: &Repo, version: &str, into: &Path) -> Result<(), String> {
+    if version.len() != 40 || !version.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!(
+            "{version:?} is no full commit id: it is not 40 hexadecimal characters"
+        ));
+    }
     if into.symlink_metadata().is_ok() {
         return Err(format!("{} already exists", into.display()));
     }
