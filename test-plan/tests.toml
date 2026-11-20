@@ -15,6 +15,9 @@
 # A pane test fills the shared models with facts as the Keeper sends them and reads the requests the
 # pane makes. It asserts nothing that only the Keeper can produce: that is for the tests of the whole
 # Window (part = window), which have a real Keeper beneath, and for the system tests.
+# From slice 8 a pane test also plays the Navigator at its port: it reads the asks the pane makes and
+# tells answers as data, in the shapes the Navigator tells them, and computes nothing the Navigator
+# computes. WIN-10 joins the pane, the real Navigator and the stand-in language server.
 #
 # A row with driver = agent runs twice, once with the stand-in speaking as Claude Code and once as pi,
 # through the same contract. A row that runs for one only says why in its note.
@@ -2406,7 +2409,7 @@ id = "RP-21"
 what = "Hovering a name in a diff shows what the Navigator reports for it; an answer given while no language server is ready carries the mark that it may be wrong."
 level = "component"
 part = "review-pane"
-through = "keys, clicks and the wheel in; read back through the model it shows"
+through = "keys, clicks, the wheel and the mouse resting on a name in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-051", "FR-068"]
@@ -2436,7 +2439,7 @@ built = [
 
 [[test]]
 id = "RP-24"
-what = "The references to a name in a diff are listed and any of them opens."
+what = "The references to a name in a diff are listed and any of them opens; a list found by text match is marked as possibly wrong."
 level = "component"
 part = "review-pane"
 through = "keys, clicks and the wheel in; read back through the model it shows"
@@ -2651,7 +2654,7 @@ id = "NAV-08"
 what = "A server that sits inside a repository does not run before the user said yes, and the answer is remembered for that repository."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-062"]
@@ -2661,7 +2664,7 @@ id = "NAV-09"
 what = "A downloaded server stays as it is when a newer one is named in the registry, until the user asks for the update."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-063"]
@@ -2671,7 +2674,7 @@ id = "NAV-11"
 what = "The language servers of the workspace on screen run. Off screen for the set time, 10 minutes with nothing set, they are stopped, the server for the old code included; back on screen they start again."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-064", "FR-065", "FR-066"]
@@ -2691,7 +2694,7 @@ id = "NAV-14"
 what = "A server the user registered shows as starting, then ready, and as missing when its command fails."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-070"]
@@ -2708,30 +2711,31 @@ proves = ["FR-071"]
 
 [[test]]
 id = "LSP-01"
-what = "With no server on the machine, each built-in row downloads into the app's folder, passes its digest and answers hover, definition and references on its fixed project. The rows are TypeScript, JavaScript, Python and Rust."
+what = "With no server on the machine, each of the three built-in rows downloads into the app's folder, passes its digest and answers hover, definition and references on its fixed project: TypeScript and JavaScript by one row, Python, and Rust."
 level = "component"
 part = "navigator"
 through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-057", "FR-058", "FR-056", "FR-051", "FR-052", "FR-054"]
+note = "Changed in slice 8: TypeScript and JavaScript are one row and one server, so three downloads, not four. The one test that fetches from the publishers. That a digest that differs is refused is LSP-05's."
 
 [[test]]
 id = "LSP-02"
 what = "A candidate that exists and fails its trial run is passed over, and the next one is used."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-061"]
 
 [[test]]
 id = "LSP-03"
-what = "A hover asked before the server is ready is answered by text match and marked."
+what = "A hover, a definition or a list of references asked before the server is ready is answered by text match and marked."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-068"]
@@ -2741,7 +2745,7 @@ id = "LSP-04"
 what = "A row of the user replaces a built-in row, is started from the one registry file in the app's folder, and is never downloaded: when its command fails, no download is offered for it."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-069", "FR-073", "FR-071"]
@@ -2751,7 +2755,7 @@ id = "LSP-05"
 what = "A download whose digest differs from its row is refused."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server served on the loopback address"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-058"]
@@ -2761,20 +2765,21 @@ id = "LSP-06"
 what = "A new language added by one row and no change of code answers hover."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["NFR-002"]
 
 [[test]]
 id = "LSP-07"
-what = "After hover, definition and references on each of the three fixed projects, git status with ignored files shows nothing new, and the build folder of the Rust project gains no output."
+what = "After hover, definition and references on each of the three fixed projects, git status with ignored files shows nothing new, and the build folder of the Rust project gains no output; and the servers ran no package manager and left no file in their home, cache or temporary folders."
 level = "component"
 part = "navigator"
 through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["NFR-021"]
+note = "Changed in slice 8. tsgo's acquisition of types is turned off in its row: its file outside every project is asked about first. The package manager on the servers' search path is a recorder, and their proxy variables name a listener of the test's own; both are read after the servers ended, with no barrier on the server's own choice. A control test beside it, the row's setting taken out, waits for npm to run, and a unit test asserts the setting is in the row. A connection a server opens without the proxy variables is not observed: no tracer runs in the tests."
 
 [[test]]
 id = "OLD-01"
@@ -2785,6 +2790,7 @@ through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-055"]
+note = "Holds what ADR-016 calls OLD-02 (a definition the change moved). Shown with TypeScript and with Rust, as phase 4 measured; Python's old side is OLD-03's."
 
 [[test]]
 id = "OLD-03"
@@ -2800,18 +2806,19 @@ proves = ["FR-055"]
 id = "OLD-04"
 what = "After use of the old side, the status, the worktrees and the refs of the repository are unchanged."
 level = "component"
-part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
-driver = "language-servers"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
 runs = "ci"
 proves = ["NFR-021"]
+note = "Changed in slice 8: the export of an old side is the Keeper's (ADR-016 point 1), so the row is the Keeper's; what a server writes is LSP-07's."
 
 [[test]]
 id = "OLD-05"
 what = "No process for the old side runs before the reviewer's first use of a removed line."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-066"]
@@ -2821,7 +2828,7 @@ id = "OLD-06"
 what = "After another change is selected, the export of the earlier old side is gone."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-066"]
@@ -2831,7 +2838,7 @@ id = "OLD-07"
 what = "In the diff of a past turn, hover on an unchanged line of the new side answers from the server, and on a line changed since it answers by text match, marked."
 level = "component"
 part = "navigator"
-through = "its calls, with real language servers on small fixed projects"
+through = "its calls, with the stand-in language server on projects the test makes"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-055", "FR-068"]
@@ -2856,6 +2863,7 @@ driver = "git"
 runs = "ci"
 proves = []
 slice = 8
+note = "Best of seven runs after one to warm, each list complete, as the 50 ms tests of the diff. It may fail under taskpolicy -b, as they do."
 
 [[test]]
 id = "CLIENT-01"
@@ -3690,6 +3698,17 @@ built = [
     "crates/window/window/tests/credits.rs::with_two_sessions_in_one_worktree_that_changed_the_same_file_each_review_shows_it_whole_with_the_mark_and_a_turn_end_selects_only_the_paths_credited_to_its_session_and_those_no_agent_made",
 ]
 note = "Added in slice 6 for the rest of ADR-007 point 8: slice 6 keeps the credits with each recorded state and the engine lists a review's paths with the mark (REV-24); the Window draws no mark yet and a turn's end selects the worktree's whole change."
+
+[[test]]
+id = "WIN-10"
+what = "In the composed Window with the real Keeper and Navigator and the stand-in language server, hover on a name in a diff answers from the server, go to definition opens the file view and the return control comes back, and hover on a removed line answers from the old side the Keeper exported."
+level = "component"
+part = "window"
+through = "keys, clicks and the wheel in, with the real Keeper and Navigator and the stand-in language server beneath"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-051", "FR-052", "FR-055"]
+note = "Added in slice 8: the rows of the review pane play the Navigator at its port with data, as they play the Keeper at the socket; this row joins the pane, the real Navigator and the Keeper's export."
 
 [[test]]
 id = "SEAM-03"
