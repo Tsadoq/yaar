@@ -36,6 +36,15 @@ pub(crate) enum Source {
     },
 }
 
+/// Who is credited with each file of a list the Keeper made for a review: what
+/// `CompareForReview` answered, kept beside the files it listed.
+pub(crate) struct Credits {
+    /// The review the list was asked for.
+    pub(crate) review: ReviewId,
+    /// The files with the sessions credited with them, as answered.
+    pub(crate) files: Vec<CreditedFile>,
+}
+
 /// What the pane holds of the tree of Changes.
 pub(crate) struct Tree {
     /// The workspace the history and the uncommitted changes are of.
@@ -56,6 +65,9 @@ pub(crate) struct Tree {
     /// The focus of the tree: its keys work while it has it.
     pub(crate) focus: FocusHandle,
     scroll: UniformListScrollHandle,
+    /// The credits of the files last listed through `CompareForReview`; none when they were
+    /// listed by `CompareVersions`, which carries none (`shared.rs`).
+    pub(crate) credits: Option<Credits>,
     /// The change whose files the pane shows.
     pub(crate) shown: ChangeShown,
     /// Whether `shown` is what the pane picked for a window that has no changes yet, and
@@ -83,6 +95,7 @@ impl Tree {
             marked: Vec::new(),
             focus: cx.focus_handle(),
             scroll: UniformListScrollHandle::new(),
+            credits: None,
             shown: ChangeShown::Comparison,
             first_picture: false,
             wanted: Source::Comparison,
@@ -343,16 +356,30 @@ impl ReviewPane {
         self.tree.first_picture = !by_reviewer;
         self.tree.shown = ChangeShown::Entries { first, last };
         cx.notify();
-        self.list_change(workspace, old, new, cx);
+        self.list_change(workspace, old, new, None, cx);
         true
     }
 
     /// Selects what changed between two versions, `from` to `to`, as the change to show:
-    /// what a turn end selects, counted from the last review.
+    /// what changed since a round was sent, listed with no credits.
     pub(crate) fn select_since(
         &mut self,
         from: Option<String>,
         to: String,
+        cx: &mut Context<Self>,
+    ) {
+        self.select_since_for(from, to, None, cx);
+    }
+
+    /// Selects what changed between two versions as `select_since` does, listed for the
+    /// review of an agent session when `review` is one: only the files it shows, each with
+    /// its credits. With none, which is all the review of no agent has, every file is listed
+    /// with none.
+    pub(crate) fn select_since_for(
+        &mut self,
+        from: Option<String>,
+        to: String,
+        review: Option<ReviewId>,
         cx: &mut Context<Self>,
     ) {
         let Some(workspace) = self.tree.of.clone() else {
@@ -365,23 +392,30 @@ impl ReviewPane {
             to: to.clone(),
         };
         cx.notify();
-        self.list_change(workspace, from, Some(to), cx);
+        self.list_change(workspace, from, Some(to), review, cx);
     }
 
     /// Lists the files of the change from `old` to `new`, none for the files on disk, and
-    /// shows them, unless they are shown already.
+    /// shows them, unless they are shown already. With a `review` the list is the one
+    /// `CompareForReview` makes for it, and its credits are kept beside the files.
     fn list_change(
         &mut self,
         workspace: WorkspaceId,
         old: Option<String>,
         new: Option<String>,
+        review: Option<ReviewId>,
         cx: &mut Context<Self>,
     ) {
         let source = Source::Versions {
             old: old.clone(),
             new: new.clone(),
         };
-        if self.tree.wanted == source && self.listed.as_ref() == Some(&source) {
+        // The same two versions listed for another review are another list.
+        let listed_for = self.tree.credits.as_ref().map(|credits| &credits.review);
+        if self.tree.wanted == source
+            && self.listed.as_ref() == Some(&source)
+            && listed_for == review.as_ref()
+        {
             return;
         }
         self.tree.wanted = source.clone();
@@ -393,15 +427,24 @@ impl ReviewPane {
                 "Nothing came before this change, so its files cannot be listed",
                 cx,
             );
+            self.tree.credits = None;
             self.show_files(Vec::new(), source, cx);
             return;
         };
         let asked = self.models.link.update(cx, |link, cx| {
             link.ask(
-                Request::CompareVersions {
-                    workspace,
-                    from,
-                    to: new,
+                match (&review, new.clone()) {
+                    (Some(review), Some(to)) => Request::CompareForReview {
+                        workspace,
+                        review: review.clone(),
+                        from,
+                        to,
+                    },
+                    _ => Request::CompareVersions {
+                        workspace,
+                        from,
+                        to: new,
+                    },
                 },
                 cx,
             )
@@ -411,17 +454,28 @@ impl ReviewPane {
         self.tree.listing = Some(cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| {
-                let files = match answer {
-                    Ok(Reply::Compared(files)) => files,
-                    Ok(_) => {
+                let (files, credits) = match (answer, review) {
+                    (Ok(Reply::Compared(files)), None) => (files, None),
+                    (Ok(Reply::ComparedForReview(credited)), Some(review)) => (
+                        credited
+                            .iter()
+                            .map(|credited| credited.file.clone())
+                            .collect(),
+                        Some(Credits {
+                            review,
+                            files: credited,
+                        }),
+                    ),
+                    (Ok(_), _) => {
                         pane.say(yaar_frame::AskError::Unexpected.to_string(), cx);
-                        Vec::new()
+                        (Vec::new(), None)
                     }
-                    Err(error) => {
+                    (Err(error), _) => {
                         pane.say(words(&error), cx);
-                        Vec::new()
+                        (Vec::new(), None)
                     }
                 };
+                pane.tree.credits = credits;
                 pane.show_files(files, source, cx);
             })
             .ok();
@@ -436,6 +490,7 @@ impl ReviewPane {
             new: None,
         };
         self.tree.shown = ChangeShown::Uncommitted;
+        self.tree.credits = None;
         self.tree.first_picture = false;
         self.tree.wanted = source.clone();
         self.tree.listing = None;
@@ -453,6 +508,7 @@ impl ReviewPane {
     /// Puts the comparison of the workspace back in the place of an entry or a range.
     pub(crate) fn back_to_comparison(&mut self, cx: &mut Context<Self>) {
         self.tree.shown = ChangeShown::Comparison;
+        self.tree.credits = None;
         self.tree.first_picture = false;
         self.tree.wanted = Source::Comparison;
         self.tree.listing = None;

@@ -18,30 +18,53 @@
 
 use std::path::Path;
 
+use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 
-use crate::ReviewPane;
+use crate::{ChangeShown, ReviewPane};
 
 impl ReviewPane {
     /// Whether the change of `path` in the change shown was made by a session other than the
     /// review's own too, as the credits of the change shown say: those of the answer of
     /// `CompareForReview` for a turn's end, those of the uncommitted changes the review
-    /// lists for them. False for a file of a change listed with no credits.
+    /// lists for them. False for a file of a change listed with no credits, and for the
+    /// review of no agent, which has no session of its own for another to be other than.
     pub fn changed_by_another_too(&self, path: &Path) -> bool {
-        let _ = path;
-        todo!("whether another agent changed a file shown too")
+        let Some(own) = self.review_session() else {
+            return false;
+        };
+        let credited = match self.tree.shown {
+            ChangeShown::Uncommitted => self.tree.uncommitted.as_deref(),
+            ChangeShown::Since { .. } => self
+                .tree
+                .credits
+                .as_ref()
+                .map(|credits| credits.files.as_slice()),
+            _ => None,
+        };
+        credited.unwrap_or_default().iter().any(|credited| {
+            credited.file.path == path
+                && credited.by.contains(own)
+                && credited.by.iter().any(|session| session != own)
+        })
     }
 
     /// The mark on the heading of the file of row `index`, `path`, while
-    /// [`ReviewPane::changed_by_another_too`] holds for it. A hook of the contract that
-    /// draws nothing.
+    /// [`ReviewPane::changed_by_another_too`] holds for it, under the selector
+    /// `review-shared-<index>`.
     pub(crate) fn shared_mark(
         &self,
         index: usize,
         path: &Path,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        let _ = (index, path, cx);
-        None
+        self.changed_by_another_too(path).then(|| {
+            div()
+                .debug_selector(|| format!("review-shared-{index}"))
+                .flex_none()
+                .text_color(cx.theme().warning)
+                .child("also changed by another agent")
+                .into_any_element()
+        })
     }
 }
