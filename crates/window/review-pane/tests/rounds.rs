@@ -1244,10 +1244,44 @@ fn a_round_sent_in_a_turn_that_still_runs_is_not_counted_and_is_once_the_history
         }
     );
 
+    // The press after round 1's change comes to round 2 again and says its turn still
+    // runs. The notice stays on screen until an action takes it away.
+    cx.simulate_keystrokes("shift-s");
+    let said = notice(&stage, &mut cx).expect("the notice says the turn still runs");
+    assert!(said.contains("Round 2"), "{said}");
+
     // The turn ends: the history holds it, with its state. The round is counted to that
-    // state, which is newer than the round's own, as RP-38 counts a round, and the
-    // control and the key ask for it.
+    // state, which is newer than the round's own, as RP-38 counts a round. The notice
+    // that said the turn runs is still on screen but is no longer true of round 2, so
+    // the press that follows is not one after the notice that passes on to round 1: it
+    // shows what changed since round 2.
     history_grows(&mut stage, history_of("57"), &mut cx);
+    cx.simulate_keystrokes("shift-s");
+    assert_eq!(notice(&stage, &mut cx), None);
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(version('6')),
+            to: version('7'),
+        }
+    );
+    compared(
+        &mut stage,
+        version('6'),
+        Some(version('7')),
+        Vec::new(),
+        &mut cx,
+    );
+
+    // The control of the round asks for the same, from another change shown.
+    click("review-history-0", &mut cx);
+    compared(
+        &mut stage,
+        COMMIT.to_owned(),
+        Some(version('5')),
+        Vec::new(),
+        &mut cx,
+    );
     click("review-round-2-since", &mut cx);
     assert_eq!(notice(&stage, &mut cx), None);
     assert_eq!(
@@ -1292,7 +1326,7 @@ fn a_round_sent_in_a_turn_that_still_runs_is_not_counted_and_is_once_the_history
 }
 
 #[gpui_kit::test]
-fn a_turn_the_history_holds_with_no_state_is_a_turn_that_still_runs_and_so_is_one_with_no_history_at_all(
+fn a_turn_the_history_holds_with_no_state_is_a_turn_that_still_runs_and_so_is_one_in_a_history_with_no_entry(
     cx: &mut TestAppContext,
 ) {
     // The turn `7` is an entry of the history, but with no state recorded: not an entry
@@ -1315,8 +1349,8 @@ fn a_turn_the_history_holds_with_no_state_is_a_turn_that_still_runs_and_so_is_on
     assert!(said.contains("still runs"), "{said}");
     assert_eq!(shown(&stage, &mut cx), ChangeShown::Comparison);
 
-    // No history at all: the turn still runs is what is true, not that no state is
-    // recorded.
+    // A history read with no entry: the turn is not in it either, and that it still runs
+    // is what is true, not that no state is recorded.
     history_grows(&mut stage, history_of(""), &mut cx);
     focus_the_rows(&stage, &mut cx);
     cx.simulate_keystrokes("shift-s");

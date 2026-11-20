@@ -188,7 +188,6 @@ impl ReviewPane {
     fn counted_since(&self, state: &str, turn: Option<&TurnId>) -> Counted {
         match &self.tree.history {
             Some(history) => counted(&history.entries, state, turn),
-            None if turn.is_some() => Counted::Running,
             None => Counted::NoState,
         }
     }
@@ -251,17 +250,17 @@ impl ReviewPane {
         }
         // The rounds with something to say: one counted to nothing is passed over, one whose
         // turn still runs is not, since the press says so.
-        let counted_to: Vec<Counted> = with_state
-            .iter()
-            .map(|(_, state, turn)| self.counted_since(state, turn.as_ref()))
-            .collect();
-        let with_state: Vec<(u32, String)> = with_state
+        let with_state: Vec<(u32, String, bool)> = with_state
             .into_iter()
-            .zip(counted_to)
-            .filter(|(_, counted)| matches!(counted, Counted::To(_) | Counted::Running))
-            .map(|((number, state, _), _)| (number, state))
+            .filter_map(
+                |(number, state, turn)| match self.counted_since(&state, turn.as_ref()) {
+                    Counted::To(_) => Some((number, state, false)),
+                    Counted::Running => Some((number, state, true)),
+                    Counted::NoState | Counted::Nothing => None,
+                },
+            )
             .collect();
-        let Some(&(newest, _)) = with_state.last() else {
+        let Some(&(newest, ..)) = with_state.last() else {
             return match self.tree.history.as_ref().map(|h| versions(&h.entries)) {
                 Some(held) if !held.is_empty() => {
                     self.say("Nothing was recorded since any round was sent", cx)
@@ -269,16 +268,19 @@ impl ReviewPane {
                 _ => self.say("No state of the worktree is recorded to count to yet", cx),
             };
         };
-        // Where the presses are: the round whose turn the last press said still runs, or
-        // else the round whose change is shown, the first of those with one state, since
-        // they show the same change.
+        // Where the presses are: the round whose turn the last press said still runs, if
+        // it still does (the notice stays on screen after the turn ends, and is no longer
+        // true of that round), or else the round whose change is shown, the first of those
+        // with one state, since they show the same change.
         let at = with_state
             .iter()
-            .position(|(number, _)| said.as_ref() == Some(&still_runs(*number)))
+            .position(|(number, _, running)| {
+                *running && said.as_ref() == Some(&still_runs(*number))
+            })
             .or_else(|| match &self.tree.shown {
                 ChangeShown::Since {
                     from: Some(from), ..
-                } => with_state.iter().position(|(_, state)| state == from),
+                } => with_state.iter().position(|(_, state, _)| state == from),
                 _ => None,
             });
         let number = match at {

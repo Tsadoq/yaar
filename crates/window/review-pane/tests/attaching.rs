@@ -608,8 +608,7 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.update(|window, cx| stage.focus.focus(window, cx));
 
-    // A list of two CLIs is a shape the Keeper of this slice, with one Adapter, never
-    // sends: it is allowed here to show the drawing of a list.
+    // The Keeper of slice 7 offers both CLIs for the review of no agent.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -751,7 +750,10 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_an
     // request the test causes is the first the pane sent.
     assert_eq!(chosen(&stage, &mut cx), None);
     cx.simulate_keystrokes("ctrl-n");
-    assert!(notice(&stage, &mut cx).is_some_and(|words| words.contains("offer")));
+    assert!(
+        notice(&stage, &mut cx).is_some_and(|words| words.contains("attach a review first")),
+        "ctrl-n with no offer says to attach a review first"
+    );
 
     // The offer of two CLIs chooses the first and marks its control.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
