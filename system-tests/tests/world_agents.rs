@@ -1534,10 +1534,16 @@ fn the_reporting_program_a_pi_started_outside_is_given_is_the_one_the_shells_of_
     let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
         lines_of(bytes).iter().any(|line| line == "done-mark")
     });
+    // The prompt of the shell lands in front of the first line the command prints, so the
+    // line is read from the marker the command prints itself. The line typed, echoed back,
+    // holds the marker too, and is told apart by what follows: not a path.
     let named = lines_of(&heard)
         .into_iter()
-        .find_map(|line| line.strip_prefix("reporter=").map(str::to_owned))
-        .filter(|named| named.starts_with('/'))
+        .filter_map(|line| {
+            line.split_once("reporter=")
+                .map(|(_, named)| named.to_owned())
+        })
+        .find(|named| named.starts_with('/'))
         .expect("a shell of the app names the reporting program");
     assert_eq!(named, program("yaar-pi-report").to_str().expect("text"));
     drop((world, client));
