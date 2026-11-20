@@ -463,6 +463,24 @@ impl Window {
         }
     }
 
+    /// Reads until an `AgentsChanged` of `workspace` that shows no session with something
+    /// attached has come after the first `mark` facts. The agents' side tells in the order
+    /// it was handed its work, so every `AgentsChanged` an earlier request told is in
+    /// front of it: a test that attached before the mark and detaches after it reads what
+    /// the requests between told, and no more is to come.
+    fn agents_detached_since(&mut self, mark: usize, workspace: &WorkspaceId) {
+        loop {
+            let seen = self.facts[mark..].iter().any(|fact| {
+                matches!(fact, Fact::AgentsChanged(told) if told.workspace == *workspace
+                    && told.sessions.iter().all(|session| session.attached.is_none()))
+            });
+            if seen {
+                return;
+            }
+            self.read("the sessions told with nothing attached");
+        }
+    }
+
     /// How many `AgentsChanged` of `workspace` came after the first `mark` facts.
     fn agents_changed_since(&self, mark: usize, workspace: &WorkspaceId) -> usize {
         self.facts[mark..]
@@ -731,6 +749,56 @@ fn attaching_the_review_of_no_agent_offers_every_supported_cli() {
 }
 
 #[test]
+fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and_carries_no_text() {
+    let mut setup = Setup::new();
+    let review = setup.review_of_no_agent();
+    setup.window.draft(&review, 1, 1, "first draft");
+    let workspace = setup.workspace.clone();
+    let (store, scratch) = setup.finish();
+
+    // A session of a CLI the Keeper has no Adapter for, as an older Keeper that knew one
+    // left it: it ended, and the review is its own.
+    let session = yaar_store::SessionId::new("5".repeat(32));
+    store
+        .put_session(&yaar_store::SessionRecord {
+            id: session.clone(),
+            workspace: yaar_store::WorkspaceId::new(workspace.as_str()),
+            agent: "pi".to_owned(),
+            cli_session: "pi-session".to_owned(),
+            terminal: None,
+            number: 1,
+            running: false,
+            ended: Some(1),
+            ended_by: Some(yaar_store::EndedBy::Cli),
+        })
+        .expect("keep the session");
+    store
+        .set_review_agent(&yaar_store::ReviewId::new(review.as_str()), Some(&session))
+        .expect("give the review to the session");
+    drop(store);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    // Its CLI is the one to offer, and it cannot be started: the offer is empty, which
+    // every supported CLI is not.
+    assert_eq!(
+        window.ask(Request::AttachReview {
+            review: review.clone(),
+            thread: None,
+        }),
+        Ok(Reply::AttachedReview { start: Vec::new() })
+    );
+    // With no Adapter there is no instruction to put first and nobody to deliver to.
+    assert_eq!(
+        window.attachment(&review),
+        Err(Refusal::NothingToSend {
+            review: review.clone()
+        })
+    );
+    window.stop(keeper);
+}
+
+#[test]
 fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tells_nobody_and_leaves_what_was_attached()
  {
     let mut setup = Setup::new();
@@ -778,6 +846,13 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         })
     );
     assert_eq!(setup.review(&review).attached, None);
+    // A review that is not there is not one with nothing to carry.
+    assert_eq!(
+        setup.window.attachment(&nobody),
+        Err(Refusal::UnknownReview {
+            review: nobody.clone()
+        })
+    );
 
     // The barrier: a draft and an attach that succeed. Whatever the refusals told came
     // before it, on the lane of requests and on the agents' queue.
@@ -834,6 +909,10 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
     setup.window.flush();
     let mark = setup.window.facts.len();
 
+    // Reading what the attachment would carry changes nothing, so it tells nobody: the
+    // counts below are the detach's own.
+    let read = setup.window.attachment(&review);
+    assert!(matches!(read, Ok(Reply::Attachment { .. })), "{read:?}");
     assert_eq!(
         setup.window.ask(Request::DetachReview {
             review: review.clone()
@@ -841,7 +920,7 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
         Ok(Reply::Done)
     );
     setup.window.flush();
-    setup.window.agents_told_since(mark, &setup.workspace);
+    setup.window.agents_detached_since(mark, &setup.workspace);
     assert_eq!(
         setup.window.reviews_changed_since(mark, &setup.workspace),
         1
@@ -980,6 +1059,15 @@ fn a_thread_is_resolved_and_reopened_by_the_reviewer_alone_and_one_attached_alon
         ),
         (
             Request::ResolveThread {
+                review: nobody.clone(),
+                thread: first.clone(),
+            },
+            Refusal::UnknownReview {
+                review: nobody.clone(),
+            },
+        ),
+        (
+            Request::ReopenThread {
                 review: nobody.clone(),
                 thread: first.clone(),
             },
