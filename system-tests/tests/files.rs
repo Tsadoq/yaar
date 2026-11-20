@@ -7,6 +7,12 @@
 //! everything the app stored. On Linux the Keeper also runs under `strace`, which sees
 //! every file it and the programs it started open.
 //!
+//! Each row runs for both CLIs: its body is a function of a [`Dialect`], run as Claude Code
+//! by the test that carries the row's name and as pi by the one with `_as_pi` after it. pi's
+//! settings are the one file of a CLI the app may change, by the one entry the user's yes
+//! asks for: a world as pi gives that yes first, and the home is looked at again after it,
+//! so that the turn is shown to change nothing.
+//!
 //! The reading of a trace is plain code that both systems compile; the tests of it run on
 //! a trace typed by hand. Only starting the Keeper under the tracer, and the row that
 //! does, run on Linux alone.
@@ -21,7 +27,7 @@ use std::time::SystemTime;
 
 use yaar_link::{SessionState, TerminalSize};
 use yaar_system_tests::standin::{Did, Script};
-use yaar_system_tests::{Client, DEADLINE, World, descendants_of, is_alive, wait_until};
+use yaar_system_tests::{Client, DEADLINE, Dialect, World, descendants_of, is_alive, wait_until};
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 100,
@@ -256,14 +262,14 @@ fn plant(world: &World, relative: &str, content: &str) {
     fs::write(&file, content).expect("plant the file");
 }
 
-/// A full turn of the stand-in in a shell of the app, as AGENT-01 has it: a read, an edit,
-/// a new file and a shell write, and then the session's exit, which the app has seen when
-/// this returns. Gives the client.
-fn full_turn(world: &World, repo: &yaar_system_tests::Repo) -> Client {
+/// A full turn of the stand-in of `dialect` in a shell of the app, as AGENT-01 has it: a
+/// read, an edit, a new file and a shell write, and then the session's exit, which the app
+/// has seen when this returns. Gives the client.
+fn full_turn(world: &World, repo: &yaar_system_tests::Repo, dialect: Dialect) -> Client {
     let mut client = world.client();
     let workspace = client.open_folder(repo.path()).expect("open the folder").1;
     let terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
-    client.type_line(&terminal, "claude");
+    client.type_line(&terminal, dialect.name());
     let prompt = client.wait_for_prompt(&terminal, 0);
     client.type_line(&terminal, "make the changes");
     client.wait_for_agents(&workspace, DEADLINE, |agents| {
@@ -307,11 +313,22 @@ fn stop_the_keeper(world: &mut World, client: &mut Client) {
 #[test]
 fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored()
  {
+    settings_are_unchanged(Dialect::ClaudeCode);
+}
+
+// AGENT-12, as pi.
+#[test]
+fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_credentials_is_found_nowhere_the_app_stored_as_pi()
+ {
+    settings_are_unchanged(Dialect::Pi);
+}
+
+fn settings_are_unchanged(dialect: Dialect) {
     let Prepared {
         mut world,
         repo,
         marker,
-        before,
+        mut before,
     } = world_with_files(|_| Vec::new());
     let home = world.home();
     let data = world.data_dir();
@@ -321,7 +338,25 @@ fn the_settings_of_both_clis_are_unchanged_after_a_turn_and_a_marker_in_their_cr
         SETTINGS.len() + CREDENTIALS.len()
     );
 
-    let mut client = full_turn(&world, &repo);
+    if dialect == Dialect::Pi {
+        // pi is installed here, so the Keeper asks its question, and asking writes nothing.
+        // The user's yes then changes pi's settings and nothing else of the home (what it
+        // writes there is CONSENT-01's), and it is the home after it that the turn must
+        // leave as it is: no yes is given by the turn.
+        assert_eq!(
+            differences(&before, &record(&home, &data)),
+            Vec::<String>::new()
+        );
+        world.allow_pi_extension();
+        let allowed = record(&home, &data);
+        assert_eq!(
+            differences(&before, &allowed),
+            [".pi/agent/settings.json holds other bytes"]
+        );
+        before = allowed;
+    }
+
+    let mut client = full_turn(&world, &repo, dialect);
     // The Keeper ends before anything is looked at: what it does as it ends is part of
     // what the app did.
     stop_the_keeper(&mut world, &mut client);
@@ -588,6 +623,21 @@ fn credential_lines(trace: &str) -> Vec<&str> {
         .collect()
 }
 
+/// Whether a call of `trace` that succeeded renamed a file over pi's settings: how the app
+/// puts the entry of the user's yes into them, through a temporary file beside them. The
+/// settings are named by the path the call was given, `.pi/agent/settings.json`, as the
+/// app gives it, and as its last word: the temporary file has a longer name.
+fn replaces_the_settings_of_pi(trace: &str) -> bool {
+    calls(trace).iter().any(|call| {
+        call.name.starts_with("rename")
+            && call.rest.contains(".pi/agent/settings.json\"")
+            && call
+                .rest
+                .rsplit_once(" = ")
+                .is_some_and(|(_, result)| result.starts_with('0'))
+    })
+}
+
 #[test]
 fn the_programs_of_a_trace_are_read_from_the_execve_calls_that_succeeded() {
     let trace = "\
@@ -626,6 +676,40 @@ execve(\"/work/target/yaar-keeper\", [\"yaar-keeper\"], 0x7ffe1 /* 12 vars */) =
 fn an_empty_trace_holds_no_program() {
     assert!(programs("").is_empty());
     assert!(credential_lines("").is_empty());
+    assert!(!replaces_the_settings_of_pi(""));
+}
+
+#[test]
+fn the_settings_of_pi_are_replaced_by_a_rename_that_succeeded_onto_their_path_and_by_nothing_else()
+{
+    // `rename` on x86-64, `renameat` on arm64; a call that was unfinished is joined.
+    let renamed = "\
+9001  rename(\"/h/.pi/agent/settings.json.tmp1\", \"/h/.pi/agent/settings.json\") = 0
+";
+    assert!(replaces_the_settings_of_pi(renamed));
+    let at = "\
+9001  renameat(AT_FDCWD, \"/h/.pi/agent/settings.json.tmp1\", AT_FDCWD, \"/h/.pi/agent/settings.json\") = 0
+";
+    assert!(replaces_the_settings_of_pi(at));
+    let split = "\
+9001  renameat2(AT_FDCWD, \"/h/.pi/agent/settings.json.tmp1\", AT_FDCWD, \"/h/.pi/agent/settings.json\", 0 <unfinished ...>
+9002  getpid() = 9002
+9001  <... renameat2 resumed>) = 0
+";
+    assert!(replaces_the_settings_of_pi(split));
+
+    // A rename that failed, one onto another file, a look at the settings and the lock
+    // beside them, and a rename onto the temporary name alone, replace nothing.
+    for trace in [
+        "9001  rename(\"/h/.pi/agent/settings.json.tmp1\", \"/h/.pi/agent/settings.json\") = -1 EACCES (Permission denied)\n",
+        "9001  rename(\"/h/.pi/agent/a.tmp\", \"/h/.pi/agent/auth.json\") = 0\n",
+        "9001  rename(\"/h/other/settings.json.tmp\", \"/h/other/settings.json\") = 0\n",
+        "9001  openat(AT_FDCWD, \"/h/.pi/agent/settings.json\", O_RDONLY) = 3</h/.pi/agent/settings.json>\n",
+        "9001  mkdir(\"/h/.pi/agent/settings.json.lock\", 0777) = 0\n",
+        "9001  rename(\"/h/x\", \"/h/.pi/agent/settings.json.tmp1\") = 0\n",
+    ] {
+        assert!(!replaces_the_settings_of_pi(trace), "{trace}");
+    }
 }
 
 #[test]
@@ -701,6 +785,29 @@ fn strace_wrapper(trace: &Path) -> Vec<OsString> {
 #[cfg(target_os = "linux")]
 #[test]
 fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn() {
+    nothing_opens_a_credential_file(Dialect::ClaudeCode);
+}
+
+// AGENT-13, as pi. Written on macOS, where it does not build: the Linux run is the first.
+#[cfg(target_os = "linux")]
+#[test]
+fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn_as_pi() {
+    nothing_opens_a_credential_file(Dialect::Pi);
+}
+
+/// The program of the app that reports for `dialect`'s CLI: Claude Code's hook program, and
+/// for pi the reporting program its extension runs. The extension itself is TypeScript, run
+/// by pi, and no process of the trace names it.
+#[cfg(target_os = "linux")]
+fn companion_program(dialect: Dialect) -> &'static str {
+    match dialect {
+        Dialect::ClaudeCode => "yaar-claude-hook",
+        Dialect::Pi => "yaar-pi-report",
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn nothing_opens_a_credential_file(dialect: Dialect) {
     let found = std::process::Command::new("strace").arg("-V").output();
     assert!(
         found.is_ok_and(|output| output.status.success()),
@@ -711,7 +818,12 @@ fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_trac
     let Prepared {
         mut world, repo, ..
     } = world_with_files(|world| strace_wrapper(&trace_of(world)));
-    let mut client = full_turn(&world, &repo);
+    if dialect == Dialect::Pi {
+        // The user's yes, which makes the Keeper open pi's settings and write its one entry
+        // there, so that the trace shows the app beside the file where the credentials lie.
+        world.allow_pi_extension();
+    }
+    let mut client = full_turn(&world, &repo, dialect);
 
     // The Keeper ends of its own accord, and the tracer with it, so that everything it
     // saw is written down.
@@ -721,10 +833,18 @@ fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_trac
 
     // The trace holds the Keeper and a companion, so that an empty one cannot pass.
     let run = programs(&trace);
-    for program in ["yaar-keeper", "yaar-claude-hook"] {
+    for program in ["yaar-keeper", companion_program(dialect)] {
         assert!(
             run.values().any(|name| name == program),
             "the trace holds no process of {program}: {run:?}"
+        );
+    }
+    // As pi it holds the Keeper's change of pi's settings too: the app did open the folder of
+    // pi's own files, and the credentials beside them were left alone.
+    if dialect == Dialect::Pi {
+        assert!(
+            replaces_the_settings_of_pi(&trace),
+            "the trace holds no change of pi's settings"
         );
     }
     // None of them, nor any other process the Keeper started, names a credential file.
