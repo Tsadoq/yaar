@@ -18,10 +18,10 @@ use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
-    Anchor, Attachment, CommentId, DraftOn, Fact, Hello, Lines, Message, Program, Refusal, Reply,
-    Request, RequestId, ReviewId, SOCKET_VARIABLE, SessionState, Side, Step, TERMINAL_VARIABLE,
-    TerminalId, TerminalSize, ThreadId, WorkspaceAgents, WorkspaceId, WorkspaceReviews, handshake,
-    read_message, write_message,
+    AgentReport, Anchor, Attachment, CommentId, DraftOn, Fact, Hello, Lines, Message, Program,
+    Refusal, Reply, Request, RequestId, ReviewId, SOCKET_VARIABLE, SessionState, Side, Step,
+    TERMINAL_VARIABLE, TerminalId, TerminalSize, ThreadId, WorkspaceAgents, WorkspaceId,
+    WorkspaceReviews, handshake, read_message, write_message,
 };
 use yaar_recorder::Git;
 use yaar_review_engine::Reviews;
@@ -274,6 +274,17 @@ impl Scratch {
             .expect("hand it the hook's input");
         let status = child.wait().expect("wait for the hook program");
         assert!(status.success(), "the hook program failed");
+    }
+}
+
+/// A process the test started, killed and collected when the test ends, whatever way it
+/// does.
+struct Process(std::process::Child);
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -805,6 +816,38 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         .expect("the second session")
         .id
         .clone();
+    // A third session starts in a terminal of the app, before the second one ends, so that it
+    // holds a review of its own.
+    let at_mention = recorded::hook_events(AT_MENTION);
+    let terminal = window.open_program(&workspace, Program::Shell);
+    // Its CLI is a process of its own, as it is when its terminal ends: the hook program
+    // names the test's process for every session it reports, and that would end the others.
+    let cli = Process(
+        Command::new("sleep")
+            .arg("600")
+            .stdin(Stdio::null())
+            .spawn()
+            .expect("start a process"),
+    );
+    let report = AgentReport {
+        agent: yaar_adapter_claude::NAME.to_owned(),
+        terminal: Some(terminal.clone()),
+        pid: cli.0.id(),
+        payload: at_mention[0].in_project(&repo).input_bytes(),
+    };
+    // On a connection of its own, as the hook program's.
+    let mut piece = scratch.window();
+    assert_eq!(piece.ask(Request::Report { report }), Ok(Reply::Done));
+    let third = window.agents_until(&workspace, "the third session", |agents| {
+        agents.sessions.len() == 3
+    });
+    let closed = third
+        .sessions
+        .iter()
+        .find(|s| s.id != session && s.id != ended_by_cli)
+        .expect("the third session")
+        .id
+        .clone();
     scratch.hook(None, &tools[35].in_project(&repo).input_bytes());
     let ended = window.agents_until(
         &workspace,
@@ -819,14 +862,35 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     assert_eq!(by_cli.state, SessionState::NotRunning);
     assert!(by_cli.review.is_some());
     assert!(!by_cli.resumable, "its CLI ended it: nothing cut it off");
+
+    // The user closes the third one's terminal (the end of the file on an empty line ends
+    // the shell, which only reads it): its process is gone, which is no cut-off of the
+    // Keeper's either.
+    window.type_into(&terminal, b"\x04");
+    let gone = window.agents_until(&workspace, "the third gone with its terminal", |agents| {
+        agents
+            .sessions
+            .iter()
+            .any(|s| s.id == closed && s.state == SessionState::NotRunning)
+    });
+    let by_terminal = gone
+        .sessions
+        .iter()
+        .find(|s| s.id == closed)
+        .expect("the third session");
+    assert!(by_terminal.review.is_some());
+    assert!(
+        !by_terminal.resumable,
+        "its process went with its terminal: nothing cut it off"
+    );
     window.stop(keeper);
 
-    // The Keeper starts again: the first session was cut off, the second was not.
+    // The Keeper starts again: the first session was cut off, the others were not.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let listed = window.agents();
     assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].sessions.len(), 2);
+    assert_eq!(listed[0].sessions.len(), 3);
     let cut_off = listed[0]
         .sessions
         .iter()
@@ -845,7 +909,18 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
         !ended_before.resumable,
         "it ended before the Keeper stopped"
     );
+    let closed_before = listed[0]
+        .sessions
+        .iter()
+        .find(|s| s.id == closed)
+        .expect("the third session");
+    assert_eq!(closed_before.state, SessionState::NotRunning);
+    assert!(
+        !closed_before.resumable,
+        "its terminal ended before the Keeper stopped"
+    );
 
+    let resumed = session.clone();
     window.open_program(&workspace, Program::Resume { session });
     let launched = scratch.launched_with();
     assert_eq!(launched[..3], ["-l", "-i", "-c"]);
@@ -860,8 +935,9 @@ fn a_session_that_ran_when_its_keeper_stopped_is_resumable_until_it_runs_again_a
     let runs = running
         .sessions
         .iter()
-        .find(|s| s.state == SessionState::Idle)
+        .find(|s| s.id == resumed)
         .expect("the session that runs");
+    assert_eq!(runs.state, SessionState::Idle);
     assert!(!runs.resumable);
     window.stop(keeper);
 }

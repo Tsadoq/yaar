@@ -484,6 +484,8 @@ impl Agents {
             .ok_or_else(|| Refusal::Failed {
                 reason: format!("the app holds no session {session}"),
             })?;
+        // Either part says it runs: the Store and the Switchboard are kept in step, and a
+        // session one of them still holds as running is not brought back a second time.
         let runs = lock(&self.core.switchboard)
             .session(&yaar_switchboard::SessionId(id.as_str().to_owned()))
             .is_some_and(|known| known.state != State::NotRunning);
