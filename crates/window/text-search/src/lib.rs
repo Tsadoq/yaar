@@ -91,8 +91,7 @@ impl TextSearch {
     /// The number of threads of ADR-017: half the cores the machine says it has, rounded
     /// down, and at least one.
     pub fn half_the_cores() -> usize {
-        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
-        (cores / 2).max(1)
+        half_of(std::thread::available_parallelism().map_or(1, |n| n.get()))
     }
 
     /// The number of threads it searches on.
@@ -159,10 +158,19 @@ impl TextSearch {
     }
 }
 
+// Half of `cores`, rounded down, and at least one: a machine with three cores gives one thread.
+fn half_of(cores: usize) -> usize {
+    (cores / 2).max(1)
+}
+
 /// Whether git's ignore rules, as [`TextSearch::search`] reads them for `folder`, leave out
 /// `path`, a file inside `folder`, or any folder above it inside `folder`. A path outside
-/// `folder` is not ignored by them.
+/// `folder` is not ignored by them. Both are made absolute, as `search` makes its folder, so
+/// a relative folder and the absolute path of a file the search gave belong together.
 pub fn is_ignored(folder: &Path, path: &Path) -> bool {
+    let folder = std::path::absolute(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let folder = folder.as_path();
     let Ok(relative) = path.strip_prefix(folder) else {
         return false;
     };
@@ -354,13 +362,17 @@ mod tests {
 
     #[test]
     fn the_threads_are_half_the_cores_and_at_least_one() {
-        // At most half the cores, rounded down, and never below one: the number is that of
-        // the machine the test runs on, so the rule is stated, not a figure.
+        // At most half the cores, rounded down, and never below one. The odd counts are
+        // where rounding up would give another number, and a machine with an even count
+        // cannot show it: a 3-core runner gets one thread, not two.
+        for (cores, threads) in [(1, 1), (2, 1), (3, 1), (12, 6)] {
+            assert_eq!(half_of(cores), threads, "half of {cores} cores");
+        }
         let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
         assert_eq!(
             TextSearch::half_the_cores(),
-            (cores / 2).max(1),
-            "half of {cores} cores, rounded down, at least one"
+            half_of(cores),
+            "the machine's own count goes through the same rule"
         );
         assert_eq!(TextSearch::new(0).threads(), 1);
         assert_eq!(TextSearch::new(5).threads(), 5);

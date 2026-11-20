@@ -67,13 +67,16 @@ fn repository_of_the_row(scratch: &Scratch) -> PathBuf {
 fn a_name_defined_in_a_new_untracked_file_is_found_and_one_in_an_ignored_file_is_not() {
     let scratch = Scratch::new();
     let root = repository_of_the_row(&scratch);
-    // The row's sentence needs the file untracked, and ignored by nothing.
-    assert!(
-        scratch
-            .git(&root, &["status", "--porcelain", "--untracked-files=all"])
-            .contains("?? fresh.rs"),
-        "fresh.rs is untracked"
-    );
+    // The row's sentence needs the file untracked, and ignored by nothing, and the other two
+    // files left out by git itself: git is the authority on both, not the test's own rules.
+    let status = scratch.git(&root, &["status", "--porcelain", "--untracked-files=all"]);
+    assert!(status.contains("?? fresh.rs"), "fresh.rs is untracked");
+    for left_out in ["ignored/only_here.txt", "excluded.txt"] {
+        assert!(
+            !status.contains(left_out),
+            "git leaves {left_out} out: {status}"
+        );
+    }
 
     let new = search().all(&root, "brand_new_name").expect("a search");
     assert_eq!(
@@ -446,6 +449,48 @@ fn is_ignored_says_what_the_search_leaves_out() {
         &root.join("sub"),
         &root.join("ignored/only_here.txt")
     ));
+}
+
+/// `folder`, an absolute path, spelled relative to the folder the test runs in: as many
+/// `..` as the working folder is deep, then the folder's own parts. No test may change the
+/// working folder of its process, so the folder is reached by this way round.
+fn relative_to_the_working_folder(folder: &std::path::Path) -> PathBuf {
+    let here = std::env::current_dir()
+        .and_then(|here| here.canonicalize())
+        .expect("the working folder");
+    let mut relative: PathBuf = here.components().skip(1).map(|_| "..").collect();
+    relative.extend(folder.components().skip(1));
+    relative
+}
+
+#[test]
+fn is_ignored_takes_a_relative_folder_with_the_absolute_paths_the_search_gives() {
+    let scratch = Scratch::new();
+    let root = repository_of_the_row(&scratch);
+    let folder = relative_to_the_working_folder(&root);
+    assert!(folder.is_relative(), "{folder:?} is relative");
+    // The search makes its folder absolute, so each path it gives is absolute.
+    let found = search().all(&folder, "brand_new_name").expect("a search");
+    assert_eq!(found.len(), 1, "the control: the search found the new file");
+    assert!(found[0].path.is_absolute(), "{:?}", found[0].path);
+    let absolute = found[0]
+        .path
+        .parent()
+        .expect("the folder of the file")
+        .to_owned();
+
+    assert!(
+        is_ignored(&folder, &absolute.join("ignored/only_here.txt")),
+        "an ignored file, by its absolute path under a relative folder"
+    );
+    assert!(is_ignored(&folder, &absolute.join("excluded.txt")));
+    assert!(
+        !is_ignored(&folder, &found[0].path),
+        "the file the search found is not ignored"
+    );
+    // Both spelled relative: the same answers.
+    assert!(is_ignored(&folder, &folder.join("ignored/only_here.txt")));
+    assert!(!is_ignored(&folder, &folder.join("fresh.rs")));
 }
 
 #[test]
