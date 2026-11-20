@@ -673,6 +673,13 @@ fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_co
     let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs"]))));
+    // The answer is waited for: a new question drops one the model has not taken yet, and
+    // the model would then hold no list when the refusal comes.
+    wait_until(cx, "the answer to be taken", |cx| {
+        models.changes.read_with(cx, |changes, _| {
+            changes.changes().is_some() && !changes.is_loading()
+        })
+    });
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(
@@ -685,6 +692,19 @@ fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_co
         models.changes.read_with(cx, |changes, _| {
             !changes.is_loading() && changes.refusal().is_some()
         })
+    });
+    // The model still shows the list it held, which a connect must not take as the last
+    // answer of the Keeper.
+    models.changes.read_with(cx, |changes, _| {
+        let shown = changes.changes().expect("the list is still shown");
+        assert_eq!(
+            shown
+                .files
+                .iter()
+                .map(|f| f.path.clone())
+                .collect::<Vec<_>>(),
+            vec![PathBuf::from("a.rs")]
+        );
     });
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
