@@ -408,6 +408,19 @@ fn line_end_conversions_of_the_attributes_apply_as_in_a_checkout() {
 
 #[test]
 fn settings_the_environment_hands_git_still_apply_when_drivers_are_turned_off() {
+    settings_of_the_environment_apply_with_drivers_off(false);
+}
+
+#[test]
+fn settings_the_environment_hands_git_still_apply_when_hooks_and_drivers_are_turned_off() {
+    settings_of_the_environment_apply_with_drivers_off(true);
+}
+
+/// An export of a repository with a driver that must not run, in a process whose
+/// environment hands git `core.autocrlf`. With `hook`, the configuration also defines a
+/// hook, so that the store's own commands already carry a setting of their own that turns
+/// it off, numbered after the one of the environment: the drivers' settings go after both.
+fn settings_of_the_environment_apply_with_drivers_off(hook: bool) {
     let scratch = Scratch::new();
     let repo = scratch.join("repo");
     init(&repo);
@@ -419,11 +432,20 @@ fn settings_the_environment_hands_git_still_apply_when_drivers_are_turned_off() 
     write(&repo, "a.bin", "stored\n");
     write(&repo, "a.txt", "one\ntwo\n");
     let commit = commit_all(&repo, "one");
-    // The driver is added after the commit, which a driver that must run would fail.
+    // The driver is added after the commit, which a driver that must run would fail. A
+    // hook goes in before the store is opened, which reads the hooks to turn off once.
+    let hook_section = if hook {
+        format!(
+            "[hook \"x\"]\n\tcommand = touch {}\n\tevent = pre-commit\n",
+            scratch.join("a-hook-ran").display()
+        )
+    } else {
+        String::new()
+    };
     std::fs::write(
         &global,
         format!(
-            "[filter \"big\"]\n\tsmudge = touch {}\n\trequired = true\n",
+            "{hook_section}[filter \"big\"]\n\tsmudge = touch {}\n\trequired = true\n",
             mark.display()
         ),
     )
@@ -433,7 +455,8 @@ fn settings_the_environment_hands_git_still_apply_when_drivers_are_turned_off() 
 
     // A setting handed over in the environment, as a shell or an outer git does: with
     // line ends converted as git on Windows would, the text file is written with CRLF.
-    // The settings that turn the drivers off are numbered after it and replace nothing.
+    // The settings that turn the drivers off, and the hooks when there are any, are
+    // numbered after it and replace nothing.
     // SAFETY: as above.
     unsafe {
         std::env::set_var("GIT_CONFIG_COUNT", "1");
