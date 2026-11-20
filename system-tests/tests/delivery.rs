@@ -381,6 +381,13 @@ fn a_review_round_goes_from_a_comment_to_the_agents_reply(dialect: Dialect) {
         "{view}"
     );
     assert!(view.contains(reply_tool(dialect)), "{view}");
+    // The bare name of pi's tool is a part of Claude Code's listed name, so the prefix of
+    // Claude Code's tools must be in the one view and not in the other.
+    assert_eq!(
+        view.contains("mcp__plugin_yaar-review_yaar__"),
+        dialect == Dialect::ClaudeCode,
+        "{view}"
+    );
     let instruction_ends = view
         .find("Only the reviewer resolves a thread.")
         .unwrap_or_else(|| panic!("{view}"));
@@ -394,8 +401,8 @@ fn a_review_round_goes_from_a_comment_to_the_agents_reply(dialect: Dialect) {
     );
 
     // The user types a message and does not press Enter. Once the stand-in has read the
-    // keys, which shows that what is typed reaches it, nothing else did: it ran no
-    // `UserPromptSubmit`, and the comment is still a draft.
+    // keys, which shows that what is typed reaches it, nothing else did: it made no
+    // report of the message (the dialect's message_event), and the comment is still a draft.
     client.type_into(&terminal, b"Please look");
     let before_enter = log_when(&world, "default", |log| {
         log.received.ends_with(b"Please look")
@@ -411,7 +418,7 @@ fn a_review_round_goes_from_a_comment_to_the_agents_reply(dialect: Dialect) {
     assert_eq!(waiting.rounds, vec![]);
     assert_eq!(thread_of(&waiting, &thread).comments[0].round, None);
 
-    // Enter: the message goes, and the hook's answer carries what the view showed.
+    // Enter: the message goes, and the report's answer carries what the view showed.
     client.type_into(&terminal, b"\r");
     let submitted = log_when(&world, "default", |log| !prompts(dialect, log).is_empty());
     let [(answer, _)] = prompts(dialect, &submitted)[..] else {
@@ -699,6 +706,8 @@ fn an_agent_that_runs_in_no_terminal_is_followed_receives_a_review_and_replies(d
     let (world, repo) = world_with_standin(dialect, name, &outside);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
+    // As pi, `start_agent_outside` lists the extension in pi's settings itself, so the
+    // user's yes given in `world_with_standin` is not what lets the stand-in report here.
     let mut agent = world.start_agent_outside(dialect, &outside, repo.path());
     agent.wait_for_prompt();
 
