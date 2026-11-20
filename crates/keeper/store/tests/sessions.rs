@@ -5,7 +5,7 @@ mod support;
 
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use support::Scratch;
 use yaar_store::{
@@ -715,4 +715,93 @@ fn a_start_for_a_turn_that_is_not_kept_is_refused_with_its_id_and_keeps_nothing(
         store.turns_of(&workspace(1)).expect("turns"),
         [turn(10, 1, 1)]
     );
+}
+
+#[test]
+fn the_record_of_a_sessions_cli_is_kept_replaced_and_taken_away_for_that_session_only() {
+    let scratch = Scratch::new();
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        put_all(&store, &[session(1, 1), session(2, 1)]);
+        // A session starts with no record of its CLI's.
+        assert_eq!(store.session_cli_record(&sid(1)).expect("read"), None);
+
+        store
+            .set_session_cli_record(&sid(1), Some(Path::new("/pi/sessions/one.jsonl")))
+            .expect("set the record");
+        assert_eq!(
+            store.session_cli_record(&sid(1)).expect("read"),
+            Some(PathBuf::from("/pi/sessions/one.jsonl"))
+        );
+        assert_eq!(store.session_cli_record(&sid(2)).expect("read"), None);
+
+        // The last record a report named is the one kept.
+        store
+            .set_session_cli_record(&sid(1), Some(Path::new("/pi/sessions/moved.jsonl")))
+            .expect("set it again");
+        store
+            .set_session_cli_record(&sid(2), Some(Path::new("/pi/sessions/two.jsonl")))
+            .expect("set the other");
+    }
+
+    // What the call returned is what the drive holds for a Store opened anew, and the
+    // record is no part of the session's own record.
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(
+        store.session_cli_record(&sid(1)).expect("read"),
+        Some(PathBuf::from("/pi/sessions/moved.jsonl"))
+    );
+    assert_eq!(
+        store.session_cli_record(&sid(2)).expect("read"),
+        Some(PathBuf::from("/pi/sessions/two.jsonl"))
+    );
+    assert_eq!(session_of(&store, 1), session(1, 1));
+
+    store
+        .set_session_cli_record(&sid(1), None)
+        .expect("take it away");
+    assert_eq!(store.session_cli_record(&sid(1)).expect("read"), None);
+    assert_eq!(
+        store.session_cli_record(&sid(2)).expect("read"),
+        Some(PathBuf::from("/pi/sessions/two.jsonl"))
+    );
+    // Taking away what is not there is no fault.
+    store
+        .set_session_cli_record(&sid(1), None)
+        .expect("take it away again");
+}
+
+#[test]
+fn the_record_of_a_sessions_cli_is_kept_as_the_bytes_of_its_path() {
+    let scratch = Scratch::new();
+    let odd = PathBuf::from(OsStr::from_bytes(b"/pi/sessions/\xff odd, 'quoted'.jsonl"));
+    {
+        let store = Store::open(&scratch.file()).expect("open");
+        put_all(&store, &[session(1, 1)]);
+        store
+            .set_session_cli_record(&sid(1), Some(&odd))
+            .expect("set the record");
+    }
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(store.session_cli_record(&sid(1)).expect("read"), Some(odd));
+}
+
+#[test]
+fn a_record_for_a_session_the_store_does_not_hold_is_refused_and_keeps_nothing() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    put_all(&store, &[session(1, 1)]);
+
+    let sentence = refusal_of(
+        store.set_session_cli_record(&sid(9), Some(Path::new("/pi/sessions/nine.jsonl"))),
+    );
+    assert!(sentence.contains(&id(9)), "{sentence}");
+    refusal_of(store.set_session_cli_record(&sid(9), None));
+    assert_eq!(store.session_cli_record(&sid(9)).expect("read"), None);
+    // Nothing was made for the session: it is still not there, and a session kept later
+    // under that id starts with no record.
+    assert_eq!(store.session(&sid(9)).expect("read"), None);
+    put_all(&store, &[session(9, 1)]);
+    assert_eq!(store.session_cli_record(&sid(9)).expect("read"), None);
+    assert_eq!(store.session_cli_record(&sid(1)).expect("read"), None);
 }
