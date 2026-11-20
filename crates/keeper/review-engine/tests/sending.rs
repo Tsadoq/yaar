@@ -651,3 +651,177 @@ fn the_review_of_a_session_is_the_one_whose_agent_it_is() {
         None
     );
 }
+
+#[test]
+fn a_thread_attached_alone_is_sent_alone_as_the_view_shows_it_and_the_other_draft_stays_a_draft() {
+    let Round {
+        scratch,
+        worktree,
+        store,
+        reviews,
+        review,
+        repo: _,
+    } = attached_review_in_a_repository();
+    reviews
+        .save_draft(
+            Some(&worktree),
+            &review,
+            &new_thread(2, "b.txt", 1, "two", "and why two"),
+        )
+        .expect("a second thread");
+    reviews
+        .attach(&review, Attachment::Thread(ThreadId::new(id(1))), &[])
+        .expect("attach one thread");
+    let mut keeper = Keeper::new(INSTRUCTION);
+
+    let viewed = reviews
+        .attached_text(&review, keeper.instruction())
+        .expect("read")
+        .expect("something is attached");
+    let (_, sent) = reviews
+        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .expect("send")
+        .expect("something was sent");
+
+    // What was handed out is what the view showed: the one thread, and not the other's draft.
+    assert_eq!(keeper.handed.len(), 1);
+    let handed = &keeper.handed[0];
+    assert_eq!(handed.text, viewed.text);
+    assert!(handed.text.contains("why changed"), "{}", handed.text);
+    assert!(!handed.text.contains("and why two"), "{}", handed.text);
+    assert!(
+        handed.text.contains(&format!("Thread {}", id(1))),
+        "{}",
+        handed.text
+    );
+    assert!(
+        !handed.text.contains(&format!("Thread {}", id(2))),
+        "{}",
+        handed.text
+    );
+    assert_eq!((handed.threads, handed.round), (1, 1));
+    assert_eq!(sent.comments, vec![CommentId::new(id(1001))]);
+
+    // The other draft is still a draft, and nothing is attached, also in a Store opened anew.
+    drop(reviews);
+    drop(store);
+    let store = self::store(&scratch);
+    let reviews = engine(&scratch, store.clone());
+    assert_eq!(round_of(&reviews, &review, 1001), Some(1));
+    assert_eq!(round_of(&reviews, &review, 1002), None);
+    assert_eq!(
+        store.review(&review).expect("read").expect("kept").attached,
+        None
+    );
+}
+
+#[test]
+fn each_of_two_rounds_that_wait_for_their_state_gets_the_state_its_own_call_recorded() {
+    let Round {
+        scratch,
+        repo,
+        worktree,
+        store,
+        reviews,
+        review,
+    } = attached_review_in_a_repository();
+    let mut keeper = Keeper::new(INSTRUCTION);
+    reviews
+        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .expect("send round 1")
+        .expect("something was sent");
+    reviews
+        .save_draft(
+            Some(&worktree),
+            &review,
+            &new_thread(2, "b.txt", 1, "two", "and why two"),
+        )
+        .expect("a second thread");
+    reviews
+        .attach(&review, Attachment::Review, &[])
+        .expect("attach again");
+    reviews
+        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .expect("send round 2")
+        .expect("something was sent");
+    let waiting = reviews.review(&review).expect("read");
+    assert_eq!(
+        waiting
+            .rounds()
+            .iter()
+            .map(|r| r.state.clone())
+            .collect::<Vec<_>>(),
+        vec![None, None]
+    );
+
+    // The recording of the first takes a second, and the second is recorded in between, or
+    // after: each call names its round, and the files differ between the two.
+    write(&repo, "a.txt", "one, for the first round\n");
+    let first = reviews
+        .record_round(&worktree, &review, 1)
+        .expect("record round 1");
+    write(&repo, "a.txt", "one, for the second round\n");
+    let second = reviews
+        .record_round(&worktree, &review, 2)
+        .expect("record round 2");
+    assert_ne!(first, second);
+
+    let expected = vec![
+        (1, Some(first.as_str().to_owned())),
+        (2, Some(second.as_str().to_owned())),
+    ];
+    let states_of = |reviews: &Reviews| {
+        reviews
+            .review(&review)
+            .expect("read")
+            .rounds()
+            .iter()
+            .map(|round| (round.number, round.state.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(states_of(&reviews), expected);
+
+    // Also from a Store opened anew.
+    drop(reviews);
+    drop(store);
+    let reviews = engine(&scratch, self::store(&scratch));
+    assert_eq!(states_of(&reviews), expected);
+}
+
+#[test]
+fn the_threads_a_round_counts_are_threads_and_not_the_comments_of_a_thread_with_two_unsent() {
+    let Round {
+        scratch: _scratch,
+        worktree: _worktree,
+        store,
+        reviews,
+        review,
+        repo: _,
+    } = attached_review_in_a_repository();
+    // A second unsent comment of the reviewer on the thread the draft started: the Store
+    // keeps one, as a draft saved again after a restart could leave.
+    store
+        .put_comment(
+            &ThreadId::new(id(1)),
+            &Comment {
+                id: CommentId::new(id(1003)),
+                author: Author::Reviewer,
+                text: "and one more thing".to_owned(),
+                round: None,
+            },
+        )
+        .expect("a second unsent comment");
+    let mut keeper = Keeper::new(INSTRUCTION);
+
+    let (_, sent) = reviews
+        .send_attached(&review, SentBy::Delivered, &mut keeper)
+        .expect("send")
+        .expect("something was sent");
+
+    assert_eq!(
+        sent.comments,
+        vec![CommentId::new(id(1001)), CommentId::new(id(1003))]
+    );
+    assert_eq!(keeper.handed.len(), 1);
+    assert_eq!(keeper.handed[0].threads, 1);
+}
