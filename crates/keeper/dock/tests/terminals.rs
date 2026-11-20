@@ -1091,7 +1091,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
     }
     let scratch = Scratch::new();
     let plugin = scratch.path().join("plugin");
-    let first = scratch.path().join("pieces");
+    let reporter = scratch.path().join("pieces/yaar-pi-report");
     // What the user's own environment is, less what a system program drops by itself:
     // macOS removes the variables of the dynamic loader before it runs `env`.
     let users: BTreeMap<String, String> = std::env::vars()
@@ -1113,7 +1113,10 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
             name: "CLAUDE_CODE_PLUGIN_DIRS".into(),
             path: plugin.clone(),
         },
-        Entry::SearchFirst(first.clone()),
+        Entry::Variable {
+            name: "YAAR_PI_REPORT".into(),
+            value: reporter.clone().into_os_string(),
+        },
     ]);
     let (_, watch) = open(&dock, start);
     let events = watch.wait_for_end();
@@ -1135,7 +1138,7 @@ fn the_environment_of_a_shell_of_the_app_differs_from_the_users_only_by_what_the
             "CLAUDE_CODE_PLUGIN_DIRS",
             format!("/user/own:{}", plugin.display()),
         ),
-        ("PATH", format!("{}:/usr/bin:/bin", first.display())),
+        ("YAAR_PI_REPORT", reporter.display().to_string()),
         ("YAAR_SOCKET", "/run/yaar/keeper.sock".to_owned()),
         (
             "YAAR_TERMINAL",

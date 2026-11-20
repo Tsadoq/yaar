@@ -1,14 +1,17 @@
 // The extension of the app YAAR for pi: it tells the app what pi does, hands a review the
 // user attached in the app to the user's message, and gives the agent the reply tool.
 //
-// pi loads it from the app's own folder, through the `-e` the app's `pi` wrapper adds; a
-// pi started outside the app's shells never sees it. It is TypeScript, as pi requires,
-// written with no syntax that type stripping cannot erase, so that Node runs it as it is in
-// its test. It decides nothing: every report goes, as it is, to the reporting program the
-// wrapper names in YAAR_PI_REPORT, and the app's answer comes back from it. What each
-// report holds and what it is answered is written down in the crate doc of
-// `yaar-adapter-pi`; this file follows that doc. It reads YAAR_PI_REPORT at each report,
-// not once when pi loads it, and every handler awaits its own report to its end.
+// pi loads it from the app's own folder because pi's own settings list it, which the app
+// writes only after the user said yes. So pi loads it in every pi the user starts, outside
+// the app too: there no YAAR_PI_REPORT is set, and the extension, looking for it when pi
+// loads it, registers no handler and no tool, reports nothing and prints nothing. Inside
+// the app every shell sets it. It is TypeScript, as pi requires, written with no syntax
+// that type stripping cannot erase, so that Node runs it as it is in its test. It decides
+// nothing: every report goes, as it is, to the reporting program YAAR_PI_REPORT names, and
+// the app's answer comes back from it. What each report holds and what it is answered is
+// written down in the crate doc of `yaar-adapter-pi`; this file follows that doc. A loaded
+// extension reads YAAR_PI_REPORT again at each report, and every handler awaits its own
+// report to its end.
 //
 // It registers no handler for the trust of a folder, nor for any dialog of pi's: the user
 // answers them.
@@ -16,7 +19,7 @@
 import { Type } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
-/** The variable the app's wrapper sets to the absolute path of the reporting program. */
+/** The variable every shell of the app sets to the absolute path of the reporting program. */
 export const REPORT_VARIABLE = "YAAR_PI_REPORT";
 
 /** The reply tool, as pi lists it to the agent. */
@@ -48,7 +51,10 @@ export function report(payload: Record<string, unknown>, tool: boolean): Promise
   throw new Error("not built yet: the report of pi's extension");
 }
 
-/** The extension, as pi calls it once it loaded the file, and again after `/new`. */
+/**
+ * The extension, as pi calls it once it loaded the file, and again after `/new`. With no
+ * YAAR_PI_REPORT set, outside the app, it registers nothing and returns.
+ */
 export default function yaar(pi: ExtensionAPI): void {
   void pi;
   void Type;

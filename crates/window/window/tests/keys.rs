@@ -77,6 +77,9 @@ fn documented() -> BTreeSet<String> {
             "cmd-shift-t",
             "cmd-alt-c",
             "cmd-shift-r",
+            // The answers to a question for leave, of slice 7.
+            "cmd-alt-e",
+            "cmd-alt-shift-e",
         ]);
     } else {
         keys.extend(["ctrl-shift-c", "ctrl-shift-v"]);

@@ -3,7 +3,9 @@
 //! Owns: the terminal emulator and its drawing, several terminals, launchers, the attachment shown at the agent's terminal.
 //!
 //! Next to the shell it offers a launcher for each agent CLI the Keeper names, and a
-//! control that resumes each session a restart cut off (`launchers.rs`).
+//! control that resumes each session a restart cut off (`launchers.rs`). Under them it
+//! shows the question an Adapter asks before it writes into the user's own settings of its
+//! CLI, with the two controls that answer it (`consent.rs`).
 //!
 //! Surface:
 //! - [`entry`], the pane as the Window program registers it, with [`pane`], which builds
@@ -24,6 +26,7 @@
 //! It depends on the Frame and on no other pane.
 
 mod attachment;
+mod consent;
 mod draw;
 mod emulator;
 mod keys;
@@ -45,6 +48,7 @@ use yaar_link::{
 };
 
 pub use attachment::ADDRESS_EACH_COMMENT;
+pub use consent::NOTHING_TO_INSTALL;
 pub use emulator::{
     Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
 };
@@ -96,6 +100,12 @@ actions!(
         /// Opens a terminal that resumes the next session of the workspace on screen that
         /// a restart cut off, with its CLI's own command.
         ResumeAgent,
+        /// Answers yes to the question of every Adapter that writes into its CLI's own
+        /// settings only with the user's leave: each installs its entry.
+        InstallAgentExtensions,
+        /// Answers no to that question: nothing is installed, and an entry installed
+        /// before is taken out.
+        KeepAgentExtensionsOut,
     ]
 );
 
@@ -148,7 +158,9 @@ pub fn pane() -> BuildPane {
 /// Ctrl-Shift-C and Ctrl-Shift-V elsewhere. [`NewAgentTerminal`] (`secondary-shift-t`),
 /// [`NextAgentCli`] (`secondary-alt-c`) and [`ResumeAgent`] (`secondary-shift-r`) work
 /// anywhere; the first and the last send [`RequestKind::OpenTerminal`], of a launcher and
-/// of a session's resume.
+/// of a session's resume. [`InstallAgentExtensions`] (`secondary-alt-e`) and
+/// [`KeepAgentExtensionsOut`] (`secondary-alt-shift-e`) work anywhere and send
+/// [`RequestKind::AnswerConsent`], yes and no to an Adapter's question for leave.
 pub fn controls() -> Vec<Control> {
     let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
     let nothing = |title, action: fn() -> Box<dyn Action>, keystroke, place| Control {
@@ -260,6 +272,23 @@ pub fn controls() -> Vec<Control> {
             keystroke: "secondary-shift-r",
             place: Place::Anywhere,
             sends: Some(Sends::Request(RequestKind::OpenTerminal)),
+            asks: Asks::Nothing,
+        },
+        // Not Cmd-Alt-I, the toolkit's inspector on macOS.
+        Control {
+            title: "Install Agent Extensions",
+            action: || Box::new(InstallAgentExtensions),
+            keystroke: "secondary-alt-e",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::AnswerConsent)),
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "Keep Agent Extensions Out",
+            action: || Box::new(KeepAgentExtensionsOut),
+            keystroke: "secondary-alt-shift-e",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::AnswerConsent)),
             asks: Asks::Nothing,
         },
     ]
@@ -430,6 +459,8 @@ impl TerminalPane {
         models.routes.route(&pane, Self::new_agent_terminal);
         models.routes.route(&pane, Self::next_agent_cli);
         models.routes.route(&pane, Self::resume_agent);
+        models.routes.route(&pane, Self::install_agent_extensions);
+        models.routes.route(&pane, Self::keep_agent_extensions_out);
 
         let focus = cx.focus_handle();
         let handed_on = cx.on_focus(&focus, window, |pane, window, cx| {
@@ -450,6 +481,8 @@ impl TerminalPane {
         });
         // The waiting mark follows the agents, whatever else changes.
         let agents = cx.observe(&models.agents, |_, _, cx| cx.notify());
+        // The question for leave comes and goes with what the Keeper tells.
+        let consents = cx.observe(&models.consents, |_, _, cx| cx.notify());
         // A terminal the list gains is attached.
         let terminals = cx.observe(&models.terminals, |pane, _, cx| pane.attach_missing(cx));
         // A terminal another pane wants is opened here.
@@ -479,7 +512,7 @@ impl TerminalPane {
             attachments: attachment::Attachments::default(),
             launchers: launchers::Launchers::default(),
             _subscriptions: vec![
-                handed_on, keys, facts, workspaces, agents, terminals, wanted,
+                handed_on, keys, facts, workspaces, agents, consents, terminals, wanted,
             ],
         };
         pane.attach_missing(cx);
@@ -1017,6 +1050,9 @@ impl Render for TerminalPane {
         // (`launchers.rs`), so that no terminal's first rows lie under them; the room the
         // canvas measures is what lies below them.
         let launchers = self.render_launchers(cx);
+        // The question an Adapter asks before it writes into its CLI's settings lies in
+        // the same top row, under them (`consent.rs`).
+        let consent = self.render_consent(cx);
         let slots = shown.iter().enumerate().filter_map(|(n, id)| {
             // The name comes from the entry the view is taken from, so that no view is
             // drawn under the name of another terminal.
@@ -1134,6 +1170,7 @@ impl Render for TerminalPane {
             .flex()
             .flex_col()
             .children(launchers)
+            .children(consent)
             .child(
                 div()
                     .flex_1()

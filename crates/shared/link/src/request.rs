@@ -9,10 +9,11 @@ use std::path::PathBuf;
 
 use crate::LinkError;
 use crate::agent::{
-    AgentCli, AgentReport, CreditedFile, History, Step, TerminalInfo, Turn, WorkspaceAgents,
-    read_agent_cli, read_credited, read_history, read_report, read_step, read_terminal_info,
-    read_turn, read_workspace_agents, write_agent_cli, write_credited, write_history, write_report,
-    write_step, write_terminal_info, write_turn, write_workspace_agents,
+    AgentCli, AgentReport, Consent, ConsentAnswer, CreditedFile, History, Step, TerminalInfo, Turn,
+    WorkspaceAgents, read_agent_cli, read_consent, read_consent_answer, read_credited,
+    read_history, read_report, read_step, read_terminal_info, read_turn, read_workspace_agents,
+    write_agent_cli, write_consent, write_consent_answer, write_credited, write_history,
+    write_report, write_step, write_terminal_info, write_turn, write_workspace_agents,
 };
 use crate::review::{
     CommentId, DraftOn, ReviewId, SessionId, ThreadId, TurnId, WorkspaceReviews, read_draft_on,
@@ -167,6 +168,10 @@ request_kinds! {
     ListClis = 33, Window;
     /// See [`Request::CompareForReview`].
     CompareForReview = 34, Window;
+    /// See [`Request::ListConsents`].
+    ListConsents = 35, Window;
+    /// See [`Request::AnswerConsent`].
+    AnswerConsent = 36, User;
 }
 
 impl RequestKind {
@@ -551,6 +556,24 @@ pub enum Request {
         /// The recorded state the change leads to.
         to: String,
     },
+    /// Every Adapter that writes into the user's own settings of its CLI only with the
+    /// user's leave, whose CLI is installed, with its question and what the user said, in
+    /// the order of the Adapters. Answered by [`Reply::Consents`]; an empty list where no
+    /// Adapter needs leave.
+    ListConsents,
+    /// The user's answer to an Adapter's question for leave: `Yes` writes the Adapter's
+    /// entry into the CLI's settings, `No` writes nothing and takes out an entry the app
+    /// wrote, `NotAsked` takes it out too and has the Window ask again. The answer is kept
+    /// across restarts. Answered by [`Reply::Consents`], every Adapter's as it now stands,
+    /// the one answered with its `problem` where its CLI's settings could not be changed;
+    /// refused with [`Refusal::Failed`] for an agent no listed Adapter has. Every Window is
+    /// told [`Fact::ConsentsChanged`] with the same list.
+    AnswerConsent {
+        /// The Adapter, by its name.
+        agent: String,
+        /// What the user said.
+        answer: ConsentAnswer,
+    },
 }
 
 impl Request {
@@ -591,6 +614,8 @@ impl Request {
             Self::GetAttachment { .. } => RequestKind::GetAttachment,
             Self::ListClis => RequestKind::ListClis,
             Self::CompareForReview { .. } => RequestKind::CompareForReview,
+            Self::ListConsents => RequestKind::ListConsents,
+            Self::AnswerConsent { .. } => RequestKind::AnswerConsent,
         }
     }
 }
@@ -680,6 +705,9 @@ pub enum Reply {
     /// The files a review shows of the change between two versions, ordered by path, each
     /// with the sessions credited with it.
     ComparedForReview(Vec<CreditedFile>),
+    /// Every Adapter that needs the user's leave to write into its CLI's settings, and how
+    /// that stands.
+    Consents(Vec<Consent>),
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -901,6 +929,11 @@ pub enum Fact {
     /// A Window set a setting: every Window is told it, the one that set it included, in
     /// the order the settings were kept.
     SettingChanged(Setting),
+    /// How the Adapters that need the user's leave stand now: told to every Window after
+    /// an answer, and to one Window alone as it connects when a question waits for an
+    /// answer or a CLI's settings could not be changed. A Window that is told none at its
+    /// connect has nothing to ask.
+    ConsentsChanged(Vec<Consent>),
 }
 
 pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
@@ -1024,7 +1057,11 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(review.as_str());
             out.text(thread.as_str());
         }
-        Request::ListClis => {}
+        Request::ListClis | Request::ListConsents => {}
+        Request::AnswerConsent { agent, answer } => {
+            out.text(agent);
+            write_consent_answer(out, *answer);
+        }
         Request::CompareForReview {
             workspace,
             review,
@@ -1169,6 +1206,11 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
             from: input.text()?,
             to: input.text()?,
         },
+        RequestKind::ListConsents => Request::ListConsents,
+        RequestKind::AnswerConsent => Request::AnswerConsent {
+            agent: input.text()?,
+            answer: read_consent_answer(input)?,
+        },
     };
     Ok((id, request))
 }
@@ -1268,6 +1310,10 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::ComparedForReview(files) => {
                     out.u16(21);
                     out.list(files, write_credited);
+                }
+                Reply::Consents(consents) => {
+                    out.u16(22);
+                    out.list(consents, write_consent);
                 }
             }
         }
@@ -1393,6 +1439,7 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             },
             20 => Reply::Clis(input.list(read_agent_cli)?),
             21 => Reply::ComparedForReview(input.list(read_credited)?),
+            22 => Reply::Consents(input.list(read_consent)?),
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {
@@ -1506,6 +1553,10 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.u16(8);
             write_setting(out, setting);
         }
+        Fact::ConsentsChanged(consents) => {
+            out.u16(9);
+            out.list(consents, write_consent);
+        }
     }
 }
 
@@ -1538,6 +1589,7 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
             step: read_step(input)?,
         },
         8 => Fact::SettingChanged(read_setting(input)?),
+        9 => Fact::ConsentsChanged(input.list(read_consent)?),
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })
 }

@@ -14,8 +14,9 @@ use serde_json::Value;
 pub enum Dialect {
     /// Claude Code: the stand-in runs the hooks of the app's plugin.
     ClaudeCode,
-    /// pi: the stand-in, found through the app's wrapper, runs the reporting program the
-    /// wrapper names, as pi's extension does.
+    /// pi: the stand-in, started by its name, finds the app's extension in pi's own
+    /// settings in its home, as pi does once the user said yes, and runs the reporting
+    /// program a shell of the app names, as pi's extension does.
     Pi,
 }
 

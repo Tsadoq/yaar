@@ -44,11 +44,13 @@ use wiring::{Answered, Answerer, Outcome, Parts};
 
 /// The Adapters of every agent CLI the Keeper supports, in the order the app offers them:
 /// Claude Code, then pi. The one list of the app that names a CLI: adding one is a line
-/// here, beside its own integration module.
-pub fn adapters() -> Vec<Box<dyn yaar_agent::Adapter>> {
+/// here, beside its own integration module. `home` is the user's home, where a CLI keeps
+/// its own settings: an Adapter that writes into them after the user's yes finds them under
+/// it, and reads no home from its environment.
+pub fn adapters(home: &Path) -> Vec<Box<dyn yaar_agent::Adapter>> {
     vec![
         Box::new(yaar_adapter_claude::ClaudeCode::new()),
-        Box::new(yaar_adapter_pi::Pi::new()),
+        Box::new(yaar_adapter_pi::Pi::in_home(home)),
     ]
 }
 
@@ -81,11 +83,16 @@ pub struct Options {
     /// a test that runs the Keeper in its own process names the folder of the built
     /// programs.
     pub companions: Option<PathBuf>,
+    /// The user's home, under which each agent CLI keeps its own settings: what
+    /// [`adapters`] hands the Adapters. The program as installed takes `HOME`; a test names
+    /// a folder of its own, so that nothing it runs can reach the user's real settings.
+    pub home: PathBuf,
 }
 
 impl Options {
     /// The options of the program as installed: the socket of [`yaar_link::socket_path`],
-    /// a linger of five seconds and the folder of [`yaar_link::data_dir`].
+    /// a linger of five seconds, the folder of [`yaar_link::data_dir`] and the home `HOME`
+    /// names (`/` where it names none, under which no CLI keeps settings).
     pub fn new(app_version: &str) -> Self {
         Self {
             socket: yaar_link::socket_path(),
@@ -93,6 +100,9 @@ impl Options {
             app_version: app_version.to_owned(),
             data_dir: yaar_link::data_dir(),
             companions: None,
+            home: std::env::var_os("HOME")
+                .filter(|home| !home.is_empty())
+                .map_or_else(|| PathBuf::from("/"), PathBuf::from),
         }
     }
 }
@@ -199,6 +209,32 @@ impl Shared {
     /// admitted after.
     fn tell_nobody_any_more(&self) -> Vec<Arc<Window>> {
         lock(&self.told).take().unwrap_or_default()
+    }
+
+    /// Tells `window` alone how the Adapters that need the user's leave stand, when one of
+    /// them waits for an answer or could not change its CLI's settings: the question the
+    /// Window shows at its connect. Tells it nothing when nothing waits. Under the turn, so
+    /// that an answer of another Window is told after it, never before.
+    fn greet(&self, window: &Arc<Window>) {
+        let _turn = lock(&self.turn);
+        let consents = match self
+            .parts
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+        {
+            Some(parts) => parts.consents(),
+            None => return,
+        };
+        let waits = consents.iter().any(|consent| {
+            consent.answer == yaar_link::ConsentAnswer::NotAsked || consent.problem.is_some()
+        });
+        if !waits {
+            return;
+        }
+        if let Ok(frame) = frame_of(&Message::Fact(Fact::ConsentsChanged(consents))) {
+            let _ = window.queue(frame);
+        }
     }
 
     /// Tells every attached Window these facts, in this order, by queuing them: no Window
@@ -572,6 +608,8 @@ fn serve_window(stream: UnixStream, shared: &Arc<Shared>, version: &str) -> Resu
 /// thread for reviews is answered before this returns.
 fn converse(window: &Arc<Window>, speaks: bool, shared: &Arc<Shared>) -> Result<(), LinkError> {
     let mut in_order = InOrder::default();
+    // Whether the Window has been told what waits for the user's answer.
+    let mut greeted = false;
     loop {
         match read_message(&mut &window.stream) {
             Ok(Message::Shutdown) => {
@@ -584,30 +622,38 @@ fn converse(window: &Arc<Window>, speaks: bool, shared: &Arc<Shared>) -> Result<
                     "a Window of another version asked for more than the stop",
                 ));
             }
-            Ok(Message::Request { id, request }) => match wiring::answerer(request.kind()) {
-                // A piece of an agent CLI asks one thing and goes: what it was owed is
-                // written, and nothing more is read from it.
-                Answerer::Here if request.kind().origin() == Origin::Agent => {
-                    answer(shared, window, id, request);
-                    return Ok(());
+            Ok(Message::Request { id, request }) => {
+                // A Window, not a piece of a CLI, by its first request: told once what waits
+                // for the user's answer, before that request is answered.
+                if !greeted && request.kind().origin() != Origin::Agent {
+                    greeted = true;
+                    shared.greet(window);
                 }
-                Answerer::Here => {
-                    if !answer(shared, window, id, request) {
+                match wiring::answerer(request.kind()) {
+                    // A piece of an agent CLI asks one thing and goes: what it was owed is
+                    // written, and nothing more is read from it.
+                    Answerer::Here if request.kind().origin() == Origin::Agent => {
+                        answer(shared, window, id, request);
                         return Ok(());
                     }
-                }
-                Answerer::InOrder => {
-                    if !in_order.hand(shared, window, id, request) {
-                        return Ok(());
+                    Answerer::Here => {
+                        if !answer(shared, window, id, request) {
+                            return Ok(());
+                        }
+                    }
+                    Answerer::InOrder => {
+                        if !in_order.hand(shared, window, id, request) {
+                            return Ok(());
+                        }
+                    }
+                    Answerer::Apart => {
+                        let (shared, window) = (Arc::clone(shared), Arc::clone(window));
+                        // Its answer is queued like any other. A Window let go meanwhile
+                        // takes nothing, and its reading thread finds the connection closed.
+                        std::thread::spawn(move || answer(&shared, &window, id, request));
                     }
                 }
-                Answerer::Apart => {
-                    let (shared, window) = (Arc::clone(shared), Arc::clone(window));
-                    // Its answer is queued like any other. A Window let go meanwhile
-                    // takes nothing, and its reading thread finds the connection closed.
-                    std::thread::spawn(move || answer(&shared, &window, id, request));
-                }
-            },
+            }
             Ok(Message::Input { .. }) if !speaks => {
                 return Err(LinkError::Malformed(
                     "a Window of another version asked for more than the stop",

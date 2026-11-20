@@ -14,8 +14,9 @@
 //! - [`Models`], the shared models a pane observes: [`WorkspaceList`], the repositories
 //!   with their worktrees and the workspace on screen, [`WorkspaceChanges`], the changes
 //!   of that workspace, [`AgentList`], the agent sessions of every workspace,
-//!   [`TerminalList`], the terminals the Keeper holds, and [`SettingList`], the settings
-//!   the user set;
+//!   [`TerminalList`], the terminals the Keeper holds, [`SettingList`], the settings the
+//!   user set, and [`ConsentList`], the questions for leave of the Adapters that write
+//!   into a CLI's own settings only with the user's yes;
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
@@ -34,6 +35,7 @@
 //! [`Routes`]. No pane holds another pane.
 
 mod agents;
+mod consents;
 mod controls;
 pub mod keeper;
 mod link_model;
@@ -45,6 +47,7 @@ pub mod trace;
 mod view;
 
 pub use agents::{AgentList, TerminalList, Wanted};
+pub use consents::ConsentList;
 pub use controls::{
     Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
     PROGRAM_CONTEXT, PROGRAM_KEYS, Place, Quit, QuitAndStopAgents, SelectNextWorkspace,

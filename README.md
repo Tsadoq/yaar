@@ -325,7 +325,7 @@ as GPUI writes them.
 | `ctrl-tab`, `ctrl-shift-tab`: the next and the previous pane | the same |
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r`, `cmd-alt-e`, `cmd-alt-shift-e` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others

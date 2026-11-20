@@ -1,37 +1,66 @@
 //! pi adapter (`H-AGENT-PI`).
 //!
-//! Owns: the mapping of pi's extension events to the seven events; its delivery, reply handling, shell entries, launcher and resume command.
+//! Owns: the mapping of pi's extension events to the seven events; its delivery, reply handling, shell entries, launcher and resume command; and the one entry it writes into pi's own settings, after the user's yes.
 //!
 //! Surface: [`Pi`], the [`yaar_agent::Adapter`] of pi, and the names it stands on: [`NAME`],
-//! [`TITLE`], [`COMMAND`], [`WRAPPER`], [`BIN`], [`EXTENSION`], [`EXTENSION_FILE`],
-//! [`REPORT_PROGRAM`], [`REPORT_VARIABLE`], [`SUBCOMMANDS`], [`REPLY_TOOL`],
-//! [`REPLY_EVENT`] and [`INSTRUCTION`]; [`ToPi`], its delivery module; and what the
-//! reporting program `yaar-pi-report` does ([`pass_on`], [`ReportPlace`],
-//! [`ReportAnswer`], [`DEADLINE`], [`TOOL_DEADLINE`]).
+//! [`TITLE`], [`COMMAND`], [`EXTENSION`], [`EXTENSION_FILE`], [`REPORT_PROGRAM`],
+//! [`REPORT_VARIABLE`], [`AGENT_FOLDER`], [`SETTINGS_FILE`], [`SETTINGS_KEY`],
+//! [`CONSENT_FILE`], [`REPLY_TOOL`], [`REPLY_EVENT`] and [`INSTRUCTION`]; [`ToPi`], its
+//! delivery module; and what the reporting program `yaar-pi-report` does ([`pass_on`],
+//! [`ReportPlace`], [`ReportAnswer`], [`DEADLINE`], [`TOOL_DEADLINE`]).
 //!
 //! # How pi reaches the app
 //!
-//! pi reads no variable that names an extension. [`Adapter::install`] writes two files into
-//! the Adapter's own folder of the app, from the sources of the companion folder
-//! `companions/pi` of the repository, which this crate holds as text:
+//! pi reads no variable that names an extension; it loads the extensions its own settings
+//! list. The app asks the user once, and only a yes puts the app's extension there.
 //!
-//! - `<folder>/`[`BIN`]`/`[`WRAPPER`]: the wrapper, a POSIX `sh` script made from
-//!   `companions/pi/pi.sh` ([`WRAPPER_SOURCE`]), with the absolute paths of the reporting
-//!   program and of the extension put in, each single-quoted for `sh` (a `'` inside written
-//!   `'\''`). It exports [`REPORT_VARIABLE`] naming the reporting program, finds the next
-//!   program named `pi` on the search path after its own folder, and runs it with every
-//!   argument it was given, after `-e` and the extension's path; when the first argument is
-//!   one of [`SUBCOMMANDS`], with no `-e` at all, since pi would take the extension's path
-//!   for part of the subcommand's arguments. It writes nothing and decides nothing else.
-//!   With no other `pi` on the search path it says so on its standard error and ends with
-//!   127, as a shell does for a program it cannot find.
-//! - `<folder>/`[`EXTENSION`]`/`[`EXTENSION_FILE`]: the extension, `companions/pi/yaar.ts`
-//!   ([`EXTENSION_SOURCE`]) as it is, TypeScript, which pi loads itself.
+//! [`Adapter::install`] writes one file into the Adapter's own folder of the app, at every
+//! start of the Keeper, from the source of the companion folder `companions/pi` of the
+//! repository, which this crate holds as text:
+//! `<folder>/`[`EXTENSION`]`/`[`EXTENSION_FILE`], the extension, `companions/pi/yaar.ts`
+//! ([`EXTENSION_SOURCE`]) as it is, TypeScript, which pi loads itself. The path is the same
+//! after an update of the app; only the file's text changes. It gives one
+//! [`yaar_agent::ShellEntry::Variable`]: [`REPORT_VARIABLE`] naming the reporting program
+//! [`REPORT_PROGRAM`] by its absolute path, so that every shell of the app, and so every
+//! pi typed in one or started by a launcher, tells the extension that it runs inside the
+//! app and where to report. Nothing of pi's is written by it.
 //!
-//! It gives one [`yaar_agent::ShellEntry::SearchFirst`] with `<folder>/`[`BIN`], so that the
-//! name `pi` typed in a shell of the app, or run by its launcher, finds the wrapper first.
-//! Nothing is written into pi's own folder, `~/.pi`, or a worktree; a pi started outside the
-//! app's shells finds no wrapper and loads nothing of the app.
+//! pi's own settings are `<home>/`[`AGENT_FOLDER`]`/`[`SETTINGS_FILE`], `home` being the
+//! user's home the Keeper hands [`Pi::in_home`] at its start (a test hands a folder of its
+//! own; [`Pi::new`] knows no home and asks nothing). pi is installed for the app when
+//! `<home>/`[`AGENT_FOLDER`] is a folder: pi makes it at its first run. Until then the
+//! Adapter asks nothing ([`Adapter::consent`] gives none) and pi in the app is any program.
+//!
+//! The question ([`Adapter::consent`]) says, in plain words, that the app would add the
+//! extension's absolute path to the list [`SETTINGS_KEY`] of that file, that pi would then
+//! load the extension in every pi the user starts, where outside the app it does nothing,
+//! and that the answer can be changed. The answer is kept in `<folder>/`[`CONSENT_FILE`]:
+//! `yes` or `no` and a line feed; no file is "not asked yet". A kept yes whose entry is no
+//! longer in pi's settings (the user took it out by hand) stands as not asked: the app asks
+//! again and writes nothing back by itself.
+//!
+//! What a yes writes ([`Adapter::answer_consent`]): the one entry, the extension's absolute
+//! path as a JSON string, at the end of the top-level array [`SETTINGS_KEY`], and nothing
+//! else. Every other byte of the file stays as it was, its layout and the order of its keys
+//! among them: the entry is put into the text, not by writing the parsed settings back.
+//! Where the array is missing, the key and an array of the one entry are added as the
+//! object's last member; where the file is missing, it is written as pi would, the object
+//! with that one key, indented by two spaces. An entry already there is not added twice.
+//! A no, and an ask again, take that one string out of the array with the comma that parted
+//! it, and nothing else: an array left empty stays, and so does a file the app made.
+//!
+//! A file is changed safely: the new text is written to a temporary file in the folder of
+//! the settings, which is then renamed over them, so pi never reads a half-written file;
+//! the file's permissions are kept, and a settings file that is a symbolic link is changed
+//! where it points. While it changes the file the Adapter holds pi's own lock beside it,
+//! the folder `<settings file>.lock`, which pi takes before it writes its settings, and
+//! gives up, changing nothing, when pi holds it past a short wait.
+//!
+//! A settings file the app cannot read as pi writes it is left as it was, and the
+//! [`yaar_agent::Consent`] says so in `problem`, naming the file and why: not text, not
+//! JSON, not a JSON object, a top-level [`SETTINGS_KEY`] that is no array of strings, or
+//! two of them. pi reads its settings with `JSON.parse` (after a byte-order mark, which is
+//! kept): what it cannot read, the app does not change.
 //!
 //! # What the extension reports
 //!
@@ -40,10 +69,15 @@
 //! them, with no shell between, so that the program's parent is pi itself. It writes the
 //! report's payload on the program's standard input and reads its answer from its standard
 //! output; the program passes the payload on, unread, to the Keeper as one
-//! `yaar_link::Request::Report` of the Adapter [`NAME`] ([`pass_on`]). A pi with no
-//! [`REPORT_VARIABLE`] in its environment, one started outside the app, reports nothing.
-//! The extension reads the variable at each report, not once when pi loads it: in pi the
-//! two are the same, and the extension's test sets it between two reports of one process.
+//! `yaar_link::Request::Report` of the Adapter [`NAME`] ([`pass_on`]).
+//!
+//! Outside the app the extension does nothing and says nothing. Once the user said yes, pi
+//! loads it in every pi the user starts, in another terminal program too; there no
+//! [`REPORT_VARIABLE`] is set, and the extension, which looks for it when pi loads it,
+//! registers no handler and no tool, reports nothing and prints nothing. Inside the app
+//! every shell sets it. A loaded extension reads the variable again at each report: in pi
+//! the two are the same, and the extension's test takes it away between two reports of
+//! one process, after which the extension reports nothing.
 //!
 //! Every handler awaits the end of its own report, the program's exit, before it returns,
 //! as Claude Code's hooks are run to their end before Claude Code goes on. pi runs a tool
@@ -124,6 +158,8 @@
 //! message an extension sent, as one pi starts for a background task, carries no review.
 //!
 //! [`Adapter::install`]: yaar_agent::Adapter::install
+//! [`Adapter::consent`]: yaar_agent::Adapter::consent
+//! [`Adapter::answer_consent`]: yaar_agent::Adapter::answer_consent
 //! [`Adapter::asked`]: yaar_agent::Adapter::asked
 //! [`Adapter::marks`]: yaar_agent::Adapter::marks
 
@@ -131,16 +167,18 @@ mod deliver;
 mod install;
 mod report;
 mod reporter;
+mod settings;
 
 pub use deliver::{INSTRUCTION, ToPi};
 pub use reporter::{DEADLINE, ReportAnswer, ReportPlace, TOOL_DEADLINE, pass_on};
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use report::Remembered;
 use yaar_agent::{
-    Adapter, Answer, Asked, CliSession, Delivery, Report, ReportError, Reported, ShellEntry,
+    Adapter, Answer, Asked, CliSession, Consent, ConsentAnswer, Delivery, Report, ReportError,
+    Reported, ShellEntry,
 };
 
 /// The name the app knows pi by.
@@ -149,15 +187,8 @@ pub const NAME: &str = "pi";
 /// The name a person reads.
 pub const TITLE: &str = "pi";
 
-/// What a launcher runs in the user's shell: the name, which the wrapper answers first.
+/// What a launcher runs in the user's shell: pi itself, as the user types it.
 pub const COMMAND: &str = "pi";
-
-/// The wrapper's name in [`BIN`]: pi's own, so that it is found in pi's place.
-pub const WRAPPER: &str = "pi";
-
-/// The folder, inside the Adapter's own folder of the app, that holds the wrapper and is put
-/// first on the search path of every shell of the app.
-pub const BIN: &str = "bin";
 
 /// The folder, inside the Adapter's own folder of the app, that holds the extension.
 pub const EXTENSION: &str = "extension";
@@ -169,24 +200,25 @@ pub const EXTENSION_FILE: &str = "yaar.ts";
 /// app's programs beside the Keeper.
 pub const REPORT_PROGRAM: &str = "yaar-pi-report";
 
-/// The variable the wrapper exports, naming [`REPORT_PROGRAM`] by its absolute path: the
-/// extension finds it there, and a pi with no such variable reports nothing.
+/// The variable every shell of the app sets, naming [`REPORT_PROGRAM`] by its absolute
+/// path: the extension finds it there, and an extension loaded where it is not set, in a pi
+/// started outside the app, registers nothing, reports nothing and prints nothing.
 pub const REPORT_VARIABLE: &str = "YAAR_PI_REPORT";
 
-/// pi's subcommands, which it finds by the first argument alone: the wrapper runs pi with
-/// no extension when the first argument is one of these, and leaves every argument as it
-/// is. Read from pi 1.1.0; a subcommand a later pi adds and this list lacks would be run
-/// with the extension's path among its arguments.
-pub const SUBCOMMANDS: [&str; 8] = [
-    "install",
-    "remove",
-    "uninstall",
-    "update",
-    "list",
-    "config",
-    "mcp",
-    "auth",
-];
+/// pi's own folder of settings, under the user's home: `PI_CODING_AGENT_DIR` names another
+/// for pi, which the app does not follow.
+pub const AGENT_FOLDER: &str = ".pi/agent";
+
+/// pi's settings file in [`AGENT_FOLDER`].
+pub const SETTINGS_FILE: &str = "settings.json";
+
+/// The top-level key of [`SETTINGS_FILE`] whose array of paths lists the extensions pi
+/// loads, besides those of its own `extensions` folder and `-e`.
+pub const SETTINGS_KEY: &str = "extensions";
+
+/// The file, in the Adapter's own folder of the app, that keeps the user's answer: `yes`
+/// or `no` and a line feed.
+pub const CONSENT_FILE: &str = "consent";
 
 /// The reply tool the extension registers with pi, as pi lists it to the agent.
 pub const REPLY_TOOL: &str = "reply_to_thread";
@@ -203,26 +235,32 @@ pub const EXTENSION_SOURCE: &str = include_str!(concat!(
     "/../../../companions/pi/yaar.ts"
 ));
 
-/// The source of the wrapper, `companions/pi/pi.sh`: a POSIX `sh` script in which
-/// [`Adapter::install`] puts `@REPORT@` in place of the reporting program's absolute path
-/// and `@EXTENSION@` in place of the extension's, each quoted for `sh` as one word.
-///
-/// [`Adapter::install`]: yaar_agent::Adapter::install
-pub const WRAPPER_SOURCE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../../companions/pi/pi.sh"
-));
-
-/// The Adapter of pi. It remembers, for each session, whether a run of its agent is open.
+/// The Adapter of pi. It remembers, for each session, whether a run of its agent is open,
+/// and knows the user's home, where pi keeps its settings.
 #[derive(Debug, Default)]
 pub struct Pi {
     memory: Remembered,
+    // The user's home, under which pi keeps its settings; none for an Adapter that asks
+    // nothing and writes nothing of pi's.
+    home: Option<PathBuf>,
 }
 
 impl Pi {
-    /// The Adapter, knowing no session yet.
+    /// The Adapter, knowing no session yet and no home: it asks the user nothing and
+    /// writes nothing of pi's, and pi in the app is any program.
     pub fn new() -> Pi {
         Pi::default()
+    }
+
+    /// The Adapter, knowing no session yet, for the user whose home is `home`: pi's
+    /// settings are `home/`[`AGENT_FOLDER`]`/`[`SETTINGS_FILE`]. The Keeper hands it the
+    /// home it was started with, and a test a folder of its own; the Adapter never reads
+    /// one from its environment.
+    pub fn in_home(home: &Path) -> Pi {
+        Pi {
+            memory: Remembered::default(),
+            home: Some(home.to_owned()),
+        }
     }
 }
 
@@ -239,14 +277,25 @@ impl Adapter for Pi {
         COMMAND
     }
 
-    /// Writes `folder/`[`BIN`]`/`[`WRAPPER`], which can be run, and
-    /// `folder/`[`EXTENSION`]`/`[`EXTENSION_FILE`], as the crate's doc says, each through a
-    /// temporary file of its folder renamed into place, and gives
-    /// [`yaar_agent::ShellEntry::SearchFirst`] with `folder/`[`BIN`]. The reporting program
-    /// is `companions/`[`REPORT_PROGRAM`] by its absolute path. A path that is not text is
-    /// an error of kind `InvalidInput`, and nothing is written.
+    /// Writes `folder/`[`EXTENSION`]`/`[`EXTENSION_FILE`], as the crate's doc says, through
+    /// a temporary file of its folder renamed into place, and gives
+    /// [`yaar_agent::ShellEntry::Variable`] with [`REPORT_VARIABLE`] naming
+    /// `companions/`[`REPORT_PROGRAM`] by its absolute path. Nothing of pi's is written.
     fn install(&self, folder: &Path, companions: &Path) -> io::Result<Vec<ShellEntry>> {
         install::write(folder, companions)
+    }
+
+    /// pi's question, as the crate's doc says, once pi is installed under the home this
+    /// Adapter knows; none without a home or before pi's folder exists.
+    fn consent(&self, folder: &Path) -> Option<Consent> {
+        let home = self.home.as_deref()?;
+        settings::consent(home, folder)
+    }
+
+    /// Keeps the answer and writes or takes out the one entry, as the crate's doc says.
+    fn answer_consent(&self, folder: &Path, answer: ConsentAnswer) -> Option<Consent> {
+        let home = self.home.as_deref()?;
+        settings::answer(home, folder, answer)
     }
 
     /// None: pi reports an interrupt itself.

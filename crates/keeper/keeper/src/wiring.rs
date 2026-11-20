@@ -35,6 +35,12 @@
 //! | `SetSetting` | `settings::set`, into the Store | `SettingChanged` with the setting |
 //! | `ListClis` | `Agents::supported`, the Adapters' names and titles | none |
 //! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
+//! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
+//! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
+//!
+//! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
+//! question waits for an answer or its CLI's settings could not be changed: the question
+//! it shows (`Parts::consents`).
 //!
 //! A piece of the app inside an agent CLI connects as a Window does, sends one request of
 //! the origin `Agent`, and is let go once it is answered.
@@ -237,6 +243,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // git in the state store and the Store's credits of each state in the range: as a
         // comparison of two versions.
         RequestKind::CompareForReview => Answerer::Apart,
+        // A few small files of the CLIs' settings, read or written once, which a user's
+        // key waits for no longer than the drive takes.
+        RequestKind::ListConsents | RequestKind::AnswerConsent => Answerer::Here,
     }
 }
 
@@ -316,6 +325,10 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // No fact carries what they read: the CLIs never change, and a Window told of a
         // turn's end or of a change of reviews asks again for what a review shows.
         RequestKind::ListClis | RequestKind::CompareForReview => false,
+        // An answer leads to `ConsentsChanged`, and the list carries what that fact
+        // carries: read between two answers and sent after the fact of the second, it
+        // would be taken for the newer one.
+        RequestKind::ListConsents | RequestKind::AnswerConsent => true,
     }
 }
 
@@ -372,6 +385,12 @@ impl Parts {
         if let Ok(kept) = &self.kept {
             self.watching.window_gone(kept, window);
         }
+    }
+
+    /// How the Adapters that need the user's leave stand: what a Window is told at its
+    /// connect when one waits for an answer.
+    pub(crate) fn consents(&self) -> Vec<yaar_link::Consent> {
+        self.agents.consents()
     }
 
     /// How many programs of terminals run.
@@ -576,6 +595,14 @@ impl Parts {
             } => self
                 .agents
                 .compare_for_review(kept, &workspace, &review, &from, &to),
+            // The questions for leave of the Adapters that write into a CLI's settings.
+            Request::ListConsents => Ok(Reply::Consents(self.agents.consents())),
+            Request::AnswerConsent { agent, answer } => {
+                self.agents.answer_consent(&agent, answer).map(|consents| {
+                    facts.push(Fact::ConsentsChanged(consents.clone()));
+                    Reply::Consents(consents)
+                })
+            }
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -654,9 +681,6 @@ impl Parts {
             },
         ];
         entries.extend(self.agents.entries());
-        // The folders the entries put first, named again for a start-up file of the user's
-        // that sets the search path anew (`yaar_link::PATH_FIRST_VARIABLE`).
-        entries.extend(self.agents.path_first());
         let mut start = start.with(&entries);
         // Every terminal is watched for the marks of every agent CLI, for the same reason.
         start.marks = self.agents.marks();

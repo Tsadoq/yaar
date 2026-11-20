@@ -173,6 +173,7 @@ impl Scratch {
             app_version: "test-keeper".to_owned(),
             data_dir: self.data(),
             companions: Some(self.companions()),
+            home: self.0.join("home"),
         };
         std::thread::spawn(move || run(options))
     }

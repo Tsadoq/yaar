@@ -26,12 +26,16 @@
 //!
 //! Started as `pi` it behaves as pi does with the app's extension loaded: the pi dialect,
 //! built by the stand-in's package of slice 7 (until then it refuses to start as `pi`). It
-//! is found as the next `pi` on the search path by the app's wrapper, which runs it with
-//! `-e` and the extension's path before the user's arguments: it writes its arguments down
-//! as they came, and runs as pi only when they hold `-e`, as a pi given no extension
+//! is found by its name on the search path, as pi is, whether typed in a shell or run by a
+//! launcher, and finds its extensions as pi does: each path of the top-level array
+//! `extensions` of `<HOME>/.pi/agent/settings.json` that names a file, and each path given
+//! with `-e`. A path that names no file is passed over, and settings that are not a JSON
+//! object give none, as pi does; it reads nothing else of pi's and writes nothing there. It
+//! writes its arguments and the extensions it found down as they came, and runs as pi only
+//! when it found one: a pi whose user said no, or was not asked, loads no extension and
 //! reports nothing. It cannot run the extension, which is TypeScript: it does what the
 //! extension does instead, and only that. For each moment of its script it runs the
-//! reporting program the wrapper names in `YAAR_PI_REPORT`, with no shell between, so that
+//! reporting program the shell of the app names in `YAAR_PI_REPORT`, with no shell between, so that
 //! the program's parent is the stand-in, as it is pi for the extension; it writes the
 //! report's payload on the program's standard input, in the shape the crate doc of
 //! `yaar-adapter-pi` gives (the `event`, `sessionId`, `sessionFile`, `cwd` and the keys of

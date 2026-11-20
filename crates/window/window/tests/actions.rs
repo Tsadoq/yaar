@@ -213,10 +213,13 @@ impl Composed {
             | RequestKind::GetSettings
             | RequestKind::GetAttachment
             | RequestKind::ListClis
-            | RequestKind::CompareForReview => {
+            | RequestKind::CompareForReview
+            | RequestKind::ListConsents => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
+            // The answers to a question for leave are not walked yet (`OF_SLICE_7`).
+            RequestKind::AnswerConsent => {}
             RequestKind::AttachReview => {
                 let attached = match passed {
                     Request::AttachReview {
@@ -488,9 +491,15 @@ impl Composed {
             !controls.is_empty(),
             "no control of the Window sends {kind:?}: a user has no way to start it"
         );
-        // The launcher and the resume of slice 7 are left out until the package that builds
-        // the composed Window of slice 7 teaches the walk them, and takes this filter away.
-        const OF_SLICE_7: [&str; 2] = ["New Agent Terminal", "Resume Agent"];
+        // The launcher, the resume and the answers to a question for leave of slice 7 are
+        // left out until the package that builds the composed Window of slice 7 teaches the
+        // walk them, and takes this filter away.
+        const OF_SLICE_7: [&str; 4] = [
+            "New Agent Terminal",
+            "Resume Agent",
+            "Install Agent Extensions",
+            "Keep Agent Extensions Out",
+        ];
         for control in controls
             .into_iter()
             .filter(|control| !OF_SLICE_7.contains(&control.title))
@@ -615,11 +624,17 @@ impl Composed {
                 | RequestKind::GetSettings
                 | RequestKind::GetAttachment
                 | RequestKind::ListClis
-                | RequestKind::CompareForReview => {
+                | RequestKind::CompareForReview
+                | RequestKind::ListConsents => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
+                }
+                // Left out by `OF_SLICE_7` above, so never reached until the walk is taught
+                // the answers to a question for leave.
+                RequestKind::AnswerConsent => {
+                    unreachable!("the walk leaves out the answers to a question for leave")
                 }
                 RequestKind::AttachReview => {
                     let (review, thread) = self.agent_with_a_thread(cx);

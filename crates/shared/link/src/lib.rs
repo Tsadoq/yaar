@@ -20,6 +20,8 @@
 //!   set, as the [`FlowForm`] of a workspace; and what slice 6 adds to reviews: the
 //!   [`ThreadState`] of a thread, where it sits now ([`Placed`]) and the [`Notice`] of
 //!   code that changed under it, and the [`AgentCli`]s offered when a review is attached;
+//!   and the [`Consent`] of an Adapter that asks the user's leave before it writes into
+//!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
 //!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
@@ -59,8 +61,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 pub use agent::{
-    AgentCli, AgentReport, CreditedFile, History, HistoryEntry, Session, SessionState, Step,
-    TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
+    AgentCli, AgentReport, Consent, ConsentAnswer, CreditedFile, History, HistoryEntry, Session,
+    SessionState, Step, TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
 };
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use review::{
@@ -109,13 +111,6 @@ pub const SOCKET_VARIABLE: &str = "YAAR_SOCKET";
 /// the app inside an agent CLI passes it on, so that the Keeper knows which terminal the
 /// CLI runs in.
 pub const TERMINAL_VARIABLE: &str = "YAAR_TERMINAL";
-
-/// The variable that names, in every shell of the app, the folders the app put first on
-/// its search path, parted by `:`, as `PATH` lists folders: where a CLI's wrapper lies.
-/// A login shell reads the start-up files of the system and of the user, and one of them
-/// may set the search path anew; a start-up file of the user's that puts this variable's
-/// folders first again keeps the app's pieces loaded in the CLI typed by its name.
-pub const PATH_FIRST_VARIABLE: &str = "YAAR_PATH";
 
 const MAGIC: [u8; 4] = *b"YAAR";
 const KIND_HELLO: u8 = 1;
@@ -1099,7 +1094,21 @@ mod tests {
                 from: COMMIT.to_owned(),
                 to: "e".repeat(40),
             },
+            Request::ListConsents,
+            Request::AnswerConsent {
+                agent: "pi".to_owned(),
+                answer: ConsentAnswer::Yes,
+            },
         ];
+        // The two other answers to a question for leave.
+        let refused = Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        };
+        let asked_again = Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::NotAsked,
+        };
         // The launcher of a CLI started for a review, a session resumed, and the review
         // attached whole.
         let for_a_review = Request::OpenTerminal {
@@ -1362,6 +1371,15 @@ mod tests {
                 },
             ]),
             Reply::ComparedForReview(Vec::new()),
+            Reply::Consents(vec![consent(ConsentAnswer::NotAsked, None)]),
+            Reply::Consents(vec![
+                consent(ConsentAnswer::Yes, None),
+                consent(
+                    ConsentAnswer::No,
+                    Some("the settings at /home/u/.pi/agent/settings.json are not JSON"),
+                ),
+            ]),
+            Reply::Consents(Vec::new()),
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1438,6 +1456,8 @@ mod tests {
                 workspace: workspace.clone(),
                 form: FlowForm::LiveDiff,
             }),
+            Fact::ConsentsChanged(vec![consent(ConsentAnswer::Yes, None)]),
+            Fact::ConsentsChanged(Vec::new()),
             Fact::Step {
                 workspace,
                 session: session_id(),
@@ -1497,6 +1517,12 @@ mod tests {
                 request,
             });
         }
+        for request in [refused, asked_again] {
+            messages.push(Message::Request {
+                id: RequestId(u32::MAX - 4),
+                request,
+            });
+        }
         for reply in replies {
             messages.push(Message::Reply {
                 to: RequestId(u32::MAX),
@@ -1534,6 +1560,16 @@ mod tests {
 
     fn review_id() -> ReviewId {
         ReviewId::new("88888888888888888888888888888888")
+    }
+
+    /// pi's question for leave, answered as given.
+    fn consent(answer: ConsentAnswer, problem: Option<&str>) -> Consent {
+        Consent {
+            agent: "pi".to_owned(),
+            question: "Install the app's extension into pi's settings?".to_owned(),
+            answer,
+            problem: problem.map(str::to_owned),
+        }
     }
 
     /// The full id of a recorded state.
@@ -1832,8 +1868,9 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; ten kinds are tried a second time, and the
-        // opening of a terminal a third and a fourth, for each kind of program.
+        // One of each, in the order of the table; eleven kinds are tried a second time, the
+        // opening of a terminal a third and a fourth, for each kind of program, and the
+        // answer to a question for leave a third, for each answer.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
@@ -1850,6 +1887,8 @@ mod tests {
                 RequestKind::OpenTerminal,
                 RequestKind::OpenTerminal,
                 RequestKind::AttachReview,
+                RequestKind::AnswerConsent,
+                RequestKind::AnswerConsent,
             ]
         );
     }
@@ -1883,6 +1922,7 @@ mod tests {
                 RequestKind::ResolveThread,
                 RequestKind::ReopenThread,
                 RequestKind::ResolveAddressed,
+                RequestKind::AnswerConsent,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
@@ -1915,6 +1955,9 @@ mod tests {
             // change is read to be shown.
             RequestKind::ListClis,
             RequestKind::CompareForReview,
+            // Which Adapters need the user's leave is read to know what to ask; the answer
+            // is the user's, by a control.
+            RequestKind::ListConsents,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }

@@ -29,8 +29,10 @@
 //! `reading.rs`, from the Store, the state stores and Workspaces, through `Kept`: it holds
 //! nothing of this side's thread. What a report waits for, and the app's answer to it, is
 //! worked out in `delivery.rs`: the review that rides with a message, the allows, the
-//! agent's replies.
+//! agent's replies. What the Adapters that write into a CLI's own settings only with the
+//! user's leave ask, and the user's answer, are handed on in `consents.rs`.
 
+mod consents;
 mod delivery;
 mod reading;
 
@@ -291,7 +293,7 @@ impl Agents {
         watching: Arc<Watching>,
         shared: Weak<Shared>,
     ) -> Agents {
-        let adapters: Vec<Box<dyn Adapter>> = crate::adapters();
+        let adapters: Vec<Box<dyn Adapter>> = crate::adapters(&options.home);
         let companions = options.companions.clone().unwrap_or_else(|| {
             std::env::current_exe()
                 .ok()
@@ -368,14 +370,6 @@ impl Agents {
     /// What every shell of the app gets from the Adapters, in the Dock's words.
     pub(crate) fn entries(&self) -> Vec<yaar_dock::Entry> {
         self.core.entries.clone()
-    }
-
-    /// The variable `yaar_link::PATH_FIRST_VARIABLE` naming, parted by `:`, the folders
-    /// the Adapters' entries put first on the search path, for every shell of the app;
-    /// none when no entry puts one first. A hook of the contract of slice 7 that gives none,
-    /// for the package of the Keeper's sessions to fill.
-    pub(crate) fn path_first(&self) -> Option<yaar_dock::Entry> {
-        None
     }
 
     /// The runs of bytes every terminal is watched for: the marks of every Adapter, one
@@ -1599,7 +1593,7 @@ fn session_of(change: &Change) -> yaar_switchboard::SessionId {
 fn entry(shell: ShellEntry) -> yaar_dock::Entry {
     match shell {
         ShellEntry::PathList { name, path } => yaar_dock::Entry::PathList { name, path },
-        ShellEntry::SearchFirst(folder) => yaar_dock::Entry::SearchFirst(folder),
+        ShellEntry::Variable { name, value } => yaar_dock::Entry::Variable { name, value },
     }
 }
 

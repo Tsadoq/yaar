@@ -93,6 +93,7 @@ impl Scratch {
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
             companions: None,
+            home: self.0.join("home"),
         };
         std::thread::spawn(move || run(options))
     }
@@ -655,6 +656,11 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                 review: yaar_link::ReviewId::new("1".repeat(32)),
                 from: "a".repeat(40),
                 to: "b".repeat(40),
+            },
+            RequestKind::ListConsents => Request::ListConsents,
+            RequestKind::AnswerConsent => Request::AnswerConsent {
+                agent: "pi".to_owned(),
+                answer: yaar_link::ConsentAnswer::No,
             },
         };
         assert_eq!(
