@@ -356,6 +356,30 @@ mod tests {
     }
 
     #[test]
+    fn a_row_flagged_as_the_users_is_offered_no_download_even_when_a_server_of_it_has_one() {
+        // The reader never lets a user's file carry a download, so a row is built by hand
+        // from a built-in one: its servers keep their downloads, the row says it is the
+        // user's.
+        let registry = builtin();
+        for name in ["typescript", "python", "rust"] {
+            let mut row = registry.row(name).unwrap().clone();
+            assert!(
+                row.servers.iter().any(|s| !s.downloads.is_empty()),
+                "{name}"
+            );
+            row.registered = true;
+            for platform in Platform::ALL.map(Some).into_iter().chain([None]) {
+                assert_eq!(offer(&row, platform), None, "{name} on {platform:?}");
+                assert_eq!(
+                    when_none(&row, platform),
+                    State::Missing { offer: None },
+                    "{name} on {platform:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn a_file_of_no_rows_language_has_no_row_and_so_no_state() {
         let registry = builtin();
         assert!(registry.for_path(Path::new("notes.txt")).is_none());
