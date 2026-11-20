@@ -297,6 +297,12 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
         Step::Exit,
     ]);
     let (world, repo) = World::with_standin("default", &round);
+    // A change nobody committed, so that the index and the status the test compares at the
+    // end have something to lose: a recording that wrote the worktree's own index would
+    // stage it.
+    repo.write("README.md", "# app\nan uncommitted line\n");
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.contains("README.md"), "{status}");
     let untouched = Untouched::of(&repo);
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
@@ -328,9 +334,18 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
 
     // What the view control shows: the instruction, then the review.
     let view = client.attachment(&review.id).expect("the view");
-    assert!(view.contains(REPLY_TOOL), "{view}");
+    // The instruction comes first: the view opens with the sentence the Adapter's
+    // instruction opens with, and the review follows it.
     assert!(
-        view.contains("Only the reviewer resolves a thread."),
+        view.starts_with("This is a code review of your changes, attached to the user's message."),
+        "{view}"
+    );
+    assert!(view.contains(REPLY_TOOL), "{view}");
+    let instruction_ends = view
+        .find("Only the reviewer resolves a thread.")
+        .unwrap_or_else(|| panic!("{view}"));
+    assert!(
+        view.find(&format!("Thread {thread}")) > Some(instruction_ends),
         "{view}"
     );
     assert!(
@@ -410,7 +425,7 @@ fn a_review_round_goes_from_a_comment_through_the_attach_and_the_users_message_t
 
     // Nobody committed, and the app left no file in the worktree.
     untouched.holds_in(&repo);
-    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+    assert_eq!(repo.git(&["status", "--porcelain"]), status);
     end(world, client);
 }
 
