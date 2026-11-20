@@ -517,3 +517,55 @@ fn a_session_credited_with_a_path_in_two_states_is_listed_once_and_the_path_is_n
             .is_empty()
     );
 }
+
+// REV-24
+#[test]
+fn a_state_recorded_at_a_send_stops_waiting_at_a_turn_end_that_keeps_credits_inside_the_range() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, &["x.txt"]);
+    let worktree = open(&repo);
+    let w = workspace();
+    let a = session_id(1);
+    let b = session_id(2);
+    let store = store(&scratch);
+    let reviews = engine(&scratch, store.clone());
+    let r = reviewers(&reviews, &store);
+    let s0 = record(&reviews, &w, &worktree);
+
+    // A's tool writes b.txt and the reviewer sends: that state keeps nothing.
+    write(&repo, "b.txt", "by A\n");
+    let sent = record(&reviews, &w, &worktree);
+    // A's turn goes on and ends in a state of its own that keeps the credits of both files.
+    write(&repo, "c.txt", "by A\n");
+    let s2 = record(&reviews, &w, &worktree);
+    assert_ne!(sent, s2, "the turn end is a state after the send");
+    reviews
+        .keep_credits(
+            &w,
+            &s2,
+            &[credited("b.txt", &[&a]), credited("c.txt", &[&a])],
+        )
+        .expect("keep");
+    // B's turn then changes b.txt and keeps its credit, after the range.
+    write(&repo, "b.txt", "by B\n");
+    let s3 = record(&reviews, &w, &worktree);
+    reviews
+        .keep_credits(&w, &s3, &[credited("b.txt", &[&b])])
+        .expect("keep");
+
+    // The wait of the send ended at s2: B's credit for b.txt is not A's, and B's review
+    // shows nothing of what B had not touched by s2.
+    assert_eq!(
+        reviews.credited_change(&r.a, &s0, &s2).expect("A"),
+        [
+            listed("b.txt", Change::Added, &[&a], false),
+            listed("c.txt", Change::Added, &[&a], false),
+        ]
+    );
+    assert!(
+        reviews
+            .credited_change(&r.b, &s0, &s2)
+            .expect("B")
+            .is_empty()
+    );
+}
