@@ -759,7 +759,8 @@ fn a_no_and_ask_again_are_kept_where_the_file_cannot_be_read_and_it_is_left_alon
     assert_eq!(world.kept().as_deref(), Some("no\n"));
     assert_eq!(world.bytes(), b"{\"extensions\": [1]}");
     assert_eq!(world.modified(), before);
-    // A restart: a kept no needs nothing read, so it is no problem now.
+    // A restart: the file cannot be read and the app writes nothing after a no, so a kept
+    // no says nothing of it.
     assert_eq!(world.consent().answer, ConsentAnswer::No);
     assert_eq!(world.consent().problem, None);
 
@@ -1161,6 +1162,52 @@ fn a_no_that_finds_the_lock_held_is_kept_and_the_entry_stays_with_the_problem() 
     assert_eq!(consent.answer, ConsentAnswer::No, "the user's no is kept");
     assert!(consent.problem.unwrap().contains("try again"));
     assert!(lock.is_dir());
+}
+
+#[test]
+fn a_no_whose_entry_could_not_be_taken_out_is_told_again_after_a_restart_until_it_is_gone() {
+    let world = World::with_pi();
+    world.answer(ConsentAnswer::Yes);
+    let with_entry = world.bytes();
+    let lock = world.agent_folder().join(format!("{SETTINGS_FILE}.lock"));
+    fs::create_dir(&lock).unwrap();
+    world.answer(ConsentAnswer::No);
+    fs::remove_dir(&lock).unwrap();
+    let before = world.age();
+    let tree = world.tree();
+
+    // The Keeper is started again, and again: the entry is still in pi's settings.
+    let first = world.consent();
+    let second = world.consent();
+
+    assert_eq!(first.answer, ConsentAnswer::No, "the user's no stands");
+    assert_eq!(second, first);
+    let problem = first.problem.expect("the entry that stays is told");
+    assert!(
+        problem.contains(world.settings().to_str().unwrap()),
+        "it names the settings: {problem}"
+    );
+    assert!(
+        problem.contains("answer no again"),
+        "and says what to do: {problem}"
+    );
+    assert_eq!(world.bytes(), with_entry, "asking writes nothing");
+    assert_eq!(world.modified(), before);
+    assert_eq!(world.tree(), tree);
+
+    // The user says no again, and now the entry goes.
+    let again = world.answer(ConsentAnswer::No);
+    assert_eq!((again.answer, again.problem), (ConsentAnswer::No, None));
+    assert!(
+        !String::from_utf8(world.bytes())
+            .unwrap()
+            .contains(&world.extension())
+    );
+    let restarted = world.consent();
+    assert_eq!(
+        (restarted.answer, restarted.problem),
+        (ConsentAnswer::No, None)
+    );
 }
 
 #[test]

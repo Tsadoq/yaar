@@ -32,7 +32,8 @@ const LOCK_WAIT: Duration = Duration::from_millis(20);
 /// [`yaar_agent::Adapter::consent`] says: none while `home/.pi/agent` is not a folder. Its
 /// `answer` is the kept one, but a kept yes whose entry is not in pi's settings is
 /// [`ConsentAnswer::NotAsked`]; `problem` says why the settings cannot be read, where they
-/// cannot, and is none for a kept no, which needs nothing read. Writes nothing.
+/// cannot, and, for a kept no, says that the entry is still listed where it is (a no whose
+/// take-out failed), and is otherwise none. Writes nothing.
 pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
     let agent = home.join(AGENT_FOLDER);
     if !agent.is_dir() {
@@ -43,8 +44,21 @@ pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
     let kept = kept(folder);
 
     let (answer, problem) = match kept {
-        // A no needs nothing of pi's read: the app writes nothing and takes nothing out.
-        ConsentAnswer::No => (ConsentAnswer::No, None),
+        // A no stands. Where the entry is still in pi's settings, because the app could not
+        // take it out when the user said no (pi held its lock), the user is told, at every
+        // start until it is gone. A file the app cannot read says nothing: the app writes
+        // nothing after a no, and pi reads no file the app cannot.
+        ConsentAnswer::No => match is_listed(&settings, &extension) {
+            Ok(true) => (
+                ConsentAnswer::No,
+                Some(format!(
+                    "{}: the extension is still listed there, though your answer is no: \
+                     answer no again to take it out",
+                    settings.display()
+                )),
+            ),
+            _ => (ConsentAnswer::No, None),
+        },
         kept => match is_listed(&settings, &extension) {
             Ok(true) => (kept, None),
             // The entry is gone, or the file is: the question comes back, and nothing is
