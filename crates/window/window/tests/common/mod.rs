@@ -16,7 +16,7 @@ use gpui_kit::{
     AnyView, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
     point, px,
 };
-use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane};
+use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wanted};
 use yaar_link::{ReviewId, SessionId, TerminalId, ThreadId};
 use yaar_review_pane::ReviewPane;
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
@@ -314,6 +314,20 @@ impl Composed {
         cx.simulate_click(at, Modifiers::none());
     }
 
+    /// Clicks at the left end of an element, once it is drawn.
+    pub fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
+        let mut found = None;
+        wait_until(cx, selector, |cx| {
+            found = cx.debug_bounds(selector);
+            found.is_some()
+        });
+        let found = found.expect("the element is drawn");
+        cx.simulate_click(
+            point(found.left() + px(2.), found.center().y),
+            Modifiers::none(),
+        );
+    }
+
     /// Whether the focus is inside an element that sets this key context.
     pub fn focus_is_in(&self, context: &str, cx: &mut VisualTestContext) -> bool {
         cx.update(|window, _| {
@@ -380,6 +394,99 @@ impl Composed {
         });
         wait_until(cx, "the first row of the review pane", |cx| {
             cx.debug_bounds("review-row-0").is_some()
+        });
+    }
+
+    /// Starts the stand-in in a launcher terminal of the workspace on screen, as the offer
+    /// made on attaching does, and has the Window show what the keys of the reviews act on:
+    /// that terminal focused, and the review of its session in the review pane. The agent
+    /// is kept in [`Composed::agent`].
+    pub fn start_an_agent(&mut self, cx: &mut VisualTestContext) {
+        let workspace = self
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.selected().cloned())
+            .expect("a workspace is on screen before an agent is started");
+        // What the review pane asks for when its offer to start an agent is taken: the
+        // launcher of the CLI for the review shown, the one of no agent for now. The pane
+        // of the terminals opens it and gives it the focus.
+        let mut shown = None;
+        wait_until(cx, "the review pane to hold a review", |cx| {
+            shown = self
+                .review
+                .read_with(cx, |pane, _| pane.review().map(|review| review.id.clone()));
+            shown.is_some()
+        });
+        let review_of_no_agent = shown.expect("the pane holds a review");
+        self.models.terminals.update(cx, |list, cx| {
+            list.want(
+                Wanted::AgentFor {
+                    workspace,
+                    agent: "claude".to_owned(),
+                    review: review_of_no_agent,
+                },
+                cx,
+            )
+        });
+        let mut found = None;
+        wait_until(
+            cx,
+            "the session in the terminal that took the focus, with its review",
+            |cx| {
+                found = self
+                    .terminals
+                    .read_with(cx, |pane, _| pane.focused())
+                    .and_then(|terminal| {
+                        self.models
+                            .agents
+                            .read_with(cx, |agents, _| agents.in_terminal(&terminal).cloned())
+                    });
+                found
+                    .as_ref()
+                    .is_some_and(|session| session.review.is_some())
+            },
+        );
+        let session = found.expect("the agents list the session");
+        let review = session.review.clone().expect("it has a review");
+        let terminal = session.terminal.clone().expect("it runs in a terminal");
+        wait_until(cx, "the focus in the launcher's terminal", |cx| {
+            self.focus_is_in("Program", cx)
+        });
+
+        // The review: Next Review, from the review pane, until the pane shows the
+        // session's, which it need not at first. At most once for each review there is.
+        wait_until(cx, "the session among those the review pane names", |cx| {
+            self.review.read_with(cx, |pane, _| {
+                pane.review().is_some() && pane.sessions().iter().any(|s| s.id == session.id)
+            })
+        });
+        self.click_into_the_review_pane(cx);
+        let shows = |window: &Self, cx: &mut VisualTestContext| {
+            window
+                .review
+                .read_with(cx, |pane, _| pane.review_session().cloned())
+                == Some(session.id.clone())
+        };
+        let reviews = self
+            .review
+            .read_with(cx, |pane, _| pane.sessions().len() + 1);
+        for _ in 0..reviews {
+            if shows(self, cx) {
+                break;
+            }
+            cx.simulate_keystrokes(&key_of("Next Review"));
+            cx.run_until_parked();
+        }
+        wait_until(
+            cx,
+            "the review of the agent's session in the review pane",
+            |cx| shows(self, cx),
+        );
+        self.agent = Some(RunningAgent {
+            terminal,
+            session: session.id,
+            review,
+            thread: None,
         });
     }
 }

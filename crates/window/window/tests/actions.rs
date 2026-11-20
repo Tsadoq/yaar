@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext, point, px};
-use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends, Wanted as Launcher};
+use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
 use yaar_link::{
     Attachment, CommentId, FlowForm, Origin, Program, Request, RequestKind, ReviewId, Setting,
     ThreadId, ThreadState, Workspace,
@@ -406,20 +406,6 @@ impl Composed {
         }
     }
 
-    /// Clicks at the left end of an element, once it is drawn.
-    fn click_into(&mut self, cx: &mut VisualTestContext, selector: &'static str) {
-        let mut found = None;
-        wait_until(cx, selector, |cx| {
-            found = cx.debug_bounds(selector);
-            found.is_some()
-        });
-        let found = found.expect("the element is drawn");
-        cx.simulate_click(
-            point(found.left() + px(2.), found.center().y),
-            Modifiers::none(),
-        );
-    }
-
     /// Presses the key of `control` where it works, as a user does. Fails when the
     /// control has no key, and when the key runs anything but the action of the control.
     fn press(&mut self, control: &Control, cx: &mut VisualTestContext) {
@@ -684,97 +670,11 @@ impl Composed {
             .unwrap_or_else(|| panic!("no control is titled {title:?}"))
     }
 
-    /// Starts the stand-in in a launcher terminal of the workspace on screen, as the offer
-    /// made on attaching does, and has the Window show what the keys of the reviews act on:
-    /// that terminal focused, and the review of its session in the review pane.
-    fn start_the_agent(&mut self, cx: &mut VisualTestContext) {
-        let workspace = self
-            .on_screen(cx)
-            .expect("a workspace is on screen before the walk starts an agent")
-            .id;
-        // What the review pane asks for when its offer to start an agent is taken: the
-        // launcher of the CLI for the review shown, the one of no agent for now. The pane
-        // of the terminals opens it and gives it the focus.
-        let review_of_no_agent = self.review_shown(cx);
-        self.models.terminals.update(cx, |list, cx| {
-            list.want(
-                Launcher::AgentFor {
-                    workspace,
-                    agent: "claude".to_owned(),
-                    review: review_of_no_agent,
-                },
-                cx,
-            )
-        });
-        let mut found = None;
-        wait_until(
-            cx,
-            "the session in the terminal that took the focus, with its review",
-            |cx| {
-                found = self
-                    .terminals
-                    .read_with(cx, |pane, _| pane.focused())
-                    .and_then(|terminal| {
-                        self.models
-                            .agents
-                            .read_with(cx, |agents, _| agents.in_terminal(&terminal).cloned())
-                    });
-                found
-                    .as_ref()
-                    .is_some_and(|session| session.review.is_some())
-            },
-        );
-        let session = found.expect("the agents list the session");
-        let review = session.review.clone().expect("it has a review");
-        let terminal = session.terminal.clone().expect("it runs in a terminal");
-        wait_until(cx, "the focus in the launcher's terminal", |cx| {
-            self.focus_is_in("Program", cx)
-        });
-
-        // The review: Next Review until the pane shows the session's, which it need not at
-        // first, and checked.
-        wait_until(cx, "the session among those the review pane names", |cx| {
-            self.review.read_with(cx, |pane, _| {
-                pane.review().is_some() && pane.sessions().iter().any(|s| s.id == session.id)
-            })
-        });
-        let reviews = self
-            .review
-            .read_with(cx, |pane, _| pane.sessions().len() + 1);
-        let next_review = Self::control_titled("Next Review");
-        for _ in 0..reviews {
-            if self
-                .review
-                .read_with(cx, |pane, _| pane.review_session().cloned())
-                == Some(session.id.clone())
-            {
-                break;
-            }
-            self.press(&next_review, cx);
-            cx.run_until_parked();
-        }
-        wait_until(
-            cx,
-            "the review of the agent's session in the review pane",
-            |cx| {
-                self.review
-                    .read_with(cx, |pane, _| pane.review_session().cloned())
-                    == Some(session.id.clone())
-            },
-        );
-        self.agent = Some(RunningAgent {
-            terminal,
-            session: session.id,
-            review,
-            thread: None,
-        });
-    }
-
     /// The review of the agent and a thread of it with a draft, the reviewer on its line:
     /// the agent is started and the draft written the first time this is asked.
     fn agent_with_a_thread(&mut self, cx: &mut VisualTestContext) -> (ReviewId, ThreadId) {
         if self.agent.is_none() {
-            self.start_the_agent(cx);
+            self.start_an_agent(cx);
         }
         if self.agent().thread.is_none() {
             // The kinds before wrote a thread on the first line.
