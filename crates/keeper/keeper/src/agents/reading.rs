@@ -387,14 +387,17 @@ fn review_of_workspace(
 }
 
 /// The state store of a workspace.
-fn states_of(kept: &Kept, id: &yaar_workspaces::WorkspaceId) -> Result<Arc<StateStore>, Refusal> {
+pub(super) fn states_of(
+    kept: &Kept,
+    id: &yaar_workspaces::WorkspaceId,
+) -> Result<Arc<StateStore>, Refusal> {
     kept.reviews.states_of(id).map_err(failed)
 }
 
 /// The refusal of a comparison or a reading that failed: `UnknownRevision` naming the first
 /// version that is neither held by the state store nor a commit of the repository, else
 /// the failure as it was.
-fn versions_refusal(
+pub(super) fn versions_refusal(
     error: RecordError,
     states: &StateStore,
     worktree: Option<&Worktree>,
@@ -428,7 +431,7 @@ fn worktree_is_gone() -> Refusal {
 }
 
 /// A failure the user cannot mend from here, as a sentence.
-fn failed(error: impl Display) -> Refusal {
+pub(super) fn failed(error: impl Display) -> Refusal {
     Refusal::Failed {
         reason: error.to_string(),
     }
