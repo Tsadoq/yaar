@@ -790,9 +790,14 @@ impl Setup {
     /// a repeated look at a fact that only becomes true: the recording thread keeps it off the
     /// agents' way, and no change of the reviews is a barrier for it.
     fn wait_for_states(&mut self, cli: &str) {
+        self.wait_for_states_of(yaar_adapter_claude::NAME, cli);
+    }
+
+    /// [`Setup::wait_for_states`] for a session of the CLI `agent`.
+    fn wait_for_states_of(&mut self, agent: &str, cli: &str) {
         let deadline = Instant::now() + DEADLINE;
         loop {
-            let review = self.review_of(cli);
+            let review = self.review_of_agent(agent, cli);
             if !review.rounds.is_empty()
                 && review
                     .rounds
@@ -1659,4 +1664,38 @@ fn after_pis_new_a_reply_of_the_new_session_is_kept_in_the_review_it_took_over()
     };
     assert_eq!(reply.text, "After the new session.");
     setup.stop();
+}
+
+#[test]
+fn the_turn_a_round_was_sent_in_is_told_again_after_the_keeper_is_started_again() {
+    let mut setup = Setup::new();
+    let run = recorded::pi_events(PI_TURN_TOOLS);
+    let (review, ..) = setup.pi_session_with_a_draft(&run[1], "Why is this `one`?");
+    assert!(matches!(setup.pi(&run[3]), Reply::Answer { .. }));
+    let turn = delivered_round(&setup.review_of_agent(yaar_adapter_pi::NAME, run[1].session()))
+        .turn
+        .clone()
+        .expect("the round has a turn");
+    // The state of the round is recorded off the agent's way, and a Keeper stopped before it
+    // is would show none: wait for it, so that what is read after is the whole round.
+    setup.wait_for_states_of(yaar_adapter_pi::NAME, run[1].session());
+    let Setup {
+        scratch,
+        keeper,
+        window,
+        workspace,
+        ..
+    } = setup;
+    window.stop(keeper);
+
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let reviews = window.reviews(&workspace);
+    let kept = reviews
+        .reviews
+        .iter()
+        .find(|held| held.id == review.id)
+        .expect("the review is kept");
+    assert_eq!(delivered_round(kept).turn, Some(turn));
+    window.stop(keeper);
 }
