@@ -564,6 +564,33 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
 }
 
 #[gpui_kit::test]
+fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it(cx: &mut TestAppContext) {
+    let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
+    let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
+    keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs"]))));
+    wait_until(cx, "the answer to be taken", |cx| {
+        models
+            .changes
+            .read_with(cx, |changes, _| changes.changes().is_some())
+    });
+
+    // A server starts from the files on disk, so a Navigator that connects now has no stale
+    // state to be told of: the three first tellings come, and the Download after them is the
+    // barrier for a `FilesChanged` that was on its way.
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+    models
+        .navigation
+        .update(cx, |navigation, _| navigation.download("go"));
+    navigator.expect(
+        Ask::Download {
+            language: "go".to_owned(),
+        },
+        cx,
+    );
+}
+
+#[gpui_kit::test]
 fn a_renamed_file_is_told_changed_at_both_of_its_paths(cx: &mut TestAppContext) {
     let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
     let mut navigator = Navigator::connect(&models, cx);

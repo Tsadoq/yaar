@@ -19,7 +19,9 @@
 //!   too), each time it takes an answer of the Keeper (a file may change again with its
 //!   path in the list already), together with the paths the last such answer for that
 //!   workspace held, so that a file that left the list because it was put back is told
-//!   too; nothing when there are no paths, and nothing after a refusal;
+//!   too; nothing when there are no paths, nothing after a refusal, and nothing at the
+//!   connect (a server starts from the files on disk, so a new Navigator holds nothing
+//!   stale);
 //! - for each [`yaar_navigator::Told::ExportWanted`], `Request::ExportVersion` to the
 //!   Keeper through the link, and the answer handed back as
 //!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
