@@ -11,13 +11,13 @@ use std::path::PathBuf;
 use gpui_kit::{Entity, Modifiers, TestAppContext, VisualTestContext};
 use yaar_link::{
     CreditedFile, Fact, FileStatus, History, HistoryEntry, Refusal, Reply, Request, ReviewId,
-    SessionId, TurnId,
+    SessionId, SessionState, TurnId,
 };
 use yaar_review_pane::{ChangeShown, PaneRow, ReviewPane};
 
 use common::{
-    COMMIT, Stage, commit, drawn, file, id, link_up, open_window, repository, reviews_of, rows,
-    since_main, texts, wait_for_files, wait_until, workspace,
+    COMMIT, Stage, agents_of, commit, drawn, file, id, link_up, open_window, repository,
+    reviews_of, rows, session, since_main, texts, wait_for_files, wait_until, workspace,
 };
 
 /// The id of a commit or a state that is this digit forty times.
@@ -509,6 +509,70 @@ fn a_selection_in_the_tree_is_listed_with_no_credits_and_takes_the_marks_of_the_
 }
 
 #[gpui_kit::test]
+fn a_change_listed_with_no_credits_after_one_listed_with_credits_carries_no_mark(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with(
+        vec![(review_s(), Some(session_s()))],
+        &review_s(),
+        Vec::new(),
+        cx,
+    );
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    listed_for(
+        &mut stage,
+        &review_s(),
+        &s1(),
+        &s2(),
+        the_list_of_s(),
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+    assert!(marked(&stage, "s.txt", &mut cx));
+
+    // The turn of a session the pane holds no review of ends: its change is listed by
+    // `CompareVersions`, over the review that stays shown, and carries no credits. The
+    // credits of the list before it are not its credits.
+    stage.keeper.tell(turn_ended(&session_t(), &s3(), &s2()));
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s2(),
+            to: Some(s3()),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::Compared(vec![file("s.txt", FileStatus::Modified)])),
+    );
+    read_files(
+        &mut stage,
+        Some(&s2()),
+        Some(&s3()),
+        &[("s.txt", "s2\n", "s3\n")],
+        &mut cx,
+    );
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.review_session().cloned()),
+        Some(session_s())
+    );
+    assert!(!marked(&stage, "s.txt", &mut cx));
+}
+
+#[gpui_kit::test]
 fn the_same_change_listed_for_another_session_s_review_is_asked_again_with_its_own_credits(
     cx: &mut TestAppContext,
 ) {
@@ -571,6 +635,64 @@ fn the_same_change_listed_for_another_session_s_review_is_asked_again_with_its_o
     );
     assert!(marked(&stage, "s.txt", &mut cx));
     assert!(!marked(&stage, "a.txt", &mut cx));
+}
+
+#[gpui_kit::test]
+fn moving_to_another_review_takes_the_marks_of_a_list_made_for_the_review_before_away(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with(
+        vec![
+            (review_s(), Some(session_s())),
+            (review_t(), Some(session_t())),
+        ],
+        &review_s(),
+        Vec::new(),
+        cx,
+    );
+    let sessions = vec![
+        session('5', "Claude Code 1", SessionState::Works, Some(review_s())),
+        session('6', "Claude Code 2", SessionState::Works, Some(review_t())),
+    ];
+    stage.keeper.tell_agents(agents_of(sessions.clone()));
+    wait_until(&mut cx, "the sessions in the pane", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.sessions() == sessions)
+    });
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    listed_for(
+        &mut stage,
+        &review_s(),
+        &s1(),
+        &s2(),
+        the_list_of_s(),
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+    assert!(marked(&stage, "s.txt", &mut cx));
+
+    // The reviewer moves to the review of `t`. The list stays, and its credits were made
+    // for the review of `s`: read as `t`'s, they would mark a file `s` also changed as one
+    // another agent changed, which no list made for `t` has said.
+    click("review-session-1", &mut cx);
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.review_session().cloned()),
+        Some(session_t())
+    );
+    assert!(!marked(&stage, "s.txt", &mut cx));
 }
 
 #[gpui_kit::test]

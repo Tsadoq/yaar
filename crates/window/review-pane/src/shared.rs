@@ -35,10 +35,13 @@ impl ReviewPane {
         };
         let credited = match self.tree.shown {
             ChangeShown::Uncommitted => self.tree.uncommitted.as_deref(),
+            // Credits made for another review than the one shown say nothing about this
+            // one: `own` would be read against another session's list.
             ChangeShown::Since { .. } => self
                 .tree
                 .credits
                 .as_ref()
+                .filter(|credits| Some(&credits.review) == self.review().map(|review| &review.id))
                 .map(|credits| credits.files.as_slice()),
             _ => None,
         };
