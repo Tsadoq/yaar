@@ -804,3 +804,212 @@ fn a_comparison_the_keeper_refuses_for_a_review_shows_no_file_and_no_mark_and_sa
     );
     assert!(marked(&stage, "s.txt", &mut cx));
 }
+
+/// Opens the pane on the reviews of `s` and `t` with the sessions of both in the agents
+/// model, shows the change from `s1` to `s2` listed for the review of `s`, and returns
+/// with its files read.
+fn the_list_of_s_is_shown(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = open_with(
+        vec![
+            (review_s(), Some(session_s())),
+            (review_t(), Some(session_t())),
+        ],
+        &review_s(),
+        Vec::new(),
+        cx,
+    );
+    let sessions = vec![
+        session('5', "Claude Code 1", SessionState::Works, Some(review_s())),
+        session('6', "Claude Code 2", SessionState::Works, Some(review_t())),
+    ];
+    stage.keeper.tell_agents(agents_of(sessions.clone()));
+    wait_until(&mut cx, "the sessions in the pane", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.sessions() == sessions)
+    });
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    listed_for(
+        &mut stage,
+        &review_s(),
+        &s1(),
+        &s2(),
+        the_list_of_s(),
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+    assert!(marked(&stage, "s.txt", &mut cx));
+    (stage, cx)
+}
+
+#[gpui_kit::test]
+fn moving_to_another_review_lists_the_change_shown_again_for_that_review(cx: &mut TestAppContext) {
+    let (mut stage, mut cx) = the_list_of_s_is_shown(cx);
+
+    // The reviewer moves to the review of `t`: the change stays the one shown, and its
+    // files are those `t`'s review shows, not those of `s`'s list, with `t`'s credits.
+    click("review-session-1", &mut cx);
+    listed_for(
+        &mut stage,
+        &review_t(),
+        &s1(),
+        &s2(),
+        vec![
+            credited("a.txt", vec![session_t()]),
+            credited("s.txt", vec![session_t(), session_s()]),
+        ],
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[("a.txt", "a\n", "a2\n"), ("s.txt", "s\n", "s2\n")],
+        &mut cx,
+    );
+    assert_eq!(
+        shown(&stage, &mut cx),
+        ChangeShown::Since {
+            from: Some(s1()),
+            to: s2()
+        }
+    );
+    assert!(marked(&stage, "s.txt", &mut cx));
+    assert!(!marked(&stage, "a.txt", &mut cx));
+}
+
+#[gpui_kit::test]
+fn moving_to_the_review_of_no_agent_lists_the_change_shown_again_with_no_credits(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with(
+        vec![
+            (review_s(), Some(session_s())),
+            (review_of_no_agent(), None),
+        ],
+        &review_of_no_agent(),
+        Vec::new(),
+        cx,
+    );
+    let sessions = vec![session(
+        '5',
+        "Claude Code 1",
+        SessionState::Works,
+        Some(review_s()),
+    )];
+    stage.keeper.tell_agents(agents_of(sessions.clone()));
+    wait_until(&mut cx, "the sessions in the pane", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.sessions() == sessions)
+    });
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    listed_for(
+        &mut stage,
+        &review_s(),
+        &s1(),
+        &s2(),
+        the_list_of_s(),
+        &mut cx,
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+
+    // The review of no agent shows every file, none of them credited.
+    click("review-session-1", &mut cx);
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: s1(),
+            to: Some(s2()),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::Compared(vec![
+            file("b.txt", FileStatus::Modified),
+            file("t.txt", FileStatus::Modified),
+        ])),
+    );
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[("b.txt", "b\n", "b2\n"), ("t.txt", "t\n", "t2\n")],
+        &mut cx,
+    );
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.review_session().cloned()),
+        None
+    );
+    assert!(!marked(&stage, "b.txt", &mut cx));
+}
+
+#[gpui_kit::test]
+fn a_turn_end_back_to_the_review_asked_for_before_is_asked_again_while_another_review_s_list_is_on_its_way(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = the_list_of_s_is_shown(cx);
+
+    // The turn of `t` ends at the same state, counted from the same one, and its list is
+    // on its way when the turn of `s` ends there too: the list of `s` is what is wanted,
+    // and the answer for `t` that comes later is not shown.
+    stage.keeper.tell(turn_ended(&session_t(), &s2(), &s1()));
+    let for_t = stage
+        .keeper
+        .expect(compare_for(&review_t(), s1(), s2()), &mut cx);
+    stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
+    let for_s = stage
+        .keeper
+        .expect(compare_for(&review_s(), s1(), s2()), &mut cx);
+    stage.keeper.reply(
+        for_t,
+        Ok(Reply::ComparedForReview(vec![credited(
+            "a.txt",
+            vec![session_t()],
+        )])),
+    );
+    stage
+        .keeper
+        .reply(for_s, Ok(Reply::ComparedForReview(the_list_of_s())));
+    read_files(
+        &mut stage,
+        Some(&s1()),
+        Some(&s2()),
+        &[
+            ("b.txt", "b\n", "b2\n"),
+            ("h.txt", "h\n", "h2\n"),
+            ("s.txt", "s\n", "s2\n"),
+        ],
+        &mut cx,
+    );
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.review_session().cloned()),
+        Some(session_s())
+    );
+    assert!(marked(&stage, "s.txt", &mut cx));
+}

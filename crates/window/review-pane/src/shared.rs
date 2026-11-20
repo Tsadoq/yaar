@@ -8,7 +8,9 @@
 //! credited to the session and those no agent made. The offer a turn's end makes while the
 //! pane keeps the selection is taken the same way. A change the reviewer selects in the
 //! tree, what changed since a round, and every selection of the review of no agent are
-//! listed as before, by `CompareVersions`.
+//! listed as before, by `CompareVersions`. A change listed for the review of a session and
+//! left on screen while the reviewer moves to another review is listed again for that one
+//! (`tree.rs`), so the files and the marks are always those of the review shown.
 //!
 //! A file of the change shown that a session other than the review's own is credited with
 //! too, in the answer of `CompareForReview` or in the uncommitted changes the review lists
