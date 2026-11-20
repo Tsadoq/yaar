@@ -1217,8 +1217,7 @@ fn a_session_that_takes_over_the_review_of_no_agent_tells_the_reviews_changed() 
     setup.hook_in(&terminal, &records, 0);
     let workspace = setup.workspace.clone();
     setup.window.until("the reviews told as changed", |fact| {
-        matches!(fact, Fact::ReviewsChanged { workspace: told } if *told == workspace)
-            .then_some(())
+        matches!(fact, Fact::ReviewsChanged { workspace: told } if *told == workspace).then_some(())
     });
 
     // A Window that reads them again, as the fact asks, finds the session its owner.
