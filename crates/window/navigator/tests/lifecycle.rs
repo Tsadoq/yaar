@@ -774,8 +774,7 @@ fn a_candidate_that_passes_its_trial_and_fails_to_initialize_is_passed_over_at_r
     running.end();
 }
 
-/// Waits for `answers.rs` (P10): a server that was ready and ended has its asks answered by
-/// `answers::server_gone`, which is a `todo!()` until then.
+/// A server that was ready and ended has its asks answered by `answers::server_gone`.
 #[test]
 fn a_server_that_dies_after_it_was_ready_is_passed_over_for_the_next_candidate() {
     let scratch = Scratch::new();
