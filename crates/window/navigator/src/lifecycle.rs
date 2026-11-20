@@ -56,7 +56,7 @@
 //! | | | the trial failed, or took longer than [`crate::TRIAL_DEADLINE`] | the next candidate left, or none left |
 //! | starting a candidate | [`State::Starting`] | [`ServerEvent::Ready`] | ready |
 //! | | | the start failed, or [`ServerEvent::Exited`] | the next candidate left, or none left |
-//! | ready | [`State::Ready`], with `update` when the program is a downloaded one older than the row pins | [`ServerEvent::Exited`] | the next candidate left, or none left |
+//! | ready | [`State::Ready`], with `update` when the program is a downloaded one of another version than the row pins | [`ServerEvent::Exited`] | the next candidate left, or none left |
 //! | none left | `search::when_none` | [`search_again`] (a yes, or `fetch.rs`) | a new search |
 //! | downloading | [`State::Downloading`] | [`search_again`], from `fetch.rs` | a new search |
 //!
