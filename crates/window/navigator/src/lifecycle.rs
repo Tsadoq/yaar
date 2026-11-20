@@ -10,8 +10,10 @@
 //! side's server ensured ([`ensure`]); any other key is ensured by `answers.rs` at the
 //! first ask about a file of its row, and by `answers.rs` for an old side once its export is
 //! written. A key ensured goes through these steps, and [`crate::Told::Servers`] is told
-//! after each change of any key ([`publish`]), once for each event handled, so that the list
-//! a test reads after an ask it sent is the one that ask made:
+//! after each change of any key ([`publish`]): one list for each event handled, which
+//! [`on_screen`] always tells, and before it, when it stopped any, the list of
+//! [`look_at_the_clock`]. A test that sends an ask that changes nothing reads the list that
+//! ask made, after everything the asks before it made the Navigator do:
 //!
 //! 1. Search: `search::look` and `search::order` give the candidates, kept as the list of
 //!    the key's candidates left. Each candidate that lies inside the workspace's repository

@@ -314,12 +314,22 @@ fn a_yes_for_another_repository_does_not_let_the_server_run() {
     let log = scratch.root.join("run-d.log");
     let (ws, mine, other) = (workspace_id('1'), repository_id('1'), repository_id('2'));
     let mut running = Running::start(scratch.config(&project_row(&log)));
+    // Told before the workspace is shown, and told after.
+    running.ask(Ask::Consents(vec![consent(&other, true)]));
     running.show(&repo, &ws, &mine);
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         matches!(state.state, State::Asking { .. })
     });
+    let list = barrier(&mut running, &ws);
+    assert!(
+        matches!(standin_in(&list, &ws).unwrap().state, State::Asking { .. }),
+        "{list:#?}"
+    );
 
-    running.ask(Ask::Consents(vec![consent(&other, true)]));
+    running.ask(Ask::Consents(vec![
+        consent(&other, true),
+        consent(&repository_id('3'), true),
+    ]));
     let list = barrier(&mut running, &ws);
     assert!(
         matches!(standin_in(&list, &ws).unwrap().state, State::Asking { .. }),
@@ -602,6 +612,42 @@ fn a_candidate_that_passes_its_trial_and_fails_to_initialize_is_passed_over_at_r
             .unwrap()
             .contains(&Value::from("--fail-initialize"))
     );
+    running.end();
+}
+
+/// Waits for `answers.rs` (P10): a server that was ready and ended has its asks answered by
+/// `answers::server_gone`, which is a `todo!()` until then.
+#[test]
+fn a_server_that_dies_after_it_was_ready_is_passed_over_for_the_next_candidate() {
+    let scratch = Scratch::new();
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let bin = scratch.root.join("bin");
+    // Passes `--version`, becomes ready, and ends.
+    let dies = bin.join("standin-dies");
+    std::fs::write(
+        &dies,
+        format!(
+            "#!/bin/sh\nexec {} --exit-after-ready \"$@\"\n",
+            standin().display()
+        ),
+    )
+    .expect("write the script");
+    std::fs::set_permissions(&dies, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("make it executable");
+    let good = scratch.put_standin(&bin, "standin-lsp");
+    let log = scratch.root.join("lsp02-dies.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running =
+        Running::start(scratch.config(&machine_row(&["standin-dies", "standin-lsp"], &log)));
+    running.show(&repo, &ws, &repository);
+
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready && state.program.as_deref() == Some(good.as_path())
+    });
+    assert!(is_alive(ready.pid.unwrap()));
+    // The first became ready, and ended; the second started after it.
+    assert_eq!(events(&log, "ready").len(), 2);
+    assert_eq!(events(&log, "exit")[0]["code"], 2);
     running.end();
 }
 
