@@ -661,12 +661,31 @@ fn a_thread_carried_to_a_version_the_tree_does_not_show_is_under_threads_elsewhe
         }
     );
 
+    // The reviewer asks for the line it was written on, where it was carried to.
+    let original = format!("review-thread-original-text-{the}");
+    click(&format!("review-thread-original-{the}"), &mut cx);
+    assert!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| pane.shows_original(&the))
+    );
+    assert!(is_drawn(&original, &mut cx));
+
     // The turn that ended at the version it was written in: on the line it was written on,
-    // as written, so no notice of code that changed.
+    // as written, so no notice of code that changed, and no original to show: the line is
+    // the one it was written on.
     select(&mut stage, 0, COMMIT.to_owned(), version('1'), &mut cx);
     assert!(!elsewhere(&stage, &mut cx));
     assert!(!is_drawn(&notice, &mut cx));
-    assert!(rows_of(&stage, &mut cx).contains(&PaneRow::Thread { thread: the }));
+    assert!(!is_drawn(&original, &mut cx));
+    assert!(
+        !stage
+            .pane
+            .read_with(&cx, |pane, _| pane.shows_original(&the))
+    );
+    assert!(rows_of(&stage, &mut cx).contains(&PaneRow::Thread {
+        thread: the.clone()
+    }));
 }
 
 #[gpui_kit::test]

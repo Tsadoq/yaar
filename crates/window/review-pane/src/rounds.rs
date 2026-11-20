@@ -7,8 +7,9 @@
 //! shows in Changes what changed since that round's comments were sent:
 //! `ChangeShown::Since` from the round's state to the newest state of the history after
 //! it, through the selection of the tree of Changes (`select_since` of `tree.rs`). The line
-//! is drawn for a review that has a thread or a round, and says that no round was sent
-//! until the first one comes, so that the first send does not move the diff down by a row.
+//! is drawn for every review shown, and says that no round was sent until the first one
+//! comes, so that no fact of the Keeper and no comment of the reviewer's own brings it in
+//! and moves the diff down by a row.
 //! [`crate::SinceRound`] does the same from the keyboard: the first press for the newest
 //! round with a state, each press after it for the round before, and after the first
 //! round the newest again; with no round that has a state, or no state of the worktree
@@ -97,15 +98,14 @@ impl ReviewPane {
             .collect()
     }
 
-    /// The line of the rounds, drawn above the tree of Changes; none for a review with no
-    /// thread and no round.
+    /// The line of the rounds, drawn above the tree of Changes for every review shown; none
+    /// while no review is shown.
     pub(crate) fn render_rounds(&self, cx: &Context<Self>) -> Option<AnyElement> {
-        let review = self.review()?;
-        // A review with a comment can be sent, and its first round then comes: the line is
-        // there before it, at the height it will have, so that the diff does not move.
-        if review.threads.is_empty() && review.rounds.is_empty() {
-            return None;
-        }
+        self.review()?;
+        // The line is there for every review shown, whatever it holds: a first thread, from
+        // the Keeper or from the reviewer's own first comment, a first round, or another
+        // review shown in place of this one would otherwise bring it in and move the diff
+        // down by a row.
         let rounds = self.rounds_shown();
         let theme = cx.theme();
         let mut line = div()

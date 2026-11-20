@@ -12,7 +12,10 @@ mod common;
 
 use std::path::PathBuf;
 
-use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
+use gpui_kit::{
+    Modifiers, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point,
+    px,
+};
 use yaar_link::{
     Anchor, Author, Comment, CommentId, Fact, FileStatus, Lines, Placed, ReviewId, Round, SentBy,
     SessionState, Side as LinkSide, Step, Thread, ThreadId, WorkspaceReviews,
@@ -176,6 +179,21 @@ fn below_the_top(row: &PaneRow, stage: &Stage, cx: &mut VisualTestContext) -> is
             .expect("the row is still among the rows");
         index as isize - start as isize
     })
+}
+
+/// Where `row` is drawn on screen now: the origin of its bounds.
+fn on_screen(row: &PaneRow, stage: &Stage, cx: &mut VisualTestContext) -> Point<Pixels> {
+    let start = reading(stage, cx).start;
+    let index = start + below_the_top(row, stage, cx) as usize;
+    bounds_of_row(index, cx).origin
+}
+
+/// The row of the diff the reviewer reads: the first row in view that is no thread or
+/// comment, and where it is drawn.
+fn diff_on_screen(stage: &Stage, cx: &mut VisualTestContext) -> (PaneRow, Point<Pixels>) {
+    let (diff, _) = diff_in_view(stage, cx);
+    let at = on_screen(&diff, stage, cx);
+    (diff, at)
 }
 
 /// The index of the row of the thread, among the rows of the pane.
@@ -758,11 +776,6 @@ fn the_first_round_of_a_review_leaves_the_diff_where_it_is_on_screen(cx: &mut Te
     let comments = vec![comment('1', Author::Reviewer)];
     let (mut stage, mut cx) = stage_with_thread_in_view(20, comments.clone(), 0, cx);
     let (diff, offset) = diff_in_view(&stage, &mut cx);
-    let on_screen = |row: &PaneRow, stage: &Stage, cx: &mut VisualTestContext| {
-        let start = reading(stage, cx).start;
-        let index = start + below_the_top(row, stage, cx) as usize;
-        bounds_of_row(index, cx).origin
-    };
     let before = on_screen(&diff, &stage, &mut cx);
     assert!(offset > 0);
 
@@ -782,6 +795,118 @@ fn the_first_round_of_a_review_leaves_the_diff_where_it_is_on_screen(cx: &mut Te
     wait_until(&mut cx, "the round", |cx| {
         stage.pane.read_with(cx, |pane, _| {
             pane.review().is_some_and(|review| review.rounds.len() == 1)
+        })
+    });
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
+}
+
+/// Shows the long file in the review of session `a`, idle, which has no thread yet, and puts
+/// the reviewer down the file.
+fn stage_with_a_review_and_no_thread(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            keeper.set_agents(vec![agents_of(vec![session(
+                'a',
+                "Claude Code 1",
+                SessionState::Idle,
+                Some(review_id()),
+            )])]);
+            keeper.set_reviews(review_of_a_with(Vec::new()));
+        },
+        cx,
+    );
+    show_long_file(&mut stage, false, &mut cx);
+    (stage, cx)
+}
+
+#[gpui_kit::test]
+fn the_first_thread_of_a_review_told_by_the_keeper_leaves_the_diff_where_it_is_on_screen(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = stage_with_a_review_and_no_thread(cx);
+    read_down_the_file(&stage, 5, &mut cx);
+    let (diff, before) = diff_on_screen(&stage, &mut cx);
+
+    // Another Window makes the review's first thread, above the rows in view.
+    tell_threads(
+        &mut stage,
+        vec![thread_on(3, vec![comment('1', Author::Reviewer)])],
+        &mut cx,
+    );
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
+}
+
+#[gpui_kit::test]
+fn the_reviewers_own_first_comment_leaves_what_is_above_it_where_it_is_on_screen(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut cx) = stage_with_a_review_and_no_thread(cx);
+    // The reviewer is on the first line of the diff; the file's header is above it.
+    let line = bounds_of_row(2, &mut cx).center();
+    cx.simulate_click(line, Modifiers::none());
+    cx.update(|window, _| assert!(stage.focus.is_focused(window)));
+    let header = PaneRow::clone(&rows_of(&stage, &mut cx)[0]);
+    let before = on_screen(&header, &stage, &mut cx);
+
+    // A first comment is typed: the pane puts the draft into the review at once, as a
+    // thread, and the comment box opens under the rows.
+    cx.simulate_keystrokes("c");
+    cx.simulate_input("x");
+    wait_until(&mut cx, "the draft among the threads of the review", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review()
+                .is_some_and(|review| !review.threads.is_empty())
+        })
+    });
+    assert_eq!(on_screen(&header, &stage, &mut cx), before);
+}
+
+#[gpui_kit::test]
+fn another_review_shown_leaves_the_diff_where_it_is_on_screen_whether_or_not_it_has_a_thread(
+    cx: &mut TestAppContext,
+) {
+    let (ra, rb) = (review_id(), ReviewId::new("2".repeat(32)));
+    let sessions = |a: SessionState| {
+        agents_of(vec![
+            session('a', "Claude Code 1", a, Some(ra.clone())),
+            session('b', "Claude Code 2", SessionState::Works, Some(rb.clone())),
+        ])
+    };
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            keeper.set_agents(vec![sessions(SessionState::NotRunning)]);
+            let mut first = review_with(ra.clone(), Some(session_id('a')), None);
+            first
+                .threads
+                .push(thread_on(3, vec![comment('1', Author::Reviewer)]));
+            keeper.set_reviews(reviews_of(vec![
+                first,
+                review_with(rb.clone(), Some(session_id('b')), None),
+            ]));
+        },
+        cx,
+    );
+    show_long_file(&mut stage, false, &mut cx);
+    read_down_the_file(&stage, 6, &mut cx);
+    let (diff, before) = diff_on_screen(&stage, &mut cx);
+
+    // The review of `a`, which has a thread, comes to be the one shown, in place of the
+    // review of `b`, which has none.
+    stage.keeper.tell_agents(sessions(SessionState::Idle));
+    wait_until(&mut cx, "the review of the first session shown", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().map(|review| review.id.clone()) == Some(ra.clone())
+        })
+    });
+    assert_eq!(on_screen(&diff, &stage, &mut cx), before);
+
+    // And back: the review without a thread takes its place again.
+    stage.keeper.tell_agents(sessions(SessionState::NotRunning));
+    wait_until(&mut cx, "the review of the running session shown", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().map(|review| review.id.clone()) == Some(rb.clone())
         })
     });
     assert_eq!(on_screen(&diff, &stage, &mut cx), before);
