@@ -969,6 +969,24 @@ pub fn wait_until(
     }
 }
 
+/// Keeps the app running until `holds` says yes: [`wait_until`] for what is read from the
+/// window as drawn. Fails at the deadline, naming `what`.
+pub fn wait_drawn(
+    cx: &mut VisualTestContext,
+    what: &str,
+    mut holds: impl FnMut(&mut VisualTestContext) -> bool,
+) {
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        cx.run_until_parked();
+        if holds(cx) {
+            return;
+        }
+        assert!(Instant::now() < deadline, "waited in vain for {what}");
+        std::thread::park_timeout(PAUSE);
+    }
+}
+
 /// The lines of the screen of a terminal of the pane, as its view reads them.
 pub fn lines(pane: &Entity<TerminalPane>, id: &TerminalId, cx: &impl AppContext) -> Vec<String> {
     let view = pane
