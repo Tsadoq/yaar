@@ -415,10 +415,11 @@ fn a_turn_end_shows_the_review_of_its_session_unless_the_selection_is_kept(
     cx.simulate_keystrokes("shift-o");
     assert_eq!(review_shown(&stage, &mut cx), Some(r2()));
     wait_for_uncommitted_of(&stage, r2(), &mut cx);
-    // The comparison of the offer is the next request; the test does not answer it.
+    // The comparison of the offer is the next request, made for the review of the session
+    // that finished; the test does not answer it.
     let (_, asked) = stage.keeper.request(&mut cx);
     assert!(
-        matches!(asked, Request::CompareVersions { .. }),
+        matches!(&asked, Request::CompareForReview { review, .. } if *review == r2()),
         "{asked:?}"
     );
 
