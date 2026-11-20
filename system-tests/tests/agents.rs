@@ -925,14 +925,36 @@ fn an_agent_whose_process_is_killed_shows_as_not_running_while_its_terminal_live
 }
 
 fn a_killed_agent_shows_as_not_running(dialect: Dialect) {
-    let idle = Script(vec![]);
-    let (world, repo) = world_for(dialect, &idle);
+    let (world, repo) = world_for(dialect, &Script(vec![]));
     let mut client = world.client();
     let workspace = open(&mut client, &repo);
     let terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
-    client.type_line(&terminal, dialect.name());
+    let bystander_terminal = client.open_terminal(&workspace, SIZE).expect("a terminal");
+    let doomed = start_in(
+        &world,
+        &mut client,
+        &terminal,
+        "doomed",
+        dialect.name(),
+        "",
+        &script(&["turn"]),
+    );
+    client.wait_for_prompt(&terminal, 0);
+    let bystander = start_in(
+        &world,
+        &mut client,
+        &bystander_terminal,
+        "bystander",
+        dialect.name(),
+        "",
+        &script(&["turn"]),
+    );
+    client.wait_for_prompt(&bystander_terminal, 0);
     let seen = seen_until(&mut client, |fact| {
-        shows(fact, &workspace, SessionState::Idle)
+        matches!(fact, Fact::AgentsChanged(agents)
+            if agents.workspace == workspace
+                && agents.sessions.len() == 2
+                && agents.sessions.iter().all(|s| s.state == SessionState::Idle))
     });
     assert!(
         seen.iter().all(|fact| !matches!(fact,
@@ -940,20 +962,54 @@ fn a_killed_agent_shows_as_not_running(dialect: Dialect) {
                 if agents.sessions.iter().any(|s| s.state == SessionState::NotRunning))),
         "{seen:?}"
     );
+    let Some(Fact::AgentsChanged(agents)) = seen.last() else {
+        panic!("the wait ended on no change of the agents: {seen:?}");
+    };
+    let session_in = |terminal: &TerminalId| {
+        agents
+            .sessions
+            .iter()
+            .find(|s| s.terminal.as_ref() == Some(terminal))
+            .expect("a session in the terminal")
+            .id
+            .clone()
+    };
+    let (doomed_session, other_session) = (session_in(&terminal), session_in(&bystander_terminal));
+    let not_running = |agents: &WorkspaceAgents, session: &yaar_link::SessionId| {
+        agents.workspace == workspace
+            && agents
+                .sessions
+                .iter()
+                .any(|s| s.id == *session && s.state == SessionState::NotRunning)
+    };
+
+    // The Keeper finds a process gone in a pass over every process it follows, so a
+    // session found gone in the pass that finds the bystander's gone is one whose own
+    // process the Keeper takes for gone while it lives. The bystander is killed first, and
+    // that pass is the barrier before the session under test is killed: until then it was
+    // not found gone, and what ends it afterwards is the kill.
+    kill(bystander.log(&world).pid);
+    let seen = seen_until(
+        &mut client,
+        |fact| matches!(fact, Fact::AgentsChanged(agents) if not_running(agents, &other_session)),
+    );
+    assert!(
+        seen.iter().all(|fact| !matches!(fact,
+            Fact::AgentsChanged(agents) if not_running(agents, &doomed_session))),
+        "the session was found gone before it was killed: {seen:?}"
+    );
 
     // Killed, with no goodbye.
-    let pid = Started {
-        name: "default".into(),
-    }
-    .log(&world)
-    .pid;
-    assert_ne!(pid, 0);
-    // SAFETY: a signal to a process of this test.
-    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
+    kill(doomed.log(&world).pid);
     let gone = client.wait_for_agents(&workspace, DEADLINE, |agents| {
-        agents.shown == Some(SessionState::NotRunning)
+        not_running(agents, &doomed_session)
     });
-    assert_eq!(only_session(&gone).state, SessionState::NotRunning);
+    assert!(
+        gone.sessions
+            .iter()
+            .any(|s| s.id == doomed_session && s.state == SessionState::NotRunning),
+        "{gone:?}"
+    );
     // The shell it ran in is still there: the end came from the process, not the terminal.
     let terminals = client.terminals();
     assert!(
@@ -961,6 +1017,13 @@ fn a_killed_agent_shows_as_not_running(dialect: Dialect) {
         "{terminals:?}"
     );
     end(world, client);
+}
+
+/// Kills the process `pid` of a stand-in with no goodbye.
+fn kill(pid: u32) {
+    assert_ne!(pid, 0);
+    // SAFETY: a signal to a process of this test.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) }, 0);
 }
 
 // Not a row: the process the Keeper takes for an agent's, which it looks at every little
