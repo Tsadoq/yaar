@@ -472,6 +472,21 @@ fn row_with_a_title(downloads: &str) -> String {
     )
 }
 
+/// The row `standin` as the Navigator told it at its start: its title and extensions.
+fn standin_language(running: &Running) -> (String, Vec<String>) {
+    let language = running
+        .told
+        .iter()
+        .find_map(|told| match told {
+            Told::Languages(languages) => {
+                languages.iter().find(|language| language.name == "standin")
+            }
+            _ => None,
+        })
+        .expect("the Navigator tells the row standin at its start");
+    (language.title.clone(), language.extensions.clone())
+}
+
 /// Writes the user's file: a row `standin` with one server `mine` that is `command` and
 /// nothing else.
 fn write_user_row(scratch: &Scratch, command: &[String]) {
@@ -518,6 +533,12 @@ fn a_row_of_the_user_replaces_a_built_in_row_is_started_from_the_registry_file_a
         ],
     );
     let mut running = Running::start(config);
+    // The user's row names no title and no extensions: it takes the built-in row's, which
+    // the Navigator tells at its start, before any file is shown.
+    assert_eq!(
+        standin_language(&running),
+        ("Stand-in tongue".to_owned(), vec!["sil".to_owned()])
+    );
     running.show(&repo, &ws, &repository);
 
     // "Replaces a built-in row": the user's server runs, not the one on the machine; the
@@ -567,6 +588,10 @@ fn a_registered_server_whose_command_fails_is_not_offered_and_a_download_asked_f
     let builtin =
         row_with_a_title(&downloads) + &control_row(&loopback.url("control.tar.gz"), &archive);
     let mut running = Running::start(scratch.config(&builtin));
+    assert_eq!(
+        standin_language(&running),
+        ("Stand-in tongue".to_owned(), vec!["sil".to_owned()])
+    );
     running.show(&repo, &ws, &repository);
 
     // "When its command fails, no download is offered for it."
