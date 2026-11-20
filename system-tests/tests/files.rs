@@ -818,7 +818,7 @@ fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_trac
     nothing_opens_a_credential_file(Dialect::ClaudeCode);
 }
 
-// AGENT-13, as pi. Written on macOS, where it does not build: the Linux run is the first.
+// AGENT-13, as pi. Written on macOS, where it does not run (it compiles there): the Linux run is the first.
 #[cfg(target_os = "linux")]
 #[test]
 fn neither_the_keeper_nor_a_companion_opens_a_credential_file_of_a_cli_in_a_traced_turn_as_pi() {
