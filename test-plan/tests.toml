@@ -800,7 +800,7 @@ built = [
 
 [[test]]
 id = "DOCK-02"
-what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by one folder put first on the search path, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
+what = "The environment of a shell of the app differs from the user's own only by the variable that names the plugin folder, by the variable that names pi's reporting program, by the address of the app's socket and the id of the terminal, by the terminal's own variables (TERM, COLORTERM, TERM_PROGRAM, TERM_PROGRAM_VERSION), and by the variables of another terminal or multiplexer left out: nothing in it names an editor connection."
 level = "component"
 part = "dock"
 through = "its calls, on a real pseudo-terminal"
@@ -836,14 +836,14 @@ built = [
 
 [[test]]
 id = "DOCK-07"
-what = "The name pi typed in a shell of the app runs the app's wrapper, which passes every argument on and adds the extension."
+what = "Every shell of the app, and the launcher of pi, names pi's reporting program; after the user's yes, pi's own settings in the user's home list the extension the pi Adapter wrote, so that pi typed in a shell and pi started from its launcher load the same."
 level = "component"
 part = "keeper"
 through = "the Link, as the Window speaks it, on a real pseudo-terminal"
 driver = "pty"
 runs = "ci"
 proves = ["FR-022"]
-note = "The shell's .profile is the line the README gives a user (YAAR_PATH), then the test's own folder of scripts. Without that line a login shell loses the wrapper's first place: macOS's path_helper puts the system's folders ahead of it, Ubuntu's /etc/profile sets the search path anew. The known limit of ADR-008's assumption, open with Matteo."
+note = "No wrapper and no folder put first on the search path (DEC-228): pi loads the extension from its own settings, which the app writes only after the user's yes (CONSENT-01)."
 
 [[test]]
 id = "LISTEN-03"
@@ -1247,7 +1247,7 @@ note = "Claude Code's tool server only; pi's registered tool is PIX-01, slice 7.
 
 [[test]]
 id = "PIX-01"
-what = "The pi extension, loaded by a stand-in for pi's extension interface: it reports the events, hands an attached review whole to the user's message with the instruction on how to answer, reports that message so the comments become sent, and offers the reply tool with no way to resolve."
+what = "The pi extension, loaded by a stand-in for pi's extension interface: it reports the events, hands an attached review whole to the user's message with the instruction on how to answer, reports that message so the comments become sent, and offers the reply tool with no way to resolve, and, loaded where no reporting program is named, as outside the app, registers nothing and prints nothing."
 level = "component"
 part = "companion-pi"
 through = "the Link on one side, the agent's side on the other"
@@ -1256,6 +1256,78 @@ runs = "ci"
 proves = ["FR-023", "FR-082", "FR-090", "FR-097", "FR-098"]
 slice = 7
 note = "The extension is TypeScript, as pi requires, so this one test needs Node on the machines of the workflow. The app itself still holds no JavaScript. pi only: Claude Code's pieces are REPLY-02 and the companion's hook tests. Node 22.18 or later; CI pins Node 24.11.1. The review rides in the user's own message through pi's input event, 1,500,000 characters through the extension and the reporting program."
+
+[[test]]
+id = "CONSENT-01"
+what = "A yes writes the extension's absolute path at the end of the top-level extensions of pi's settings and changes no other byte of the file; with no array it adds the key, with no file it writes one as pi would, and with the entry there already it writes nothing."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020", "FR-018", "FR-022"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-02"
+what = "Taking the yes back takes out that one entry and nothing else, and a no or a question not yet answered writes nothing into pi's settings."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-03"
+what = "A settings file the app cannot read as pi writes it is left byte for byte as it was, and the answer says why; with pi not installed nothing is asked and nothing is written."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-04"
+what = "The answer is kept across a restart, a yes, a no and a question not yet answered each as it was; a kept yes whose entry the user took out is asked again, and nothing is written back."
+level = "unit"
+part = "adapter-pi"
+through = "its public functions, on files in a home folder the test makes"
+driver = "call"
+runs = "ci"
+proves = ["NFR-020"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-05"
+what = "The Keeper tells a Window the question of an Adapter not yet answered when the Window first asks it something, tells every Window the answer, and tells a Window that connects after the answer nothing."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["NFR-020", "NFR-001"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "CONSENT-06"
+what = "The terminal pane shows each question the Keeper tells in the Adapter's words with two controls, sends the user's yes or no by a click or a key, and the question goes once the answer is told; the same two keys change the answer later."
+level = "component"
+part = "terminal-pane"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["NFR-020", "NFR-001", "FR-121"]
+slice = 7
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
 
 [[test]]
 id = "STATE-01"
@@ -2841,7 +2913,7 @@ proves = ["FR-025", "FR-026", "FR-022"]
 built = [
     "system-tests/tests/agents.rs::edits_of_a_program_that_is_no_supported_cli_and_of_a_cli_started_around_the_apps_pieces_are_no_session_turn_step_or_notice_and_show_as_changes_no_agent_made",
 ]
-note = "The offer to attach exists from slice 6; its absence is checked from then on."
+note = "The offer to attach exists from slice 6; its absence is checked from then on. As pi, a CLI started around the app's pieces is pi whose settings hold no entry of the app's (no yes given)."
 
 [[test]]
 id = "AGENT-08"
@@ -2884,6 +2956,7 @@ built = [
     "system-tests/tests/files.rs::a_recording_of_a_home_finds_a_changed_a_touched_a_removed_and_an_added_file_of_a_cli",
     "system-tests/tests/files.rs::the_search_for_a_marker_finds_it_in_a_file_and_in_a_git_object_and_nowhere_else",
 ]
+note = "As pi no yes is given by the turn: what a yes writes into pi's settings is CONSENT-01's."
 
 [[test]]
 id = "AGENT-13"
@@ -2903,7 +2976,7 @@ built = [
     "system-tests/tests/files.rs::a_credential_file_is_named_by_its_path_or_by_the_path_of_the_descriptor_it_was_opened_beside",
     "system-tests/tests/files.rs::a_file_that_is_no_credential_of_a_cli_is_named_by_no_line_of_a_trace",
 ]
-note = "Built and run on Linux only; macOS has no tracer short of lifting the system's protection. As pi the wrapper and the reporting program are traced; the extension, TypeScript, runs only under PIX-01 and is not traced."
+note = "Built and run on Linux only; macOS has no tracer short of lifting the system's protection. As pi the reporting program is traced; the extension, TypeScript, runs only under PIX-01 and is not traced; the Keeper opens pi's settings after a yes, never its credential file."
 
 [[test]]
 id = "AGENT-15"
@@ -3047,7 +3120,7 @@ proves = ["FR-022", "FR-111", "FR-115"]
 
 [[test]]
 id = "LOAD-03"
-what = "pi, pi --continue, pi list and pi mcp list typed in a shell of the app behave as without the app, and the first two load the extension."
+what = "pi, pi --continue, pi list and pi mcp list typed in a shell of the app behave as without the app, and, after the user's yes, the first two load the extension."
 level = "system"
 part = "app"
 through = "the real program in a terminal of the app"
@@ -3058,7 +3131,7 @@ proves = ["FR-022", "FR-023"]
 
 [[test]]
 id = "LOAD-04"
-what = "After a session of each CLI, git status with ignored files and a listing of each CLI's settings show no change by the app, and macOS has asked for no keychain access on the app's behalf."
+what = "After a session of each CLI, git status with ignored files and a listing of each CLI's settings show no change by the app but, after the user's yes, the one entry the app put into pi's settings; and macOS has asked for no keychain access on the app's behalf."
 level = "system"
 part = "app"
 through = "the real program in a terminal of the app"
@@ -3066,6 +3139,30 @@ driver = "real-clis"
 runs = "release"
 checklist = "real-clis"
 proves = ["NFR-020", "NFR-021", "NFR-023"]
+
+[[test]]
+id = "LOAD-07"
+what = "After the user's yes, pi started in another terminal program loads the app's extension, which registers no tool, prints nothing and reports nothing."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["NFR-020", "FR-018"]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
+
+[[test]]
+id = "LOAD-08"
+what = "After the user's yes, a subagent of pi started in a terminal of the app reports as a session of its own, and its writes are credited to it."
+level = "system"
+part = "app"
+through = "the real program in a terminal of the app"
+driver = "real-clis"
+runs = "release"
+checklist = "real-clis"
+proves = ["FR-023"]
+note = "Added in slice 7 with Matteo's decision that the app asks once and installs its extension into pi's own settings (DEC-228)."
 
 [[test]]
 id = "LOAD-05"
