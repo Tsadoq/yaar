@@ -90,8 +90,9 @@ fn offer_of(version: &str, archive: &[u8]) -> Offer {
 }
 
 /// A second row, `control`, for files ending in `.ctl` that the repository of the test holds
-/// as `main.ctl`, whose one server `control` is found nowhere and downloads `archive` as
-/// version 1 from `url`. A test whose clause says no download happened asks for this row's
+/// as `main.ctl`, whose one server `control-server` is found nowhere and downloads `archive`
+/// as version 1 from `url`. The server's name differs from its row's, so that a download made
+/// under the row's name instead of the server's installs where nothing looks for it. A test whose clause says no download happened asks for this row's
 /// download after the fact, and reads the listener only once this one ended: a download that
 /// the fact wrongly started was begun before this one, and has reached the listener long
 /// before a whole download, its unpacking and its server's start are through.
@@ -110,7 +111,7 @@ fn control_row_named(name: &str, extension: &str, url: &str, archive: &[u8]) -> 
          markers = [\"main.{extension}\"]\n\
          \n\
          [[{name}.server]]\n\
-         name = \"{name}\"\n\
+         name = \"{name}-server\"\n\
          trial = [\"--version\"]\n\
          \n\
          [[{name}.server.download]]\n\
@@ -135,14 +136,20 @@ fn download_the_control(running: &mut Running, workspace: &WorkspaceId) {
     download_a_control(running, workspace, "control");
 }
 
-/// [`download_the_control`] for the control row `name`.
+/// [`download_the_control`] for the control row `name`. The server that runs is the one
+/// installed under the name of the row's server, not of the row.
 fn download_a_control(running: &mut Running, workspace: &WorkspaceId, name: &str) {
     running.ask(Ask::Download {
         language: name.to_owned(),
     });
-    running.wait_state(workspace, name, None, DEADLINE, |state| {
+    let ready = running.wait_state(workspace, name, None, DEADLINE, |state| {
         state.state == State::Ready
     });
+    let program = ready.program.expect("a ready server has its program");
+    assert!(
+        program.ends_with(format!("servers/{name}-server/1/standin-lsp")),
+        "the control server runs from where its server's name puts it, not its row's: {program:?}"
+    );
 }
 
 /// The folder of the app's downloads of this test.
@@ -431,7 +438,7 @@ fn a_download_asked_for_a_server_that_runs_with_no_update_to_show_does_nothing()
     // The one request is the control's.
     assert_eq!(lines(&loopback), ["GET /standin-1.tar.gz"]);
     assert!(!servers_of(&scratch).join("standin").exists());
-    assert!(servers_of(&scratch).join("control").exists());
+    assert!(servers_of(&scratch).join("control-server").exists());
     let standin_states: Vec<State> = running.told[asked_at..]
         .iter()
         .filter_map(|told| match told {
