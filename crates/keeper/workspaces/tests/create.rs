@@ -295,6 +295,14 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
     };
     let two = world.create("main", "two", None);
     assert_eq!(two.folder, world.worktrees().join("two"));
+    // The base is the branch it was made from, whichever that is.
+    git(&world.repo, &["branch", "side"]);
+    let from_side = world.create("side", "from-side", None);
+    assert_eq!(from_side.base, base("side"));
+    assert_eq!(
+        world.workspaces.base(&from_side.workspace).expect("base"),
+        Some(base("side"))
+    );
 
     // A repository whose linked worktree lies elsewhere puts the next one there.
     let other = world.scratch.join("other");
@@ -436,6 +444,13 @@ fn a_bare_repository_puts_its_worktrees_where_they_lie_and_otherwise_beside_its_
     assert_eq!(planned.folder(), trees.join("w2"));
     let added = planned.add().expect("add");
     workspaces.open_added(&planned, added).expect("open");
+
+    // The git folder of a bare repository is no place for them, though no worktree lies
+    // there.
+    assert_eq!(
+        refused(workspaces.check_worktrees_folder(&repository, &bare.join("inside"))),
+        Refusal::FolderInsideRepository(bare.join("inside"))
+    );
 
     // Two folders now: beside the git folder.
     let elsewhere = scratch.join("elsewhere");
