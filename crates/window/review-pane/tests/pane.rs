@@ -720,9 +720,7 @@ enum Effect {
     Nothing,
 }
 
-/// The keys of the line of the language server, which the second part of the review pane's
-/// first package of slice 8 takes out of this list once the package that builds the line
-/// is merged, naming their effect in [`effect_of`]: the notice that nothing waits.
+// The second builder of P14 takes these four keys of P15's line out once P15 is reviewed and merged here, and names their effect in `effect_of`.
 const OF_SLICE_8: [&str; 4] = ["shift-i", "shift-u", "shift-y", "shift-q"];
 
 /// The effect of the key of a control. A control with no effect named here fails the
