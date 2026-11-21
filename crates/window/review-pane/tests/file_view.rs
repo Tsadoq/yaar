@@ -778,3 +778,55 @@ fn the_file_view_holds_no_input_and_no_key_changes_what_it_shows(cx: &mut TestAp
         Some(opened)
     );
 }
+
+// The keys of the diff's own lines
+#[gpui_kit::test]
+fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hides_them(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut navigator, mut cx) = open_long(cx);
+    click_compute(&stage, &mut cx);
+    let left = position(&stage.pane, &mut cx);
+    let opened = opened_of(
+        in_the_worktree("src/lib.rs"),
+        "/gits/feature/src/lib.rs",
+        30,
+    );
+    go_to_definition(
+        vec![location("/gits/feature/src/lib.rs", 12)],
+        Some(opened),
+        &mut navigator,
+        &mut cx,
+    );
+    // Each of these would act on the line of the diff the reviewer left, which nobody can
+    // see: move to a thread, mark the file viewed, resolve, attach, delete a draft.
+    for key in [
+        "m", "shift-m", "r", "x", "u", "t", "d d", "i", "o", "w", "s", "tab", "f",
+    ] {
+        cx.simulate_keystrokes(key);
+    }
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.notice()),
+        None,
+        "a key of the diff said something"
+    );
+    // The barrier: back in the diff, `y` sends `CopyReview`, which has to be the first
+    // request any of the keys made.
+    cx.simulate_keystrokes("escape");
+    assert_eq!(position(&stage.pane, &mut cx), left);
+    cx.simulate_keystrokes("y");
+    let (_, request) = stage.keeper.request(&mut cx);
+    assert!(
+        matches!(request, Request::CopyReview { .. }),
+        "a key of the diff made the pane ask {request:?}"
+    );
+    assert_eq!(
+        stage
+            .pane
+            .read_with(&cx, |pane, _| (pane.view(), pane.layout())),
+        (
+            yaar_review_pane::View::Changes,
+            yaar_review_pane::Layout::Unified
+        )
+    );
+}

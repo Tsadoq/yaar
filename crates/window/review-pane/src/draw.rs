@@ -176,7 +176,7 @@ impl Render for ReviewPane {
         // and of Flow until the reviewer goes back.
         if let Some(file_view) = file_view {
             return pane.children(bar).children(servers).child(
-                body.child(self.with_keys(div().flex_1().min_h_0().child(file_view), cx))
+                body.child(self.with_file_keys(div().flex_1().min_h_0().child(file_view), cx))
                     .children(hover)
                     .children(references)
                     .children(notice)
@@ -294,6 +294,30 @@ impl ReviewPane {
             .on_action(cx.listener(Self::since_round))
             .on_action(cx.listener(Self::start_agent))
             .on_action(cx.listener(Self::next_offered_agent))
+            .on_action(cx.listener(Self::next_name))
+            .on_action(cx.listener(Self::previous_name))
+            .on_action(cx.listener(Self::hover_name))
+            .on_action(cx.listener(Self::go_to_definition))
+            .on_action(cx.listener(Self::find_references))
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::download_server))
+            .on_action(cx.listener(Self::update_server))
+            .on_action(cx.listener(Self::allow_servers))
+            .on_action(cx.listener(Self::refuse_servers))
+    }
+
+    /// Gives the file view the pane's key context, its focus and the actions that work on
+    /// what it shows: the lines, the names, the comments and the line of the language
+    /// server. The actions that work on the line of the diff the reviewer left, whose rows
+    /// are not drawn, are not here: a key for one of them does nothing while the file view
+    /// is open, and does not act where nobody can see it.
+    fn with_file_keys(&self, element: Div, cx: &Context<Self>) -> Div {
+        element
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::line_down))
+            .on_action(cx.listener(Self::line_up))
+            .on_action(cx.listener(Self::comment))
             .on_action(cx.listener(Self::next_name))
             .on_action(cx.listener(Self::previous_name))
             .on_action(cx.listener(Self::hover_name))

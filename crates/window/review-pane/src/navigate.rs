@@ -8,10 +8,12 @@
 //! when the reviewer comes to the line ([`crate::names`]), the next or the one before with
 //! [`crate::NextName`] (`l`) and [`crate::PreviousName`] (`h`), and the one clicked when
 //! the reviewer clicks on a name of a line: the click puts the reviewer on that line, as
-//! before, and on the name under the pointer, found from the pointer's distance into the
-//! line's text, the font being of fixed width. It is drawn with a mark under the selector
-//! `review-name`, whose bounds are those of the name. [`crate::ReviewPane::name_at`] reads
-//! it.
+//! before, and on the name under the pointer, found by the layout the line's text was drawn
+//! with. The text of a line is drawn by an element as wide as the text, under the selector
+//! `review-text-<row>-<side>:<text>` (`review-file-text-<line>:<text>` in the file view). The
+//! name is drawn with a mark under the selector `review-name`, whose bounds are those of the
+//! name: an underline of an invisible copy of the line laid over it.
+//! [`crate::ReviewPane::name_at`] reads it.
 //!
 //! # Asking
 //!
@@ -40,20 +42,27 @@
 //!
 //! The hover ([`HoverShown`]) is drawn under the rows, above the notice, under the selector
 //! `review-hover`, its text under `review-hover-text:<text>`; while its answer is on its
-//! way `review-hover-waiting`. An answer found by text match carries
-//! `review-hover-guessed` and the words [`GUESSED`] above the text (FR-068). It goes when
-//! the reviewer moves to another line or name, and with Escape.
+//! way `review-hover-waiting`, and `review-hover-nothing` where the Navigator reported
+//! nothing. An answer found by text match carries `review-hover-guessed` and the words
+//! [`GUESSED`], under `review-hover-guessed-words:<words>`, above the text (FR-068). It goes
+//! when the reviewer moves to another line or name, and with Escape; a hover asked for the
+//! name the mouse rested on goes when the reviewer moves, but not when the mouse does.
 //!
 //! A definition with one location opens it in the file view ([`crate::file_view`]); with
 //! several, or by text match, they are listed as references are. References are listed
 //! ([`ReferencesShown`]) under the rows, under the selector `review-references`, each
 //! under `review-reference-<index>` with its path relative to the worktree where it lies
-//! in it, its line and its text, the chosen one marked `review-reference-chosen`, the list
-//! marked `review-references-guessed` with [`GUESSED`] when found by text match. The list
-//! takes the focus, and its keys work in its own context [`crate::REFERENCES_CONTEXT`]:
-//! `j`, `down`, `k`, `up` move the chosen one, `enter` opens it in the file view, `escape`
-//! closes the list and gives the focus back to the rows. A click on an entry opens it.
-//! With no location, the notice says that none was found.
+//! in it, its line and its text, under `review-reference-words-<index>:<path>:<line>
+//! <text>`, the chosen one marked `review-reference-chosen`, the list titled under
+//! `review-references-title:<words>` and marked `review-references-guessed`, with [`GUESSED`]
+//! under `review-references-guessed-words:<words>`, when found by text match; while the
+//! answer is on its way `review-references-waiting`. At most eight entries are drawn, the
+//! chosen one among them. The list takes the focus when its answer is here, and its keys work
+//! in its own context [`crate::REFERENCES_CONTEXT`]: `j`, `down`, `k`, `up` move the chosen
+//! one, `enter` opens it in the file view, `escape` closes the list and gives the focus
+//! back to the rows. A click on an entry opens it. The list closes when the file view
+//! opens, and the focus is the rows'. With no location, the notice says that none was
+//! found.
 //!
 //! The pane tells `Navigation::old_side_shown` the old side of the change shown, the
 //! workspace's and its version, whenever the change shown or its old side changes, and

@@ -11,7 +11,8 @@
 //! reviewer's line marked `review-file-at`; its path above the lines under
 //! `review-file-path:<path>`, relative to the worktree where the file lies in it; and the
 //! control [`BACK`] under `review-file-back`, with the text selector
-//! `review-file-back:<the label>`. The file view offers no way to edit (FR-053).
+//! `review-file-back:<the label>`. The file view offers no way to edit (FR-053): the keys that
+//! work on the lines of the diff it hides do nothing while it is open.
 //!
 //! The place left is kept when the first file view opens from the diff: the view (Changes
 //! or Flow), the reviewer's position, the name and the scroll. [`crate::GoBack`]
