@@ -455,6 +455,15 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
         &mut cx,
     );
     assert!(!has_control("yes", &mut cx));
+    assert!(!has_control("no", &mut cx));
+    assert!(
+        drawn(
+            "review-servers-text:Rust: language servers of the repository b\
+             bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb are kept out",
+            &mut cx
+        )
+        .is_some()
+    );
     assert_no_dialog(&mut cx);
 }
 

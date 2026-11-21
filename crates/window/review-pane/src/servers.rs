@@ -21,8 +21,8 @@
 //!
 //! | State | Words, under `review-servers-text:<words>` | Controls |
 //! | --- | --- | --- |
-//! | ready | `<title>: ready` | the update control, when the state shows an update |
-//! | starting | `<title>: starting; names are found by text match meanwhile` | |
+//! | ready | `<title>: ready` | the update control, when the state shows an update: [`UPDATE`] `<version>` under `review-servers-update`, key [`crate::UpdateServer`] (`shift-u`) |
+//! | starting | `<title>: starting; names are found by text match meanwhile` | the update control, as for ready |
 //! | missing, with an offer | `<title>: no language server found` | [`DOWNLOAD`] `<server> <version>` under `review-servers-download`, key [`crate::DownloadServer`] (`shift-i`) |
 //! | missing, no offer | `<title>: no language server found; names are found by text match` | |
 //! | asking | `<title>: <program> lies inside the repository <name>. Run language servers from this repository?` | [`ALLOW`] under `review-servers-yes`, [`REFUSE`] under `review-servers-no`, keys [`crate::AllowServers`] (`shift-y`) and [`crate::RefuseServers`] (`shift-q`) |
@@ -37,7 +37,7 @@
 //! until it has heard the answer, and the pane already knows the answer from the Frame's
 //! model (`Navigation::consent`, set at once by the click or the key, and told again by
 //! the Keeper), so a told state that still asks about a repository with an answer shows
-//! the state `asking` with the second of the two lines of the table and no controls.
+//! the state `asking` with the words of the row "asking, answered" and no controls.
 //!
 //! A server is known for the code on screen when the Navigator told its state: the
 //! server of a removed line's old side is told once the old side is first used, and until
@@ -49,8 +49,9 @@
 //! `Navigation::update`. The question's controls answer through `Navigation::answer_consent`
 //! for the repository asked about, which the Keeper keeps as a setting of that repository
 //! and tells every Window: a repository with an answer is never asked again, from any of its
-//! worktrees (FR-062), and the line shows the next state the Navigator tells. With no
-//! question shown, the two keys say so in the notice and send nothing.
+//! worktrees (FR-062), and the line shows the next state the Navigator tells. A key whose
+//! control is not on the line (nothing to download, nothing to update, no question shown)
+//! says so in the notice and sends nothing.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -122,6 +123,9 @@ impl ReviewPane {
 
     /// The code on screen: the file of the line the reviewer is on, read in the version
     /// its side of the line belongs to.
+    ///
+    /// While a file view is open its file is the code on screen. The file view is not
+    /// built yet, so only the line of the diff is read here.
     fn code_on_screen(&self) -> Option<Code> {
         let position = self.position()?;
         let file = &self.files[*self.by_path.get(&position.path)?].file;
