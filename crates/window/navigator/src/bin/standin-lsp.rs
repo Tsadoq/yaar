@@ -1,7 +1,9 @@
 //! The stand-in language server of the tests (ADR-033 § 3): a server for an invented
 //! language, the stand-in language, whose files end in `.sil`. It sits with the Navigator's
-//! component tests and is started by them, by the review pane's and the Window's tests
-//! through a registry row of their own, and by nothing the app ships.
+//! component tests and is started by them and by the Window's tests, through a registry row
+//! of their own, and by nothing the app ships. The review pane's tests start no server: they
+//! play the Navigator's end of the port, as the Keeper's end of the socket is played, and
+//! read the asks the pane makes.
 //!
 //! It follows what its command line says and decides nothing. It speaks the Language
 //! Server Protocol on its standard input and output, as `yaar_navigator::lsp` frames it,
