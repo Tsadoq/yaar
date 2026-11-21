@@ -21,8 +21,9 @@
 //! Before it makes anything the call also notes whether the repository's configuration has
 //! a section `branch.<branch>` (`git config --get-regexp` of `^branch\.<branch, its dots
 //! escaped>\.`, exit code 1 being "none"). Only once every check and that read have passed
-//! is the parent folder of `folder` made, when it is not there (`fs::create_dir_all`), and
-//! the call remembers whether it made it.
+//! is the parent folder of `folder` made, when it is not there (`fs::create_dir`: that one
+//! folder, never its parents, so that a missing grandparent fails before git runs with
+//! nothing made), and the call remembers whether it made it.
 //!
 //! git is given `from` by its full name (`refs/heads/<from>` or `refs/remotes/<from>`), so a
 //! tag of the same name counts for nothing. A remote branch as `from` makes git set it as
@@ -168,7 +169,7 @@ impl Worktree {
         // Every check has passed: from here something is made.
         let made_parent = match folder.parent() {
             Some(parent) if fs::symlink_metadata(parent).is_err() => {
-                fs::create_dir_all(parent)?;
+                fs::create_dir(parent)?;
                 true
             }
             _ => false,

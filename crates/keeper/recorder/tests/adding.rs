@@ -544,6 +544,29 @@ fn a_read_of_git_that_fails_after_the_other_checks_leaves_no_folder_made() {
     place.assert_planted_objects_are_there();
 }
 
+// Only the folder's parent is made, never its parents: when the parent's own parent is
+// not there, no folder is made and git is not run. A call that made both levels would
+// leave a folder the user never named whenever the add then failed.
+#[test]
+fn a_folder_whose_parent_has_no_parent_either_makes_nothing() {
+    let scratch = Scratch::new();
+    let place = place(&scratch);
+    let before = place.snapshot();
+    let missing = place.lair.join("missing");
+    let folder = missing.join("places").join("task");
+
+    let outcome = open(&place.repo).add_worktree(&folder, "task", "main");
+
+    // Barrier: the call returned, as a failure that is not a refusal of a check.
+    assert!(matches!(outcome, Err(AddError::Git(_))), "{outcome:?}");
+    assert_eq!(place.snapshot(), before);
+    assert!(
+        std::fs::symlink_metadata(&missing).is_err(),
+        "no folder was made"
+    );
+    place.assert_planted_objects_are_there();
+}
+
 // The checks and git's run hold one lock: of several calls for one branch one makes it and
 // the others find it there.
 #[test]
