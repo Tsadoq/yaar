@@ -1259,34 +1259,49 @@ fn showing_a_workspace_again_does_not_search_again_for_a_server_that_is_starting
     let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     let program = scratch.put_recording(&scratch.root.join("bin"), "standin-lsp");
     let (never, log) = (scratch.root.join("never"), scratch.root.join("again.log"));
+    // The rule of readiness waits for a file nobody makes, so that the key is starting
+    // each time the workspace is shown. The server asks for its configuration after
+    // `initialized`: once the log holds that line it is past `initialize`, and not ready.
     let row = row_with(&format!(
         "machine = [\"standin-lsp\"]\n\
-         args = [\"--log\", {}, \"--ready-when\", {}]\n\
+         args = [\"--ready\", \"notification\", \"--ready-when\", {}, \
+         \"--ask-configuration\", \"standin\", \"--log\", {}]\n\
          trial = [\"--version\"]\n\
-         ready = {{ kind = \"answer\" }}",
-        qp(&log),
-        qp(&never)
+         ready = {{ kind = \"notification\", method = \"standin/status\", match = {{ ready = true }} }}",
+        qp(&never),
+        qp(&log)
     ));
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row));
     running.show(&repo, &ws, &repository);
-    // The rule is `answer`, so the server is ready at once; what is shown again is a
-    // workspace whose server has been found.
     let first = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
-        state.state == State::Ready
+        state.state == State::Starting && state.pid.is_some()
     });
+    wait_for_configuration(&log);
+    assert!(events(&log, "ready").is_empty());
     for _ in 0..3 {
         let list = barrier(&mut running, &ws);
-        assert_eq!(standin_in(&list, &ws).unwrap().pid, first.pid);
+        let shown = standin_in(&list, &ws).unwrap();
+        assert_eq!((shown.state, shown.pid), (State::Starting, first.pid));
     }
     assert_eq!(
         runs(&program),
         [
             "--version".to_owned(),
-            format!("--log {} --ready-when {}", log.display(), never.display())
+            format!(
+                "--ready notification --ready-when {} --ask-configuration standin --log {}",
+                never.display(),
+                log.display()
+            )
         ]
     );
     assert_eq!(events(&log, "start").len(), 1);
+    // Control: the rule is met, and the same key, the same process, is ready.
+    std::fs::write(&never, "").expect("make the file the server waits for");
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(ready.pid, first.pid);
     running.end();
 }
 
