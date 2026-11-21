@@ -33,8 +33,9 @@
 //! received; `configuration` with `result`, the answer received, as the client sent it;
 //! `request` with `method` and `id`
 //! for every request received; `notification` with `method` for every notification
-//! received, and with `changes`, as received, for `workspace/didChangeWatchedFiles`; `ready`; `exit` with its code. A line is written before what it tells is
-//! answered, so that a test that reads the log after an answer finds the line.
+//! received, and with `changes`, as received, for `workspace/didChangeWatchedFiles`; `ready`;
+//! `exit` with its code. A line is written before what it tells is answered, so that a test
+//! that reads the log after an answer finds the line.
 //!
 //! # What it answers
 //!

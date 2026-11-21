@@ -85,14 +85,14 @@
 //! or the Navigator), and only then forgets the key and publishes. So
 //! [`look_at_the_clock`], [`workspaces`], [`close`], and `old_side.rs` through [`stop`], have
 //! every process they stop gone when they return, and a [`crate::Told::Servers`] told after
-//! them names no process that still runs. Nothing here waits for a server's answer or its readiness: those come as
-//! events.
+//! them names no process that still runs. Nothing here waits for a server's answer or its
+//! readiness: those come as events.
 //!
 //! # What other modules call
 //!
 //! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`running_server`],
-//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`on_an_older_copy`],
-//! [`downloading`], [`search_again`] and [`publish`]; nothing else here.
+//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`],
+//! [`on_an_older_copy`], [`downloading`], [`search_again`] and [`publish`]; nothing else here.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsString;
@@ -710,6 +710,9 @@ pub(crate) fn downloading(core: &mut Core, key: &ServerKey, offer: Offer) {
     };
     let was_ready = end_server(keyed);
     keyed.phase = Phase::Downloading { offer };
+    // `fetch::download` hands over only keys that offer a download, which run nothing, so
+    // no ask waits at one today; the call keeps a caller that hands over a ready key from
+    // leaving its asks waiting.
     if was_ready {
         answers::server_gone(core, key);
     }
