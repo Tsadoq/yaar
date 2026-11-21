@@ -705,7 +705,14 @@ fn the_states_ask_nothing_by_themselves_and_a_deletion_before_the_first_question
     let (models, mut keeper) = window(Vec::new(), Vec::new(), cx);
     keeper.tell(Fact::StatesDeleted { workspace: id('1') });
 
-    // The deletion was told before the barrier's question, so it reached the model first.
+    // A fact told after it, which the Window takes after the deletion, since a Keeper's facts
+    // come in the order they were told: once it is taken, the deletion was.
+    keeper.tell(Fact::SettingChanged(Setting::KeepStates { days: 3 }));
+    wait_until(cx, "the fact told after the deletion", |cx| {
+        models
+            .settings
+            .read_with(cx, |list, _| list.keep_states() == 3)
+    });
     let before = barrier(&models, &mut keeper, cx);
     assert_eq!(asked_for_sizes(&before), 0);
     assert_eq!(states_sizes(&models, cx), None);
