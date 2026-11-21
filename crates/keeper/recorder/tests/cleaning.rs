@@ -7,6 +7,8 @@ mod support;
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,7 +16,7 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use support::{Scratch, commit_all, git, init, write};
+use support::{Scratch, commit_all, git, init, program, write};
 use yaar_recorder::{
     Clock, CommitId, Deleted, Git, RecordedState, SAME_STATE_FOR, StateStore, Worktree, sizes,
 };
@@ -24,6 +26,11 @@ const BASE: u64 = 1_767_225_600;
 
 /// How long a test waits for work that must end, which a deadlock never does.
 const DEADLINE: Duration = Duration::from_secs(300);
+
+/// How long a clean-up that ought to be waiting is given to show that it is not. Nothing a
+/// passing run does has to end within it: a clean-up that runs on in that time is a failure,
+/// one that is slower than this on a busy machine is missed, never wrongly blamed.
+const SETTLE: Duration = Duration::from_secs(3);
 
 /// A clock that starts at [`BASE`] and moves only when the test moves it.
 #[derive(Debug)]
@@ -68,6 +75,11 @@ fn open(folder: &Path) -> Worktree {
 
 fn open_store(folder: &Path, clock: &Arc<TestClock>) -> StateStore {
     StateStore::open_with(&found(), folder, clock.clone()).expect("open the store")
+}
+
+/// A store whose every git is started through `program`.
+fn open_store_through(program: &Path, folder: &Path, clock: &Arc<TestClock>) -> StateStore {
+    StateStore::open_with(&Git::at(program), folder, clock.clone()).expect("open the store")
 }
 
 /// Pseudo-random bytes from a xorshift of a seed: incompressible, and none of two seeds
@@ -195,6 +207,33 @@ fn assert_unchanged(repo: &Path, before: &Reads, planted: &[String; 2]) {
     );
     for id in planted {
         git(repo, &["cat-file", "-e", id]);
+    }
+}
+
+/// A repository with the two objects planted in it and its reads taken, before the
+/// program under test is started: what a clean-up must leave as it found it.
+struct Watched {
+    repo: PathBuf,
+    planted: [String; 2],
+    before: Reads,
+}
+
+/// Plants the two objects in `repo` and takes its reads. Called after the test's own
+/// commits and before anything of the Recorder runs.
+fn watch(scratch: &Scratch, repo: &Path) -> Watched {
+    let planted = plant(scratch, repo, "watched");
+    let before = reads(repo);
+    Watched {
+        repo: repo.to_owned(),
+        planted,
+        before,
+    }
+}
+
+impl Watched {
+    /// The reads are as they were, and both planted objects are still there.
+    fn assert_unchanged(&self) {
+        assert_unchanged(&self.repo, &self.before, &self.planted);
     }
 }
 
@@ -436,6 +475,7 @@ fn the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_
 fn a_reader_of_a_state_that_stays_reads_the_same_bytes_after_the_clean_up() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -464,12 +504,14 @@ fn a_reader_of_a_state_that_stays_reads_the_same_bytes_after_the_clean_up() {
         None,
         "a state that was deleted holds no file"
     );
+    watched.assert_unchanged();
 }
 
 #[test]
 fn a_state_recorded_after_the_caller_listed_the_states_is_not_deleted() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -495,6 +537,7 @@ fn a_state_recorded_after_the_caller_listed_the_states_is_not_deleted() {
         2,
         "the late state reads whole"
     );
+    watched.assert_unchanged();
 }
 
 #[test]
@@ -611,6 +654,7 @@ fn files_recorded_again_within_the_hour_are_the_newest_state_and_past_it_a_new_o
 fn deleting_an_empty_list_or_an_id_no_ref_names_deletes_nothing() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -630,12 +674,14 @@ fn deleting_an_empty_list_or_an_id_no_ref_names_deletes_nothing() {
     assert_eq!(refs_of(store.folder()), refs, "every ref is there");
     assert_eq!(store.states().expect("states"), vec![state]);
     assert_eq!(store.kept_commits().expect("kept"), vec![head.to_string()]);
+    watched.assert_unchanged();
 }
 
 #[test]
 fn a_delete_takes_away_only_refs_of_states_and_kept_commits() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -655,6 +701,7 @@ fn a_delete_takes_away_only_refs_of_states_and_kept_commits() {
         refs_of(store.folder()),
         format!("{} commit\trefs/heads/not-ours", state.id)
     );
+    watched.assert_unchanged();
 }
 
 #[test]
@@ -666,6 +713,7 @@ fn a_kept_commit_in_the_list_is_let_go_and_after_the_pack_its_files_are_gone() {
     let commit = CommitId::new(commit_all(&repo, "two"));
     write(&repo, "notes.txt", "changed\n");
     commit_all(&repo, "three");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -701,12 +749,14 @@ fn a_kept_commit_in_the_list_is_let_go_and_after_the_pack_its_files_are_gone() {
     assert_eq!(store.kept_commits().expect("kept"), Vec::<String>::new());
     assert!(store.paths(commit.as_str()).is_err(), "its files are gone");
     assert!(!holds(store.folder(), &blob), "and its blob");
+    watched.assert_unchanged();
 }
 
 #[test]
 fn packing_a_store_with_nothing_in_it_or_nothing_deleted_changes_no_state() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -720,6 +770,7 @@ fn packing_a_store_with_nothing_in_it_or_nothing_deleted_changes_no_state() {
 
     assert_eq!(store.states().expect("states"), vec![state.clone()]);
     assert_eq!(files_of(&store, &state), files);
+    watched.assert_unchanged();
 }
 
 #[test]
@@ -729,7 +780,11 @@ fn the_pack_removes_the_complete_head_when_its_commit_went_and_the_next_recordin
     let repo = repository(&scratch, "repo");
     let mut noise = Noise(17);
     std::fs::write(repo.join("committed.bin"), noise.kib(16)).expect("write");
-    commit_all(&repo, "two");
+    // Only that file: `turn.bin` stays untracked, so that the test's own rewriting of it
+    // leaves the repository's reads as they were.
+    git(&repo, &["add", "committed.bin"]);
+    git(&repo, &["commit", "--quiet", "-m", "two"]);
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -758,12 +813,14 @@ fn the_pack_removes_the_complete_head_when_its_commit_went_and_the_next_recordin
         std::fs::read(repo.join("committed.bin")).expect("read"),
         "a file of the commit, which no state of the new recording had to copy"
     );
+    watched.assert_unchanged();
 }
 
 #[test]
 fn the_pack_keeps_the_complete_head_while_a_state_still_reaches_its_commit() {
     let scratch = Scratch::new();
     let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
     let worktree = open(&repo);
     let clock = TestClock::new();
     let store = open_store(&scratch.join("states/one.git"), &clock);
@@ -782,6 +839,7 @@ fn the_pack_keeps_the_complete_head_while_a_state_still_reaches_its_commit() {
     assert_eq!(store.states().expect("states"), vec![first]);
     let next = record_with_noise(&store, &repo, &worktree, &mut noise);
     assert_eq!(files_of(&store, &next).len(), 2);
+    watched.assert_unchanged();
 }
 
 #[test]
@@ -867,16 +925,22 @@ struct Stressed {
     store: Arc<StateStore>,
     state: RecordedState,
     old_commit: String,
+    watched: Watched,
 }
 
 fn stressed(scratch: &Scratch) -> Stressed {
     let repo = repository(scratch, "repo");
     let mut noise = Noise(29);
     std::fs::write(repo.join("old.bin"), noise.kib(8)).expect("write");
-    let old_commit = commit_all(&repo, "two");
+    // `turn.bin` stays untracked, so that the tests' own rewriting of it leaves the
+    // repository's reads as they were.
+    git(&repo, &["add", "old.bin"]);
+    git(&repo, &["commit", "--quiet", "-m", "two"]);
+    let old_commit = git(&repo, &["rev-parse", "HEAD"]);
     write(&repo, "notes.txt", "one\nthree\n");
     std::fs::remove_file(repo.join("old.bin")).expect("remove");
-    commit_all(&repo, "three");
+    git(&repo, &["commit", "--quiet", "-a", "-m", "three"]);
+    let watched = watch(scratch, &repo);
     let worktree = Arc::new(open(&repo));
     let clock = TestClock::new();
     let store = Arc::new(open_store(&scratch.join("states/one.git"), &clock));
@@ -887,6 +951,7 @@ fn stressed(scratch: &Scratch) -> Stressed {
         store,
         state,
         old_commit,
+        watched,
     }
 }
 
@@ -908,8 +973,8 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
         state,
         old_commit,
         repo,
+        watched,
     } = stressed(&scratch);
-    let reads_before = reads(&repo);
     let against_commit = store
         .compare(Some(&worktree), &old_commit, Some(state.id.as_str()))
         .expect("compare");
@@ -952,7 +1017,7 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
         with_commit.join().expect("the comparisons");
         cleaner.join().expect("the clean-ups");
     });
-    assert_eq!(reads(&repo).refs, reads_before.refs);
+    watched.assert_unchanged();
 }
 
 #[test]
@@ -963,6 +1028,7 @@ fn every_call_that_holds_a_version_works_beside_the_clean_up_and_none_waits_fore
         store,
         state,
         old_commit,
+        watched,
         ..
     } = stressed(&scratch);
     let commit = CommitId::new(old_commit.clone());
@@ -1000,4 +1066,167 @@ fn every_call_that_holds_a_version_works_beside_the_clean_up_and_none_waits_fore
         }
         cleaner.join().expect("the clean-ups");
     });
+    watched.assert_unchanged();
+}
+
+#[test]
+fn a_ref_moved_after_the_delete_read_the_store_is_not_deleted_and_no_other_ref_is() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
+    let worktree = open(&repo);
+    let clock = TestClock::new();
+    let folder = scratch.join("states/one.git");
+    // A git that, once armed, moves one ref of the store just before the store's own
+    // `update-ref --stdin` runs: another handle recording meanwhile.
+    let armed = scratch.join("move-a-ref");
+    let moving = scratch.join("bin/git-moving");
+    program(
+        &moving,
+        &format!(
+            "case \"$*\" in\n*\"update-ref --stdin\"*)\n  if [ -e '{armed}' ]; then\n    \
+             read name object < '{armed}'\n    rm '{armed}'\n    \
+             git --git-dir='{folder}' update-ref \"$name\" \"$object\"\n  fi;;\nesac\n\
+             exec git \"$@\"",
+            armed = armed.display(),
+            folder = folder.display(),
+        ),
+    );
+    let store = open_store_through(&moving, &folder, &clock);
+    let mut noise = Noise(41);
+    let first = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let second = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let name_of = |state: &RecordedState| {
+        git(
+            store.folder(),
+            &[
+                "for-each-ref",
+                "--points-at",
+                state.id.as_str(),
+                "--format=%(refname)",
+                "refs/yaar/states/",
+            ],
+        )
+    };
+    let (ref_1, ref_2) = (name_of(&first), name_of(&second));
+    // The second state's ref now names the first state's commit, as if it had been deleted
+    // and the number taken again by a state of another handle.
+    std::fs::write(&armed, format!("{ref_2} {}\n", first.id)).expect("arm the git");
+
+    let both: BTreeSet<String> = [&first, &second]
+        .map(|state| state.id.as_str().to_owned())
+        .into();
+    let refused = store.delete(&both);
+
+    assert!(
+        refused.is_err(),
+        "a ref that moved is a delete that fails: {refused:?}"
+    );
+    assert!(!armed.exists(), "the ref was moved before the delete ran");
+    assert_eq!(
+        refs_of(store.folder()),
+        format!("{id} commit\t{ref_1}\n{id} commit\t{ref_2}", id = first.id),
+        "the moved ref still names what it was moved to, and the other ref is not deleted either"
+    );
+    watched.assert_unchanged();
+}
+
+/// Makes a named pipe and opens it for reading and writing, so that neither end waits for
+/// the other to open: a read waits for a byte, a write leaves one.
+fn pipe(path: &Path) -> File {
+    let made = Command::new("mkfifo").arg(path).status().expect("mkfifo");
+    assert!(made.success(), "mkfifo {path:?}");
+    File::options()
+        .read(true)
+        .write(true)
+        .open(path)
+        .expect("open the pipe")
+}
+
+#[test]
+fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let mut noise = Noise(37);
+    let content = noise.kib(8);
+    std::fs::write(repo.join("unique.bin"), &content).expect("write");
+    let commit = commit_all(&repo, "two");
+    write(&repo, "notes.txt", "changed\n");
+    commit_all(&repo, "three");
+    let watched = watch(&scratch, &repo);
+    let worktree = Arc::new(open(&repo));
+    // The first read of a file starts the process that hands out contents, after the
+    // commit was copied into the store and before anything is read: this git stops there,
+    // once armed, tells the test and waits for it to say go.
+    let armed = scratch.join("stop-the-reader");
+    let (reached_path, go_path) = (scratch.join("reached"), scratch.join("go"));
+    let stopping = scratch.join("bin/git-stopping");
+    program(
+        &stopping,
+        &format!(
+            "case \" $* \" in\n*\" cat-file --batch \"*)\n  if [ -e '{armed}' ]; then\n    \
+             rm '{armed}'\n    echo reached > '{reached}'\n    read go < '{go}'\n  fi;;\nesac\n\
+             exec git \"$@\"",
+            armed = armed.display(),
+            reached = reached_path.display(),
+            go = go_path.display(),
+        ),
+    );
+    let (mut reached, mut go) = (pipe(&reached_path), pipe(&go_path));
+    let clock = TestClock::new();
+    let store = Arc::new(open_store_through(
+        &stopping,
+        &scratch.join("states/one.git"),
+        &clock,
+    ));
+    std::fs::write(&armed, "").expect("arm the git");
+
+    let reading = {
+        let (store, worktree, commit) = (store.clone(), worktree.clone(), commit.clone());
+        std::thread::spawn(move || {
+            store.content_in(Some(&worktree), &commit, Path::new("unique.bin"))
+        })
+    };
+    // The read holds the commit, in the store and named by a ref, and has not read.
+    let (told, arrived) = channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        let _ = told.send(reached.read_exact(&mut byte));
+    });
+    arrived
+        .recv_timeout(DEADLINE)
+        .expect("the read reached its process of contents")
+        .expect("read the pipe");
+
+    // The clean-up of that commit starts now. It must not end while the read is between
+    // holding the commit and reading it.
+    let (cleaned, ended) = channel();
+    let cleaner = {
+        let (store, commit) = (store.clone(), commit.clone());
+        std::thread::spawn(move || {
+            let ids: BTreeSet<String> = [commit].into();
+            store.delete(&ids).expect("delete");
+            store.pack().expect("pack");
+            let _ = cleaned.send(());
+        })
+    };
+    let ran_on = ended.recv_timeout(SETTLE);
+    go.write_all(b"go\n").expect("say go");
+    assert_eq!(
+        ran_on,
+        Err(RecvTimeoutError::Timeout),
+        "the clean-up ended while a read held the commit"
+    );
+
+    let read = reading.join().expect("the read").expect("content_in");
+    assert_eq!(read, Some(content), "the read found what it held");
+    ended
+        .recv_timeout(DEADLINE)
+        .expect("the clean-up ended once the read had");
+    cleaner.join().expect("the clean-up");
+    assert!(
+        store.paths(&commit).is_err(),
+        "and then the clean-up took the commit away"
+    );
+    watched.assert_unchanged();
 }
