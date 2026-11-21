@@ -2062,7 +2062,10 @@ mod tests {
             // the last line, tuicr's to the last file.
             (ResumeFollow.name(), "shift-g", vec!["vim", TUICR]),
             // Code intelligence: vim's `l` and `h` step right and left, here a name at a
-            // time; `K` looks up the word under the cursor; `gd` goes to its definition.
+            // time. Why these keys and not vim's word motion: the pane has no place inside a
+            // line but a name, so the step is from name to name, and vim's `w` is taken (it
+            // is Original Line). `K` looks up the word under the cursor; `gd` goes to its
+            // definition.
             (NextName.name(), "l", vec!["vim"]),
             (PreviousName.name(), "h", vec!["vim"]),
             (Hover.name(), "shift-k", vec!["vim"]),
@@ -2161,6 +2164,10 @@ mod tests {
                 FindReferences.name(),
                 "neither has one; Neovim's `grr`, shortened, as vim's `gr` replaces text",
             ),
+            // Back to the Diff is Escape, tuicr's key for leaving a mode. Vim jumps back with
+            // `ctrl-o`, and has `ctrl-t` for the tag stack; on Linux both belong to the
+            // app: `ctrl-o` is the Frame's Open Folder and `ctrl-t` the terminal pane's New
+            // Terminal, and a control has one key, the same on both systems.
             (
                 GoBack.name(),
                 "vim's `ctrl-o` jumps back, but it opens a folder on Linux; tuicr's Escape leaves",
