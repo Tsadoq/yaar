@@ -17,7 +17,8 @@
 # Window (part = window), which have a real Keeper beneath, and for the system tests.
 # From slice 8 a pane test also plays the Navigator at its port: it reads the asks the pane makes and
 # tells answers as data, in the shapes the Navigator tells them, and computes nothing the Navigator
-# computes. WIN-10 joins the pane, the real Navigator and the stand-in language server.
+# computes. WIN-10 joins the pane, the real Navigator, the stand-in language server and the Keeper's
+# export of an old side.
 #
 # A row with driver = agent runs twice, once with the stand-in speaking as Claude Code and once as pi,
 # through the same contract. A row that runs for one only says why in its note.
