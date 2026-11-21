@@ -336,6 +336,28 @@ fn a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_nam
         .plan_worktree(&other_id, "main", "y", None)
         .expect("plan");
     assert_eq!(next.folder(), elsewhere.join("y"));
+    // Linked worktrees in two folders share none: rule 2, the folder beside the main
+    // worktree, and not the folder of the first, the last or the most of them.
+    let elsewhere_too = world.scratch.join("elsewhere-too");
+    std::fs::create_dir_all(&elsewhere_too).expect("a folder");
+    git(
+        &other.join("repo"),
+        &[
+            "worktree",
+            "add",
+            "-b",
+            "z",
+            elsewhere_too.join("z").to_str().expect("text"),
+        ],
+    );
+    assert_eq!(
+        world
+            .workspaces
+            .plan_worktree(&other_id, "main", "w", None)
+            .expect("plan")
+            .folder(),
+        other.join("repo.worktrees").join("w")
+    );
 
     // "Or in the folder the user named for the repository": a folder not there yet.
     let places = world.scratch.join("places");
@@ -564,8 +586,8 @@ fn a_repository_whose_every_worktree_is_gone_is_unknown() {
     let outcome = world
         .workspaces
         .plan_worktree(&world.repository, "main", "next", None);
-    // The linked worktree is still a worktree of the repository, but git lists the
-    // repository by the folder the Store knows: nothing lies there now.
+    // The repository's only worktree is the folder the Store knows, and nothing lies
+    // there now: no worktree of it can be read.
     match outcome {
         Err(WorkspaceError::Refused(Refusal::UnknownRepository(id))) => {
             assert_eq!(id, world.repository)

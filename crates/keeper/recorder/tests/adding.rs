@@ -512,6 +512,38 @@ fn a_failure_of_git_before_it_made_the_worktree_leaves_nothing_either() {
     assert!(!place.worktrees().exists());
 }
 
+// Every read the add makes comes before the parent folder is made: git, asked for the
+// configuration's section of the branch, fails after every other check passed, and the
+// folder is not there afterwards. The git is the real one, wrapped by a program of the
+// test that answers that one question with an error.
+#[test]
+fn a_read_of_git_that_fails_after_the_other_checks_leaves_no_folder_made() {
+    let scratch = Scratch::new();
+    let place = place(&scratch);
+    let wrapper = scratch.join("bin/git");
+    program(
+        &wrapper,
+        "for argument in \"$@\"; do\n  case \"$argument\" in\n    '^branch'*)\n      echo 'the configuration cannot be read' >&2\n      exit 7 ;;\n  esac\ndone\nexec git \"$@\"",
+    );
+    let before = place.snapshot();
+    let folder = place.worktrees().join("task");
+    let worktree = Worktree::open(&Git::at(&wrapper), &place.repo).expect("open");
+
+    let outcome = worktree.add_worktree(&folder, "task", "main");
+
+    // Barrier: the call returned, and it was the read that failed, not a check.
+    match outcome {
+        Err(AddError::Git(failure)) => assert!(
+            failure.to_string().contains("cannot be read"),
+            "not the read that failed: {failure}"
+        ),
+        other => panic!("not a failure of git: {other:?}"),
+    }
+    assert_eq!(place.snapshot(), before);
+    assert!(!place.worktrees().exists(), "no folder was made");
+    place.assert_planted_objects_are_there();
+}
+
 // The checks and git's run hold one lock: of several calls for one branch one makes it and
 // the others find it there.
 #[test]
