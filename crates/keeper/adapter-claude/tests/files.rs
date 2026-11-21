@@ -46,6 +46,7 @@ impl Place {
         let folder = self.session(id);
         fs::create_dir_all(&folder).expect("make the session's folder");
         let file = folder.join(name);
+        fs::create_dir_all(file.parent().expect("a parent")).expect("make the file's folder");
         fs::write(&file, bytes).expect("write a review");
         file
     }
@@ -54,10 +55,10 @@ impl Place {
     /// lead the clean-up to.
     fn outside(&self) -> (PathBuf, PathBuf) {
         let file = self.scratch.path().join("outside.txt");
-        fs::write(&file, b"not the Adapter's").expect("write the outside file");
+        fs::write(&file, noise(20_000, 1)).expect("write the outside file");
         let folder = self.scratch.path().join("outside-folder");
         fs::create_dir_all(&folder).expect("make the outside folder");
-        fs::write(folder.join("inside.txt"), b"not the Adapter's either")
+        fs::write(folder.join("inside.txt"), noise(20_000, 2))
             .expect("write the file of the outside folder");
         (file, folder)
     }
@@ -71,6 +72,18 @@ impl Place {
             written_before,
         )
     }
+}
+
+/// `len` bytes that no file system can squeeze into fewer blocks, so that the blocks a file
+/// uses are more than none; `seed` makes two of them differ.
+fn noise(len: usize, seed: u32) -> Vec<u8> {
+    let mut state = seed.wrapping_mul(2_654_435_761).wrapping_add(1);
+    (0..len)
+        .map(|_| {
+            state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (state >> 24) as u8
+        })
+        .collect()
 }
 
 /// The blocks the file at `path` uses on disk, in bytes, as the Adapter counts them.
@@ -94,8 +107,8 @@ fn set_modified(path: &Path, time: SystemTime) {
 #[test]
 fn the_files_of_a_session_that_ended_go_and_those_of_one_that_runs_stay() {
     let place = Place::new();
-    let ended = place.write("s1", "r-1.md", &[b'a'; 20_000]);
-    let running_text: Vec<u8> = (0..30_000u32).map(|n| (n % 251) as u8).collect();
+    let ended = place.write("s1", "r-1.md", &noise(20_000, 3));
+    let running_text = noise(30_000, 4);
     let running = place.write("s2", "r-1.md", &running_text);
     let expected = blocks_of(&ended);
     assert!(expected > 0, "a file of 20 000 bytes uses blocks");
@@ -125,18 +138,26 @@ fn every_file_of_an_ended_session_is_counted_the_hidden_temporary_ones_too() {
 fn a_link_inside_a_session_is_removed_as_a_link_and_never_followed() {
     let place = Place::new();
     let (file, folder) = place.outside();
-    place.write("s1", "r-1.md", b"a review");
-    symlink(&file, place.session("s1").join("to-file")).expect("link to a file");
-    symlink(&folder, place.session("s1").join("to-folder")).expect("link to a folder");
+    let review = place.write("s1", "r-1.md", &noise(9_000, 5));
+    let to_file = place.session("s1").join("to-file");
+    let to_folder = place.session("s1").join("to-folder");
+    symlink(&file, &to_file).expect("link to a file");
+    symlink(&folder, &to_folder).expect("link to a folder");
+    // What the session uses itself: the review and the links as they lie, not what they name.
+    let expected = blocks_of(&review) + blocks_of(&to_file) + blocks_of(&to_folder);
+    assert!(expected > 0, "the review uses blocks");
+    let outside = blocks_of(&file) + blocks_of(&folder.join("inside.txt"));
+    assert!(outside > 0, "the files outside use blocks");
 
-    place.remove(&[], None).expect("the clean-up runs");
+    let removed = place.remove(&[], None).expect("the clean-up runs");
 
     assert!(!place.session("s1").exists());
-    assert_eq!(fs::read(&file).expect("the file"), b"not the Adapter's");
+    assert_eq!(fs::read(&file).expect("the file"), noise(20_000, 1));
     assert_eq!(
         fs::read(folder.join("inside.txt")).expect("the folder's file"),
-        b"not the Adapter's either"
+        noise(20_000, 2)
     );
+    assert_eq!(removed, expected, "what the links name is not counted");
 }
 
 #[test]
@@ -144,14 +165,20 @@ fn a_session_that_is_itself_a_link_goes_as_a_link_and_its_target_stays() {
     let place = Place::new();
     let (_, folder) = place.outside();
     symlink(&folder, place.session("s1")).expect("link a session to a folder");
+    let expected = blocks_of(&place.session("s1"));
+    assert!(
+        blocks_of(&folder.join("inside.txt")) > 0,
+        "the folder's file uses blocks"
+    );
 
-    place.remove(&[], None).expect("the clean-up runs");
+    let removed = place.remove(&[], None).expect("the clean-up runs");
 
     assert!(fs::symlink_metadata(place.session("s1")).is_err());
     assert_eq!(
         fs::read(folder.join("inside.txt")).expect("the folder's file"),
-        b"not the Adapter's either"
+        noise(20_000, 2)
     );
+    assert_eq!(removed, expected, "what the link names is not counted");
 }
 
 #[test]
@@ -211,6 +238,33 @@ fn a_session_with_one_file_still_new_keeps_all_of_them() {
     assert_eq!(removed, 0);
     assert_eq!(fs::read(&old).expect("kept"), b"old");
     assert_eq!(fs::read(&new).expect("kept"), b"new");
+}
+
+#[test]
+fn a_file_in_a_folder_of_a_session_counts_for_all_it_says() {
+    let place = Place::new();
+    let now = SystemTime::now();
+    let old = place.write("s1", "r-1.md", &noise(5_000, 6));
+    let nested = place.write("s1", "sub/r-2.md", &noise(7_000, 7));
+    set_modified(&old, now - THIRTY_DAYS - Duration::from_secs(3600));
+
+    let removed = place
+        .remove(&[], Some(now - THIRTY_DAYS))
+        .expect("the clean-up runs");
+    assert_eq!(removed, 0, "the file in the folder is within the time");
+    assert!(old.exists());
+    assert!(nested.exists());
+
+    set_modified(&nested, now - THIRTY_DAYS - Duration::from_secs(3600));
+    let expected = blocks_of(&old) + blocks_of(&nested);
+    let removed = place
+        .remove(&[], Some(now - THIRTY_DAYS))
+        .expect("the clean-up runs");
+    assert!(!place.session("s1").exists());
+    assert_eq!(
+        removed, expected,
+        "the blocks of the file in the folder too"
+    );
 }
 
 #[test]
