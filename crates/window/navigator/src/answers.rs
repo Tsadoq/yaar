@@ -50,10 +50,10 @@
 //!
 //! [`cancel`] cancels the server's request (`Server::cancel`) or drops the search's result;
 //! a cancelled ask is never answered. [`files_changed`] hands the paths, made absolute and
-//! each once, to every new-side server of the workspace that is ready
-//! (`Server::files_changed`): a path told twice, and one that no longer exists, are the
-//! driver's to tell as changed or deleted. A server that is not ready reads the files when
-//! it loads, and is sent a file's text at each ask.
+//! each once, to every running new-side server of the workspace, starting or ready
+//! (`Server::files_changed`; `lifecycle::running_server`): a path told twice, and one that no
+//! longer exists, are the driver's to tell as changed or deleted, and the driver holds what a
+//! server is sent before it answered `initialize`. A file's text is sent at each ask.
 //!
 //! # Opening a file
 //!
@@ -73,7 +73,7 @@ use yaar_link::WorkspaceId;
 use yaar_text_search::{Found, TextSearch, is_ignored};
 
 use crate::driver::Server;
-use crate::lifecycle::{ensure, ready_server};
+use crate::lifecycle::{ensure, ready_server, running_server};
 use crate::lsp::{Spot, byte_column, file_uri, hover_text, spots, utf16_column};
 use crate::navigator::{Core, Event, ServerKey, Side};
 use crate::old_side;
@@ -441,7 +441,7 @@ pub(crate) fn files_changed(core: &mut Core, workspace: &WorkspaceId, paths: &[P
             language: row.name.clone(),
             side: Side::New,
         };
-        if let Some(server) = ready_server(core, &key) {
+        if let Some(server) = running_server(core, &key) {
             server.files_changed(&changed);
         }
     }

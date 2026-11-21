@@ -90,8 +90,8 @@
 //!
 //! # What other modules call
 //!
-//! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`state_of`],
-//! [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`downloading`],
+//! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`running_server`],
+//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`downloading`],
 //! [`search_again`] and [`publish`]; nothing else here.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
@@ -575,6 +575,16 @@ fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
 pub(crate) fn ready_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Server> {
     match &core.life.keys.get(key)?.phase {
         Phase::Ready { running } => Some(&running.server),
+        _ => None,
+    }
+}
+
+/// The server of `key`, when one runs, starting or ready: the process that can be told what
+/// changed. One whose rule of readiness is not met yet reads the files when it loads, and the
+/// driver holds what is sent before the answer to `initialize`.
+pub(crate) fn running_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Server> {
+    match &core.life.keys.get(key)?.phase {
+        Phase::Starting { running } | Phase::Ready { running } => Some(&running.server),
         _ => None,
     }
 }

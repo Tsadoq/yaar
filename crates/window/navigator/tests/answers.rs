@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use support::*;
+use yaar_navigator::lsp::file_uri;
 use yaar_navigator::{Answered, Ask, AskId, FileKind, Location, State, Told, Tree};
 
 /// `text` as a TOML string.
@@ -39,6 +40,14 @@ fn requests(log: &Path, method: &str) -> usize {
         .iter()
         .filter(|line| line["event"] == "request" && line["method"] == method)
         .count()
+}
+
+/// The lines of a stand-in's log whose `event` is `event`.
+fn events(log: &Path, event: &str) -> Vec<Value> {
+    log_of(log)
+        .into_iter()
+        .filter(|line| line["event"] == event)
+        .collect()
 }
 
 /// How many notifications of `method` the stand-in logged.
@@ -722,6 +731,62 @@ fn the_files_that_changed_are_told_to_a_ready_server_once_and_a_gone_one_does_no
         DEADLINE,
     );
     assert_eq!(notifications(&log, "workspace/didChangeWatchedFiles"), 1);
+    running.end();
+}
+
+#[test]
+fn the_files_that_changed_are_told_to_a_server_that_is_starting_and_reach_it_once_it_is_released() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let (go, log) = (scratch.root.join("go"), scratch.root.join("standin.log"));
+    let repo = scratch.repository(
+        "project",
+        &[("main.sil", "def alpha\n"), ("notes.txt", "milk\n")],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_ready_when(&go, &log)));
+    running.show(&repo, &ws, &repository);
+    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Starting && state.pid.is_some()
+    });
+
+    // The server runs and its rule of readiness waits for `go`. The barrier, an ask the
+    // Navigator answers by itself, is handled after the notice of the change: when it is
+    // told, the notice was handled, and the server is still not ready.
+    running.ask(Ask::FilesChanged {
+        workspace: ws.clone(),
+        paths: vec![PathBuf::from("main.sil")],
+    });
+    running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert!(
+        events(&log, "ready").is_empty(),
+        "the server was ready before it was released"
+    );
+
+    std::fs::write(&go, "").expect("make the file the server waits for");
+    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    let changes = wait_for("the notice to reach the server", || {
+        let noticed: Vec<Value> = log_of(&log)
+            .into_iter()
+            .filter(|line| {
+                line["event"] == "notification"
+                    && line["method"] == "workspace/didChangeWatchedFiles"
+            })
+            .map(|line| line["changes"].clone())
+            .collect();
+        (!noticed.is_empty()).then_some(noticed)
+    });
+    assert_eq!(
+        changes,
+        [serde_json::json!([
+            {"uri": file_uri(&repo.root.join("main.sil")), "type": 2}
+        ])]
+    );
     running.end();
 }
 

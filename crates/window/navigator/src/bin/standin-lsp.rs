@@ -33,7 +33,7 @@
 //! received; `configuration` with `result`, the answer received, as the client sent it;
 //! `request` with `method` and `id`
 //! for every request received; `notification` with `method` for every notification
-//! received; `ready`; `exit` with its code. A line is written before what it tells is
+//! received, and with `changes`, as received, for `workspace/didChangeWatchedFiles`; `ready`; `exit` with its code. A line is written before what it tells is
 //! answered, so that a test that reads the log after an answer finds the line.
 //!
 //! # What it answers
@@ -411,7 +411,11 @@ impl Session {
 
     fn notification(&mut self, method: &str, params: &Value) {
         let server = Arc::clone(&self.server);
-        server.log(json!({"event": "notification", "method": method}));
+        let mut line = json!({"event": "notification", "method": method});
+        if method == "workspace/didChangeWatchedFiles" {
+            line["changes"] = params.get("changes").cloned().unwrap_or(Value::Null);
+        }
+        server.log(line);
         let document = params.get("textDocument");
         let path = document
             .and_then(|document| document.get("uri"))
