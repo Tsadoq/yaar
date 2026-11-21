@@ -369,7 +369,9 @@ pub enum Told {
     References {
         /// The ask.
         id: AskId,
-        /// The answer, by path, then line.
+        /// The answer. A server's: by path, then line, then column. By text match: the file
+        /// under the pointer first, then the files of the change on screen in their order,
+        /// then the rest by path; each file's by line, then column.
         answer: Answered<Vec<Location>>,
     },
     /// The answer to [`Ask::Open`]: the file, or why it could not be read.
