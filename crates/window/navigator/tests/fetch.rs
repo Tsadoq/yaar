@@ -1004,6 +1004,69 @@ fn an_update_that_ends_well_starts_again_a_key_still_starting_on_the_older_versi
 }
 
 #[test]
+fn an_update_that_ends_well_starts_again_a_key_whose_trial_run_of_the_older_version_is_on_its_way()
+{
+    use std::os::unix::fs::PermissionsExt;
+
+    let scratch = Scratch::new();
+    let first = scratch.repository("first", &[("main.sil", "def alpha\n")]);
+    let second = scratch.repository("second", &[("main.sil", "def alpha\n")]);
+    install(&scratch, "1");
+    // Version 1 is a script: where the folder it is run in holds a file `hold`, it only
+    // sleeps, so that the trial run of the first workspace does not end until the key is
+    // stopped; anywhere else it is the stand-in.
+    let program = program_of(&scratch, "1");
+    std::fs::write(
+        &program,
+        format!(
+            "#!/bin/sh\nif [ -e ./hold ]; then exec sleep 60; fi\nexec '{}' \"$@\"\n",
+            standin().display()
+        ),
+    )
+    .expect("write the script");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("make it executable");
+    std::fs::write(first.root.join("hold"), "").expect("make the file that holds the trial");
+    let two = archive_of("2");
+    let held = Held::serve("standin-2.tar.gz", two.clone());
+    let row = row_with(
+        &scratch.root.join("standin.log"),
+        &download_of("2", &held.url("standin-2.tar.gz"), &two),
+    );
+    let (ws1, ws2) = (workspace_id('1'), workspace_id('2'));
+    let mut running = Running::start(scratch.config(&row));
+    running.ask(Ask::Workspaces(vec![
+        root_of(&first, &ws1, '1'),
+        root_of(&second, &ws2, '2'),
+    ]));
+    running.ask(Ask::OnScreen(Some(ws2.clone())));
+    let ready = running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready && state.update.is_some()
+    });
+    // The first workspace's key is trying the candidate: no process of its own is shown.
+    running.ask(Ask::OnScreen(Some(ws1.clone())));
+    let trying = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Starting && state.server.as_deref() == Some("standin")
+    });
+    assert_eq!((trying.program, trying.pid), (None, None));
+
+    running.ask(Ask::Update {
+        language: "standin".to_owned(),
+    });
+    held.wait_for_a_request();
+    held.release();
+    // The update ended and removed version 1: the key that was trying it runs version 2.
+    let after = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(after.program, Some(program_of(&scratch, "2")));
+    assert_eq!(after.update, None);
+    assert!(!program_of(&scratch, "1").exists());
+    assert!(!is_alive(ready.pid.expect("a process")));
+    running.end();
+}
+
+#[test]
 fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_one() {
     let scratch = Scratch::new();
     let repo = scratch.repository(
