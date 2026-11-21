@@ -27,8 +27,8 @@ use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Mutex, PoisonError};
-use std::time::SystemTime;
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{Duration, SystemTime};
 
 use crate::clock::{Clock, SystemClock};
 
@@ -46,7 +46,7 @@ mod versions;
 // Deleting what nothing refers to, and the room a store takes.
 mod cleaning;
 
-pub use cleaning::{Cleaned, StoreSizes, sizes};
+pub use cleaning::{Deleted, StoreSizes, sizes};
 
 /// The old value that `git update-ref` takes for "no such ref".
 const NO_REF: &str = "0000000000000000000000000000000000000000";
@@ -57,6 +57,17 @@ const STATES: &str = "refs/yaar/states/";
 const KEPT: &str = "refs/yaar/kept/";
 /// The file of the store that holds the commit the store last copied whole.
 const COMPLETE_HEAD: &str = "yaar-complete-head";
+/// The file of the store that holds the commit the changes of the worktree were last
+/// counted from, as the Keeper noted it ([`StateStore::note_counted_from`]).
+const COUNTED_FROM: &str = "yaar-counted-from";
+
+/// How long a recording of files that are those of the newest state gives that state back
+/// rather than a new one, by the store's clock: one hour. Past it, the same files are
+/// recorded as a new state dated now, so that a turn that changed nothing has a state as
+/// young as the turn, and the clean-up by the set time, which counts from the time a state
+/// was recorded, never takes it earlier than the set time after the turn. The clean-up by
+/// the set time adds this hour to the set time for that reason.
+pub const SAME_STATE_FOR: Duration = Duration::from_secs(60 * 60);
 
 /// Names one recorded state: the full id of its commit in the state store.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -157,6 +168,12 @@ pub struct StateStore {
     contents: Mutex<Option<Contents>>,
     // Where the time a state is recorded at is read.
     clock: Arc<dyn Clock>,
+    // The guard of the clean-up: taken shared by every call that makes the store hold a
+    // version and then runs git on it, for the whole call, and exclusively by
+    // `StateStore::pack`, which removes objects. Taken once per call, never twice on one
+    // thread: a call that calls another public call of the store calls its inner part.
+    // `cleaning.rs`'s module doc says which calls take it.
+    cleaning: RwLock<()>,
 }
 
 impl Drop for StateStore {
@@ -198,6 +215,7 @@ impl StateStore {
             writing: Mutex::new(()),
             contents: Mutex::new(None),
             clock,
+            cleaning: RwLock::new(()),
         })
     }
 
@@ -213,15 +231,51 @@ impl StateStore {
         todo!("the committer date of every state, as the doc says")
     }
 
+    /// The full ids of the commits the store keeps by [`StateStore::keep_commit`] (each named
+    /// by a ref `refs/yaar/kept/<id>`), ordered by id: one `git for-each-ref` of that folder
+    /// of refs. What the clean-up at once may let go besides states.
+    pub fn kept_commits(&self) -> Result<Vec<String>, GitError> {
+        todo!("the kept commits, as the doc says")
+    }
+
+    /// The commit the changes of the worktree were last counted from, as
+    /// [`StateStore::note_counted_from`] noted it; none before the first note, or when the
+    /// file holds no full id. A file of the store, `yaar-counted-from`, not a ref: the
+    /// commit is noted, not copied, and nothing of the clean-up reads or removes it.
+    pub fn counted_from(&self) -> std::io::Result<Option<CommitId>> {
+        match fs::read_to_string(self.folder.join(COUNTED_FROM)) {
+            Ok(text) => {
+                let id = text.trim();
+                Ok(is_full_id(id).then(|| CommitId::new(id)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Notes `commit` as the one the changes of the worktree are counted from now, read back
+    /// by [`StateStore::counted_from`], also by a store opened anew after the Keeper started
+    /// again. Written whole or not at all: into a file beside it, then renamed over it.
+    pub fn note_counted_from(&self, commit: &CommitId) -> std::io::Result<()> {
+        let file = self.folder.join(COUNTED_FROM);
+        let beside = self.folder.join(format!("{COUNTED_FROM}.new"));
+        fs::write(&beside, format!("{commit}\n"))?;
+        fs::rename(&beside, &file)
+    }
+
     /// The folder of the store.
     pub fn folder(&self) -> &Path {
         &self.folder
     }
 
     /// Records the state of `worktree` as its files are now, and returns it. When the
-    /// tree is that of the newest state, that state is returned and no new state is made,
-    /// though objects of the files may have been written into the store: a state is the
-    /// files, and the same files are the same state.
+    /// tree is that of the newest state and that state was recorded less than
+    /// [`SAME_STATE_FOR`] ago by the store's clock, that state is returned and no new state
+    /// is made, though objects of the files may have been written into the store: a state
+    /// is the files, and the same files a moment later are the same state. Past
+    /// [`SAME_STATE_FOR`], or with a newest state whose time cannot be read, the same tree
+    /// is recorded as a new state dated now (its message names its own number, so its id
+    /// differs from the older one's).
     ///
     /// A new state is named by the ref `refs/yaar/states/<n>`, `n` the highest number of
     /// the store's states plus 1, written with 10 digits. The ref is written only if no

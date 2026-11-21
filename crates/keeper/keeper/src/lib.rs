@@ -33,6 +33,7 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -138,6 +139,9 @@ struct Shared {
     told: Mutex<Option<Vec<Arc<Window>>>>,
     // Held while a request that waits its turn is answered and its facts are told.
     turn: Mutex<()>,
+    // Whether a reply to a Window has been queued since the start: the sweep of the states
+    // by the set time waits for it, so that its repacks do not slow the first Window's start.
+    answered: AtomicBool,
 }
 
 impl Shared {
@@ -157,7 +161,13 @@ impl Shared {
             parts: RwLock::new(Some(parts)),
             told: Mutex::new(Some(Vec::new())),
             turn: Mutex::new(()),
+            answered: AtomicBool::new(false),
         }
+    }
+
+    /// Whether the Keeper has queued a reply to a Window since it started.
+    fn has_answered(&self) -> bool {
+        self.answered.load(Ordering::Acquire)
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -447,9 +457,10 @@ pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) ->
 
     // Only the Keeper that holds the lock opens the database, and it is open before the
     // first Window can ask for anything.
-    let shared = Shared::start(&options, clock);
-    // The clean-up of states by the set time: at once, then every hour, until the end.
-    let sweeps = cleaning::Sweeps::start(Arc::downgrade(&shared));
+    let shared = Shared::start(&options, Arc::clone(&clock));
+    // The clean-up of states by the set time: once the first reply is queued, then every
+    // hour by the clock, until the end.
+    let sweeps = cleaning::Sweeps::start(Arc::downgrade(&shared), clock);
 
     match fs::remove_file(socket) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -782,6 +793,9 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
             false
         }
     };
+    if answered {
+        shared.answered.store(true, Ordering::Release);
+    }
     // What waited for the reply to be on its way, as the output of a terminal it names,
     // goes after it.
     if let Some(then) = then {

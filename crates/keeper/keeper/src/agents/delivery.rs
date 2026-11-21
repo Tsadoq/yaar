@@ -391,7 +391,6 @@ mod tests {
             ),
             workspaces: yaar_workspaces::Workspaces::new(git_found, store.clone()),
             store,
-            base_seen: crate::base_moves::Seen::default(),
         };
         let watching = Arc::new(crate::watching::Watching::new(Weak::new()));
         let agents = Agents::start(&options, Some(&kept), watching, Weak::new());

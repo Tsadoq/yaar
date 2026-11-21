@@ -24,11 +24,13 @@
 //!   [`StateStore::compare`] and [`StateStore::content_in`], the paths that differ
 //!   between any two of commits, states and the files on disk, and a file in any of them;
 //! - what slice 9 adds: the time each state was recorded at, read from a [`Clock`]
-//!   ([`StateStore::open_with`], [`StateStore::recorded_times`]); the clean-up of
-//!   everything a store holds that the caller does not keep ([`StateStore::clean_up`],
-//!   [`Cleaned`]); the room the stores take on disk ([`sizes`], [`StoreSizes`]); and a new
-//!   worktree made by the user's own git ([`Worktree::add_worktree`], [`Added`],
-//!   [`AddError`], [`Worktree::remove_added`]);
+//!   ([`StateStore::open_with`], [`StateStore::recorded_times`], [`SAME_STATE_FOR`]); the
+//!   deletion of the states and kept commits the caller names ([`StateStore::delete`],
+//!   [`Deleted`], [`StateStore::kept_commits`]) and of every object nothing reaches then
+//!   ([`StateStore::pack`]); the room the stores take on disk ([`sizes`], [`StoreSizes`]);
+//!   the commit the changes were last counted from ([`StateStore::counted_from`],
+//!   [`StateStore::note_counted_from`]); and a new worktree made by the user's own git
+//!   ([`Worktree::add_worktree`], [`Added`], [`AddError`], [`Worktree::remove_added`]);
 //! - [`history`], the commits and the states of a worktree in the order they happened,
 //!   as [`HistoryEntry`]s.
 //!
@@ -65,7 +67,8 @@ pub use clock::{Clock, SystemClock};
 pub use git::{Git, GitError};
 pub use history::{Entry as HistoryEntry, history};
 pub use states::{
-    Cleaned, RecordError, RecordedState, Recording, StateId, StateStore, StoreSizes, sizes,
+    Deleted, RecordError, RecordedState, Recording, SAME_STATE_FOR, StateId, StateStore,
+    StoreSizes, sizes,
 };
 pub use worktree::{
     AddError, Added, Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head,

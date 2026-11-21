@@ -20,6 +20,9 @@
 //! - [`menus`], the menus of the app on macOS, made from [`controls`]: GPUI shows each
 //!   item's key from the binding of its action.
 
+// The system's light or dark setting, told to the theme's model.
+mod appearance;
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -147,6 +150,7 @@ pub fn open_panes(
 ) -> Result<Opened> {
     let opened = yaar_frame::open(socket, VERSION, panes, cx)?;
     join_navigator(&opened.models, navigator, cx);
+    appearance::follow_system(&opened, cx);
     Ok(opened)
 }
 

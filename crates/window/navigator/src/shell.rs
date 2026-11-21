@@ -31,6 +31,13 @@
 //! - for at most [`LoginShell::deadline`] of real time: past it, its whole process group is
 //!   killed (`kill(-pid, SIGKILL)`) and reaped, and the take has failed.
 //!
+//! Its standard output is read to its end on a second thread while the first waits for the
+//! shell with a polling `try_wait` up to the deadline. Once the shell has exited, its whole
+//! process group is killed at once (`kill(-pid, SIGKILL)`, an error of "no such process"
+//! being none): a job a start-up file left in the background would otherwise hold the pipe
+//! open, and the read would wait for it until the deadline. The output is then what the
+//! reading thread has once the pipe is closed.
+//!
 //! [`COMMAND`] prints [`MARKER`] and then has `env -0` print every variable, each
 //! `NAME=value` and a NUL. Whatever a start-up file printed before is noise and is dropped:
 //! the variables are what follows the last [`MARKER`] of the standard output. Each is split
@@ -38,11 +45,18 @@
 //!
 //! # What the servers get
 //!
-//! The Window's own environment, with every variable the shell printed in the place of the
-//! one of the same name, or added; except `PWD`, `OLDPWD`, `SHLVL` and `_`, which describe
-//! the shell's run and not the user's setup, and are kept as the Window has them. The search
-//! path the candidates are looked for in (`NavigatorConfig::search_path`) is the `PATH` of
-//! the result, split as `std::env::split_paths` splits it.
+//! The Window's own environment first: a variable the Window has keeps the Window's value,
+//! so that a Window started from a shell of a project's own setup (a `nix develop`, a
+//! `direnv` folder, a Python virtual environment) gives its servers that setup, as before
+//! slice 9. Every variable the shell printed that the Window lacks is added; but `PWD`,
+//! `OLDPWD`, `SHLVL` and `_`, which describe the shell's run and not the user's setup, are
+//! never taken from the shell. `PATH` is the one merged: the Window's entries, in their
+//! order, then each entry of the shell's `PATH` that the Window's does not hold, in the
+//! shell's order. The search path the candidates are looked for in
+//! (`NavigatorConfig::search_path`) is the `PATH` of the result, split as
+//! `std::env::split_paths` splits it. A Window started from the Finder or the Dock has the
+//! system's short path and few variables, and so gains the folders and the variables of the
+//! user's start-up files.
 //!
 //! # When it fails
 //!
@@ -60,9 +74,9 @@ use std::fmt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-/// How long the user's login shell may take to print its environment: as long as a trial
-/// run of a candidate may take.
-pub const SHELL_DEADLINE: Duration = crate::TRIAL_DEADLINE;
+/// How long the user's login shell may take to print its environment: ten seconds, a slow
+/// start-up file's time and more.
+pub const SHELL_DEADLINE: Duration = Duration::from_secs(10);
 
 /// What the shell prints before the variables, so that what its start-up files printed
 /// before can be told from them.
@@ -106,8 +120,8 @@ impl fmt::Display for ShellError {
 }
 
 /// Runs `shell` once, as the module doc says, in the environment `base`, and gives the
-/// environment the servers run in: `base` with what the shell printed put in, as the module
-/// doc says.
+/// environment the servers run in: `base` with what the shell printed merged in, as the
+/// module doc says.
 pub fn take(
     shell: &LoginShell,
     base: &[(OsString, OsString)],

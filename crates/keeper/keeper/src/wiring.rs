@@ -38,7 +38,7 @@
 //! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
 //! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
 //! | `ExportVersion` | `Agents::export_version`, through `StateStore::export` | none |
-//! | `CreateWorktree` | `Parts::create_worktree` (`wiring/worktrees.rs`): `Workspaces::create_worktree`, then the agent's launcher as `OpenTerminal` opens it | `Workspaces`, the list as it is then |
+//! | `CreateWorktree` | `Parts::create_worktree` (`wiring/worktrees.rs`): `Workspaces::plan_worktree`, `Planned::add` once the parts are let go, then under the Keeper's turn `Workspaces::open_added` and the agent's launcher as `OpenTerminal` opens it | `Workspaces`, the list as it is then, told under the turn before the reply |
 //! | `GetStateSizes` | `cleaning::sizes`, through `Reviews::state_sizes` | none |
 //! | `CleanUpStates` | `cleaning::clean_up_now`: `Reviews::clean_up` of every workspace, then `Agents::remove_files_of_ended` | `StatesDeleted` of each workspace that lost a state |
 //!
@@ -156,9 +156,6 @@ pub(crate) struct Kept {
     pub(crate) workspaces: Workspaces,
     pub(crate) reviews: Reviews,
     pub(crate) store: Store,
-    /// The commit each workspace's changes were last counted from, for the threads on the
-    /// old side when the base moves.
-    pub(crate) base_seen: base_moves::Seen,
 }
 
 /// A step that waits for a reply to be queued, and runs after it.
@@ -264,9 +261,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // git's checkout of a whole tree, a second or more on a large repository: as a
         // comparison of two versions.
         RequestKind::ExportVersion => Answerer::Apart,
-        // Made with the user's git and its launcher opened as `OpenTerminal` opens one: on
-        // the connection's thread, in its turn.
-        RequestKind::CreateWorktree => Answerer::Here,
+        // The user's git checks a whole branch out and runs the user's hooks, which may take
+        // a minute: apart, so that the Window's other requests and its typing go on.
+        RequestKind::CreateWorktree => Answerer::Apart,
         // A walk of every folder of states, and a repack of every store: apart.
         RequestKind::GetStateSizes | RequestKind::CleanUpStates => Answerer::Apart,
     }
@@ -354,8 +351,10 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         RequestKind::ListConsents | RequestKind::AnswerConsent => true,
         // It leads to no fact, and no fact carries what it writes.
         RequestKind::ExportVersion => false,
-        // It changes the list of workspaces, and tells it.
-        RequestKind::CreateWorktree => true,
+        // It changes the list of workspaces, and tells it: not for the whole of its run,
+        // which waits for the user's git, but for its last steps, the opening and the fact,
+        // which take the turn themselves (`wiring/worktrees.rs`).
+        RequestKind::CreateWorktree => false,
         // The sizes change nothing; the clean-up's facts name workspaces, not the list.
         RequestKind::GetStateSizes | RequestKind::CleanUpStates => false,
     }
@@ -388,7 +387,6 @@ impl Parts {
                 workspaces: Workspaces::new(git, store.clone()),
                 reviews,
                 store,
-                base_seen: base_moves::Seen::default(),
             })
         });
         let agents = Arc::new(Agents::start(
@@ -659,28 +657,17 @@ impl Parts {
             } => self
                 .agents
                 .export_version(kept, &workspace, &version, &into),
-            // A worktree made from a branch, and an agent started in it.
+            // A worktree made from a branch, and an agent started in it: the user's git runs
+            // after the parts are let go.
             Request::CreateWorktree {
                 repository,
                 from,
                 branch,
                 agent,
                 size: at,
-            } => self
-                .create_worktree(
-                    kept,
-                    window,
-                    &repository,
-                    &from,
-                    &branch,
-                    &agent,
-                    at,
-                    &mut facts,
-                )
-                .map(|(reply, release)| {
-                    then = Some(release);
-                    reply
-                }),
+            } => {
+                return self.create_worktree(kept, window, &repository, &from, &branch, &agent, at);
+            }
             // The room the recorded states take, and their clean-up at once.
             Request::GetStateSizes => crate::cleaning::sizes(kept),
             Request::CleanUpStates => crate::cleaning::clean_up_now(kept, &self.agents, &mut facts),

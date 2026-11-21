@@ -1,48 +1,63 @@
 //! The clean-up of the recorded states, between the Link, the Review engine and the
 //! Adapters: the sizes a Window asks for, the clean-up the user asks for, and the one the
-//! set time makes, at the Keeper's start and every [`SWEEP_EVERY`] after.
+//! set time makes, the sweep.
 //!
 //! | Request | Answered by | Facts |
 //! | --- | --- | --- |
 //! | `GetStateSizes` | `Reviews::state_sizes`, each store mapped to a workspace the Store holds, in the order the workspaces were first kept; a store of no workspace the Store holds counts in the total only | none |
-//! | `CleanUpStates` | for every workspace the Store holds, `Reviews::clean_up`, the worktree gone or not as `Workspaces::worktree` finds it; then `Agents::remove_files_of_ended`; then the sizes, as `GetStateSizes` | `StatesDeleted` of each workspace that lost a state, after the reply |
+//! | `CleanUpStates` | for every workspace the Store holds, `Reviews::clean_up`, `Presence::Gone` when `Workspaces::worktree` finds none, else `Presence::Present`; then `Agents::remove_files_of_ended` with no time (every file of a session that does not run); then the sizes, as `GetStateSizes` | `StatesDeleted` of each workspace that lost a state, after the reply |
 //!
-//! Both are answered apart, on a thread of their own: a clean-up repacks every store, and a
+//! Both are answered apart, on a thread of their own: a clean-up packs every store, and a
 //! size walks every folder of states.
 //!
 //! # The sweep by the set time
 //!
-//! [`Sweeps::start`] starts one thread at the Keeper's start. It sweeps at once, then every
-//! [`SWEEP_EVERY`], until the Keeper ends ([`Sweeps`] is dropped, which wakes and ends the
-//! thread: it waits on a channel with a timeout, never in a plain sleep). A sweep:
+//! [`Sweeps::start`] starts one thread at the Keeper's start. It wakes every [`TICK`] of
+//! real time, waiting on a channel with that timeout (never in a plain sleep), so that
+//! dropping [`Sweeps`] wakes it and ends it at once; `Drop` joins it. At each wake it reads
+//! the engine's clock (the clock the Keeper was started with, `run_with_clock`) and the set
+//! time, and sweeps when all of these hold:
 //!
-//! 1. reads the set time from the Store's settings, `KeepStates` in days, or
-//!    `yaar_review_engine::KEEP_STATES` when the user set none;
-//! 2. for every workspace the Store holds, calls `Reviews::expire` with that time, the
-//!    worktree gone or not as `Workspaces::worktree` finds it, under the Keeper's parts read
-//!    as a request reads them (the parts may be gone: the sweep then ends);
-//! 3. has the Adapters remove the files of sessions that no longer run;
-//! 4. tells every Window `StatesDeleted` of each workspace that lost a state.
+//! - the Keeper has queued a reply to a Window since it started (`Shared::has_answered`): the
+//!   first sweep does not slow the first Window's start;
+//! - and either no sweep ran yet, or the clock reads at least [`SWEEP_EVERY`] past the
+//!   clock's time of the last sweep, or the set time differs from the one the last sweep
+//!   used (the user changed it: the new time is in force at once).
 //!
-//! The age of a state is the engine's clock's, which the Keeper was started with
-//! (`run_with_clock`); [`SWEEP_EVERY`] is only how often it looks, real time. A test of the
-//! sweep starts a Keeper of its own with a clock it moved past the set time: the sweep at
-//! the start is the one it reads, and it waits for that sweep's `StatesDeleted`, which is
-//! told to the Windows attached by then, or for `GetHistory` to show the turn expired.
-//! A failure of one workspace's sweep is written to the standard error in one line,
-//! starting `yaar-keeper:`, and the others go on.
+//! The set time is `Setting::KeepStates` of the Store's settings, in days, or
+//! `yaar_review_engine::KEEP_STATES` when the user set none. A sweep:
+//!
+//! 1. for every workspace the Store holds, calls `Reviews::expire` with that time,
+//!    `Presence::Gone` or `Present` as `Workspaces::worktree` finds it, under the Keeper's
+//!    parts read for that one workspace (`shared.parts.read()`, let go before the next: a
+//!    request that waits for the parts to be written, as the Keeper's end, waits for one
+//!    workspace's sweep at the most; the parts may be gone, and the sweep then ends);
+//! 2. has the Adapters remove the files of sessions that do not run and whose files were
+//!    last written before the clock's now less the set time
+//!    (`Agents::remove_files_of_ended` with that time);
+//! 3. tells every Window `StatesDeleted` of each workspace that lost a state.
+//!
+//! [`SWEEP_EVERY`] and the age of a state are the clock's; only [`TICK`], how often the
+//! thread looks, is real time. A test moves its clock past the set time, or changes the set
+//! time, and waits for the sweep's `StatesDeleted` or for `GetHistory` to show the turn
+//! expired. A failure of one workspace's sweep is written to the standard error in one
+//! line, starting `yaar-keeper:`, and the others go on.
 
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 use yaar_link::{Fact, Refusal, Reply};
+use yaar_recorder::Clock;
 
 use crate::Shared;
 use crate::agents::Agents;
 use crate::wiring::Kept;
 
-/// How often the sweep by the set time looks, after the one at the Keeper's start.
+/// How long after a sweep the next one runs, by the engine's clock.
 pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
+
+/// How often, in real time, the thread of the sweep looks at the clock and the set time.
+pub(crate) const TICK: Duration = Duration::from_secs(1);
 
 /// `Request::GetStateSizes`, as the module doc says.
 pub(crate) fn sizes(kept: &Kept) -> Result<Reply, Refusal> {
@@ -65,13 +80,17 @@ pub(crate) fn clean_up_now(
 /// thread and waits for it.
 pub(crate) struct Sweeps {
     _shared: Weak<Shared>,
+    _clock: Arc<dyn Clock>,
 }
 
 impl Sweeps {
-    /// Starts the sweeps of the Keeper whose shared state is `shared`, as the module doc
-    /// says.
-    pub(crate) fn start(shared: Weak<Shared>) -> Sweeps {
+    /// Starts the sweeps of the Keeper whose shared state is `shared`, reading the time from
+    /// `clock`, the one the Keeper's engine reads, as the module doc says.
+    pub(crate) fn start(shared: Weak<Shared>, clock: Arc<dyn Clock>) -> Sweeps {
         // Until the sweep is built the Keeper sweeps nothing.
-        Sweeps { _shared: shared }
+        Sweeps {
+            _shared: shared,
+            _clock: clock,
+        }
     }
 }

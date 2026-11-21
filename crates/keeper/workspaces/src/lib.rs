@@ -13,8 +13,9 @@
 //!   [`Comparison`] with [`NoComparison`], [`FileSides`], and [`WorkspaceError`] with the
 //!   [`Refusal`] a user can mend;
 //! - a worktree the app creates from a branch for an agent, beside the repository, with
-//!   that branch as its base: [`Workspaces::create_worktree`], which gives what it
-//!   [`Created`], and [`Workspaces::remove_created`] (the module `create.rs`);
+//!   that branch as its base, in three steps: [`Workspaces::plan_worktree`], which gives what
+//!   it [`Planned`], [`Planned::add`] and [`Workspaces::open_added`], which gives what it
+//!   [`Created`]; and [`Workspaces::remove_created`] (the module `create.rs`);
 //! - the watcher of a worktree, [`Workspaces::watch`], which tells what it [`Seen`]; and who
 //!   is credited with a changed path: [`Workspaces::agent_wrote`],
 //!   [`Workspaces::command_began`] and [`Workspaces::command_ended`] in, and
@@ -55,7 +56,7 @@ use yaar_recorder::{Branch, Commits, Git, GitError, OpenError};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
 
 pub use base::{default_base, on_base_branch};
-pub use create::Created;
+pub use create::{Created, Planned};
 pub use credit::{CreditedPath, Ledger, SETTLE};
 pub use watch::Seen;
 pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs, Worktree};

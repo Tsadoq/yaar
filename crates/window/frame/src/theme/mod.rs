@@ -2,9 +2,10 @@
 //!
 //! A theme is one [`ThemeDefinition`]: a name, whether it is a light or a dark one
 //! ([`Appearance`]), a colour for each role the Window draws with ([`Colors`]) and the
-//! colours of a terminal ([`TerminalColors`]). Adding a theme is one more definition handed
-//! to [`Themes::with`]; nothing that draws changes, since nothing that draws names a colour:
-//! the Frame and the panes read the toolkit's theme (`cx.theme()`), whose colours the applied
+//! colours of a terminal ([`TerminalColors`]). Adding a theme to the app is one more
+//! definition in this folder, listed in [`Themes::built_in`] and checked as [`Themes::with`]
+//! checks one; nothing that draws changes, since nothing that draws names a colour: the
+//! Frame and the panes read the toolkit's theme (`cx.theme()`), whose colours the applied
 //! definition sets ([`ThemeDefinition::onto`]), and the terminal pane reads
 //! [`TerminalColors`] of the applied definition ([`applied`]).
 //!
@@ -43,14 +44,27 @@
 //!
 //! # Where colours may be written
 //!
-//! In this folder only, and in the colours a program in a terminal asks for by number or by
-//! value ([`indexed`], [`rgb24`]), which are xterm's, not the theme's. The test of colours in
-//! drawing code (THEME-02, proposed; `crates/window/window/tests/colours.rs`) reads every
-//! source of the Frame, the three panes and the Window program but this folder and fails on
-//! any colour written there: `rgb(`, `rgba(`, `hsla(`, `hsl(`, `Hsla {`, `Rgba {`, and the
-//! toolkit's named colours `black()`, `white()`, `red()`, `green()`, `blue()`, `yellow()`,
-//! `opaque_grey(`. `transparent_black()` and `transparent_white()` are no colour: they draw
-//! nothing, and stay allowed.
+//! In this folder only. The terminal pane picks the colour of a cell in one public function
+//! of its own (`yaar_terminal_pane::colour_of`): the definition's [`TerminalColors`] for the
+//! default foreground and background and the sixteen numbered colours, [`indexed`] for the
+//! numbers 16 to 255 and [`rgb24`] for a colour a program gives by value, which are xterm's,
+//! not the theme's. The terminal also answers a program that asks for its colours (OSC 4,
+//! 10, 11 and 12) from the applied definition's [`TerminalColors`].
+//!
+//! The test of colours in drawing code (THEME-02, proposed;
+//! `crates/window/window/tests/colours.rs`) reads every source of the Frame, the three panes
+//! and the Window program but this folder, and fails:
+//! - on any colour written there: `rgb(`, `rgba(`, `hsla(`, `hsl(`, `hex(`, `hexa(`,
+//!   `Hsla {`, `Rgba {`, `Rgb {`, `Rgb::new`, `opaque_grey(`, and the toolkit's named colours
+//!   `black()`, `white()`, `red()`, `green()`, `blue()`, `yellow()`, each matched as a whole
+//!   name (no letter, digit or `_` just before it), so that `transparent_black()` and
+//!   `transparent_white()`, which draw nothing, stay allowed;
+//! - on a role of the toolkit's theme read that is not one of [`Colors`]: every name read
+//!   as `theme.<name>` or `theme().<name>` is a role of [`Colors::roles`] or one of the
+//!   toolkit theme's fields that are no colour (`mode`, `font_family`, `font_size`,
+//!   `mono_font_family`, `mono_font_size`, `radius`, `radius_lg`, `window_radius`,
+//!   `shadow`). A role the definition does not hold would keep the toolkit's colour of the
+//!   mode under any third theme.
 
 mod dark;
 mod light;
@@ -98,8 +112,8 @@ pub fn hexa(value: u32) -> Hsla {
 
 /// The colour xterm gives the numbered colours 16 to 255 a program asks for: the 6 by 6 by 6
 /// cube from 16 to 231 (each channel 0, or 55 plus 40 times its step), and 24 greys from 232
-/// (8 plus 10 times its step). Under 16 the theme decides: this gives the 16 of xterm's own
-/// palette, as [`TerminalColors::ansi`] of a dark theme would.
+/// (8 plus 10 times its step). Under 16 the theme decides ([`TerminalColors::ansi`]), and
+/// the terminal pane never asks this for those; it gives xterm's own sixteen there.
 pub fn indexed(index: u8) -> Hsla {
     let _ = index;
     todo!("xterm's numbered colours, as the doc says")

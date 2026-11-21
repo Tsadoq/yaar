@@ -323,19 +323,15 @@ impl Reviews {
         // while it ran counts.
         let since = self.review(&review)?.reviewed().map(str::to_owned);
         let states = self.states_of(&workspace)?;
-        let from = match (&since, start) {
-            (Some(reviewed), _) => Some(reviewed.clone()),
+        let changed = match (&since, start) {
+            (Some(reviewed), _) => Some(states.changed_paths(reviewed, state.as_str())?),
+            // The commit of the real repository is copied into the state store when it lacks
+            // it, and compared with the state, in one call of the store, so that no clean-up
+            // of the store can take the copy away between the two.
             (None, Some(start)) => {
-                // The commit of the real repository is copied into the state store, so
-                // that it can be compared with a state.
-                states.keep_commit(worktree, start)?;
-                Some(start.as_str().to_owned())
+                Some(states.compare(Some(worktree), start.as_str(), Some(state.as_str()))?)
             }
             (None, None) => None,
-        };
-        let changed = match from {
-            Some(from) => Some(states.changed_paths(&from, state.as_str())?),
-            None => None,
         };
         Ok(TurnEnded {
             state,

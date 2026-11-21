@@ -1,7 +1,8 @@
 //! The shared model of the theme the Window draws in (NFR-017, NFR-018).
 //!
-//! [`Looks`] holds the themes the Window can apply (`crate::theme::Themes`), the system's
-//! light or dark setting as the Window last told it ([`Looks::system_is`]), and the user's
+//! [`Looks`] holds the themes the Window can apply (`crate::theme::Themes::built_in`: a theme
+//! is added to the app as one more definition there), the system's light or dark setting as
+//! the Window last told it ([`Looks::system_is`]), and the user's
 //! choice, which it reads from the settings (`SettingList::theme`, `Setting::Theme`, kept
 //! by the Keeper and told to every Window). From the two it applies one definition
 //! (`Themes::resolve`), and applies it again whenever either changes:
@@ -36,19 +37,21 @@
 //!
 //! A test plays the system at [`Looks::system_is`]: GPUI's test platform reports a light
 //! system and gives a test no way to change it (its window's `simulate_appearance_change`
-//! is not public), so a component test tells the model what the platform would.
+//! is not public), so a component test tells the model what the platform would. That the
+//! Window program tells it at the opening is shown by the composed Window's test: until
+//! told, [`Looks::system`] is none.
 
 use gpui_kit::*;
 use yaar_link::ThemeChoice;
 
 use crate::settings::SettingList;
-use crate::theme::{Appearance, ThemeDefinition, ThemeError, Themes};
+use crate::theme::{Appearance, ThemeDefinition, Themes};
 
 /// The theme the Window draws in, and why.
 pub struct Looks {
     settings: Entity<SettingList>,
-    /// The system's setting, as last told; light until told.
-    system: Appearance,
+    /// The system's setting, as last told; none until told.
+    system: Option<Appearance>,
 }
 
 impl Looks {
@@ -58,7 +61,7 @@ impl Looks {
         let _ = cx;
         Looks {
             settings,
-            system: Appearance::Light,
+            system: None,
         }
     }
 
@@ -69,8 +72,8 @@ impl Looks {
         todo!("note the system's setting and apply, as the module doc says")
     }
 
-    /// The system's setting, as last told.
-    pub fn system(&self) -> Appearance {
+    /// The system's setting, as last told; none until [`Looks::system_is`] was first called.
+    pub fn system(&self) -> Option<Appearance> {
         self.system
     }
 
@@ -89,16 +92,5 @@ impl Looks {
     /// The themes the Window can apply.
     pub fn themes(&self) -> &Themes {
         todo!("the themes")
-    }
-
-    /// Adds a theme the user can then choose, as `Themes::with` accepts it; applies it at
-    /// once where the choice already names it.
-    pub fn add(
-        &mut self,
-        definition: ThemeDefinition,
-        cx: &mut Context<Self>,
-    ) -> Result<(), ThemeError> {
-        let _ = (definition, cx);
-        todo!("add, then apply if chosen")
     }
 }

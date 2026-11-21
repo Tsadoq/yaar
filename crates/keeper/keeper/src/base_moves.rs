@@ -4,33 +4,28 @@
 //! The commit the changes of a workspace are counted from is `Changes::counted_from`. It
 //! moves when the user sets another base (`SetBase`), and when the base branch or the
 //! branch of the workspace moves, which the Keeper sees as a new `counted_from` when it
-//! answers `GetChanges`. [`Seen`] keeps, for each workspace, the last `counted_from` the
-//! Keeper answered or found, in memory: the first `GetChanges` after a start of the Keeper
-//! carries nothing, it only notes.
+//! answers `GetChanges`, also when it moved while the Keeper was not running (an overnight
+//! pull). The last `counted_from` the Keeper answered or found is noted in the workspace's
+//! state store (`StateStore::note_counted_from`, read back with
+//! `StateStore::counted_from`, through `Reviews::states_of`), so that the note outlives a
+//! restart of the Keeper.
 //!
 //! | Where | What is done |
 //! | --- | --- |
 //! | `SetBase`, before the base is set | [`before_set`] reads `counted_from` now, from `Workspaces::changes` |
-//! | `SetBase`, after the base is set | [`after_set`] reads it again; when it differs, `Reviews::base_moved(from, to)`, notes `to`, and puts `ReviewsChanged` of the workspace into the facts when a thread moved |
-//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, the same as above; then notes it |
+//! | `SetBase`, after the base is set | [`after_set`] reads it again; when it differs from `before`, `Reviews::base_moved(before, after)`, notes `after`, and puts `ReviewsChanged` of the workspace into the facts when a thread moved |
+//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, the same as above; when none was noted, it only notes |
 //!
+//! Two `GetChanges` of two Windows at once may both carry from the same noted commit: the
+//! second carries nothing, since the first moved every thread placed on that commit.
 //! A workspace with no `counted_from` before or after carries nothing. A failure of the
 //! carry is written to the standard error in one line, starting `yaar-keeper:`, and does not
 //! change the reply.
-
-use std::collections::HashMap;
-use std::sync::Mutex;
 
 use yaar_link::{Fact, WorkspaceId};
 use yaar_recorder::CommitId;
 
 use crate::wiring::Kept;
-
-/// The last commit each workspace's changes were counted from, as the Keeper answered it.
-#[derive(Debug, Default)]
-pub(crate) struct Seen {
-    _counted_from: Mutex<HashMap<WorkspaceId, CommitId>>,
-}
 
 /// `SetBase` of `workspace` is about to be answered: what its changes are counted from now.
 pub(crate) fn before_set(kept: &Kept, workspace: &WorkspaceId) -> Option<CommitId> {

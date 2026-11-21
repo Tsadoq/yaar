@@ -19,9 +19,11 @@
 //! # The rows, in order
 //!
 //! Each row is one [`SettingRow`], with a title ([`TITLES`]) and its values, each drawn as a
-//! control under the selector `settings-value-<row>-<value>:<label>` (`<row>` and `<value>`
-//! counted from 0, `<label>` the words drawn), the chosen one also under
-//! `settings-chosen-<row>`. A click on a value chooses it; with the screen focused, `j` and
+//! control under the selector `settings-value-<row>-<value>:<label>`, the chosen one also
+//! under `settings-chosen-<row>`: `<row>` is the row's index in [`SettingsScreen::rows`] as
+//! they are drawn (so it depends on how many rows of extensions and of repositories come
+//! before; a test finds a row's index in `rows()`, never writes it), `<value>` the value's
+//! index in [`RowShown::values`], both from 0, `<label>` the words drawn. A click on a value chooses it; with the screen focused, `j` and
 //! `k` move the cursor (`settings-cursor` on its row) to the next and the previous row, `l`
 //! and `h` choose the next and the previous value of the row under the cursor, stopping at
 //! the last and the first, `enter` acts on a row that acts ([`SettingRow::Base`]), and
@@ -45,10 +47,12 @@
 //! above, or below, it.
 //!
 //! The sizes are asked for when the screen opens (`RecordedStates::refresh`), and shown as
-//! `<workspace's name>: <size>` (selector `settings-size-<workspace id>`) and
-//! `Total: <size>` (`settings-size-total`), a size in the units of [`size_words`]. A
-//! workspace the Window does not list is not shown on its own; its store counts in the
-//! total.
+//! `<workspace's name>: <size>` (selector `settings-size-<workspace id>`) for each workspace
+//! of the answer that the Window lists; then, when the total is larger than the sum of
+//! those, `<OTHER_STATES>: <the difference>` (selector `settings-size-other`,
+//! [`OTHER_STATES`]'s words): the stores of worktrees that are gone or that this Window does
+//! not list; then `Total: <size>` (`settings-size-total`); each size in the words of
+//! [`size_words`].
 //!
 //! The labels are the constants of this module, which the drawing and the tests read from
 //! this one place: a control's drawn words and its selector are made from the same constant.
@@ -108,6 +112,8 @@ pub const KEEP_SERVERS_OUT: &str = "Keep them out";
 pub const CLEAN_UP: &str = "Clean up now";
 /// The clean-up's control while it runs.
 pub const CLEANING: &str = "Cleaning up…";
+/// The line of the states of workspaces the Window does not list.
+pub const OTHER_STATES: &str = "Other recorded states";
 
 /// The stop times offered, in minutes.
 pub const STOP_AFTER_MINUTES: [u32; 7] = [1, 2, 5, 10, 15, 30, 60];
@@ -153,9 +159,13 @@ pub struct RowShown {
     pub chosen: Option<usize>,
 }
 
-/// A size of the disk as the screen writes it: bytes under 1,024 as "N bytes", then "N KB",
-/// "N MB", "N GB", each a unit of 1,024 of the one before, with one decimal under 10 (as
-/// "2.5 MB") and none above.
+/// A size of the disk as the screen writes it. Under 1,024 bytes: "N bytes". Otherwise the
+/// largest of KB, MB, GB and TB (1,024 bytes, then each 1,024 of the one before) of which
+/// there is at least one; the number in it rounded to one decimal, half away from zero;
+/// when that is below 10, written with its decimal, a decimal of 0 dropped; else rounded to
+/// a whole number. So: 0 "0 bytes", 1,023 "1023 bytes", 1,024 "1 KB", 2,560 "2.5 KB", 4,096
+/// "4 KB", 2,621,440 "2.5 MB", 2,629,632 "2.5 MB", 10,485,760 "10 MB", 3,221,225,472
+/// "3 GB".
 pub fn size_words(bytes: u64) -> String {
     let _ = bytes;
     todo!("a size in words, as the doc says")

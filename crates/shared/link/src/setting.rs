@@ -67,7 +67,7 @@ pub enum ThemeChoice {
     System,
     /// The theme of this name, whatever the system's setting: `Light` and `Dark` are the
     /// two the app is built with. A name no theme of the Window has is drawn as
-    /// [`ThemeChoice::System`]: a later version may have kept a theme this one lacks.
+    /// [`ThemeChoice::System`]: a name this build has no theme for.
     Named(String),
 }
 
