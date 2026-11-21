@@ -550,6 +550,66 @@ fn an_ask_left_waiting_when_its_server_was_stopped_is_answered_by_text_match_and
 }
 
 #[test]
+fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_match_and_marked() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def alpha\nuse alpha\n"),
+            ("notes.txt", "milk\n"),
+        ],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+    let pid = running
+        .wait_state(&ws, "standin", None, DEADLINE, |state| {
+            state.state == State::Ready
+        })
+        .pid
+        .expect("a ready server runs");
+
+    // A hover the server does not answer, because it is stopped. The barrier, an ask the
+    // Navigator answers by itself, is handled after the hover: when it is told, the hover
+    // was handled and nothing answered it.
+    signal(pid, libc::SIGSTOP);
+    running.ask(Ask::Hover {
+        id: AskId(100),
+        place: place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0),
+    });
+    running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert!(
+        !running
+            .told
+            .iter()
+            .any(|told| answered_id(told) == Some(AskId(100))),
+        "the stopped server answered: {:#?}",
+        running.told
+    );
+
+    // The workspace goes, and its server with it. No ask follows: the answer comes with the
+    // end of the server, and nothing else.
+    running.ask(Ask::Workspaces(vec![]));
+    let told = answers_to(&mut running, &[AskId(100)]).remove(0);
+    let Told::Hover { answer, .. } = told else {
+        panic!("a hover was answered by {told:?}");
+    };
+    assert_eq!(
+        answer,
+        Answered {
+            value: Some("main.sil:1: def alpha".to_owned()),
+            guessed: true
+        }
+    );
+    assert!(!is_alive(pid), "the stopped server was not ended");
+    running.end();
+}
+
+#[test]
 fn a_file_outside_the_worktree_is_asked_about_by_its_absolute_path() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");

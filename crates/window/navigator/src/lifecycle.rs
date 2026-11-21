@@ -39,8 +39,10 @@
 //!    downloaded version's folder of that server. Ready at [`ServerEvent::Ready`]. A start
 //!    that fails, an exit before the server was ready, and an exit after it, are each a
 //!    failure of that candidate: the next one is tried (FR-061). `answers::server_gone`
-//!    hears of the exit of a server that had been ready, the only kind a request was ever
-//!    sent to; one that exited before it was ready has no ask to answer.
+//!    hears of the exit of a server that had been ready, and of its end when this module
+//!    stops it itself ([`stop`], [`search_again`], a download that takes its key's place):
+//!    a ready server is the only kind a request was ever sent to, and one that ended before
+//!    it was ready has no ask to answer.
 //! 4. None left: `search::when_none`, missing with or without the offer.
 //!
 //! # Where a key stands
@@ -598,16 +600,23 @@ fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return false;
     };
-    end_server(&mut keyed);
+    if end_server(&mut keyed) {
+        answers::server_gone(core, key);
+    }
     true
 }
 
 /// Stops the server of the key's phase, or kills the trial run that is on its way, if
 /// there is one, and waits for its process to be reaped; the phase is none left after.
-fn end_server(keyed: &mut Keyed) {
+/// Gives whether the server that ended was a ready one, the only kind a request was ever
+/// sent to: the caller then hands the key to `answers::server_gone`, once the key stands
+/// as it will after the stop.
+fn end_server(keyed: &mut Keyed) -> bool {
     match std::mem::replace(&mut keyed.phase, Phase::NoneLeft) {
-        Phase::Starting { running } | Phase::Ready { running } => {
+        Phase::Starting { running } => running.server.stop(STOP_DEADLINE),
+        Phase::Ready { running } => {
             running.server.stop(STOP_DEADLINE);
+            return true;
         }
         Phase::Trying { process, .. } => {
             // Taken out first, so that the thread that waits for it finds it gone and the
@@ -620,6 +629,7 @@ fn end_server(keyed: &mut Keyed) {
         }
         Phase::NoneLeft | Phase::Downloading { .. } => {}
     }
+    false
 }
 
 /// The keys of the row `language` whose state is missing with an offer, each with it.
@@ -648,11 +658,15 @@ pub(crate) fn updating(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
 /// Shows `key` as [`State::Downloading`] with `offer` until it is searched again, and
 /// publishes.
 pub(crate) fn downloading(core: &mut Core, key: &ServerKey, offer: Offer) {
-    if let Some(keyed) = core.life.keys.get_mut(key) {
-        end_server(keyed);
-        keyed.phase = Phase::Downloading { offer };
-        publish(core);
+    let Some(keyed) = core.life.keys.get_mut(key) else {
+        return;
+    };
+    let was_ready = end_server(keyed);
+    keyed.phase = Phase::Downloading { offer };
+    if was_ready {
+        answers::server_gone(core, key);
     }
+    publish(core);
 }
 
 /// Searches again for `key`, from step 1 of the module doc, with the root it was ensured
@@ -670,7 +684,9 @@ fn restart(core: &mut Core, key: &ServerKey) {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return;
     };
-    end_server(&mut keyed);
+    if end_server(&mut keyed) {
+        answers::server_gone(core, key);
+    }
     core.life.generation += 1;
     keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
