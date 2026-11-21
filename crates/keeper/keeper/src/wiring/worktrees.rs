@@ -61,13 +61,14 @@
 //! (the folder's parent is there, nothing but a folder is at it, no worktree of the
 //! repository has come to lie around it since) is `plan_worktree`'s.
 
-use std::path::Path;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, PoisonError, Weak};
 
-use yaar_link::{Fact, Refusal, Reply, RepositoryId, TerminalSize};
+use yaar_link::{Fact, Program, Refusal, Reply, RepositoryId, TerminalSize};
+use yaar_workspaces::Planned;
 
-use crate::Window;
-use crate::wiring::{Answered, Kept, Parts};
+use crate::wiring::{Answered, Kept, Outcome, Parts, list, refusal};
+use crate::{Shared, Window, lock};
 
 impl Parts {
     /// `Request::CreateWorktree`, as the module doc says: the refusal at once, or the work
@@ -86,9 +87,118 @@ impl Parts {
         agent: &str,
         size: TerminalSize,
     ) -> Answered {
-        let _ = (kept, window, repository, from, branch, agent, size);
-        todo!("check the agent, plan, then the work of the module doc")
+        // The agent first: a CLI the app has no Adapter for is no reason to run git.
+        if !self.agents.supported().iter().any(|cli| cli.agent == agent) {
+            return Answered::Now(Outcome::failed(format!(
+                "there is no agent CLI named {agent}"
+            )));
+        }
+        let repository = yaar_workspaces::RepositoryId::new(repository.as_str());
+        // Read here, under the parts, and not in the work: the setting is as it was when
+        // the user asked.
+        let folder = match named_folder(kept, &repository) {
+            Ok(folder) => folder,
+            Err(reason) => return Answered::Now(Outcome::failed(reason)),
+        };
+        let planned =
+            match kept
+                .workspaces
+                .plan_worktree(&repository, from, branch, folder.as_deref())
+            {
+                Ok(planned) => planned,
+                Err(error) => return Answered::Now(refused(refusal(error))),
+            };
+        // The work owns everything it uses: it runs after the parts are let go.
+        let (shared, window, agent) = (self.shared.clone(), Arc::clone(window), agent.to_owned());
+        Answered::Later(Box::new(move || {
+            make(&planned, &shared, &window, agent, size)
+        }))
     }
+}
+
+/// Steps 2 to 4 of the module doc.
+fn make(
+    planned: &Planned,
+    shared: &Weak<Shared>,
+    window: &Arc<Window>,
+    agent: String,
+    size: TerminalSize,
+) -> Outcome {
+    // Step 2: the user's own git, with nothing of the Keeper held.
+    let added = match planned.add() {
+        Ok(added) => added,
+        Err(error) => return refused(refusal(error)),
+    };
+    // Step 3: the Keeper's turn, then its parts again, which are gone when it is leaving.
+    let leaving = || {
+        let _ = planned.take_away(&added);
+        Outcome::failed("the Keeper is leaving")
+    };
+    let Some(shared) = shared.upgrade() else {
+        return leaving();
+    };
+    let _turn = lock(&shared.turn);
+    let held = shared.parts.read().unwrap_or_else(PoisonError::into_inner);
+    let Some(parts) = held.as_ref() else {
+        return leaving();
+    };
+    let Some(kept) = parts.kept() else {
+        return leaving();
+    };
+    let created = match kept.workspaces.open_added(planned, added) {
+        Ok(created) => created,
+        // Taken away again by `open_added`.
+        Err(error) => return refused(refusal(error)),
+    };
+    let workspace = yaar_link::WorkspaceId::new(created.workspace.as_str());
+    let opened = parts.open_terminal(kept, window, &workspace, &Program::Agent { agent }, size);
+    let (terminal, release) = match opened {
+        Ok((Reply::TerminalOpened { terminal }, release)) => (terminal, release),
+        Ok(_) => unreachable!("opening a terminal is answered by the terminal"),
+        Err(refused_by_the_dock) => {
+            // Nothing half made is left: the worktree and its branch go again.
+            let _ = kept.workspaces.remove_created(&created);
+            return refused(refused_by_the_dock);
+        }
+    };
+    // Told under the turn, so that the list takes its place among the others told, and
+    // before the reply, which is queued once this returns.
+    if let Ok(repositories) = list(&kept.workspaces) {
+        shared.tell(&[Fact::Workspaces(repositories)]);
+    }
+    Outcome {
+        reply: Ok(Reply::WorktreeCreated {
+            workspace,
+            terminal,
+        }),
+        facts: Vec::new(),
+        then: Some(release),
+    }
+}
+
+/// An outcome that is a refusal and tells nothing.
+fn refused(refusal: Refusal) -> Outcome {
+    Outcome {
+        reply: Err(refusal),
+        facts: Vec::new(),
+        then: None,
+    }
+}
+
+/// The folder the user named for the worktrees of `repository`: none when no setting names
+/// one or the setting is none. The sentence of the failure when the Store cannot be read.
+fn named_folder(
+    kept: &Kept,
+    repository: &yaar_workspaces::RepositoryId,
+) -> Result<Option<PathBuf>, String> {
+    let settings = kept.store.settings().map_err(|error| error.to_string())?;
+    Ok(settings.into_iter().find_map(|setting| match setting {
+        yaar_store::Setting::WorktreesFolder {
+            repository: of,
+            folder,
+        } if of == *repository => folder,
+        _ => None,
+    }))
 }
 
 /// `Request::SetSetting` of `Setting::WorktreesFolder`: checks and keeps the folder the
@@ -101,6 +211,30 @@ pub(crate) fn set_worktrees_folder(
     folder: Option<&Path>,
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
-    let _ = (kept, repository, folder, facts);
-    todo!("check the folder, keep it and tell it, as the module doc says")
+    let failed = |error: &dyn std::fmt::Display| Refusal::Failed {
+        reason: error.to_string(),
+    };
+    let held = yaar_workspaces::RepositoryId::new(repository.as_str());
+    let known = kept.store.repositories().map_err(|e| failed(&e))?;
+    if !known.iter().any(|known| known.id == held) {
+        return Err(Refusal::Failed {
+            reason: format!("the repository {repository} is not known"),
+        });
+    }
+    if let Some(folder) = folder {
+        kept.workspaces
+            .check_worktrees_folder(&held, folder)
+            .map_err(refusal)?;
+    }
+    kept.store
+        .set_setting(&yaar_store::Setting::WorktreesFolder {
+            repository: held,
+            folder: folder.map(Path::to_owned),
+        })
+        .map_err(|e| failed(&e))?;
+    facts.push(Fact::SettingChanged(yaar_link::Setting::WorktreesFolder {
+        repository: repository.clone(),
+        folder: folder.map(Path::to_owned),
+    }));
+    Ok(Reply::Done)
 }
