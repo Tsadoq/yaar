@@ -265,7 +265,7 @@ fn methods(frames: &[Value]) -> Vec<&str> {
 fn is_stopped(pid: u32) -> bool {
     std::fs::read_to_string(format!("/proc/{pid}/stat"))
         .ok()
-        .and_then(|stat| Some(stat.rsplit_once(')')?.1.trim_start().chars().next()?))
+        .and_then(|stat| stat.rsplit_once(')')?.1.trim_start().chars().next())
         .is_some_and(|state| state == 'T')
 }
 
@@ -1115,6 +1115,62 @@ fn a_server_dropped_is_killed_and_reaped() {
         other => panic!("expected the exit of a process that was killed, got {other:?}"),
     }
     assert!(!is_alive(pid));
+}
+
+/// A server that does not end when its input closes, as rust-analyzer does not: `sleep`
+/// shows the kernel's part alone, which the stand-in would hide by ending at the end of its
+/// input.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_server_ends_when_the_window_that_started_it_is_killed() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let this_test = "a_server_ends_when_the_window_that_started_it_is_killed";
+    if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
+        // The Window: it starts the server, says who it is and where its scratch is, and
+        // waits to be killed; the end of its input, which a failed test leaves, ends it.
+        let scratch = Scratch::new();
+        let (root, _) = project(&scratch, "def a\n");
+        let mut launch = launch(&scratch, &root, &[]);
+        launch.program = PathBuf::from("/bin/sleep");
+        launch.args = vec!["600".to_owned()];
+        let run = Run::start(launch);
+        println!("SERVER {} {}", run.server.pid(), scratch.root.display());
+        let _ = std::io::stdin().read_line(&mut String::new());
+        return;
+    }
+
+    let mut window = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", this_test, "--nocapture", "--test-threads=1"])
+        .env("YAAR_WINDOW_CHILD", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the test again as a Window of its own");
+    let output = window.stdout.take().expect("the output was piped");
+    let said = BufReader::new(output)
+        .lines()
+        .map_while(Result::ok)
+        // The test harness has started a line of its own, so the sentence is not first.
+        .find_map(|line| line.split_once("SERVER ").map(|(_, said)| said.to_owned()))
+        .expect("the Window said which server it started");
+    let (pid, scratch) = said.split_once(' ').expect("a process and a folder");
+    let pid: u32 = pid.parse().expect("a process number");
+    assert!(is_alive(pid), "the server runs while its Window does");
+
+    window.kill().expect("kill the Window");
+    window.wait().expect("reap the Window");
+    let end = Instant::now() + DEADLINE;
+    while is_alive(pid) {
+        if Instant::now() >= end {
+            kill(pid);
+            panic!("the server outlived the Window that started it");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The Window was killed, so its scratch was not removed.
+    let _ = std::fs::remove_dir_all(scratch);
 }
 
 /// The time a stop gives a server to end by itself, in tests that expect it to.

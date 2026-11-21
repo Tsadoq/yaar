@@ -525,16 +525,15 @@ fn end_with_the_window(command: &mut Command) {
     // only, which are safe there, and touches no memory of this process's.
     unsafe {
         command.pre_exec(move || {
-            // SAFETY: as above.
-            unsafe {
-                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                // The parent may have ended before the request took effect: its signal
-                // would never come.
-                if libc::getppid() != parent {
-                    libc::_exit(1);
-                }
+            // The closure is part of the unsafe block above, whose comment covers these
+            // calls.
+            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // The parent may have ended before the request took effect: its signal
+            // would never come.
+            if libc::getppid() != parent {
+                libc::_exit(1);
             }
             Ok(())
         });
