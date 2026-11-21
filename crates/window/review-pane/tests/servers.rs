@@ -10,14 +10,17 @@ use std::path::PathBuf;
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use yaar_diff::Row;
-use yaar_link::{Fact, FileStatus, RepositoryId, Setting};
+use yaar_link::{
+    Fact, FileStatus, History, HistoryEntry, Reply, RepositoryId, Request, SessionId, Setting,
+    TurnId,
+};
 use yaar_navigator::{Ask, Language, Offer, ServerState, State, Told};
 use yaar_review_pane::servers::{ALLOW, DOWNLOAD, REFUSE, UPDATE};
 use yaar_review_pane::{PaneRow, Position};
 
 use common::navigator::NavigatorEnd;
 use common::{
-    COMMIT, Stage, bounds_of_row, drawn, file, id, open, since_main, texts, wait_for_files,
+    COMMIT, Stage, bounds_of_row, commit, drawn, file, id, open, since_main, texts, wait_for_files,
     wait_until, workspace,
 };
 
@@ -306,14 +309,22 @@ fn the_download_control_goes_when_the_offer_does_and_the_download_is_said_while_
     );
     assert!(!has_control("download", &mut cx));
 
-    // The barrier: the next ask the test causes through the same path is the first the
-    // pane made since the key with nothing to download, so that key asked nothing.
-    navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
+    // The barrier: a key pressed on a line of another language asks for that language's
+    // download. The asks come in the order they were made, so when this one is the first
+    // the Navigator hears, the key with nothing to download asked nothing before it.
+    navigator.tell(
+        Told::Servers(vec![
+            rust(missing_with_offer()),
+            python(missing_with_offer()),
+        ]),
+        &mut cx,
+    );
+    go_to(&stage, "app/main.py", Line::Added, &mut cx);
     cx.simulate_keystrokes("shift-i");
     assert_eq!(
         navigator.ask(&mut cx),
         Ask::Download {
-            language: "rust".to_owned()
+            language: "python".to_owned()
         }
     );
     assert_eq!(navigator.asked_so_far(&mut cx), Vec::new());
@@ -335,28 +346,31 @@ fn the_update_is_offered_on_the_line_of_a_ready_server_that_runs_an_older_versio
         Some("No language server update waits".to_owned())
     );
 
+    // The barrier: the update of another language is the first ask the Navigator hears
+    // if the key with nothing to update asked nothing, since asks come in the order they
+    // were made.
     let older = ServerState {
         update: Some(newer()),
-        ..rust(State::Ready)
+        ..python(State::Ready)
     };
-    navigator.tell(Told::Servers(vec![older]), &mut cx);
-    assert_line("ready", "Rust: ready", &mut cx);
+    navigator.tell(Told::Servers(vec![rust(State::Ready), older]), &mut cx);
+    go_to(&stage, "app/main.py", Line::Added, &mut cx);
+    assert_line("ready", "Python: ready", &mut cx);
     assert!(drawn("review-servers-update:Update to 2026-12-01", &mut cx).is_some());
     assert_eq!(UPDATE, "Update to");
     let at = drawn("review-servers-update", &mut cx).unwrap().center();
     cx.simulate_click(at, Modifiers::none());
-    // The barrier: the key with nothing to update asked nothing, since this is the first.
     assert_eq!(
         navigator.ask(&mut cx),
         Ask::Update {
-            language: "rust".to_owned()
+            language: "python".to_owned()
         }
     );
     cx.simulate_keystrokes("shift-u");
     assert_eq!(
         navigator.ask(&mut cx),
         Ask::Update {
-            language: "rust".to_owned()
+            language: "python".to_owned()
         }
     );
     assert_eq!(navigator.asked_so_far(&mut cx), Vec::new());
@@ -604,6 +618,178 @@ fn the_line_follows_the_file_of_the_line_the_reviewer_is_on_and_a_removed_line_s
             .read_with(&cx, |pane, cx| pane.server_on_screen(cx)),
         None
     );
+}
+
+/// The id of a commit or a state that is this digit forty times.
+fn version(digit: char) -> String {
+    digit.to_string().repeat(40)
+}
+
+/// The server of the old side of the change, read in `version`.
+fn old_side_in(version: &str, of: ServerState) -> ServerState {
+    ServerState {
+        old_side: Some(version.to_owned()),
+        ..of
+    }
+}
+
+#[gpui_kit::test]
+fn a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_version_it_names(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let comparison = since_main(
+        vec![commit('b', "Edit the story")],
+        vec![file("story.txt", FileStatus::Modified)],
+    );
+    stage
+        .keeper
+        .show(&comparison, |_| texts("a\nb\n", "a\nc\n"), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    // A history of a commit, a turn and a commit: the turn is between the first commit
+    // and the state recorded at its end, none of which is what the changes are counted
+    // from.
+    let (first, turn_end) = (version('1'), version('5'));
+    let history = History {
+        workspace: id('1'),
+        start: Some(COMMIT.to_owned()),
+        entries: vec![
+            HistoryEntry::Commit(commit('1', "First")),
+            HistoryEntry::Turn {
+                turn: TurnId::new("a".repeat(32)),
+                session: SessionId::new("5".repeat(32)),
+                state: Some(turn_end.clone()),
+            },
+            HistoryEntry::Commit(commit('2', "Second")),
+        ],
+    };
+    stage.keeper.set_history(history.clone());
+    stage
+        .keeper
+        .tell(Fact::Workspaces(vec![common::repository(vec![workspace(
+            '1', "feature",
+        )])]));
+    wait_until(&mut cx, "the history in the pane", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&history))
+    });
+    let navigator = NavigatorEnd::connect(&stage.models, &mut cx);
+    navigator.tell(Told::Languages(languages()), &mut cx);
+
+    // Select the turn: the change between the first commit and the end of the turn.
+    let at = drawn("review-history-1", &mut cx)
+        .expect("the turn is drawn in the tree")
+        .center();
+    cx.simulate_click(at, Modifiers::none());
+    let asked = stage.keeper.expect(
+        Request::CompareVersions {
+            workspace: id('1'),
+            from: first.clone(),
+            to: Some(turn_end.clone()),
+        },
+        &mut cx,
+    );
+    stage.keeper.reply(
+        asked,
+        Ok(Reply::Compared(vec![file("turn.rs", FileStatus::Modified)])),
+    );
+    let asked = stage.keeper.expect(
+        Request::ReadVersions {
+            workspace: id('1'),
+            old: Some(first.clone()),
+            old_path: PathBuf::from("turn.rs"),
+            new: Some(turn_end.clone()),
+            path: PathBuf::from("turn.rs"),
+        },
+        &mut cx,
+    );
+    stage
+        .keeper
+        .reply(asked, texts("before\n", "after\n").map(Reply::File));
+    wait_until(&mut cx, "the files of the turn", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.rows()
+                .iter()
+                .any(|row| matches!(row, PaneRow::Diff { path, .. } if path == &PathBuf::from("turn.rs")))
+        })
+    });
+
+    // The old side of this change is the first commit, not the commit the changes of
+    // the branch are counted from: the two have different states.
+    navigator.tell(
+        Told::Servers(vec![
+            rust(State::Starting),
+            old_side_in(&first, rust(State::Ready)),
+            old_side_in(COMMIT, rust(State::Missing { offer: None })),
+        ]),
+        &mut cx,
+    );
+    go_to(&stage, "turn.rs", Line::Removed, &mut cx);
+    assert_line("ready", "Rust: ready", &mut cx);
+    let on_screen = stage
+        .pane
+        .read_with(&cx, |pane, cx| pane.server_on_screen(cx))
+        .expect("a server is on screen");
+    assert_eq!(on_screen.old_side.as_deref(), Some(first.as_str()));
+    // The added line is read in the new side of the files on disk.
+    go_to(&stage, "turn.rs", Line::Added, &mut cx);
+    assert_line(
+        "starting",
+        "Rust: starting; names are found by text match meanwhile",
+        &mut cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_removed_line_of_a_renamed_file_shows_the_server_of_the_language_of_its_old_name(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    let changes = since_main(
+        Vec::new(),
+        vec![file(
+            "src/new.rs",
+            FileStatus::Renamed {
+                from: PathBuf::from("app/old.py"),
+            },
+        )],
+    );
+    stage.keeper.show(
+        &changes,
+        |_| texts("gone\nkeep\n", "keep\nadded\n"),
+        &mut cx,
+    );
+    wait_for_files(&stage.pane, &mut cx);
+    let navigator = NavigatorEnd::connect(&stage.models, &mut cx);
+    navigator.tell(Told::Languages(languages()), &mut cx);
+    // The old side was Python and the new side is Rust, with a state each, and the
+    // other language's old side told as well, with another state.
+    navigator.tell(
+        Told::Servers(vec![
+            rust(State::Ready),
+            old_side(python(State::Starting)),
+            old_side(rust(State::Missing { offer: None })),
+        ]),
+        &mut cx,
+    );
+
+    go_to(&stage, "src/new.rs", Line::Removed, &mut cx);
+    assert_line(
+        "starting",
+        "Python: starting; names are found by text match meanwhile",
+        &mut cx,
+    );
+    let on_screen = stage
+        .pane
+        .read_with(&cx, |pane, cx| pane.server_on_screen(cx))
+        .expect("a server is on screen");
+    assert_eq!(
+        (on_screen.language.as_str(), on_screen.old_side.as_deref()),
+        ("python", Some(COMMIT))
+    );
+    go_to(&stage, "src/new.rs", Line::Added, &mut cx);
+    assert_line("ready", "Rust: ready", &mut cx);
 }
 
 #[gpui_kit::test]
