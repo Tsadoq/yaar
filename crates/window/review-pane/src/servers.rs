@@ -7,8 +7,11 @@
 //! The code on screen is the file of the line the reviewer is on, or of the file view's
 //! line: its server is `Navigation::state_for` of the workspace on screen, that file, and
 //! for a removed line the version its old side is read in (the version a change is counted
-//! from, as a comment on that line records it). The pane observes the model and draws the
-//! line again at each change.
+//! from, as a comment on that line records it). The one exception is the file view's file
+//! of the worktree or of an export: it is read in the workspace its kind names, which may be
+//! another workspace of the repository, so that the line names the server that answers the
+//! file view's asks. A file outside the worktree is read in the workspace on screen. The
+//! pane observes the model and draws the line again at each change.
 //!
 //! # The line
 //!
