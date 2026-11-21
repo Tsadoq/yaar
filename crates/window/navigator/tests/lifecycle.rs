@@ -803,7 +803,18 @@ fn a_server_that_dies_after_it_was_ready_is_passed_over_for_the_next_candidate()
         state.state == State::Ready && state.program.as_deref() == Some(good.as_path())
     });
     assert!(is_alive(ready.pid.unwrap()));
-    // The first became ready, and ended; the second started after it.
+    // The first became ready, and ended; the second started after it. The Navigator shows
+    // the second ready when it was answered `initialize`, and the stand-in logs its own
+    // `ready` on the `initialized` that follows: that line is waited for, a repeated look at
+    // one fact that stays true once it is.
+    let until = Instant::now() + DEADLINE;
+    while events(&log, "ready").len() < 2 {
+        assert!(
+            Instant::now() < until,
+            "the second server did not log that it was ready in {DEADLINE:?}"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
     assert_eq!(events(&log, "ready").len(), 2);
     assert_eq!(events(&log, "exit")[0]["code"], 2);
     running.end();
