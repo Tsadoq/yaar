@@ -621,7 +621,8 @@ fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_ma
 }
 
 #[test]
-fn an_ask_waiting_at_a_server_when_the_port_is_dropped_is_not_answered_and_the_server_is_gone() {
+fn an_ask_waiting_at_a_stopped_server_when_the_port_is_dropped_leaves_the_navigator_ended_and_the_server_gone()
+ {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
     let repo = scratch.repository(
@@ -662,8 +663,10 @@ fn an_ask_waiting_at_a_server_when_the_port_is_dropped_is_not_answered_and_the_s
         running.told
     );
 
-    // The port is dropped: the Navigator ends, which stops the server, and answers nothing
-    // on its way out. Nobody is left to read an answer.
+    // The port is dropped: the Navigator ends, which stops the server it could not get an
+    // answer from, and tells no answer on its way out. That it also starts no text search
+    // for the ask is not seen here: such a search would be answered by an event of a loop
+    // that has ended, so nothing differs at the port.
     let told = running.end_and_read();
     assert!(
         !told
