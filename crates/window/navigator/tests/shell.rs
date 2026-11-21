@@ -23,10 +23,6 @@ use support::*;
 use yaar_navigator::shell::{COMMAND, LoginShell, MARKER, ShellError, take};
 use yaar_navigator::{Ask, State, Told, WorkspaceRoot};
 
-/// A deadline short enough for a test of a shell that outlasts it, and long enough for a
-/// script to have started on a loaded machine.
-const SHORT: Duration = Duration::from_secs(5);
-
 /// `path` quoted for a `/bin/sh` script.
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
@@ -91,15 +87,31 @@ fn read_pipe(pipe: &Path, what: &str) -> String {
 
 /// Waits until no process `pid` runs. A process that lost its parent is reaped by the
 /// system's first process, in its own time, and has no event to wait for, so this looks
-/// again at the one fact until it holds, up to [`DEADLINE`].
+/// again at the one fact until it holds, up to [`DEADLINE`]. A process still there is killed
+/// before the test fails, so that a failure leaves nothing running.
 fn wait_until_gone(pid: u32, what: &str) {
     let until = Instant::now() + DEADLINE;
     while is_alive(pid) {
-        assert!(
-            Instant::now() < until,
-            "{what} (process {pid}) was still there after {DEADLINE:?}"
-        );
+        if Instant::now() >= until {
+            // SAFETY: a signal to a process of this test's own making.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            panic!("{what} (process {pid}) was still there after {DEADLINE:?}");
+        }
         std::thread::park_timeout(Duration::from_millis(2));
+    }
+}
+
+/// Kills the processes it holds when a test fails, so that a failure leaves nothing running.
+struct KillOnFailure(Vec<u32>);
+
+impl Drop for KillOnFailure {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            for pid in &self.0 {
+                // SAFETY: a signal to a process of this test's own making.
+                unsafe { libc::kill(*pid as libc::pid_t, libc::SIGKILL) };
+            }
+        }
     }
 }
 
@@ -289,40 +301,52 @@ fn a_job_a_start_up_file_left_in_the_background_does_not_hold_the_output_open() 
 fn a_shell_that_outlasts_its_deadline_is_killed_with_everything_it_started() {
     let scratch = Scratch::new();
     let base = scratch.environment();
-    let (shell_pid, job_pid) = (scratch.root.join("shell.pid"), scratch.root.join("job.pid"));
+    let pids = scratch.root.join("pids");
+    make_pipe(&pids);
+    // The script says its own process and its job's through the pipe, which it blocks on
+    // until the test reads: the numbers are in hand before the deadline is of any matter.
     let shell = shell_of(
         &scratch,
         "shell",
         &format!(
-            "echo $$ > {}\n\
-             sleep 600 &\n\
-             echo $! > {}\n\
+            "sleep 600 &\n\
+             echo \"$$ $!\" > {}\n\
              wait\n",
-            quoted(&shell_pid),
-            quoted(&job_pid)
+            quoted(&pids)
         ),
-        SHORT,
+        DEADLINE,
     );
 
-    let started = Instant::now();
-    let outcome = take(&shell, &base);
-    let took = started.elapsed();
+    let (done, outcome) = mpsc::channel();
+    std::thread::spawn({
+        let base = base.clone();
+        move || {
+            let started = Instant::now();
+            let result = take(&shell, &base);
+            let _ = done.send((result, started.elapsed()));
+        }
+    });
+    let said = read_pipe(&pids, "the shell to say its process and its job's");
+    let mut numbers = said
+        .split_whitespace()
+        .map(|number| number.parse::<u32>().expect("a process number"));
+    let (shell_pid, job_pid) = (
+        numbers.next().expect("the shell's process"),
+        numbers.next().expect("the job's process"),
+    );
+    let _cleanup = KillOnFailure(vec![shell_pid, job_pid]);
+    let (result, took) = outcome
+        .recv_timeout(2 * DEADLINE)
+        .unwrap_or_else(|_| panic!("the call did not end within twice its deadline"));
 
-    assert_eq!(outcome, Err(ShellError::Deadline(SHORT)));
+    assert_eq!(result, Err(ShellError::Deadline(DEADLINE)));
     assert!(
-        took >= SHORT,
-        "the call ended after {took:?}, before its deadline of {SHORT:?}"
+        took >= DEADLINE,
+        "the call ended after {took:?}, before its deadline of {DEADLINE:?}"
     );
-    let read = |file: &Path| -> u32 {
-        std::fs::read_to_string(file)
-            .unwrap_or_else(|_| panic!("the script did not start within {SHORT:?}"))
-            .trim()
-            .parse()
-            .expect("a process number")
-    };
     // The shell is reaped before the call returns; its job is the group's other member.
-    assert!(!is_alive(read(&shell_pid)), "the shell is still there");
-    wait_until_gone(read(&job_pid), "the shell's background job");
+    assert!(!is_alive(shell_pid), "the shell is still there");
+    wait_until_gone(job_pid, "the shell's background job");
 }
 
 // ---------------------------------------------------------------------------------------
@@ -448,6 +472,23 @@ fn root_of(id: &yaar_link::WorkspaceId, repository: char, repo: &Repo) -> Worksp
     }
 }
 
+/// Waits, up to [`DEADLINE`], until the stand-in's log holds a line of `event`, looking
+/// again at the one file until it does; gives that line.
+fn wait_logged(path: &Path, event: &str) -> Value {
+    let until = Instant::now() + DEADLINE;
+    loop {
+        if let Some(line) = log_of(path).into_iter().find(|line| line["event"] == event) {
+            return line;
+        }
+        assert!(
+            Instant::now() < until,
+            "the log {} held no `{event}` line after {DEADLINE:?}",
+            path.display()
+        );
+        std::thread::park_timeout(Duration::from_millis(2));
+    }
+}
+
 /// Every line of the stand-in's log, as the JSON it is; none when it is not there.
 fn log_of(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
@@ -499,12 +540,8 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         "the shell runs once, as the launchers run it"
     );
 
-    // The stand-in wrote its `start` line before it answered the request that made it
-    // ready, and the script wrote the environment before it became the stand-in.
-    let started = log_of(&rig.log)
-        .into_iter()
-        .find(|line| line["event"] == "start")
-        .expect("the stand-in's start line");
+    // The stand-in's `start` line, waited for: it is written by a process of its own.
+    let started = wait_logged(&rig.log, "start");
     assert_eq!(started["env"]["STANDIN_FROM_SHELL"], "yes");
     assert_eq!(
         started["env"]["STANDIN_KEPT_BY_BASE"], "base",
@@ -661,4 +698,66 @@ fn a_shell_that_outlasts_its_deadline_leaves_the_windows_own_and_is_gone() {
     // The call reaped the shell before it reported, and the report came before this state.
     assert!(!is_alive(pid), "the shell outlived its deadline");
     running.end();
+}
+
+#[test]
+fn the_programs_are_looked_for_on_the_windows_search_path_before_the_shells_entries() {
+    let rig = Rig::new();
+    // Both folders hold the stand-in: the Window's own is named on its path, the shell's is
+    // put on the path by the shell. The one found says which comes first.
+    let window_bin = rig.scratch.root.join("window-bin");
+    rig.scratch.put_standin(&window_bin, "standin-lsp");
+    let repo = rig.project("project");
+    let ws = workspace_id('1');
+    let mut config = rig.config(rig.shell(DEADLINE));
+    for (name, value) in &mut config.environment {
+        if name == "PATH" {
+            let entries = std::iter::once(window_bin.clone()).chain(std::env::split_paths(value));
+            *value = std::env::join_paths(entries).expect("a search path");
+        }
+    }
+    let mut running = Running::start(config);
+    show_all(&mut running, vec![root_of(&ws, '1', &repo)], &ws);
+
+    let ready = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+
+    assert_eq!(
+        ready.program,
+        Some(window_bin.join("standin-lsp")),
+        "the Window's search path comes before the shell's entries"
+    );
+    assert!(
+        !rig.env_seen.exists(),
+        "the stand-in of the shell's folder was run"
+    );
+    running.end();
+}
+
+#[test]
+fn a_shell_still_running_when_the_navigator_ends_is_killed_with_it() {
+    let rig = Rig::new();
+    let pipe = rig.scratch.root.join("shell.pid");
+    make_pipe(&pipe);
+    // Its own deadline lies past the wait below, so that only the end of the Navigator can
+    // be what ends it within the wait.
+    let shell = shell_of(
+        &rig.scratch,
+        "slow-shell",
+        &format!("echo $$ > {}\nexec sleep 600\n", quoted(&pipe)),
+        4 * DEADLINE,
+    );
+    let repo = rig.project("project");
+    let ws = workspace_id('1');
+    let mut running = Running::start(rig.config(shell));
+    show_all(&mut running, vec![root_of(&ws, '1', &repo)], &ws);
+    let pid: u32 = read_pipe(&pipe, "the shell to say its process")
+        .trim()
+        .parse()
+        .expect("a process number");
+
+    running.end();
+
+    wait_until_gone(pid, "the shell");
 }

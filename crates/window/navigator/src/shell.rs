@@ -28,15 +28,20 @@
 //! - in a session of its own (`setsid` before `exec`), with its standard input from
 //!   `/dev/null` and its standard error thrown away, so that it can neither take a terminal
 //!   nor wait for a key;
-//! - for at most [`LoginShell::deadline`] of real time: past it, its whole process group is
-//!   killed (`kill(-pid, SIGKILL)`) and reaped, and the take has failed.
+//! - for at most [`LoginShell::deadline`] of real time, counted from its start: past it, its
+//!   whole process group is killed (`kill(-pid, SIGKILL)`) and reaped, and the take has
+//!   failed;
+//! - never for longer than the Navigator lives: the Navigator's end kills the group of a
+//!   shell still running ([`Group`]), and on Linux the kernel does when the Window dies.
 //!
-//! Its standard output is read to its end on a second thread while the first waits for the
-//! shell with a polling `try_wait` up to the deadline. Once the shell has exited, its whole
-//! process group is killed at once (`kill(-pid, SIGKILL)`, an error of "no such process"
-//! being none): a job a start-up file left in the background would otherwise hold the pipe
-//! open, and the read would wait for it until the deadline. The output is then what the
-//! reading thread has once the pipe is closed.
+//! Two threads read what the shell leaves: one reads its standard output to the end, and one
+//! waits for the shell and reaps it, while the first waits on that thread's channel for what
+//! is left of the deadline. Once the shell has exited, its whole process group is killed at
+//! once (`kill(-pid, SIGKILL)`, an error of "no such process" being none): a job a start-up
+//! file left in the background would otherwise hold the pipe open, and the read would wait
+//! for it. The rest of the output is then awaited only within what is left of the deadline,
+//! for a process that left the group may hold the pipe still; past it the take fails with
+//! the deadline.
 //!
 //! [`COMMAND`] prints [`MARKER`] and then has `env -0` print every variable, each
 //! `NAME=value` and a NUL. Whatever a start-up file printed before is noise and is dropped:
@@ -76,6 +81,8 @@ use std::os::unix::ffi::OsStringExt;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -128,12 +135,62 @@ impl fmt::Display for ShellError {
     }
 }
 
+/// The process group of a shell on its way, shared between the thread that runs it and the
+/// Navigator, so that the Navigator's end can kill a shell that is still running.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Group(Arc<AtomicI32>);
+
+impl Group {
+    /// No shell yet.
+    const NONE: i32 = 0;
+    /// The Navigator ended: a shell started after this is killed as it starts.
+    const ENDED: i32 = -1;
+
+    /// Notes that the shell's group is `group`; kills it at once when the Navigator has
+    /// ended already.
+    fn started(&self, group: libc::pid_t) {
+        if self
+            .0
+            .compare_exchange(Self::NONE, group, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            kill_group(group);
+        }
+    }
+
+    /// Notes that the shell was reaped: its group number may be anybody's from now on.
+    fn reaped(&self) {
+        let _ = self
+            .0
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+                (held > Self::NONE).then_some(Self::NONE)
+            });
+    }
+
+    /// The Navigator's end: kills the shell if one runs, and any that starts later.
+    pub(crate) fn end(&self) {
+        let held = self.0.swap(Self::ENDED, Ordering::SeqCst);
+        if held > Self::NONE {
+            kill_group(held);
+        }
+    }
+}
+
 /// Runs `shell` once, as the module doc says, in the environment `base`, and gives the
 /// environment the servers run in: `base` with what the shell printed merged in, as the
 /// module doc says.
 pub fn take(
     shell: &LoginShell,
     base: &[(OsString, OsString)],
+) -> Result<Vec<(OsString, OsString)>, ShellError> {
+    take_in(shell, base, &Group::default())
+}
+
+/// [`take`], noting the shell's process group in `group` while it runs.
+pub(crate) fn take_in(
+    shell: &LoginShell,
+    base: &[(OsString, OsString)],
+    group: &Group,
 ) -> Result<Vec<(OsString, OsString)>, ShellError> {
     let started = Instant::now();
     let home = base
@@ -151,12 +208,29 @@ pub fn take(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
-    // SAFETY: `setsid` is async-signal-safe and touches no memory of the parent, as a
-    // function run between `fork` and `exec` must not.
+    #[cfg(target_os = "linux")]
+    // SAFETY: `getpid` has no preconditions.
+    let parent = unsafe { libc::getpid() };
+    // SAFETY: `setsid`, `prctl`, `getppid` and `_exit` are async-signal-safe and touch no
+    // memory of the parent, as a function run between `fork` and `exec` must not.
     unsafe {
-        command.pre_exec(|| {
+        command.pre_exec(move || {
             if libc::setsid() == -1 {
                 return Err(std::io::Error::last_os_error());
+            }
+            // On Linux the kernel kills the shell when the thread that started it ends, so
+            // that a Window that dies leaves no shell behind. The thread outlives the
+            // shell: it returns once the shell is reaped.
+            #[cfg(target_os = "linux")]
+            {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may have ended before the request took effect: its signal
+                // would never come.
+                if libc::getppid() != parent {
+                    libc::_exit(1);
+                }
             }
             Ok(())
         });
@@ -165,7 +239,8 @@ pub fn take(
         .spawn()
         .map_err(|error| ShellError::Start(error.to_string()))?;
     // The session's leader: its id is the id of the whole group.
-    let group = child.id() as libc::pid_t;
+    let id = child.id() as libc::pid_t;
+    group.started(id);
     let mut stdout = child.stdout.take().expect("the output was piped");
 
     let (output_tx, output) = mpsc::channel();
@@ -177,7 +252,7 @@ pub fn take(
             let _ = output_tx.send(bytes);
         })
         .map_err(|error| {
-            kill_group(group);
+            kill_group(id);
             let _ = child.wait();
             ShellError::Start(error.to_string())
         })?;
@@ -188,7 +263,7 @@ pub fn take(
             let _ = status_tx.send(child.wait());
         })
         .map_err(|error| {
-            kill_group(group);
+            kill_group(id);
             ShellError::Start(error.to_string())
         })?;
 
@@ -199,13 +274,15 @@ pub fn take(
             // Past its deadline: the whole group goes, and the wait returns once it is
             // reaped. The reading thread ends by itself when every holder of the pipe is
             // gone.
-            kill_group(group);
+            kill_group(id);
             let _ = status.recv();
+            group.reaped();
             return Err(ShellError::Deadline(shell.deadline));
         }
     };
     // Whatever the shell left in the background must not hold the pipe open.
-    kill_group(group);
+    group.reaped();
+    kill_group(id);
     let ended = ended.map_err(|error| ShellError::Start(error.to_string()))?;
     if !ended.success() {
         return Err(ShellError::Status(ended.code()));

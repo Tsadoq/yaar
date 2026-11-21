@@ -73,7 +73,8 @@
 //! `NavigatorConfig::environment` and `NavigatorConfig::search_path`, notes the shell as
 //! taken, and searches every held key, in the order they were held, as a first search does.
 //! A held key stopped meanwhile is forgotten and not searched. With `login_shell` none, or
-//! the shell taken, no key is ever held.
+//! the shell taken, no key is ever held. A shell still running when [`close`] is called is
+//! killed with its process group.
 //!
 //! "The next candidate left": the head of the key's list is taken off it; one inside the
 //! repository is skipped as step 1 says; one whose server names `trial` is tried, any other
@@ -143,6 +144,8 @@ pub(crate) struct Life {
     shell: ShellTaken,
     /// The keys held for the shell, in the order they were held.
     held: Vec<ServerKey>,
+    /// The shell's process group while it runs, so that the Navigator's end can kill it.
+    shell_group: crate::shell::Group,
 }
 
 /// Where the user's login shell stands.
@@ -604,10 +607,11 @@ fn must_wait_for_the_shell(core: &mut Core) -> bool {
             };
             let base = core.config.environment.clone();
             let events = core.events.clone();
+            let group = core.life.shell_group.clone();
             let started = std::thread::Builder::new()
                 .name("navigator-shell".to_owned())
                 .spawn(move || {
-                    let _ = events.send(Event::Shell(crate::shell::take(&shell, &base)));
+                    let _ = events.send(Event::Shell(crate::shell::take_in(&shell, &base, &group)));
                 });
             match started {
                 Ok(_) => {
@@ -639,6 +643,8 @@ pub(crate) fn close(core: &mut Core) {
     // The asks waiting at these servers are dropped first: the end of a server answers them
     // by text match, and no one is left to read it.
     answers::forget_the_waiting(core);
+    // A shell still running is killed with its group, as a trial run is.
+    core.life.shell_group.end();
     let keys: Vec<ServerKey> = core.life.keys.keys().cloned().collect();
     for key in &keys {
         stop_quietly(core, key);
