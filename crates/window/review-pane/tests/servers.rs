@@ -377,6 +377,41 @@ fn the_update_is_offered_on_the_line_of_a_ready_server_that_runs_an_older_versio
 }
 
 #[gpui_kit::test]
+fn a_starting_server_told_with_an_update_draws_no_update_control_and_its_key_says_nothing_waits(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_on_code(cx);
+    go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
+    let starting = ServerState {
+        update: Some(newer()),
+        ..rust(State::Starting)
+    };
+    navigator.tell(Told::Servers(vec![starting]), &mut cx);
+    assert_line(
+        "starting",
+        "Rust: starting; names are found by text match meanwhile",
+        &mut cx,
+    );
+    assert!(!has_control("update", &mut cx));
+    cx.simulate_keystrokes("shift-u");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.notice()),
+        Some("No language server update waits".to_owned())
+    );
+
+    // The barrier: the download of the row is the first ask the Navigator hears if the
+    // key sent nothing, since asks come in the order they were made.
+    navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
+    cx.simulate_keystrokes("shift-i");
+    assert_eq!(
+        navigator.ask(&mut cx),
+        Ask::Download {
+            language: "rust".to_owned()
+        }
+    );
+}
+
+#[gpui_kit::test]
 fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_for_that_repository(
     cx: &mut TestAppContext,
 ) {

@@ -25,7 +25,7 @@
 //! | State | Words, under `review-servers-text:<words>` | Controls |
 //! | --- | --- | --- |
 //! | ready | `<title>: ready` | the update control, when the state shows an update: [`UPDATE`] `<version>` under `review-servers-update`, key [`crate::UpdateServer`] (`shift-u`) |
-//! | starting | `<title>: starting; names are found by text match meanwhile` | the update control, as for ready |
+//! | starting | `<title>: starting; names are found by text match meanwhile` | |
 //! | missing, with an offer | `<title>: no language server found` | [`DOWNLOAD`] `<server> <version>` under `review-servers-download`, key [`crate::DownloadServer`] (`shift-i`) |
 //! | missing, no offer | `<title>: no language server found; names are found by text match` | |
 //! | asking | `<title>: <program> lies inside the repository <name>. Run language servers from this repository?` | [`ALLOW`] under `review-servers-yes`, [`REFUSE`] under `review-servers-no`, keys [`crate::AllowServers`] (`shift-y`) and [`crate::RefuseServers`] (`shift-q`) |
@@ -254,7 +254,7 @@ impl ReviewPane {
             ),
         };
         if let Some(update) = &server.update
-            && matches!(server.state, State::Ready | State::Starting)
+            && matches!(server.state, State::Ready)
         {
             controls.push((
                 "update",
@@ -348,8 +348,7 @@ impl ReviewPane {
             }
             Act::Update => {
                 let Some(server) = server.filter(|server| {
-                    server.update.is_some()
-                        && matches!(server.state, State::Ready | State::Starting)
+                    server.update.is_some() && matches!(server.state, State::Ready)
                 }) else {
                     return self.say(NOTHING_TO_UPDATE, cx);
                 };
