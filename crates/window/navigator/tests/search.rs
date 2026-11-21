@@ -546,18 +546,20 @@ fn a_variable_that_is_not_set_or_is_empty_passes_its_entry_over_and_the_next_one
     let scratch = Scratch::new("unset");
     let text = "[lang]\nextensions = { l = \"l\" }\n\
         [[lang.server]]\nname = \"one\"\n\
-        project = [\"{env:NOT_SET}/bin/one\", \"{env:EMPTY}/bin/one\", \"{env:SET}/bin/one\", \"bin/one\"]\n\
-        machine = [\"{env:NOT_SET}\", \"{env:SET_NAME}\"]\n";
+        project = [\"{env:NOT_SET}in/one\", \"{env:EMPTY}in/one\", \"{env:SET}/bin/one\", \"bin/one\"]\n\
+        machine = [\"{env:NOT_SET}nothing\", \"{env:EMPTY}nothing\", \"{env:SET_NAME}\"]\n";
     let (registry, errors) = Registry::read(text, None);
     assert_eq!(errors, vec![]);
     let row = registry.row("lang").unwrap();
     let set = scratch.path("set");
-    // `/bin/one` is what an empty variable would make of the second entry: it must not be
-    // looked at as the file system's own `/bin`.
+    // What an unset or an empty variable would make of the first two entries and of the first
+    // two names, were it put in as nothing: each lands on a file that is there, so an entry
+    // that is tried instead of passed over shows in the result.
+    scratch.executable("worktree/in/one");
+    scratch.executable("path/nothing");
     let in_set = scratch.executable("set/bin/one");
     let in_worktree = scratch.executable("worktree/bin/one");
     let named = scratch.executable("path/named");
-    scratch.executable("path/nothing");
     let environment: Vec<(OsString, OsString)> = vec![
         ("EMPTY".into(), "".into()),
         ("SET".into(), set.into_os_string()),
@@ -672,9 +674,13 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
     // proxy's trial has written its line by then.
     let started = running.wait_state(&ws, "rust", None, DEADLINE, |state| state.pid.is_some());
     assert_eq!(started.program, Some(proxy));
-    let written = std::fs::read_to_string(&log).unwrap();
+    // The line stays in the file once it is there, so it is waited for.
+    let written = wait_for("the first line of the copies' log", || {
+        let written = lines_of(&log);
+        (!written.is_empty()).then_some(written)
+    });
     assert_eq!(
-        written.lines().next(),
+        written.first().map(String::as_str),
         Some("proxy 0"),
         "the proxy is the first copy tried, with no install asked for: {written:?}"
     );
@@ -688,6 +694,132 @@ fn a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and
                 "a question was shown: {list:#?}"
             );
         }
+    }
+    running.end();
+}
+
+// A variable in a server's `args` and `environment`, put in when it starts
+
+/// A copy of the stand-in at `folder/name` that first appends one line, its arguments and
+/// then what it holds as `PROBE`, to `ran`, and then is the stand-in: what it was started
+/// with, and what it was started in.
+fn probing_standin(folder: &Path, name: &str, ran: &Path) {
+    script(
+        &folder.join(name),
+        &format!(
+            "printf '%s|%s\\n' \"$*\" \"$PROBE\" >> '{}'\nexec '{}' \"$@\"\n",
+            ran.display(),
+            support::standin().display()
+        ),
+    );
+}
+
+/// Looks at `look` again until it gives something, up to `DEADLINE`: a fact that stays true
+/// once it is, as a line of a file another program writes.
+fn wait_for<T>(what: &str, mut look: impl FnMut() -> Option<T>) -> T {
+    let until = std::time::Instant::now() + support::DEADLINE;
+    loop {
+        if let Some(found) = look() {
+            return found;
+        }
+        assert!(
+            std::time::Instant::now() < until,
+            "waited {:?} for {what}",
+            support::DEADLINE
+        );
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
+/// The lines of `file`, none while it is not there.
+fn lines_of(file: &Path) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .map(|text| text.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_variable_in_the_args_and_the_environment_of_a_server_is_put_in_from_the_servers_environment() {
+    use support::{DEADLINE, Running, repository_id, workspace_id};
+    use yaar_navigator::State;
+
+    let scratch = support::Scratch::new();
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let ran = scratch.root.join("ran.log");
+    let log = scratch.root.join("standin.log");
+    let bin = scratch.root.join("bin");
+    probing_standin(&bin, "probe-lsp", &ran);
+    let table = "[standin]\nextensions = { sil = \"standin\" }\nmarkers = [\"main.sil\"]\n\
+        [[standin.server]]\nname = \"standin\"\nmachine = [\"probe-lsp\"]\n\
+        args = [\"--log\", \"{env:LOG_FILE}\"]\n\
+        environment = { PROBE = \"{env:PROBE_VALUE}\" }\n\
+        trial = [\"--version\"]\nready = { kind = \"answer\" }\n";
+    let mut config = scratch.config(table);
+    config
+        .environment
+        .push(("LOG_FILE".into(), log.clone().into_os_string()));
+    config
+        .environment
+        .push(("PROBE_VALUE".into(), "its value".into()));
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(config);
+    running.show(&repo, &ws, &repository);
+    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+
+    // The script writes its line before it becomes the stand-in, which may be after the
+    // state that showed its process.
+    let started = format!("--log {}|its value", log.display());
+    wait_for("the line of the started server", || {
+        lines_of(&ran).contains(&started).then_some(())
+    });
+    running.end();
+}
+
+#[test]
+fn a_variable_in_the_args_or_the_environment_that_the_servers_environment_lacks_passes_the_candidate_over()
+ {
+    use support::{DEADLINE, Running, repository_id, workspace_id};
+    use yaar_navigator::State;
+
+    let scratch = support::Scratch::new();
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let bin = scratch.root.join("bin");
+    let args_ran = scratch.root.join("args.log");
+    let environment_ran = scratch.root.join("environment.log");
+    let good_ran = scratch.root.join("good.log");
+    probing_standin(&bin, "args-lsp", &args_ran);
+    probing_standin(&bin, "environment-lsp", &environment_ran);
+    probing_standin(&bin, "good-lsp", &good_ran);
+    let table = "[standin]\nextensions = { sil = \"standin\" }\nmarkers = [\"main.sil\"]\n\
+        [[standin.server]]\nname = \"by-args\"\nmachine = [\"args-lsp\"]\n\
+        args = [\"--log\", \"{env:NOT_SET}\"]\ntrial = [\"--version\"]\n\
+        ready = { kind = \"answer\" }\n\
+        [[standin.server]]\nname = \"by-environment\"\nmachine = [\"environment-lsp\"]\n\
+        environment = { PROBE = \"{env:ALSO_NOT_SET}\" }\ntrial = [\"--version\"]\n\
+        ready = { kind = \"answer\" }\n\
+        [[standin.server]]\nname = \"good\"\nmachine = [\"good-lsp\"]\n\
+        trial = [\"--version\"]\nready = { kind = \"answer\" }\n";
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(table));
+    running.show(&repo, &ws, &repository);
+
+    // The third server is tried after the first two failed to start, so its being ready is
+    // the barrier for what they did not do.
+    let state = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(state.server.as_deref(), Some("good"));
+    assert_eq!(state.program, Some(bin.join("good-lsp")));
+    for ran in [&args_ran, &environment_ran] {
+        // Their trial run (`--version`) has no variable; they were never started.
+        let lines = lines_of(ran);
+        assert!(
+            lines.iter().all(|line| line.starts_with("--version|")),
+            "{}: {lines:?}",
+            ran.display()
+        );
     }
     running.end();
 }

@@ -25,7 +25,8 @@ use crate::registry::{Platform, Row, Vars, expand};
 pub enum CandidateKind {
     /// A command the user registered in their own file.
     Registered,
-    /// A path of a server's `project` under the worktree's root.
+    /// A path of a server's `project` under the worktree's root, or an absolute path outside
+    /// it, once its variables are put in.
     Project,
     /// A name of a server's `machine` found in the search path.
     Machine,
