@@ -307,7 +307,7 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     // for; once it is written, the old side's server starts in it.
     let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
     assert_eq!(asked.workspace, ws);
-    assert_eq!(started_in(&old_log), [asked.into.clone()]);
+    assert_eq!(started_in(&old_log), std::slice::from_ref(&asked.into));
     assert_eq!(started_in(&new_log), std::slice::from_ref(&repo.root));
     assert!(old.pid.is_some_and(is_alive));
 
