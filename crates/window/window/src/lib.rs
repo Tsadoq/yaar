@@ -11,8 +11,8 @@
 //!   Navigator with what this user's environment gives it; [`open_with`] does the same with
 //!   a Navigator's configuration of the caller's, and [`open_panes`] with panes of the
 //!   caller's too;
-//! - [`join_navigator`] and [`stop_navigator`], which start a Navigator for a window's models
-//!   and end it; the quit of the app ends every one that runs;
+//! - [`join_navigator`], which starts a Navigator for a window's models; the quit of the app
+//!   is the one end of every Navigator that runs;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
 //!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
@@ -98,10 +98,11 @@ pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
 /// environment of its servers.
 ///
 /// The Navigator is started on a new port and joined to the window's model of code
-/// intelligence ([`join_navigator`]). When the app quits, the port is dropped and the Window
-/// waits up to [`yaar_navigator::STOP_DEADLINE`] and a second more for the Navigator to stop
-/// its servers, so that no server outlives the Window. A second window gets a Navigator of
-/// its own.
+/// intelligence ([`join_navigator`]). The quit of the app is the one end of a Navigator: the
+/// port is let go ([`yaar_frame::Navigation::disconnect`]) and the Window waits up to
+/// [`yaar_navigator::STOP_DEADLINE`] and a second more for the Navigator to stop its servers,
+/// so that no server outlives the Window, whatever asks are on their way. A second window
+/// gets a Navigator of its own.
 pub fn open_with(
     socket: PathBuf,
     navigator: yaar_navigator::NavigatorConfig,
@@ -150,7 +151,7 @@ struct Navigators {
 impl Global for Navigators {}
 
 /// Starts a Navigator on `config`, joins its port to `models.navigation` and keeps its
-/// handle in a global of the app, to be stopped at quit or by [`stop_navigator`]. What the
+/// handle in a global of the app, to be stopped at the quit of the app. What the
 /// model tells the Navigator by itself, and what it keeps of what it is told, is the Frame's.
 pub fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: &mut App) {
     let (port, end) = yaar_navigator::port();
@@ -187,29 +188,6 @@ pub fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, 
         })
         .detach();
     }
-}
-
-/// Stops the Navigator [`join_navigator`] started for `models`, as the quit of the app
-/// does: its port is dropped and, up to [`yaar_navigator::STOP_DEADLINE`] and a second
-/// more, the call waits for it to stop every server and end. Gives whether it ended, and
-/// true when none runs. The model shows no Navigator afterwards.
-///
-/// Nothing in the product calls it: the app opens one window and quits when it closes, so
-/// in this slice only the quit of the app ends a Navigator there. It is public for a test,
-/// and for the day a window closes while others remain.
-pub fn stop_navigator(models: &Models, cx: &mut App) -> bool {
-    let id = models.navigation.entity_id();
-    let navigators = cx.default_global::<Navigators>();
-    let Some(at) = navigators
-        .running
-        .iter()
-        .position(|joined| joined.navigation.entity_id() == id)
-    else {
-        return true;
-    };
-    let joined = navigators.running.remove(at);
-    drop_port(&joined.navigation, cx);
-    joined.navigator.wait(STOP_WITHIN)
 }
 
 /// Lets go of the Frame's end of a Navigator's port: the model closes the channel of asks

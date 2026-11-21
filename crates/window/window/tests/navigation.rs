@@ -304,7 +304,8 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     // read before this, and a server logs a request before it answers, so what an answer
     // came from is in a log by now. The new side's server was started in the worktree and
     // was asked only about the added line; the old side's was started in the export and
-    // answered the removed line (more than once when the first hover found it ready).
+    // answered the removed line, once: the first hover on it is answered by text match while
+    // the export is written, so only the second reaches the server.
     let (new_log, old_log) = (log_beside(&folder), log_beside(&into));
     assert_ne!(new_log, old_log, "the two sides share a log");
     assert_eq!(
@@ -320,9 +321,10 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
         1,
         "the new side's server was asked about the removed line"
     );
-    assert!(
-        requests(&old_log, "textDocument/hover") >= 1,
-        "the old side's server was never asked"
+    assert_eq!(
+        requests(&old_log, "textDocument/hover"),
+        1,
+        "the old side's server was not asked about the removed line exactly once"
     );
 
     window.end_the_navigator(&mut cx);
@@ -641,8 +643,8 @@ fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages
                     .any(|language| language.name == "standin")
         })
     });
-    assert!(cx.update(|cx| yaar_window::stop_navigator(&models, cx)));
-    // Ended: nothing is connected to ask, and the model says so once it heard.
+    cx.update(|app| app.shutdown());
+    // Ended by the quit: nothing is connected to ask, and the model says so once it heard.
     wait_until(&mut inner, "the model to see the Navigator end", |cx| {
         models
             .navigation
@@ -667,7 +669,14 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
         });
     }
 
-    assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
+    first
+        .navigation
+        .update(&mut first_cx, |navigation, cx| navigation.disconnect(cx));
+    assert!(
+        !first
+            .navigation
+            .read_with(&first_cx, |navigation, _| navigation.is_connected())
+    );
     // The second Navigator was not the first's: it still listens and answers. The model's
     // flags only change when the end of a Navigator reaches it, which may be a turn later
     // than this look, so the test asks the second Navigator for a file and waits for what
@@ -707,10 +716,18 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
             .navigation
             .read_with(&second_cx, |navigation, _| navigation.is_connected())
     );
-    // Stopping the first again is a call that finds nothing to stop.
-    assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
+    // Letting go of the first again is a call that finds nothing to let go of.
+    first
+        .navigation
+        .update(&mut first_cx, |navigation, cx| navigation.disconnect(cx));
     assert!(second.navigation.read_with(&second_cx, |navigation, _| {
         !navigation.languages().is_empty()
     }));
-    assert!(cx.update(|cx| yaar_window::stop_navigator(&second, cx)));
+    // The quit of the app ends the second, which the first's end left running.
+    cx.update(|app| app.shutdown());
+    wait_until(&mut second_cx, "the model to see the Navigator end", |cx| {
+        second
+            .navigation
+            .read_with(cx, |navigation, _| !navigation.is_connected())
+    });
 }

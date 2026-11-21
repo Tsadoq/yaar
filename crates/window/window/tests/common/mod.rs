@@ -144,7 +144,7 @@ pub fn open_another_composed_in(
 /// [`open_composed_in`] with a Navigator started as the program starts one, on
 /// `navigator`, which [`navigator_for`] makes for the world: the composed Window with the
 /// real Keeper and the real Navigator, and the stand-in language server beneath. The test
-/// ends the Navigator with [`Composed::end_the_navigator`].
+/// ends the Navigator, through the quit of the app, with [`Composed::end_the_navigator`].
 pub fn open_composed_with_a_navigator(
     world: World,
     cx: &mut TestAppContext,
@@ -628,10 +628,11 @@ impl Composed {
         })
     }
 
-    /// Ends the Navigator the Window started, as the quit of the app does, and proves it
-    /// gone: it ended within its deadline, and by the time the call returns the process of
-    /// no server it had told is left (the call waited for them: nothing here does). Does
-    /// nothing for a Window opened with none.
+    /// Ends the Navigator the Window started through the quit of the app, the product's one
+    /// end of a Navigator, and proves it gone: by the time the call returns the process of
+    /// no server it had told is left (the quit waited for them: nothing here does). Does
+    /// nothing for a Window opened with none. The app has quit afterwards, so a test calls it
+    /// last.
     pub fn end_the_navigator(&mut self, cx: &mut VisualTestContext) {
         let pids: Vec<u32> = self.models.navigation.read_with(cx, |navigation, _| {
             navigation
@@ -640,11 +641,10 @@ impl Composed {
                 .filter_map(|server| server.pid)
                 .collect()
         });
-        let ended = cx.update(|_, cx| yaar_window::stop_navigator(&self.models, cx));
-        assert!(ended, "the Navigator did not end within its deadline");
+        cx.quit();
         assert!(
             pids.iter().all(|pid| !is_alive(*pid)),
-            "a language server outlived the end of the Navigator: {:?}",
+            "a language server outlived the quit of the app: {:?}",
             pids.iter()
                 .filter(|pid| is_alive(**pid))
                 .collect::<Vec<_>>()
