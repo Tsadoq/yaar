@@ -25,7 +25,9 @@ use yaar_link::{
     Anchor, Author, Comment, CommentId, DraftOn, Fact, FileStatus, Lines, Request, Review,
     Side as LinkSide, Thread, ThreadId, ThreadState,
 };
-use yaar_navigator::{Answered, Ask, FileKind, Language, Location, OpenedFile, Place, Told, Tree};
+use yaar_navigator::{
+    Answered, Ask, FileKind, Language, Location, OpenedFile, Place, ServerState, State, Told, Tree,
+};
 use yaar_review_pane::navigate::GUESSED;
 use yaar_review_pane::{FileShown, PaneRow, Position, ReferencesShown, ReviewPane};
 
@@ -889,4 +891,158 @@ fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hi
             yaar_review_pane::Layout::Unified
         )
     );
+}
+
+/// The state of a server, as the Navigator tells it, for the files on disk of workspace `1`
+/// or for its old side in `old_side`.
+fn server(language: &str, title: &str, old_side: Option<&str>, state: State) -> ServerState {
+    ServerState {
+        workspace: workspace_id(),
+        language: language.to_owned(),
+        title: title.to_owned(),
+        old_side: old_side.map(str::to_owned),
+        registered: false,
+        state,
+        server: None,
+        program: None,
+        pid: None,
+        update: None,
+    }
+}
+
+/// The state the line of the language server draws, if it draws one, with its words.
+fn the_line(cx: &mut VisualTestContext) -> Option<&'static str> {
+    ["ready", "starting", "missing", "asking", "downloading"]
+        .into_iter()
+        .find(|state| drawn(&format!("review-servers-state:{state}"), cx).is_some())
+}
+
+// The line of the language server over a file view (FR-057, FR-059)
+#[gpui_kit::test]
+fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_long(cx);
+    let pane = &stage.pane;
+    let version = "a".repeat(40);
+    let python = Language {
+        name: "python".to_owned(),
+        title: "Python".to_owned(),
+        extensions: vec!["py".to_owned()],
+    };
+    navigator.tell(Told::Languages(vec![rust(), python]), &mut cx);
+    // Each state is told for one place only, so that a line read from the wrong place
+    // reads another state or none.
+    navigator.tell(
+        Told::Servers(vec![
+            server("rust", "Rust", None, State::Ready),
+            server("python", "Python", None, State::Starting),
+            server(
+                "rust",
+                "Rust",
+                Some(&version),
+                State::Missing { offer: None },
+            ),
+        ]),
+        &mut cx,
+    );
+    click_compute(&stage, &mut cx);
+    assert_eq!(the_line(&mut cx), Some("ready"), "the line of the diff");
+
+    let on_screen = |cx: &mut VisualTestContext| {
+        pane.read_with(cx, |pane, cx| pane.server_on_screen(cx))
+            .map(|server| (server.language, server.old_side, server.state))
+    };
+    let target = location("/gits/feature/src/lib.rs", 2);
+    let kinds = [
+        (
+            "a file of the worktree",
+            in_the_worktree("app/main.py"),
+            "/gits/feature/app/main.py",
+            "starting",
+            Some(("python", None, State::Starting)),
+        ),
+        (
+            "a file of an export reads its old side",
+            FileKind::Version {
+                workspace: workspace_id(),
+                version: version.clone(),
+                relative: PathBuf::from("src/lib.rs"),
+            },
+            "/cache/old/src/lib.rs",
+            "missing",
+            Some((
+                "rust",
+                Some(version.clone()),
+                State::Missing { offer: None },
+            )),
+        ),
+        (
+            "a file outside the worktree reads the workspace on screen",
+            FileKind::Outside,
+            "/x/lib/dep.py",
+            "starting",
+            Some(("python", None, State::Starting)),
+        ),
+        // A file of no known language has no line, not the line of the diff it hides.
+        (
+            "a file of no known language",
+            in_the_worktree("notes.txt"),
+            "/gits/feature/notes.txt",
+            "",
+            None,
+        ),
+    ];
+    for (what, kind, path, line, state) in kinds {
+        go_to_definition(
+            vec![target.clone()],
+            Some(opened_of(kind, path, 5)),
+            &mut navigator,
+            &mut cx,
+        );
+        assert!(file_view(pane, &mut cx).is_some(), "{what}: no file view");
+        assert_eq!(
+            on_screen(&mut cx),
+            state.clone().map(|(l, o, s)| (l.to_owned(), o, s)),
+            "{what}"
+        );
+        match &state {
+            Some(_) => assert_eq!(the_line(&mut cx), Some(line), "{what}: the line"),
+            None => {
+                assert_eq!(the_line(&mut cx), None, "{what}: a line is drawn");
+                assert!(drawn("review-servers", &mut cx).is_none(), "{what}");
+            }
+        }
+        // Back in the diff, the line is the diff's again.
+        cx.simulate_keystrokes("escape");
+        assert_eq!(file_view(pane, &mut cx), None);
+        assert_eq!(the_line(&mut cx), Some("ready"), "{what}: back in the diff");
+        assert_eq!(
+            on_screen(&mut cx).map(|(language, ..)| language),
+            Some("rust".to_owned())
+        );
+    }
+
+    // The line follows what the Navigator tells while the file view stays open.
+    go_to_definition(
+        vec![target],
+        Some(opened_of(
+            in_the_worktree("app/main.py"),
+            "/gits/feature/app/main.py",
+            5,
+        )),
+        &mut navigator,
+        &mut cx,
+    );
+    assert_eq!(the_line(&mut cx), Some("starting"));
+    navigator.tell(
+        Told::Servers(vec![
+            server("rust", "Rust", None, State::Ready),
+            server("python", "Python", None, State::Ready),
+        ]),
+        &mut cx,
+    );
+    assert_eq!(the_line(&mut cx), Some("ready"));
+    assert!(drawn("review-servers-text:Python: ready", &mut cx).is_some());
+    assert!(!cx.has_pending_prompt());
 }
