@@ -91,8 +91,8 @@
 //! # What other modules call
 //!
 //! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`running_server`],
-//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`downloading`],
-//! [`search_again`] and [`publish`]; nothing else here.
+//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`on_an_older_copy`],
+//! [`downloading`], [`search_again`] and [`publish`]; nothing else here.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsString;
@@ -103,7 +103,7 @@ use std::time::{Duration, Instant};
 
 use yaar_link::{RepositoryId, WorkspaceId};
 
-use crate::download::installed;
+use crate::download::{Installed, installed};
 use crate::driver::{Launch, Server, ServerEvent};
 use crate::navigator::{Core, Event, ServerKey, Side};
 use crate::port::{Language, Offer, RepositoryConsent, ServerState, State, Told, WorkspaceRoot};
@@ -662,6 +662,43 @@ pub(crate) fn updating(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
         .iter()
         .filter(|(key, _)| key.language == language)
         .filter_map(|(key, keyed)| update_of(core, key, keyed).map(|offer| (key.clone(), offer)))
+        .collect()
+}
+
+/// The keys of the row `language` whose candidate, the one tried, started or running, is a
+/// downloaded copy of the server named `server` in a version other than `installed`, the one
+/// just installed: the folder of the copy they were given is gone or about to go, and a key
+/// that does not search again finds it missing, or runs from a folder that is not there. The
+/// phases trying, starting and ready all count: a candidate is chosen by the version that was
+/// installed when the key searched, whatever the key has reached since.
+pub(crate) fn on_an_older_copy(
+    core: &Core,
+    language: &str,
+    server: &str,
+    installed: &Installed,
+) -> Vec<ServerKey> {
+    let Some(row) = core.registry.row(language) else {
+        return Vec::new();
+    };
+    let current = core.config.servers.join(server).join(&installed.version);
+    core.life
+        .keys
+        .iter()
+        .filter(|(key, _)| key.language == language)
+        .filter(|(_, keyed)| {
+            let candidate = match &keyed.phase {
+                Phase::Trying { candidate, .. } => candidate,
+                Phase::Starting { running } | Phase::Ready { running } => &running.candidate,
+                Phase::NoneLeft | Phase::Downloading { .. } => return false,
+            };
+            candidate.kind == CandidateKind::Downloaded
+                && row
+                    .servers
+                    .get(candidate.server)
+                    .is_some_and(|candidate_server| candidate_server.name == server)
+                && !candidate.program.starts_with(&current)
+        })
+        .map(|(key, _)| key.clone())
         .collect()
 }
 

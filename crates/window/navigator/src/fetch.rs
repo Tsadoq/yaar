@@ -40,11 +40,13 @@
 //!
 //! A download that ends well also searches again the keys of the row that are not on the
 //! waiting list but need it. A workspace shown while the download was on its way found
-//! nothing and shows the offer, or found the version that was installed then and runs it
-//! with an update to show: the first would otherwise offer what is installed, the second
-//! would keep running a program whose folder the download removed and offer the version
-//! it just installed. A key that is still starting when the download ends is not told
-//! apart, and runs on as it started.
+//! nothing and shows the offer, or found the version that was installed then and tries,
+//! starts or runs it: the first would otherwise offer what is installed, the second would
+//! keep a program whose folder the download removed (it fails its start and shows missing
+//! with an offer of the version already installed, or runs from a folder that is gone) and
+//! then offer the version it just installed. Every key of the row that tries, starts or runs
+//! a downloaded copy of another version than the one installed is searched again
+//! (`lifecycle::on_an_older_copy`).
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
@@ -137,16 +139,18 @@ pub(crate) fn downloaded(
         update,
     } = core.fetch.on_its_way.remove(&language).unwrap_or_default();
     match outcome {
-        Ok(_) => {
+        Ok(installed) => {
             // A key made while the download was on its way found nothing, and shows the
             // offer: it finds what is installed now. A key that found the version installed
-            // then runs it still, and the download removed its folder: it starts the new one.
-            let late = lifecycle::offering(core, &language).into_iter().chain(
-                lifecycle::updating(core, &language)
-                    .into_iter()
-                    .filter(|(_, shown)| shown.server == server),
-            );
-            for (key, _) in late.collect::<Vec<_>>() {
+            // then, trying it, starting it or running it, has a copy whose folder the
+            // download removed: it starts the new one.
+            let late = lifecycle::offering(core, &language)
+                .into_iter()
+                .map(|(key, _)| key)
+                .chain(lifecycle::on_an_older_copy(
+                    core, &language, &server, &installed,
+                ));
+            for key in late.collect::<Vec<_>>() {
                 if !keys.contains(&key) {
                     keys.push(key);
                 }

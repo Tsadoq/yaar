@@ -934,6 +934,76 @@ fn a_workspace_shown_while_an_update_is_on_its_way_runs_the_new_version_when_it_
 }
 
 #[test]
+fn an_update_that_ends_well_starts_again_a_key_still_starting_on_the_older_version() {
+    let scratch = Scratch::new();
+    let first = scratch.repository("first", &[("main.sil", "def alpha\n")]);
+    let second = scratch.repository("second", &[("main.sil", "def alpha\n")]);
+    install(&scratch, "1");
+    let two = archive_of("2");
+    let held = Held::serve("standin-2.tar.gz", two.clone());
+    // The server is ready once `{root}/go` exists: the second repository holds it, the first
+    // does not, so that its server stays starting until the test makes the file.
+    let row = standin_row(
+        "standin",
+        &[
+            "--ready",
+            "notification",
+            "--ready-when",
+            "{root}/go",
+            "--log",
+            &scratch.root.join("standin.log").display().to_string(),
+        ],
+        "notification",
+        &download_of("2", &held.url("standin-2.tar.gz"), &two),
+    );
+    std::fs::write(second.root.join("go"), "").expect("make the file the second waits for");
+    let (ws1, ws2) = (workspace_id('1'), workspace_id('2'));
+    let mut running = Running::start(scratch.config(&row));
+    running.ask(Ask::Workspaces(vec![
+        root_of(&first, &ws1, '1'),
+        root_of(&second, &ws2, '2'),
+    ]));
+    // The second workspace's server is ready on version 1 and shows the update; the first
+    // workspace is shown after it, and its server starts on version 1 and does not get ready.
+    running.ask(Ask::OnScreen(Some(ws2.clone())));
+    let ready = running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready && state.update.is_some()
+    });
+    running.ask(Ask::OnScreen(Some(ws1.clone())));
+    let starting = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Starting && state.pid.is_some()
+    });
+    assert_eq!(starting.program, Some(program_of(&scratch, "1")));
+
+    running.ask(Ask::Update {
+        language: "standin".to_owned(),
+    });
+    held.wait_for_a_request();
+    held.release();
+    // The update ended and removed version 1. The key that was ready on it runs version 2;
+    // so does the key that was starting on it, which is let go ready only now: it is not the
+    // process of version 1 that gets ready.
+    running.wait_state(&ws2, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready && state.program == Some(program_of(&scratch, "2"))
+    });
+    std::fs::write(first.root.join("go"), "").expect("make the file the first waits for");
+    let after = running.wait_state(&ws1, "standin", None, DEADLINE, |state| {
+        state.state == State::Ready
+    });
+    assert_eq!(after.program, Some(program_of(&scratch, "2")));
+    assert_eq!(after.update, None);
+    assert_ne!(after.pid, starting.pid);
+    assert!(!program_of(&scratch, "1").exists());
+    for before in [ready.pid, starting.pid] {
+        assert!(
+            !is_alive(before.expect("a process")),
+            "a server of version 1 still runs"
+        );
+    }
+    running.end();
+}
+
+#[test]
 fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_one() {
     let scratch = Scratch::new();
     let repo = scratch.repository(
