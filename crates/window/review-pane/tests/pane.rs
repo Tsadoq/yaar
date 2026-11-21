@@ -696,6 +696,9 @@ enum Effect {
     Moves,
     /// Says in the notice why there is nothing to do.
     Notice,
+    /// Says in the notice that nothing waits: no download, no update and no question of the
+    /// line of the language server, of which no Navigator tells here.
+    NothingWaits,
     /// Sets whether a turn end keeps the selection: on after the key, off again after the
     /// action.
     Setting,
@@ -719,9 +722,6 @@ enum Effect {
     /// changes, which the state read before and after shows.
     Nothing,
 }
-
-// The second builder of P14 takes these four keys of P15's line out once P15 is reviewed and merged here, and names their effect in `effect_of`.
-const OF_SLICE_8: [&str; 4] = ["shift-i", "shift-u", "shift-y", "shift-q"];
 
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.
@@ -753,6 +753,9 @@ fn effect_of(keystroke: &str) -> Effect {
         "shift-k" | "g d" | "g r" => Effect::Notice,
         // No file view, no hover and no box is open to close.
         "escape" => Effect::Nothing,
+        // No language server is known here, so nothing waits to be downloaded or updated,
+        // and no question waits to be answered: each key says so and sends nothing.
+        "shift-i" | "shift-u" | "shift-y" | "shift-q" => Effect::NothingWaits,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -774,6 +777,11 @@ impl Effect {
             Effect::Notice => assert!(
                 pane.read_with(cx, |pane, _| pane.notice().is_some()),
                 "{title} by {how} said nothing"
+            ),
+            Effect::NothingWaits => assert!(
+                pane.read_with(cx, |pane, _| pane.notice())
+                    .is_some_and(|notice| notice.starts_with("No ") && notice.contains(" wait")),
+                "{title} by {how} did not say that nothing waits"
             ),
             Effect::Setting => assert_eq!(
                 pane.read_with(cx, |pane, _| pane.keeps_selection()),
@@ -939,7 +947,6 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         .filter(|control| control.place != Place::In(HISTORY_CONTEXT))
         // The keys of the list of references work in the list, which this state has none of.
         .filter(|control| control.place != Place::In(REFERENCES_CONTEXT))
-        .filter(|control| !OF_SLICE_8.contains(&control.keystroke))
     {
         // Back on the line the threads follow, where the keys that act on a thread find
         // them: the keys before this one moved the reviewer.
@@ -1003,7 +1010,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         // are keys of the pane that say the notice is gone and leave all as it was.
         match effect {
             Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
-            Effect::Notice | Effect::Resume => cx.simulate_keystrokes("s s"),
+            Effect::Notice | Effect::NothingWaits | Effect::Resume => cx.simulate_keystrokes("s s"),
             Effect::Moves
             | Effect::Nothing
             | Effect::Setting
@@ -1014,7 +1021,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
         }
         if matches!(
             effect,
-            Effect::Notice | Effect::Resume | Effect::Box | Effect::Field
+            Effect::Notice | Effect::NothingWaits | Effect::Resume | Effect::Box | Effect::Field
         ) {
             assert!(
                 stage.pane.read_with(&cx, |pane, _| pane.notice().is_none()
