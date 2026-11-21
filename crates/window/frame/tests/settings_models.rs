@@ -642,10 +642,11 @@ fn the_choice_is_kept_by_name_across_a_new_list_and_falls_back_to_the_first_with
         .update(cx, |list, cx| list.choose_next_cli(cx));
 
     // The Keeper reached again names the CLIs in another order: the choice follows the name,
-    // which is no longer the first.
+    // which is neither the first nor where it stood before (index 1), so a choice kept by
+    // position, or one fallen back to the first, would give another CLI.
     let link = models.link.clone();
     let mut again = KeeperEnd::attach_staged(hello(), &link, cx, |keeper| {
-        keeper.set_clis(vec![cli("other"), cli("pi"), cli("claude")]);
+        keeper.set_clis(vec![cli("other"), cli("claude"), cli("pi")]);
     });
     again.list(&listed(), cx);
     wait_until(cx, "the CLIs in their new order", |cx| {
