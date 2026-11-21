@@ -19,7 +19,7 @@
 //!   documented set of keys that never reach the program in a terminal.
 
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
@@ -175,8 +175,13 @@ pub fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, 
                 drop_port(&joined.navigation, cx);
             }
             async move {
+                // One deadline for all: the Navigators stop side by side, and the quit
+                // never waits longer than a single one may take.
+                let deadline = Instant::now() + STOP_WITHIN;
                 for joined in joined {
-                    joined.navigator.wait(STOP_WITHIN);
+                    joined
+                        .navigator
+                        .wait(deadline.saturating_duration_since(Instant::now()));
                 }
             }
         })

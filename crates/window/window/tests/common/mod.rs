@@ -20,7 +20,7 @@ use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wa
 use yaar_link::{
     ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
 };
-use yaar_navigator::{NavigatorConfig, Platform, STOP_AFTER, SystemClock};
+use yaar_navigator::{NavigatorConfig, STOP_AFTER, SystemClock};
 use yaar_review_pane::ReviewPane;
 use yaar_system_tests::standin::{Script, Step};
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
@@ -191,6 +191,21 @@ pub fn navigator_cache(world: &World) -> PathBuf {
 /// started when the worktree holds `marker`, with one server, the stand-in, found as `found`
 /// says.
 pub fn standin_row(found: Found, marker: &str, extra_extensions: &[&str]) -> String {
+    standin_row_started_with(found, marker, extra_extensions, &[])
+}
+
+/// [`standin_row`] with the stand-in started with `args`, each of which may name a variable
+/// of the row (`{root}`).
+pub fn standin_row_started_with(
+    found: Found,
+    marker: &str,
+    extra_extensions: &[&str],
+    args: &[&str],
+) -> String {
+    let args: Vec<String> = args
+        .iter()
+        .map(|arg| format!("\"{}\"", arg.replace('\\', "\\\\").replace('"', "\\\"")))
+        .collect();
     let mut extensions = String::from("sil = \"standin\"");
     for extension in extra_extensions {
         extensions.push_str(&format!(", {extension} = \"standin\""));
@@ -208,8 +223,10 @@ pub fn standin_row(found: Found, marker: &str, extra_extensions: &[&str]) -> Str
          [[standin.server]]\n\
          name = \"standin\"\n\
          {find}\n\
+         args = [{}]\n\
          trial = [\"--version\"]\n\
-         ready = {{ kind = \"answer\" }}\n"
+         ready = {{ kind = \"answer\" }}\n",
+        args.join(", ")
     )
 }
 
@@ -246,7 +263,7 @@ pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig 
         cache: navigator_cache(world),
         search_path,
         environment,
-        platform: Platform::current(),
+        platform: None,
         stop_after: STOP_AFTER,
         clock: std::sync::Arc::new(SystemClock),
     }
@@ -612,8 +629,9 @@ impl Composed {
     }
 
     /// Ends the Navigator the Window started, as the quit of the app does, and proves it
-    /// gone: it ended within its deadline, and the process of no server it had told is
-    /// left. Does nothing for a Window opened with none.
+    /// gone: it ended within its deadline, and by the time the call returns the process of
+    /// no server it had told is left (the call waited for them: nothing here does). Does
+    /// nothing for a Window opened with none.
     pub fn end_the_navigator(&mut self, cx: &mut VisualTestContext) {
         let pids: Vec<u32> = self.models.navigation.read_with(cx, |navigation, _| {
             navigation
@@ -625,8 +643,8 @@ impl Composed {
         let ended = cx.update(|_, cx| yaar_window::stop_navigator(&self.models, cx));
         assert!(ended, "the Navigator did not end within its deadline");
         assert!(
-            wait_for(DEADLINE, || pids.iter().all(|pid| !is_alive(*pid))),
-            "a language server outlived the Navigator: {:?}",
+            pids.iter().all(|pid| !is_alive(*pid)),
+            "a language server outlived the end of the Navigator: {:?}",
             pids.iter()
                 .filter(|pid| is_alive(**pid))
                 .collect::<Vec<_>>()

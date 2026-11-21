@@ -11,17 +11,19 @@
 
 mod common;
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, point};
 use yaar_link::Request;
-use yaar_navigator::{FileKind, State, Tree};
+use yaar_navigator::{FileKind, Location, State, Tree};
 use yaar_review_pane::HoverShown;
-use yaar_system_tests::{DEADLINE, Repo, World, is_alive, wait_until as wait_for};
+use yaar_system_tests::{Repo, World, is_alive};
 
 use common::{
     Composed, Found, drawn, give_an_identity, navigator_cache, navigator_for,
-    open_composed_with_a_navigator, standin_row, wait_until,
+    open_composed_with_a_navigator, standin_row, standin_row_started_with, wait_until,
 };
 
 /// The file the change leaves in place, which defines the names the change uses.
@@ -92,6 +94,55 @@ fn the_line_says(state: &str, cx: &mut VisualTestContext) -> bool {
     drawn(&format!("review-servers-state:{state}"), cx).is_some()
 }
 
+/// The file the stand-in of a side logs to: `{root}/../standin.log`, beside the folder it
+/// serves, so that each side has a log of its own (the worktree's parent for the new side,
+/// the folder the export lies in for the old). The Navigator expands `{root}` as the folder
+/// of the side, and the stand-in makes no folder, so the log lies where one already is.
+const LOG_BESIDE_ROOT: &str = "{root}/../standin.log";
+
+/// The log of the stand-in that serves `root`, as the row writes it.
+fn log_beside(root: &Path) -> PathBuf {
+    root.parent()
+        .expect("the folder a server serves has a parent")
+        .join("standin.log")
+}
+
+/// The lines of a stand-in's log, one JSON object each; none while it has not been made.
+fn log_of(log: &Path) -> Vec<String> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
+
+/// How many requests of `method` the stand-in logged. The window's tests read the log as
+/// text, which is what its lines are: `"event":"request"` and `"method":"<method>"`.
+fn requests(log: &Path, method: &str) -> usize {
+    log_of(log)
+        .iter()
+        .filter(|line| {
+            line.contains("\"event\":\"request\"")
+                && line.contains(&format!("\"method\":\"{method}\""))
+        })
+        .count()
+}
+
+/// The folders the stand-in of `log` was started in, from the `cwd` of each `start` line.
+fn started_in(log: &Path) -> Vec<PathBuf> {
+    log_of(log)
+        .iter()
+        .filter(|line| line.contains("\"event\":\"start\""))
+        .map(|line| {
+            let from = line.find("\"cwd\":\"").expect("a start names its folder") + 7;
+            let length = line[from..].find('"').expect("the folder ends");
+            PathBuf::from(&line[from..from + length])
+                .canonicalize()
+                .expect("the folder of a start exists")
+        })
+        .collect()
+}
+
 // WIN-10
 #[gpui_kit::test]
 fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_removed_line_from_the_old_side_the_keeper_exported(
@@ -101,15 +152,21 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     world.start_keeper();
     let (repository, base) = repository_with_a_change(&world);
     let folder = repository.path().to_owned();
+    // Read before the Window opens the folder: from then on a server may run in it.
+    let status = repository.git(&["status", "--porcelain"]);
     let navigator = navigator_for(
         &world,
         Found::OnTheMachine,
-        &standin_row(Found::OnTheMachine, "main.sil", &[]),
+        &standin_row_started_with(
+            Found::OnTheMachine,
+            "main.sil",
+            &[],
+            &["--log", LOG_BESIDE_ROOT],
+        ),
     );
     let (mut window, mut cx) = open_composed_with_a_navigator(world, cx, Vec::new(), navigator);
     window.open_this_folder(&folder, &mut cx);
     window.show_the_changes_view(&mut cx);
-    let status = repository.git(&["status", "--porcelain"]);
 
     // The reviewer comes to a name of an added line: the pane names the server of that file,
     // which the Navigator found, started, and says is ready.
@@ -241,17 +298,42 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     // The repository holds nothing of it.
     assert_eq!(repository.git(&["status", "--porcelain"]), status);
 
-    window.end_the_navigator(&mut cx);
+    // Which server answered: each side's stand-in logs beside its own root. The answer was
+    // read before this, and a server logs a request before it answers, so what an answer
+    // came from is in a log by now. The new side's server was started in the worktree and
+    // was asked only about the added line; the old side's was started in the export and
+    // answered the removed line (more than once when the first hover found it ready).
+    let (new_log, old_log) = (log_beside(&folder), log_beside(&into));
+    assert_ne!(new_log, old_log, "the two sides share a log");
+    assert_eq!(
+        started_in(&new_log),
+        [folder.canonicalize().expect("the worktree")]
+    );
+    assert_eq!(
+        started_in(&old_log),
+        [into.canonicalize().expect("the export")]
+    );
+    assert_eq!(
+        requests(&new_log, "textDocument/hover"),
+        1,
+        "the new side's server was asked about the removed line"
+    );
     assert!(
-        wait_for(DEADLINE, || !Path::new(&into).exists()),
+        requests(&old_log, "textDocument/hover") >= 1,
+        "the old side's server was never asked"
+    );
+
+    window.end_the_navigator(&mut cx);
+    // The end of the Navigator removed what it exported, and the call waited for that.
+    assert!(
+        !Path::new(&into).exists(),
         "the export outlived the Navigator"
     );
 }
 
-// Of its own: the app's quit ends the Navigator and the servers it started, as a user's
-// quit does, and the Window waits for it.
-#[gpui_kit::test]
-fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppContext) {
+/// A composed Window with a Navigator, on the repository of the test with the stand-in
+/// running for the file on screen: gives it, its context and the process of the server.
+fn with_a_server_running(cx: &mut TestAppContext) -> (Composed, VisualTestContext, u32) {
     let mut world = World::new();
     world.start_keeper();
     let (repository, _) = repository_with_a_change(&world);
@@ -280,6 +362,14 @@ fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppCont
     });
     let pid = pid.expect("a server runs");
     assert!(is_alive(pid));
+    (window, inner, pid)
+}
+
+// Of its own: the app's quit ends the Navigator and the servers it started, as a user's
+// quit does, and the Window waits for it.
+#[gpui_kit::test]
+fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppContext) {
+    let (_window, _inner, pid) = with_a_server_running(cx);
 
     cx.update(|app| app.shutdown());
     // The quit waited for it: no wait here.
@@ -287,6 +377,35 @@ fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppCont
         !is_alive(pid),
         "the server {pid} outlived the quit of the app"
     );
+}
+
+/// Lets a server that a test stopped go on again when the test ends, so that none is left
+/// stopped by a test that failed before the Navigator killed it.
+struct Resumed(u32);
+
+impl Drop for Resumed {
+    fn drop(&mut self) {
+        // SAFETY: signal CONT to a process the test stopped; one that is gone takes none.
+        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGCONT) };
+    }
+}
+
+// Of its own: ending a Navigator waits for its servers. One that is stopped, so that it
+// reads no `shutdown` and cannot end of itself, is killed after the Navigator's deadline,
+// and the call returns only once it is reaped.
+#[gpui_kit::test]
+fn ending_a_navigator_returns_only_once_a_server_that_does_not_end_is_gone(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, mut inner, pid) = with_a_server_running(cx);
+    let _resumed = Resumed(pid);
+    // SAFETY: signal STOP to the stand-in this test started.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
+
+    // The server is not gone by itself, so a call that did not wait for it leaves it, and
+    // `end_the_navigator` looks for it as soon as the call returns.
+    window.end_the_navigator(&mut inner);
+    assert!(!is_alive(pid));
 }
 
 /// Opens a window as `open_with` does, with a Navigator whose registry has the stand-in's
@@ -350,13 +469,46 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
     }
 
     assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
-    // The second Navigator was not the first's: it still tells and still listens, and
-    // stopping the first again is a call that finds nothing to stop.
+    // The second Navigator was not the first's: it still listens and answers. The model's
+    // flags only change when the end of a Navigator reaches it, which may be a turn later
+    // than this look, so the test asks the second Navigator for a file and waits for what
+    // it tells: an ended Navigator answers nothing but a refusal.
+    let file = world.home().join("barrier.sil");
+    std::fs::write(&file, "def barrier\n").expect("write the file");
+    let asking = second.navigation.update(&mut second_cx, |navigation, cx| {
+        navigation.open(
+            Location {
+                path: file.clone(),
+                line: 1,
+                column: 0,
+                text: String::new(),
+            },
+            cx,
+        )
+    });
+    let answer = Rc::new(RefCell::new(None));
+    let _waiting = cx.foreground_executor().spawn({
+        let answer = answer.clone();
+        async move {
+            let told = asking.await;
+            *answer.borrow_mut() = Some(told);
+        }
+    });
+    wait_until(&mut second_cx, "the second Navigator to answer", |_| {
+        answer.borrow().is_some()
+    });
+    let opened = answer
+        .take()
+        .expect("an answer")
+        .expect("the second Navigator is still connected")
+        .expect("the second Navigator reads the file");
+    assert_eq!(opened.text, "def barrier\n");
     assert!(
         second
             .navigation
             .read_with(&second_cx, |navigation, _| navigation.is_connected())
     );
+    // Stopping the first again is a call that finds nothing to stop.
     assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
     assert!(second.navigation.read_with(&second_cx, |navigation, _| {
         !navigation.languages().is_empty()
