@@ -216,6 +216,9 @@ program does, and the app writes nothing of pi's and does not hear it.
   | Python | basedpyright, pyright, ty, pyrefly | ty |
   | Rust | rust-analyzer: the first program of that name on the search path of the Window (rustup's runs the project's toolchain), and no copy of the project's own | rust-analyzer |
 
+  For Rust, a rust-analyzer that lies earlier on the search path than rustup's, Homebrew's
+  for one, runs first, before the one rustup runs for the project's toolchain.
+
   "On the machine" means in a folder of the search path the Window was started with. A Window
   started from the Finder or the Dock on macOS has the system's short search path and finds
   none of rustup's, Homebrew's or nvm's; one started with `cargo run` from a shell has the
