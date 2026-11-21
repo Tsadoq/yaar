@@ -134,8 +134,11 @@ impl WorkspaceList {
     /// made with an agent needs, whose workspace the Keeper names in its reply before it tells
     /// the list.
     pub fn want_on_screen(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
-        let _ = (workspace, cx);
-        todo!("as open_folder's wanted workspace, as the doc says")
+        if self.workspace(&workspace).is_some() {
+            self.select(&workspace, cx);
+        } else {
+            self.wanted = Some(workspace);
+        }
     }
 
     /// An empty list, fed by `link`.

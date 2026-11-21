@@ -37,6 +37,8 @@ pub struct AgentList {
     listing: Option<Task<()>>,
     /// Whether the answer to that question is still awaited.
     awaits_list: bool,
+    /// The name of the CLI the user moved the choice to; none until they did.
+    chosen: Option<String>,
 }
 
 impl AgentList {
@@ -72,6 +74,7 @@ impl AgentList {
             listing_clis: None,
             listing: None,
             awaits_list: false,
+            chosen: None,
         };
         if connected {
             list.refresh(cx);
@@ -111,14 +114,28 @@ impl AgentList {
     /// again keeps the choice while the CLI is in it, and falls back to the first when it is
     /// not; none while the Keeper names no CLI. The one choice of the Window, for its life.
     pub fn chosen_cli(&self) -> Option<&AgentCli> {
-        todo!("the chosen CLI, as the doc says")
+        self.chosen
+            .as_ref()
+            .and_then(|name| self.clis.iter().find(|cli| cli.agent == *name))
+            .or_else(|| self.clis.first())
     }
 
     /// Makes the next CLI of [`AgentList::clis`] the chosen one, and after the last the
     /// first; tells the observers. Does nothing while the Keeper names none.
     pub fn choose_next_cli(&mut self, cx: &mut Context<Self>) {
-        let _ = cx;
-        todo!("the next CLI, as the doc says")
+        let Some(current) = self.chosen_cli() else {
+            return;
+        };
+        let at = self
+            .clis
+            .iter()
+            .position(|cli| cli == current)
+            .unwrap_or_default();
+        let next = self.clis[(at + 1) % self.clis.len()].agent.clone();
+        if self.chosen.as_ref() != Some(&next) {
+            self.chosen = Some(next);
+            cx.notify();
+        }
     }
 
     /// Asks the Keeper for every workspace's agents, and takes the answer unless a later
