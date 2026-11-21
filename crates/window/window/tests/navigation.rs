@@ -17,7 +17,7 @@ use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, point};
 use yaar_link::Request;
 use yaar_navigator::{FileKind, State, Tree};
 use yaar_review_pane::HoverShown;
-use yaar_system_tests::{DEADLINE, Repo, World, wait_until as wait_for};
+use yaar_system_tests::{DEADLINE, Repo, World, is_alive, wait_until as wait_for};
 
 use common::{
     Composed, Found, drawn, give_an_identity, navigator_cache, navigator_for,
@@ -245,5 +245,46 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
     assert!(
         wait_for(DEADLINE, || !Path::new(&into).exists()),
         "the export outlived the Navigator"
+    );
+}
+
+// Of its own: the app's quit ends the Navigator and the servers it started, as a user's
+// quit does, and the Window waits for it.
+#[gpui_kit::test]
+fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppContext) {
+    let mut world = World::new();
+    world.start_keeper();
+    let (repository, _) = repository_with_a_change(&world);
+    let folder = repository.path().to_owned();
+    let navigator = navigator_for(
+        &world,
+        Found::OnTheMachine,
+        &standin_row(Found::OnTheMachine, "main.sil", &[]),
+    );
+    let (mut window, mut inner) = open_composed_with_a_navigator(world, cx, Vec::new(), navigator);
+    window.open_this_folder(&folder, &mut inner);
+    window.show_the_changes_view(&mut inner);
+    let added = row_of(&window, "new", ADDED, &mut inner);
+    window.click_into_the_review_pane(&mut inner);
+    click_name(added, "new", ADDED, "total", &mut inner);
+    let mut pid = None;
+    wait_until(&mut inner, "the stand-in running", |cx| {
+        pid = window.models.navigation.read_with(cx, |navigation, _| {
+            navigation
+                .servers()
+                .iter()
+                .find(|server| server.state == State::Ready)
+                .and_then(|server| server.pid)
+        });
+        pid.is_some()
+    });
+    let pid = pid.expect("a server runs");
+    assert!(is_alive(pid));
+
+    cx.update(|app| app.shutdown());
+    // The quit waited for it: no wait here.
+    assert!(
+        !is_alive(pid),
+        "the server {pid} outlived the quit of the app"
     );
 }
