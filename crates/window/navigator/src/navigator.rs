@@ -120,7 +120,7 @@ pub(crate) struct Core {
     pub(crate) on_screen: Option<WorkspaceId>,
     /// Every answer on the servers inside a repository, as last told.
     pub(crate) consents: Vec<RepositoryConsent>,
-    /// Where this Navigator's own cache lies: `<cache>/<pid>-<k>` ([`own_cache`]).
+    /// Where this Navigator's own cache lies: `<cache>/navigator/<pid>-<k>` ([`own_cache`]).
     pub(crate) own_cache: PathBuf,
     /// What `lifecycle.rs` keeps.
     pub(crate) life: lifecycle::Life,
@@ -151,7 +151,8 @@ impl Core {
 /// Counts the Navigators started in this process, for [`own_cache`].
 static STARTED: AtomicU64 = AtomicU64::new(1);
 
-/// The folder of a new Navigator's own cache: `<cache>/<pid>-<k>`, `<pid>` this process and
+/// The folder of a new Navigator's own cache: `<cache>/navigator/<pid>-<k>` (`cache` is
+/// `<cache>/navigator`, as `NavigatorConfig::cache` holds it), `<pid>` this process and
 /// `<k>` counting the Navigators this process started, from 1, so that two Navigators of one
 /// process (two windows, or two in one test) never share their exports or their logs. At
 /// its start a Navigator removes every such folder whose `<pid>`, the part before the `-`,

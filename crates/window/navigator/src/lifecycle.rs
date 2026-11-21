@@ -35,7 +35,7 @@
 //!    row's `extensions` as the language ids; the log `<own cache>/logs/<n>.log`, `<n>`
 //!    counting the servers this Navigator started, from 1), every variable expanded:
 //!    `{root}` the worktree's folder or the export's, `{worktree}` the worktree's folder,
-//!    `{target}` `<cache>/targets/<workspace>/new` or `old`, `{platform}`, `{servers}` the
+//!    `{target}` `<cache>/navigator/targets/<workspace>/new` or `old`, `{platform}`, `{servers}` the
 //!    downloaded version's folder of that server. Ready at [`ServerEvent::Ready`]. A start
 //!    that fails, an exit before the server was ready, and an exit after it, are each a
 //!    failure of that candidate: the next one is tried (FR-061). `answers::server_gone`
@@ -77,7 +77,7 @@
 //! on screen has its new side's servers ensured again; an old side's server starts again
 //! at the next ask about the old side. A workspace that leaves the list of
 //! [`crate::Ask::Workspaces`] has every server stopped at once, and its build folders,
-//! `<cache>/targets/<workspace>`, removed. [`close`] drops the asks still waiting and stops
+//! `<cache>/navigator/targets/<workspace>`, removed. [`close`] drops the asks still waiting and stops
 //! every server.
 //!
 //! Every stop here is done before the function that does it returns: [`stop`] calls
@@ -180,7 +180,7 @@ enum Phase {
 /// [`crate::NavigatorConfig::builtin`] and the user's file into [`Core::registry`],
 /// writing each [`crate::registry::RowError`] to the standard error as one line; tells
 /// [`crate::Told::Languages`], each row's name, title and extensions in the registry's
-/// order; and removes every folder `<cache>/<pid>-<k>` whose `<pid>`, the part of its name
+/// order; and removes every folder `<cache>/navigator/<pid>-<k>` whose `<pid>`, the part of its name
 /// before the `-`, names no process that runs (a folder whose name is not of that form is
 /// left as it is).
 pub(crate) fn started(core: &mut Core) {
@@ -266,7 +266,7 @@ fn process_runs(pid: u32) -> bool {
 
 /// [`crate::Ask::Workspaces`]: keeps the list; every key of a workspace no longer listed, or
 /// whose worktree is gone, is stopped and forgotten; a workspace listed before and no
-/// longer listed has `<cache>/targets/<workspace>` removed.
+/// longer listed has `<cache>/navigator/targets/<workspace>` removed.
 pub(crate) fn workspaces(core: &mut Core, roots: Vec<WorkspaceRoot>) {
     let before: Vec<WorkspaceId> = core.workspaces.iter().map(|root| root.id.clone()).collect();
     core.workspaces = roots;

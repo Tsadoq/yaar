@@ -6,7 +6,9 @@
 //! At the first ask about the old side of `version` in a workspace ([`root`]), the
 //! Navigator tells [`crate::Told::ExportWanted`] once, into a folder of its own cache that
 //! does not exist yet, `<own cache>/old/<n>`, `n` counting up from 1 in this Navigator
-//! (the own cache, `<cache>/<pid>-<k>`, is this Navigator's alone).
+//! (the own cache, `<cache>/navigator/<pid>-<k>`, is this Navigator's alone). Here `<cache>`
+//! is `yaar_link::cache_dir()`, as in the table of folders in `lib.rs`; the field
+//! [`crate::NavigatorConfig::cache`], the Navigator's cache folder, is `<cache>/navigator`.
 //! The Keeper writes it and the Frame hands the answer back ([`exported`]). On success,
 //! for every row's `old_side.link`, each folder of that name the worktree holds, at any
 //! depth but inside `.git` and inside a folder already linked, is linked into the export
