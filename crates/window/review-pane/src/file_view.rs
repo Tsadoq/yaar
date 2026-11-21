@@ -15,7 +15,8 @@
 //! work on the lines of the diff it hides do nothing while it is open.
 //!
 //! The place left is kept when the first file view opens from the diff: the view (Changes
-//! or Flow), the reviewer's position, the name and the scroll. [`crate::GoBack`]
+//! or Flow), the reviewer's position and the name; the scroll of the rows stays in their own
+//! scroll handle, which the file view does not use. [`crate::GoBack`]
 //! (`escape`) and a click on the control close the file view, put that place back as it
 //! was, and drop it. A definition or a reference followed from inside a file view opens
 //! the next file view and keeps the place left in the diff: going back always returns to
@@ -153,7 +154,6 @@ impl ReviewPane {
             self.navigate.left = Some(Left {
                 view: self.view,
                 name: self.navigate.name.clone(),
-                offset: self.scroll.0.borrow().base_handle.offset(),
             });
         }
         self.navigate.file_lines = line_ranges(&file.text);
@@ -201,8 +201,10 @@ impl ReviewPane {
         self.leave_file_view(window, cx);
     }
 
-    /// Closes the file view, and puts back the view, the name and the scroll of the diff
-    /// that were left.
+    /// Closes the file view, and puts back the view and the name of the diff that were left.
+    /// The scroll of the rows is not put back: their scroll handle keeps its offset while the
+    /// file view has its own, and rebuilding the rows under the reviewer moves it as it
+    /// moves it for a diff on screen, so that the row the reviewer left is where it was.
     fn leave_file_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.navigate.file.take().is_none() {
             return;
@@ -211,7 +213,6 @@ impl ReviewPane {
         if let Some(left) = self.navigate.left.take() {
             self.view = left.view;
             self.navigate.name = left.name;
-            self.scroll.0.borrow().base_handle.set_offset(left.offset);
         }
         self.close_list(window, cx);
         self.focus.focus(window, cx);

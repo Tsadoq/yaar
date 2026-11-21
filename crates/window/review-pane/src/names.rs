@@ -37,12 +37,13 @@ pub(crate) fn names_of(line: &str) -> Vec<Range<usize>> {
     names
 }
 
-/// The index, in [`names_of`]'s list, of the name that holds the byte `at`, or whose end is
-/// `at`; none where no name does.
+/// The index, in [`names_of`]'s list, of the name whose characters hold the byte `at`; none
+/// where no name does, the byte right after a name's last character included. A pointer is
+/// on the character it is over, so the character after a name is not part of it.
 pub(crate) fn name_at(line: &str, at: usize) -> Option<usize> {
     names_of(line)
         .iter()
-        .position(|name| name.start <= at && at <= name.end)
+        .position(|name| name.start <= at && at < name.end)
 }
 
 #[cfg(test)]
@@ -97,17 +98,25 @@ mod tests {
     }
 
     #[test]
-    fn a_byte_holds_the_name_it_is_in_or_the_name_that_ends_there() {
+    fn a_byte_holds_the_name_it_is_in_and_the_byte_after_the_name_is_not() {
         let line = "ab  cd";
         assert_eq!(name_at(line, 0), Some(0));
         assert_eq!(name_at(line, 1), Some(0));
-        // The end of `ab`.
-        assert_eq!(name_at(line, 2), Some(0));
-        // Between the names.
+        // The byte after `ab` is no part of it.
+        assert_eq!(name_at(line, 2), None);
         assert_eq!(name_at(line, 3), None);
         assert_eq!(name_at(line, 4), Some(1));
-        assert_eq!(name_at(line, 6), Some(1));
+        assert_eq!(name_at(line, 5), Some(1));
+        // The end of the line.
+        assert_eq!(name_at(line, 6), None);
         assert_eq!(name_at(line, 7), None);
         assert_eq!(name_at("", 0), None);
+        // A name's characters may be several bytes: all of them hold it.
+        assert_eq!(name_at("é(x", 0), Some(0));
+        assert_eq!(name_at("é(x", 1), Some(0));
+        assert_eq!(name_at("é(x", 2), None);
+        assert_eq!(name_at("é(x", 3), Some(1));
+        // A name next to a symbol, as in `a.b`: the dot belongs to neither.
+        assert_eq!(name_at("a.b", 1), None);
     }
 }

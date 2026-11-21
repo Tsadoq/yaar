@@ -19,7 +19,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{
-    Bounds, Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point,
+    Bounds, Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
 use yaar_link::{FileStatus, History, HistoryEntry, SessionId, TurnId, WorkspaceId};
@@ -94,6 +94,21 @@ fn row_of(pane: &Entity<ReviewPane>, wanted: Row, cx: &mut VisualTestContext) ->
     .unwrap_or_else(|| panic!("no row {wanted:?}"))
 }
 
+/// Where the character at offset `at` of `text` is drawn: the middle of its cell, in the
+/// element of the text of the row, by the rule in the header.
+fn char_point(
+    row: usize,
+    side: &str,
+    text: &str,
+    at: usize,
+    cx: &mut VisualTestContext,
+) -> Point<Pixels> {
+    let selector = format!("review-text-{row}-{side}:{text}");
+    let bounds = drawn(&selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
+    let cell = bounds.size.width / text.chars().count() as f32;
+    point(bounds.left() + cell * (at as f32 + 0.5), bounds.center().y)
+}
+
 /// Where the first byte of `name` in `text` is drawn, in the element of the text of the
 /// row, by the rule in the header.
 fn name_point(
@@ -103,14 +118,43 @@ fn name_point(
     name: &str,
     cx: &mut VisualTestContext,
 ) -> Point<Pixels> {
-    let selector = format!("review-text-{row}-{side}:{text}");
-    let bounds = drawn(&selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
-    let chars = text.chars().count() as f32;
-    let cell = bounds.size.width / chars;
     let offset = text[..text.find(name).expect("the line holds the name")]
         .chars()
+        .count();
+    char_point(row, side, text, offset, cx)
+}
+
+/// What the mark of the name should cover, as the left and right edge of the name `name`
+/// of `text`: where its first character starts and where its last one ends.
+fn name_edges(
+    row: usize,
+    side: &str,
+    text: &str,
+    name: &str,
+    cx: &mut VisualTestContext,
+) -> (Pixels, Pixels) {
+    let selector = format!("review-text-{row}-{side}:{text}");
+    let bounds = drawn(&selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
+    let cell = bounds.size.width / text.chars().count() as f32;
+    let start = text[..text.find(name).expect("the line holds the name")]
+        .chars()
         .count() as f32;
-    point(bounds.left() + cell * (offset + 0.5), bounds.center().y)
+    (
+        bounds.left() + cell * start,
+        bounds.left() + cell * (start + name.chars().count() as f32),
+    )
+}
+
+/// The mark of the name is drawn under the name, no wider and no further left or right:
+/// its edges are the name's, to the rounding of the layout to whole pixels.
+fn assert_marks(row: usize, side: &str, text: &str, name: &str, cx: &mut VisualTestContext) {
+    let mark = bounds("review-name", cx);
+    let (left, right) = name_edges(row, side, text, name, cx);
+    let slack = px(1.5);
+    assert!(
+        (mark.left() - left).abs() < slack && (mark.right() - right).abs() < slack,
+        "the mark {mark:?} is not under {name} ({left:?} to {right:?})"
+    );
 }
 
 /// A click on `name` in the text of a row.
@@ -242,18 +286,7 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
         }
     );
     // The mark of the name is drawn under the name, and no wider.
-    let mark = bounds("review-name", &mut cx);
-    let at = name_point(added, "new", ADDED, "perimeter", &mut cx);
-    assert!(mark.contains(&at), "{mark:?} does not hold {at:?}");
-    let cell = bounds(&format!("review-text-{added}-new:{ADDED}"), &mut cx)
-        .size
-        .width
-        / ADDED.chars().count() as f32;
-    // The layout is rounded to whole pixels.
-    assert!(
-        (mark.size.width - cell * 9.).abs() < gpui_kit::px(1.5),
-        "{mark:?} is not nine cells of {cell:?}"
-    );
+    assert_marks(added, "new", ADDED, "perimeter", &mut cx);
 
     // `shift-k` asks the hover of that name, of the files on disk.
     cx.simulate_keystrokes("shift-k");
@@ -405,6 +438,99 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
     assert_eq!(asked.name, "let");
 }
 
+/// Where the characters of `ADDED` lie, by offset: four spaces, then `let` (4 to 7), a
+/// space, `total` (8 to 13), a space, `=`, a space, `perimeter` (16 to 25), `(`, `sides`
+/// (26 to 31), `)` and `;`.
+const LET: std::ops::Range<usize> = 4..7;
+const TOTAL: std::ops::Range<usize> = 8..13;
+const PERIMETER: std::ops::Range<usize> = 16..25;
+const SIDES: std::ops::Range<usize> = 26..31;
+
+// RP-21, the name the pointer is on is the name whose characters hold it
+#[gpui_kit::test]
+fn a_click_chooses_the_name_whose_characters_hold_the_pointer_and_none_at_its_edges(
+    cx: &mut TestAppContext,
+) {
+    let (stage, _navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+
+    // Each case: the name the reviewer is on, the character clicked, the name it is on
+    // after. The first and last characters of a name are the name's; the character
+    // before and the character after it are not, and a click on one leaves the reviewer
+    // where they were.
+    let cases = [
+        ("sides", LET.end - 1, "let"),
+        ("sides", LET.end, "sides"),
+        ("sides", TOTAL.start, "total"),
+        ("sides", TOTAL.end - 1, "total"),
+        ("sides", TOTAL.end, "sides"),
+        ("let", PERIMETER.start, "perimeter"),
+        ("let", PERIMETER.end - 1, "perimeter"),
+        ("let", PERIMETER.end, "let"),
+        ("let", SIDES.start, "sides"),
+        ("let", SIDES.end - 1, "sides"),
+        ("let", SIDES.end, "let"),
+        ("total", SIDES.end + 1, "total"),
+    ];
+    for (from, at, wanted) in cases {
+        click_name(added, "new", ADDED, from, Modifiers::none(), &mut cx);
+        assert_eq!(name(pane, &mut cx).as_deref(), Some(from), "from {from}");
+        let on = char_point(added, "new", ADDED, at, &mut cx);
+        cx.simulate_click(on, Modifiers::none());
+        assert_eq!(
+            name(pane, &mut cx).as_deref(),
+            Some(wanted),
+            "a click on {:?} (offset {at}) with the reviewer on {from}",
+            &ADDED[at..at + 1]
+        );
+    }
+}
+
+// RP-21, the mouse resting where no name is
+#[gpui_kit::test]
+fn the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing(cx: &mut TestAppContext) {
+    let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+    click_name(added, "new", ADDED, "let", Modifiers::none(), &mut cx);
+
+    // The mouse rests on the characters next to a name, which are no name's: the `(`
+    // after `perimeter`, and the space after `total`. The delay passes, and the executor
+    // runs what the delay released. The barrier is an ask of the reviewer's own: if the
+    // mouse asked, it came first.
+    for at in [PERIMETER.end, TOTAL.end] {
+        let on = char_point(added, "new", ADDED, at, &mut cx);
+        cx.simulate_mouse_move(on, None, Modifiers::none());
+        cx.executor()
+            .advance_clock(HOVER_DELAY + Duration::from_millis(1));
+        cx.run_until_parked();
+        cx.simulate_keystrokes("shift-k");
+        let asked = hover_answered(&mut navigator, &mut cx);
+        assert_eq!(
+            asked.name, "let",
+            "the mouse asked for a name it did not rest on, at {at}"
+        );
+    }
+
+    // The mouse rests on `sides` and leaves the rows before the delay passes, for the
+    // corner of the window, where no row is. It asks nothing when the delay is over.
+    let on_sides = name_point(added, "new", ADDED, "sides", &mut cx);
+    cx.simulate_mouse_move(on_sides, None, Modifiers::none());
+    let away = point(px(1.), px(1.));
+    assert!(
+        !bounds_of_row(added, &mut cx).contains(&away),
+        "the corner is on the row"
+    );
+    cx.simulate_mouse_move(away, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(HOVER_DELAY + Duration::from_millis(1));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("shift-k");
+    let asked = hover_answered(&mut navigator, &mut cx);
+    assert_eq!(asked.name, "let", "the mouse asked for a name it left");
+}
+
 // RP-21, the keys that move the name, and what moving does to the hover
 #[gpui_kit::test]
 fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_way(
@@ -427,9 +553,12 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     }
     cx.simulate_keystrokes("h");
     assert_eq!(name(pane, &mut cx).as_deref(), Some("let"));
-    // The mark follows the name.
-    let mark = bounds("review-name", &mut cx);
-    assert!(mark.contains(&name_point(added, "new", ADDED, "let", &mut cx)));
+    // The mark follows the name, and is under it only.
+    assert_marks(added, "new", ADDED, "let", &mut cx);
+    cx.simulate_keystrokes("l l");
+    assert_marks(added, "new", ADDED, "perimeter", &mut cx);
+    cx.simulate_keystrokes("h h");
+    assert_marks(added, "new", ADDED, "let", &mut cx);
 
     // Moving to another name drops the hover that was shown for the first.
     cx.simulate_keystrokes("shift-k");
@@ -470,6 +599,9 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     cx.simulate_keystrokes("escape");
     assert_eq!(hover(pane, &mut cx), None);
     assert_eq!(notice(pane, &mut cx), None);
+    // It asked nothing: the ask of the next key is the next ask the pane makes.
+    cx.simulate_keystrokes("shift-k");
+    assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 }
 
 // RP-24
@@ -1044,10 +1176,7 @@ fn a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_p
     // Off every name, at the end of the line: nothing is asked. The barrier is the hover
     // that the next key asks, which comes after anything the click asked.
     let text = bounds(&format!("review-text-{added}-new:{ADDED}"), &mut cx);
-    cx.simulate_click(
-        point(text.right() + gpui_kit::px(20.), text.center().y),
-        secondary,
-    );
+    cx.simulate_click(point(text.right() + px(20.), text.center().y), secondary);
     cx.simulate_keystrokes("shift-k");
     assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 }

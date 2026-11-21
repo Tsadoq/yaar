@@ -333,7 +333,67 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
     cx.simulate_keystrokes("escape");
     assert_eq!(file_view(pane, &mut cx), None);
     assert_eq!(position(pane, &mut cx), before.0);
+    // The name is the one the reviewer left in the diff, not the one the first file view
+    // had: the place left is kept by the first file view and by no other.
+    assert_eq!(name(pane, &mut cx), before.1);
+    assert_eq!(pane.read_with(&cx, |pane, _| pane.rows_in_view()), before.3);
     assert_eq!(common::bounds_of_row(row, &mut cx), before.2);
+}
+
+// RP-22, the way back when the rows changed while the reviewer was away
+#[gpui_kit::test]
+fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_it_meanwhile(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut navigator, mut cx) = open_long(cx);
+    let (row, _) = click_compute(&stage, &mut cx);
+    let clicked = stage
+        .pane
+        .read_with(&cx, |pane, _| pane.rows()[row].clone());
+    let before = common::bounds_of_row(row, &mut cx);
+
+    go_to_definition(
+        vec![location("/gits/feature/src/lib.rs", 12)],
+        Some(opened_of(
+            in_the_worktree("src/lib.rs"),
+            "/gits/feature/src/lib.rs",
+            30,
+        )),
+        &mut navigator,
+        &mut cx,
+    );
+    assert!(file_view(&stage.pane, &mut cx).is_some());
+
+    // While the file view is open the Keeper tells a thread on a line far above what the
+    // reviewer left in view: its rows come into the diff above it.
+    let mut above = thread('4', anchor(None, "src/lib.rs", LinkSide::New, 2));
+    above.anchor.text = "    let v2 = 2;".to_owned();
+    let rows_before = stage.pane.read_with(&cx, |pane, _| pane.rows().len());
+    let review = Review {
+        threads: vec![above.clone()],
+        ..no_agent_review()
+    };
+    stage.keeper.set_reviews(reviews_of(vec![review]));
+    stage.keeper.tell(Fact::ReviewsChanged {
+        workspace: workspace_id(),
+    });
+    wait_until(&mut cx, "the thread above, in the rows", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.rows().len() > rows_before)
+    });
+    // The file view is still what is shown.
+    assert!(file_view(&stage.pane, &mut cx).is_some());
+
+    cx.simulate_keystrokes("escape");
+    let now = stage.pane.read_with(&cx, |pane, _| {
+        pane.rows().iter().position(|held| *held == clicked)
+    });
+    let now = now.expect("the row the reviewer left is still among the rows");
+    assert!(now > row, "the thread's rows came above it");
+    // The reviewer's row is drawn where it was: the view went down by the rows that came.
+    assert_eq!(common::bounds_of_row(now, &mut cx), before);
+    assert_eq!(name(&stage.pane, &mut cx).as_deref(), Some("compute"));
 }
 
 // RP-22, several definitions

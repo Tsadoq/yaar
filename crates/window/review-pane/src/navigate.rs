@@ -187,8 +187,6 @@ pub(crate) struct Left {
     pub(crate) view: View,
     /// The name the reviewer was on.
     pub(crate) name: Option<(Cursor, usize)>,
-    /// How far the rows were scrolled.
-    pub(crate) offset: Point<Pixels>,
 }
 
 /// What this module keeps in the pane: the name the reviewer is on, the asks on their way,
@@ -1182,7 +1180,9 @@ impl ReviewPane {
 }
 
 /// The index, among the names of `text`, of the one under `position`, a point of the
-/// window, by the layout the text was drawn with; none where the pointer is on none.
+/// window, by the layout the text was drawn with; none where the pointer is on none. The
+/// layout gives the character the pointer is over, so a name holds the pointer only on its
+/// own characters.
 fn name_under(text: &str, layout: &TextLayout, position: Point<Pixels>) -> Option<usize> {
     let at = layout.index_for_position(position).ok()?;
     names::name_at(text, at)
