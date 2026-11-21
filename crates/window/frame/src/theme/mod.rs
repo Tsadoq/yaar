@@ -7,7 +7,7 @@
 //! checks one; nothing that draws changes, since nothing that draws names a colour: the
 //! Frame and the panes read the toolkit's theme (`cx.theme()`), whose colours the applied
 //! definition sets ([`ThemeDefinition::onto`]), and the terminal pane reads
-//! [`TerminalColors`] of the applied definition ([`applied`], which [`set_applied`] sets).
+//! [`TerminalColors`] of the applied definition ([`applied`], which `crate::Looks` sets).
 //!
 //! # The definitions the app is built with
 //!
@@ -22,12 +22,12 @@
 //! over `background` first); where a pair falls short, the text role alone is changed, in
 //! steps of 5 points of lightness in HSL (darker on a light theme, lighter on a dark one),
 //! until it passes (and where that direction can never pass, as for the dark theme's
-//! `warning_foreground`, a dark text on a light yellow, the other direction). The terminal's colours: `foreground` and `background` those of the
-//! theme, `cursor` the theme's `foreground`, `selection` the theme's `selection`, and the
-//! sixteen of `ansi` in xterm's order: 0 black `#000000`, 1 to 6 the theme's `red`,
-//! `green`, `yellow`, `blue`, `magenta`, `cyan`, 7 white `#e5e5e5`, 8 bright black
-//! `#7f7f7f`, 9 to 14 the theme's `red_light` to `cyan_light`, 15 bright white `#ffffff`:
-//! what the terminal pane drew before slice 9.
+//! `warning_foreground`, a dark text on a light yellow, the other direction). The terminal's
+//! colours: `foreground` and `background` those of the theme, `cursor` the theme's
+//! `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in xterm's order:
+//! 0 black `#000000`, 1 to 6 the theme's `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
+//! 7 white `#e5e5e5`, 8 bright black `#7f7f7f`, 9 to 14 the theme's `red_light` to `cyan_light`,
+//! 15 bright white `#ffffff`: what the terminal pane drew before slice 9.
 //!
 //! # What the definitions must hold
 //!
@@ -397,8 +397,15 @@ pub fn applied(cx: &App) -> ThemeDefinition {
 }
 
 /// Keeps `definition` as the one [`applied`] gives. `crate::Looks` calls this as the third
-/// step of applying a definition; it writes nothing into the toolkit's colours.
-pub fn set_applied(definition: ThemeDefinition, cx: &mut App) {
+/// step of applying a definition; it writes nothing into the toolkit's colours. It is the
+/// crate's own: nothing outside the Frame may set the applied definition around `Looks`.
+// Nothing but a test calls it until `Looks` does its third step; whoever writes that call removes
+// this attribute.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "`Looks` is the caller, not yet written")
+)]
+pub(crate) fn set_applied(definition: ThemeDefinition, cx: &mut App) {
     cx.set_global(Applied(definition));
 }
 
@@ -595,7 +602,16 @@ mod tests {
             Themes::built_in().with(named("dark")),
             Err(ThemeError::Taken("dark".to_owned()))
         );
-        for bad in [String::new(), "x".repeat(65), "two\nlines".to_owned()] {
+        // Every kind of control character, not only the newline.
+        for bad in [
+            String::new(),
+            "x".repeat(65),
+            "two\nlines".to_owned(),
+            "tab\there".to_owned(),
+            "\u{1b}[31m".to_owned(),
+            "bell\u{7}".to_owned(),
+            "\u{7f}".to_owned(),
+        ] {
             assert_eq!(
                 themes.clone().with(named(&bad)),
                 Err(ThemeError::BadName(bad.clone()))
