@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::time::Instant;
 
 use serde_json::Value;
 use support::*;
@@ -1076,14 +1077,11 @@ fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_on
     install(&scratch, "1");
     let two = archive_of("2");
     // The address serves bytes that are not the ones pinned.
-    let loopback = Loopback::serve(vec![
-        ("standin-2.tar.gz".to_owned(), archive_of("other")),
-        ("control.tar.gz".to_owned(), archive_of("1")),
-    ]);
+    let loopback = Loopback::serve(vec![("standin-2.tar.gz".to_owned(), archive_of("other"))]);
     let row = row_with(
         &scratch.root.join("standin.log"),
         &download_of("2", &loopback.url("standin-2.tar.gz"), &two),
-    ) + &control_row(&loopback.url("control.tar.gz"), &archive_of("1"));
+    );
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row));
     running.show(&repo, &ws, &repository);
@@ -1091,16 +1089,31 @@ fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_on
         state.state == State::Ready && state.update.is_some()
     });
 
+    // The barrier: an update asked while another is on its way does nothing, so a second
+    // request for the file can only come from an update that the loop handled after the
+    // first one's end, which it had handled in full by then. The loop handles one event at a
+    // time, in order: each pass asks again and reads after a hover the Navigator answers
+    // by itself, so that nothing the failure did is still to be told.
     running.ask(Ask::Update {
         language: "standin".to_owned(),
     });
-    // The barrier: the control row's whole download, asked after the update, ends after the
-    // failed one (which is a digest that does not match) was handled and the Navigator told
-    // what it did about it.
-    download_the_control(&mut running, &ws);
-    let mut heard = lines(&loopback);
-    heard.sort();
-    assert_eq!(heard, ["GET /control.tar.gz", "GET /standin-2.tar.gz"]);
+    let until = Instant::now() + DEADLINE;
+    while lines(&loopback).len() < 2 {
+        assert!(
+            Instant::now() < until,
+            "waited {DEADLINE:?} for a second update to start"
+        );
+        barrier(&mut running, &repo, &ws);
+        running.ask(Ask::Update {
+            language: "standin".to_owned(),
+        });
+    }
+    barrier(&mut running, &repo, &ws);
+    let heard = lines(&loopback);
+    assert!(
+        heard.iter().all(|line| line == "GET /standin-2.tar.gz"),
+        "{heard:?}"
+    );
 
     // The server that ran runs still: the same process, ready, the update still offered.
     let after = state_of(&running, &ws);
