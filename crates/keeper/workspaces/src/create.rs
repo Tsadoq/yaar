@@ -120,7 +120,8 @@ pub struct Planned {
 }
 
 impl Planned {
-    /// The folder the new worktree is made in, as the module doc's rules give it.
+    /// The folder of the new worktree itself: the folder the module doc's rules give, joined
+    /// with the branch's name.
     pub fn folder(&self) -> &Path {
         &self.folder
     }
