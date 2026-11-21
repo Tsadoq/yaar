@@ -199,6 +199,30 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
         .expect("keep");
     let on_a_state = world.thread(4);
     git(&world.repo, &["checkout", "--quiet", "--", "f"]);
+    // A thread on the new side that sits on the very commit the base moves from: only its
+    // side keeps it out, since no recorded state tells it apart from a thread of the base.
+    world
+        .reviews
+        .save_draft(
+            Some(&world.worktree),
+            &world.review,
+            &DraftSave {
+                thread: ThreadId::new(id(5)),
+                comment: CommentId::new(id(1005)),
+                on: DraftOn::NewThread(NewAnchor {
+                    tree: Some(world.m1.as_str().to_owned()),
+                    path: PathBuf::from("f"),
+                    side: Side::New,
+                    first: 3,
+                    last: 3,
+                    text: "line 3".to_owned(),
+                }),
+                text: "on the new side of the base".to_owned(),
+            },
+        )
+        .expect("save the draft");
+    let new_side_on_the_base = world.thread(5);
+    assert_eq!(new_side_on_the_base.anchor.tree, world.m1.as_str());
 
     // `main` gains two lines above line 3.
     let m2 = world.move_main(&[("f", Some(&with_before(3, &["new 1", "new 2"])))]);
@@ -209,6 +233,7 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
     assert_eq!(carried.now, Some(place(&m2, "f", 5, 5)));
     assert_eq!(carried.anchor.tree, world.m1.as_str(), "the anchor is kept");
     assert_eq!(world.thread(2), new_side);
+    assert_eq!(world.thread(5), new_side_on_the_base);
     assert_eq!(world.thread(3), resolved);
     assert_eq!(world.thread(4), on_a_state);
 }

@@ -6,10 +6,12 @@
 //! environment as its first statement, and these tests are run by `cargo nextest`, which
 //! gives each test a process of its own.
 
+use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -23,6 +25,13 @@ use yaar_link::{
 /// seconds, as every test file of this crate has it, since a Keeper starts git of its own
 /// and a throttled machine runs it slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
+
+/// The variable that makes the test below run a Keeper, on the scratch folder it names,
+/// until it is asked to stop: the Keeper of a process of its own.
+const APART: &str = "YAAR_BASE_MOVES_KEEPER_IN";
+
+/// The name of that test, as the test program lists it.
+const APART_TEST: &str = "the_keeper_of_a_process_of_its_own_serves_the_folder_its_variable_names_and_does_nothing_without_it";
 
 /// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
@@ -80,22 +89,52 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    fn data(&self) -> PathBuf {
-        self.0.join("data")
+    /// What a Keeper on this scratch folder runs with.
+    fn options(root: &Path) -> Options {
+        Options {
+            socket: root.join("k.sock"),
+            linger: Duration::from_secs(60),
+            app_version: "test-keeper".to_owned(),
+            data_dir: root.join("data"),
+            companions: None,
+            home: root.join("home"),
+        }
     }
 
     /// Starts the Keeper's library on a thread of this test, on the data folder of the
     /// test: a second call, after the first Keeper stopped, starts one on the same data.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
-        let options = Options {
-            socket: self.socket(),
-            linger: Duration::from_secs(60),
-            app_version: "test-keeper".to_owned(),
-            data_dir: self.data(),
-            companions: None,
-            home: self.0.join("home"),
-        };
+        let options = Scratch::options(&self.0);
         std::thread::spawn(move || run(options))
+    }
+
+    /// Starts a Keeper on the data folder of the test in a process of its own, this test
+    /// program run again for the one test that plays it. What such a Keeper held in its
+    /// memory goes with the process, so that what a Keeper started after it finds, it
+    /// found in the data folder.
+    fn keeper_apart(&self) -> Apart {
+        let mut child = Command::new(std::env::current_exe().expect("the test program's path"))
+            .args([APART_TEST, "--exact", "--nocapture", "--test-threads=1"])
+            .env(APART, &self.0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("start the Keeper's process");
+        let stdout = child.stdout.take().expect("piped output");
+        let (sender, lines) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Apart {
+            child,
+            lines,
+            reader: Some(reader),
+        }
     }
 
     /// Attaches as a Window does, waiting for the Keeper to listen.
@@ -113,7 +152,6 @@ impl Scratch {
                     stream,
                     next_id: 0,
                     facts: Vec::new(),
-                    looked_at: 0,
                     replies: Vec::new(),
                 };
             }
@@ -162,6 +200,54 @@ impl Scratch {
     }
 }
 
+/// A Keeper in a process of its own. Dropping it kills the process and waits for it, so
+/// that a test that fails leaves none.
+struct Apart {
+    child: Child,
+    lines: Receiver<String>,
+    reader: Option<JoinHandle<()>>,
+}
+
+impl Apart {
+    /// Waits for the Keeper to report that it stopped, and for its process to end well.
+    fn ended(mut self) {
+        loop {
+            match self.lines.recv_timeout(DEADLINE) {
+                Ok(line) if line == "stopped" => break,
+                Ok(_) => {}
+                Err(why) => panic!("the Keeper's process never reported `stopped`: {why}"),
+            }
+        }
+        let status = self.child.wait().expect("wait for the Keeper's process");
+        assert!(status.success(), "the Keeper's process ended with {status}");
+    }
+}
+
+impl Drop for Apart {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+/// What the Keeper of a process of its own does: serves until asked to stop, tells the
+/// test, and ends. Run as a test of its own, it does nothing without its variable.
+#[test]
+fn the_keeper_of_a_process_of_its_own_serves_the_folder_its_variable_names_and_does_nothing_without_it()
+ {
+    let Some(root) = std::env::var_os(APART) else {
+        return;
+    };
+    // The test program writes `test <name> ... ` without ending the line.
+    println!();
+    let exit = run(Scratch::options(Path::new(&root))).expect("run");
+    assert_eq!(exit, Exit::Shutdown);
+    println!("stopped");
+}
+
 /// The repository of [`Scratch::history`] and its commits.
 struct History {
     repo: PathBuf,
@@ -173,7 +259,12 @@ struct History {
 impl History {
     /// Moves `main` to `commit` while nobody has it checked out, as a pull does.
     fn move_main(&self, commit: &str) {
-        git(&self.repo, &["branch", "--force", "main", commit]);
+        self.move_branch("main", commit);
+    }
+
+    /// Moves the branch `name`, which nobody has checked out, to `commit`.
+    fn move_branch(&self, name: &str, commit: &str) {
+        git(&self.repo, &["branch", "--force", name, commit]);
     }
 
     /// Where a reviewer writes a thread on line 3 of `f` on the old side of `commit`.
@@ -214,12 +305,11 @@ fn git(folder: &Path, args: &[&str]) -> String {
 }
 
 /// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
+/// test reads it in order.
 struct Window {
     stream: UnixStream,
     next_id: u32,
     facts: Vec<Fact>,
-    looked_at: usize,
     replies: Vec<(RequestId, Result<Reply, Refusal>, usize)>,
 }
 
@@ -284,6 +374,7 @@ impl Window {
     /// Waits for a `ReviewsChanged` at or after the fact numbered `from`: the facts told
     /// after the reply that came with `from` facts before it.
     fn wait_for_reviews_changed_from(&mut self, from: usize) {
+        let deadline = Instant::now() + DEADLINE;
         loop {
             if self.facts[from.min(self.facts.len())..]
                 .iter()
@@ -291,18 +382,40 @@ impl Window {
             {
                 return;
             }
+            assert!(
+                Instant::now() < deadline,
+                "no ReviewsChanged after the fact numbered {from}: {:#?}",
+                self.facts
+            );
             self.read("a ReviewsChanged");
+        }
+    }
+
+    /// How many `ReviewsChanged` this Window was told among the facts numbered `from` up to
+    /// but not including `to`.
+    fn reviews_changed_between(&self, from: usize, to: usize) -> usize {
+        self.facts[from..to]
+            .iter()
+            .filter(|fact| matches!(fact, Fact::ReviewsChanged { .. }))
+            .count()
+    }
+
+    /// What the changes of `workspace` are counted from, with how many facts this Window
+    /// had been told when the reply came.
+    fn counted_from_noting_facts(&mut self, workspace: &WorkspaceId) -> (String, usize) {
+        match self.ask_noting_facts(Request::GetChanges {
+            workspace: workspace.clone(),
+        }) {
+            (Ok(Reply::Changes(changes)), facts) => {
+                (changes.counted_from.expect("a commit"), facts)
+            }
+            (other, _) => panic!("no changes: {other:?}"),
         }
     }
 
     /// What the changes of `workspace` are counted from.
     fn counted_from(&mut self, workspace: &WorkspaceId) -> String {
-        match self.ask(Request::GetChanges {
-            workspace: workspace.clone(),
-        }) {
-            Ok(Reply::Changes(changes)) => changes.counted_from.expect("a commit"),
-            other => panic!("no changes: {other:?}"),
-        }
+        self.counted_from_noting_facts(workspace).0
     }
 
     /// The review of the workspace, of no agent, and its threads.
@@ -329,8 +442,8 @@ impl Window {
     }
 
     /// Saves the first comment of thread `n` on `anchor` and waits for the `ReviewsChanged`
-    /// that follows the reply.
-    fn start(&mut self, review: &ReviewId, n: u8, anchor: Anchor) {
+    /// that follows the reply, which came with the number of facts this gives.
+    fn start(&mut self, review: &ReviewId, n: u8, anchor: Anchor) -> usize {
         let (reply, facts) = self.ask_noting_facts(Request::SaveDraft {
             review: review.clone(),
             thread: thread_id(n),
@@ -340,11 +453,18 @@ impl Window {
         });
         assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
         self.wait_for_reviews_changed_from(facts);
+        facts
     }
 
     fn stop(mut self, keeper: JoinHandle<std::io::Result<Exit>>) {
         write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
         assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
+    }
+
+    /// Asks a Keeper of a process of its own to stop, and waits for the process to end.
+    fn stop_apart(mut self, keeper: Apart) {
+        write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
+        keeper.ended();
     }
 }
 
@@ -407,8 +527,10 @@ fn a_base_that_moved_under_the_running_keeper_moves_the_threads_once_and_the_sec
 
     // A pull moves `main` to `m2`: the fork point of the workspace moves with it.
     history.move_main(&history.m2);
-    assert_eq!(window.counted_from(&workspace), history.m2);
-    assert_eq!(window.counted_from(&workspace), history.m2);
+    let (counted, first) = window.counted_from_noting_facts(&workspace);
+    assert_eq!(counted, history.m2);
+    let (counted, second) = window.counted_from_noting_facts(&workspace);
+    assert_eq!(counted, history.m2);
     // The barrier: a thread saved after the second answer tells its own `ReviewsChanged`
     // after that reply, so that nothing the second answer told can still be on its way.
     let new_side = Anchor {
@@ -418,11 +540,21 @@ fn a_base_that_moved_under_the_running_keeper_moves_the_threads_once_and_the_sec
         lines: Lines { first: 1, last: 1 },
         text: "g".to_owned(),
     };
-    window.start(&review, 2, new_side);
+    let barrier = window.start(&review, 2, new_side);
 
-    // Told once for the first answer and once for the barrier.
+    // The first answer told once, after its reply and before the second one; the second
+    // told nothing, before the barrier's reply.
+    assert_eq!(window.reviews_changed_between(first, second), 1);
+    assert_eq!(window.reviews_changed_between(second, barrier), 0);
     assert_eq!(window.reviews_changed(), told + 2);
     sits_on(&window.thread(&workspace, &thread_id(1)), &history.m2, 5);
+
+    // A second pull: the thread is carried again from where the first one put it.
+    history.move_main(&history.m3);
+    let (counted, moved) = window.counted_from_noting_facts(&workspace);
+    assert_eq!(counted, history.m3);
+    window.wait_for_reviews_changed_from(moved);
+    sits_on(&window.thread(&workspace, &thread_id(1)), &history.m3, 6);
     window.stop(keeper);
 }
 
@@ -430,13 +562,15 @@ fn a_base_that_moved_under_the_running_keeper_moves_the_threads_once_and_the_sec
 fn a_base_that_moved_while_the_keeper_was_stopped_moves_the_threads_at_its_first_answer() {
     let scratch = Scratch::new();
     let history = scratch.history();
-    let keeper = scratch.keeper();
+    // The first Keeper is a process of its own: the note of the commit the changes are
+    // counted from has to be in the data folder for the second one to find it.
+    let keeper = scratch.keeper_apart();
     let mut window = scratch.window();
     let workspace = window.open(&history.repo);
     assert_eq!(window.counted_from(&workspace), history.m1);
     let (review, _) = window.threads(&workspace);
     window.start(&review, 1, history.on_line_3_of_the_old_side(&history.m1));
-    window.stop(keeper);
+    window.stop_apart(keeper);
 
     history.move_main(&history.m2);
     let keeper = scratch.keeper();
@@ -475,6 +609,35 @@ fn a_base_set_after_a_silent_move_carries_the_threads_from_the_commit_last_seen(
     window.wait_for_reviews_changed_from(facts_before);
 
     assert_eq!(window.counted_from(&workspace), history.m3);
+    sits_on(&window.thread(&workspace, &thread_id(1)), &history.m3, 6);
+    window.stop(keeper);
+}
+
+#[test]
+fn a_base_set_and_then_moved_by_a_pull_carries_the_threads_again_from_where_the_set_put_them() {
+    let scratch = Scratch::new();
+    let history = scratch.history();
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&history.repo);
+    assert_eq!(window.counted_from(&workspace), history.m1);
+    let (review, _) = window.threads(&workspace);
+    window.start(&review, 1, history.on_line_3_of_the_old_side(&history.m1));
+
+    let (reply, facts_before) = window.ask_noting_facts(Request::SetBase {
+        workspace: workspace.clone(),
+        base: "mid".to_owned(),
+    });
+    assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
+    window.wait_for_reviews_changed_from(facts_before);
+    sits_on(&window.thread(&workspace, &thread_id(1)), &history.m2, 5);
+
+    // A pull moves the base branch on: the next answer carries from the commit the set
+    // left the thread on, not from the first one the Keeper saw.
+    history.move_branch("mid", &history.m3);
+    let (counted, moved) = window.counted_from_noting_facts(&workspace);
+    assert_eq!(counted, history.m3);
+    window.wait_for_reviews_changed_from(moved);
     sits_on(&window.thread(&workspace, &thread_id(1)), &history.m3, 6);
     window.stop(keeper);
 }
