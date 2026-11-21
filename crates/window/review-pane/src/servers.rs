@@ -6,8 +6,9 @@
 //!
 //! The code on screen is the file of the line the reviewer is on, or of the file view's
 //! line: its server is `Navigation::state_for` of the workspace on screen, that file, and
-//! for a removed line the version its old side is read in. The pane observes the model and
-//! draws the line again at each change.
+//! for a removed line the version its old side is read in (the version a change is counted
+//! from, as a comment on that line records it). The pane observes the model and draws the
+//! line again at each change.
 //!
 //! # The line
 //!
@@ -20,16 +21,27 @@
 //!
 //! | State | Words, under `review-servers-text:<words>` | Controls |
 //! | --- | --- | --- |
-//! | ready | `<title>: ready` | the update control, when the state shows an update |
-//! | starting | `<title>: starting; names are found by text match meanwhile` | |
+//! | ready | `<title>: ready` | the update control, when the state shows an update: [`UPDATE`] `<version>` under `review-servers-update`, key [`crate::UpdateServer`] (`shift-u`) |
+//! | starting | `<title>: starting; names are found by text match meanwhile` | the update control, as for ready |
 //! | missing, with an offer | `<title>: no language server found` | [`DOWNLOAD`] `<server> <version>` under `review-servers-download`, key [`crate::DownloadServer`] (`shift-i`) |
 //! | missing, no offer | `<title>: no language server found; names are found by text match` | |
 //! | asking | `<title>: <program> lies inside the repository <name>. Run language servers from this repository?` | [`ALLOW`] under `review-servers-yes`, [`REFUSE`] under `review-servers-no`, keys [`crate::AllowServers`] (`shift-y`) and [`crate::RefuseServers`] (`shift-q`) |
+//! | asking, answered | `<title>: language servers of the repository <name> may run`, or `... are kept out` | |
 //! | downloading | `<title>: downloading <server> <version>` | |
 //!
 //! Each control's drawn text carries the selector `review-servers-<control>:<its words>`,
 //! as the question for leave's do, so that a control that does one thing and reads another
 //! fails its test.
+//!
+//! The question is asked once for a repository. The Navigator keeps telling the question
+//! until it has heard the answer, and the pane already knows the answer from the Frame's
+//! model (`Navigation::consent`, set at once by the click or the key, and told again by
+//! the Keeper), so a told state that still asks about a repository with an answer shows
+//! the state `asking` with the words of the row "asking, answered" and no controls.
+//!
+//! A server is known for the code on screen when the Navigator told its state: the
+//! server of a removed line's old side is told once the old side is first used, and until
+//! then there is no line for such a line. A file of no known language has none either.
 //!
 //! # What the controls do
 //!
@@ -37,13 +49,20 @@
 //! `Navigation::update`. The question's controls answer through `Navigation::answer_consent`
 //! for the repository asked about, which the Keeper keeps as a setting of that repository
 //! and tells every Window: a repository with an answer is never asked again, from any of its
-//! worktrees (FR-062), and the line shows the next state the Navigator tells. With no
-//! question shown, the two keys say so in the notice and send nothing.
+//! worktrees (FR-062), and the line shows the next state the Navigator tells. A key whose
+//! control is not on the line (nothing to download, nothing to update, no question shown)
+//! says so in the notice and sends nothing.
 
+use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_navigator::ServerState;
+use yaar_diff::Side;
+use yaar_link::{RepositoryId, WorkspaceId};
+use yaar_navigator::{ServerState, State};
 
 use crate::ReviewPane;
+use crate::draw::ROW_HEIGHT;
+use crate::threads::path_in;
+use crate::tree::Source;
 
 /// The words of the control that downloads, before the server's name and version.
 pub const DOWNLOAD: &str = "Download";
@@ -57,27 +76,277 @@ pub const ALLOW: &str = "Run them";
 /// The words of the control that answers no.
 pub const REFUSE: &str = "Not from this repository";
 
+/// What the notice says when a key of the line has nothing to act on.
+const NOTHING_TO_DOWNLOAD: &str = "No language server waits to be downloaded";
+const NOTHING_TO_UPDATE: &str = "No language server update waits";
+const NO_QUESTION: &str = "No question about language servers waits";
+
 /// What this module keeps in the pane.
 #[derive(Default)]
-pub(crate) struct Servers {}
+pub(crate) struct Servers {
+    /// The observation of the settings, which holds the answers on the servers inside a
+    /// repository: the line is drawn again when one arrives, from another window too.
+    /// Made when the Navigation model is first heard from, which is when a Navigator
+    /// connects, since no line exists before.
+    settings: Option<Subscription>,
+}
+
+/// The code whose server the line tells of.
+struct Code {
+    workspace: WorkspaceId,
+    /// The file's path in the version it is read in: its old path on a removed line.
+    path: std::path::PathBuf,
+    /// The version of the old side for a removed line; none for the files on disk.
+    old_side: Option<String>,
+}
+
+/// What a control of the line does when it is clicked.
+#[derive(Clone, Copy)]
+enum Act {
+    Download,
+    Update,
+    Allow,
+    Refuse,
+}
 
 impl ReviewPane {
     /// The state of the server of the code on screen, as the line shows it; none while
     /// there is none.
     pub fn server_on_screen(&self, cx: &App) -> Option<ServerState> {
-        let _ = cx;
-        todo!()
+        let code = self.code_on_screen()?;
+        self.models
+            .navigation
+            .read(cx)
+            .state_for(&code.workspace, &code.path, code.old_side.as_deref())
+            .cloned()
+    }
+
+    /// The code on screen: the file of the line the reviewer is on, read in the version
+    /// its side of the line belongs to.
+    ///
+    /// While a file view is open its file is the code on screen. The file view is not
+    /// built yet, so only the line of the diff is read here.
+    fn code_on_screen(&self) -> Option<Code> {
+        let position = self.position()?;
+        let file = &self.files[*self.by_path.get(&position.path)?].file;
+        let workspace = self.changes.as_ref()?.workspace.clone();
+        let old_side = match position.side {
+            Side::New => None,
+            Side::Old => Some(self.old_version()?),
+        };
+        Some(Code {
+            workspace,
+            path: path_in(file, position.side).to_path_buf(),
+            old_side,
+        })
+    }
+
+    /// The version the old side of the change shown is read in: what a comment on a removed
+    /// line is anchored to.
+    fn old_version(&self) -> Option<String> {
+        match &self.listed {
+            Some(Source::Versions { old, .. }) => old.clone(),
+            _ => self.changes.as_ref()?.counted_from.clone(),
+        }
+    }
+
+    /// The name of a repository, as the workspaces list it.
+    fn repository_name(&self, repository: &RepositoryId, cx: &App) -> String {
+        self.models
+            .workspaces
+            .read(cx)
+            .repositories()
+            .iter()
+            .find(|listed| &listed.id == repository)
+            .map_or_else(|| repository.to_string(), |listed| listed.name.clone())
+    }
+
+    /// The repository the question on the line is about, while the question waits: the
+    /// state asks and the settings hold no answer for the repository.
+    fn question(&self, cx: &App) -> Option<RepositoryId> {
+        let State::Asking { repository, .. } = self.server_on_screen(cx)?.state else {
+            return None;
+        };
+        self.models
+            .navigation
+            .read(cx)
+            .consent(&repository, cx)
+            .is_none()
+            .then_some(repository)
+    }
+
+    /// The name of the state the line draws, its words, and its controls.
+    fn the_line(
+        &self,
+        server: &ServerState,
+        cx: &App,
+    ) -> (&'static str, String, Vec<(&'static str, String, Act)>) {
+        let title = &server.title;
+        let mut controls = Vec::new();
+        let (name, words) = match &server.state {
+            State::Ready => ("ready", format!("{title}: ready")),
+            State::Starting => (
+                "starting",
+                format!("{title}: starting; names are found by text match meanwhile"),
+            ),
+            State::Missing { offer: Some(offer) } => {
+                controls.push((
+                    "download",
+                    format!("{DOWNLOAD} {} {}", offer.server, offer.version),
+                    Act::Download,
+                ));
+                ("missing", format!("{title}: no language server found"))
+            }
+            State::Missing { offer: None } => (
+                "missing",
+                format!("{title}: no language server found; names are found by text match"),
+            ),
+            State::Asking {
+                repository,
+                program,
+            } => {
+                let name = self.repository_name(repository, cx);
+                let answer = self.models.navigation.read(cx).consent(repository, cx);
+                let words = match answer {
+                    None => {
+                        controls.push(("yes", ALLOW.to_owned(), Act::Allow));
+                        controls.push(("no", REFUSE.to_owned(), Act::Refuse));
+                        format!(
+                            "{title}: {} lies inside the repository {name}. \
+                             Run language servers from this repository?",
+                            program.display()
+                        )
+                    }
+                    Some(true) => {
+                        format!("{title}: language servers of the repository {name} may run")
+                    }
+                    Some(false) => {
+                        format!("{title}: language servers of the repository {name} are kept out")
+                    }
+                };
+                ("asking", words)
+            }
+            State::Downloading { offer } => (
+                "downloading",
+                format!("{title}: downloading {} {}", offer.server, offer.version),
+            ),
+        };
+        if let Some(update) = &server.update
+            && matches!(server.state, State::Ready | State::Starting)
+        {
+            controls.push((
+                "update",
+                format!("{UPDATE} {}", update.version),
+                Act::Update,
+            ));
+        }
+        (name, words, controls)
     }
 
     /// The line, drawn under the bar; none while no server is known for the code on screen.
     pub(crate) fn render_servers(&self, cx: &Context<Self>) -> Option<Div> {
-        let _ = cx;
-        None
+        let server = self.server_on_screen(cx)?;
+        let (name, words, controls) = self.the_line(&server, cx);
+        let theme = cx.theme();
+        let colour = match server.state {
+            State::Missing { .. } | State::Asking { .. } => theme.warning,
+            _ => theme.muted_foreground,
+        };
+        let state = div()
+            .debug_selector(|| format!("review-servers-state:{name}"))
+            .flex_none()
+            .text_color(colour)
+            .child(name);
+        // The words may need more than one line: the controls keep their place beside
+        // them, and are never pushed out of the pane.
+        let text = div()
+            .debug_selector(|| format!("review-servers-text:{words}"))
+            .flex_1()
+            .min_w_0()
+            .child(words.clone());
+        let mut line = div()
+            .debug_selector(|| "review-servers".to_owned())
+            .flex_none()
+            .min_h(ROW_HEIGHT)
+            .w_full()
+            .flex()
+            .items_center()
+            .gap_3()
+            .px_2()
+            .border_b_1()
+            .border_color(theme.border)
+            .child(state)
+            .child(text);
+        for (control, words, act) in controls {
+            line = line.child(
+                div()
+                    .debug_selector(|| format!("review-servers-{control}"))
+                    .flex_none()
+                    .px_2()
+                    .bg(theme.secondary)
+                    .child(
+                        div()
+                            .debug_selector(|| format!("review-servers-{control}:{words}"))
+                            .child(words.clone()),
+                    )
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |pane, _: &MouseDownEvent, _, cx| {
+                            pane.acted(cx);
+                            pane.act(act, cx);
+                        }),
+                    ),
+            );
+        }
+        Some(line)
     }
 
-    /// The Navigation model changed.
+    /// The Navigation model changed: the line is drawn again.
     pub(crate) fn servers_changed(&mut self, cx: &mut Context<Self>) {
-        let _ = cx;
+        if self.servers.settings.is_none() {
+            let settings = self.models.settings.clone();
+            self.servers.settings = Some(cx.observe(&settings, |_, _, cx| cx.notify()));
+        }
+        cx.notify();
+    }
+
+    /// Does what a control of the line, or its key, does.
+    fn act(&mut self, act: Act, cx: &mut Context<Self>) {
+        let server = self.server_on_screen(cx);
+        match act {
+            Act::Download => {
+                let Some(server) = server
+                    .filter(|server| matches!(server.state, State::Missing { offer: Some(_) }))
+                else {
+                    return self.say(NOTHING_TO_DOWNLOAD, cx);
+                };
+                self.models
+                    .navigation
+                    .update(cx, |navigation, _| navigation.download(&server.language));
+            }
+            Act::Update => {
+                let Some(server) = server.filter(|server| {
+                    server.update.is_some()
+                        && matches!(server.state, State::Ready | State::Starting)
+                }) else {
+                    return self.say(NOTHING_TO_UPDATE, cx);
+                };
+                self.models
+                    .navigation
+                    .update(cx, |navigation, _| navigation.update(&server.language));
+            }
+            Act::Allow | Act::Refuse => {
+                let Some(repository) = self.question(cx) else {
+                    return self.say(NO_QUESTION, cx);
+                };
+                let allowed = matches!(act, Act::Allow);
+                self.models.navigation.update(cx, |navigation, cx| {
+                    navigation.answer_consent(repository, allowed, cx);
+                });
+                // The question goes at once, as the model holds the answer now.
+                cx.notify();
+            }
+        }
     }
 
     /// What [`crate::DownloadServer`] does.
@@ -87,7 +356,8 @@ impl ReviewPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = cx;
+        self.acted(cx);
+        self.act(Act::Download, cx);
     }
 
     /// What [`crate::UpdateServer`] does.
@@ -97,7 +367,8 @@ impl ReviewPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = cx;
+        self.acted(cx);
+        self.act(Act::Update, cx);
     }
 
     /// What [`crate::AllowServers`] does.
@@ -107,7 +378,8 @@ impl ReviewPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = cx;
+        self.acted(cx);
+        self.act(Act::Allow, cx);
     }
 
     /// What [`crate::RefuseServers`] does.
@@ -117,6 +389,7 @@ impl ReviewPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let _ = cx;
+        self.acted(cx);
+        self.act(Act::Refuse, cx);
     }
 }
