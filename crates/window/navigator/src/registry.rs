@@ -26,7 +26,7 @@
 //! | --- | --- | --- | --- |
 //! | `name` | string | the server's name, as the offer and the line of its state name it, and the folder its download is unpacked into | required in the built-in table; in the user's file, the row's name |
 //! | `command` | array of strings | the user's own server: its program, then its arguments. Only in the user's file, where every server must name it | no registered server |
-//! | `project` | array of strings | the project's own copy: paths relative to the worktree's root | none |
+//! | `project` | array of strings | the project's own copy: paths relative to the worktree's root, or absolute (after a variable such as `{env:NAME}` is put in) for one outside it | none |
 //! | `machine` | array of strings | names of a copy installed on the machine: each file of that name in every folder of the search path, in the path's order | none |
 //! | `trial` | array of strings | the arguments of the trial run of a candidate; one that ends with success is accepted | no trial: a candidate counts as started when it answers `initialize` |
 //! | `args` | array of strings | the arguments a copy found by `project`, `machine` or a download is started with | none |
@@ -55,14 +55,24 @@
 //! digits, is an error of its row, so that no row can download what no digest guards.
 //! Two downloads of one server for the same platform are an error of the row too.
 //!
-//! The strings of a server's `command`, `project`, `args`, `capabilities`,
+//! The strings of a server's `command`, `project`, `machine`, `args`, `capabilities`,
 //! `initialization_options`, `settings` and `environment`, and of the row's `old_side`, may
-//! name these variables, written `{name}`, which are put in when the server starts
-//! ([`expand`]): `{root}`, the folder the server serves; `{worktree}`, the folder of the
-//! worktree, the same as `{root}` but for an old side; `{target}`, a build folder of the
+//! name these variables, written `{name}`, which are put in when the server is looked for or
+//! starts ([`expand`]): `{root}`, the folder the server serves; `{worktree}`, the folder of
+//! the worktree, the same as `{root}` but for an old side; `{target}`, a build folder of the
 //! app's own for this server; `{platform}`, the machine's [`Platform`] name; `{servers}`,
-//! the folder the server's download is unpacked into. A string that names any other is an
-//! error of its row.
+//! the folder the server's download is unpacked into; `{env:NAME}`, the value `NAME` has in
+//! the environment the servers run in (`NavigatorConfig::environment`, with what the login
+//! shell added). A string that names any other is an error of its row.
+//!
+//! A `{env:NAME}` whose `NAME` the environment does not hold, or holds as the empty text,
+//! is no error when the servers are looked for: the `project`, `machine` or `command` entry
+//! that names it is passed over and the row's other entries are looked at, so that a row
+//! may name a place that exists only on some machines. A `project` entry that is absolute
+//! once expanded names a file outside the worktree, as `{env:CARGO_HOME}/bin/rust-analyzer`
+//! does, and is not joined to the worktree's root; a candidate there asks no question,
+//! since it lies outside the repository. In an `args` or `environment` string a `NAME`
+//! that is not held makes the candidate fail to start, and the next is tried.
 //!
 //! # The user's file
 //!
@@ -91,6 +101,7 @@
 //! download), a value of the wrong type, a variable the format does not have, or breaks a
 //! rule above, is reported in a [`RowError`] and passed over, and every other row is read.
 
+use std::ffi::OsString;
 use std::path::Path;
 
 use serde_json::Value;
@@ -376,14 +387,21 @@ pub struct Vars {
     /// `{servers}`: the folder the server's download is unpacked into; empty where nothing
     /// is downloaded.
     pub servers: String,
+    /// `{env:NAME}`: the environment the servers run in. None where no environment is
+    /// known, as when a row is read: every `{env:NAME}` then puts in nothing. Some, as
+    /// when a server is looked for or started: a `NAME` it does not hold, or holds as the
+    /// empty text or as text that is not UTF-8, is an error of [`expand`].
+    pub env: Option<Vec<(OsString, OsString)>>,
 }
 
 /// The names of the variables a row may name.
 pub const VARIABLES: [&str; 5] = ["root", "worktree", "target", "platform", "servers"];
 
-/// `text` with each `{name}` of [`VARIABLES`] replaced by its value in `vars`. `{{` and
-/// `}}` stand for `{` and `}`. Gives the name of the first variable that is none of
-/// [`VARIABLES`], or of a `{` with no `}`, as the error.
+/// `text` with each `{name}` of [`VARIABLES`], and each `{env:NAME}`, replaced by its value in
+/// `vars`. `{{` and `}}` stand for `{` and `}`. Gives the name of the first variable that is
+/// none of these, or of a `{` with no `}`, as the error; and `env:NAME` for a `{env:NAME}` the
+/// environment of `vars` does not hold ([`Vars::env`]). A `NAME` is letters, digits and
+/// underscores and does not start with a digit: `{env:}` and `{env:A B}` name no variable.
 pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
@@ -404,7 +422,13 @@ pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
                 "target" => &vars.target,
                 "platform" => &vars.platform,
                 "servers" => &vars.servers,
-                _ => return Err(name.to_string()),
+                _ => match name.strip_prefix("env:").filter(|name| is_env_name(name)) {
+                    Some(variable) => match &vars.env {
+                        None => "",
+                        Some(env) => env_value(env, variable).ok_or_else(|| name.to_string())?,
+                    },
+                    None => return Err(name.to_string()),
+                },
             });
             rest = &after[end + 1..];
         } else {
@@ -415,6 +439,24 @@ pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
     }
     out.push_str(rest);
     Ok(out)
+}
+
+/// Whether `name` can be the `NAME` of an `{env:NAME}`.
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// What `name` is in `env`, its first entry of that name: none where it is not there, is the
+/// empty text (a `{env:CARGO_HOME}/bin` would name the root folder's `/bin`) or is not UTF-8.
+fn env_value<'a>(env: &'a [(OsString, OsString)], name: &str) -> Option<&'a str> {
+    env.iter()
+        .find(|(key, _)| key == name)
+        .and_then(|(_, value)| value.to_str())
+        .filter(|value| !value.is_empty())
 }
 
 /// [`expand`] applied to every string inside `value`, keys left as they are.
@@ -1712,6 +1754,7 @@ mod tests {
             target: "/t".into(),
             platform: "darwin-arm64".into(),
             servers: "/s".into(),
+            env: None,
         }
     }
 
@@ -1761,6 +1804,137 @@ mod tests {
             ..vars()
         };
         assert_eq!(expand("{root}", &vars), Ok("{target}".to_string()));
+    }
+
+    /// The variables of `vars()` with the environment `pairs`.
+    fn with_env(pairs: &[(&str, &str)]) -> Vars {
+        Vars {
+            env: Some(
+                pairs
+                    .iter()
+                    .map(|(name, value)| (OsString::from(name), OsString::from(value)))
+                    .collect(),
+            ),
+            ..vars()
+        }
+    }
+
+    #[test]
+    fn an_environment_variable_is_put_in_from_the_environment_the_servers_run_in() {
+        let vars = with_env(&[("CARGO_HOME", "/c"), ("HOME", "/h"), ("A_1", "x y")]);
+        assert_eq!(
+            expand("{env:CARGO_HOME}/bin|{env:HOME}|{env:A_1}|{root}", &vars),
+            Ok("/c/bin|/h|x y|/r".to_string())
+        );
+        // The first entry of a name wins, as it does where a server's environment is made.
+        let twice = with_env(&[("A", "first"), ("A", "second")]);
+        assert_eq!(expand("{env:A}", &twice), Ok("first".to_string()));
+        // A value put in is not read again, and the names are case-sensitive.
+        let braces = with_env(&[("A", "{root}")]);
+        assert_eq!(expand("{env:A}", &braces), Ok("{root}".to_string()));
+        assert_eq!(
+            expand("{env:a}", &braces),
+            Err("env:a".to_string()),
+            "names are case-sensitive"
+        );
+    }
+
+    #[test]
+    fn an_environment_variable_that_is_not_held_or_is_empty_or_is_not_text_is_an_error_naming_it() {
+        use std::os::unix::ffi::OsStringExt;
+        let mut vars = with_env(&[("EMPTY", "")]);
+        vars.env
+            .as_mut()
+            .unwrap()
+            .push(("BYTES".into(), OsString::from_vec(vec![0xff, b'a'])));
+        for name in ["MISSING", "EMPTY", "BYTES"] {
+            assert_eq!(
+                expand(&format!("/a/{{env:{name}}}/b"), &vars),
+                Err(format!("env:{name}"))
+            );
+        }
+        assert_eq!(
+            expand_json(&json!({ "k": ["{env:MISSING}"] }), &vars),
+            Err("env:MISSING".to_string())
+        );
+        // No environment is known: a row is being read, and every name puts in nothing.
+        assert_eq!(
+            expand("a{env:MISSING}b", &Vars::default()),
+            Ok("ab".to_string())
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_no_name_of_a_variable_is_none_of_the_formats_whatever_the_environment() {
+        let vars = with_env(&[("", "x"), ("A B", "x"), ("1A", "x"), ("A-B", "x")]);
+        for name in ["", "A B", "1A", "A-B", "é"] {
+            let text = format!("{{env:{name}}}");
+            assert_eq!(expand(&text, &vars), Err(format!("env:{name}")), "{name:?}");
+            assert_eq!(
+                expand(&text, &Vars::default()),
+                Err(format!("env:{name}")),
+                "{name:?}"
+            );
+        }
+        // Other spellings are no variable either.
+        assert_eq!(expand("{env}", &vars), Err("env".to_string()));
+        assert_eq!(expand("{Env:A}", &vars), Err("Env:A".to_string()));
+        assert_eq!(expand("{env: A}", &vars), Err("env: A".to_string()));
+    }
+
+    #[test]
+    fn a_row_may_name_an_environment_variable_wherever_it_names_a_variable_and_a_bad_name_is_an_error_of_its_row()
+     {
+        let places = [
+            "args = [\"{env:A}\"]",
+            "project = [\"{env:A}/x\"]",
+            "machine = [\"{env:A}\"]",
+            "environment = { B = \"{env:A}\" }",
+            "settings = { s = \"{env:A}\" }",
+            "initialization_options = { s = [\"{env:A}\"] }",
+        ];
+        for line in places {
+            let text =
+                format!("[v]\nextensions = {{ v = \"v\" }}\n[[v.server]]\nname = \"v\"\n{line}\n");
+            read_ok(&text, None);
+        }
+        let user = "[v]\nextensions = { v = \"v\" }\n[[v.server]]\ncommand = [\"{env:A}/x\"]\n";
+        read_ok(&good("v"), Some(user));
+        let old_side = "[v]\nextensions = { v = \"v\" }\n[[v.server]]\nname = \"v\"\n\
+                        [v.old_side]\nlink = [\"{env:A}\"]\nenvironment = { B = \"{env:A}\" }\n";
+        read_ok(old_side, None);
+
+        for bad in ["{env:}", "{env:A B}", "{env:1}", "{env:A"] {
+            let text = format!(
+                "[v]\nextensions = {{ v = \"v\" }}\n[[v.server]]\nname = \"v\"\nproject = [\"{bad}\"]\n{}",
+                good("ok")
+            );
+            let (registry, errors) = Registry::read(&text, None);
+            assert_eq!(names(&registry), ["ok"], "{bad}");
+            assert_eq!(error_rows(&errors), ["v"], "{bad}");
+        }
+    }
+
+    #[test]
+    fn the_built_in_rust_row_names_rustups_proxy_as_the_projects_own_and_lets_it_install_nothing() {
+        let registry = read_ok(BUILTIN, None);
+        let server = &registry.row("rust").unwrap().servers[0];
+        assert_eq!(server.name, "rust-analyzer");
+        assert_eq!(
+            server.project,
+            [
+                "{env:CARGO_HOME}/bin/rust-analyzer",
+                "{env:HOME}/.cargo/bin/rust-analyzer"
+            ]
+        );
+        assert_eq!(server.machine, ["rust-analyzer"]);
+        assert!(
+            server
+                .environment
+                .contains(&("RUSTUP_AUTO_INSTALL".to_owned(), "0".to_owned())),
+            "{:?}",
+            server.environment
+        );
     }
 
     #[test]

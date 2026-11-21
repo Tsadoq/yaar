@@ -888,6 +888,7 @@ fn search(core: &Core, key: &ServerKey, keyed: &mut Keyed) {
         row,
         &keyed.root,
         &core.config.search_path,
+        &core.config.environment,
         &core.config.servers,
         core.config.platform,
     );
@@ -1254,6 +1255,7 @@ fn expander(core: &Core, key: &ServerKey, root: &Path, candidate: &Candidate) ->
                 .as_ref()
                 .map(|folder| folder.display().to_string())
                 .unwrap_or_default(),
+            env: Some(core.config.environment.clone()),
         },
         servers: servers.is_some(),
     }

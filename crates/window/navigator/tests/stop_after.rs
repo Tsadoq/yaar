@@ -116,7 +116,8 @@ fn started(
 }
 
 #[test]
-fn a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the_old_one_would_keep() {
+fn a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the_old_one_would_keep()
+ {
     let scratch = Scratch::new();
     let (mut running, clock, ws1, ws2, pid) = started(&scratch, "shorter.log");
 
@@ -134,10 +135,7 @@ fn a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the
     running.ask(Ask::StopAfter(Duration::from_secs(60)));
     let list = barrier(&mut running, &ws2);
     assert_eq!(pid_in(&list, &ws1), None, "the idle server is still listed");
-    assert!(
-        list.iter().all(|state| state.workspace != ws1),
-        "{list:#?}"
-    );
+    assert!(list.iter().all(|state| state.workspace != ws1), "{list:#?}");
     assert!(!is_alive(pid), "the idle server still runs");
     running.end();
 }
