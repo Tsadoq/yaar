@@ -21,9 +21,8 @@
 //!   workspace held, so that a file that left the list because it was put back is told
 //!   too; nothing when there are no paths, nothing after a refusal, and nothing at the
 //!   connect (a server starts from the files on disk, so a new Navigator holds nothing
-//!   stale), though the list the changes model holds then, when it holds one and the last
-//!   question was not refused, is the last answer the next one is set against; a path may
-//!   be told again and may no longer exist;
+//!   stale), though the list the changes model holds then, when it holds one, is the last
+//!   answer the next one is set against; a path may be told again and may no longer exist;
 //! - for each [`yaar_navigator::Told::ExportWanted`], `Request::ExportVersion` to the
 //!   Keeper through the link, and the answer handed back as
 //!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
@@ -222,9 +221,7 @@ impl Navigation {
         // next answer is set against it, so that a file put back since is told changed.
         let mut told_changes = HashMap::new();
         let held = self.changes.read(cx);
-        if held.refusal().is_none()
-            && let Some(taken) = held.changes()
-        {
+        if let Some(taken) = held.changes() {
             told_changes.insert(taken.workspace.clone(), changed_paths(taken));
         }
         let reading = cx.spawn(async move |navigation, cx| {
