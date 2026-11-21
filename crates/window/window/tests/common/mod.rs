@@ -20,6 +20,7 @@ use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wa
 use yaar_link::{
     ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
 };
+use yaar_navigator::{NavigatorConfig, Platform, STOP_AFTER, SystemClock};
 use yaar_review_pane::ReviewPane;
 use yaar_system_tests::standin::{Script, Step};
 use yaar_system_tests::{Repo, Tap, World, descendants_of, is_alive, wait_until as wait_for};
@@ -127,7 +128,7 @@ pub fn open_composed_in(
     cx: &mut TestAppContext,
     extra: Vec<BuildPane>,
 ) -> (Composed, VisualTestContext) {
-    open_composed_with(world, cx, extra, true)
+    open_composed_with(world, cx, extra, true, None)
 }
 
 /// [`open_composed_in`] for a second Window of the same test, after the Keeper of the world
@@ -137,7 +138,130 @@ pub fn open_another_composed_in(
     cx: &mut TestAppContext,
     extra: Vec<BuildPane>,
 ) -> (Composed, VisualTestContext) {
-    open_composed_with(world, cx, extra, false)
+    open_composed_with(world, cx, extra, false, None)
+}
+
+/// [`open_composed_in`] with a Navigator started as the program starts one, on
+/// `navigator`, which [`navigator_for`] makes for the world: the composed Window with the
+/// real Keeper and the real Navigator, and the stand-in language server beneath. The test
+/// ends the Navigator with [`Composed::end_the_navigator`].
+pub fn open_composed_with_a_navigator(
+    world: World,
+    cx: &mut TestAppContext,
+    extra: Vec<BuildPane>,
+    navigator: NavigatorConfig,
+) -> (Composed, VisualTestContext) {
+    open_composed_with(world, cx, extra, true, Some(navigator))
+}
+
+/// How the Navigator of a test finds the stand-in language server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Found {
+    /// Installed on the machine: a copy of the stand-in named `standin-lsp` in a folder of
+    /// the world, which is the Navigator's search path.
+    OnTheMachine,
+    /// The project's own: the file `tools/standin-lsp` of the repository, which the test
+    /// puts there ([`put_the_standin_in`]). A server inside a repository runs only after the
+    /// user said yes.
+    InTheProject,
+}
+
+/// The folder of the world that holds what the Navigator of a test keeps: the downloads, the
+/// user's registry (none), the copy of the stand-in.
+fn navigator_data(world: &World) -> PathBuf {
+    world.home().with_file_name("navigator-data")
+}
+
+/// The Navigator's cache folder in a world: where the Keeper, whose home is the world's,
+/// finds the app's cache, `yaar_link::cache_dir()` of its environment, and the Navigator's
+/// folder in it. The Keeper writes an export only there.
+pub fn navigator_cache(world: &World) -> PathBuf {
+    let cache = if cfg!(target_os = "macos") {
+        world.home().join("Library/Caches")
+    } else {
+        world.home().join(".cache")
+    };
+    cache
+        .join(yaar_link::APP_FOLDER)
+        .join(yaar_navigator::CACHE_FOLDER)
+}
+
+/// The registry of a test's Navigator: one row, `standin`, for the invented language whose
+/// files end in `.sil` and for `extra_extensions` (each mapped to the same language id),
+/// started when the worktree holds `marker`, with one server, the stand-in, found as `found`
+/// says.
+pub fn standin_row(found: Found, marker: &str, extra_extensions: &[&str]) -> String {
+    let mut extensions = String::from("sil = \"standin\"");
+    for extension in extra_extensions {
+        extensions.push_str(&format!(", {extension} = \"standin\""));
+    }
+    let find = match found {
+        Found::OnTheMachine => "machine = [\"standin-lsp\"]",
+        Found::InTheProject => "project = [\"tools/standin-lsp\"]",
+    };
+    format!(
+        "[standin]\n\
+         title = \"Stand-in\"\n\
+         extensions = {{ {extensions} }}\n\
+         markers = [\"{marker}\"]\n\
+         \n\
+         [[standin.server]]\n\
+         name = \"standin\"\n\
+         {find}\n\
+         trial = [\"--version\"]\n\
+         ready = {{ kind = \"answer\" }}\n"
+    )
+}
+
+/// The configuration of the Navigator of a test in `world`: the registry `row`, every folder
+/// in the world, the Navigator's cache where the Keeper of the world takes its exports
+/// ([`navigator_cache`]), the stand-in on the search path when it is installed on the
+/// machine, a short search path and environment of the world's own for the servers, and no
+/// download: nothing of the user's is read, and nothing leaves the machine.
+pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig {
+    let data = navigator_data(world);
+    let folder = data.join("machine");
+    std::fs::create_dir_all(&folder).expect("make the folder of the machine's programs");
+    let mut search_path = Vec::new();
+    if found == Found::OnTheMachine {
+        let copy = folder.join("standin-lsp");
+        std::fs::copy(yaar_system_tests::program("standin-lsp"), &copy)
+            .expect("copy the stand-in language server");
+        search_path.push(folder);
+    }
+    let tmp = world.home().with_file_name("tmp");
+    let environment = vec![
+        ("HOME".into(), world.home().into_os_string()),
+        ("TMPDIR".into(), tmp.into_os_string()),
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("LANG".into(), "C.UTF-8".into()),
+    ];
+    NavigatorConfig {
+        builtin: row.to_owned(),
+        user_file: data.join(yaar_navigator::USER_FILE),
+        servers: data.join(yaar_navigator::SERVERS_FOLDER),
+        cache: navigator_cache(world),
+        search_path,
+        environment,
+        platform: Platform::current(),
+        stop_after: STOP_AFTER,
+        clock: std::sync::Arc::new(SystemClock),
+    }
+}
+
+/// Puts a copy of the stand-in language server in the repository as the project's own,
+/// `tools/standin-lsp`, and keeps it out of what git sees (the exclude file of the
+/// repository, which no change and no commit holds): the worktree has the file, and the
+/// review has no row for it.
+pub fn put_the_standin_in(repository: &Repo) {
+    let program = repository.path().join("tools/standin-lsp");
+    std::fs::create_dir_all(program.parent().expect("a folder above")).expect("make tools");
+    std::fs::copy(yaar_system_tests::program("standin-lsp"), &program)
+        .expect("copy the stand-in language server");
+    let exclude = repository.path().join(".git/info/exclude");
+    let mut held = std::fs::read_to_string(&exclude).unwrap_or_default();
+    held.push_str("/tools/\n");
+    std::fs::write(&exclude, held).expect("write the exclude file");
 }
 
 fn open_composed_with(
@@ -145,6 +269,7 @@ fn open_composed_with(
     cx: &mut TestAppContext,
     extra: Vec<BuildPane>,
     prepare_the_app: bool,
+    navigator: Option<NavigatorConfig>,
 ) -> (Composed, VisualTestContext) {
     let keeper = world.keeper_pid().expect("the world's Keeper runs");
     let tap = world.tap();
@@ -185,7 +310,11 @@ fn open_composed_with(
         frame,
         models,
     } = cx
-        .update(|cx| yaar_frame::open(tap.socket(), yaar_window::VERSION, builders, cx))
+        .update(|cx| match navigator {
+            // As the program opens its window.
+            Some(navigator) => yaar_window::open_panes(tap.socket(), builders, navigator, cx),
+            None => yaar_frame::open(tap.socket(), yaar_window::VERSION, builders, cx),
+        })
         .expect("open the composed Window on the test platform");
     let mut cx = VisualTestContext::from_window(window, cx);
     // The window a user types in is the active one; GPUI tells no focus change to a window
@@ -477,6 +606,28 @@ impl Composed {
                 .iter()
                 .any(|stack| stack.contains(context))
         })
+    }
+
+    /// Ends the Navigator the Window started, as the quit of the app does, and proves it
+    /// gone: it ended within its deadline, and the process of no server it had told is
+    /// left. Does nothing for a Window opened with none.
+    pub fn end_the_navigator(&mut self, cx: &mut VisualTestContext) {
+        let pids: Vec<u32> = self.models.navigation.read_with(cx, |navigation, _| {
+            navigation
+                .servers()
+                .iter()
+                .filter_map(|server| server.pid)
+                .collect()
+        });
+        let ended = cx.update(|_, cx| yaar_window::stop_navigator(&self.models, cx));
+        assert!(ended, "the Navigator did not end within its deadline");
+        assert!(
+            wait_for(DEADLINE, || pids.iter().all(|pid| !is_alive(*pid))),
+            "a language server outlived the Navigator: {:?}",
+            pids.iter()
+                .filter(|pid| is_alive(**pid))
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Gives the world back and lets go of the rest of this Window: its tap ends first,
