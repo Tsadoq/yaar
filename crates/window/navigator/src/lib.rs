@@ -5,9 +5,11 @@
 //!
 //! The Navigator answers what a name in a diff is, where it is defined and who uses it,
 //! from the language server of its file, on new and on old code. It runs in the Window's
-//! process, on a thread of its own, and its servers are the Window's children: they end
-//! with it. It holds no database and runs no git: what it needs of the Keeper, the old side
-//! of a change written into a folder, it asks for through the Frame.
+//! process, on a thread of its own, and its servers are the Window's children. A Window
+//! that quits stops them; on Linux the kernel also kills them when the Navigator's thread
+//! ends, so that a Window that crashed leaves none, which on macOS it can. It holds no
+//! database and runs no git: what it needs of the Keeper, the old side of a change written
+//! into a folder, it asks for through the Frame.
 //!
 //! Surface:
 //! - [`port`], the vocabulary between the Window and the Navigator: the [`Ask`]s the

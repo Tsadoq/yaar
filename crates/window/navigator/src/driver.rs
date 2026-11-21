@@ -7,10 +7,11 @@
 //! The program starts with `args`, its working folder `root`, exactly the environment
 //! [`Launch::environment`] (no variable of this process leaks in), its standard input and
 //! output piped to the driver and its standard error written to [`Launch::log`]. On Linux
-//! it is also asked to end when this process ends (`PR_SET_PDEATHSIG`), so that no server
-//! outlives a Window that crashed. On macOS nothing ends a server whose Window crashed:
-//! some servers end when their input closes, rust-analyzer does not. A Window that quits
-//! stops every server itself.
+//! the kernel kills a server (`SIGKILL`, asked for with `PR_SET_PDEATHSIG`) when the thread
+//! that started it ends, which is the Navigator's thread and ends with the Window's process,
+//! so that no server outlives a Window that crashed. On macOS nothing ends a server whose
+//! Window crashed: some servers end when their input closes, rust-analyzer does not. A
+//! Window that quits stops every server itself.
 //!
 //! The driver sends `initialize` with `processId` this process, `rootUri` and one
 //! workspace folder of `root`, `initializationOptions`, and these client capabilities,
@@ -43,17 +44,19 @@
 //!
 //! # Threads
 //!
-//! [`Server::start`] spawns the process and three threads. The reading thread reads every
+//! [`Server::start`] spawns the process and three threads, named `language-server-reader`,
+//! `language-server-writer` and `language-server-waiter`. The reading thread reads every
 //! frame, answers the server's requests itself, keeps the readiness and hands each event to
 //! the `events` callback it was given: [`ServerEvent::Ready`] once, each answer to a request,
 //! and [`ServerEvent::Exited`] last. The writing thread writes what the callers and the
 //! reading thread queue, in the order it was queued, so that a caller never waits for a
 //! server to read, and a server that waits for the driver to read while the driver waits to
-//! write cannot stall both. The waiting thread reaps the process. Nothing here blocks the
+//! write cannot stall both. The waiting thread is the reaper: it waits for the process to
+//! end without reaping it, then reaps it and tells how it ended. Nothing here blocks the
 //! caller but [`Server::stop`], which waits for the process.
 //!
-//! On Linux the kernel ends a server when the thread that started it ends, not when the
-//! process does: start servers from a thread that lives as long as they do.
+//! The kernel's end of a server on Linux follows the thread that called [`Server::start`],
+//! not the process: start servers from a thread that lives as long as they do.
 
 use std::collections::{BTreeSet, HashMap};
 use std::ffi::OsString;
@@ -513,8 +516,9 @@ fn log_file(log: Option<&Path>) -> Stdio {
         .map_or_else(|_| Stdio::null(), Stdio::from)
 }
 
-/// Asks the kernel to end the server with the thread that starts it, on Linux. On macOS
-/// nothing ends a server whose Window crashed (a Window that quits stops every server).
+/// Asks the kernel to kill the server when the thread that starts it ends, on Linux. On
+/// macOS nothing ends a server whose Window crashed (a Window that quits stops every
+/// server).
 #[cfg(target_os = "linux")]
 fn end_with_the_window(command: &mut Command) {
     use std::os::unix::process::CommandExt;

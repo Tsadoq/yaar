@@ -335,8 +335,9 @@ program does, and the app writes nothing of pi's and does not hear it.
 Known limits of what is there:
 
 - A language server that was running when the Window crashed may go on running on macOS:
-  rust-analyzer did not end when its input closed. On Linux the kernel ends each server with
-  the Window. A quit of the Window stops every server.
+  rust-analyzer did not end when its input closed. On Linux the kernel kills each server when
+  the thread that started it ends, which a crash of the Window brings. A quit of the Window
+  stops every server.
 - The download takes no proxy of your shell, so behind a proxy that the network requires
   it cannot fetch. Servers that run on your own Node (typescript-language-server, vtsls,
   basedpyright, pyright) and pyrefly are found on the machine and never downloaded. ty is a

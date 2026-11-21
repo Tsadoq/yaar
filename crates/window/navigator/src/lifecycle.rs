@@ -1034,9 +1034,9 @@ fn spawn_trial(launch: &Launch, args: &[String]) -> std::io::Result<Child> {
     command.spawn()
 }
 
-/// Asks the kernel to end the trial run with the thread that starts it, on Linux, as the
-/// driver does for a server. On macOS nothing ends a run whose Window crashed, and a trial is
-/// short.
+/// Asks the kernel to kill the trial run when the thread that starts it ends, on Linux, as
+/// the driver does for a server. On macOS nothing ends a run whose Window crashed, and a
+/// trial is short.
 #[cfg(target_os = "linux")]
 fn end_with_the_window(command: &mut Command) {
     use std::os::unix::process::CommandExt;
