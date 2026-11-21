@@ -69,10 +69,15 @@
 //! the test wants and then runs the command it was given with `/bin/sh -c`), never the
 //! user's, and a `HOME` in its scratch folder.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::io::Read;
+use std::os::unix::ffi::OsStringExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 /// How long the user's login shell may take to print its environment: ten seconds, a slow
 /// start-up file's time and more.
@@ -84,6 +89,10 @@ pub const MARKER: &str = "yaar-environment-follows";
 
 /// The command the shell is told to run.
 pub const COMMAND: &str = "printf '%s' 'yaar-environment-follows'; exec env -0";
+
+/// The variables that describe the shell's own run, not the user's setup: never taken from
+/// the shell.
+const NOT_TAKEN: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
 
 /// The user's login shell, run once for the environment of the language servers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -126,12 +135,254 @@ pub fn take(
     shell: &LoginShell,
     base: &[(OsString, OsString)],
 ) -> Result<Vec<(OsString, OsString)>, ShellError> {
-    let _ = (shell, base);
-    todo!("run the shell, read past the marker, merge, as the module doc says")
+    let started = Instant::now();
+    let home = base
+        .iter()
+        .find(|(name, _)| name == "HOME")
+        .map(|(_, value)| PathBuf::from(value))
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let mut command = Command::new(&shell.program);
+    command
+        .args(["-l", "-i", "-c", COMMAND])
+        .env_clear()
+        .envs(base.iter().map(|(name, value)| (name, value)))
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // SAFETY: `setsid` is async-signal-safe and touches no memory of the parent, as a
+    // function run between `fork` and `exec` must not.
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| ShellError::Start(error.to_string()))?;
+    // The session's leader: its id is the id of the whole group.
+    let group = child.id() as libc::pid_t;
+    let mut stdout = child.stdout.take().expect("the output was piped");
+
+    let (output_tx, output) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("navigator-shell-output".to_owned())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            let _ = output_tx.send(bytes);
+        })
+        .map_err(|error| {
+            kill_group(group);
+            let _ = child.wait();
+            ShellError::Start(error.to_string())
+        })?;
+    let (status_tx, status) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("navigator-shell-wait".to_owned())
+        .spawn(move || {
+            let _ = status_tx.send(child.wait());
+        })
+        .map_err(|error| {
+            kill_group(group);
+            ShellError::Start(error.to_string())
+        })?;
+
+    let left = |now: Instant| shell.deadline.saturating_sub(now.duration_since(started));
+    let ended = match status.recv_timeout(left(Instant::now())) {
+        Ok(ended) => ended,
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+            // Past its deadline: the whole group goes, and the wait returns once it is
+            // reaped. The reading thread ends by itself when every holder of the pipe is
+            // gone.
+            kill_group(group);
+            let _ = status.recv();
+            return Err(ShellError::Deadline(shell.deadline));
+        }
+    };
+    // Whatever the shell left in the background must not hold the pipe open.
+    kill_group(group);
+    let ended = ended.map_err(|error| ShellError::Start(error.to_string()))?;
+    if !ended.success() {
+        return Err(ShellError::Status(ended.code()));
+    }
+    // A process that left the group (a session of its own) may still hold the pipe: the
+    // deadline bounds the wait for the rest of the output.
+    let bytes = match output.recv_timeout(left(Instant::now())) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(ShellError::Deadline(shell.deadline)),
+    };
+    let printed = printed_after_marker(&bytes).ok_or(ShellError::NoMarker)?;
+    Ok(merge(base, &printed))
+}
+
+/// Kills every process of the process group `group`. A group that is gone is no error.
+fn kill_group(group: libc::pid_t) {
+    // SAFETY: a signal to the group of a process this function's caller started; a group
+    // that no longer exists answers `ESRCH`, which is no fault.
+    let _ = unsafe { libc::kill(-group, libc::SIGKILL) };
+}
+
+/// The variables the shell printed: what follows the last [`MARKER`] of `output`, each
+/// `NAME=value` ended by a NUL, split at the first `=`. An entry with no `=` or with an
+/// empty name is dropped. None when `output` holds no marker.
+fn printed_after_marker(output: &[u8]) -> Option<Vec<(OsString, OsString)>> {
+    let marker = MARKER.as_bytes();
+    let at = output
+        .windows(marker.len())
+        .enumerate()
+        .rev()
+        .find(|(_, window)| *window == marker)
+        .map(|(at, _)| at)?;
+    let after = &output[at + marker.len()..];
+    Some(
+        after
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| {
+                let equals = entry.iter().position(|byte| *byte == b'=')?;
+                (equals > 0).then(|| {
+                    (
+                        OsString::from_vec(entry[..equals].to_vec()),
+                        OsString::from_vec(entry[equals + 1..].to_vec()),
+                    )
+                })
+            })
+            .collect(),
+    )
+}
+
+/// `base` with the variables of `printed` it lacks added, but the ones of [`NOT_TAKEN`],
+/// and its `PATH` followed by the entries of the printed one it does not hold.
+fn merge(
+    base: &[(OsString, OsString)],
+    printed: &[(OsString, OsString)],
+) -> Vec<(OsString, OsString)> {
+    let mut merged: Vec<(OsString, OsString)> = base.to_vec();
+    for (name, value) in printed {
+        if NOT_TAKEN.iter().any(|not| name == OsStr::new(not)) {
+            continue;
+        }
+        match merged.iter().position(|(have, _)| have == name) {
+            None => merged.push((name.clone(), value.clone())),
+            Some(at) if name == "PATH" => {
+                let mut entries: Vec<PathBuf> = std::env::split_paths(&merged[at].1).collect();
+                for entry in std::env::split_paths(value) {
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
+                }
+                if let Ok(joined) = std::env::join_paths(entries) {
+                    merged[at].1 = joined;
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    merged
 }
 
 /// The search path of an environment: its `PATH`, split; none where it has no `PATH`.
 pub fn search_path(environment: &[(OsString, OsString)]) -> Vec<PathBuf> {
-    let _ = environment;
-    todo!("split the PATH of the environment")
+    environment
+        .iter()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| std::env::split_paths(value).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variables(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect()
+    }
+
+    #[test]
+    fn the_merge_keeps_the_values_of_the_base_and_adds_what_only_the_shell_has() {
+        let merged = merge(
+            &variables(&[("A", "base"), ("HOME", "/h")]),
+            &variables(&[("A", "shell"), ("B", "only"), ("HOME", "/elsewhere")]),
+        );
+        assert_eq!(
+            merged,
+            variables(&[("A", "base"), ("HOME", "/h"), ("B", "only")])
+        );
+    }
+
+    #[test]
+    fn the_merge_never_takes_the_variables_that_describe_the_shells_own_run() {
+        let merged = merge(
+            &variables(&[("A", "1")]),
+            &variables(&[
+                ("PWD", "/p"),
+                ("OLDPWD", "/o"),
+                ("SHLVL", "3"),
+                ("_", "/usr/bin/env"),
+                ("B", "2"),
+            ]),
+        );
+        assert_eq!(merged, variables(&[("A", "1"), ("B", "2")]));
+        // The base's own value of one of them stays.
+        let merged = merge(&variables(&[("PWD", "/mine")]), &variables(&[("PWD", "/p")]));
+        assert_eq!(merged, variables(&[("PWD", "/mine")]));
+    }
+
+    #[test]
+    fn the_merge_gives_the_path_of_the_base_then_the_entries_of_the_shell_it_lacks() {
+        let merged = merge(
+            &variables(&[("PATH", "/a:/b")]),
+            &variables(&[("PATH", "/c:/a:/d")]),
+        );
+        assert_eq!(merged, variables(&[("PATH", "/a:/b:/c:/d")]));
+    }
+
+    #[test]
+    fn the_merge_adds_a_path_the_base_lacks_and_keeps_one_the_shell_lacks() {
+        assert_eq!(
+            merge(&variables(&[("A", "1")]), &variables(&[("PATH", "/c:/d")])),
+            variables(&[("A", "1"), ("PATH", "/c:/d")])
+        );
+        assert_eq!(
+            merge(&variables(&[("PATH", "/a")]), &variables(&[("B", "2")])),
+            variables(&[("PATH", "/a"), ("B", "2")])
+        );
+    }
+
+    #[test]
+    fn the_variables_are_what_follows_the_last_marker_and_an_entry_with_no_name_is_dropped() {
+        let mut output = b"noise\n".to_vec();
+        output.extend_from_slice(MARKER.as_bytes());
+        output.extend_from_slice(b"stale=1\0");
+        // A start-up file that printed the marker too: only what follows the last counts.
+        output.extend_from_slice(MARKER.as_bytes());
+        output.extend_from_slice(b"A=1\0NOEQUALS\0=x\0B=two=parts\0C=\0multi=line\nvalue\0");
+        let printed = printed_after_marker(&output).expect("a marker");
+        assert_eq!(
+            printed,
+            variables(&[
+                ("A", "1"),
+                ("B", "two=parts"),
+                ("C", ""),
+                ("multi", "line\nvalue"),
+            ])
+        );
+        assert_eq!(printed_after_marker(b"A=1\0"), None);
+    }
+
+    #[test]
+    fn the_search_path_is_the_path_split_and_none_where_there_is_no_path() {
+        assert_eq!(
+            search_path(&variables(&[("X", "1"), ("PATH", "/a:/b")])),
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+        assert_eq!(search_path(&variables(&[("X", "1")])), Vec::<PathBuf>::new());
+    }
 }

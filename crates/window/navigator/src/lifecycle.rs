@@ -139,6 +139,22 @@ pub(crate) struct Life {
     /// The last generation given out. One count for every key, so that an event of a key
     /// that was stopped can never be taken for one of the key made again in its place.
     generation: u64,
+    /// Where the user's login shell stands: the keys wait for it, as the module doc says.
+    shell: ShellTaken,
+    /// The keys held for the shell, in the order they were held.
+    held: Vec<ServerKey>,
+}
+
+/// Where the user's login shell stands.
+#[derive(Default, PartialEq, Eq)]
+enum ShellTaken {
+    /// Not run yet: the first key to be searched runs it.
+    #[default]
+    NotYet,
+    /// Its thread is on its way.
+    Running,
+    /// It reported, or none is given: no key is held any more.
+    Taken,
 }
 
 /// One key and where it stands.
@@ -187,6 +203,8 @@ enum Phase {
     NoneLeft,
     /// The download of a server for the row is on its way.
     Downloading { offer: Offer },
+    /// The key waits for the user's login shell, and has not been searched.
+    Held,
 }
 
 /// At the start of the Navigator: reads the registry from
@@ -542,10 +560,78 @@ pub(crate) fn look_at_the_clock(core: &mut Core) {
 /// and searches the keys held for it, as the table "Where a key stands" says.
 pub(crate) fn shell_taken(
     core: &mut Core,
-    taken: Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, crate::shell::ShellError>,
+    taken: Result<Vec<(OsString, OsString)>, crate::shell::ShellError>,
 ) {
-    let _ = (core, taken);
-    todo!("take the environment and search the held keys, as the module doc says")
+    core.life.shell = ShellTaken::Taken;
+    match taken {
+        Ok(environment) => {
+            core.config.search_path = crate::shell::search_path(&environment);
+            core.config.environment = environment;
+        }
+        Err(why) => {
+            let program = core
+                .config
+                .login_shell
+                .as_ref()
+                .map(|shell| shell.program.display().to_string())
+                .unwrap_or_default();
+            eprintln!("yaar-navigator: the login shell {program}: {why}");
+        }
+    }
+    let held = std::mem::take(&mut core.life.held);
+    for key in held {
+        // A key stopped meanwhile is forgotten, and one made again after it is searched
+        // once, where it was first held.
+        if matches!(
+            core.life.keys.get(&key).map(|keyed| &keyed.phase),
+            Some(Phase::Held)
+        ) {
+            restart(core, &key);
+        }
+    }
+    publish(core);
+}
+
+/// Whether a key to be searched now has to wait for the user's login shell, and starts the
+/// shell on a thread of its own when this is the first one.
+fn must_wait_for_the_shell(core: &mut Core) -> bool {
+    match core.life.shell {
+        ShellTaken::Taken => false,
+        ShellTaken::Running => true,
+        ShellTaken::NotYet => {
+            let Some(shell) = core.config.login_shell.clone() else {
+                return false;
+            };
+            let base = core.config.environment.clone();
+            let events = core.events.clone();
+            let started = std::thread::Builder::new()
+                .name("navigator-shell".to_owned())
+                .spawn(move || {
+                    let _ = events.send(Event::Shell(crate::shell::take(&shell, &base)));
+                });
+            match started {
+                Ok(_) => {
+                    core.life.shell = ShellTaken::Running;
+                    true
+                }
+                Err(error) => {
+                    eprintln!("yaar-navigator: the login shell cannot be run: {error}");
+                    core.life.shell = ShellTaken::Taken;
+                    false
+                }
+            }
+        }
+    }
+}
+
+/// Puts `keyed` in the phase of a key that waits for the shell, and notes `key` as held.
+fn hold(core: &mut Core, key: &ServerKey, keyed: &mut Keyed) {
+    keyed.left.clear();
+    keyed.question = None;
+    keyed.passed_over = false;
+    keyed.phase = Phase::Held;
+    core.life.held.retain(|held| held != key);
+    core.life.held.push(key.clone());
 }
 
 /// At the end: drops the asks still waiting, then stops every server, each as [`stop`] does.
@@ -583,15 +669,22 @@ fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
         let now = core.config.clock.now();
         core.life.left.insert(key.workspace.clone(), now);
     }
-    core.life.generation += 1;
     let mut keyed = Keyed {
         root: root.to_path_buf(),
-        generation: core.life.generation,
+        generation: 0,
         left: VecDeque::new(),
         phase: Phase::NoneLeft,
         question: None,
         passed_over: false,
     };
+    if must_wait_for_the_shell(core) {
+        // Held: no search, no generation counted, until the shell has reported.
+        hold(core, key, &mut keyed);
+        core.life.keys.insert(key.clone(), keyed);
+        return true;
+    }
+    core.life.generation += 1;
+    keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
     advance(core, key, &mut keyed);
     core.life.keys.insert(key.clone(), keyed);
@@ -637,6 +730,7 @@ fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return false;
     };
+    core.life.held.retain(|held| held != key);
     if end_server(&mut keyed) {
         answers::server_gone(core, key);
     }
@@ -664,7 +758,7 @@ fn end_server(keyed: &mut Keyed) -> bool {
                 .take();
             kill_and_reap(taken);
         }
-        Phase::NoneLeft | Phase::Downloading { .. } => {}
+        Phase::NoneLeft | Phase::Downloading { .. } | Phase::Held => {}
     }
     false
 }
@@ -716,7 +810,7 @@ pub(crate) fn on_an_older_copy(
             let candidate = match &keyed.phase {
                 Phase::Trying { candidate, .. } => candidate,
                 Phase::Starting { running } | Phase::Ready { running } => &running.candidate,
-                Phase::NoneLeft | Phase::Downloading { .. } => return false,
+                Phase::NoneLeft | Phase::Downloading { .. } | Phase::Held => return false,
             };
             candidate.kind == CandidateKind::Downloaded
                 && row
@@ -764,6 +858,11 @@ fn restart(core: &mut Core, key: &ServerKey) {
     if end_server(&mut keyed) {
         answers::server_gone(core, key);
     }
+    if must_wait_for_the_shell(core) {
+        hold(core, key, &mut keyed);
+        core.life.keys.insert(key.clone(), keyed);
+        return;
+    }
     core.life.generation += 1;
     keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
@@ -810,7 +909,7 @@ fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
             Some(running.candidate.program.clone()),
             Some(running.server.pid()),
         ),
-        Phase::NoneLeft | Phase::Downloading { .. } => (None, None, None),
+        Phase::NoneLeft | Phase::Downloading { .. } | Phase::Held => (None, None, None),
     };
     // The question takes the line while the key keeps one, whatever the phase.
     let state = if let Some((repository, program)) = &keyed.question {
@@ -820,7 +919,7 @@ fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
         }
     } else {
         match &keyed.phase {
-            Phase::Trying { .. } | Phase::Starting { .. } => State::Starting,
+            Phase::Trying { .. } | Phase::Starting { .. } | Phase::Held => State::Starting,
             Phase::Ready { .. } => State::Ready,
             Phase::NoneLeft => row.map_or(State::Missing { offer: None }, |row| {
                 when_none(row, core.config.platform)
