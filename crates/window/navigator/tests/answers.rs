@@ -691,6 +691,53 @@ fn a_file_of_no_rows_extension_is_answered_by_text_match() {
 }
 
 #[test]
+fn a_hover_on_a_file_of_no_row_in_a_workspace_with_no_file_of_a_row_starts_no_server() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    // No file of the stand-in's row: neither its marker nor a file of its extension.
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("notes.txt", "remember the milk\n"),
+            ("more.txt", "the milk is in the fridge\n"),
+        ],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+
+    let hover = running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert_eq!(
+        hover,
+        Answered {
+            value: Some("more.txt:1: the milk is in the fridge".to_owned()),
+            guessed: true
+        }
+    );
+    // The barrier: the list the Navigator tells for the ask after the hover comes after
+    // everything the hover made it do.
+    running.ask(Ask::OnScreen(Some(ws.clone())));
+    running.wait_told("the list of servers told for the ask", DEADLINE, |told| {
+        matches!(told, Told::Servers(_))
+    });
+    let keys_of_the_row: Vec<_> = running
+        .told
+        .iter()
+        .filter_map(|told| match told {
+            Told::Servers(states) => Some(states),
+            _ => None,
+        })
+        .flatten()
+        .filter(|state| state.language == "standin")
+        .collect();
+    assert!(keys_of_the_row.is_empty(), "{keys_of_the_row:#?}");
+    running.end();
+}
+
+#[test]
 fn the_files_that_changed_are_told_to_a_ready_server_once_and_a_gone_one_does_no_harm() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
