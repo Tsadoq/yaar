@@ -1,6 +1,11 @@
 //! `look` and `inside` on real files: executables, links and a folder the tests make under
 //! the temporary folder, as the Navigator's search for a server reads them. What `order` does
 //! with what was found is shown with no file, in the unit tests of `search.rs`.
+//!
+//! Three tests start a Navigator on the stand-in language server, through scripts of their
+//! own that stand for rustup's proxy and a copy on the machine (the proxy first, with no
+//! question and no install asked for), and that log what they were given (a variable of the
+//! servers' environment put into the args and the environment, or passing a candidate over).
 
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
