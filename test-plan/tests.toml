@@ -491,13 +491,14 @@ built = [
 
 [[test]]
 id = "WS-05"
-what = "A worktree created from a branch name lies beside the repository and has that branch as its base."
+what = "A worktree created on a new branch from a branch name lies beside the repository, where it keeps its worktrees, or in the folder the user named for the repository, and has the branch it was made from as its base."
 level = "component"
 part = "workspaces"
 through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-004", "FR-014"]
+note = "Changed in slice 9: the user names the new branch and the worktree is made from the branch of the workspace on screen, which FR-004 calls the branch it was made from. The folder the user named is the repository's setting, which the Keeper reads and hands over; the test hands it as the Keeper does. What is refused when the folder is set or at creation is shown by tests of the same packages, not by this row."
 
 [[test]]
 id = "WS-06"
@@ -711,6 +712,7 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-124", "NFR-017"]
+note = "The base is set through the Frame's field, as Set Base sets it; the stop time reaches the Navigator at once (NAV-17 shows the Navigator acts on it at once); what a turn end then selects is shown by WIN-11."
 
 [[test]]
 id = "FRAME-12"
@@ -727,10 +729,23 @@ id = "FRAME-14"
 what = "With no theme chosen the app follows the system's light or dark setting as it changes; after a choice it does not."
 level = "component"
 part = "frame"
-through = "keys, clicks and the wheel in; read back through the model it shows"
+through = "keys, clicks and the wheel in, and the system's setting told to the Frame's model as the Window tells it; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["NFR-018"]
+note = "Changed in slice 9: GPUI's test platform reports a light system and gives a test no way to change it, so the test tells the Frame's model what the platform would. WIN-11 shows the composed Window telling the model the platform's setting at its opening; a change of the system's setting while the app runs is checked on a real screen, by the conventions checklist."
+
+[[test]]
+id = "FRAME-15"
+what = "The settings list the answer given on the language servers of each repository and on an agent's extension, and change either."
+level = "component"
+part = "frame"
+through = "keys, clicks and the wheel in; read back through the model it shows"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-062", "NFR-020"]
+slice = 9
+note = "Added in slice 9: an answer given once can be changed."
 
 [[test]]
 id = "THEME-01"
@@ -741,6 +756,19 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["NFR-019"]
+note = "From slice 9 a second test scans the sources of the Frame, the panes and the Window program: none outside the theme definitions writes a colour or reads a colour the definitions do not hold."
+
+[[test]]
+id = "THEME-03"
+what = "In each built-in theme every text role is readable on its ground, at a contrast of 4.5 to 1 or more, and no two roles that must differ are the same colour."
+level = "unit"
+part = "frame"
+through = "its public functions"
+driver = "call"
+runs = "ci"
+proves = ["NFR-017"]
+slice = 9
+note = "Added in slice 9: the guard of the light theme's values, which nobody has looked at on a screen before the release's checklist."
 
 [[test]]
 id = "HOLD-07"
@@ -1515,6 +1543,19 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-125"]
+note = "A running turn's start, the newest state of a worktree that is there, and a state recorded within the last hour are kept too; the set time is counted with that hour added, so no state goes before the set time has passed since its turn. Whether the newest state stays past the set time is put to the owner (slice 9 ruling 10)."
+
+[[test]]
+id = "STATE-10"
+what = "The Keeper deletes the states nothing refers to once the set time has passed by its clock, at its start, while it runs, and at once when the user shortens the time; the history marks the turn expired and the sizes are smaller."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it"
+driver = "client"
+runs = "ci"
+proves = ["FR-125", "FR-126"]
+slice = 9
+note = "Added in slice 9: STATE-09 is the engine's; this row shows the Keeper's own clean-up and the history's mark through the Link. The Keeper's clock is handed in by the test."
 
 [[test]]
 id = "REC-01"
@@ -1570,6 +1611,7 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-126"]
+note = "Sizes are blocks on disk, as du counts. What nothing refers to is what the engine names for deletion; the Recorder deletes it and every object only it reached, the trees and blobs of comparisons among them."
 
 [[test]]
 id = "STORE-01"
@@ -2160,6 +2202,18 @@ built = [
     "crates/keeper/review-engine/src/follow/corpus.rs::over_the_corpus_of_real_changes_each_followed_in_one_round_and_in_three_the_anchors_that_differ_from_the_truth_are_named",
 ]
 note = "The truth is phase 4's blame, repaired and corrected by hand (crates/keeper/review-engine/corpus/NOTICE.md), for the first and the last version only; SPLIT and EXCLUDE anchors are left out. The three rounds cut each change's n hunks at the ceilings of n/3 and 2n/3, a change of one or two hunks having empty rounds. Three rounds differ from one round only on moved code a round cut in two."
+
+[[test]]
+id = "THREAD-09"
+what = "When the commit a workspace's changes are counted from moves, also while the Keeper was not running, a thread on a removed line is carried to the new one by the rule the new side's threads follow; a resolved thread and a thread on the new side stay."
+level = "component"
+part = "review-engine"
+through = "its calls, with the real Store and the real Recorder beneath, on a repository the test makes"
+driver = "git"
+runs = "ci"
+proves = ["FR-124"]
+slice = 9
+note = "Added in slice 9: the base of a workspace is a setting, and a changed base moves the old side of its threads."
 
 [[test]]
 id = "RP-01"
@@ -2796,6 +2850,42 @@ built = [
 ]
 
 [[test]]
+id = "NAV-16"
+what = "With a login shell given, the servers run in the Window's environment with what the shell prints added and its search path after the Window's, taken once at the first server needed and never before; a shell that fails, prints no environment or outlasts its deadline leaves the Window's own."
+level = "component"
+part = "navigator"
+through = "its calls, with the stand-in language server and a login shell the test writes"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-060"]
+slice = 9
+note = "Added in slice 9: a window started from the Dock has the system's short search path. No test runs the user's own shell."
+
+[[test]]
+id = "NAV-17"
+what = "A stop time told while the Navigator runs is in force at once."
+level = "component"
+part = "navigator"
+through = "its calls, with the stand-in language server"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-065", "FR-124"]
+slice = 9
+note = "Added in slice 9: what makes FRAME-11's at once hold for a Navigator that runs."
+
+[[test]]
+id = "NAV-18"
+what = "For Rust, rustup's own rust-analyzer, found through the toolchain's home, is the project's own and is tried before any copy on the search path, and never installs a toolchain."
+level = "component"
+part = "navigator"
+through = "its calls, on folders the test makes"
+driver = "language-servers"
+runs = "ci"
+proves = ["FR-060"]
+slice = 9
+note = "Added in slice 9: the order of DEC-067, the project's own before the machine's, where another copy lies earlier on the search path (slice 8 ruling 54)."
+
+[[test]]
 id = "LSP-01"
 what = "With no server on the machine, each of the three built-in rows downloads into the app's folder, passes its digest and answers hover, definition and references on its fixed project: TypeScript and JavaScript by one row, Python, and Rust."
 level = "component"
@@ -3141,7 +3231,7 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-014"]
-note = "Runs for both CLIs, with the slice that builds it (FR-023)."
+note = "Runs for both CLIs, with the slice that builds it (FR-023). The agent is the CLI the request names, the Window's one chosen CLI. A refused request makes nothing."
 
 [[test]]
 id = "AGENT-04"
@@ -3630,6 +3720,30 @@ proves = []
 slice = 10
 
 [[test]]
+id = "TERM-07"
+what = "On macOS, Option is Meta or types characters as the setting says, and with none set as the keyboard layout says; elsewhere it is always Meta."
+level = "component"
+part = "terminal-pane"
+through = "keys in; read back as the bytes the program gets"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-016"]
+slice = 9
+note = "Added in slice 9: the setting of DEC-112."
+
+[[test]]
+id = "TERM-08"
+what = "On macOS, Cmd-K empties the history and the screen above the prompt's line, Cmd-A selects everything, and the Cmd scroll keys move to the top, the bottom and one line; none sends a byte to the program."
+level = "component"
+part = "terminal-pane"
+through = "keys in; read back through the screen it shows and the bytes the program gets"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-122"]
+slice = 9
+note = "Added in slice 9. On Linux these have no key: only Ctrl-Shift-C and Ctrl-Shift-V are kept in a terminal there (DEC-112)."
+
+[[test]]
 id = "SCREEN-01"
 what = "The review round of the system test, done by hand in the real window, in the dark and in the light theme: every step looks as its pane test says, and a review shows no vote and no label."
 level = "system"
@@ -3858,6 +3972,18 @@ built = [
     "crates/window/window/tests/navigation.rs::the_composed_window_answers_hover_and_definition_from_the_server_and_a_removed_line_from_the_old_side_the_keeper_exported",
 ]
 note = "Added in slice 8: the rows of the review pane play the Navigator at its port with data, as they play the Keeper at the socket; this row joins the pane, the real Navigator and the Keeper's export."
+
+[[test]]
+id = "WIN-11"
+what = "In the composed Window with the real Keeper, the theme follows the system's setting from the opening; the settings screen sets what a turn end selects, the stop time, the theme, the place of the terminal pane and the time states are kept; each is in force at once and still set after the Keeper restarts; the screen shows the sizes of the recorded states and its clean-up reaches the Keeper."
+level = "component"
+part = "window"
+through = "keys, clicks and the wheel in, with a real Keeper beneath"
+driver = "test-platform"
+runs = "ci"
+proves = ["FR-124", "FR-126", "NFR-017", "NFR-018"]
+slice = 9
+note = "Added in slice 9: the rows of the Frame play the Keeper with data; this row joins the settings screen and the real Keeper, as WIN-10 joined the Navigator."
 
 [[test]]
 id = "SEAM-03"
