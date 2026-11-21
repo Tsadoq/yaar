@@ -926,6 +926,63 @@ fn a_trial_run_on_its_way_is_killed_when_the_navigator_ends() {
     assert!(!is_alive(pid), "the trial run outlived the Navigator");
 }
 
+/// A trial run that does not end by itself, as the kernel's part alone: the Window that
+/// started it is killed, so nothing of the Navigator's own cleanup runs.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let this_test = "a_trial_run_ends_when_the_window_that_started_it_is_killed";
+    if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
+        // The Window: it starts the trial run, says which process it is and where its
+        // scratch is, and waits to be killed; the end of its input, which a failed test
+        // leaves, ends it.
+        let scratch = Scratch::new();
+        let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+        let (row, noted) = row_with_a_hung_trial(&scratch);
+        let (ws, repository) = (workspace_id('1'), repository_id('1'));
+        let running = Running::start(scratch.config(&row));
+        running.show(&repo, &ws, &repository);
+        println!("TRIAL {} {}", noted_process(&noted), scratch.root.display());
+        let _ = std::io::stdin().read_line(&mut String::new());
+        return;
+    }
+
+    let mut window = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", this_test, "--nocapture", "--test-threads=1"])
+        .env("YAAR_WINDOW_CHILD", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the test again as a Window of its own");
+    let output = window.stdout.take().expect("the output was piped");
+    let said = BufReader::new(output)
+        .lines()
+        .map_while(Result::ok)
+        // The test harness has started a line of its own, so the sentence is not first.
+        .find_map(|line| line.split_once("TRIAL ").map(|(_, said)| said.to_owned()))
+        .expect("the Window said which trial run it started");
+    let (pid, scratch) = said.split_once(' ').expect("a process and a folder");
+    let pid: u32 = pid.parse().expect("a process number");
+    assert!(is_alive(pid), "the trial run runs while its Window does");
+
+    window.kill().expect("kill the Window");
+    window.wait().expect("reap the Window");
+    let end = Instant::now() + DEADLINE;
+    while is_alive(pid) {
+        if Instant::now() >= end {
+            // SAFETY: a signal to a process of this test's own.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+            panic!("the trial run outlived the Window that started it");
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // The Window was killed, so its scratch was not removed.
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
 #[test]
 fn a_trial_run_on_its_way_is_killed_when_its_workspace_leaves_the_list() {
     let scratch = Scratch::new();
