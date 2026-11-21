@@ -2413,6 +2413,16 @@ through = "keys, clicks, the wheel and the mouse resting on a name in; read back
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-051", "FR-068"]
+built = [
+    "crates/window/review-pane/tests/navigate.rs::hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by_text_match",
+    "crates/window/review-pane/tests/navigate.rs::the_mouse_resting_on_a_name_asks_its_hover_after_the_delay",
+    "crates/window/review-pane/tests/navigate.rs::a_click_chooses_the_name_whose_characters_hold_the_pointer_and_none_at_its_edges",
+    "crates/window/review-pane/tests/navigate.rs::the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing",
+    "crates/window/review-pane/tests/navigate.rs::l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_way",
+    "crates/window/review-pane/tests/navigate.rs::a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_pointer",
+    "crates/window/review-pane/tests/navigate.rs::a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away_is_not_asked",
+    "crates/window/review-pane/tests/navigate.rs::a_key_that_moves_the_reviewer_drops_the_hover_before_any_frame_is_drawn",
+]
 
 [[test]]
 id = "RP-22"
@@ -2423,6 +2433,13 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-052"]
+built = [
+    "crates/window/review-pane/tests/file_view.rs::going_to_a_definition_opens_the_file_and_the_return_control_brings_the_reviewer_back",
+    "crates/window/review-pane/tests/file_view.rs::back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_it_meanwhile",
+    "crates/window/review-pane/tests/file_view.rs::several_definitions_are_listed_and_not_opened",
+    "crates/window/review-pane/tests/file_view.rs::a_file_that_cannot_be_opened_and_a_definition_that_is_not_found_are_said_in_the_notice",
+    "crates/window/review-pane/tests/file_view.rs::escape_in_the_file_view_takes_a_shown_hover_away_and_only_then_goes_back",
+]
 
 [[test]]
 id = "RP-23"
@@ -2446,6 +2463,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-054"]
+built = [
+    "crates/window/review-pane/tests/navigate.rs::the_references_to_a_name_are_listed_and_any_of_them_opens",
+    "crates/window/review-pane/tests/navigate.rs::a_list_of_references_is_marked_only_when_it_was_found_by_text_match",
+    "crates/window/review-pane/tests/navigate.rs::with_no_reference_the_notice_says_none_was_found",
+]
 
 [[test]]
 id = "RP-25"
@@ -2456,6 +2478,12 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-055"]
+built = [
+    "crates/window/review-pane/tests/navigate.rs::on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_layouts",
+    "crates/window/review-pane/tests/navigate.rs::a_removed_line_of_a_renamed_file_is_asked_by_the_path_it_had",
+    "crates/window/review-pane/tests/navigate.rs::in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_side_its_version",
+    "crates/window/review-pane/tests/navigate.rs::a_past_version_whose_last_line_has_no_line_feed_is_asked_with_its_text_as_the_file_has_it",
+]
 
 [[test]]
 id = "RP-26"
@@ -2466,6 +2494,11 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-057", "FR-059"]
+built = [
+    "crates/window/review-pane/tests/servers.rs::a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_download_is_offered",
+    "crates/window/review-pane/tests/servers.rs::the_download_control_goes_when_the_offer_does_and_the_download_is_said_while_it_runs",
+    "crates/window/review-pane/tests/servers.rs::a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_and_then_its_own",
+]
 
 [[test]]
 id = "RP-27"
@@ -2476,6 +2509,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-062"]
+built = [
+    "crates/window/review-pane/tests/servers.rs::the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_for_that_repository",
+    "crates/window/review-pane/tests/servers.rs::the_keys_and_the_click_that_refuse_a_repository_send_the_refusal_of_that_repository",
+]
 
 [[test]]
 id = "RP-28"
@@ -2486,6 +2523,14 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-067"]
+built = [
+    "crates/window/review-pane/tests/servers.rs::the_line_says_where_the_server_stands_for_a_built_in_row_and_a_registered_one_alike",
+    "crates/window/review-pane/tests/servers.rs::the_line_follows_the_file_of_the_line_the_reviewer_is_on_and_a_removed_line_shows_the_old_side",
+    "crates/window/review-pane/tests/servers.rs::a_removed_line_of_a_change_between_two_versions_shows_the_server_of_the_old_version_it_names",
+    "crates/window/review-pane/tests/servers.rs::a_removed_line_of_a_renamed_file_shows_the_server_of_the_language_of_its_old_name",
+    "crates/window/review-pane/tests/servers.rs::a_starting_server_told_with_an_update_draws_no_update_control_and_its_key_says_nothing_waits",
+    "crates/window/review-pane/tests/servers.rs::a_pane_made_after_the_navigator_told_its_servers_draws_the_line_again_on_a_setting_changed_elsewhere",
+]
 
 [[test]]
 id = "RP-30"
@@ -2509,6 +2554,10 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-075"]
+built = [
+    "crates/window/review-pane/tests/file_view.rs::a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_reference",
+    "crates/window/review-pane/tests/file_view.rs::a_thread_of_the_review_is_drawn_on_its_line_of_the_file_view_while_the_line_holds_its_text",
+]
 
 [[test]]
 id = "RP-34"
@@ -2638,6 +2687,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-057"]
+built = [
+    "crates/window/navigator/src/search.rs::a_built_in_row_with_no_server_found_is_missing_with_the_offer_of_its_first_download",
+    "crates/window/navigator/src/search.rs::the_offer_names_the_server_version_and_size_the_row_pins_for_the_platform",
+    "crates/window/navigator/src/search.rs::a_row_the_user_registered_is_missing_with_no_offer_whatever_the_platform",
+    "crates/window/navigator/src/search.rs::a_file_of_no_rows_language_has_no_row_and_so_no_state",
+]
 
 [[test]]
 id = "NAV-07"
@@ -2648,6 +2703,11 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-060"]
+built = [
+    "crates/window/navigator/src/search.rs::of_several_servers_the_registered_comes_first_then_the_projects_then_the_machines_then_the_downloaded",
+    "crates/window/navigator/src/search.rs::within_a_kind_the_order_is_the_rows_order_of_servers_then_the_paths_order",
+    "crates/window/navigator/src/search.rs::a_users_row_tries_what_the_user_registered_first_and_downloads_nothing",
+]
 
 [[test]]
 id = "NAV-08"
@@ -2658,6 +2718,11 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-062"]
+built = [
+    "crates/window/navigator/tests/lifecycle.rs::a_server_inside_a_repository_does_not_run_before_the_user_said_yes",
+    "crates/window/navigator/tests/lifecycle.rs::the_answer_is_remembered_for_the_repository_in_its_other_worktrees",
+    "crates/window/navigator/tests/lifecycle.rs::a_no_passes_the_server_over_for_good",
+]
 
 [[test]]
 id = "NAV-09"
@@ -2668,6 +2733,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-063"]
+built = [
+    "crates/window/navigator/tests/fetch.rs::a_downloaded_server_stays_as_it_is_when_a_newer_one_is_named_until_the_user_asks_for_the_update",
+]
 
 [[test]]
 id = "NAV-11"
@@ -2678,6 +2746,10 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-064", "FR-065", "FR-066"]
+built = [
+    "crates/window/navigator/tests/old_side.rs::the_servers_of_the_workspace_on_screen_run_and_stop_when_it_was_off_screen_for_the_set_time_the_old_side_included",
+    "crates/window/navigator/tests/lifecycle.rs::a_workspace_off_screen_for_the_set_time_has_its_server_stopped_and_it_starts_again_on_screen",
+]
 
 [[test]]
 id = "NAV-13"
@@ -2688,6 +2760,10 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-067"]
+built = [
+    "crates/window/navigator/src/readiness.rs::each_built_in_row_has_the_rule_its_server_needs",
+    "crates/window/navigator/src/readiness.rs::rust_analyzer_is_ready_when_it_reports_quiescent_and_not_when_it_answers_initialize",
+]
 
 [[test]]
 id = "NAV-14"
@@ -2698,6 +2774,10 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-070"]
+built = [
+    "crates/window/navigator/tests/lifecycle.rs::a_registered_server_shows_as_starting_and_then_as_ready",
+    "crates/window/navigator/tests/lifecycle.rs::a_registered_server_whose_command_fails_shows_as_missing_with_no_offer",
+]
 
 [[test]]
 id = "NAV-15"
@@ -2708,6 +2788,11 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["FR-071"]
+built = [
+    "crates/window/navigator/src/registry.rs::the_built_in_table_reads_with_no_error_in_the_order_written",
+    "crates/window/navigator/src/registry.rs::a_row_that_cannot_be_read_is_reported_and_passed_over_and_the_rows_after_it_are_read",
+    "crates/window/navigator/src/registry.rs::a_users_row_of_a_built_in_name_replaces_it_whole_and_takes_what_it_leaves_out",
+]
 
 [[test]]
 id = "LSP-01"
@@ -2718,6 +2803,11 @@ through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-057", "FR-058", "FR-056", "FR-051", "FR-052", "FR-054"]
+built = [
+    "crates/window/navigator/tests/downloaded.rs::typescript_and_javascript_are_downloaded_by_one_row_and_answer",
+    "crates/window/navigator/tests/downloaded.rs::python_is_downloaded_and_answers",
+    "crates/window/navigator/tests/downloaded.rs::rust_is_downloaded_and_answers",
+]
 note = "Changed in slice 8: TypeScript and JavaScript are one row and one server, so three downloads, not four. The one test that fetches from the publishers. That a digest that differs is refused is LSP-05's."
 
 [[test]]
@@ -2729,6 +2819,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-061"]
+built = [
+    "crates/window/navigator/tests/lifecycle.rs::a_candidate_that_fails_its_trial_run_is_passed_over_and_the_next_is_used",
+]
 
 [[test]]
 id = "LSP-03"
@@ -2739,6 +2832,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-068"]
+built = [
+    "crates/window/navigator/tests/answers.rs::a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answered_by_text_match_and_marked",
+]
 
 [[test]]
 id = "LSP-04"
@@ -2749,6 +2845,10 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-069", "FR-073", "FR-071"]
+built = [
+    "crates/window/navigator/tests/fetch.rs::a_row_of_the_user_replaces_a_built_in_row_is_started_from_the_registry_file_and_is_never_downloaded",
+    "crates/window/navigator/tests/fetch.rs::a_registered_server_whose_command_fails_is_not_offered_and_a_download_asked_for_it_does_nothing",
+]
 
 [[test]]
 id = "LSP-05"
@@ -2759,6 +2859,9 @@ through = "its calls, with the stand-in language server served on the loopback a
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-058"]
+built = [
+    "crates/window/navigator/tests/download.rs::a_download_whose_digest_differs_from_its_row_is_refused",
+]
 
 [[test]]
 id = "LSP-06"
@@ -2769,6 +2872,10 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["NFR-002"]
+built = [
+    "crates/window/navigator/tests/new_language.rs::a_language_added_by_one_row_answers_hover",
+    "crates/window/navigator/tests/new_language.rs::no_string_of_the_navigators_source_names_a_language_a_server_or_a_file_of_a_row",
+]
 
 [[test]]
 id = "LSP-07"
@@ -2779,6 +2886,13 @@ through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["NFR-021"]
+built = [
+    "crates/window/navigator/tests/real.rs::typescript_leaves_nothing_in_the_repository_and_runs_no_package_manager",
+    "crates/window/navigator/tests/real.rs::python_leaves_nothing_in_the_repository_and_runs_no_package_manager",
+    "crates/window/navigator/tests/real.rs::rust_leaves_nothing_in_the_repository_and_builds_into_the_apps_cache",
+    "crates/window/navigator/tests/real.rs::typescript_without_its_setting_runs_npm_for_a_file_outside_every_project",
+    "crates/window/navigator/src/registry.rs::the_typescript_row_turns_off_the_acquisition_of_types_under_each_section",
+]
 note = "Changed in slice 8. tsgo's acquisition of types is turned off in its row: its file outside every project is asked about first. The package manager on the servers' search path is a recorder, and their proxy variables name a listener of the test's own; both are read after the servers ended, with no barrier on the server's own choice. A control test beside it, the row's setting taken out, waits for npm to run, and a unit test asserts the setting is in the row. A connection a server opens without the proxy variables is not observed: no tracer runs in the tests."
 
 [[test]]
@@ -2790,6 +2904,10 @@ through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-055"]
+built = [
+    "crates/window/navigator/tests/old_real.rs::typescript_hover_and_definition_on_a_removed_line_answer_from_the_base_for_a_deleted_symbol_and_a_moved_one",
+    "crates/window/navigator/tests/old_real.rs::rust_hover_and_definition_on_a_removed_line_answer_from_the_base_for_a_deleted_symbol_and_a_moved_one",
+]
 note = "Holds what ADR-016 calls OLD-02 (a definition the change moved). Shown with TypeScript and with Rust, as phase 4 measured; Python's old side is OLD-03's."
 
 [[test]]
@@ -2801,6 +2919,10 @@ through = "its calls, with real language servers on small fixed projects"
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-055"]
+built = [
+    "crates/window/navigator/tests/old_real.rs::typescript_a_type_from_a_dependency_on_a_removed_line_resolves",
+    "crates/window/navigator/tests/old_real.rs::python_a_type_from_a_dependency_on_a_removed_line_resolves",
+]
 
 [[test]]
 id = "OLD-04"
@@ -2811,6 +2933,9 @@ through = "the Link, as the Window speaks it"
 driver = "client"
 runs = "ci"
 proves = ["NFR-021"]
+built = [
+    "crates/keeper/keeper/tests/exports.rs::after_use_of_the_old_side_the_status_the_worktrees_and_the_refs_of_the_repository_are_unchanged",
+]
 note = "Changed in slice 8: the export of an old side is the Keeper's (ADR-016 point 1), so the row is the Keeper's; what a server writes is LSP-07's."
 
 [[test]]
@@ -2822,6 +2947,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-066"]
+built = [
+    "crates/window/navigator/tests/old_side.rs::no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_line",
+]
 
 [[test]]
 id = "OLD-06"
@@ -2832,6 +2960,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-066"]
+built = [
+    "crates/window/navigator/tests/old_side.rs::after_another_change_is_selected_the_export_of_the_earlier_old_side_is_gone",
+]
 
 [[test]]
 id = "OLD-07"
@@ -2842,6 +2973,9 @@ through = "its calls, with the stand-in language server on projects the test mak
 driver = "language-servers"
 runs = "ci"
 proves = ["FR-055", "FR-068"]
+built = [
+    "crates/window/navigator/tests/answers.rs::on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_line_by_text_match",
+]
 
 [[test]]
 id = "TEXT-01"
@@ -2852,6 +2986,9 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-068"]
+built = [
+    "crates/window/text-search/tests/search.rs::a_name_defined_in_a_new_untracked_file_is_found_and_one_in_an_ignored_file_is_not",
+]
 
 [[test]]
 id = "TEXT-03"
@@ -2863,6 +3000,9 @@ driver = "git"
 runs = "ci"
 proves = []
 slice = 8
+built = [
+    "crates/window/text-search/tests/speed.rs::the_full_list_of_a_repository_of_3500_files_arrives_within_100_ms_once_warm",
+]
 note = "Best of seven runs after one to warm, each list complete, as the 50 ms tests of the diff. It may fail under taskpolicy -b, as they do."
 
 [[test]]
@@ -3197,6 +3337,11 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["NFR-021"]
+built = [
+    "system-tests/tests/app_files.rs::a_file_of_the_app_left_in_a_worktree_is_named_by_the_check_at_the_end_of_the_test",
+    "system-tests/tests/app_files.rs::a_file_of_the_app_that_was_committed_is_named_by_the_listing_of_tracked_files",
+    "system-tests/tests/app_files.rs::a_test_that_ends_with_a_file_of_the_app_left_fails_naming_it_and_its_world_is_still_removed",
+]
 
 [[test]]
 id = "LISTEN-07"
@@ -3708,6 +3853,9 @@ through = "keys, clicks and the wheel in, with the real Keeper and Navigator and
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-051", "FR-052", "FR-055"]
+built = [
+    "crates/window/window/tests/navigation.rs::the_composed_window_answers_hover_and_definition_from_the_server_and_a_removed_line_from_the_old_side_the_keeper_exported",
+]
 note = "Added in slice 8: the rows of the review pane play the Navigator at its port with data, as they play the Keeper at the socket; this row joins the pane, the real Navigator and the Keeper's export."
 
 [[test]]
