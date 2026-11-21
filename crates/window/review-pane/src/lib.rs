@@ -916,8 +916,6 @@ pub struct ReviewPane {
     /// What code intelligence keeps: the name the reviewer is on, the asks on their way, the
     /// hover, the list of references, the file view and the place left in the diff.
     navigate: navigate::Navigate,
-    /// What the line of the language server keeps.
-    servers: servers::Servers,
 }
 
 impl ReviewPane {
@@ -941,8 +939,13 @@ impl ReviewPane {
             pane.follow_agents(cx);
         })
         .detach();
-        cx.observe(&models.settings, |pane, _, cx| pane.flow_settings(cx))
-            .detach();
+        // The answers on the servers inside a repository are settings too: the line of the
+        // language server is drawn again for each, whenever the Navigator told its states.
+        cx.observe(&models.settings, |pane, _, cx| {
+            pane.flow_settings(cx);
+            cx.notify();
+        })
+        .detach();
         cx.observe(&models.navigation, |pane, _, cx| pane.servers_changed(cx))
             .detach();
         cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
@@ -984,7 +987,6 @@ impl ReviewPane {
             attaching: attaching::Attaching::default(),
             moved: moved::Moved::default(),
             navigate: navigate::Navigate::default(),
-            servers: servers::Servers::default(),
         };
         pane.sessions_changed(cx);
         pane.follow_history(window, cx);

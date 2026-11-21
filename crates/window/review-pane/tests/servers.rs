@@ -6,7 +6,9 @@
 
 mod common;
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
 
 use gpui_kit::{Modifiers, ScrollDelta, ScrollEvent, TestAppContext, VisualTestContext, point, px};
 use yaar_diff::Row;
@@ -580,6 +582,66 @@ fn the_pane_asks_before_a_server_inside_a_repository_first_runs_and_asks_once_fo
         .is_some()
     );
     assert_no_dialog(&mut cx);
+}
+
+#[gpui_kit::test]
+fn a_pane_made_after_the_navigator_told_its_servers_draws_the_line_again_on_a_setting_changed_elsewhere(
+    cx: &mut TestAppContext,
+) {
+    // The Navigator is connected and has told its servers, the question among them, before
+    // the pane is made, and tells nothing more.
+    let (models, keeper) = common::link_up(vec![workspace('1', "feature")], cx);
+    let navigator = NavigatorEnd::connect(&models, cx);
+    navigator.tell(Told::Languages(languages()), cx);
+    navigator.tell(Told::Servers(vec![rust(asking(repository()))]), cx);
+    let (mut stage, mut cx) = common::open_window(models, keeper, cx);
+    let changes = since_main(Vec::new(), vec![file("src/lib.rs", FileStatus::Modified)]);
+    stage.keeper.show(
+        &changes,
+        |_| texts("start\ngone\nmiddle\n", "start\nmiddle\nadded\n"),
+        &mut cx,
+    );
+    wait_for_files(&stage.pane, &mut cx);
+    go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
+    assert_line(
+        "asking",
+        "Rust: /gits/feature/tools/rust-analyzer lies inside the repository repository. \
+         Run language servers from this repository?",
+        &mut cx,
+    );
+    assert!(has_control("yes", &mut cx));
+
+    // Another window answers: the Keeper tells it, and the pane, which the Navigator tells
+    // nothing more, is drawn again. The pane is read for what it is told of the change, as
+    // the window reads it: it notifies.
+    let redrawn = Rc::new(Cell::new(0));
+    let watching = cx.update(|_, cx| {
+        let redrawn = redrawn.clone();
+        cx.observe(&stage.pane, move |_, _| redrawn.set(redrawn.get() + 1))
+    });
+    let allowed = Setting::ServersInRepository {
+        repository: repository(),
+        allowed: true,
+    };
+    stage.keeper.tell(Fact::SettingChanged(allowed));
+    wait_until(&mut cx, "the answer in the Frame's model", |cx| {
+        stage
+            .models
+            .navigation
+            .read_with(cx, |navigation, cx| navigation.consent(&repository(), cx))
+            == Some(true)
+    });
+    cx.run_until_parked();
+    assert!(redrawn.get() > 0, "the pane was not drawn again");
+    assert!(!has_control("yes", &mut cx));
+    assert!(
+        drawn(
+            "review-servers-text:Rust: language servers of the repository repository may run",
+            &mut cx
+        )
+        .is_some()
+    );
+    drop(watching);
 }
 
 #[gpui_kit::test]

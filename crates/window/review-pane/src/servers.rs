@@ -86,16 +86,6 @@ const NOTHING_TO_DOWNLOAD: &str = "No language server waits to be downloaded";
 const NOTHING_TO_UPDATE: &str = "No language server update waits";
 const NO_QUESTION: &str = "No question about language servers waits";
 
-/// What this module keeps in the pane.
-#[derive(Default)]
-pub(crate) struct Servers {
-    /// The observation of the settings, which holds the answers on the servers inside a
-    /// repository: the line is drawn again when one arrives, from another window too.
-    /// Made when the Navigation model is first heard from, which is when a Navigator
-    /// connects, since no line exists before.
-    settings: Option<Subscription>,
-}
-
 /// The code whose server the line tells of.
 struct Code {
     workspace: WorkspaceId,
@@ -337,12 +327,10 @@ impl ReviewPane {
         Some(line)
     }
 
-    /// The Navigation model changed: the line is drawn again.
+    /// The Navigation model changed: the line is drawn again. The settings that hold the
+    /// answers on the servers inside a repository are heard from the pane's making, in
+    /// `ReviewPane::new`.
     pub(crate) fn servers_changed(&mut self, cx: &mut Context<Self>) {
-        if self.servers.settings.is_none() {
-            let settings = self.models.settings.clone();
-            self.servers.settings = Some(cx.observe(&settings, |_, _, cx| cx.notify()));
-        }
         cx.notify();
     }
 
