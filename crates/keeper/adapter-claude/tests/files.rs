@@ -182,6 +182,26 @@ fn a_session_that_is_itself_a_link_goes_as_a_link_and_its_target_stays() {
 }
 
 #[test]
+fn a_link_in_the_place_of_a_session_made_within_the_set_time_is_kept() {
+    let place = Place::new();
+    let (_, folder) = place.outside();
+    symlink(&folder, place.session("s1")).expect("link a session to a folder");
+
+    let removed = place
+        .remove(&[], Some(SystemTime::now() - THIRTY_DAYS))
+        .expect("the clean-up runs");
+
+    // A link's own time cannot be set back with std, so only the kept half shows here: the
+    // untimed test above shows the link going.
+    assert_eq!(removed, 0, "a link made now is within the time");
+    assert!(fs::symlink_metadata(place.session("s1")).is_ok());
+    assert_eq!(
+        fs::read(folder.join("inside.txt")).expect("the folder's file"),
+        noise(20_000, 2)
+    );
+}
+
+#[test]
 fn a_folder_of_reviews_that_is_a_link_is_not_followed() {
     let place = Place::new();
     let (_, folder) = place.outside();
@@ -271,14 +291,15 @@ fn a_file_in_a_folder_of_a_session_counts_for_all_it_says() {
 fn a_file_written_at_the_very_time_is_not_before_it() {
     let place = Place::new();
     let cut = SystemTime::now() - THIRTY_DAYS;
-    let file = place.write("s1", "r-1.md", b"on the line");
+    let file = place.write("s1", "r-1.md", &noise(20_000, 8));
     set_modified(&file, cut);
+    let expected = blocks_of(&file);
 
     assert_eq!(place.remove(&[], Some(cut)).expect("runs"), 0);
     assert!(file.exists());
 
     let later = cut + Duration::from_secs(1);
-    assert!(place.remove(&[], Some(later)).expect("runs") > 0);
+    assert_eq!(place.remove(&[], Some(later)).expect("runs"), expected);
     assert!(!place.session("s1").exists());
 }
 
