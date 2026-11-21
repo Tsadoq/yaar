@@ -936,15 +936,21 @@ fn a_workspace_shown_while_an_update_is_on_its_way_runs_the_new_version_when_it_
 #[test]
 fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_one() {
     let scratch = Scratch::new();
-    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
+    let repo = scratch.repository(
+        "project",
+        &[("main.sil", "def alpha\n"), ("main.ctl", "\n")],
+    );
     install(&scratch, "1");
     let two = archive_of("2");
     // The address serves bytes that are not the ones pinned.
-    let loopback = Loopback::serve(vec![("standin-2.tar.gz".to_owned(), archive_of("other"))]);
+    let loopback = Loopback::serve(vec![
+        ("standin-2.tar.gz".to_owned(), archive_of("other")),
+        ("control.tar.gz".to_owned(), archive_of("1")),
+    ]);
     let row = row_with(
         &scratch.root.join("standin.log"),
         &download_of("2", &loopback.url("standin-2.tar.gz"), &two),
-    );
+    ) + &control_row(&loopback.url("control.tar.gz"), &archive_of("1"));
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row));
     running.show(&repo, &ws, &repository);
@@ -955,14 +961,27 @@ fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_on
     running.ask(Ask::Update {
         language: "standin".to_owned(),
     });
-    // The failed download ends with the key searched again, as the module doc says: a server
-    // of another process runs, and it is the version that ran before.
-    let after = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
-        state.state == State::Ready && state.pid != before.pid
-    });
-    assert_eq!(after.program, before.program);
-    assert_eq!(after.update, Some(offer_of("2", &two)));
-    assert_eq!(lines(&loopback), ["GET /standin-2.tar.gz"]);
+    // The barrier: the control row's whole download, asked after the update, ends after the
+    // failed one (which is a digest that does not match) was handled and the Navigator told
+    // what it did about it.
+    download_the_control(&mut running, &ws);
+    let mut heard = lines(&loopback);
+    heard.sort();
+    assert_eq!(heard, ["GET /control.tar.gz", "GET /standin-2.tar.gz"]);
+
+    // The server that ran runs still: the same process, ready, the update still offered.
+    let after = state_of(&running, &ws);
+    assert_eq!(
+        (&after.state, &after.program, after.pid, &after.update),
+        (
+            &State::Ready,
+            &before.program,
+            before.pid,
+            &Some(offer_of("2", &two))
+        )
+    );
+    assert!(is_alive(before.pid.expect("a process")));
+    assert!(!shows_downloading(&running.told));
     assert_eq!(
         installed(&servers_of(&scratch), "standin").unwrap().version,
         "1"

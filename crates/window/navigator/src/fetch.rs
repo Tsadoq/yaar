@@ -27,13 +27,16 @@
 //! searched again (`lifecycle::search_again`), which stops the server it ran and finds the
 //! version now installed as its downloaded candidate (`search::look` reads
 //! `download::installed`). On failure, the reason is written to the standard error as one
-//! line, and every such key is searched again too: a download shows missing with its offer
-//! again, an update keeps the version that ran.
+//! line. The keys of a download are searched again, and show missing with its offer again;
+//! the keys of an update are left alone: the server that ran is the same process, still
+//! ready, and still offers the newer version, so that nothing it was asked is lost. The same
+//! holds when the update's thread cannot be started.
 //!
 //! The [`crate::download::Downloader`] is made once, by the thread of the first download
 //! ([`crate::download::Downloader::new`] reads the system's certificates, and the
 //! Navigator's thread waits for nothing); when it cannot be made, the download fails with
-//! its sentence as the reason.
+//! its sentence as the reason, and so does every later one: a downloader that could not be
+//! made stays failed for the Navigator's life.
 //!
 //! A download that ends well also searches again the keys of the row that are not on the
 //! waiting list but need it. A workspace shown while the download was on its way found
@@ -57,7 +60,9 @@ use crate::registry::Download;
 pub(crate) struct Fetches {
     /// The downloader, made once by the first download's own thread (reading the system's
     /// certificates takes a while, and the Navigator's thread waits for nothing), or the
-    /// sentence of why it could not be made. Handed to each thread behind an `Arc`.
+    /// sentence of why it could not be made. A downloader that could not be made is kept as
+    /// the failure: every later download of this Navigator fails with the same sentence, and
+    /// only a new Navigator tries again. Handed to each thread behind an `Arc`.
     downloader: Arc<OnceLock<Result<Downloader, String>>>,
     /// The rows with a download on its way, each with the keys that were shown for it when it
     /// began. A key that is forgotten meanwhile stays in the list, and is left alone when the
@@ -72,6 +77,9 @@ struct Waiting {
     server: String,
     /// The keys that were shown for the download when it began.
     keys: Vec<ServerKey>,
+    /// Whether it is an update: its keys run a server meanwhile, and one that fails leaves
+    /// them as they are.
+    update: bool,
 }
 
 /// [`crate::Ask::Download`]: downloads the row's server for every key whose state offers it.
@@ -91,7 +99,7 @@ pub(crate) fn download(core: &mut Core, language: &str) {
     for key in &keys {
         lifecycle::downloading(core, key, offer.clone());
     }
-    begin(core, language, keys, server, download);
+    begin(core, language, keys, server, download, false);
 }
 
 /// [`crate::Ask::Update`]: downloads the version the row pins now, for the keys whose state
@@ -113,16 +121,21 @@ pub(crate) fn update(core: &mut Core, language: &str) {
         .filter(|(_, shown)| shown.server == server)
         .map(|(key, _)| key.clone())
         .collect();
-    begin(core, language, keys, server, download);
+    begin(core, language, keys, server, download, true);
 }
 
-/// A download ended: the keys that waited for it are searched again.
+/// A download ended: the keys that waited for it are searched again, but for the keys of an
+/// update that failed.
 pub(crate) fn downloaded(
     core: &mut Core,
     language: String,
     outcome: Result<Installed, DownloadError>,
 ) {
-    let Waiting { server, mut keys } = core.fetch.on_its_way.remove(&language).unwrap_or_default();
+    let Waiting {
+        server,
+        mut keys,
+        update,
+    } = core.fetch.on_its_way.remove(&language).unwrap_or_default();
     match outcome {
         Ok(_) => {
             // A key made while the download was on its way found nothing, and shows the
@@ -139,7 +152,14 @@ pub(crate) fn downloaded(
                 }
             }
         }
-        Err(error) => eprintln!("yaar-navigator: the download for {language} failed: {error}"),
+        Err(error) => {
+            eprintln!("yaar-navigator: the download for {language} failed: {error}");
+            // An update's keys run the version that ran before, and nothing is gained by
+            // stopping a server and starting it again: its pending answers would be lost.
+            if update {
+                return;
+            }
+        }
     }
     for key in &keys {
         lifecycle::search_again(core, key);
@@ -159,19 +179,22 @@ fn pinned(core: &Core, language: &str, server: &str) -> Option<(String, Download
 }
 
 /// Starts the one download of `download` for the row `language`, on a thread of its own,
-/// which sends [`Event::Downloaded`], and notes the `keys` that wait for it.
+/// which sends [`Event::Downloaded`], and notes the `keys` that wait for it; `update` says
+/// whether the download is an update's.
 fn begin(
     core: &mut Core,
     language: &str,
     keys: Vec<ServerKey>,
     server: String,
     download: Download,
+    update: bool,
 ) {
     core.fetch.on_its_way.insert(
         language.to_owned(),
         Waiting {
             server: server.clone(),
             keys,
+            update,
         },
     );
     let downloader = Arc::clone(&core.fetch.downloader);
