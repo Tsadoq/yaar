@@ -224,9 +224,12 @@ pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig 
     std::fs::create_dir_all(&folder).expect("make the folder of the machine's programs");
     let mut search_path = Vec::new();
     if found == Found::OnTheMachine {
+        // A second window of the test finds the copy there, which the first may run.
         let copy = folder.join("standin-lsp");
-        std::fs::copy(yaar_system_tests::program("standin-lsp"), &copy)
-            .expect("copy the stand-in language server");
+        if !copy.exists() {
+            std::fs::copy(yaar_system_tests::program("standin-lsp"), &copy)
+                .expect("copy the stand-in language server");
+        }
         search_path.push(folder);
     }
     let tmp = world.home().with_file_name("tmp");

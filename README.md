@@ -228,7 +228,8 @@ nothing of pi's and does not hear it.
   uploaded. The bytes are checked against the SHA-256 digest pinned in the app and are
   refused when it differs. The server is unpacked into the app's data folder, below, and
   started. When the version the app pins is newer than the one you downloaded, the line
-  offers "Update to" (Shift-U); nothing updates by itself. A server you registered is never downloaded.
+  offers "Update to" (Shift-U); nothing updates by itself. A server you registered is never
+  downloaded.
 - **Asks before it runs a server that sits inside a repository.** A project's own server,
   such as `node_modules/.../tsc` or `.venv/bin/ty`, runs code from the repository. The line
   asks once for the repository, "Run them" (Shift-Y) or "Not from this repository" (Shift-Q),

@@ -288,3 +288,78 @@ fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppCont
         "the server {pid} outlived the quit of the app"
     );
 }
+
+/// Opens a window as `open_with` does, with a Navigator whose registry has the stand-in's
+/// row, against the Keeper of `world`.
+fn open_with(world: &World, cx: &mut TestAppContext) -> (yaar_frame::Models, VisualTestContext) {
+    let navigator = navigator_for(
+        world,
+        Found::OnTheMachine,
+        &standin_row(Found::OnTheMachine, "main.sil", &[]),
+    );
+    let socket = world.socket();
+    let yaar_frame::Opened { window, models, .. } = cx
+        .update(|cx| yaar_window::open_with(socket, navigator, cx))
+        .expect("open the window");
+    (models.clone(), VisualTestContext::from_window(window, cx))
+}
+
+// Of its own: `open_with`, which the program's `open` is, hands the Navigator to the window.
+#[gpui_kit::test]
+fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages(
+    cx: &mut TestAppContext,
+) {
+    let mut world = World::new();
+    world.start_keeper();
+    cx.executor().allow_parking();
+    cx.update(yaar_window::init);
+    let (models, mut inner) = open_with(&world, cx);
+    wait_until(&mut inner, "the Navigator's languages", |cx| {
+        models.navigation.read_with(cx, |navigation, _| {
+            navigation.is_connected()
+                && navigation
+                    .languages()
+                    .iter()
+                    .any(|language| language.name == "standin")
+        })
+    });
+    assert!(cx.update(|cx| yaar_window::stop_navigator(&models, cx)));
+    // Ended: nothing is connected to ask, and the model says so once it heard.
+    wait_until(&mut inner, "the model to see the Navigator end", |cx| {
+        models
+            .navigation
+            .read_with(cx, |navigation, _| navigation.languages().is_empty())
+    });
+}
+
+// Of its own: each window has a Navigator of its own, and ending one leaves the other.
+#[gpui_kit::test]
+fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
+    let mut world = World::new();
+    world.start_keeper();
+    cx.executor().allow_parking();
+    cx.update(yaar_window::init);
+    let (first, mut first_cx) = open_with(&world, cx);
+    let (second, mut second_cx) = open_with(&world, cx);
+    for (models, window_cx) in [(&first, &mut first_cx), (&second, &mut second_cx)] {
+        wait_until(window_cx, "the languages of the window's Navigator", |cx| {
+            models
+                .navigation
+                .read_with(cx, |navigation, _| !navigation.languages().is_empty())
+        });
+    }
+
+    assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
+    // The second Navigator was not the first's: it still tells and still listens, and
+    // stopping the first again is a call that finds nothing to stop.
+    assert!(
+        second
+            .navigation
+            .read_with(&second_cx, |navigation, _| navigation.is_connected())
+    );
+    assert!(cx.update(|cx| yaar_window::stop_navigator(&first, cx)));
+    assert!(second.navigation.read_with(&second_cx, |navigation, _| {
+        !navigation.languages().is_empty()
+    }));
+    assert!(cx.update(|cx| yaar_window::stop_navigator(&second, cx)));
+}
