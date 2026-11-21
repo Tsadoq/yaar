@@ -7,14 +7,14 @@ on lines, and send the comments back to the agent.
 **Pre-release.** Today the app opens a git repository, shows what a branch changed, lets
 you comment on any line of the diff and keeps those comments, and runs terminals beside the
 diff. It answers what a name in the diff is, where it is defined and who uses it, from a
-language server (below). It hears Claude Code, which you run in one of those terminals as always, and pi, once
-you have said yes to one question the app asks (below): the sidebar shows whether each works,
-waits for you or has finished a turn, Flow shows what it does as it works, and Changes shows
-what the turn changed. A review round with either works end to end: you attach your comments
-to your next message, the agent receives them with the message you submit, answers each thread
-with a tool of the app, and the threads follow the code it rewrites. You still press Enter
-yourself. Until you say yes, pi runs in a terminal as any program does, and the app writes
-nothing of pi's and does not hear it.
+language server (below). It hears Claude Code, which you run in one of those terminals as
+always, and pi, once you have said yes to one question the app asks (below): the sidebar
+shows whether each works, waits for you or has finished a turn, Flow shows what it does as
+it works, and Changes shows what the turn changed. A review round with either works end to
+end: you attach your comments to your next message, the agent receives them with the message
+you submit, answers each thread with a tool of the app, and the threads follow the code it
+rewrites. You still press Enter yourself. Until you say yes, pi runs in a terminal as any
+program does, and the app writes nothing of pi's and does not hear it.
 
 ## What it does now
 

@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, point};
+use yaar_frame::LinkStatus;
 use yaar_link::Request;
 use yaar_navigator::{FileKind, Location, State, Tree};
 use yaar_review_pane::HoverShown;
@@ -376,6 +377,108 @@ fn the_quit_of_the_app_stops_every_server_before_it_goes_on(cx: &mut TestAppCont
     assert!(
         !is_alive(pid),
         "the server {pid} outlived the quit of the app"
+    );
+}
+
+/// Asks the Navigator of the window whose models these are for the hover on `total` in the
+/// worktree of `workspace`, and waits for its answer: the server of the stand-in is started
+/// by that ask. Then waits until the model shows the stand-in ready, and gives its process.
+fn start_the_standin_in(
+    models: &yaar_frame::Models,
+    workspace: &yaar_link::WorkspaceId,
+    cx: &mut VisualTestContext,
+    app: &mut TestAppContext,
+) -> u32 {
+    let place = yaar_navigator::Place {
+        workspace: workspace.clone(),
+        tree: Tree::Worktree,
+        path: PathBuf::from("main.sil"),
+        line: 2,
+        column: 4,
+        name: "total".to_owned(),
+        shown: Vec::new(),
+    };
+    let asking = models
+        .navigation
+        .update(cx, |navigation, cx| navigation.hover(place, cx));
+    let answered = Rc::new(RefCell::new(false));
+    let _waiting = app.foreground_executor().spawn({
+        let answered = answered.clone();
+        async move {
+            let _ = asking.await;
+            *answered.borrow_mut() = true;
+        }
+    });
+    wait_until(cx, "the answer to the hover", |_| *answered.borrow());
+    let mut pid = None;
+    wait_until(cx, "the stand-in of the window ready", |cx| {
+        pid = models.navigation.read_with(cx, |navigation, _| {
+            navigation
+                .servers()
+                .iter()
+                .find(|server| server.state == State::Ready)
+                .and_then(|server| server.pid)
+        });
+        pid.is_some()
+    });
+    pid.expect("a server runs")
+}
+
+// Of its own: the quit of the app ends the Navigator of every window, not the first's alone.
+#[gpui_kit::test]
+fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext) {
+    let mut world = World::new();
+    world.start_keeper();
+    let (repository, _) = repository_with_a_change(&world);
+    let folder = repository.path().to_owned();
+    cx.executor().allow_parking();
+    cx.update(yaar_window::init);
+    let (first, mut first_cx) = open_with(&world, cx);
+    let (second, mut second_cx) = open_with(&world, cx);
+    wait_until(
+        &mut first_cx,
+        "the Keeper to answer the first window",
+        |cx| {
+            first.link.read_with(cx, |link, _| {
+                matches!(link.status(), LinkStatus::Connected(_))
+            })
+        },
+    );
+    first.workspaces.update(&mut first_cx, |list, cx| {
+        list.open_folder(folder.clone(), cx)
+    });
+    let mut workspace = None;
+    wait_until(&mut first_cx, "the workspace on screen", |cx| {
+        workspace = first
+            .workspaces
+            .read_with(cx, |list, _| list.selected().cloned());
+        workspace.is_some()
+    });
+    let workspace = workspace.expect("a workspace is on screen");
+    // The Keeper tells every window of its workspaces, so the second Navigator has it too.
+    wait_until(&mut second_cx, "the workspace in the second window", |cx| {
+        second
+            .workspaces
+            .read_with(cx, |list, _| list.workspace(&workspace).is_some())
+    });
+
+    let first_pid = start_the_standin_in(&first, &workspace, &mut first_cx, cx);
+    let second_pid = start_the_standin_in(&second, &workspace, &mut second_cx, cx);
+    assert_ne!(
+        first_pid, second_pid,
+        "each Navigator runs a server of its own"
+    );
+    assert!(is_alive(first_pid) && is_alive(second_pid));
+
+    cx.update(|app| app.shutdown());
+    // The quit waited for both: no wait here.
+    assert!(
+        !is_alive(first_pid),
+        "the server {first_pid} of the first window outlived the quit of the app"
+    );
+    assert!(
+        !is_alive(second_pid),
+        "the server {second_pid} of the second window outlived the quit of the app"
     );
 }
 

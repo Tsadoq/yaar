@@ -193,6 +193,10 @@ pub fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, 
 /// does: its port is dropped and, up to [`yaar_navigator::STOP_DEADLINE`] and a second
 /// more, the call waits for it to stop every server and end. Gives whether it ended, and
 /// true when none runs. The model shows no Navigator afterwards.
+///
+/// Nothing in the product calls it: the app opens one window and quits when it closes, so
+/// in this slice only the quit of the app ends a Navigator there. It is public for a test,
+/// and for the day a window closes while others remain.
 pub fn stop_navigator(models: &Models, cx: &mut App) -> bool {
     let id = models.navigation.entity_id();
     let navigators = cx.default_global::<Navigators>();
