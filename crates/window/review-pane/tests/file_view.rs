@@ -350,6 +350,56 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
     assert_eq!(common::bounds_of_row(row, &mut cx), before.2);
 }
 
+// RP-22, Escape in the file view takes a hover away first
+#[gpui_kit::test]
+fn escape_in_the_file_view_takes_a_shown_hover_away_and_only_then_goes_back(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_long(cx);
+    let pane = &stage.pane;
+    click_compute(&stage, &mut cx);
+    let opened = opened_of(
+        in_the_worktree("src/lib.rs"),
+        "/gits/feature/src/lib.rs",
+        30,
+    );
+    go_to_definition(
+        vec![location("/gits/feature/src/lib.rs", 12)],
+        Some(opened.clone()),
+        &mut navigator,
+        &mut cx,
+    );
+    let shown = FileShown {
+        file: opened,
+        line: 12,
+    };
+    assert_eq!(file_view(pane, &mut cx), Some(shown.clone()));
+
+    // A hover is asked of the name of the line of the file view, and told.
+    cx.simulate_keystrokes("shift-k");
+    let Ask::Hover { id, .. } = navigator.ask(&mut cx) else {
+        panic!("the hover was not asked")
+    };
+    navigator.tell(
+        Told::Hover {
+            id,
+            answer: Answered {
+                value: Some("a hover".to_owned()),
+                guessed: false,
+            },
+        },
+        &mut cx,
+    );
+    assert!(pane.read_with(&cx, |pane, _| pane.hover().is_some()));
+
+    // The first Escape takes the hover away and leaves the file view; the second goes back.
+    cx.simulate_keystrokes("escape");
+    assert!(pane.read_with(&cx, |pane, _| pane.hover().is_none()));
+    assert_eq!(file_view(pane, &mut cx), Some(shown));
+    cx.simulate_keystrokes("escape");
+    assert_eq!(file_view(pane, &mut cx), None);
+}
+
 // RP-22, the way back when the rows changed while the reviewer was away
 #[gpui_kit::test]
 fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_it_meanwhile(
