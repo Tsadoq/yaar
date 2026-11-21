@@ -226,13 +226,44 @@ fn root_of(workspace: &WorkspaceId, repo: &Repo) -> WorkspaceRoot {
 // OLD-05: no process for the old side before the first use of a removed line.
 // ---------------------------------------------------------------------------------------
 
+/// The stand-in's row `standin`, ready at once, that logs to a file of its own side's target
+/// folder, `{target}/standin.log`: each side's server has a log, so that a test reads which
+/// of them was asked.
+fn row_with_a_log_for_each_side() -> String {
+    standin_row("standin", &["--log", "{target}/standin.log"], "answer", "")
+}
+
+/// The log of the stand-in's server of `side`, `new` or `old`, of `workspace`, in the target
+/// folder the Navigator names for it; the folder is made, as a build tool makes its own.
+fn side_log(scratch: &Scratch, workspace: &WorkspaceId, side: &str) -> PathBuf {
+    let target = scratch
+        .root
+        .join("navigator")
+        .join("targets")
+        .join(workspace.as_str())
+        .join(side);
+    std::fs::create_dir_all(&target).expect("make the target folder");
+    target.join("standin.log")
+}
+
+/// How many requests of `method` a stand-in's log holds.
+fn requests(log: &Path, method: &str) -> usize {
+    log_of(log)
+        .iter()
+        .filter(|line| line["event"] == "request" && line["method"] == method)
+        .count()
+}
+
 #[test]
 fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_line() {
     let scratch = Scratch::new();
     let repo = removed_line_repository(&scratch);
-    let log = scratch.root.join("standin.log");
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
-    let mut running = Running::start(scratch.config(&row(&log, "")));
+    let (new_log, old_log) = (
+        side_log(&scratch, &ws, "new"),
+        side_log(&scratch, &ws, "old"),
+    );
+    let mut running = Running::start(scratch.config(&row_with_a_log_for_each_side()));
     running.show(&repo, &ws, &repository);
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -262,19 +293,26 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     );
     assert_eq!(old_sides_told(&running), vec![]);
     assert_eq!(
-        started_in(&log),
+        started_in(&new_log),
         std::slice::from_ref(&repo.root),
         "a second process was started"
     );
+    assert!(
+        log_of(&old_log).is_empty(),
+        "a process of the old side started"
+    );
+    assert_eq!(requests(&new_log, "textDocument/hover"), 1);
 
     // The first use of a removed line: answered by text match at once, and the export asked
     // for; once it is written, the old side's server starts in it.
     let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
     assert_eq!(asked.workspace, ws);
-    assert_eq!(started_in(&log), [repo.root.clone(), asked.into.clone()]);
+    assert_eq!(started_in(&old_log), [asked.into.clone()]);
+    assert_eq!(started_in(&new_log), std::slice::from_ref(&repo.root));
     assert!(old.pid.is_some_and(is_alive));
 
-    // It serves the base: the line that is gone from the worktree.
+    // It serves the base: the line that is gone from the worktree. The request is in the
+    // old side's log, and the new side's holds only the hover of the line it serves.
     let hover = running.hover(removed(&repo, &ws), DEADLINE);
     assert_eq!(
         hover,
@@ -283,6 +321,8 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
             guessed: false
         }
     );
+    assert_eq!(requests(&old_log, "textDocument/hover"), 1);
+    assert_eq!(requests(&new_log, "textDocument/hover"), 1);
     running.end();
 }
 
