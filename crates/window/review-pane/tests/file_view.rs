@@ -94,7 +94,15 @@ fn rust() -> Language {
 /// Opens the pane on the long change of `src/lib.rs`, connects the Navigator, waits for
 /// the reviews, and scrolls down so that the first row is out of view.
 fn open_long(cx: &mut TestAppContext) -> (Stage, NavigatorEnd, VisualTestContext) {
-    let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
+    open_long_in(vec![workspace('1', "feature")], cx)
+}
+
+/// [`open_long`] in a repository of these workspaces, of which the first is on screen.
+fn open_long_in(
+    workspaces: Vec<yaar_link::Workspace>,
+    cx: &mut TestAppContext,
+) -> (Stage, NavigatorEnd, VisualTestContext) {
+    let (mut stage, mut cx) = open(workspaces, cx);
     let changes = since_main(Vec::new(), vec![file("src/lib.rs", FileStatus::Modified)]);
     stage
         .keeper
@@ -910,6 +918,20 @@ fn server(language: &str, title: &str, old_side: Option<&str>, state: State) -> 
     }
 }
 
+/// [`server`] as told for the workspace `digit` names.
+fn server_of(
+    digit: char,
+    language: &str,
+    title: &str,
+    old_side: Option<&str>,
+    state: State,
+) -> ServerState {
+    ServerState {
+        workspace: id(digit),
+        ..server(language, title, old_side, state)
+    }
+}
+
 /// The state the line of the language server draws, if it draws one, with its words.
 fn the_line(cx: &mut VisualTestContext) -> Option<&'static str> {
     ["ready", "starting", "missing", "asking", "downloading"]
@@ -922,7 +944,10 @@ fn the_line(cx: &mut VisualTestContext) -> Option<&'static str> {
 fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file(
     cx: &mut TestAppContext,
 ) {
-    let (stage, mut navigator, mut cx) = open_long(cx);
+    let (stage, mut navigator, mut cx) = open_long_in(
+        vec![workspace('1', "feature"), workspace('2', "sibling")],
+        cx,
+    );
     let pane = &stage.pane;
     let version = "a".repeat(40);
     let python = Language {
@@ -932,7 +957,9 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
     };
     navigator.tell(Told::Languages(vec![rust(), python]), &mut cx);
     // Each state is told for one place only, so that a line read from the wrong place
-    // reads another state or none.
+    // reads another state or none. Workspace 2 is told other states than workspace 1 for
+    // the same languages and the same version, so that a file read in the wrong workspace
+    // reads the wrong state.
     navigator.tell(
         Told::Servers(vec![
             server("rust", "Rust", None, State::Ready),
@@ -943,6 +970,14 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
                 Some(&version),
                 State::Missing { offer: None },
             ),
+            server_of(
+                '2',
+                "python",
+                "Python",
+                None,
+                State::Missing { offer: None },
+            ),
+            server_of('2', "rust", "Rust", Some(&version), State::Starting),
         ]),
         &mut cx,
     );
@@ -952,6 +987,10 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
     let on_screen = |cx: &mut VisualTestContext| {
         pane.read_with(cx, |pane, cx| pane.server_on_screen(cx))
             .map(|server| (server.language, server.old_side, server.state))
+    };
+    let in_other_workspace = |relative: &str| FileKind::Worktree {
+        workspace: id('2'),
+        relative: PathBuf::from(relative),
     };
     let target = location("/gits/feature/src/lib.rs", 2);
     let kinds = [
@@ -976,6 +1015,26 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
                 Some(version.clone()),
                 State::Missing { offer: None },
             )),
+        ),
+        // A workspace of the repository other than the one on screen: the file is read in
+        // the workspace its kind names.
+        (
+            "a file of another workspace's worktree",
+            in_other_workspace("app/main.py"),
+            "/gits/sibling/app/main.py",
+            "missing",
+            Some(("python", None, State::Missing { offer: None })),
+        ),
+        (
+            "a file of an export of another workspace reads that workspace's old side",
+            FileKind::Version {
+                workspace: id('2'),
+                version: version.clone(),
+                relative: PathBuf::from("src/lib.rs"),
+            },
+            "/cache/old/src/lib.rs",
+            "starting",
+            Some(("rust", Some(version.clone()), State::Starting)),
         ),
         (
             "a file outside the worktree reads the workspace on screen",

@@ -754,7 +754,8 @@ fn effect_of(keystroke: &str) -> Effect {
         // No file view, no hover and no box is open to close.
         "escape" => Effect::Nothing,
         // No language server is known here, so nothing waits to be downloaded or updated,
-        // and no question waits to be answered: each key says so and sends nothing.
+        // and no question waits to be answered: each key says so in the notice, read here.
+        // That it sends nothing is shown by `tests/servers.rs`, with its barrier.
         "shift-i" | "shift-u" | "shift-y" | "shift-q" => Effect::NothingWaits,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
