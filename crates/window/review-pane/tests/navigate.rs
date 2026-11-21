@@ -1012,3 +1012,86 @@ fn the_place_of_a_name_is_read_from_a_position_of_the_diff(cx: &mut TestAppConte
         None
     );
 }
+
+// RP-21, the click with the secondary key held
+#[gpui_kit::test]
+fn a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_pointer(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+
+    // On a name: the reviewer comes to it, and its definition is asked.
+    let secondary = cx.update(|_, cx| Modifiers::secondary_key(cx));
+    click_name(added, "new", ADDED, "perimeter", secondary, &mut cx);
+    assert_eq!(name(pane, &mut cx).as_deref(), Some("perimeter"));
+    let Ask::Definition { place: asked, .. } = navigator.ask(&mut cx) else {
+        panic!("the definition was not asked")
+    };
+    assert_eq!(
+        asked,
+        place(
+            Tree::Worktree,
+            "src/lib.rs",
+            3,
+            ADDED,
+            "perimeter",
+            &["src/lib.rs"]
+        )
+    );
+
+    // Off every name, at the end of the line: nothing is asked. The barrier is the hover
+    // that the next key asks, which comes after anything the click asked.
+    let text = bounds(&format!("review-text-{added}-new:{ADDED}"), &mut cx);
+    cx.simulate_click(
+        point(text.right() + gpui_kit::px(20.), text.center().y),
+        secondary,
+    );
+    cx.simulate_keystrokes("shift-k");
+    assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
+}
+
+// The name keys outside Changes, and a Navigator that ends
+#[gpui_kit::test]
+fn in_flow_the_name_keys_say_so_and_ask_nothing_and_a_navigator_that_ends_is_said(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+    click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
+
+    cx.simulate_keystrokes("f");
+    assert_eq!(
+        pane.read_with(&cx, |pane, _| pane.view()),
+        yaar_review_pane::View::Flow
+    );
+    cx.simulate_keystrokes("shift-k");
+    assert_eq!(
+        notice(pane, &mut cx).as_deref(),
+        Some("Names are asked on the lines of Changes")
+    );
+    // Back in Changes, the first ask the pane makes is the barrier: none came before it.
+    cx.simulate_keystrokes("f shift-k");
+    assert_eq!(notice(pane, &mut cx), None);
+    let (_, asked) = hover_ask(&mut navigator, &mut cx);
+    assert_eq!(asked.name, "perimeter");
+
+    // The Navigator ends before it answers: the hover on its way is told so.
+    drop(navigator);
+    wait_until(&mut cx, "the end of the Navigator to be said", |cx| {
+        pane.read_with(cx, |pane, _| pane.notice()).is_some()
+    });
+    assert_eq!(
+        notice(pane, &mut cx).as_deref(),
+        Some("code intelligence stopped before it answered")
+    );
+    assert_eq!(hover(pane, &mut cx), None);
+    // With none connected any more, a key that asks says so.
+    cx.simulate_keystrokes("g r");
+    assert_eq!(
+        notice(pane, &mut cx).as_deref(),
+        Some("code intelligence is not running")
+    );
+}
