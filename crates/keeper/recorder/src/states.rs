@@ -28,7 +28,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::clock::{Clock, SystemClock};
 
@@ -227,15 +227,46 @@ impl StateStore {
     /// `GIT_AUTHOR_DATE` to `@<seconds since the epoch> +0000` of [`Clock::now`] on the
     /// `commit-tree` it runs; this reads `%(committerdate:unix)` with `git for-each-ref`.
     pub fn recorded_times(&self) -> Result<Vec<(StateId, SystemTime)>, GitError> {
-        let _ = &self.clock;
-        todo!("the committer date of every state, as the doc says")
+        self.numbered_with_times()?
+            .into_iter()
+            .map(|(_, state, seconds)| {
+                let seconds = seconds.ok_or_else(|| {
+                    unreadable(
+                        "a read of the state store",
+                        format!("the state {} has no readable time", state.id),
+                    )
+                })?;
+                Ok((state.id, UNIX_EPOCH + Duration::from_secs(seconds)))
+            })
+            .collect()
     }
 
     /// The full ids of the commits the store keeps by [`StateStore::keep_commit`] (each named
     /// by a ref `refs/yaar/kept/<id>`), ordered by id: one `git for-each-ref` of that folder
     /// of refs. What the clean-up at once may let go besides states.
     pub fn kept_commits(&self) -> Result<Vec<String>, GitError> {
-        todo!("the kept commits, as the doc says")
+        let answer = self.run(None, ["for-each-ref", "--format=%(refname)", KEPT])?;
+        let command = answer.command().to_owned();
+        let printed = answer.printed()?;
+        let mut kept = Vec::new();
+        for name in printed.split(|byte| *byte == b'\n') {
+            if name.is_empty() {
+                continue;
+            }
+            let id = std::str::from_utf8(name)
+                .ok()
+                .and_then(|name| name.strip_prefix(KEPT))
+                .filter(|id| is_full_id(id))
+                .ok_or_else(|| {
+                    unreadable(
+                        &command,
+                        format!("the ref {:?}", String::from_utf8_lossy(name)),
+                    )
+                })?;
+            kept.push(id.to_owned());
+        }
+        kept.sort();
+        Ok(kept)
     }
 
     /// The commit the changes of the worktree were last counted from, as
@@ -298,6 +329,16 @@ impl StateStore {
     /// cleans the store up takes it away while it is named. A commit the store holds
     /// already costs nothing.
     pub fn keep_commit(&self, worktree: &Worktree, commit: &CommitId) -> Result<(), RecordError> {
+        let _guard = self.reading();
+        self.keep_commit_held(worktree, commit)
+    }
+
+    /// [`StateStore::keep_commit`] for a caller that holds the guard of the clean-up.
+    pub(crate) fn keep_commit_held(
+        &self,
+        worktree: &Worktree,
+        commit: &CommitId,
+    ) -> Result<(), RecordError> {
         if !is_full_id(commit.as_str()) {
             return Err(not_a_commit(commit.as_str()).into());
         }
@@ -330,6 +371,7 @@ impl StateStore {
         if !is_full_id(commit) {
             return Err(not_a_commit(commit));
         }
+        let _guard = self.reading();
         let printed = self
             .run(
                 None,
@@ -379,6 +421,7 @@ impl StateStore {
                 return Err(not_a_commit(commit));
             }
         }
+        let _guard = self.reading();
         let answer = self.run(
             None,
             ["diff-tree", "-r", "-z", "-M", "--name-status", from, to],
@@ -408,16 +451,17 @@ impl StateStore {
         let real_objects = worktree.common_dir().join("objects");
         let (tree, left_out) = self.tree_on_disk(worktree)?;
 
-        let numbered = self.numbered()?;
-        if let Some((_, newest)) = numbered.last()
+        let numbered = self.numbered_with_times()?;
+        if let Some((_, newest, recorded)) = numbered.last()
             && newest.tree == tree
+            && self.is_recent(*recorded)
         {
             return Ok(Recording {
                 state: newest.clone(),
                 left_out,
             });
         }
-        let number = numbered.last().map_or(1, |(n, _)| n + 1);
+        let number = numbered.last().map_or(1, |(n, _, _)| n + 1);
         let message = format!("YAAR state {number}");
         let mut args = vec!["commit-tree", &tree];
         if let Some(head) = &head {
@@ -426,11 +470,14 @@ impl StateStore {
         args.extend(["-m", &message]);
         let mut command = self.command(Some(&real_objects));
         command.args(args);
-        // The app's own identity, so that `user.useConfigOnly` cannot stop it.
+        // The app's own identity, so that `user.useConfigOnly` cannot stop it, and the
+        // time of the store's clock, which the clean-up counts a state's age from.
+        let date = format!("@{} +0000", seconds_of(self.clock.now()));
         for who in ["AUTHOR", "COMMITTER"] {
             command
                 .env(format!("GIT_{who}_NAME"), "YAAR")
-                .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid");
+                .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid")
+                .env(format!("GIT_{who}_DATE"), &date);
         }
         let commit = line(finish(command)?.printed()?);
 
@@ -617,11 +664,22 @@ impl StateStore {
 
     /// Every state with its number, in the order of the numbers.
     fn numbered(&self) -> Result<Vec<(u64, RecordedState)>, GitError> {
+        Ok(self
+            .numbered_with_times()?
+            .into_iter()
+            .map(|(number, state, _)| (number, state))
+            .collect())
+    }
+
+    /// Every state with its number and the seconds since the epoch of its committer date,
+    /// in the order of the numbers, from one run of git. The date is none where git gave
+    /// nothing readable.
+    fn numbered_with_times(&self) -> Result<Vec<(u64, RecordedState, Option<u64>)>, GitError> {
         let answer = self.run(
             None,
             [
                 "for-each-ref",
-                "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)",
+                "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)%00%(committerdate:unix)",
                 STATES,
             ],
         )?;
@@ -633,7 +691,7 @@ impl StateStore {
             .filter(|record| !record.is_empty())
         {
             let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
-            let [name, id, tree, parent] = fields[..] else {
+            let [name, id, tree, parent, time] = fields[..] else {
                 return Err(unreadable(
                     &command,
                     format!("the line {:?}", String::from_utf8_lossy(record)),
@@ -657,10 +715,27 @@ impl StateStore {
                     tree: text(tree),
                     on: (!parent.is_empty()).then(|| CommitId::new(text(parent))),
                 },
+                text(time).parse::<u64>().ok(),
             ));
         }
-        all.sort_by_key(|(number, _)| *number);
+        all.sort_by_key(|(number, _, _)| *number);
         Ok(all)
+    }
+
+    /// Whether a state recorded at `recorded` (seconds since the epoch, none where it is
+    /// not known) is younger than [`SAME_STATE_FOR`] by the store's clock. A time ahead of
+    /// the clock is as young as can be.
+    fn is_recent(&self, recorded: Option<u64>) -> bool {
+        recorded.is_some_and(|recorded| {
+            seconds_of(self.clock.now()).saturating_sub(recorded) < SAME_STATE_FOR.as_secs()
+        })
+    }
+
+    /// The guard of the clean-up taken for reading, for the whole call of the one that
+    /// holds it. A thread that failed while holding it leaves it as sound as it was: the
+    /// guard protects no data.
+    pub(crate) fn reading(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.cleaning.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The id of the tree of a commit that the real repository or the store holds.
@@ -946,6 +1021,12 @@ fn changed_under_us(root: &Path, path: &[u8]) -> bool {
         ),
         Ok(found) => found.is_dir() && !place.join(".git").exists(),
     }
+}
+
+/// The whole seconds `time` lies after the epoch; none before it.
+fn seconds_of(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |after| after.as_secs())
 }
 
 /// The first line git printed, without its line end.

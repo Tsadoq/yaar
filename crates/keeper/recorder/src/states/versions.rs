@@ -29,6 +29,17 @@ impl StateStore {
         from: &str,
         to: Option<&str>,
     ) -> Result<Vec<ChangedPath>, RecordError> {
+        let _guard = self.reading();
+        self.compare_held(worktree, from, to)
+    }
+
+    /// [`StateStore::compare`] for a caller that holds the guard of the clean-up.
+    pub(crate) fn compare_held(
+        &self,
+        worktree: Option<&Worktree>,
+        from: &str,
+        to: Option<&str>,
+    ) -> Result<Vec<ChangedPath>, RecordError> {
         match to {
             Some(to) => self.hold(worktree, &[from, to])?,
             None => self.hold(worktree, &[from])?,
@@ -74,6 +85,7 @@ impl StateStore {
         version: &str,
         path: &Path,
     ) -> Result<Option<Vec<u8>>, RecordError> {
+        let _guard = self.reading();
         self.hold(worktree, &[version])?;
         Ok(self.content(version, path)?)
     }
@@ -81,7 +93,8 @@ impl StateStore {
     /// Makes the store hold each of `versions`, states or commits, so that they read with
     /// the real repository gone: a commit the store has not got is copied from the
     /// repository of `worktree`. Every version is checked before any is copied, so that a
-    /// call with one that is refused leaves the store as it was.
+    /// call with one that is refused leaves the store as it was. The caller holds the guard
+    /// of the clean-up.
     fn hold(&self, worktree: Option<&Worktree>, versions: &[&str]) -> Result<(), RecordError> {
         let mut to_keep = Vec::new();
         for version in versions {
@@ -117,7 +130,7 @@ impl StateStore {
             to_keep.push((worktree, *version));
         }
         for (worktree, version) in to_keep {
-            self.keep_commit(worktree, &CommitId::new(version))?;
+            self.keep_commit_held(worktree, &CommitId::new(version))?;
         }
         Ok(())
     }

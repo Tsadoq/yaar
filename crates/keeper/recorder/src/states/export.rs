@@ -50,6 +50,7 @@ impl StateStore {
         version: &str,
         into: &Path,
     ) -> Result<(), RecordError> {
+        let _guard = self.reading();
         // The folder is claimed first, by making it: a name that is taken, by a folder or
         // by anything else, is left as it is, and no one else can write into this one.
         fs::create_dir(into).map_err(|e| self.store_error(into, &e))?;
@@ -62,7 +63,8 @@ impl StateStore {
         }
     }
 
-    /// The steps of [`StateStore::export`] after `into` was made.
+    /// The steps of [`StateStore::export`] after `into` was made, under the guard of the
+    /// clean-up that it holds.
     fn write_into(
         &self,
         worktree: Option<&Worktree>,
@@ -71,7 +73,7 @@ impl StateStore {
     ) -> Result<(), RecordError> {
         // A comparison of the version with itself is what makes the store hold it, state
         // or commit, and refuses a version that is none; it names no path.
-        self.compare(worktree, version, Some(version))?;
+        self.compare_held(worktree, version, Some(version))?;
 
         // A list of files of its own, empty, in the system's temporary folder: where none
         // is there to copy, the copy is none, which git reads as an empty list. The real

@@ -76,10 +76,17 @@
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
+use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt as _;
 use std::path::Path;
+use std::sync::PoisonError;
 
-use crate::states::{RecordError, StateStore};
+use crate::git::{finish_with, unreadable};
+use crate::states::{COMPLETE_HEAD, KEPT, RecordError, STATES, StateStore};
+
+/// The unit `st_blocks` counts in, whatever the file system's own block size.
+const BLOCK: u64 = 512;
 
 /// What [`StateStore::delete`] deleted.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -108,22 +115,171 @@ impl StateStore {
     ///
     /// The real repository is not read, not written and not needed: the store stands alone.
     pub fn delete(&self, ids: &BTreeSet<String>) -> Result<Deleted, RecordError> {
-        let _ = ids;
-        todo!("delete the refs of the ids given, as the module doc says")
+        let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let answer = self.run(
+            None,
+            [
+                "for-each-ref",
+                "--format=%(refname)%00%(objectname)",
+                STATES,
+                KEPT,
+            ],
+        )?;
+        let command = answer.command().to_owned();
+        let printed = answer.printed()?;
+        let mut states = Vec::new();
+        let mut commits = Vec::new();
+        let mut transaction = Vec::new();
+        for record in printed
+            .split(|byte| *byte == b'\n')
+            .filter(|record| !record.is_empty())
+        {
+            let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
+            let [name, object] = fields[..] else {
+                return Err(unreadable(
+                    &command,
+                    format!("the line {:?}", String::from_utf8_lossy(record)),
+                )
+                .into());
+            };
+            let (Ok(name), Ok(object)) = (std::str::from_utf8(name), std::str::from_utf8(object))
+            else {
+                return Err(unreadable(
+                    &command,
+                    format!("the line {:?}", String::from_utf8_lossy(record)),
+                )
+                .into());
+            };
+            if !ids.contains(object) {
+                continue;
+            }
+            // The object given is the one that was read: a ref moved since is not deleted.
+            transaction.extend_from_slice(format!("delete {name} {object}\n").as_bytes());
+            if name.starts_with(STATES) {
+                states.push((number_of(name), object.to_owned()));
+            } else {
+                commits.push(object.to_owned());
+            }
+        }
+        if transaction.is_empty() {
+            return Ok(Deleted::default());
+        }
+        finish_with(
+            self.command_with(None, ["update-ref", "--stdin"]),
+            &transaction,
+        )?
+        .printed()?;
+        states.sort();
+        commits.sort();
+        Ok(Deleted {
+            states: states.into_iter().map(|(_, id)| id).collect(),
+            commits,
+        })
     }
 
     /// Removes from disk every object of the store no ref reaches, packing the rest, as the
     /// module doc says: after [`StateStore::delete`] deleted something, or when the user
     /// cleans up at once. Waits for every call that holds the guard of the clean-up.
     pub fn pack(&self) -> Result<(), RecordError> {
-        let _ = &self.cleaning;
-        todo!("repack, prune and the complete head's file, as the module doc says")
+        // The guard first, then the lock of writing: a call that holds the guard and then
+        // takes the lock of writing (`keep_commit`) must not meet this one in the other
+        // order.
+        let _exclusive = self
+            .cleaning
+            .write()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        self.run(
+            None,
+            ["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
+        )?
+        .printed()?;
+        self.run(None, ["prune", "--expire=now"])?.printed()?;
+        let marker = self.folder.join(COMPLETE_HEAD);
+        if let Ok(noted) = fs::read_to_string(&marker) {
+            let head = noted.trim();
+            let held = !head.is_empty()
+                && self
+                    .run(None, ["cat-file", "-e", &format!("{head}^{{tree}}")])?
+                    .code
+                    == Some(0);
+            if !held {
+                match fs::remove_file(&marker) {
+                    Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                        return Err(RecordError::Store {
+                            folder: self.folder.clone(),
+                            reason: format!("the note of the complete head cannot be removed: {e}"),
+                        });
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
     }
+}
+
+/// The number a ref of [`STATES`] ends in.
+fn number_of(name: &str) -> u64 {
+    name.strip_prefix(STATES)
+        .and_then(|number| number.parse().ok())
+        .unwrap_or(0)
 }
 
 /// The room the folder `folder` and everything in it take on disk, and each folder directly
 /// inside it, as the module doc says. A folder that is not there takes nothing.
 pub fn sizes(folder: &Path) -> io::Result<StoreSizes> {
-    let _ = folder;
-    todo!("walk the folder and count the blocks, as the module doc says")
+    let top = match fs::metadata(folder) {
+        Ok(top) => top,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(StoreSizes {
+                stores: Vec::new(),
+                total: 0,
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let mut total = top.blocks() * BLOCK;
+    let mut stores = Vec::new();
+    for entry in fs::read_dir(folder)? {
+        let entry = entry?;
+        // A store that was removed while the folder was read takes nothing now.
+        let Some(room) = room_of(&entry.path())? else {
+            continue;
+        };
+        total += room;
+        let kind = entry.file_type()?;
+        if kind.is_dir() || kind.is_symlink() {
+            stores.push((entry.file_name(), room));
+        }
+    }
+    stores.sort();
+    Ok(StoreSizes { stores, total })
+}
+
+/// What `path` takes on disk, itself and everything in it, links not followed; none when it
+/// is gone by the time it is looked at: git replaces and removes files while it works.
+fn room_of(path: &Path) -> io::Result<Option<u64>> {
+    let meta = match fs::symlink_metadata(path) {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let mut room = meta.blocks() * BLOCK;
+    if meta.is_dir() {
+        let children = match fs::read_dir(path) {
+            Ok(children) => children,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        for child in children {
+            let child = match child {
+                Ok(child) => child,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            room += room_of(&child.path())?.unwrap_or(0);
+        }
+    }
+    Ok(Some(room))
 }
