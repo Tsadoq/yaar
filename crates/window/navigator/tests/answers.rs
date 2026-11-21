@@ -18,7 +18,9 @@ use std::time::{Duration, Instant};
 use serde_json::Value;
 use support::*;
 use yaar_navigator::lsp::file_uri;
-use yaar_navigator::{Answered, Ask, AskId, FileKind, Location, State, Told, Tree};
+use yaar_navigator::{
+    Answered, Ask, AskId, FileKind, Location, RepositoryConsent, State, Told, Tree,
+};
 
 /// `text` as a TOML string.
 fn q(text: impl AsRef<str>) -> String {
@@ -603,6 +605,103 @@ fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_ma
     // The workspace goes, and its server with it. No ask follows: the answer comes with the
     // end of the server, and nothing else.
     running.ask(Ask::Workspaces(vec![]));
+    let told = answers_to(&mut running, &[AskId(100)]).remove(0);
+    let Told::Hover { answer, .. } = told else {
+        panic!("a hover was answered by {told:?}");
+    };
+    assert_eq!(
+        answer,
+        Answered {
+            value: Some("main.sil:1: def alpha".to_owned()),
+            guessed: true
+        }
+    );
+    assert!(!is_alive(pid), "the stopped server was not ended");
+    running.end();
+}
+
+#[test]
+fn an_ask_waiting_at_a_server_that_a_consent_makes_the_navigator_search_for_again_is_answered_at_once()
+ {
+    let scratch = Scratch::new();
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def alpha\nuse alpha\n"),
+            ("notes.txt", "milk\n"),
+        ],
+    );
+    // As in the test of a ready later candidate: the project's own copy is the question, the
+    // machine's copy after it runs ready meanwhile.
+    scratch.put_recording(&repo.root.join("tools"), "standin-lsp");
+    repo.git(&["add", "tools"]);
+    repo.git(&["commit", "--quiet", "-m", "the project's own server"]);
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let row = standin_row(
+        "standin",
+        &[
+            "--log",
+            &scratch.root.join("standin.log").display().to_string(),
+        ],
+        "answer",
+        &format!("project = [{}]", q("tools/standin-lsp")),
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row));
+    running.ask(Ask::Consents(vec![]));
+    running.show(&repo, &ws, &repository);
+    running.wait_state(&ws, "standin", None, DEADLINE, |state| {
+        matches!(state.state, State::Asking { .. })
+    });
+    let hover = |running: &mut Running| {
+        running.hover(
+            place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0),
+            DEADLINE,
+        )
+    };
+    let ready = wait_for("the machine's copy to answer", || {
+        let answer = hover(&mut running);
+        (!answer.guessed).then_some(answer)
+    });
+    assert_eq!(ready.value.as_deref(), Some("standin: alpha"));
+    let pid = running
+        .told
+        .iter()
+        .rev()
+        .find_map(|told| match told {
+            Told::Servers(states) => states.iter().find_map(|state| state.pid),
+            _ => None,
+        })
+        .expect("the machine's copy runs");
+
+    // A hover the machine's copy does not answer, because it is stopped. The barrier, an ask
+    // the Navigator answers by itself, is handled after the hover: when it is told, the hover
+    // was handled and nothing answered it.
+    signal(pid, libc::SIGSTOP);
+    running.ask(Ask::Hover {
+        id: AskId(100),
+        place: place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0),
+    });
+    running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert!(
+        !running
+            .told
+            .iter()
+            .any(|told| answered_id(told) == Some(AskId(100))),
+        "the stopped server answered: {:#?}",
+        running.told
+    );
+
+    // The user says yes to the project's copy: the key searches again and the machine's copy
+    // is ended. No ask follows: the answer comes with the end of the process, and nothing
+    // else.
+    running.ask(Ask::Consents(vec![RepositoryConsent {
+        repository,
+        allowed: true,
+    }]));
     let told = answers_to(&mut running, &[AskId(100)]).remove(0);
     let Told::Hover { answer, .. } = told else {
         panic!("a hover was answered by {told:?}");
