@@ -8,11 +8,11 @@
 //!   there, and has its keys bound and its view built from that line;
 //! - [`init`], which prepares the app before a window opens;
 //! - [`open`], which opens the window with every pane, linked to the Keeper, and starts the
-//!   Navigator with what this user's environment gives it; [`open_with`] does the same with
-//!   a Navigator's configuration of the caller's, and [`open_panes`] with panes of the
-//!   caller's too;
-//! - [`join_navigator`], which starts a Navigator for a window's models; the quit of the app
-//!   is the one end of every Navigator that runs;
+//!   Navigator with what this user's environment gives it; the quit of the app is the one
+//!   end of every Navigator that runs;
+//! - [`open_with`] and [`open_panes`], the entries beneath `open` that the component tests of
+//!   the composed Window take: the same window with a Navigator's configuration of the
+//!   caller's, and with panes of the caller's too;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
 //!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
@@ -98,7 +98,7 @@ pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
 /// environment of its servers.
 ///
 /// The Navigator is started on a new port and joined to the window's model of code
-/// intelligence ([`join_navigator`]). The quit of the app is the one end of a Navigator: the
+/// intelligence. The quit of the app is the one end of a Navigator: the
 /// port is let go ([`yaar_frame::Navigation::disconnect`]) and the Window waits up to
 /// [`yaar_navigator::STOP_DEADLINE`] and a second more for the Navigator to stop its servers,
 /// so that no server outlives the Window, whatever asks are on their way. A second window
@@ -117,8 +117,7 @@ pub fn open_with(
 }
 
 /// [`open_with`] for panes the caller builds: the Frame opened on `panes` and the Navigator
-/// joined to it. A test of the composed Window wraps the builders of [`panes`] to keep the
-/// views it reads, and starts a Navigator of its own through this.
+/// joined to it. The caller may wrap the builders of [`panes`] to keep the views it reads.
 pub fn open_panes(
     socket: PathBuf,
     panes: Vec<BuildPane>,
@@ -153,7 +152,7 @@ impl Global for Navigators {}
 /// Starts a Navigator on `config`, joins its port to `models.navigation` and keeps its
 /// handle in a global of the app, to be stopped at the quit of the app. What the
 /// model tells the Navigator by itself, and what it keeps of what it is told, is the Frame's.
-pub fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: &mut App) {
+fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: &mut App) {
     let (port, end) = yaar_navigator::port();
     let navigator = Navigator::start(config, end);
     models
