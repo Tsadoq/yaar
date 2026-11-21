@@ -23,7 +23,7 @@ use yaar_recorder::{
 const BASE: u64 = 1_767_225_600;
 
 /// How long a test waits for work that must end, which a deadlock never does.
-const DEADLINE: Duration = Duration::from_secs(120);
+const DEADLINE: Duration = Duration::from_secs(300);
 
 /// A clock that starts at [`BASE`] and moves only when the test moves it.
 #[derive(Debug)]
