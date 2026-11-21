@@ -71,8 +71,11 @@
 //! directly inside that is a symbolic link (a store a user moved to another disk) is counted
 //! as the link's own blocks, listed among the stores by its name, and never followed. The
 //! stores hold no hard links (git's fetch and repack write new files), so the walk and `du`
-//! agree but for `du`'s rounding to whole units. The walk runs on the caller's thread, never
-//! on the thread that draws: in the Keeper it is a request answered apart.
+//! agree but for `du`'s rounding to whole units. A path that vanishes between the listing of
+//! its folder and its reading (git replaces and removes files while it works) takes nothing.
+//! The folder itself is followed when it is a link, as a read of it is. The walk runs on the
+//! caller's thread, never on the thread that draws: in the Keeper it is a request answered
+//! apart.
 
 use std::collections::BTreeSet;
 use std::ffi::OsString;
