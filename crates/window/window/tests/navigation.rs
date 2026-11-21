@@ -424,6 +424,17 @@ fn start_the_standin_in(
     pid.expect("a server runs")
 }
 
+/// Lets a server that a test stopped go on again when the test ends, so that none is left
+/// stopped by a test that failed before the Navigator killed it.
+struct Resumed(u32);
+
+impl Drop for Resumed {
+    fn drop(&mut self) {
+        // SAFETY: signal CONT to a process the test stopped; one that is gone takes none.
+        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGCONT) };
+    }
+}
+
 // Of its own: the quit of the app ends the Navigator of every window, not the first's alone.
 #[gpui_kit::test]
 fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext) {
@@ -470,6 +481,16 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
     );
     assert!(is_alive(first_pid) && is_alive(second_pid));
 
+    // The second server is stopped, so that it reads no `shutdown` and cannot end of itself:
+    // its Navigator kills it after its deadline, and only a quit that waits for the
+    // Navigator of every window is still waiting then.
+    let _resumed = Resumed(second_pid);
+    // SAFETY: signal STOP to the stand-in this test started.
+    assert_eq!(
+        unsafe { libc::kill(second_pid as libc::pid_t, libc::SIGSTOP) },
+        0
+    );
+
     cx.update(|app| app.shutdown());
     // The quit waited for both: no wait here.
     assert!(
@@ -480,17 +501,6 @@ fn the_quit_of_the_app_stops_the_servers_of_every_window(cx: &mut TestAppContext
         !is_alive(second_pid),
         "the server {second_pid} of the second window outlived the quit of the app"
     );
-}
-
-/// Lets a server that a test stopped go on again when the test ends, so that none is left
-/// stopped by a test that failed before the Navigator killed it.
-struct Resumed(u32);
-
-impl Drop for Resumed {
-    fn drop(&mut self) {
-        // SAFETY: signal CONT to a process the test stopped; one that is gone takes none.
-        unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGCONT) };
-    }
 }
 
 // Of its own: ending a Navigator waits for its servers. One that is stopped, so that it
