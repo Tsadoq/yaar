@@ -621,6 +621,60 @@ fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_ma
 }
 
 #[test]
+fn an_ask_waiting_at_a_server_when_the_port_is_dropped_is_not_answered_and_the_server_is_gone() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def alpha\nuse alpha\n"),
+            ("notes.txt", "milk\n"),
+        ],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row_logging(&scratch.root.join("log"))));
+    running.show(&repo, &ws, &repository);
+    let pid = running
+        .wait_state(&ws, "standin", None, DEADLINE, |state| {
+            state.state == State::Ready
+        })
+        .pid
+        .expect("a ready server runs");
+
+    // A hover the server does not answer, because it is stopped. The barrier, an ask the
+    // Navigator answers by itself, is handled after the hover: when it is told, the hover
+    // was handled and nothing answered it.
+    signal(pid, libc::SIGSTOP);
+    running.ask(Ask::Hover {
+        id: AskId(100),
+        place: place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0),
+    });
+    running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert!(
+        !running
+            .told
+            .iter()
+            .any(|told| answered_id(told) == Some(AskId(100))),
+        "the stopped server answered: {:#?}",
+        running.told
+    );
+
+    // The port is dropped: the Navigator ends, which stops the server, and answers nothing
+    // on its way out. Nobody is left to read an answer.
+    let told = running.end_and_read();
+    assert!(
+        !told
+            .iter()
+            .any(|told| answered_id(told) == Some(AskId(100))),
+        "the ask was answered at the end: {told:#?}"
+    );
+    assert!(!is_alive(pid), "the stopped server was not ended");
+}
+
+#[test]
 fn an_ask_waiting_at_a_server_that_a_consent_makes_the_navigator_search_for_again_is_answered_at_once()
  {
     let scratch = Scratch::new();

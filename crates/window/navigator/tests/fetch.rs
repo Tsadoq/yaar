@@ -1070,10 +1070,7 @@ fn an_update_that_ends_well_starts_again_a_key_whose_trial_run_of_the_older_vers
 #[test]
 fn an_update_that_fails_keeps_the_version_that_ran_and_still_offers_the_newer_one() {
     let scratch = Scratch::new();
-    let repo = scratch.repository(
-        "project",
-        &[("main.sil", "def alpha\n"), ("main.ctl", "\n")],
-    );
+    let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
     install(&scratch, "1");
     let two = archive_of("2");
     // The address serves bytes that are not the ones pinned.

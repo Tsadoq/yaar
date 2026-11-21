@@ -77,7 +77,8 @@
 //! on screen has its new side's servers ensured again; an old side's server starts again
 //! at the next ask about the old side. A workspace that leaves the list of
 //! [`crate::Ask::Workspaces`] has every server stopped at once, and its build folders,
-//! `<cache>/targets/<workspace>`, removed. [`close`] stops every server.
+//! `<cache>/targets/<workspace>`, removed. [`close`] drops the asks still waiting and stops
+//! every server.
 //!
 //! Every stop here is done before the function that does it returns: [`stop`] calls
 //! `Server::stop` with [`crate::STOP_DEADLINE`], which returns once the process is reaped
@@ -524,8 +525,11 @@ pub(crate) fn look_at_the_clock(core: &mut Core) {
     }
 }
 
-/// At the end: stops every server, each as [`stop`] does.
+/// At the end: drops the asks still waiting, then stops every server, each as [`stop`] does.
 pub(crate) fn close(core: &mut Core) {
+    // The asks waiting at these servers are dropped first: the end of a server answers them
+    // by text match, and no one is left to read it.
+    answers::forget_the_waiting(core);
     let keys: Vec<ServerKey> = core.life.keys.keys().cloned().collect();
     for key in &keys {
         stop_quietly(core, key);

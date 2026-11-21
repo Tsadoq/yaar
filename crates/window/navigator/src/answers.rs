@@ -28,13 +28,15 @@
 //! [`crate::Location`] whose line is the spot's plus one, whose column is in bytes of that
 //! line as its file holds it (`lsp::byte_column`), and whose text is that line; references
 //! sorted by path, then line. A server that answers with an error, or ends before it
-//! answered ([`server_gone`]), has the ask answered by text match, marked, then: also a server
-//! the Navigator ends itself, whose key is stopped or searched for again (`lifecycle.rs` tells
-//! [`server_gone`] after each such end of a ready server). An ask is held for the server's
+//! answered ([`server_gone`]), has the ask answered by text match, marked. So does a ready
+//! server the Navigator ends itself when its key is stopped or searched for again:
+//! `lifecycle.rs` tells [`server_gone`] after each such end. An ask is held for the server's
 //! process as well as for its request number, which each process counts from the start, so
 //! that none takes the answer of a later process; an ask held for a process that is no longer
 //! the key's ready one is answered by text match at the next ask or answer, whatever ended the
-//! process.
+//! process. At its own end the Navigator answers no ask: `lifecycle::close` has
+//! [`forget_the_waiting`] drop the asks still waiting before it stops the servers, and no
+//! text search starts at a quit.
 //!
 //! # Text match
 //!
@@ -556,6 +558,14 @@ pub(crate) fn server_gone(core: &mut Core, key: &ServerKey) {
             by_text(core, id, pending);
         }
     }
+}
+
+/// The Navigator ends: every ask still waiting is forgotten, not answered. Nobody is left to
+/// read an answer, and an answer by text match would start a search over a worktree that
+/// nothing waits for, so none starts at a quit. Called before the servers stop, since the end
+/// of a server is what answers the asks waiting at it.
+pub(crate) fn forget_the_waiting(core: &mut Core) {
+    core.answers.waiting.clear();
 }
 
 /// The export of `version` of `workspace` is written, at `root`: every row asked about on

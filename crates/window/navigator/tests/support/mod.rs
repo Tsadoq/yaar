@@ -982,7 +982,12 @@ impl Running {
     /// Ends the Navigator: drops the Frame's end of the port, waits until the Navigator's
     /// thread ended ([`DEADLINE`] plus `yaar_navigator::STOP_DEADLINE` for each server
     /// told), then asserts that every process any [`Told::Servers`] named is gone.
-    pub fn end(mut self) {
+    pub fn end(self) {
+        self.end_and_read();
+    }
+
+    /// [`Running::end`], giving everything that was told, up to the closing of the port.
+    pub fn end_and_read(mut self) -> Vec<Told> {
         let told = self.port.take().expect("the Navigator was ended").told;
         self.drain(&told);
         if let Some(navigator) = self.navigator.take() {
@@ -1003,6 +1008,7 @@ impl Running {
             alive.is_empty(),
             "the processes {alive:?} of servers the Navigator named are still running"
         );
+        std::mem::take(&mut self.told)
     }
 
     /// Reads everything in the channel now, and no more.
