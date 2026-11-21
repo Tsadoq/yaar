@@ -331,7 +331,10 @@ mod tests {
         );
         assert_eq!(merged, variables(&[("A", "1"), ("B", "2")]));
         // The base's own value of one of them stays.
-        let merged = merge(&variables(&[("PWD", "/mine")]), &variables(&[("PWD", "/p")]));
+        let merged = merge(
+            &variables(&[("PWD", "/mine")]),
+            &variables(&[("PWD", "/p")]),
+        );
         assert_eq!(merged, variables(&[("PWD", "/mine")]));
     }
 
@@ -383,6 +386,9 @@ mod tests {
             search_path(&variables(&[("X", "1"), ("PATH", "/a:/b")])),
             vec![PathBuf::from("/a"), PathBuf::from("/b")]
         );
-        assert_eq!(search_path(&variables(&[("X", "1")])), Vec::<PathBuf>::new());
+        assert_eq!(
+            search_path(&variables(&[("X", "1")])),
+            Vec::<PathBuf>::new()
+        );
     }
 }

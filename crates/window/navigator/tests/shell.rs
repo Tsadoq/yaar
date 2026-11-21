@@ -67,7 +67,12 @@ fn make_pipe(path: &Path) {
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("a path with no NUL");
     // SAFETY: `name` is a NUL-terminated path that lives through the call.
     let made = unsafe { libc::mkfifo(name.as_ptr(), 0o600) };
-    assert_eq!(made, 0, "make the pipe: {}", std::io::Error::last_os_error());
+    assert_eq!(
+        made,
+        0,
+        "make the pipe: {}",
+        std::io::Error::last_os_error()
+    );
 }
 
 /// What a script writes into the named pipe `pipe`, read on a thread of its own so that the
@@ -173,7 +178,10 @@ fn the_shell_runs_in_the_windows_environment_and_no_other_and_in_the_folder_home
     );
 
     // With no HOME, the root.
-    let base: Vec<_> = base.into_iter().filter(|(name, _)| name != "HOME").collect();
+    let base: Vec<_> = base
+        .into_iter()
+        .filter(|(name, _)| name != "HOME")
+        .collect();
     take(&shell, &base).expect("an environment");
     let cwd = std::fs::read_to_string(seen.with_extension("cwd")).expect("the folder it ran in");
     assert_eq!(
@@ -186,7 +194,11 @@ fn the_shell_runs_in_the_windows_environment_and_no_other_and_in_the_folder_home
 #[test]
 fn the_variables_that_describe_the_shells_run_and_the_entries_that_are_no_variable_are_left_out() {
     let scratch = Scratch::new();
-    let base = pairs(&[("HOME", "/"), ("PATH", "/usr/bin:/bin"), ("PWD", "/windows")]);
+    let base = pairs(&[
+        ("HOME", "/"),
+        ("PATH", "/usr/bin:/bin"),
+        ("PWD", "/windows"),
+    ]);
     let shell = shell_of(
         &scratch,
         "shell",
@@ -458,7 +470,9 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         root_of(&w_two, '3', &two),
     ];
     let config = rig.config(rig.shell(DEADLINE));
-    let base_path = value_of(&config.environment, "PATH").expect("a PATH").clone();
+    let base_path = value_of(&config.environment, "PATH")
+        .expect("a PATH")
+        .clone();
     let mut running = Running::start(config);
 
     // Never before a server is needed: a workspace with no file of any row on screen.

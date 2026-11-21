@@ -1117,9 +1117,11 @@ fn a_server_dropped_is_killed_and_reaped() {
     assert!(!is_alive(pid));
 }
 
-/// A server that does not end when its input closes, as rust-analyzer does not: `sleep`
-/// shows the kernel's part alone, which the stand-in would hide by ending at the end of its
-/// input.
+/// A server that does not end when its input closes, as rust-analyzer does not, and that
+/// ignores `SIGTERM`: `sleep` shows the kernel's part alone, which the stand-in would hide by
+/// ending at the end of its input, and that it ends all the same shows the signal the kernel
+/// sends is `SIGKILL`. The script says it ignores the signal before the Window says anything
+/// of the server, so that the Window is not killed while the signal is still the default.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_server_ends_when_the_window_that_started_it_is_killed() {
@@ -1133,9 +1135,28 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
         let scratch = Scratch::new();
         let (root, _) = project(&scratch, "def a\n");
         let mut launch = launch(&scratch, &root, &[]);
-        launch.program = PathBuf::from("/bin/sleep");
-        launch.args = vec!["600".to_owned()];
+        // The server writes into a named pipe once it ignores the signal, and the Window
+        // reads it, which blocks until the server has: no sleep, no look in between.
+        let ignoring = scratch.root.join("ignoring");
+        let name = std::ffi::CString::new(ignoring.to_str().expect("a path of text"))
+            .expect("a path with no NUL");
+        // SAFETY: `name` is a NUL-terminated path that lives through the call.
+        assert_eq!(
+            unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+            0,
+            "make the pipe"
+        );
+        launch.program = PathBuf::from("/bin/sh");
+        launch.args = vec![
+            "-c".to_owned(),
+            format!(
+                "trap '' TERM; echo ignoring > '{}'; exec sleep 600",
+                ignoring.display()
+            ),
+        ];
         let run = Run::start(launch);
+        let told = std::fs::read_to_string(&ignoring).expect("the server's word on the pipe");
+        assert_eq!(told.trim(), "ignoring");
         println!("SERVER {} {}", run.server.pid(), scratch.root.display());
         let _ = std::io::stdin().read_line(&mut String::new());
         return;
