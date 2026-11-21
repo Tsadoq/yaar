@@ -57,12 +57,11 @@ use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
 use yaar_diff::Side;
 use yaar_link::{RepositoryId, WorkspaceId};
-use yaar_navigator::{ServerState, State};
+use yaar_navigator::{FileKind, ServerState, State};
 
 use crate::ReviewPane;
 use crate::draw::ROW_HEIGHT;
 use crate::threads::path_in;
-use crate::tree::Source;
 
 /// The words of the control that downloads, before the server's name and version.
 pub const DOWNLOAD: &str = "Download";
@@ -113,7 +112,7 @@ impl ReviewPane {
     /// The state of the server of the code on screen, as the line shows it; none while
     /// there is none.
     pub fn server_on_screen(&self, cx: &App) -> Option<ServerState> {
-        let code = self.code_on_screen()?;
+        let code = self.code_on_screen(cx)?;
         self.models
             .navigation
             .read(cx)
@@ -124,9 +123,38 @@ impl ReviewPane {
     /// The code on screen: the file of the line the reviewer is on, read in the version
     /// its side of the line belongs to.
     ///
-    /// While a file view is open its file is the code on screen. The file view is not
-    /// built yet, so only the line of the diff is read here.
-    fn code_on_screen(&self) -> Option<Code> {
+    /// While a file view is open its file is the code on screen: a file of the worktree is
+    /// read on disk, one of an export in the version it lies in, and one outside the
+    /// worktree in the files on disk of the workspace on screen, as the asks of the file
+    /// view place it.
+    fn code_on_screen(&self, cx: &App) -> Option<Code> {
+        if let Some(shown) = self.file_view() {
+            let file = &shown.file;
+            return match &file.kind {
+                FileKind::Worktree {
+                    workspace,
+                    relative,
+                } => Some(Code {
+                    workspace: workspace.clone(),
+                    path: relative.clone(),
+                    old_side: None,
+                }),
+                FileKind::Version {
+                    workspace,
+                    version,
+                    relative,
+                } => Some(Code {
+                    workspace: workspace.clone(),
+                    path: relative.clone(),
+                    old_side: Some(version.clone()),
+                }),
+                FileKind::Outside => Some(Code {
+                    workspace: self.models.changes.read(cx).workspace()?.clone(),
+                    path: file.path.clone(),
+                    old_side: None,
+                }),
+            };
+        }
         let position = self.position()?;
         let file = &self.files[*self.by_path.get(&position.path)?].file;
         let workspace = self.changes.as_ref()?.workspace.clone();
@@ -139,15 +167,6 @@ impl ReviewPane {
             path: path_in(file, position.side).to_path_buf(),
             old_side,
         })
-    }
-
-    /// The version the old side of the change shown is read in: what a comment on a removed
-    /// line is anchored to.
-    fn old_version(&self) -> Option<String> {
-        match &self.listed {
-            Some(Source::Versions { old, .. }) => old.clone(),
-            _ => self.changes.as_ref()?.counted_from.clone(),
-        }
     }
 
     /// The name of a repository, as the workspaces list it.
