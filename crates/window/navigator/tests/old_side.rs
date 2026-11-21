@@ -858,6 +858,81 @@ fn an_export_still_being_written_when_the_old_side_is_dropped_is_removed_when_it
 }
 
 #[test]
+fn a_second_answer_for_an_export_in_use_leaves_it_and_its_server_answering() {
+    let scratch = Scratch::new();
+    let repo = removed_line_repository(&scratch);
+    let log = scratch.root.join("standin.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row(&log, "")));
+    running.show(&repo, &ws, &repository);
+    let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+    let (pid, file) = (old.pid, asked.into.join("legacy.sil"));
+    assert!(file.is_file(), "the export was not written");
+
+    // The Keeper answers the same ask again, as a Frame that told it twice would. The
+    // Navigator handles it before the hover, whose answer is the barrier.
+    running.ask(Ask::Exported {
+        asked: asked.clone(),
+        failed: None,
+    });
+    let hover = running.hover(removed(&repo, &ws), DEADLINE);
+    assert_eq!(
+        hover,
+        Answered {
+            value: Some("standin: legacy".to_owned()),
+            guessed: false
+        }
+    );
+    assert!(file.is_file(), "the export in use was removed");
+    let list = last_servers(&running);
+    let still = server_in(&list, &ws, Some(&repo.base)).expect("the old side's server");
+    assert_eq!((still.state, still.pid), (State::Ready, pid));
+    assert_eq!(exports_wanted(&running), 1);
+    running.end();
+}
+
+#[test]
+fn an_answer_for_a_folder_that_is_not_under_the_navigators_own_old_folder_removes_nothing() {
+    let scratch = Scratch::new();
+    let repo = removed_line_repository(&scratch);
+    let log = scratch.root.join("standin.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row(&log, "")));
+    running.show(&repo, &ws, &repository);
+    // An export in use, so that the Navigator's `old` folder is there.
+    let (asked, _) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+    // A folder of the machine's, which no export of this Navigator made.
+    let elsewhere = scratch.root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("make the folder");
+    std::fs::write(elsewhere.join("keep.txt"), "mine\n").expect("write the file");
+
+    // Named plainly, and named by a path that starts in the export's folder and climbs out
+    // of it: the export is `<cache>/<own>/old/<n>`, and the folder is four levels above.
+    let climbing = asked.into.join("../../../../elsewhere");
+    assert!(
+        climbing.join("keep.txt").is_file(),
+        "the path leaves the export"
+    );
+    for into in [elsewhere.clone(), climbing] {
+        running.ask(Ask::Exported {
+            asked: ExportAsk {
+                workspace: ws.clone(),
+                version: repo.base.clone(),
+                into,
+            },
+            failed: None,
+        });
+        settled(&mut running);
+        assert!(
+            elsewhere.join("keep.txt").is_file(),
+            "a folder the Navigator did not make was removed"
+        );
+    }
+    assert!(asked.into.is_dir(), "the export in use was removed");
+    running.end();
+}
+
+#[test]
 fn two_navigators_of_one_process_keep_their_exports_apart() {
     let scratch = Scratch::new();
     let repo = removed_line_repository(&scratch);

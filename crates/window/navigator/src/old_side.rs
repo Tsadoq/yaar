@@ -115,7 +115,8 @@ pub(crate) fn root(core: &mut Core, workspace: &WorkspaceId, version: &str) -> O
 
 /// [`crate::Ask::Exported`]: the Keeper's answer. One that is not for the export a workspace
 /// holds now, because the change was dropped or another selected while it was written, only
-/// removes the folder.
+/// removes the folder, and that only when it lies under `<own cache>/old` and no export held
+/// uses it: an answer told twice for an export in use leaves it as it is.
 pub(crate) fn exported(core: &mut Core, asked: ExportAsk, failed: Option<String>) {
     let current = core
         .old
@@ -123,7 +124,9 @@ pub(crate) fn exported(core: &mut Core, asked: ExportAsk, failed: Option<String>
         .get(&asked.workspace)
         .is_some_and(|export| export.into == asked.into && !export.written);
     if !current {
-        remove_folder(&asked.into);
+        if is_unused_export_folder(core, &asked.into) {
+            remove_folder(&asked.into);
+        }
         return;
     }
     if let Some(reason) = failed {
@@ -141,6 +144,27 @@ pub(crate) fn exported(core: &mut Core, asked: ExportAsk, failed: Option<String>
         export.written = true;
     }
     answers::export_ready(core, &asked.workspace, &asked.version, &asked.into);
+}
+
+/// Whether `folder` is one this Navigator asked an export into, `<own cache>/old/<n>`, and no
+/// export it holds uses it. An answer that is not for the export a workspace holds removes
+/// only such a folder: the Keeper's answer comes from outside, and one that names a folder
+/// in use, or any other, must not take it away.
+fn is_unused_export_folder(core: &Core, folder: &Path) -> bool {
+    let folder = absolute(folder);
+    let old = absolute(&core.own_cache.join("old"));
+    let under_old = folder.strip_prefix(&old).is_ok_and(|rest| {
+        rest.components().next().is_some()
+            && rest
+                .components()
+                .all(|part| matches!(part, std::path::Component::Normal(_)))
+    });
+    under_old
+        && !core
+            .old
+            .exports
+            .values()
+            .any(|export| export.into == folder)
 }
 
 /// The list of workspaces changed: the exports of those gone are removed.
