@@ -1155,7 +1155,20 @@ fn a_server_ends_when_the_window_that_started_it_is_killed() {
             ),
         ];
         let run = Run::start(launch);
-        let told = std::fs::read_to_string(&ignoring).expect("the server's word on the pipe");
+        // The read blocks until a writer opens the pipe, so it is made on a thread of its
+        // own and waited for with the deadline: a shell that never starts fails the test
+        // with a sentence and does not hang it.
+        let (sent, received) = std::sync::mpsc::channel();
+        let pipe = ignoring.clone();
+        std::thread::spawn(move || {
+            let _ = sent.send(std::fs::read_to_string(pipe));
+        });
+        let told = received
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|_| {
+                panic!("waited {DEADLINE:?} for the server to say it ignores the signal")
+            })
+            .expect("read the server's word on the pipe");
         assert_eq!(told.trim(), "ignoring");
         println!("SERVER {} {}", run.server.pid(), scratch.root.display());
         let _ = std::io::stdin().read_line(&mut String::new());

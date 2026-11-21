@@ -115,6 +115,25 @@ impl Drop for KillOnFailure {
     }
 }
 
+/// Kills the background job whose process number the file holds, when a test fails, so that
+/// a failure of `take` before the test read the number leaves nothing running.
+struct KillJobOnFailure(PathBuf);
+
+impl Drop for KillJobOnFailure {
+    fn drop(&mut self) {
+        if !std::thread::panicking() {
+            return;
+        }
+        let pid = std::fs::read_to_string(&self.0)
+            .ok()
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        if let Some(pid) = pid {
+            // SAFETY: a signal to a process of this test's own making.
+            unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // `take`
 // ---------------------------------------------------------------------------------------
@@ -284,6 +303,9 @@ fn a_job_a_start_up_file_left_in_the_background_does_not_hold_the_output_open() 
         ),
         DEADLINE,
     );
+    // A failure leaves no job running: the guard reads the job's process from its file, if
+    // the shell got so far, and kills it.
+    let _guard = KillJobOnFailure(job.clone());
 
     // A read that waited for the job would run out the deadline and fail.
     let taken = take(&shell, &base).expect("an environment, not the deadline");
@@ -353,6 +375,14 @@ fn a_shell_that_outlasts_its_deadline_is_killed_with_everything_it_started() {
 // NAV-16
 // ---------------------------------------------------------------------------------------
 
+/// The entries of the `PATH` in `environment`: what the product's configuration holds as its
+/// search path.
+fn search_path_of(environment: &[(OsString, OsString)]) -> Vec<PathBuf> {
+    value_of(environment, "PATH")
+        .map(|path| std::env::split_paths(path).collect())
+        .unwrap_or_default()
+}
+
 /// What a scratch of the NAV-16 tests holds: the shell-bin folder where the shell puts the
 /// stand-in on the path, the files the scripts write, and the registry row.
 struct Rig {
@@ -404,13 +434,15 @@ impl Rig {
 
     /// The configuration of the Window's own: the scratch's environment (its search path
     /// has no stand-in) with a variable the shell will also set, and `shell` as the login
-    /// shell.
+    /// shell. The configuration's search path is the `PATH` of that environment split, as
+    /// the product sets it, so that an order made against either one is seen.
     fn config(&self, shell: LoginShell) -> yaar_navigator::NavigatorConfig {
         let mut config = self.scratch.config(&self.row);
         config
             .environment
             .push(("STANDIN_KEPT_BY_BASE".into(), "base".into()));
         config.login_shell = Some(shell);
+        config.search_path = search_path_of(&config.environment);
         config
     }
 
@@ -716,6 +748,7 @@ fn the_programs_are_looked_for_on_the_windows_search_path_before_the_shells_entr
             *value = std::env::join_paths(entries).expect("a search path");
         }
     }
+    config.search_path = search_path_of(&config.environment);
     let mut running = Running::start(config);
     show_all(&mut running, vec![root_of(&ws, '1', &repo)], &ws);
 

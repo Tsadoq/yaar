@@ -35,7 +35,7 @@
 //!   shell still running ([`Group`]), and on Linux the kernel does when the Window dies.
 //!
 //! Two threads read what the shell leaves: one reads its standard output to the end, and one
-//! waits for the shell and reaps it, while the first waits on that thread's channel for what
+//! waits for the shell and reaps it, while the caller waits on that thread's channel for what
 //! is left of the deadline. Once the shell has exited, its whole process group is killed at
 //! once (`kill(-pid, SIGKILL)`, an error of "no such process" being none): a job a start-up
 //! file left in the background would otherwise hold the pipe open, and the read would wait
