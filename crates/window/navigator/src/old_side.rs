@@ -153,11 +153,11 @@ pub(crate) fn exported(core: &mut Core, asked: ExportAsk, failed: Option<String>
 fn is_unused_export_folder(core: &Core, folder: &Path) -> bool {
     let folder = absolute(folder);
     let old = absolute(&core.own_cache.join("old"));
+    // Exactly one component below `old`: a deeper path is part of an export, and may pass
+    // through a link of it to a folder of the worktree.
     let under_old = folder.strip_prefix(&old).is_ok_and(|rest| {
-        rest.components().next().is_some()
-            && rest
-                .components()
-                .all(|part| matches!(part, std::path::Component::Normal(_)))
+        let mut parts = rest.components();
+        matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
     });
     under_old
         && !core

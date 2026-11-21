@@ -953,7 +953,22 @@ fn an_answer_for_a_folder_that_is_not_under_the_navigators_own_old_folder_remove
         climbing.join("keep.txt").is_file(),
         "the path leaves the export"
     );
-    for into in [elsewhere.clone(), climbing] {
+    // Below the export in use: a folder of its own, and a folder of the worktree's reached
+    // through a link inside the export, as the export links its dependency folders.
+    let inside = asked.into.join("inside");
+    std::fs::create_dir_all(&inside).expect("make the folder");
+    std::fs::write(inside.join("keep.txt"), "in the export\n").expect("write the file");
+    let linked = scratch.root.join("worktree-folder");
+    std::fs::create_dir_all(linked.join("pkg")).expect("make the folder");
+    std::fs::write(linked.join("pkg/keep.txt"), "the worktree's\n").expect("write the file");
+    std::os::unix::fs::symlink(&linked, asked.into.join("deps")).expect("link the folder");
+
+    for into in [
+        elsewhere.clone(),
+        climbing,
+        inside.clone(),
+        asked.into.join("deps/pkg"),
+    ] {
         running.ask(Ask::Exported {
             asked: ExportAsk {
                 workspace: ws.clone(),
@@ -966,6 +981,14 @@ fn an_answer_for_a_folder_that_is_not_under_the_navigators_own_old_folder_remove
         assert!(
             elsewhere.join("keep.txt").is_file(),
             "a folder the Navigator did not make was removed"
+        );
+        assert!(
+            inside.join("keep.txt").is_file(),
+            "a folder inside the export in use was removed"
+        );
+        assert!(
+            linked.join("pkg/keep.txt").is_file(),
+            "a folder of the worktree, reached through a link of the export, was removed"
         );
     }
     assert!(asked.into.is_dir(), "the export in use was removed");
