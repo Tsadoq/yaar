@@ -19,8 +19,8 @@
 //! | `Setting::WorktreesFolder` | `Setting::WorktreesFolder` | `Failed` for a repository it does not hold, and for a folder `Workspaces::check_worktrees_folder` refuses, with its sentence |
 //!
 //! A folder for worktrees is checked against the repository's worktrees before it is kept,
-//! which only the Workspaces part can do: its set is `wiring::worktrees::set_folder`'s,
-//! beside the creation of a worktree that reads it.
+//! which only the Workspaces part can do: its set is `wiring::set_worktrees_folder`'s, beside
+//! the creation of a worktree that reads it.
 //! Every setting the Store lists is sent, each mapped back the same way.
 //!
 //! `GetSettings` waits the Keeper's turn, and a kept setting is told as
@@ -28,7 +28,9 @@
 //! request that set it: a Window that asks for the settings never takes an older list for a
 //! newer one.
 
-use yaar_link::{Fact, FlowForm, Refusal, Reply, Setting};
+use yaar_link::{
+    Fact, FlowForm, OptionKey, Refusal, Reply, Setting, TerminalPlace, ThemeChoice, TurnEndSelects,
+};
 
 use crate::wiring::Kept;
 
@@ -116,8 +118,11 @@ fn set_of_repository(
 /// `Fact::SettingChanged` with it into `facts`. A value the table refuses is refused with
 /// `Refusal::Failed` naming the setting, and nothing is kept or told.
 fn set_of_app(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
-    let _ = (kept, setting, facts);
-    todo!("keep a setting of the app, as the module doc says")
+    kept.store
+        .set_setting(&store_setting_of_app(&setting))
+        .map_err(failed)?;
+    facts.push(Fact::SettingChanged(setting));
+    Ok(Reply::Done)
 }
 
 /// A setting of the Store in the Link's words; none for a kind the Link has no word for.
@@ -137,14 +142,72 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
             repository: yaar_link::RepositoryId::new(repository.as_str()),
             allowed: *allowed,
         }),
-        // Until the settings of the app have their words here, none is sent.
-        yaar_store::Setting::TurnEnd(_)
-        | yaar_store::Setting::StopAfter { .. }
-        | yaar_store::Setting::Theme(_)
-        | yaar_store::Setting::TerminalPlace(_)
-        | yaar_store::Setting::KeepStates { .. }
-        | yaar_store::Setting::OptionKey(_)
-        | yaar_store::Setting::WorktreesFolder { .. } => None,
+        yaar_store::Setting::TurnEnd(selects) => Some(Setting::TurnEnd(match selects {
+            yaar_store::TurnEndSelects::WhatChanged => TurnEndSelects::WhatChanged,
+            yaar_store::TurnEndSelects::KeepSelection => TurnEndSelects::KeepSelection,
+        })),
+        yaar_store::Setting::StopAfter { seconds } => {
+            Some(Setting::StopAfter { seconds: *seconds })
+        }
+        yaar_store::Setting::Theme(theme) => Some(Setting::Theme(match theme {
+            yaar_store::Theme::System => ThemeChoice::System,
+            yaar_store::Theme::Light => ThemeChoice::Named("Light".to_owned()),
+            yaar_store::Theme::Dark => ThemeChoice::Named("Dark".to_owned()),
+            yaar_store::Theme::Named(name) => ThemeChoice::Named(name.clone()),
+        })),
+        yaar_store::Setting::TerminalPlace(place) => Some(Setting::TerminalPlace(match place {
+            yaar_store::TerminalPlace::Right => TerminalPlace::Right,
+            yaar_store::TerminalPlace::Below => TerminalPlace::Below,
+            yaar_store::TerminalPlace::Left => TerminalPlace::Left,
+        })),
+        yaar_store::Setting::KeepStates { days } => Some(Setting::KeepStates { days: *days }),
+        yaar_store::Setting::OptionKey(key) => Some(Setting::OptionKey(match key {
+            yaar_store::OptionKey::ByLayout => OptionKey::ByLayout,
+            yaar_store::OptionKey::Meta => OptionKey::Meta,
+            yaar_store::OptionKey::Characters => OptionKey::Characters,
+        })),
+        yaar_store::Setting::WorktreesFolder { repository, folder } => {
+            Some(Setting::WorktreesFolder {
+                repository: yaar_link::RepositoryId::new(repository.as_str()),
+                folder: folder.clone(),
+            })
+        }
+    }
+}
+
+/// A setting of the whole app in the Store's words. The two themes the app is built with
+/// are the Store's `Light` and `Dark`, so that the row a Store of slice 5 wrote is read the
+/// same; any other name is `Named`, which the Store refuses when it is empty or too long.
+/// A setting that is not one of the whole app's is the caller's to have kept apart.
+fn store_setting_of_app(setting: &Setting) -> yaar_store::Setting {
+    match setting {
+        Setting::TurnEnd(selects) => yaar_store::Setting::TurnEnd(match selects {
+            TurnEndSelects::WhatChanged => yaar_store::TurnEndSelects::WhatChanged,
+            TurnEndSelects::KeepSelection => yaar_store::TurnEndSelects::KeepSelection,
+        }),
+        Setting::StopAfter { seconds } => yaar_store::Setting::StopAfter { seconds: *seconds },
+        Setting::Theme(choice) => yaar_store::Setting::Theme(match choice {
+            ThemeChoice::System => yaar_store::Theme::System,
+            ThemeChoice::Named(name) if name == "Light" => yaar_store::Theme::Light,
+            ThemeChoice::Named(name) if name == "Dark" => yaar_store::Theme::Dark,
+            ThemeChoice::Named(name) => yaar_store::Theme::Named(name.clone()),
+        }),
+        Setting::TerminalPlace(place) => yaar_store::Setting::TerminalPlace(match place {
+            TerminalPlace::Right => yaar_store::TerminalPlace::Right,
+            TerminalPlace::Below => yaar_store::TerminalPlace::Below,
+            TerminalPlace::Left => yaar_store::TerminalPlace::Left,
+        }),
+        Setting::KeepStates { days } => yaar_store::Setting::KeepStates { days: *days },
+        Setting::OptionKey(key) => yaar_store::Setting::OptionKey(match key {
+            OptionKey::ByLayout => yaar_store::OptionKey::ByLayout,
+            OptionKey::Meta => yaar_store::OptionKey::Meta,
+            OptionKey::Characters => yaar_store::OptionKey::Characters,
+        }),
+        Setting::FlowForm { .. }
+        | Setting::ServersInRepository { .. }
+        | Setting::WorktreesFolder { .. } => {
+            unreachable!("`set` hands only the settings of the whole app here")
+        }
     }
 }
 
