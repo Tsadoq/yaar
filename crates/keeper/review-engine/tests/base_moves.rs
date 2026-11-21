@@ -224,18 +224,48 @@ fn a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay() {
     let new_side_on_the_base = world.thread(5);
     assert_eq!(new_side_on_the_base.anchor.tree, world.m1.as_str());
 
+    // A thread on the old side above the lines `main` gains: its lines stay.
+    world.old_thread(6, &world.m1, "f", 1, "line 1");
+
     // `main` gains two lines above line 3.
     let m2 = world.move_main(&[("f", Some(&with_before(3, &["new 1", "new 2"])))]);
     let moved = world.base_moved(&world.m1, &m2).expect("carry");
 
-    assert_eq!(moved, vec![ThreadId::new(id(1))]);
+    assert_eq!(moved.len(), 2, "{moved:?}");
+    assert!(moved.contains(&ThreadId::new(id(1))), "{moved:?}");
+    assert!(moved.contains(&ThreadId::new(id(6))), "{moved:?}");
     let carried = world.thread(1);
     assert_eq!(carried.now, Some(place(&m2, "f", 5, 5)));
+    assert_eq!(world.thread(6).now, Some(place(&m2, "f", 1, 1)));
     assert_eq!(carried.anchor.tree, world.m1.as_str(), "the anchor is kept");
     assert_eq!(world.thread(2), new_side);
     assert_eq!(world.thread(5), new_side_on_the_base);
     assert_eq!(world.thread(3), resolved);
     assert_eq!(world.thread(4), on_a_state);
+}
+
+#[test]
+fn a_thread_whose_lines_did_not_move_is_carried_too_so_that_the_next_move_finds_it() {
+    let world = World::new();
+    // Line 1 is above the two lines `main` gains, so its place does not change.
+    world.old_thread(1, &world.m1, "f", 1, "line 1");
+    let m2 = world.move_main(&[("f", Some(&with_before(3, &["new 1", "new 2"])))]);
+    // A move after it puts a line above line 1.
+    let m3 = world.move_main(&[(
+        "f",
+        Some(&format!("top\n{}", with_before(3, &["new 1", "new 2"]))),
+    )]);
+
+    assert_eq!(
+        world.base_moved(&world.m1, &m2).expect("carry"),
+        vec![ThreadId::new(id(1))]
+    );
+    assert_eq!(world.thread(1).now, Some(place(&m2, "f", 1, 1)));
+    assert_eq!(
+        world.base_moved(&m2, &m3).expect("carry"),
+        vec![ThreadId::new(id(1))]
+    );
+    assert_eq!(world.thread(1).now, Some(place(&m3, "f", 2, 2)));
 }
 
 #[test]
@@ -348,9 +378,41 @@ fn a_thread_on_a_file_outside_the_worktree_is_not_touched() {
         .reviews
         .save_draft(Some(&world.worktree), &world.review, &save)
         .expect("save the draft");
+    // A thread of the old side, placed on the base itself, whose path is absolute: only
+    // its path keeps it out, which a draft cannot give it (it is written on the new side,
+    // with no tree).
+    let outside = world.scratch.join("outside.txt");
+    world
+        .store
+        .put_thread(
+            &world.review,
+            &Thread {
+                id: ThreadId::new(id(2)),
+                anchor: Anchor {
+                    tree: world.m1.as_str().to_owned(),
+                    path: outside,
+                    side: Side::Old,
+                    first: 1,
+                    last: 1,
+                    text: "x".to_owned(),
+                },
+                resolved: false,
+                addressed: false,
+                comments: vec![Comment {
+                    id: CommentId::new(id(1002)),
+                    author: Author::Reviewer,
+                    text: "outside, on the base".to_owned(),
+                    round: None,
+                }],
+                now: None,
+            },
+        )
+        .expect("keep");
     let before = world.thread(1);
+    let on_the_base = world.thread(2);
     let m2 = world.move_main(&[("f", Some(&with_before(1, &["above"])))]);
 
     assert_eq!(world.base_moved(&world.m1, &m2).expect("carry"), vec![]);
     assert_eq!(world.thread(1), before);
+    assert_eq!(world.thread(2), on_the_base);
 }

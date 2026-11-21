@@ -1,6 +1,8 @@
 //! Component tests: the threads on the old side when the base of a workspace moves, as a
 //! Window sees it through the Link, with a real repository, a real database and the Keeper
-//! as the library on a thread of the test (`THREAD-09`, the part through the Keeper).
+//! as the library on a thread of the test (`THREAD-09`, the part through the Keeper); the
+//! one test of a restart runs its first Keeper in a process of its own, this program run
+//! again.
 //!
 //! The Keeper runs git with the environment of its process, so each test sets that
 //! environment as its first statement, and these tests are run by `cargo nextest`, which
@@ -583,6 +585,30 @@ fn a_base_that_moved_while_the_keeper_was_stopped_moves_the_threads_at_its_first
     };
     assert_eq!(changes.counted_from.as_deref(), Some(history.m2.as_str()));
     window.wait_for_reviews_changed_from(facts_before);
+    sits_on(&window.thread(&workspace, &thread_id(1)), &history.m2, 5);
+    window.stop(keeper);
+}
+
+#[test]
+fn a_base_set_before_any_look_at_the_changes_carries_the_threads_from_the_commit_before_it() {
+    let scratch = Scratch::new();
+    let history = scratch.history();
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&history.repo);
+    // No `GetChanges` has been answered, so no commit is noted: the thread, written on
+    // the old side of `m1` (which the test knows from git), is found only through the
+    // commit the changes were counted from just before the base is set.
+    let (review, _) = window.threads(&workspace);
+    window.start(&review, 1, history.on_line_3_of_the_old_side(&history.m1));
+
+    let (reply, facts_before) = window.ask_noting_facts(Request::SetBase {
+        workspace: workspace.clone(),
+        base: "mid".to_owned(),
+    });
+    assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
+    window.wait_for_reviews_changed_from(facts_before);
+
     sits_on(&window.thread(&workspace, &thread_id(1)), &history.m2, 5);
     window.stop(keeper);
 }
