@@ -44,7 +44,7 @@ fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
         .output()
         .expect("start git");
     let mut all = output.stdout;
-    all.extend_from_slice(&[b'|']);
+    all.extend_from_slice(b"|");
     all.extend_from_slice(&output.status.code().unwrap_or(-1).to_le_bytes());
     all
 }
@@ -70,7 +70,11 @@ fn walk(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, char)>) {
 fn snapshot(repo: &Path, lair: &Path) -> Snapshot {
     let mut objects = Vec::new();
     let mut files = Vec::new();
-    walk(&repo.join(".git/objects"), &repo.join(".git/objects"), &mut files);
+    walk(
+        &repo.join(".git/objects"),
+        &repo.join(".git/objects"),
+        &mut files,
+    );
     for (path, letter) in files {
         if letter == 'f' {
             let size = std::fs::metadata(repo.join(".git/objects").join(&path))
@@ -230,7 +234,9 @@ fn a_start_that_is_no_branch_is_refused_and_nothing_is_made() {
     git(&place.repo, &["tag", "release"]);
     let id = git(&place.repo, &["rev-parse", "HEAD"]);
     let folder = place.worktrees().join("x");
-    for from in ["nowhere", "release", "main^", "main~1", "HEAD", &id, "", "-x"] {
+    for from in [
+        "nowhere", "release", "main^", "main~1", "HEAD", &id, "", "-x",
+    ] {
         match refused(&place, &folder, "task", from) {
             AddError::UnknownBranch(refused) => assert_eq!(refused, from),
             other => panic!("{from:?} was refused as {other:?}"),
@@ -290,7 +296,10 @@ fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit
         )),
         "{listed}"
     );
-    assert_eq!(std::fs::read_to_string(folder.join("a.txt")).unwrap(), "two\n");
+    assert_eq!(
+        std::fs::read_to_string(folder.join("a.txt")).unwrap(),
+        "two\n"
+    );
     assert!(folder.join(".git").is_file(), "an ordinary linked worktree");
     assert_eq!(git(&folder, &["rev-parse", "HEAD"]), at.as_str());
     assert_eq!(
@@ -405,7 +414,10 @@ fn taking_a_worktree_away_leaves_no_folder_no_branch_and_the_repository_as_it_wa
     worktree.remove_added(&added).expect("take away");
 
     assert!(!folder.exists());
-    assert!(!place.worktrees().exists(), "the folder the add made is gone");
+    assert!(
+        !place.worktrees().exists(),
+        "the folder the add made is gone"
+    );
     let refs = git(&place.repo, &["for-each-ref", "refs/heads"]);
     assert!(!refs.contains("task"), "{refs}");
     assert_eq!(place.snapshot(), before);
@@ -413,7 +425,8 @@ fn taking_a_worktree_away_leaves_no_folder_no_branch_and_the_repository_as_it_wa
 }
 
 #[test]
-fn taking_a_worktree_away_leaves_a_parent_folder_that_it_did_not_make_and_one_that_holds_something() {
+fn taking_a_worktree_away_leaves_a_parent_folder_that_it_did_not_make_and_one_that_holds_something()
+{
     let scratch = Scratch::new();
     let place = place(&scratch);
     std::fs::create_dir_all(place.worktrees()).expect("the folder of worktrees");
@@ -459,7 +472,10 @@ fn a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git() {
     let place = place(&scratch);
     program(
         &place.repo.join(".git/hooks/post-checkout"),
-        &format!("echo ran >> '{}'\nexit 1", scratch.join("hook-ran").display()),
+        &format!(
+            "echo ran >> '{}'\nexit 1",
+            scratch.join("hook-ran").display()
+        ),
     );
     let before = place.snapshot();
     let folder = place.worktrees().join("task");
@@ -527,8 +543,14 @@ fn calls_for_one_branch_at_once_make_it_once_and_the_others_are_refused_cleanly(
         assert!(matches!(outcome, AddError::BranchExists(_)), "{outcome:?}");
     }
     let listed = git(&place.repo, &["worktree", "list", "--porcelain"]);
-    assert_eq!(listed.matches("branch refs/heads/task").count(), 1, "{listed}");
+    assert_eq!(
+        listed.matches("branch refs/heads/task").count(),
+        1,
+        "{listed}"
+    );
     // Nothing is left of the calls that found it there.
-    let folders = std::fs::read_dir(place.worktrees()).expect("folder").count();
+    let folders = std::fs::read_dir(place.worktrees())
+        .expect("folder")
+        .count();
     assert_eq!(folders, 1);
 }

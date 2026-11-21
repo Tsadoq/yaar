@@ -262,7 +262,9 @@ impl Worktree {
     /// Whether `git worktree list` has a worktree at `folder`, as git prints it or with
     /// every link resolved.
     fn lists(&self, folder: &Path) -> Result<bool, GitError> {
-        let answer = self.run(["worktree", "list", "--porcelain", "-z"])?.printed()?;
+        let answer = self
+            .run(["worktree", "list", "--porcelain", "-z"])?
+            .printed()?;
         let wanted = resolved(folder);
         Ok(answer
             .split(|byte| *byte == 0)
@@ -275,7 +277,7 @@ impl Worktree {
     /// at. None when it names no branch. The ref is asked for exactly, so that `main^` or
     /// `main~1` is no branch.
     fn branch_to_start_from(&self, from: &str) -> Result<Option<(String, CommitId)>, GitError> {
-        if from.starts_with('-') || from.contains('\0') {
+        if from.contains('\0') {
             return Ok(None);
         }
         for branch in [Branch::Local(from), Branch::Remote(from)] {
@@ -339,7 +341,10 @@ fn resolved(path: &Path) -> PathBuf {
     let mut at = path;
     loop {
         if let Ok(found) = fs::canonicalize(at) {
-            return rest.iter().rev().fold(found, |whole, part| whole.join(part));
+            return rest
+                .iter()
+                .rev()
+                .fold(found, |whole, part| whole.join(part));
         }
         match (at.parent(), at.file_name()) {
             (Some(parent), Some(name)) => {
