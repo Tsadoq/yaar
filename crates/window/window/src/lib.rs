@@ -212,12 +212,12 @@ pub fn stop_navigator(models: &Models, cx: &mut App) -> bool {
     joined.navigator.wait(STOP_WITHIN)
 }
 
-/// Lets go of the Frame's end of a Navigator's port: the model is connected to a port
-/// whose other end is gone, which drops the one it held, and the Navigator, with no
-/// sender left, stops its servers and ends.
+/// Lets go of the Frame's end of a Navigator's port: the model closes the channel of asks
+/// for every sender made from it, those a pane's ask on its way and an export the Keeper has
+/// not yet answered hold among them, so that the Navigator, with no sender left, stops its
+/// servers and ends.
 fn drop_port(navigation: &Entity<Navigation>, cx: &mut App) {
-    let (gone, _) = yaar_navigator::port();
-    navigation.update(cx, |navigation, cx| navigation.connect(gone, cx));
+    navigation.update(cx, |navigation, cx| navigation.disconnect(cx));
 }
 
 #[cfg(test)]

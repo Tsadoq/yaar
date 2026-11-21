@@ -14,11 +14,12 @@ mod common;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use gpui_kit::{Modifiers, TestAppContext, VisualTestContext, point};
 use yaar_frame::LinkStatus;
 use yaar_link::Request;
-use yaar_navigator::{FileKind, Location, State, Tree};
+use yaar_navigator::{FileKind, Location, STOP_DEADLINE, State, Tree};
 use yaar_review_pane::HoverShown;
 use yaar_system_tests::{Repo, World, is_alive};
 
@@ -335,9 +336,17 @@ fn the_composed_window_answers_hover_and_definition_from_the_server_and_a_remove
 /// A composed Window with a Navigator, on the repository of the test with the stand-in
 /// running for the file on screen: gives it, its context and the process of the server.
 fn with_a_server_running(cx: &mut TestAppContext) -> (Composed, VisualTestContext, u32) {
+    let (window, inner, pid, _) = with_a_server_running_over(cx);
+    (window, inner, pid)
+}
+
+/// [`with_a_server_running`], and the commit of the base the change is counted from.
+fn with_a_server_running_over(
+    cx: &mut TestAppContext,
+) -> (Composed, VisualTestContext, u32, String) {
     let mut world = World::new();
     world.start_keeper();
-    let (repository, _) = repository_with_a_change(&world);
+    let (repository, base) = repository_with_a_change(&world);
     let folder = repository.path().to_owned();
     let navigator = navigator_for(
         &world,
@@ -363,7 +372,7 @@ fn with_a_server_running(cx: &mut TestAppContext) -> (Composed, VisualTestContex
     });
     let pid = pid.expect("a server runs");
     assert!(is_alive(pid));
-    (window, inner, pid)
+    (window, inner, pid, base)
 }
 
 // Of its own: the app's quit ends the Navigator and the servers it started, as a user's
@@ -433,6 +442,83 @@ impl Drop for Resumed {
         // SAFETY: signal CONT to a process the test stopped; one that is gone takes none.
         unsafe { libc::kill(self.0 as libc::pid_t, libc::SIGCONT) };
     }
+}
+
+// Of its own: a quit that finds a hover waiting at a server that does not answer and an export
+// the Keeper has not answered ends the Navigator in time, and leaves no server. Both hold a
+// way to the Navigator's asks, which the quit has to close.
+#[gpui_kit::test]
+fn a_quit_with_a_hover_waiting_at_a_slow_server_and_an_export_the_keeper_has_not_answered_ends_in_time_and_leaves_no_server(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, mut inner, pid, base) = with_a_server_running_over(cx);
+    let workspace = window
+        .models
+        .workspaces
+        .read_with(&inner, |list, _| list.selected().cloned())
+        .expect("a workspace is on screen");
+    let place = |tree, name: &str| yaar_navigator::Place {
+        workspace: workspace.clone(),
+        tree,
+        path: PathBuf::from("main.sil"),
+        line: 2,
+        column: 4,
+        name: name.to_owned(),
+        shown: Vec::new(),
+    };
+
+    // The server reads nothing: the hover waits at it.
+    let _resumed_server = Resumed(pid);
+    // SAFETY: signal STOP to the stand-in this test started.
+    assert_eq!(unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) }, 0);
+    let hover = window
+        .models
+        .navigation
+        .update(&mut inner, |navigation, cx| {
+            navigation.hover(place(Tree::Worktree, "total"), cx)
+        });
+    // The Keeper reads nothing either: the export of the old side that the first ask about
+    // it wants is on its way and stays so.
+    let keeper = window.world.keeper_pid().expect("the Keeper runs");
+    let _resumed_keeper = Resumed(keeper);
+    // SAFETY: signal STOP to the Keeper this test's world started.
+    assert_eq!(
+        unsafe { libc::kill(keeper as libc::pid_t, libc::SIGSTOP) },
+        0
+    );
+    let old_side = window
+        .models
+        .navigation
+        .update(&mut inner, |navigation, cx| {
+            navigation.hover(place(Tree::Version(base.clone()), "old_name"), cx)
+        });
+    // Neither ask is answered and neither is dropped, as a pane's ask is not while it waits.
+    let _waiting = [
+        cx.foreground_executor().spawn(async move {
+            let _ = hover.await;
+        }),
+        cx.foreground_executor().spawn(async move {
+            let _ = old_side.await;
+        }),
+    ];
+    wait_until(&mut inner, "the export on its way to the Keeper", |_| {
+        window.tap.requests().iter().any(
+            |request| matches!(request, Request::ExportVersion { version, .. } if *version == base),
+        )
+    });
+
+    let began = Instant::now();
+    cx.update(|app| app.shutdown());
+    let took = began.elapsed();
+    // The quit waited for the Navigator: no wait here.
+    assert!(
+        !is_alive(pid),
+        "the server {pid} outlived the quit of the app"
+    );
+    assert!(
+        took < STOP_DEADLINE + Duration::from_secs(1),
+        "the quit took {took:?}"
+    );
 }
 
 // Of its own: the quit of the app ends the Navigator of every window, not the first's alone.

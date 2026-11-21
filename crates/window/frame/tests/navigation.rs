@@ -1480,6 +1480,81 @@ fn a_navigator_that_ends_resolves_what_waits_to_gone_and_leaves_the_model_unconn
     assert_eq!(resolved(&slot, cx), Err(NavError::NotConnected));
 }
 
+/// Lets go of the Navigator, as a quit of the app does.
+fn disconnect(models: &Models, cx: &mut TestAppContext) {
+    models
+        .navigation
+        .update(cx, |navigation, cx| navigation.disconnect(cx));
+    cx.run_until_parked();
+}
+
+#[gpui_kit::test]
+fn disconnected_what_waits_resolves_to_gone_and_the_model_shows_no_navigator(
+    cx: &mut TestAppContext,
+) {
+    let (models, _keeper) = window(Vec::new(), &one_workspace(), cx);
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+    navigator.tell(Told::Languages(vec![language("rust", "Rust", &["rs"])]), cx);
+    navigator_servers(&navigator, cx);
+    let asking = hover(&models, place("src/a.rs", "alpha"), cx);
+    navigator.ask(cx);
+    let (waiting, _task) = pending(asking, cx);
+    // A second hover that nothing polls yet holds a way to the Navigator, as a pane's ask
+    // does while its task has not run.
+    let unpolled = hover(&models, place("src/a.rs", "beta"), cx);
+    navigator.ask(cx);
+
+    disconnect(&models, cx);
+
+    assert_eq!(resolved(&waiting, cx), Err(NavError::Gone));
+    models.navigation.read_with(cx, |navigation, _| {
+        assert!(!navigation.is_connected());
+        assert!(
+            navigation.servers().is_empty() && navigation.languages().is_empty(),
+            "what the Navigator told is no longer true"
+        );
+    });
+    // The Navigator is let go: it reads the end of its asks, with nothing more sent.
+    navigator.ends_with_nothing_more(cx);
+    let (late, _late_task) = pending(unpolled, cx);
+    assert_eq!(resolved(&late, cx), Err(NavError::Gone));
+    let after = hover(&models, place("src/a.rs", "alpha"), cx);
+    let (slot, _task) = pending(after, cx);
+    assert_eq!(resolved(&slot, cx), Err(NavError::NotConnected));
+}
+
+#[gpui_kit::test]
+fn an_export_on_its_way_does_not_hold_the_navigator_once_the_model_is_disconnected(
+    cx: &mut TestAppContext,
+) {
+    let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
+    let mut navigator = Navigator::connect(&models, cx);
+    navigator.first_telling(cx);
+    let wanted = ExportAsk {
+        workspace: id('1'),
+        version: COMMIT.to_owned(),
+        into: PathBuf::from("/cache/navigator/1-1/old/1"),
+    };
+    navigator.tell(Told::ExportWanted(wanted.clone()), cx);
+    // The Keeper has the request and has not answered it: the model's task for it waits,
+    // holding a way to the Navigator.
+    let (asked, _) = request_of(&mut keeper, cx, |request| {
+        matches!(request, Request::ExportVersion { .. })
+    });
+
+    disconnect(&models, cx);
+
+    // The Navigator reads the end of its asks while the export is still on its way.
+    navigator.ends_with_nothing_more(cx);
+    // The Keeper answers at last: nobody is left to be told, and nothing breaks.
+    keeper.reply(asked, Ok(Reply::Done));
+    cx.run_until_parked();
+    models
+        .navigation
+        .read_with(cx, |navigation, _| assert!(!navigation.is_connected()));
+}
+
 #[gpui_kit::test]
 fn whether_a_navigator_is_connected_notifies_when_it_changes_at_a_connect_and_at_an_end(
     cx: &mut TestAppContext,

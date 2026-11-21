@@ -28,6 +28,8 @@
 //!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
 //!   or the loss of the link as a sentence.
 //!
+//! [`Navigation::disconnect`] lets the Navigator go, as the app's quit does.
+//!
 //! What it keeps of what the Navigator tells: the languages, and the newest list of servers
 //! ([`Navigation::servers`]), each change of which notifies the model's observers. Each
 //! answer resolves the [`Asking`] of its id.
@@ -251,6 +253,25 @@ impl Navigation {
         self.forget(cx);
         self.tell_workspaces(cx);
         self.tell_consents(cx);
+        // Whether a Navigator is connected changed, as far as an observer can tell.
+        cx.notify();
+    }
+
+    /// Lets go of the Navigator, as the quit of the app does: the channel of asks is
+    /// closed, for every sender made from it, so that the Navigator, which ends when no
+    /// sender is left, does not wait for an ask on its way or an export the Keeper has not
+    /// answered, each of which holds one; every ask still waiting resolves to
+    /// [`NavError::Gone`], and the model shows no Navigator and nothing it told. The model
+    /// may be connected again.
+    pub fn disconnect(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.connection.take() else {
+            return;
+        };
+        // Closing is for every clone of the sender; dropping this one would not be.
+        connection.asks.close();
+        // Each sender goes with its entry, so each waiting task resolves.
+        connection.waiting.borrow_mut().clear();
+        self.forget(cx);
         // Whether a Navigator is connected changed, as far as an observer can tell.
         cx.notify();
     }
