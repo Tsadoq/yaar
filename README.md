@@ -6,14 +6,15 @@ on lines, and send the comments back to the agent.
 
 **Pre-release.** Today the app opens a git repository, shows what a branch changed, lets
 you comment on any line of the diff and keeps those comments, and runs terminals beside the
-diff. It hears Claude Code, which you run in one of those terminals as always, and pi, once
-you have said yes to one question the app asks (below): the sidebar shows whether each works,
-waits for you or has finished a turn, Flow shows what it does as it works, and Changes shows
-what the turn changed. A review round with either works end to end: you attach your comments
-to your next message, the agent receives them with the message you submit, answers each thread
-with a tool of the app, and the threads follow the code it rewrites. You still press Enter
-yourself. Until you say yes, pi runs in a terminal as any program does, and the app writes
-nothing of pi's and does not hear it.
+diff. It answers what a name in the diff is, where it is defined and who uses it, from a
+language server (below). It hears Claude Code, which you run in one of those terminals as
+always, and pi, once you have said yes to one question the app asks (below): the sidebar
+shows whether each works, waits for you or has finished a turn, Flow shows what it does as
+it works, and Changes shows what the turn changed. A review round with either works end to
+end: you attach your comments to your next message, the agent receives them with the message
+you submit, answers each thread with a tool of the app, and the threads follow the code it
+rewrites. You still press Enter yourself. Until you say yes, pi runs in a terminal as any
+program does, and the app writes nothing of pi's and does not hear it.
 
 ## What it does now
 
@@ -180,6 +181,82 @@ nothing of pi's and does not hear it.
 - **Shows it all again when a window opens.** Start the app again, and every terminal the
   Keeper still holds comes back with its screen, each review with its drafts, and the
   turns that ended meanwhile in the tree.
+- **Shows what a language server reports for a name in the diff.** Click on a name of a
+  line, or move to it with `l` and `h`, and press Shift-K: the answer shows under the rows.
+  The mouse resting on a name for 400 ms asks the same. `g d` goes to the definition and
+  opens it in a read-only file view that takes the place of the rows; Escape, or "Back to the
+  diff" in the view, returns to the line, the name and the scroll you left. `g r` lists the
+  references: `j`, `k`, Enter and Escape move in the list, open one and close it, and a click
+  opens one. A click with Cmd (Ctrl on Linux) held goes to the definition. TypeScript and
+  JavaScript, Python and Rust have code intelligence, and no other language does.
+- **Answers a removed line from the old code.** On a removed line, in the unified and in the
+  split view, Shift-K and `g d` ask about the version the change is counted from. At the
+  first such question the Keeper writes that version, as plain files, into the app's cache
+  folder, and the app starts a second server for it there; the worktree is not touched, and
+  the files go when another change is shown or the window closes.
+- **Says when a name is found by text match.** While no language server is ready for a
+  file, and for a file of a language the app has no server for, the answer to a hover, a
+  definition or a list of references is found by searching the files of the worktree for the
+  name, and is marked as possibly wrong, in the hover and over the list.
+- **Shows the language server of the code on screen.** A line under the bar of the review
+  pane, which stays in Changes, in Flow and over the file view, says "ready", "starting;
+  names are found by text match meanwhile" or "no language server found" for the file of your
+  line, and for the old side on a removed line. It is a line of the pane and never a dialog.
+- **Comments on a line reached through a definition or a reference**, in the diff or not,
+  in the repository or not: `c` in the file view.
+- **Looks for a language server in this order**, and uses the first that starts: the one you
+  registered, the project's own (`node_modules` for TypeScript, `.venv` for Python), one
+  installed on the machine, one the app downloaded. A server that fails its trial run or does
+  not start is passed over for the next. Within each of these the order is that of the
+  built-in table:
+
+  | Language | Servers, in order | The app downloads |
+  | --- | --- | --- |
+  | TypeScript and JavaScript | tsgo, typescript-language-server, vtsls | tsgo |
+  | Python | basedpyright, pyright, ty, pyrefly | ty |
+  | Rust | rust-analyzer: the first program of that name on the search path of the Window (rustup's runs the project's toolchain), and no copy of the project's own | rust-analyzer |
+
+  "On the machine" means in a folder of the search path the Window was started with. A Window
+  started from the Finder or the Dock on macOS has the system's short search path and finds
+  none of rustup's, Homebrew's or nvm's; one started with `cargo run` from a shell has the
+  shell's.
+- **Downloads a language server only after you say yes.** When none is found for a language
+  that has a download for your machine, the line offers "Download" with the server's name and
+  version (Shift-I). Nothing is fetched before that. The download is one plain GET of the
+  publisher's address, npm's registry for tsgo and GitHub for ty and rust-analyzer, with no
+  account, no cookie, no proxy and a user agent of `language-server-download`; nothing is
+  uploaded. The bytes are checked against the SHA-256 digest pinned in the app and are
+  refused when it differs. The server is unpacked into the app's data folder, below, and
+  started. When the version the app pins is newer than the one you downloaded, the line
+  offers "Update to" (Shift-U); nothing updates by itself. A server you registered is never
+  downloaded.
+- **Asks before it runs a server that sits inside a repository.** A project's own server,
+  such as `node_modules/.../tsc` or `.venv/bin/ty`, runs code from the repository. The line
+  asks once for the repository, "Run them" (Shift-Y) or "Not from this repository" (Shift-Q),
+  and the answer is kept for the repository, in all its worktrees, and told to every window.
+  Until you answer, the next candidate that is not inside the repository runs.
+- **Takes a server of your own for a language.** The file `language-servers.toml` in the
+  app's data folder holds a row for a language, with the command of its server:
+
+  ```toml
+  [[rust.server]]
+  command = ["/path/to/rust-analyzer"]
+  ```
+
+  It takes the built-in row's place, so that only your servers are tried for those files,
+  and the line shows its state as it shows a built-in server's. What such a server answers is
+  its own. A row that cannot be read is reported and passed over, and the others are read.
+- **Runs the servers of the workspace on screen, and stops the others.** A server starts when
+  the workspace comes on screen, if its worktree holds a file the row names (a `Cargo.toml`
+  for Rust, a `tsconfig.json` or `package.json` for TypeScript, a `pyproject.toml` or
+  `requirements.txt` for Python), and otherwise at the first question about one of its files.
+  A workspace off screen for ten minutes has its servers stopped, the old side's included, and
+  they start again when it comes back; the ten minutes are fixed. Quitting the
+  window stops every server, and waits up to three seconds for them. Each window has a
+  Navigator of its own.
+- **Keeps a language server out of your repository.** rust-analyzer builds into the app's cache
+  folder and runs cargo offline, tsgo has its automatic acquisition of types turned off, and
+  nothing a server writes goes into a worktree.
 - **Runs terminals** in a pane to the right of the diff. Each terminal starts your login
   shell (`SHELL`, else the shell of your user, else `/bin/sh`) in the folder of the
   worktree on screen, and anything you start in it, an agent CLI included, runs as in any
@@ -229,9 +306,10 @@ nothing of pi's and does not hear it.
 
 ### Not there yet
 
-- Hover and go to definition, a settings screen (the form of Flow is the one setting kept,
-  and Shift-L sets it; your answer about pi's extension is changed by its two keys alone), and
-  creating a worktree.
+- A settings screen (the form of Flow, and your answers about language servers inside a
+  repository, are the settings kept, set by their keys; your answer about pi's extension is
+  changed by its two keys alone), and creating a worktree. The registry of language servers
+  is a file you edit by hand.
 - Follow is not kept: every new window starts with it on, however you left the last one.
 - Older turns in the timeline: it holds the turns the window has seen in this worktree,
   or the newest one when it opens. An earlier turn cannot be picked.
@@ -251,11 +329,24 @@ nothing of pi's and does not hear it.
   ended session still holds its review, and no mark once another session has taken that
   review over, since the ended session is then no longer listed. A session that is idle,
   with nothing to review, draws no mark.
-- Comments on a range of lines, and on a line reached through a definition.
+- Comments on a range of lines.
 - Two worktrees that share one id at different paths: the app refuses the second.
 
 Known limits of what is there:
 
+- A language server that was running when the Window crashed may go on running on macOS:
+  rust-analyzer did not end when its input closed. On Linux the kernel ends each server with
+  the Window. A quit of the Window stops every server.
+- The download takes no proxy of your shell, so behind a proxy that the network requires
+  it cannot fetch. Servers that run on your own Node (typescript-language-server, vtsls,
+  basedpyright, pyright) and pyrefly are found on the machine and never downloaded. ty is a
+  beta.
+- A change an agent makes reaches a server only through the list of changed files of the
+  worktree on screen, which the app sends it; tsgo and rust-analyzer watch the folder too.
+- The question about a repository takes the line until you answer it, even when a later
+  candidate is ready, and nothing lets you change an answer once given.
+- Two windows that update one language server: the second window keeps running the older
+  version until it searches again.
 - Claude Code reports a permission prompt and no other dialog, and pi reports none, so the
   sentence control is offered while another dialog, such as the trust dialog or a question of
   one of your own pi extensions, is up. Nothing is typed until you press the control.
@@ -331,6 +422,15 @@ is the app's own choice.
 | --- | --- | --- |
 | `j`, `k`, Down, Up | One line down, one line up | vim and tuicr |
 | `s` | Switches between the unified and the split diff | the app; tuicr has the command `:diff` |
+| `l`, `h` | Next and previous name on the line | vim, one step right and left, here a name at a time; vim's word motions `w` and `b` are not used, since `w` shows the original line |
+| Shift-K | Shows what the language server reports for the name | vim, `K` looks up the word under the cursor |
+| `g d` | Goes to the definition of the name and opens it in the file view | vim, `gd` |
+| `g r` | Lists the references to the name | neovim's `grr`; vim's `gr` replaces text, which a read-only view never does |
+| Escape | Returns from the file view to the place left in the diff; with nothing to return from, does nothing | tuicr, Escape leaves a mode; vim's `ctrl-o` jumps back, but it is Open Folder on Linux |
+| Shift-I | Downloads the language server the line offers | the app; "install" |
+| Shift-U | Updates the downloaded language server, when the line offers it | the app |
+| Shift-Y | Answers yes to the question about running language servers from the repository | the app; "yes" |
+| Shift-Q | Answers no to it | the app |
 | `c` | Opens a comment box on the line | tuicr, add a line comment |
 | `i` | Edits the draft on the line | tuicr, edit the comment; vim, insert |
 | `o` | Writes a reply in the thread of a sent comment | the app; vim's `o` opens a line below |
@@ -366,6 +466,17 @@ In the tree of Changes, as plain keys:
 | `j`, `k`, Down, Up | Moves the cursor one entry down, one up | tuicr, commit selector |
 | Space | Marks the entry under the cursor | tuicr, commit selector |
 | Enter | Shows the change of the marked entries, first to last, or of the one under the cursor | tuicr, commit selector |
+
+In the list of references, as plain keys:
+
+| Key | Does | From |
+| --- | --- | --- |
+| `j`, `k`, Down, Up | Moves to the next and the previous entry | tuicr's lists and its commit selector |
+| Enter | Opens the entry in the file view | tuicr, commit selector |
+| Escape | Closes the list and gives the focus back to the rows | tuicr |
+
+The file view takes no input: no key changes what it shows, and `j`, `k` move the line you are
+on. `c` writes a comment on that line.
 
 In the comment box the keys type text. Enter closes the box, Shift-Enter starts a new line,
 and Escape closes it too: the draft stays either way, and `d d` deletes it.
@@ -428,6 +539,13 @@ runs, to tell you of a change and to tell a change an agent made from one made b
 a program the app does not hear. Who made an uncommitted change is remembered until the
 Keeper ends; a change made before it started again shows as one no agent made.
 
+The Navigator keeps what it downloads and what you register in the same folder, under
+`language-servers/<server>/<version>/` and in `language-servers.toml`. What can be made again is
+in the cache folder, `~/Library/Caches/yaar-review/navigator/` on macOS and
+`$XDG_CACHE_HOME/yaar-review/navigator/` or `~/.cache/yaar-review/navigator/` on Linux: the old
+side of a change that the Keeper writes there, the log of each server, and rust-analyzer's build
+folders. The Keeper writes only below that folder when the Window asks it for an old side.
+
 It keeps the opened repositories, the bases you set, and every review with its comments,
 drafts, replies, rounds and attachments in one database, in
 `~/Library/Application Support/yaar-review/` on macOS and in `$XDG_DATA_HOME/yaar-review/` or
@@ -486,7 +604,15 @@ The tests run with `cargo nextest`, which gives each test a process of its own: 
 that drive git set the environment of their process. One test, the one of pi's extension
 (`crates/keeper/adapter-pi/tests/extension.rs`), runs Node, 22.18 or later, and fails with a
 sentence that says so where Node is missing or older; no other test and nothing of the app
-uses Node. CI also runs `cargo deny check` and
+uses Node. Four tests run a real language server, tsgo, ty or rust-analyzer: they read the
+folder that `YAAR_LANGUAGE_SERVERS` names and fail with a sentence that says so when it is
+unset or lacks a pinned version; they never skip. `cargo xtask language-servers <folder>` fills
+that folder from the publishers, with the app's own downloader, and finds nothing to fetch in a
+folder that is already filled. One test, LSP-01, downloads the three servers from their
+publishers into its own scratch folder; every other test of the downloader is served by a
+listener on the loopback address, and every other test of the Navigator runs a stand-in
+language server for an invented language. Each real server a test starts has a home, cache,
+temporary and cargo folder of its own. CI also runs `cargo deny check` and
 `cargo machete`; `.github/scripts/install-tools.sh <folder>` fetches these tools at the
 pinned versions.
 
@@ -512,8 +638,10 @@ states and the commit, the database, the workspaces with their watcher, the revi
 (threads, rounds, the send, the follower that moves threads), the terminals (the Dock), the
 Switchboard that follows each agent session with the steps it takes, and the adapters of
 Claude Code and of pi, with the companion of Claude Code (its hook program and its tool server),
-the extension of pi and its reporting program; in the Window, the frame with its sidebar and
-its settings, the review pane with Changes and Flow, and the terminal pane with the launchers,
+the extension of pi and its reporting program; in the Window, the Navigator, which finds,
+starts and asks the language servers, with the registry of servers, the downloader, the old
+side of a diff and the search by text match, the frame with its sidebar and
+its settings, the review pane with Changes and Flow and the file view, and the terminal pane with the launchers,
 the resume line, the question about pi's extension and the attachment at the agent's terminal.
 Every other crate is still a shell that says in its `lib.rs` which part of the app it will
 hold.
