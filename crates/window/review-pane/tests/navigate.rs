@@ -982,11 +982,14 @@ fn one_turn(start: &str, s1: &str) -> History {
     }
 }
 
-// RP-25, a change that ends at a version
-#[gpui_kit::test]
-fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_side_its_version(
+/// Opens the pane on the turn of `src/run.rs` from `old` to `new`, which ends at a version,
+/// with the Navigator connected and the old side of the turn told. Gives the version the
+/// turn starts at and the one it ends at.
+fn open_on_a_turn(
+    old: &str,
+    new: &str,
     cx: &mut TestAppContext,
-) {
+) -> (Stage, NavigatorEnd, VisualTestContext, String, String) {
     use yaar_link::{Fact, Reply, Request};
     let (mut stage, mut cx) = open(vec![workspace('1', "feature")], cx);
     let changes = since_main(
@@ -1042,10 +1045,7 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
         },
         &mut cx,
     );
-    stage.keeper.reply(
-        read,
-        texts("let old_one = 1;\nkeep();\n", "let new_one = 2;\nkeep();\n").map(Reply::File),
-    );
+    stage.keeper.reply(read, texts(old, new).map(Reply::File));
     wait_until(&mut cx, "the files of the turn", |cx| {
         stage.pane.read_with(cx, |pane, _| {
             pane.rows().iter().any(|row| {
@@ -1059,7 +1059,6 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
             })
         })
     });
-    let pane = &stage.pane;
     wait_until(&mut cx, "the old side of the turn told", |cx| {
         navigator.standing(cx).last()
             == Some(&Ask::OldSide {
@@ -1067,7 +1066,20 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
                 version: Some(start.clone()),
             })
     });
+    (stage, navigator, cx, start, s1)
+}
 
+// RP-25, a change that ends at a version
+#[gpui_kit::test]
+fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_side_its_version(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx, start, s1) = open_on_a_turn(
+        "let old_one = 1;\nkeep();\n",
+        "let new_one = 2;\nkeep();\n",
+        cx,
+    );
+    let pane = &stage.pane;
     // An added line asks as the new side of the version the change ends at, with the whole
     // text of the file there; a removed one the version before.
     let added = row_of(pane, Row::Added { new: 0 }, &mut cx);
@@ -1108,6 +1120,33 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
     let asked = hover_answered(&mut navigator, &mut cx);
     assert_eq!(asked.tree, Tree::Version(start));
     assert_eq!(asked.name, "old_one");
+}
+
+// RP-25, a last line with no line feed
+#[gpui_kit::test]
+fn a_past_version_whose_last_line_has_no_line_feed_is_asked_with_its_text_as_the_file_has_it(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx, _, s1) =
+        open_on_a_turn("let old_one = 1;\nkeep();", "let new_one = 2;\nkeep();", cx);
+    let added = row_of(&stage.pane, Row::Added { new: 0 }, &mut cx);
+    click_name(
+        added,
+        "new",
+        "let new_one = 2;",
+        "new_one",
+        Modifiers::none(),
+        &mut cx,
+    );
+    cx.simulate_keystrokes("shift-k");
+    let asked = hover_answered(&mut navigator, &mut cx);
+    assert_eq!(
+        asked.tree,
+        Tree::Past {
+            version: s1,
+            text: "let new_one = 2;\nkeep();".into(),
+        }
+    );
 }
 
 // The place of a name, as a position of the diff gives it

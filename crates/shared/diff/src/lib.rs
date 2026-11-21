@@ -236,6 +236,15 @@ impl FileDiff {
         self.text(side).starts.len() as u32
     }
 
+    /// Whether the last line of the version on `side` ends with a line feed. A version
+    /// of no lines has no last line to lack one, so it does.
+    pub fn ends_with_line_feed(&self, side: Side) -> bool {
+        self.text(side)
+            .bytes
+            .last()
+            .is_none_or(|byte| *byte == b'\n')
+    }
+
     /// The bytes of one line of the version on `side`, without the line feed that ends
     /// it. Panics when the version has no such line.
     pub fn line(&self, side: Side, line: u32) -> &[u8] {
@@ -1066,6 +1075,20 @@ fn main() {
         let emphasis = diff.emphasis(0);
         assert_eq!(emphasis.of(Side::Old, 1), []);
         assert_eq!(emphasis.of(Side::New, 1), []);
+    }
+
+    #[test]
+    fn a_version_says_whether_its_last_line_ends_with_a_line_feed() {
+        let diff = FileDiff::new(b"one\ntwo", b"one\ntwo\n");
+        assert!(!diff.ends_with_line_feed(Side::Old));
+        assert!(diff.ends_with_line_feed(Side::New));
+        let diff = FileDiff::new(b"one\n", b"one\r\ntwo");
+        assert!(diff.ends_with_line_feed(Side::Old));
+        assert!(!diff.ends_with_line_feed(Side::New));
+        // A version of no lines has none to lack its line feed.
+        let diff = FileDiff::new(b"", b"\n");
+        assert!(diff.ends_with_line_feed(Side::Old));
+        assert!(diff.ends_with_line_feed(Side::New));
     }
 
     #[test]

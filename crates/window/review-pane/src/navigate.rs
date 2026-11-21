@@ -450,7 +450,8 @@ impl ReviewPane {
     }
 
     /// The whole text of the new side of the file at `index` of the files, as the pane
-    /// holds it: its lines, each followed by a line feed.
+    /// holds it: its lines, each followed by a line feed, but for a last line that the
+    /// file ends without one.
     fn new_text(&self, index: usize) -> Option<Arc<str>> {
         let FileContent::Diff(shown) = &self.files[index].content else {
             return None;
@@ -459,6 +460,9 @@ impl ReviewPane {
         for line in 0..shown.diff.line_count(Side::New) {
             text.push_str(&String::from_utf8_lossy(shown.diff.line(Side::New, line)));
             text.push('\n');
+        }
+        if !shown.diff.ends_with_line_feed(Side::New) {
+            text.pop();
         }
         Some(text.into())
     }
