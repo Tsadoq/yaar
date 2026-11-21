@@ -43,10 +43,11 @@
 //! `yaar_text_search::TextSearch::search` of the place's name over the root, on a thread of
 //! its own, which sends `Event::Found`. The matches are ordered: those of the file under
 //! the pointer first, then those of the files of `place.shown` in that order, then the rest
-//! by path; each file's by line. A hover by text match is the first three matches that are
-//! not the place's own line, each written `<path relative to the root>:<line>: <the line,
-//! trimmed>`, joined by line feeds; none when there is none. A definition and a reference
-//! list by text match are every match, in that order. Every one of them is marked guessed.
+//! by path; each file's by line. A hover by text match is the first three lines that hold a
+//! match and are not the place's own line (a line that holds the name twice counts once),
+//! each written `<path relative to the root>:<line>: <the line, trimmed>`, joined by line
+//! feeds; none when there is none. A definition and a reference list by text match are
+//! every match, in that order. Every one of them is marked guessed.
 //!
 //! # Cancelling, and files that change
 //!
@@ -745,6 +746,9 @@ fn by_match(
     });
     match question {
         Question::Hover => {
+            // A line that holds the name twice is two matches, side by side once sorted:
+            // the hover shows it once.
+            found.dedup_by(|a, b| a.path == b.path && a.line == b.line);
             let lines: Vec<String> = found
                 .iter()
                 .filter(|found| {

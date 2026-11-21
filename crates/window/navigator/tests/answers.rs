@@ -847,6 +847,43 @@ fn a_file_of_no_rows_extension_is_answered_by_text_match() {
 }
 
 #[test]
+fn a_hover_by_text_match_shows_a_line_once_when_the_line_holds_the_name_twice() {
+    let scratch = Scratch::new();
+    scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
+    let repo = scratch.repository(
+        "project",
+        &[
+            ("main.sil", "def main\n"),
+            ("notes.txt", "remember the milk\n"),
+            ("more.txt", "milk first, milk second\nno more milk\n"),
+            ("other.txt", "milk\n"),
+        ],
+    );
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running =
+        Running::start(scratch.config(&row_logging(&scratch.root.join("standin.log"))));
+    running.show(&repo, &ws, &repository);
+
+    // The line with two matches is one line of the hover, the next line of its file and the
+    // line of the next file follow it: a line counts once, not a match.
+    let hover = running.hover(
+        place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
+        DEADLINE,
+    );
+    assert_eq!(
+        hover,
+        Answered {
+            value: Some(
+                "more.txt:1: milk first, milk second\nmore.txt:2: no more milk\nother.txt:1: milk"
+                    .to_owned()
+            ),
+            guessed: true
+        }
+    );
+    running.end();
+}
+
+#[test]
 fn a_hover_on_a_file_of_no_row_in_a_workspace_with_no_file_of_a_row_starts_no_server() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
