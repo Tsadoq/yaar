@@ -250,8 +250,18 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
     cx.run_until_parked();
     stays("the wheel", &mut cx);
     go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
-    // The removed line is read in the old version: its server was not told.
-    assert!(drawn("review-servers", &mut cx).is_none());
+    // The removed line is read in the old version, whose server was not told: the line is
+    // that of the new side's server of the language, its offer included, and the control
+    // asks the download of the row.
+    stays("a click on a removed line", &mut cx);
+    let at = drawn("review-servers-download", &mut cx).unwrap().center();
+    cx.simulate_click(at, Modifiers::none());
+    assert_eq!(
+        navigator.ask(&mut cx),
+        Ask::Download {
+            language: "rust".to_owned()
+        }
+    );
     navigator.tell(
         Told::Servers(vec![
             rust(missing_with_offer()),
@@ -270,6 +280,62 @@ fn a_missing_language_server_is_said_on_a_line_that_stays_in_the_pane_and_the_do
     stays("f", &mut cx);
     cx.simulate_keystrokes("f");
     stays("f again", &mut cx);
+}
+
+#[gpui_kit::test]
+fn a_removed_line_shows_the_new_sides_server_until_the_old_sides_state_is_told_and_then_its_own(
+    cx: &mut TestAppContext,
+) {
+    let (stage, navigator, mut cx) = open_on_code(cx);
+    navigator.tell(Told::Servers(vec![rust(missing_with_offer())]), &mut cx);
+
+    // No state of the old side is told: the line is the new side's server of the language,
+    // with its offer. A language whose new side was not told has no line either.
+    go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
+    assert_line("missing", "Rust: no language server found", &mut cx);
+    assert!(has_control("download", &mut cx));
+    let on_screen = stage
+        .pane
+        .read_with(&cx, |pane, cx| pane.server_on_screen(cx))
+        .expect("a server is on screen");
+    assert_eq!(on_screen.old_side, None);
+    go_to(&stage, "app/main.py", Line::Removed, &mut cx);
+    assert!(drawn("review-servers", &mut cx).is_none());
+
+    // Once a state of the old side is told, the line is the old side's, and shows none of
+    // the new side's controls.
+    go_to(&stage, "src/lib.rs", Line::Removed, &mut cx);
+    navigator.tell(
+        Told::Servers(vec![
+            rust(missing_with_offer()),
+            old_side(rust(State::Starting)),
+        ]),
+        &mut cx,
+    );
+    assert_line(
+        "starting",
+        "Rust: starting; names are found by text match meanwhile",
+        &mut cx,
+    );
+    assert!(!has_control("download", &mut cx));
+    navigator.tell(
+        Told::Servers(vec![
+            rust(missing_with_offer()),
+            old_side(rust(State::Missing { offer: None })),
+        ]),
+        &mut cx,
+    );
+    assert_line(
+        "missing",
+        "Rust: no language server found; names are found by text match",
+        &mut cx,
+    );
+    assert!(!has_control("download", &mut cx));
+
+    // The line of an added line is the new side's, whatever the old side's state.
+    go_to(&stage, "src/lib.rs", Line::Added, &mut cx);
+    assert_line("missing", "Rust: no language server found", &mut cx);
+    assert!(has_control("download", &mut cx));
 }
 
 #[gpui_kit::test]

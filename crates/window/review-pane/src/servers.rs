@@ -42,9 +42,12 @@
 //! the Keeper), so a told state that still asks about a repository with an answer shows
 //! the state `asking` with the words of the row "asking, answered" and no controls.
 //!
-//! A server is known for the code on screen when the Navigator told its state: the
-//! server of a removed line's old side is told once the old side is first used, and until
-//! then there is no line for such a line. A file of no known language has none either.
+//! A server is known for the code on screen when the Navigator told its state. The
+//! server of a removed line's old side is told once the old side is first used, so until
+//! then the line of a removed line is that of the new side's server of the language, its
+//! offer and controls included; once a state of the old side is told, the line is the old
+//! side's. A file of no known language has no line, nor has one whose language has no
+//! state told.
 //!
 //! # What the controls do
 //!
@@ -100,6 +103,9 @@ struct Code {
     path: std::path::PathBuf,
     /// The version of the old side for a removed line; none for the files on disk.
     old_side: Option<String>,
+    /// Whether the server of the new side stands in for the old side's while the Navigator
+    /// has told no state of that: so on a removed line of the diff.
+    new_side_until_told: bool,
 }
 
 /// What a control of the line does when it is clicked.
@@ -116,10 +122,14 @@ impl ReviewPane {
     /// there is none.
     pub fn server_on_screen(&self, cx: &App) -> Option<ServerState> {
         let code = self.code_on_screen(cx)?;
-        self.models
-            .navigation
-            .read(cx)
+        let navigation = self.models.navigation.read(cx);
+        navigation
             .state_for(&code.workspace, &code.path, code.old_side.as_deref())
+            .or_else(|| {
+                code.new_side_until_told
+                    .then(|| navigation.state_for(&code.workspace, &code.path, None))
+                    .flatten()
+            })
             .cloned()
     }
 
@@ -141,6 +151,7 @@ impl ReviewPane {
                     workspace: workspace.clone(),
                     path: relative.clone(),
                     old_side: None,
+                    new_side_until_told: false,
                 }),
                 FileKind::Version {
                     workspace,
@@ -150,11 +161,13 @@ impl ReviewPane {
                     workspace: workspace.clone(),
                     path: relative.clone(),
                     old_side: Some(version.clone()),
+                    new_side_until_told: false,
                 }),
                 FileKind::Outside => Some(Code {
                     workspace: self.models.changes.read(cx).workspace()?.clone(),
                     path: file.path.clone(),
                     old_side: None,
+                    new_side_until_told: false,
                 }),
             };
         }
@@ -168,6 +181,7 @@ impl ReviewPane {
         Some(Code {
             workspace,
             path: path_in(file, position.side).to_path_buf(),
+            new_side_until_told: old_side.is_some(),
             old_side,
         })
     }
