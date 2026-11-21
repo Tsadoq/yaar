@@ -478,6 +478,37 @@ fn a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away
     assert_eq!(asked.name, "perimeter", "the mouse asked after the wheel");
 }
 
+// RP-21, a key that moves the reviewer drops the hover at once
+#[gpui_kit::test]
+fn a_key_that_moves_the_reviewer_drops_the_hover_before_any_frame_is_drawn(
+    cx: &mut TestAppContext,
+) {
+    let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+    click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
+    cx.simulate_keystrokes("shift-k");
+    let (id, _) = hover_ask(&mut navigator, &mut cx);
+    navigator.tell(
+        Told::Hover {
+            id,
+            answer: answer(Some("text"), false),
+        },
+        &mut cx,
+    );
+    assert!(hover(pane, &mut cx).is_some());
+
+    // The action is dispatched at the pane's focus and the pane read in one go, so that no
+    // frame is drawn between the key and the read.
+    let shown = cx.update(|window, cx| {
+        stage
+            .focus
+            .dispatch_action(&yaar_review_pane::LineDown, window, cx);
+        pane.read(cx).hover().cloned()
+    });
+    assert_eq!(shown, None, "the hover waited for the next frame");
+}
+
 /// Where the characters of `ADDED` lie, by offset: four spaces, then `let` (4 to 7), a
 /// space, `total` (8 to 13), a space, `=`, a space, `perimeter` (16 to 25), `(`, `sides`
 /// (26 to 31), `)` and `;`.

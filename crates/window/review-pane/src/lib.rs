@@ -1686,6 +1686,9 @@ impl ReviewPane {
             line,
         });
         self.position_row = Some(index);
+        // What was shown for the line the reviewer left goes now, not when the next frame
+        // is drawn.
+        self.follow_cursor();
         cx.notify();
     }
 
