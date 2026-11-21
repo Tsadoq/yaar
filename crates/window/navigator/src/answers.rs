@@ -28,11 +28,13 @@
 //! [`crate::Location`] whose line is the spot's plus one, whose column is in bytes of that
 //! line as its file holds it (`lsp::byte_column`), and whose text is that line; references
 //! sorted by path, then line. A server that answers with an error, or ends before it
-//! answered ([`server_gone`]), has the ask answered by text match, marked. An ask is held for
-//! the server's process as well as for its request number, which each process counts from the
-//! start: when the key's server was stopped or searched for again without `server_gone`, its
-//! asks are answered by text match at the next ask or answer, and none takes the answer of a
-//! later process.
+//! answered ([`server_gone`]), has the ask answered by text match, marked, then: also a server
+//! the Navigator ends itself, whose key is stopped or searched for again (`lifecycle.rs` tells
+//! [`server_gone`] after each such end of a ready server). An ask is held for the server's
+//! process as well as for its request number, which each process counts from the start, so
+//! that none takes the answer of a later process; an ask held for a process that is no longer
+//! the key's ready one is answered by text match at the next ask or answer, whatever ended the
+//! process.
 //!
 //! # Text match
 //!
@@ -48,10 +50,10 @@
 //!
 //! [`cancel`] cancels the server's request (`Server::cancel`) or drops the search's result;
 //! a cancelled ask is never answered. [`files_changed`] hands the paths, made absolute and
-//! each once, to every new-side server of the workspace that is ready
-//! (`Server::files_changed`): a path told twice, and one that no longer exists, are the
-//! driver's to tell as changed or deleted. A server that is not ready reads the files when
-//! it loads, and is sent a file's text at each ask.
+//! each once, to every running new-side server of the workspace, starting or ready
+//! (`Server::files_changed`; `lifecycle::running_server`): a path told twice, and one that no
+//! longer exists, are the driver's to tell as changed or deleted, and the driver holds what a
+//! server is sent before it answered `initialize`. A file's text is sent at each ask.
 //!
 //! # Opening a file
 //!
@@ -71,7 +73,7 @@ use yaar_link::WorkspaceId;
 use yaar_text_search::{Found, TextSearch, is_ignored};
 
 use crate::driver::Server;
-use crate::lifecycle::{ensure, ready_server};
+use crate::lifecycle::{ensure, ready_server, running_server};
 use crate::lsp::{Spot, byte_column, file_uri, hover_text, spots, utf16_column};
 use crate::navigator::{Core, Event, ServerKey, Side};
 use crate::old_side;
@@ -439,7 +441,7 @@ pub(crate) fn files_changed(core: &mut Core, workspace: &WorkspaceId, paths: &[P
             language: row.name.clone(),
             side: Side::New,
         };
-        if let Some(server) = ready_server(core, &key) {
+        if let Some(server) = running_server(core, &key) {
             server.files_changed(&changed);
         }
     }
@@ -519,8 +521,9 @@ pub(crate) fn server_answered(
 }
 
 /// Every ask held for a server process that is no longer the key's ready one is answered by
-/// text match, marked. A key's server is stopped, or searched for again, without
-/// [`server_gone`] being told, and its process never answers what it was asked.
+/// text match, marked. Every end of a ready server is told to [`server_gone`], so this is
+/// the second line: it keeps an ask from ever waiting for a process that is not the key's
+/// ready one, or taking the answer of a later process that counts its requests again.
 fn answer_the_stale(core: &mut Core) {
     let stale: Vec<AskId> = core
         .answers

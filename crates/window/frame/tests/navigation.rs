@@ -667,7 +667,7 @@ fn the_old_path_of_a_rename_the_keeper_answered_before_a_connect_is_held_as_the_
 }
 
 #[gpui_kit::test]
-fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_connect(
+fn a_list_the_model_still_shows_after_a_refusal_is_held_as_the_last_answer_at_a_connect(
     cx: &mut TestAppContext,
 ) {
     let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
@@ -693,8 +693,8 @@ fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_co
             !changes.is_loading() && changes.refusal().is_some()
         })
     });
-    // The model still shows the list it held, which a connect must not take as the last
-    // answer of the Keeper.
+    // The model still shows the list it held, which a connect takes as the last answer of the
+    // Keeper: a refusal brought no newer one.
     models.changes.read_with(cx, |changes, _| {
         let shown = changes.changes().expect("the list is still shown");
         assert_eq!(
@@ -709,12 +709,19 @@ fn a_list_the_model_shows_after_a_refusal_is_not_held_as_the_last_answer_at_a_co
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
 
-    // Nothing was seeded, so an empty list after it leaves nothing to tell; the update
-    // after it is the barrier.
+    // The list was seeded, so `a.rs`, put back since, is told changed when the Keeper
+    // answers an empty list; the update after it is the barrier.
     answer_again(&models, &mut keeper, changes('1', &[]), cx);
     models
         .navigation
         .update(cx, |navigation, _| navigation.update("go"));
+    navigator.expect(
+        Ask::FilesChanged {
+            workspace: id('1'),
+            paths: vec![PathBuf::from("a.rs")],
+        },
+        cx,
+    );
     navigator.expect(
         Ask::Update {
             language: "go".to_owned(),

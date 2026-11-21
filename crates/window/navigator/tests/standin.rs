@@ -371,12 +371,17 @@ fn initialize_is_answered_with_its_capabilities_and_logged_with_what_it_received
 }
 
 #[test]
-fn a_request_and_a_notification_are_each_logged_with_their_method() {
+fn a_request_and_a_notification_are_each_logged_with_their_method_and_a_change_notice_with_its_changes()
+ {
     let scratch = Scratch::new();
     let log = scratch.root.join("run.log");
     let mut standin = Standin::start(&scratch, &["--log", &log.display().to_string()]);
     standin.start_session(&scratch.root, json!(null));
-    standin.notify("workspace/didChangeWatchedFiles", json!({"changes": []}));
+    let change = json!({"uri": "file:///project/main.sil", "type": 2});
+    standin.notify(
+        "workspace/didChangeWatchedFiles",
+        json!({"changes": [change]}),
+    );
     standin.result_of("shutdown", json!(null));
 
     let log = log_of(&log);
@@ -401,6 +406,11 @@ fn a_request_and_a_notification_are_each_logged_with_their_method() {
         ]
     );
     assert_eq!(log[6]["id"], json!(2), "the id of the request, as sent");
+    assert_eq!(
+        log[5]["changes"],
+        json!([change]),
+        "the changes of the notice, as sent"
+    );
 }
 
 #[test]

@@ -226,13 +226,44 @@ fn root_of(workspace: &WorkspaceId, repo: &Repo) -> WorkspaceRoot {
 // OLD-05: no process for the old side before the first use of a removed line.
 // ---------------------------------------------------------------------------------------
 
+/// The stand-in's row `standin`, ready at once, that logs to a file of its own side's target
+/// folder, `{target}/standin.log`: each side's server has a log, so that a test reads which
+/// of them was asked.
+fn row_with_a_log_for_each_side() -> String {
+    standin_row("standin", &["--log", "{target}/standin.log"], "answer", "")
+}
+
+/// The log of the stand-in's server of `side`, `new` or `old`, of `workspace`, in the target
+/// folder the Navigator names for it; the folder is made, as a build tool makes its own.
+fn side_log(scratch: &Scratch, workspace: &WorkspaceId, side: &str) -> PathBuf {
+    let target = scratch
+        .root
+        .join("navigator")
+        .join("targets")
+        .join(workspace.as_str())
+        .join(side);
+    std::fs::create_dir_all(&target).expect("make the target folder");
+    target.join("standin.log")
+}
+
+/// How many requests of `method` a stand-in's log holds.
+fn requests(log: &Path, method: &str) -> usize {
+    log_of(log)
+        .iter()
+        .filter(|line| line["event"] == "request" && line["method"] == method)
+        .count()
+}
+
 #[test]
 fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_line() {
     let scratch = Scratch::new();
     let repo = removed_line_repository(&scratch);
-    let log = scratch.root.join("standin.log");
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
-    let mut running = Running::start(scratch.config(&row(&log, "")));
+    let (new_log, old_log) = (
+        side_log(&scratch, &ws, "new"),
+        side_log(&scratch, &ws, "old"),
+    );
+    let mut running = Running::start(scratch.config(&row_with_a_log_for_each_side()));
     running.show(&repo, &ws, &repository);
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -262,19 +293,26 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
     );
     assert_eq!(old_sides_told(&running), vec![]);
     assert_eq!(
-        started_in(&log),
+        started_in(&new_log),
         std::slice::from_ref(&repo.root),
         "a second process was started"
     );
+    assert!(
+        log_of(&old_log).is_empty(),
+        "a process of the old side started"
+    );
+    assert_eq!(requests(&new_log, "textDocument/hover"), 1);
 
     // The first use of a removed line: answered by text match at once, and the export asked
     // for; once it is written, the old side's server starts in it.
     let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
     assert_eq!(asked.workspace, ws);
-    assert_eq!(started_in(&log), [repo.root.clone(), asked.into.clone()]);
+    assert_eq!(started_in(&old_log), std::slice::from_ref(&asked.into));
+    assert_eq!(started_in(&new_log), std::slice::from_ref(&repo.root));
     assert!(old.pid.is_some_and(is_alive));
 
-    // It serves the base: the line that is gone from the worktree.
+    // It serves the base: the line that is gone from the worktree. The request is in the
+    // old side's log, and the new side's holds only the hover of the line it serves.
     let hover = running.hover(removed(&repo, &ws), DEADLINE);
     assert_eq!(
         hover,
@@ -283,6 +321,8 @@ fn no_process_for_the_old_side_runs_before_the_reviewers_first_use_of_a_removed_
             guessed: false
         }
     );
+    assert_eq!(requests(&old_log, "textDocument/hover"), 1);
+    assert_eq!(requests(&new_log, "textDocument/hover"), 1);
     running.end();
 }
 
@@ -854,6 +894,104 @@ fn an_export_still_being_written_when_the_old_side_is_dropped_is_removed_when_it
     );
     assert_eq!(old_sides_told(&running), vec![]);
     assert_eq!(started_in(&log), std::slice::from_ref(&repo.root));
+    running.end();
+}
+
+#[test]
+fn a_second_answer_for_an_export_in_use_leaves_it_and_its_server_answering() {
+    let scratch = Scratch::new();
+    let repo = removed_line_repository(&scratch);
+    let log = scratch.root.join("standin.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row(&log, "")));
+    running.show(&repo, &ws, &repository);
+    let (asked, old) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+    let (pid, file) = (old.pid, asked.into.join("legacy.sil"));
+    assert!(file.is_file(), "the export was not written");
+
+    // The Keeper answers the same ask again, as a Frame that told it twice would. The
+    // Navigator handles it before the hover, whose answer is the barrier.
+    running.ask(Ask::Exported {
+        asked: asked.clone(),
+        failed: None,
+    });
+    let hover = running.hover(removed(&repo, &ws), DEADLINE);
+    assert_eq!(
+        hover,
+        Answered {
+            value: Some("standin: legacy".to_owned()),
+            guessed: false
+        }
+    );
+    assert!(file.is_file(), "the export in use was removed");
+    let list = last_servers(&running);
+    let still = server_in(&list, &ws, Some(&repo.base)).expect("the old side's server");
+    assert_eq!((still.state, still.pid), (State::Ready, pid));
+    assert_eq!(exports_wanted(&running), 1);
+    running.end();
+}
+
+#[test]
+fn an_answer_for_a_folder_that_is_not_under_the_navigators_own_old_folder_removes_nothing() {
+    let scratch = Scratch::new();
+    let repo = removed_line_repository(&scratch);
+    let log = scratch.root.join("standin.log");
+    let (ws, repository) = (workspace_id('1'), repository_id('1'));
+    let mut running = Running::start(scratch.config(&row(&log, "")));
+    running.show(&repo, &ws, &repository);
+    // An export in use, so that the Navigator's `old` folder is there.
+    let (asked, _) = use_the_old_side(&mut running, &repo, &ws, removed(&repo, &ws));
+    // A folder of the machine's, which no export of this Navigator made.
+    let elsewhere = scratch.root.join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).expect("make the folder");
+    std::fs::write(elsewhere.join("keep.txt"), "mine\n").expect("write the file");
+
+    // Named plainly, and named by a path that starts in the export's folder and climbs out
+    // of it: the export is `<cache>/<own>/old/<n>`, and the folder is four levels above.
+    let climbing = asked.into.join("../../../../elsewhere");
+    assert!(
+        climbing.join("keep.txt").is_file(),
+        "the path leaves the export"
+    );
+    // Below the export in use: a folder of its own, and a folder of the worktree's reached
+    // through a link inside the export, as the export links its dependency folders.
+    let inside = asked.into.join("inside");
+    std::fs::create_dir_all(&inside).expect("make the folder");
+    std::fs::write(inside.join("keep.txt"), "in the export\n").expect("write the file");
+    let linked = scratch.root.join("worktree-folder");
+    std::fs::create_dir_all(linked.join("pkg")).expect("make the folder");
+    std::fs::write(linked.join("pkg/keep.txt"), "the worktree's\n").expect("write the file");
+    std::os::unix::fs::symlink(&linked, asked.into.join("deps")).expect("link the folder");
+
+    for into in [
+        elsewhere.clone(),
+        climbing,
+        inside.clone(),
+        asked.into.join("deps/pkg"),
+    ] {
+        running.ask(Ask::Exported {
+            asked: ExportAsk {
+                workspace: ws.clone(),
+                version: repo.base.clone(),
+                into,
+            },
+            failed: None,
+        });
+        settled(&mut running);
+        assert!(
+            elsewhere.join("keep.txt").is_file(),
+            "a folder the Navigator did not make was removed"
+        );
+        assert!(
+            inside.join("keep.txt").is_file(),
+            "a folder inside the export in use was removed"
+        );
+        assert!(
+            linked.join("pkg/keep.txt").is_file(),
+            "a folder of the worktree, reached through a link of the export, was removed"
+        );
+    }
+    assert!(asked.into.is_dir(), "the export in use was removed");
     running.end();
 }
 

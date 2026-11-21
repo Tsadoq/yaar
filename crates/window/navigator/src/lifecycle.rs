@@ -39,8 +39,10 @@
 //!    downloaded version's folder of that server. Ready at [`ServerEvent::Ready`]. A start
 //!    that fails, an exit before the server was ready, and an exit after it, are each a
 //!    failure of that candidate: the next one is tried (FR-061). `answers::server_gone`
-//!    hears of the exit of a server that had been ready, the only kind a request was ever
-//!    sent to; one that exited before it was ready has no ask to answer.
+//!    hears of the exit of a server that had been ready, and of its end when this module
+//!    stops it itself ([`stop`], [`search_again`], a download that takes its key's place):
+//!    a ready server is the only kind a request was ever sent to, and one that ended before
+//!    it was ready has no ask to answer.
 //! 4. None left: `search::when_none`, missing with or without the offer.
 //!
 //! # Where a key stands
@@ -83,14 +85,14 @@
 //! or the Navigator), and only then forgets the key and publishes. So
 //! [`look_at_the_clock`], [`workspaces`], [`close`], and `old_side.rs` through [`stop`], have
 //! every process they stop gone when they return, and a [`crate::Told::Servers`] told after
-//! them names no process that still runs. Nothing here waits for a server's answer or its readiness: those come as
-//! events.
+//! them names no process that still runs. Nothing here waits for a server's answer or its
+//! readiness: those come as events.
 //!
 //! # What other modules call
 //!
-//! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`state_of`],
-//! [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`], [`downloading`],
-//! [`search_again`] and [`publish`]; nothing else here.
+//! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`running_server`],
+//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`],
+//! [`on_an_older_copy`], [`downloading`], [`search_again`] and [`publish`]; nothing else here.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsString;
@@ -101,7 +103,7 @@ use std::time::{Duration, Instant};
 
 use yaar_link::{RepositoryId, WorkspaceId};
 
-use crate::download::installed;
+use crate::download::{Installed, installed};
 use crate::driver::{Launch, Server, ServerEvent};
 use crate::navigator::{Core, Event, ServerKey, Side};
 use crate::port::{Language, Offer, RepositoryConsent, ServerState, State, Told, WorkspaceRoot};
@@ -577,6 +579,16 @@ pub(crate) fn ready_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Se
     }
 }
 
+/// The server of `key`, when one runs, starting or ready: the process that can be told what
+/// changed. One whose rule of readiness is not met yet reads the files when it loads, and the
+/// driver holds what is sent before the answer to `initialize`.
+pub(crate) fn running_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Server> {
+    match &core.life.keys.get(key)?.phase {
+        Phase::Starting { running } | Phase::Ready { running } => Some(&running.server),
+        _ => None,
+    }
+}
+
 /// Where the server of `key` stands; none for a key not known.
 pub(crate) fn state_of(core: &Core, key: &ServerKey) -> Option<State> {
     core.life
@@ -598,16 +610,23 @@ fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return false;
     };
-    end_server(&mut keyed);
+    if end_server(&mut keyed) {
+        answers::server_gone(core, key);
+    }
     true
 }
 
 /// Stops the server of the key's phase, or kills the trial run that is on its way, if
 /// there is one, and waits for its process to be reaped; the phase is none left after.
-fn end_server(keyed: &mut Keyed) {
+/// Gives whether the server that ended was a ready one, the only kind a request was ever
+/// sent to: the caller then hands the key to `answers::server_gone`, once the key stands
+/// as it will after the stop.
+fn end_server(keyed: &mut Keyed) -> bool {
     match std::mem::replace(&mut keyed.phase, Phase::NoneLeft) {
-        Phase::Starting { running } | Phase::Ready { running } => {
+        Phase::Starting { running } => running.server.stop(STOP_DEADLINE),
+        Phase::Ready { running } => {
             running.server.stop(STOP_DEADLINE);
+            return true;
         }
         Phase::Trying { process, .. } => {
             // Taken out first, so that the thread that waits for it finds it gone and the
@@ -620,6 +639,7 @@ fn end_server(keyed: &mut Keyed) {
         }
         Phase::NoneLeft | Phase::Downloading { .. } => {}
     }
+    false
 }
 
 /// The keys of the row `language` whose state is missing with an offer, each with it.
@@ -645,14 +665,58 @@ pub(crate) fn updating(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
         .collect()
 }
 
+/// The keys of the row `language` whose candidate, the one tried, started or running, is a
+/// downloaded copy of the server named `server` in a version other than `installed`, the one
+/// just installed: the folder of the copy they were given is gone or about to go, and a key
+/// that does not search again finds it missing, or runs from a folder that is not there. The
+/// phases trying, starting and ready all count: a candidate is chosen by the version that was
+/// installed when the key searched, whatever the key has reached since.
+pub(crate) fn on_an_older_copy(
+    core: &Core,
+    language: &str,
+    server: &str,
+    installed: &Installed,
+) -> Vec<ServerKey> {
+    let Some(row) = core.registry.row(language) else {
+        return Vec::new();
+    };
+    let current = core.config.servers.join(server).join(&installed.version);
+    core.life
+        .keys
+        .iter()
+        .filter(|(key, _)| key.language == language)
+        .filter(|(_, keyed)| {
+            let candidate = match &keyed.phase {
+                Phase::Trying { candidate, .. } => candidate,
+                Phase::Starting { running } | Phase::Ready { running } => &running.candidate,
+                Phase::NoneLeft | Phase::Downloading { .. } => return false,
+            };
+            candidate.kind == CandidateKind::Downloaded
+                && row
+                    .servers
+                    .get(candidate.server)
+                    .is_some_and(|candidate_server| candidate_server.name == server)
+                && !candidate.program.starts_with(&current)
+        })
+        .map(|(key, _)| key.clone())
+        .collect()
+}
+
 /// Shows `key` as [`State::Downloading`] with `offer` until it is searched again, and
 /// publishes.
 pub(crate) fn downloading(core: &mut Core, key: &ServerKey, offer: Offer) {
-    if let Some(keyed) = core.life.keys.get_mut(key) {
-        end_server(keyed);
-        keyed.phase = Phase::Downloading { offer };
-        publish(core);
+    let Some(keyed) = core.life.keys.get_mut(key) else {
+        return;
+    };
+    let was_ready = end_server(keyed);
+    keyed.phase = Phase::Downloading { offer };
+    // `fetch::download` hands over only keys that offer a download, which run nothing, so
+    // no ask waits at one today; the call keeps a caller that hands over a ready key from
+    // leaving its asks waiting.
+    if was_ready {
+        answers::server_gone(core, key);
     }
+    publish(core);
 }
 
 /// Searches again for `key`, from step 1 of the module doc, with the root it was ensured
@@ -670,7 +734,9 @@ fn restart(core: &mut Core, key: &ServerKey) {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return;
     };
-    end_server(&mut keyed);
+    if end_server(&mut keyed) {
+        answers::server_gone(core, key);
+    }
     core.life.generation += 1;
     keyed.generation = core.life.generation;
     search(core, key, &mut keyed);
