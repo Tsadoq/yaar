@@ -6,9 +6,10 @@
 //! too; it is kept with the workspace, by `Store::set_base`, and read with
 //! `Store::workspaces`.
 //!
-//! How each is kept, in the tables of version 4: a setting of the whole app is one row of
-//! `setting`, by its name; a setting of one workspace is one row of `workspace_setting`,
-//! by the workspace and its name. Names and values are text:
+//! How each is kept: a setting of the whole app is one row of `setting`, by its name; a
+//! setting of one workspace is one row of `workspace_setting`, by the workspace and its
+//! name; and, from version 7, a setting of one repository is one row of
+//! `repository_setting`, by the repository and its name. Names and values are text:
 //!
 //! | Setting | Table | Name | Values |
 //! | --- | --- | --- | --- |
@@ -17,6 +18,11 @@
 //! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark` |
 //! | [`Setting::TerminalPlace`] | `setting` | `terminal_place` | `right`, `below`, `left` |
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
+//! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
+//!
+//! A setting of a repository the Store does not hold is refused, and a row of one it no longer
+//! holds is not listed. Settings of repositories come last in [`Store::settings`], after
+//! those of the workspaces, in the order the repositories were first kept.
 //!
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.
@@ -24,7 +30,7 @@
 use rusqlite::params;
 
 use crate::reviews::{exists, refused};
-use crate::{Store, StoreError, WorkspaceId};
+use crate::{RepositoryId, Store, StoreError, WorkspaceId};
 
 /// What the app selects in Changes when a turn ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -88,13 +94,22 @@ pub enum Setting {
         /// The form.
         form: FlowForm,
     },
+    /// The user's answer on the language servers that lie inside a repository: whether
+    /// they may run.
+    ServersInRepository {
+        /// The repository.
+        repository: RepositoryId,
+        /// True for yes.
+        allowed: bool,
+    },
 }
 
 /// The name and value a setting of the whole app is kept as, or the workspace, name and
-/// value of one of a workspace.
+/// value of one of a workspace, or the repository, name and value of one of a repository.
 enum Row {
     App(&'static str, String),
     Workspace(String, &'static str, &'static str),
+    Repository(String, &'static str, &'static str),
 }
 
 impl Setting {
@@ -135,6 +150,14 @@ impl Setting {
                     FlowForm::Timeline => "timeline",
                     FlowForm::LiveDiff => "live_diff",
                 },
+            ),
+            Self::ServersInRepository {
+                repository,
+                allowed,
+            } => Row::Repository(
+                repository.as_str().to_owned(),
+                "servers_inside",
+                if *allowed { "yes" } else { "no" },
             ),
         }
     }
@@ -177,6 +200,20 @@ impl Setting {
         })
     }
 
+    /// The setting a row of `repository_setting` holds; none for a name or a value this
+    /// build does not know.
+    fn of_repository_row(repository: String, name: &str, value: &str) -> Option<Self> {
+        let allowed = match (name, value) {
+            ("servers_inside", "yes") => true,
+            ("servers_inside", "no") => false,
+            _ => return None,
+        };
+        Some(Self::ServersInRepository {
+            repository: RepositoryId::new(repository),
+            allowed,
+        })
+    }
+
     /// Where a setting of the whole app comes among the others: the order its kind is
     /// listed in.
     fn rank(&self) -> u8 {
@@ -186,6 +223,7 @@ impl Setting {
             Self::Theme(_) => 2,
             Self::TerminalPlace(_) => 3,
             Self::FlowForm { .. } => 4,
+            Self::ServersInRepository { .. } => 5,
         }
     }
 }
@@ -193,7 +231,8 @@ impl Setting {
 impl Store {
     /// Every setting the user set: those of the whole app first, in the order
     /// [`Setting`] lists their kinds, then those of each workspace, in the order the
-    /// workspaces were first kept. A setting never set is not listed.
+    /// workspaces were first kept, then those of each repository, in the order the
+    /// repositories were first kept. A setting never set is not listed.
     pub fn settings(&self) -> Result<Vec<Setting>, StoreError> {
         self.ask(|connection| {
             let mut settings = connection
@@ -226,14 +265,33 @@ impl Store {
                 .filter_map(|row| row.transpose())
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             settings.extend(of_workspaces);
+            // The same for a repository the Store does not hold.
+            let of_repositories = connection
+                .prepare(
+                    "SELECT repository_setting.repository, repository_setting.name,
+                            repository_setting.value
+                     FROM repository_setting JOIN repository
+                         ON repository.id = repository_setting.repository
+                     ORDER BY repository.seq, repository_setting.name",
+                )?
+                .query_map([], |row| {
+                    Ok(Setting::of_repository_row(
+                        row.get(0)?,
+                        &row.get::<_, String>(1)?,
+                        &row.get::<_, String>(2)?,
+                    ))
+                })?
+                .filter_map(|row| row.transpose())
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            settings.extend(of_repositories);
             Ok(settings)
         })
     }
 
     /// Keeps `setting`, in the place of the value the same setting had: one transaction
     /// that returns when the change is on the drive, so that a Keeper killed after the
-    /// call finds it. A setting of a workspace the Store does not hold is refused with a
-    /// sentence that names it.
+    /// call finds it. A setting of a workspace or of a repository the Store does not hold
+    /// is refused with a sentence that names it.
     pub fn set_setting(&self, setting: &Setting) -> Result<(), StoreError> {
         let row = setting.row();
         self.try_ask(move |connection| {
@@ -261,6 +319,22 @@ impl Store {
                          ON CONFLICT (workspace, name) DO UPDATE SET value = excluded.value
                          WHERE value IS NOT excluded.value",
                         params![workspace, name, value],
+                    )?;
+                }
+                Row::Repository(repository, name, value) => {
+                    if !exists(
+                        &keeping,
+                        "SELECT 1 FROM repository WHERE id = ?1",
+                        &repository,
+                    )? {
+                        return refused(format!("repository {repository} is not kept"));
+                    }
+                    keeping.execute(
+                        "INSERT INTO repository_setting (repository, name, value)
+                         VALUES (?1, ?2, ?3)
+                         ON CONFLICT (repository, name) DO UPDATE SET value = excluded.value
+                         WHERE value IS NOT excluded.value",
+                        params![repository, name, value],
                     )?;
                 }
             }

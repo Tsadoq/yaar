@@ -60,6 +60,7 @@ mod actions;
 mod attaching;
 mod comments;
 mod draw;
+pub mod file_view;
 mod flow;
 mod flow_comment;
 mod flow_draw;
@@ -67,8 +68,11 @@ mod follow;
 mod live;
 mod live_draw;
 mod moved;
+mod names;
+pub mod navigate;
 mod rounds;
 mod saves;
+pub mod servers;
 mod shared;
 mod states;
 mod steady;
@@ -97,6 +101,8 @@ use crate::comments::OpenBox;
 use crate::saves::Save;
 use crate::tree::{Source, Tree};
 
+pub use file_view::FileShown;
+pub use navigate::{HoverShown, ReferencesShown};
 pub use rounds::RoundShown;
 pub use yaar_diff::Layout;
 
@@ -191,6 +197,36 @@ actions!(
         /// Makes the next CLI of the offer to start an agent the chosen one, which Start
         /// Agent starts; after the last, the first.
         NextOfferedAgent,
+        /// Puts the reviewer on the next name of the line.
+        NextName,
+        /// Puts the reviewer on the name before, on the line.
+        PreviousName,
+        /// Shows what the language server reports for the name the reviewer is on.
+        Hover,
+        /// Opens the definition of the name the reviewer is on in the file view, or lists
+        /// its definitions where there are several.
+        GoToDefinition,
+        /// Lists the references to the name the reviewer is on.
+        FindReferences,
+        /// Closes the file view and brings the reviewer back to the place in the diff they
+        /// left.
+        GoBack,
+        /// Chooses the next entry of the list of references.
+        ReferenceDown,
+        /// Chooses the entry before, in the list of references.
+        ReferenceUp,
+        /// Opens the chosen entry of the list of references in the file view.
+        OpenReference,
+        /// Closes the list of references.
+        CloseReferences,
+        /// Accepts the offer to download the missing language server of the code on screen.
+        DownloadServer,
+        /// Asks for the update of the language server of the code on screen.
+        UpdateServer,
+        /// Answers yes to the question before a language server inside a repository runs.
+        AllowServers,
+        /// Answers no to it.
+        RefuseServers,
     ]
 );
 
@@ -200,6 +236,10 @@ pub const KEY_CONTEXT: &str = "ReviewPane";
 /// The key context of the tree of Changes, inside the pane: its keys work while the tree
 /// has the focus.
 pub const HISTORY_CONTEXT: &str = "ReviewHistory";
+
+/// The key context of the list of references, inside the pane: its keys work while the
+/// list has the focus.
+pub const REFERENCES_CONTEXT: &str = "ReviewReferences";
 
 /// A change of the worktree the pane shows the files of, or that a turn end offers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -430,6 +470,16 @@ pub fn controls() -> Vec<Control> {
             ..control(title, action, keystroke)
         }
     }
+    fn in_references(
+        title: &'static str,
+        action: fn() -> Box<dyn Action>,
+        keystroke: &'static str,
+    ) -> Control {
+        Control {
+            place: Place::In(REFERENCES_CONTEXT),
+            ..control(title, action, keystroke)
+        }
+    }
     fn sends(control: Control, kind: RequestKind) -> Control {
         Control {
             sends: Some(Sends::Request(kind)),
@@ -534,6 +584,50 @@ pub fn controls() -> Vec<Control> {
             "Next Offered Agent",
             || Box::new(NextOfferedAgent),
             "ctrl-n",
+        ),
+        // Code intelligence: vim's `h` and `l` move by a character, here by a name; `K`
+        // shows what the word under the cursor is (vim's keyword lookup); `gd` goes to a
+        // definition; Neovim gives the references `grr`, shortened here as vim's `gr`
+        // replaces text, which a read-only view never does. Back is Escape: vim's Ctrl-O
+        // is Open Folder on Linux.
+        control("Next Name", || Box::new(NextName), "l"),
+        control("Previous Name", || Box::new(PreviousName), "h"),
+        control("Hover", || Box::new(Hover), "shift-k"),
+        control("Go to Definition", || Box::new(GoToDefinition), "g d"),
+        control("Find References", || Box::new(FindReferences), "g r"),
+        control("Back to the Diff", || Box::new(GoBack), "escape"),
+        in_references("Next Reference", || Box::new(ReferenceDown), "j"),
+        in_references("Next Reference", || Box::new(ReferenceDown), "down"),
+        in_references("Previous Reference", || Box::new(ReferenceUp), "k"),
+        in_references("Previous Reference", || Box::new(ReferenceUp), "up"),
+        in_references("Open Reference", || Box::new(OpenReference), "enter"),
+        in_references("Close References", || Box::new(CloseReferences), "escape"),
+        // The line of the language server: neither vim nor tuicr has these actions.
+        control(
+            "Download Language Server",
+            || Box::new(DownloadServer),
+            "shift-i",
+        ),
+        control(
+            "Update Language Server",
+            || Box::new(UpdateServer),
+            "shift-u",
+        ),
+        sends(
+            control(
+                "Run Language Servers of the Repository",
+                || Box::new(AllowServers),
+                "shift-y",
+            ),
+            RequestKind::SetSetting,
+        ),
+        sends(
+            control(
+                "Keep Language Servers of the Repository Out",
+                || Box::new(RefuseServers),
+                "shift-q",
+            ),
+            RequestKind::SetSetting,
         ),
     ]
 }
@@ -819,6 +913,9 @@ pub struct ReviewPane {
     attaching: attaching::Attaching,
     /// What the threads that moved keep: whose original line is shown.
     moved: moved::Moved,
+    /// What code intelligence keeps: the name the reviewer is on, the asks on their way, the
+    /// hover, the list of references, the file view and the place left in the diff.
+    navigate: navigate::Navigate,
 }
 
 impl ReviewPane {
@@ -842,7 +939,14 @@ impl ReviewPane {
             pane.follow_agents(cx);
         })
         .detach();
-        cx.observe(&models.settings, |pane, _, cx| pane.flow_settings(cx))
+        // The answers on the servers inside a repository are settings too: the line of the
+        // language server is drawn again for each, whenever the Navigator told its states.
+        cx.observe(&models.settings, |pane, _, cx| {
+            pane.flow_settings(cx);
+            cx.notify();
+        })
+        .detach();
+        cx.observe(&models.navigation, |pane, _, cx| pane.servers_changed(cx))
             .detach();
         cx.subscribe(&models.link, |pane, _, fact: &Fact, cx| pane.told(fact, cx))
             .detach();
@@ -882,6 +986,7 @@ impl ReviewPane {
             follow: follow::Follow::new(cx),
             attaching: attaching::Attaching::default(),
             moved: moved::Moved::default(),
+            navigate: navigate::Navigate::default(),
         };
         pane.sessions_changed(cx);
         pane.follow_history(window, cx);
@@ -1423,6 +1528,7 @@ impl ReviewPane {
         rows.extend(threads::elsewhere(&self.files, review));
         self.rows = rows;
         self.settle(cx);
+        self.tell_old_side(cx);
         // What the rows of Changes are made again for, the reviews or the layout, the rows
         // of the live diff are made again for too.
         self.live_rebuild(cx);
@@ -1496,6 +1602,9 @@ impl ReviewPane {
     /// What [`LineDown`] does.
     pub(crate) fn line_down(&mut self, _: &LineDown, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        if self.file_view_step(1, cx) {
+            return;
+        }
         if self.view == View::Flow {
             return self.flow_step(1, cx);
         }
@@ -1505,6 +1614,9 @@ impl ReviewPane {
     /// What [`LineUp`] does.
     pub(crate) fn line_up(&mut self, _: &LineUp, _: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        if self.file_view_step(-1, cx) {
+            return;
+        }
         if self.view == View::Flow {
             return self.flow_step(-1, cx);
         }
@@ -1576,6 +1688,9 @@ impl ReviewPane {
             line,
         });
         self.position_row = Some(index);
+        // What was shown for the line the reviewer left goes now, not when the next frame
+        // is drawn.
+        self.follow_cursor();
         cx.notify();
     }
 
@@ -1726,8 +1841,10 @@ mod tests {
     use yaar_link::RequestKind;
 
     use super::{
-        AttachReview, AttachThread, DetachReview, NextOfferedAgent, ReopenThread, ResolveAddressed,
-        ResolveThread, ShowOriginal, SinceRound, StartAgent,
+        AllowServers, AttachReview, AttachThread, CloseReferences, DetachReview, DownloadServer,
+        FindReferences, GoBack, GoToDefinition, Hover, NextName, NextOfferedAgent, OpenReference,
+        PreviousName, REFERENCES_CONTEXT, ReferenceDown, ReferenceUp, RefuseServers, ReopenThread,
+        ResolveAddressed, ResolveThread, ShowOriginal, SinceRound, StartAgent, UpdateServer,
     };
     use super::{
         Comment, Commit, CopyReview, DeleteDraft, EditDraft, FocusHistory, FocusRows,
@@ -1755,6 +1872,16 @@ mod tests {
                 .contains(&(control.action)().name())
                 {
                     HISTORY_CONTEXT
+                } else if [
+                    ReferenceDown.name(),
+                    ReferenceUp.name(),
+                    OpenReference.name(),
+                    CloseReferences.name(),
+                ]
+                .contains(&(control.action)().name())
+                {
+                    // The keys of the list of references work in the list.
+                    REFERENCES_CONTEXT
                 } else {
                     KEY_CONTEXT
                 };
@@ -1872,6 +1999,32 @@ mod tests {
                 ("shift-s", SinceRound.name(), None, Asks::Nothing),
                 ("shift-n", StartAgent.name(), None, Asks::Nothing),
                 ("ctrl-n", NextOfferedAgent.name(), None, Asks::Nothing),
+                ("l", NextName.name(), None, Asks::Nothing),
+                ("h", PreviousName.name(), None, Asks::Nothing),
+                ("shift-k", Hover.name(), None, Asks::Nothing),
+                ("g d", GoToDefinition.name(), None, Asks::Nothing),
+                ("g r", FindReferences.name(), None, Asks::Nothing),
+                ("escape", GoBack.name(), None, Asks::Nothing),
+                ("j", ReferenceDown.name(), None, Asks::Nothing),
+                ("down", ReferenceDown.name(), None, Asks::Nothing),
+                ("k", ReferenceUp.name(), None, Asks::Nothing),
+                ("up", ReferenceUp.name(), None, Asks::Nothing),
+                ("enter", OpenReference.name(), None, Asks::Nothing),
+                ("escape", CloseReferences.name(), None, Asks::Nothing),
+                ("shift-i", DownloadServer.name(), None, Asks::Nothing),
+                ("shift-u", UpdateServer.name(), None, Asks::Nothing),
+                (
+                    "shift-y",
+                    AllowServers.name(),
+                    request(RequestKind::SetSetting),
+                    Asks::Nothing
+                ),
+                (
+                    "shift-q",
+                    RefuseServers.name(),
+                    request(RequestKind::SetSetting),
+                    Asks::Nothing
+                ),
             ]
         );
     }
@@ -1908,6 +2061,22 @@ mod tests {
             // Resuming follow goes to the newest step, the last of Flow: vim's `G` goes to
             // the last line, tuicr's to the last file.
             (ResumeFollow.name(), "shift-g", vec!["vim", TUICR]),
+            // Code intelligence: vim's `l` and `h` step right and left, here a name at a
+            // time. Why these keys and not vim's word motion: the pane has no place inside a
+            // line but a name, so the step is from name to name, and vim's `w` is taken (it
+            // is Original Line). `K` looks up the word under the cursor; `gd` goes to its
+            // definition.
+            (NextName.name(), "l", vec!["vim"]),
+            (PreviousName.name(), "h", vec!["vim"]),
+            (Hover.name(), "shift-k", vec!["vim"]),
+            (GoToDefinition.name(), "g d", vec!["vim"]),
+            // The list of references moves as tuicr's lists do, and opens as its commit
+            // selector confirms.
+            (ReferenceDown.name(), "j", vec!["vim", TUICR]),
+            (ReferenceDown.name(), "down", vec![TUICR]),
+            (ReferenceUp.name(), "k", vec!["vim", TUICR]),
+            (ReferenceUp.name(), "up", vec![TUICR]),
+            (OpenReference.name(), "enter", vec![TUICR]),
         ];
         // The actions that neither has a key for, and why.
         let others: Vec<(&str, &str)> = vec![
@@ -1990,6 +2159,38 @@ mod tests {
             (
                 NextOfferedAgent.name(),
                 "neither has one; vim's `ctrl-n` is a second key for a line down, which `j` has",
+            ),
+            (
+                FindReferences.name(),
+                "neither has one; Neovim's `grr`, shortened, as vim's `gr` replaces text",
+            ),
+            // Back to the Diff is Escape, tuicr's key for leaving a mode. Vim jumps back with
+            // `ctrl-o`, and has `ctrl-t` for the tag stack; on Linux both belong to the
+            // app: `ctrl-o` is the Frame's Open Folder and `ctrl-t` the terminal pane's New
+            // Terminal, and a control has one key, the same on both systems.
+            (
+                GoBack.name(),
+                "vim's `ctrl-o` jumps back, but it opens a folder on Linux; tuicr's Escape leaves",
+            ),
+            (
+                CloseReferences.name(),
+                "neither has one; tuicr's Escape leaves a mode",
+            ),
+            (
+                DownloadServer.name(),
+                "neither has one; neither downloads a language server",
+            ),
+            (
+                UpdateServer.name(),
+                "neither has one; neither updates a language server",
+            ),
+            (
+                AllowServers.name(),
+                "neither has one; neither asks before a server inside a repository runs",
+            ),
+            (
+                RefuseServers.name(),
+                "neither has one; neither asks before a server inside a repository runs",
             ),
         ];
         let held = controls();

@@ -23,8 +23,8 @@
 //!   and the [`Consent`] of an Adapter that asks the user's leave before it writes into
 //!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave;
 //! - [`Age`], how the side that sent a hello stands to this one in version;
-//! - [`socket_path`], [`socket_address`] and [`data_dir`], the places both programs find
-//!   by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
+//! - [`socket_path`], [`socket_address`], [`data_dir`] and [`cache_dir`], the places both
+//!   programs find by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
 //!   reaches the Keeper makes sure it is the user's own.
 //!
 //! A message travels as one frame: a length of four bytes, little endian, that counts what
@@ -93,8 +93,10 @@ use wire::{In, Out};
 /// agent's replies, the states of a thread and where it sits now, rounds whose state is
 /// recorded after the send, the launcher of a CLI for a review and the resumption of a
 /// session. 8: the agent CLIs the Keeper has an Adapter for, what a review shows of a
-/// change with who is credited with each file, and the turn a round was sent in.
-pub const PROTOCOL_VERSION: u16 = 8;
+/// change with who is credited with each file, and the turn a round was sent in. 9: a
+/// version of a workspace written into a folder of the app's cache as the old side of a
+/// diff, and the user's answer on the language servers inside a repository, a setting.
+pub const PROTOCOL_VERSION: u16 = 9;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -489,6 +491,28 @@ fn data_dir_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     folder.join(APP_FOLDER)
 }
 
+/// The app's folder in the user's cache folder, where what can be made again is kept: the
+/// old side of a diff written for a language server, and the build folders of those
+/// servers. `~/Library/Caches/yaar-review` on macOS, `$XDG_CACHE_HOME/yaar-review` or
+/// `~/.cache/yaar-review` elsewhere. Both programs find it by this rule: the Window names
+/// a folder in it, and the Keeper writes there only.
+pub fn cache_dir() -> PathBuf {
+    cache_dir_from(|name| std::env::var_os(name).map(PathBuf::from))
+}
+
+fn cache_dir_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
+    let set = |name: &str| var(name).filter(|v| !v.as_os_str().is_empty());
+    let home = set("HOME").unwrap_or_else(|| PathBuf::from("/"));
+    let folder = if cfg!(target_os = "macos") {
+        home.join("Library/Caches")
+    } else if let Some(cache) = set("XDG_CACHE_HOME") {
+        cache
+    } else {
+        home.join(".cache")
+    };
+    folder.join(APP_FOLDER)
+}
+
 /// The longest path a socket can be bound at, in bytes: the system's limit less the byte
 /// that ends the path.
 pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
@@ -834,6 +858,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn an_answer_on_the_servers_of_a_repository_takes_the_place_of_the_last_for_that_repository_only()
+     {
+        let repository = |digit: char| RepositoryId::new(digit.to_string().repeat(32));
+        let yes = Setting::ServersInRepository {
+            repository: repository('1'),
+            allowed: true,
+        };
+        let no = Setting::ServersInRepository {
+            repository: repository('1'),
+            allowed: false,
+        };
+        let other = Setting::ServersInRepository {
+            repository: repository('2'),
+            allowed: true,
+        };
+        let form = Setting::FlowForm {
+            workspace: WorkspaceId::new("1".repeat(32)),
+            form: FlowForm::Timeline,
+        };
+        assert!(yes.same_thing_as(&no));
+        assert!(!yes.same_thing_as(&other));
+        assert!(!yes.same_thing_as(&form));
+        assert!(!form.same_thing_as(&yes));
+    }
+
+    #[test]
+    fn the_cache_folder_is_where_the_environment_says() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |name: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == name)
+                    .map(|(_, v)| PathBuf::from(v))
+            }
+        };
+        let home_only = cache_dir_from(env(&[("HOME", "/home/a"), ("XDG_CACHE_HOME", "")]));
+        if cfg!(target_os = "macos") {
+            assert_eq!(
+                home_only,
+                PathBuf::from("/home/a/Library/Caches/yaar-review")
+            );
+        } else {
+            assert_eq!(home_only, PathBuf::from("/home/a/.cache/yaar-review"));
+            assert_eq!(
+                cache_dir_from(env(&[("HOME", "/home/a"), ("XDG_CACHE_HOME", "/c")])),
+                PathBuf::from("/c/yaar-review")
+            );
+        }
+    }
+
     /// A path of 128 bytes, as a long user name makes it on macOS.
     const LONG: &str = "/Users/a-user-whose-name-is-longer-than-most-and-longer-than-a-socket-allows/Library/Application Support/yaar-review/keeper.sock";
 
@@ -1099,6 +1174,11 @@ mod tests {
                 agent: "pi".to_owned(),
                 answer: ConsentAnswer::Yes,
             },
+            Request::ExportVersion {
+                workspace: workspace.clone(),
+                version: COMMIT.to_owned(),
+                into: PathBuf::from("/home/a/.cache/yaar-review/navigator/7/old/1"),
+            },
         ];
         // The two other answers to a question for leave.
         let refused = Request::AnswerConsent {
@@ -1326,6 +1406,14 @@ mod tests {
                 Setting::FlowForm {
                     workspace: WorkspaceId::new("22222222222222222222222222222222"),
                     form: FlowForm::LiveDiff,
+                },
+                Setting::ServersInRepository {
+                    repository: RepositoryId::new("33333333333333333333333333333333"),
+                    allowed: true,
+                },
+                Setting::ServersInRepository {
+                    repository: RepositoryId::new("44444444444444444444444444444444"),
+                    allowed: false,
                 },
             ]),
             Reply::Settings(Vec::new()),

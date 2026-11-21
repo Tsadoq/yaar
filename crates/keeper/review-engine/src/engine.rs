@@ -25,10 +25,13 @@ pub struct NewAnchor {
     /// The version the lines are read in: the full id of a commit, a recorded state's or
     /// one of the real repository's, never the id of a git tree object. None for lines of
     /// the files on disk, for which the engine records the state of the worktree first
-    /// and puts the thread on it.
+    /// and puts the thread on it. A thread whose path is absolute has no version, and a
+    /// tree named with such a path is not read: the path decides.
     pub tree: Option<String>,
     /// The path of the file in that version, relative to the folder of the worktree: on
-    /// the old side of a renamed file its old path, on the new side its path now.
+    /// the old side of a renamed file its old path, on the new side its path now. An
+    /// absolute path names a file outside the worktree, or one inside it that git ignores:
+    /// see [`Reviews::save_draft`].
     pub path: PathBuf,
     /// The side of the diff the lines were on.
     pub side: Side,
@@ -393,6 +396,13 @@ impl Reviews {
     /// every Window is told of, [`Saved::Made`], and it waits for the drive. A save that
     /// finds, once its state is recorded, that a save of the same comment made the thread
     /// meanwhile changes the text instead.
+    ///
+    /// A new thread whose anchor's path is absolute sits on a file outside the worktree, or
+    /// one git ignores, reached through go to definition or a reference (FR-075): it names
+    /// no tree, needs no worktree, records no state and keeps no commit; it is kept with the
+    /// empty version, which the Keeper gives the Window as none, and is never carried
+    /// through a diff (`following.rs`). It is kept on the new side whatever side the save
+    /// gave: such a file has one. Its lines and text are checked as any anchor's.
     pub fn save_draft(
         &self,
         worktree: Option<&Worktree>,
@@ -423,10 +433,17 @@ impl Reviews {
                         version = Some(self.version_of(worktree, current.workspace(), at)?);
                         continue;
                     };
+                    // A file outside the worktree has no old version to be on, so its
+                    // thread is on the new side whatever the save gave.
+                    let side = if is_outside(&at.path) {
+                        Side::New
+                    } else {
+                        at.side
+                    };
                     let anchor = Anchor {
                         tree: version,
                         path: at.path.clone(),
-                        side: at.side,
+                        side,
                         first: at.first,
                         last: at.last,
                         text: at.text.clone(),
@@ -554,14 +571,18 @@ impl Reviews {
     }
 
     // The version a new thread's lines are read in: the commit the window named, kept in
-    // the state store so that it reads with the repository gone, or the state of the
-    // files on disk, recorded now.
+    // the state store so that it reads with the repository gone, the state of the files on
+    // disk, recorded now, or, for a file outside the worktree, the empty version.
     fn version_of(
         &self,
         worktree: Option<&Worktree>,
         workspace: &WorkspaceId,
         at: &NewAnchor,
     ) -> Result<String, EngineError> {
+        // A file outside the worktree has no version, and nothing is recorded or kept for it.
+        if is_outside(&at.path) {
+            return Ok(String::new());
+        }
         match (&at.tree, worktree) {
             (None, None) => Err(EngineError::NoWorktree),
             (None, Some(worktree)) => {
@@ -596,6 +617,13 @@ impl Reviews {
             (Some(commit), None) => Ok(commit.clone()),
         }
     }
+}
+
+/// Whether an anchor's path names a file outside the worktree, or one inside it that git
+/// ignores: the Window gives such a file by its absolute path. Its thread has no version
+/// and is never carried through a diff.
+pub(crate) fn is_outside(path: &Path) -> bool {
+    path.is_absolute()
 }
 
 // Whether the file `content` has, on the lines the anchor names, the text the anchor holds.

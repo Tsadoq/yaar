@@ -287,6 +287,11 @@ impl ReviewPane {
     /// What [`Comment`] does: opens a comment box for a new thread on the reviewer's line.
     pub(crate) fn comment(&mut self, _: &Comment, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
+        // A line of the file view takes a comment of its own, whether or not it is in the
+        // diff.
+        if self.comment_in_file_view(window, cx) {
+            return;
+        }
         // In Flow the reviewer's line is one of the live diff.
         if self.view == View::Flow {
             return self.comment_in_flow(window, cx);

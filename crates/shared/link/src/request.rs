@@ -172,6 +172,8 @@ request_kinds! {
     ListConsents = 35, Window;
     /// See [`Request::AnswerConsent`].
     AnswerConsent = 36, User;
+    /// See [`Request::ExportVersion`].
+    ExportVersion = 37, Window;
 }
 
 impl RequestKind {
@@ -574,6 +576,26 @@ pub enum Request {
         /// What the user said.
         answer: ConsentAnswer,
     },
+    /// Write the files of one version of a workspace, a commit of its repository or a
+    /// recorded state, into the folder `into`, as plain files: what a second language
+    /// server reads as the old side of the change on screen. `into` must not exist yet and
+    /// must lie inside the app's cache folder, [`crate::cache_dir`]; the Keeper makes it
+    /// and nothing else outside it. The folder is no repository, and the reviewed
+    /// repository gains nothing: no worktree, no ref, no file, no change of its list of
+    /// files. Answered by [`Reply::Done`] once every file is written; refused with
+    /// [`Refusal::UnknownWorkspace`], [`Refusal::UnknownRevision`] for a version that is
+    /// neither a full commit id of the repository nor a state of the workspace, and
+    /// [`Refusal::Failed`] for an `into` that exists or lies outside the cache folder, or a
+    /// write that failed, which leaves no folder behind. The Window removes the folder
+    /// itself when it no longer needs it.
+    ExportVersion {
+        /// The workspace.
+        workspace: WorkspaceId,
+        /// The version, by its full id.
+        version: String,
+        /// The folder to write it into.
+        into: PathBuf,
+    },
 }
 
 impl Request {
@@ -616,6 +638,7 @@ impl Request {
             Self::CompareForReview { .. } => RequestKind::CompareForReview,
             Self::ListConsents => RequestKind::ListConsents,
             Self::AnswerConsent { .. } => RequestKind::AnswerConsent,
+            Self::ExportVersion { .. } => RequestKind::ExportVersion,
         }
     }
 }
@@ -1073,6 +1096,15 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(from);
             out.text(to);
         }
+        Request::ExportVersion {
+            workspace,
+            version,
+            into,
+        } => {
+            out.text(workspace.as_str());
+            out.text(version);
+            out.path(into);
+        }
     }
 }
 
@@ -1210,6 +1242,11 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::AnswerConsent => Request::AnswerConsent {
             agent: input.text()?,
             answer: read_consent_answer(input)?,
+        },
+        RequestKind::ExportVersion => Request::ExportVersion {
+            workspace: WorkspaceId::new(input.text()?),
+            version: input.text()?,
+            into: input.path()?,
         },
     };
     Ok((id, request))

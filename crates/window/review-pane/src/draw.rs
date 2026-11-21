@@ -14,6 +14,7 @@ use yaar_diff::{Hunk, Row, Side};
 use yaar_frame::SetBase;
 use yaar_link::{Author, Base, BaseSource, Comparison, FileStatus, NoComparison};
 
+use crate::navigate::Spot;
 use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown, View};
 use yaar_link::{CommentId, ThreadId};
 
@@ -22,7 +23,7 @@ use yaar_link::{CommentId, ThreadId};
 pub(crate) const ROW_HEIGHT: Pixels = px(20.);
 
 /// The width of a column of line numbers: six digits.
-const NUMBER_WIDTH: Pixels = px(56.);
+pub(crate) const NUMBER_WIDTH: Pixels = px(56.);
 
 /// The width of the column that holds the sign of a line in the unified view.
 const SIGN_WIDTH: Pixels = px(20.);
@@ -86,6 +87,9 @@ impl UniformListDecoration for InView {
 
 impl Render for ReviewPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // A move of the reviewer that the actions of the lines made is seen here: what was
+        // shown for the name they left goes before it is drawn.
+        self.follow_cursor();
         // Above the files, and in the pane's column outside the element that holds the
         // pane's key context: the keys of the tree are not the keys of the rows.
         let tree = self.tree_view(window, cx);
@@ -97,6 +101,12 @@ impl Render for ReviewPane {
         // The bar names both views and is drawn in both; Flow, when it is on screen, takes
         // the place of everything of Changes below it.
         let bar = self.render_bar(window, cx);
+        // The line of the language server of the code on screen: under the bar, in every
+        // view, the file view included.
+        let servers = self.render_servers(cx);
+        let hover = self.render_hover(cx);
+        let references = self.render_references(cx);
+        let file_view = self.render_file_view(window, cx);
         let flow = (self.view == View::Flow).then(|| self.render_flow(window, cx));
         let theme = cx.theme();
         let pane = div()
@@ -122,7 +132,10 @@ impl Render for ReviewPane {
                 pane.touched(cx);
             }))
             .capture_key_down(cx.listener(|pane, _: &KeyDownEvent, _, cx| pane.touched(cx)))
-            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| pane.touched(cx)));
+            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| {
+                pane.scrolled();
+                pane.touched(cx);
+            }));
         // Under the rows and outside the element that sets the pane's key context, so
         // that the letters typed in the box are text and not keys of the pane.
         let notice = self.notice.as_ref().map(|notice| {
@@ -162,9 +175,22 @@ impl Render for ReviewPane {
                 .on_action(cx.listener(Self::escape_commit))
                 .child(Input::new(&field.input))
         });
+        // A file reached through a definition or a reference takes the place of the rows
+        // and of Flow until the reviewer goes back.
+        if let Some(file_view) = file_view {
+            return pane.children(bar).children(servers).child(
+                body.child(self.with_file_keys(div().flex_1().min_h_0().child(file_view), cx))
+                    .children(hover)
+                    .children(references)
+                    .children(notice)
+                    .children(comment_box),
+            );
+        }
         if let Some(flow) = flow {
-            return pane.children(bar).child(
+            return pane.children(bar).children(servers).child(
                 body.child(self.with_keys(div().flex_1().min_h_0().child(flow), cx))
+                    .children(hover)
+                    .children(references)
                     .children(notice)
                     .children(comment_box)
                     .children(commit_field),
@@ -178,7 +204,7 @@ impl Render for ReviewPane {
                 .justify_center()
                 .text_color(theme.muted_foreground)
                 .child(self.idle_line(cx));
-            return pane.children(bar).child(
+            return pane.children(bar).children(servers).child(
                 body.children(sessions)
                     .children(start)
                     .children(rounds)
@@ -216,7 +242,7 @@ impl Render for ReviewPane {
         .track_scroll(&self.scroll)
         .with_decoration(InView(self.in_view.clone()))
         .size_full();
-        pane.children(bar).child(
+        pane.children(bar).children(servers).child(
             body.children(sessions)
                 .children(start)
                 .children(rounds)
@@ -224,6 +250,8 @@ impl Render for ReviewPane {
                 .children(tree)
                 .children(refused)
                 .child(self.with_keys(div().flex_1().min_h_0().child(list), cx))
+                .children(hover)
+                .children(references)
                 .children(notice)
                 .children(comment_box)
                 .children(commit_field),
@@ -269,6 +297,40 @@ impl ReviewPane {
             .on_action(cx.listener(Self::since_round))
             .on_action(cx.listener(Self::start_agent))
             .on_action(cx.listener(Self::next_offered_agent))
+            .on_action(cx.listener(Self::next_name))
+            .on_action(cx.listener(Self::previous_name))
+            .on_action(cx.listener(Self::hover_name))
+            .on_action(cx.listener(Self::go_to_definition))
+            .on_action(cx.listener(Self::find_references))
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::download_server))
+            .on_action(cx.listener(Self::update_server))
+            .on_action(cx.listener(Self::allow_servers))
+            .on_action(cx.listener(Self::refuse_servers))
+    }
+
+    /// Gives the file view the pane's key context, its focus and the actions that work on
+    /// what it shows: the lines, the names, the comments and the line of the language
+    /// server. The actions that work on the line of the diff the reviewer left, whose rows
+    /// are not drawn, are not here: a key for one of them does nothing while the file view
+    /// is open, and does not act where nobody can see it.
+    fn with_file_keys(&self, element: Div, cx: &Context<Self>) -> Div {
+        element
+            .key_context(KEY_CONTEXT)
+            .track_focus(&self.focus)
+            .on_action(cx.listener(Self::line_down))
+            .on_action(cx.listener(Self::line_up))
+            .on_action(cx.listener(Self::comment))
+            .on_action(cx.listener(Self::next_name))
+            .on_action(cx.listener(Self::previous_name))
+            .on_action(cx.listener(Self::hover_name))
+            .on_action(cx.listener(Self::go_to_definition))
+            .on_action(cx.listener(Self::find_references))
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::download_server))
+            .on_action(cx.listener(Self::update_server))
+            .on_action(cx.listener(Self::allow_servers))
+            .on_action(cx.listener(Self::refuse_servers))
     }
 
     /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
@@ -440,7 +502,7 @@ impl ReviewPane {
     }
 
     /// The row of a thread: where it sits, and whether it was resolved.
-    fn draw_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
+    pub(crate) fn draw_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let Some(thread) = self
             .review()
@@ -478,7 +540,7 @@ impl ReviewPane {
     }
 
     /// The row of a comment of a thread: who wrote it and the first line of its text.
-    fn draw_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
+    pub(crate) fn draw_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
         let Some(comment) = self
             .review()
             .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
@@ -546,15 +608,26 @@ impl ReviewPane {
                 // Lines are counted from 0 and shown from 1.
                 .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
         };
-        let text = |side: Side, line: u32| {
+        // The name the reviewer is on, marked on the line it is in.
+        let name = on.and_then(|_| self.name_range());
+        let text = |side: Side, line: u32, name: Option<Range<usize>>| {
             let mark = match side {
                 Side::Old => theme.danger.opacity(0.4),
                 Side::New => theme.success.opacity(0.4),
             };
-            line_text(diff, index, side, line, mark)
+            line_text(diff, index, side, line, mark, name, theme.primary)
         };
-        let go = |side: Side| {
-            cx.listener(move |pane, _: &MouseDownEvent, _, cx| pane.go_to(index, side, cx))
+        // A click on the text of the line, and the mouse resting on it, find the name under
+        // the pointer by the layout the text was drawn with.
+        let go = |side: Side, layout: TextLayout| {
+            cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
+                pane.clicked_row(index, side, &layout, event, window, cx);
+            })
+        };
+        let rest = |side: Side, layout: TextLayout| {
+            cx.listener(move |pane, event: &MouseMoveEvent, window, cx| {
+                pane.moved_over(Spot::Diff { index, side }, &layout, event, window, cx);
+            })
         };
 
         match (self.layout, shown) {
@@ -577,14 +650,16 @@ impl ReviewPane {
                 let Some(line) = shown.line(side) else {
                     return row;
                 };
+                let (text, layout) = text(side, line, name);
                 let row = row
                     .border_l_2()
                     .border_color(bar(on.is_some()))
-                    .on_mouse_down(MouseButton::Left, go(side))
+                    .on_mouse_down(MouseButton::Left, go(side, layout.clone()))
+                    .on_mouse_move(rest(side, layout))
                     .child(number(shown.line(Side::Old)))
                     .child(number(shown.line(Side::New)))
                     .child(div().flex_none().w(SIGN_WIDTH).px_1().child(sign))
-                    .child(text(side, line));
+                    .child(text);
                 match tint {
                     Some(tint) => row.bg(tint),
                     None => row,
@@ -614,11 +689,17 @@ impl ReviewPane {
                     } else {
                         (side, on == Some(side))
                     };
+                    // An unchanged line is drawn on both halves; the name is marked on one.
+                    let name = name
+                        .clone()
+                        .filter(|_| on == Some(stop) && (!unchanged || side == Side::New));
+                    let (text, layout) = text(side, line, name);
                     let half = half
                         .border_color(bar(here))
-                        .on_mouse_down(MouseButton::Left, go(stop))
+                        .on_mouse_down(MouseButton::Left, go(stop, layout.clone()))
+                        .on_mouse_move(rest(stop, layout))
                         .child(number(Some(line)))
-                        .child(text(side, line));
+                        .child(text);
                     if unchanged { half } else { half.bg(tint) }
                 };
                 row.child(half(Side::Old, removed))
@@ -637,12 +718,21 @@ fn side_name(side: Side) -> &'static str {
 }
 
 /// One line of the diff shown by the row at `index`, as the element that draws it: its
-/// text, with its changed words marked.
+/// text, with its changed words marked, and the layout the text was drawn with, which finds
+/// the name under a pointer.
 ///
 /// The selector of the element carries the text itself, as it is handed to the text
 /// system here and nowhere else: a test cannot read what is drawn, and reads there
 /// which text the row was given.
-fn line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: Hsla) -> Div {
+fn line_text(
+    diff: &ShownDiff,
+    index: usize,
+    side: Side,
+    line: u32,
+    mark: Hsla,
+    name: Option<Range<usize>>,
+    name_mark: Hsla,
+) -> (Div, TextLayout) {
     let text = diff.text(side, line);
     // The marks count the bytes of the line as it is in the file. Where bytes that are
     // no text were replaced, the shown text has other bytes, and nothing is marked.
@@ -663,13 +753,68 @@ fn line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: Hsla) 
         })
         .collect::<Vec<_>>();
     let drawn = text[..end].to_owned();
-    div()
-        .debug_selector(|| format!("review-text-{index}-{}:{drawn}", side_name(side)))
-        .flex_1()
-        .min_w_0()
-        .px_1()
-        .overflow_hidden()
-        .child(StyledText::new(drawn).with_highlights(highlights))
+    // The name is marked on the part of the line that is drawn.
+    let name = name.filter(|name| name.end <= end);
+    code_text(
+        format!("review-text-{index}-{}:{drawn}", side_name(side)),
+        &drawn,
+        highlights,
+        name,
+        name_mark,
+    )
+}
+
+/// A line of code as the element that draws it, with the layout of its text: the text
+/// element is as wide as the text, which a test reads the width of, and it carries the
+/// selector. The name the reviewer is on is marked under `review-name`, by an invisible copy
+/// of the line laid over it, whose piece for the name is underlined: the mark is where the
+/// name is, in any font. Each line of the pane's code, in the diff and in the file view, is
+/// drawn by this.
+pub(crate) fn code_text(
+    selector: String,
+    text: &str,
+    highlights: Vec<(Range<usize>, HighlightStyle)>,
+    name: Option<Range<usize>>,
+    name_mark: Hsla,
+) -> (Div, TextLayout) {
+    let styled = StyledText::new(text.to_owned()).with_highlights(highlights);
+    let layout = styled.layout().clone();
+    let over = name.map(|name| {
+        let before = &text[..name.start];
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
+            .h_full()
+            .flex()
+            .whitespace_nowrap()
+            .text_color(transparent_black())
+            .children((!before.is_empty()).then(|| div().child(before.to_owned())))
+            .child(
+                div()
+                    .debug_selector(|| "review-name".to_owned())
+                    .border_b_2()
+                    .border_color(name_mark)
+                    .child(text[name].to_owned()),
+            )
+    });
+    let element = div()
+        .debug_selector(move || selector.clone())
+        .relative()
+        .flex_none()
+        .whitespace_nowrap()
+        .child(styled)
+        .children(over);
+    (
+        div()
+            .flex_1()
+            .min_w_0()
+            .px_1()
+            .flex()
+            .overflow_hidden()
+            .child(element),
+        layout,
+    )
 }
 
 /// The first seven digits of the id of a commit, as git shortens it.

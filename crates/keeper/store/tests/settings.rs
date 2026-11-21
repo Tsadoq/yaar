@@ -453,3 +453,188 @@ fn a_row_with_a_name_or_a_value_this_build_does_not_know_is_left_out_of_the_list
         "theme = sepia is left out"
     );
 }
+
+fn keep_repository(store: &Store, id: &str) {
+    store
+        .put_repository(&RepositoryRecord {
+            id: RepositoryId::new(id),
+            git_dir: PathBuf::from(format!("/{id}/.git")),
+        })
+        .expect("put repository");
+}
+
+fn answer(repository: &str, allowed: bool) -> Setting {
+    Setting::ServersInRepository {
+        repository: RepositoryId::new(repository),
+        allowed,
+    }
+}
+
+#[test]
+fn the_answer_on_a_repository_is_listed_after_the_settings_of_the_workspaces_in_the_order_the_repositories_were_kept()
+ {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &["w-1"]);
+    // Kept r-3 before r-2, so that the order they were kept in is not the order of their
+    // ids: a list sorted by id would show it.
+    keep_repository(&store, "r-3");
+    keep_repository(&store, "r-2");
+    // Set in the opposite order to the one the repositories were kept in, and the
+    // settings of the other kinds after it, so that where the answers come in the list
+    // is the Store's doing and not the order of the calls.
+    for setting in [
+        answer("r-2", true),
+        answer("r-3", false),
+        answer("r-1", true),
+        Setting::FlowForm {
+            workspace: w1(),
+            form: FlowForm::LiveDiff,
+        },
+        Setting::Theme(Theme::Dark),
+    ] {
+        store.set_setting(&setting).expect("set");
+    }
+    assert_eq!(
+        store.settings().expect("settings"),
+        [
+            Setting::Theme(Theme::Dark),
+            Setting::FlowForm {
+                workspace: w1(),
+                form: FlowForm::LiveDiff,
+            },
+            answer("r-1", true),
+            answer("r-3", false),
+            answer("r-2", true),
+        ]
+    );
+}
+
+#[test]
+fn a_second_answer_on_a_repository_takes_the_place_of_the_first_and_lists_one_entry() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    keep_repository(&store, "r-2");
+    for setting in [
+        answer("r-1", true),
+        answer("r-2", true),
+        answer("r-1", false),
+        answer("r-1", false),
+    ] {
+        store.set_setting(&setting).expect("set");
+    }
+    // The first answer is the one that was changed, and the other is as it was.
+    assert_eq!(
+        store.settings().expect("settings"),
+        [answer("r-1", false), answer("r-2", true)]
+    );
+    store.set_setting(&answer("r-1", true)).expect("set");
+    assert_eq!(
+        store.settings().expect("settings"),
+        [answer("r-1", true), answer("r-2", true)]
+    );
+}
+
+#[test]
+fn the_answer_on_a_repository_the_store_does_not_hold_is_refused_with_its_id_and_keeps_nothing() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &["w-1"]);
+
+    let sentence = refusal_of(store.set_setting(&answer("r-99", true)));
+    assert!(sentence.contains("r-99"), "{sentence}");
+    assert_eq!(store.settings().expect("settings"), []);
+    // Nothing was written for it, not even a row that `settings` hides while no such
+    // repository is kept: once a repository of that id is kept, no answer comes with it.
+    keep_repository(&store, "r-99");
+    assert_eq!(store.settings().expect("settings"), []);
+    // The refusal leaves the store as it was: an answer is still kept after it.
+    store.set_setting(&answer("r-1", false)).expect("set");
+    assert_eq!(store.settings().expect("settings"), [answer("r-1", false)]);
+}
+
+#[test]
+fn the_answer_on_a_repository_is_held_by_a_store_opened_anew() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &["w-1"]);
+    keep_repository(&store, "r-2");
+    store.set_setting(&answer("r-1", true)).expect("set");
+    store.set_setting(&answer("r-2", false)).expect("set");
+    drop(store);
+
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(
+        store.settings().expect("settings"),
+        [answer("r-1", true), answer("r-2", false)]
+    );
+}
+
+#[test]
+fn a_row_of_a_repository_that_is_unknown_or_not_held_is_left_out_of_the_list() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    store.set_setting(&answer("r-1", true)).expect("set");
+    let known = [answer("r-1", true)];
+
+    // What a later version, or a hand, left in the file: the Store has no call to write
+    // it. Each row is written beside the known one, so that the list is read with one
+    // unknown row at a time among it.
+    let connection = Connection::open(scratch.file()).expect("open the file");
+    for (repository, name, value) in [
+        ("r-1", "servers_inside", "maybe"),
+        ("r-1", "servers_inside_always", "yes"),
+        ("r-1", "zoom", "2"),
+        // A repository the store does not hold.
+        ("r-gone", "servers_inside", "yes"),
+    ] {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO repository_setting (repository, name, value)
+                 VALUES (?1, ?2, ?3)",
+                [repository, name, value],
+            )
+            .expect("write the row");
+        // The unknown value takes the place of the known one: it is the one that is left
+        // out, and the rest of the list is as it was.
+        let expected: &[Setting] = if value == "maybe" { &[] } else { &known };
+        assert_eq!(
+            store.settings().expect("settings"),
+            expected,
+            "{repository} {name} = {value} is left out"
+        );
+        store.set_setting(&answer("r-1", true)).expect("set again");
+    }
+}
+
+#[test]
+fn the_answer_on_a_repository_is_kept_as_its_name_and_a_word_in_a_table_of_its_own() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    store.set_setting(&answer("r-1", true)).expect("set");
+    store.set_setting(&answer("r-1", false)).expect("set");
+
+    let connection = Connection::open(scratch.file()).expect("open the file");
+    let kept: Vec<(String, String, String)> = connection
+        .prepare("SELECT repository, name, value FROM repository_setting")
+        .expect("prepare")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+        .expect("query")
+        .collect::<rusqlite::Result<_>>()
+        .expect("read");
+    assert_eq!(
+        kept,
+        [(
+            "r-1".to_owned(),
+            "servers_inside".to_owned(),
+            "no".to_owned()
+        )]
+    );
+    let app_rows: i64 = connection
+        .query_row("SELECT COUNT(*) FROM setting", [], |row| row.get(0))
+        .expect("count");
+    assert_eq!(app_rows, 0, "no row of the whole app's table");
+}

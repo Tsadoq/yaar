@@ -17,6 +17,8 @@ gpui-kit.workspace = true
 libc.workspace = true
 yaar-review-pane.workspace = true
 yaar-terminal-pane.workspace = true
+# Code intelligence: the Window starts the Navigator and joins it to the Frame's model.
+yaar-navigator.workspace = true
 
 [dev-dependencies]
 # GPUI's test platform, for tests only: the programs users get are built without it.

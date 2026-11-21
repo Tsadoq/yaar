@@ -37,6 +37,7 @@
 //! | `CompareForReview` | `Agents::compare_for_review`, through `Reviews::credited_change` | none |
 //! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
 //! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
+//! | `ExportVersion` | `Agents::export_version`, through `StateStore::export` | none |
 //!
 //! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
 //! question waits for an answer or its CLI's settings could not be changed: the question
@@ -246,6 +247,9 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // A few small files of the CLIs' settings, read or written once, which a user's
         // key waits for no longer than the drive takes.
         RequestKind::ListConsents | RequestKind::AnswerConsent => Answerer::Here,
+        // git's checkout of a whole tree, a second or more on a large repository: as a
+        // comparison of two versions.
+        RequestKind::ExportVersion => Answerer::Apart,
     }
 }
 
@@ -329,6 +333,8 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         // carries: read between two answers and sent after the fact of the second, it
         // would be taken for the newer one.
         RequestKind::ListConsents | RequestKind::AnswerConsent => true,
+        // It leads to no fact, and no fact carries what it writes.
+        RequestKind::ExportVersion => false,
     }
 }
 
@@ -603,6 +609,14 @@ impl Parts {
                     Reply::Consents(consents)
                 })
             }
+            // The old side of a diff, for the Window's language server.
+            Request::ExportVersion {
+                workspace,
+                version,
+                into,
+            } => self
+                .agents
+                .export_version(kept, &workspace, &version, &into),
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -1176,12 +1190,14 @@ fn save_draft(
     facts: &mut Vec<Fact>,
 ) -> Result<Reply, Refusal> {
     let review = ReviewId::new(review.as_str());
-    // Only a thread that starts here is put on the files of the worktree, and needs it.
-    let worktree = match save.on {
-        yaar_review_engine::DraftOn::NewThread(_) => {
+    // Only a thread that starts here is put on the files of the worktree, and needs it; one
+    // on a file outside the worktree, which has an absolute path, is put on nothing, and the
+    // worktree is not even looked up: the lookup may fail, and the save does not depend on it.
+    let worktree = match &save.on {
+        yaar_review_engine::DraftOn::NewThread(at) if !at.path.is_absolute() => {
             worktree_of_review(workspaces, reviews, &review)?.1
         }
-        yaar_review_engine::DraftOn::Thread => None,
+        yaar_review_engine::DraftOn::NewThread(_) | yaar_review_engine::DraftOn::Thread => None,
     };
     let saved = reviews
         .save_draft(worktree.as_deref(), &review, save)
@@ -1428,7 +1444,7 @@ fn workspace_reviews(
     view: yaar_review_engine::WorkspaceView,
     store: &Store,
 ) -> Result<yaar_link::WorkspaceReviews, Refusal> {
-    let reviews = view
+    let mut reviews = view
         .reviews
         .iter()
         .map(|found| {
@@ -1437,7 +1453,14 @@ fn workspace_reviews(
                 .map_err(|e| engine_refusal(EngineError::Store(e)))?;
             Ok(review(found, &turns))
         })
-        .collect::<Result<_, Refusal>>()?;
+        .collect::<Result<Vec<yaar_link::Review>, Refusal>>()?;
+    // A thread on a file outside the worktree, which has an absolute path, has no version:
+    // the Store keeps the empty one, and the Window is told none.
+    for thread in reviews.iter_mut().flat_map(|review| &mut review.threads) {
+        if thread.anchor.path.is_absolute() {
+            thread.anchor.tree = None;
+        }
+    }
     Ok(yaar_link::WorkspaceReviews {
         workspace,
         reviews,

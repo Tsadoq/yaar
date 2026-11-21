@@ -38,6 +38,7 @@ use crate::worktree::{
 
 // The comparison of any two versions and the reading of a file in any of them: the
 // history's package's, beside the recording's.
+mod export;
 mod versions;
 
 /// The old value that `git update-ref` takes for "no such ref".

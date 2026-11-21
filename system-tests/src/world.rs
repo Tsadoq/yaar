@@ -951,8 +951,211 @@ impl Drop for OutsideAgent {
     }
 }
 
+impl World {
+    /// Every line that a git command which lists the files of a worktree prints, for each
+    /// repository of this world and each worktree git lists for it, that names a file of the
+    /// app, with the worktree's folder: what STORE-04 holds to be empty (NFR-021).
+    ///
+    /// The commands are `git status --porcelain=v2 --ignored --untracked-files=all`,
+    /// `git ls-files --cached --others --exclude-standard` and `git ls-files --others
+    /// --ignored --exclude-standard`, each run as [`Repo::git`] runs git, but taking no
+    /// optional lock, so that the check leaves the index as it was. A line names a file
+    /// of the app when a part of a path it holds is a name of [`APP_FILE_NAMES`] or starts
+    /// with one of [`APP_FILE_STARTS`], case aside, or is a review file the Claude Code
+    /// Adapter writes, `<32 hexadecimal digits>-<number>.md`.
+    ///
+    /// Called at the end of every test whose world has the stand-in on its search path
+    /// ([`World::agents_on_path`]), from the world's drop, before the Keeper is ended,
+    /// unless the test is already failing; and by STORE-04's own test.
+    pub fn app_files_listed(&self) -> Vec<(PathBuf, String)> {
+        let mut named = Vec::new();
+        for worktree in self.worktrees() {
+            for command in LISTINGS {
+                let listing = git_in(&self.root, &worktree, true, command)
+                    .unwrap_or_else(|failed| panic!("the check of STORE-04: {failed}"));
+                let is_status = command[0] == "status";
+                named.extend(
+                    listing
+                        .lines()
+                        .filter(|line| {
+                            let path = if is_status {
+                                path_of_status_line(line)
+                            } else {
+                                line
+                            };
+                            names_an_app_file(path)
+                        })
+                        .map(|line| (worktree.clone(), line.to_owned())),
+                );
+            }
+        }
+        named
+    }
+
+    /// The folder of every worktree this world has that still exists: the repositories in
+    /// `repos`, and each worktree git lists for one of them, without repeating one.
+    fn worktrees(&self) -> Vec<PathBuf> {
+        let mut repositories: Vec<_> = fs::read_dir(self.root.join("repos"))
+            .into_iter()
+            .flatten()
+            .filter_map(|entry| Some(entry.ok()?.path()))
+            .filter(|folder| folder.join(".git").exists())
+            .collect();
+        repositories.sort();
+        let mut found: Vec<PathBuf> = Vec::new();
+        for repository in repositories {
+            let listed = git_in(
+                &self.root,
+                &repository,
+                true,
+                &["worktree", "list", "--porcelain"],
+            )
+            .unwrap_or_else(|failed| panic!("the check of STORE-04: {failed}"));
+            // A record per worktree, apart by an empty line; a bare repository has no files.
+            for record in listed.split("\n\n") {
+                let is_bare = record.lines().any(|line| line == "bare");
+                let folder = record
+                    .lines()
+                    .find_map(|line| line.strip_prefix("worktree "))
+                    .map(PathBuf::from);
+                if let Some(folder) = folder
+                    && !is_bare
+                    && folder.exists()
+                    && !found.contains(&folder)
+                {
+                    found.push(folder);
+                }
+            }
+        }
+        found
+    }
+}
+
+/// The three commands whose lists of files STORE-04 reads.
+const LISTINGS: [&[&str]; 3] = [
+    &[
+        "status",
+        "--porcelain=v2",
+        "--ignored",
+        "--untracked-files=all",
+    ],
+    &["ls-files", "--cached", "--others", "--exclude-standard"],
+    &["ls-files", "--others", "--ignored", "--exclude-standard"],
+];
+
+/// Runs git in `folder` as [`Repo::git`] runs it, with the world at `world`: what it
+/// printed, or what it wrote when it failed. With `read_only` it takes no optional lock, so
+/// that the check of STORE-04, which only reads, does not refresh the index of the repository
+/// it reads; a test's own git, which passes false, runs as git does.
+fn git_in(world: &Path, folder: &Path, read_only: bool, args: &[&str]) -> Result<String, String> {
+    let mut git = Command::new("git");
+    git.env_clear();
+    if let Some(search) = std::env::var_os("PATH") {
+        git.env("PATH", search);
+    }
+    if read_only {
+        git.arg("--no-optional-locks");
+    }
+    let output = git
+        .current_dir(folder)
+        .args(args)
+        .env("HOME", world.join("home"))
+        .env("TMPDIR", world.join("tmp"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "A Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z")
+        .env("GIT_COMMITTER_NAME", "A Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start git");
+    if !output.status.success() {
+        return Err(format!(
+            "git {args:?} in {} failed: {}{}",
+            folder.display(),
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    let printed = String::from_utf8_lossy(&output.stdout);
+    Ok(printed.strip_suffix('\n').unwrap_or(&printed).to_owned())
+}
+
+/// The path a line of `git status --porcelain=v2` holds: after the marker of an untracked
+/// or ignored file, and after the fixed fields of a changed, renamed or unmerged one, with
+/// the old path of a rename still on the line.
+fn path_of_status_line(line: &str) -> &str {
+    let fields = match line.chars().next() {
+        Some('1') => 8,
+        Some('2') => 9,
+        Some('u') => 10,
+        _ => 1,
+    };
+    let mut rest = line;
+    for _ in 0..fields {
+        rest = rest.split_once(' ').map_or("", |(_, rest)| rest);
+    }
+    rest
+}
+
+/// Whether a path that git lists names a file of the app: a part of it is one of
+/// [`APP_FILE_NAMES`] or starts with one of [`APP_FILE_STARTS`], case aside, or is a review
+/// file. Git writes a path with a letter beyond ASCII in quotes; the quotes belong to no
+/// part. A renamed file's old path follows the new one after a tab, and is read as well.
+fn names_an_app_file(path: &str) -> bool {
+    path.split('\t')
+        .flat_map(|path| path.trim_matches('"').split('/'))
+        .any(|part| {
+            let part = part.trim_matches('"').to_lowercase();
+            APP_FILE_NAMES.iter().any(|name| part == *name)
+                || APP_FILE_STARTS.iter().any(|start| part.starts_with(start))
+                || is_review_file(&part)
+        })
+}
+
+/// Whether `name` is `<32 hexadecimal digits>-<number>.md`.
+fn is_review_file(name: &str) -> bool {
+    let Some((id, number)) = name
+        .strip_suffix(".md")
+        .and_then(|stem| stem.split_once('-'))
+    else {
+        return false;
+    };
+    id.len() == 32
+        && id.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && !number.is_empty()
+        && number.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+/// Names of a file or folder of the app: one such part in a path a git command lists is a
+/// file of the app in the worktree.
+pub const APP_FILE_NAMES: [&str; 5] = [
+    "ade-id",
+    ".mcp.json",
+    ".claude-plugin",
+    "yaar.ts",
+    "language-servers.toml",
+];
+
+/// Starts of names of a file or folder of the app.
+pub const APP_FILE_STARTS: [&str; 2] = ["yaar-", ".yaar"];
+
 impl Drop for World {
     fn drop(&mut self) {
+        // STORE-04: a world with the stand-in on its path ends with the check, before the
+        // Keeper is, so that a file a process of the app removes when the Keeper dies is
+        // still seen. Its panic waits until the Keeper is ended and the folder removed, or a
+        // test that fails here would leave a Keeper that lingers for an hour. A test that
+        // is failing already is left to say why: a panic in a drop while unwinding aborts.
+        let left = if self.agents.is_some() && !std::thread::panicking() {
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.app_files_listed()))
+        } else {
+            Ok(Vec::new())
+        };
         self.end_keeper();
         // A process the Keeper started, as the user's git of a commit whose Keeper was
         // killed, may still be finishing and writing into the folder: it is removed
@@ -966,6 +1169,17 @@ impl Drop for World {
         }
         if self.root.exists() {
             eprintln!("the world's folder {} was left behind", self.root.display());
+        }
+        match left {
+            Err(failed) => std::panic::resume_unwind(failed),
+            Ok(left) if !left.is_empty() => {
+                let lines: String = left
+                    .iter()
+                    .map(|(worktree, line)| format!("\n  {}: {line}", worktree.display()))
+                    .collect();
+                panic!("the test ended with files of the app in a worktree:{lines}");
+            }
+            Ok(_) => {}
         }
     }
 }
@@ -986,37 +1200,7 @@ impl Repo {
     /// Runs git in the worktree with these arguments and returns what it printed,
     /// without the line end. Panics, with what git wrote, when git fails.
     pub fn git(&self, args: &[&str]) -> String {
-        let mut git = Command::new("git");
-        git.env_clear();
-        if let Some(search) = std::env::var_os("PATH") {
-            git.env("PATH", search);
-        }
-        let output = git
-            .current_dir(&self.root)
-            .args(args)
-            .env("HOME", self.world.join("home"))
-            .env("TMPDIR", self.world.join("tmp"))
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_AUTHOR_NAME", "A Test")
-            .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
-            .env("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z")
-            .env("GIT_COMMITTER_NAME", "A Test")
-            .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
-            .env("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z")
-            .env("LC_ALL", "C")
-            .stdin(Stdio::null())
-            .output()
-            .expect("start git");
-        assert!(
-            output.status.success(),
-            "git {args:?} in {} failed: {}{}",
-            self.root.display(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let printed = String::from_utf8_lossy(&output.stdout);
-        printed.strip_suffix('\n').unwrap_or(&printed).to_owned()
+        git_in(&self.world, &self.root, false, args).unwrap_or_else(|failed| panic!("{failed}"))
     }
 
     /// Writes a file of the worktree, making the folders above it.
@@ -1274,5 +1458,62 @@ mod tests {
     fn a_login_shell_that_finds_nothing_makes_the_world_panic_too() {
         let wanted = [PathBuf::from("/world/agents/claude")];
         assert!(std::panic::catch_unwind(|| assert_found_first("", &wanted)).is_err());
+    }
+
+    #[test]
+    fn a_path_names_a_file_of_the_app_by_a_part_of_it_case_aside() {
+        for named in [
+            "ade-id",
+            "sub/ade-id",
+            "a/b/.mcp.json",
+            ".claude-plugin/plugin.json",
+            "src/yaar.ts",
+            "language-servers.toml",
+            "yaar-note.txt",
+            "docs/Yaar-Notes.md",
+            ".yaar/state",
+            ".YAAR",
+            "dir/0123456789abcdef0123456789ABCDEF-12.md",
+            "\"\\303\\251/.mcp.json\"",
+            "\"yaar-\\303\\251.txt\"",
+            "old name\tyaar-new",
+        ] {
+            assert!(names_an_app_file(named), "{named}");
+        }
+    }
+
+    #[test]
+    fn a_path_that_only_looks_like_a_file_of_the_app_names_none() {
+        for fine in [
+            "README.md",
+            "ade-ids.txt",
+            "the-yaar-way.txt",
+            "src/yaar.tsx",
+            "language-servers.toml.bak",
+            "mcp.json",
+            "0123456789abcdef0123456789abcde-1.md",
+            "0123456789abcdef0123456789abcdef0-1.md",
+            "0123456789abcdef0123456789abcdeg-1.md",
+            "0123456789abcdef0123456789abcdef-x.md",
+            "0123456789abcdef0123456789abcdef-.md",
+            "0123456789abcdef0123456789abcdef-1.txt",
+            "0123456789abcdef0123456789abcdef.md",
+        ] {
+            assert!(!names_an_app_file(fine), "{fine}");
+        }
+    }
+
+    #[test]
+    fn the_path_of_a_status_line_comes_after_its_fixed_fields() {
+        let hash = "1".repeat(40);
+        let changed = format!("1 .M N... 100644 100644 100644 {hash} {hash} a b/c.txt");
+        let renamed =
+            format!("2 R. N... 100644 100644 100644 {hash} {hash} R100 new name\told name");
+        let unmerged = format!("u UU N... 100644 100644 100644 100644 {hash} {hash} {hash} x/y");
+        assert_eq!(path_of_status_line(&changed), "a b/c.txt");
+        assert_eq!(path_of_status_line(&renamed), "new name\told name");
+        assert_eq!(path_of_status_line(&unmerged), "x/y");
+        assert_eq!(path_of_status_line("? sub/ade-id"), "sub/ade-id");
+        assert_eq!(path_of_status_line("! yaar-x"), "yaar-x");
     }
 }

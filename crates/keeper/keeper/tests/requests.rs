@@ -662,6 +662,11 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                 agent: "pi".to_owned(),
                 answer: yaar_link::ConsentAnswer::No,
             },
+            RequestKind::ExportVersion => Request::ExportVersion {
+                workspace: workspace.clone(),
+                version: "0".repeat(40),
+                into: scratch.0.join("old-side"),
+            },
         };
         assert_eq!(
             window.ask(request),

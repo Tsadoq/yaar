@@ -7,17 +7,26 @@
 //! - [`panes`], the one list of the panes of the Window. A pane is added by one line
 //!   there, and has its keys bound and its view built from that line;
 //! - [`init`], which prepares the app before a window opens;
-//! - [`open`], which opens the window with every pane, linked to the Keeper;
+//! - [`open`], which opens the window with every pane, linked to the Keeper, and starts the
+//!   Navigator with what this user's environment gives it; the quit of the app is the one
+//!   end of every Navigator that runs;
+//! - [`open_with`] and [`open_panes`], the entries beneath `open` that the component tests of
+//!   the composed Window take: the same window with a Navigator's configuration of the
+//!   caller's, and with panes of the caller's too;
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
 //!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
 //!   documented set of keys that never reach the program in a terminal.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use gpui_kit::component::theme::Theme;
 use gpui_kit::*;
-use yaar_frame::{Control, Opened, PROGRAM_CONTEXT, PaneEntry, Place};
+use yaar_frame::{
+    BuildPane, Control, Models, Navigation, Opened, PROGRAM_CONTEXT, PaneEntry, Place,
+};
+use yaar_navigator::{Navigator, STOP_DEADLINE};
 
 /// Quits the Window, the plain way: the Keeper and what it holds stay. One of the Frame's
 /// two quits, beside `yaar_frame::QuitAndStopAgents`; the Window program says what it does.
@@ -82,8 +91,110 @@ pub fn init(cx: &mut App) {
 /// The system brings an app it launches to the front. The Window does not push itself
 /// there: a window started in the background stays in the background.
 pub fn open(socket: PathBuf, cx: &mut App) -> Result<Opened> {
-    let panes = panes().iter().map(|pane| (pane.build)()).collect();
-    yaar_frame::open(socket, VERSION, panes, cx)
+    open_with(socket, yaar_navigator::NavigatorConfig::for_this_user(), cx)
+}
+
+/// [`open`], with the Navigator started on `navigator`: the folders, the registry and the
+/// environment of its servers.
+///
+/// The Navigator is started on a new port and joined to the window's model of code
+/// intelligence. The quit of the app is the one end of a Navigator: the
+/// port is let go ([`yaar_frame::Navigation::disconnect`]) and the Window waits up to
+/// [`yaar_navigator::STOP_DEADLINE`] and a second more for the Navigator to stop its servers,
+/// so that no server outlives the Window, whatever asks are on their way. A second window
+/// gets a Navigator of its own.
+pub fn open_with(
+    socket: PathBuf,
+    navigator: yaar_navigator::NavigatorConfig,
+    cx: &mut App,
+) -> Result<Opened> {
+    open_panes(
+        socket,
+        panes().iter().map(|pane| (pane.build)()).collect(),
+        navigator,
+        cx,
+    )
+}
+
+/// [`open_with`] for panes the caller builds: the Frame opened on `panes` and the Navigator
+/// joined to it. The caller may wrap the builders of [`panes`] to keep the views it reads.
+pub fn open_panes(
+    socket: PathBuf,
+    panes: Vec<BuildPane>,
+    navigator: yaar_navigator::NavigatorConfig,
+    cx: &mut App,
+) -> Result<Opened> {
+    let opened = yaar_frame::open(socket, VERSION, panes, cx)?;
+    join_navigator(&opened.models, navigator, cx);
+    Ok(opened)
+}
+
+/// How long the Window waits for a Navigator to stop its servers: the time a server is
+/// given to end, and a second more.
+const STOP_WITHIN: Duration = Duration::from_secs(STOP_DEADLINE.as_secs() + 1);
+
+/// A Navigator the Window started, and the model it is joined to.
+struct Joined {
+    navigator: Navigator,
+    navigation: Entity<Navigation>,
+}
+
+/// The Navigators of the app's windows, one each, kept for as long as they run.
+#[derive(Default)]
+struct Navigators {
+    running: Vec<Joined>,
+    /// Whether the app's quit stops them: said once, by the first window.
+    stopped_at_quit: bool,
+}
+
+impl Global for Navigators {}
+
+/// Starts a Navigator on `config`, joins its port to `models.navigation` and keeps its
+/// handle in a global of the app, to be stopped at the quit of the app. What the
+/// model tells the Navigator by itself, and what it keeps of what it is told, is the Frame's.
+fn join_navigator(models: &Models, config: yaar_navigator::NavigatorConfig, cx: &mut App) {
+    let (port, end) = yaar_navigator::port();
+    let navigator = Navigator::start(config, end);
+    models
+        .navigation
+        .update(cx, |navigation, cx| navigation.connect(port, cx));
+    let navigators = cx.default_global::<Navigators>();
+    navigators.running.push(Joined {
+        navigator,
+        navigation: models.navigation.clone(),
+    });
+    if !std::mem::replace(&mut navigators.stopped_at_quit, true) {
+        // The handler's own part runs while the windows stand: it drops every port, so
+        // that each Navigator begins to stop its servers. The waiting is the future's, run
+        // after the windows are gone, so that a pane's ask still on its way, which holds
+        // the port too, is dropped with its pane first. It blocks the thread: the quit
+        // goes on only once no server runs, or at the deadline.
+        cx.on_app_quit(|cx| {
+            let joined = std::mem::take(&mut cx.default_global::<Navigators>().running);
+            for joined in &joined {
+                drop_port(&joined.navigation, cx);
+            }
+            async move {
+                // One deadline for all: the Navigators stop side by side, and the quit
+                // never waits longer than a single one may take.
+                let deadline = Instant::now() + STOP_WITHIN;
+                for joined in joined {
+                    joined
+                        .navigator
+                        .wait(deadline.saturating_duration_since(Instant::now()));
+                }
+            }
+        })
+        .detach();
+    }
+}
+
+/// Lets go of the Frame's end of a Navigator's port: the model closes the channel of asks
+/// for every sender made from it, those a pane's ask on its way and an export the Keeper has
+/// not yet answered hold among them, so that the Navigator, with no sender left, stops its
+/// servers and ends.
+fn drop_port(navigation: &Entity<Navigation>, cx: &mut App) {
+    navigation.update(cx, |navigation, cx| navigation.disconnect(cx));
 }
 
 #[cfg(test)]

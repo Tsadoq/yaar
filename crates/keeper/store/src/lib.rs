@@ -39,7 +39,8 @@
 //! its agent edited since, where each thread sits now, what is attached to the next
 //! message, and who is credited with each path of a recorded state; version 6 adds the CLI's
 //! own record of a session, the turn a round was sent in, and which recorded
-//! states had their credits kept, none among them. A database
+//! states had their credits kept, none among them; version 7 adds the settings of one
+//! repository, the user's answer on the language servers inside it. A database
 //! of an older version is brought forward step by step when it is opened, and before the
 //! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
 //! step that goes wrong loses nothing. A database of a newer version is refused, and left
@@ -74,12 +75,14 @@ pub use settings::{FlowForm, Setting, TerminalPlace, Theme, TurnEndSelects};
 pub const FILE_NAME: &str = "store.db";
 
 /// The version of the tables this build makes and reads.
-const VERSION: u32 = 6;
+const VERSION: u32 = 7;
 
 /// The steps that make the tables, in order: `STEPS[n]` brings a database from version
 /// `n` to version `n + 1`, and ends by setting `user_version` to that. A later version
 /// adds one step at the end.
-const STEPS: [&str; VERSION as usize] = [TABLES, TABLES_2, TABLES_3, TABLES_4, TABLES_5, TABLES_6];
+const STEPS: [&str; VERSION as usize] = [
+    TABLES, TABLES_2, TABLES_3, TABLES_4, TABLES_5, TABLES_6, TABLES_7,
+];
 
 /// The tables of version 1. `seq` is the order in which the rows were first kept. A
 /// path is kept as its bytes, since a path need not be text.
@@ -270,6 +273,19 @@ const TABLES_6: &str = "
     INSERT OR IGNORE INTO state_kept (workspace, state)
         SELECT DISTINCT workspace, state FROM state_credit;
     PRAGMA user_version = 6;
+";
+
+/// What version 7 adds: the settings of one repository, as the user's answer on the
+/// language servers that lie inside it, one row per repository and name, as
+/// `workspace_setting` holds those of a workspace.
+const TABLES_7: &str = "
+    CREATE TABLE repository_setting (
+        repository TEXT NOT NULL,
+        name TEXT NOT NULL,
+        value TEXT NOT NULL,
+        PRIMARY KEY (repository, name)
+    ) STRICT;
+    PRAGMA user_version = 7;
 ";
 
 /// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its
@@ -850,7 +866,7 @@ mod tests {
     // Unit tests that make a file, because a database of an older version can only be
     // made beside the Store: no call of the Store writes one.
     #[test]
-    fn a_database_of_version_1_is_copied_and_then_brought_to_version_6_with_all_it_held() {
+    fn a_database_of_version_1_is_copied_and_then_brought_to_version_7_with_all_it_held() {
         let folder = Folder::new("upgrade");
         let old = version_one(&folder.file());
 
@@ -883,7 +899,7 @@ mod tests {
             .expect("put review");
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 6);
+        assert_eq!(user_version(&folder.file()), 7);
         // The copy is of version 1: the rows the write-ahead file held are in it, and
         // none of what version 2 adds.
         assert_eq!(user_version(&folder.copy()), 1);
@@ -909,7 +925,7 @@ mod tests {
     }
 
     #[test]
-    fn a_database_of_version_2_is_copied_and_then_brought_to_version_6_with_its_reviews() {
+    fn a_database_of_version_2_is_copied_and_then_brought_to_version_7_with_its_reviews() {
         let folder = Folder::new("upgrade-two");
         let old = version_two(&folder.file());
         let copy = folder.0.join(format!("{FILE_NAME}.v2"));
@@ -941,12 +957,13 @@ mod tests {
         assert_eq!(store.session(&session.id).expect("session"), Some(session));
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 6);
+        assert_eq!(user_version(&folder.file()), 7);
         assert_eq!(
             tables(&folder.file()),
             [
                 "comment",
                 "repository",
+                "repository_setting",
                 "review",
                 "round",
                 "session",
@@ -995,7 +1012,7 @@ mod tests {
     }
 
     #[test]
-    fn a_database_of_version_3_is_copied_and_then_brought_to_version_6_with_its_sessions_and_turns()
+    fn a_database_of_version_3_is_copied_and_then_brought_to_version_7_with_its_sessions_and_turns()
     {
         let folder = Folder::new("upgrade-three");
         let old = version_three(&folder.file());
@@ -1057,7 +1074,7 @@ mod tests {
         );
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 6);
+        assert_eq!(user_version(&folder.file()), 7);
         // The copy is of version 3: its turns are in it, and none of what version 4 adds.
         // The file was not of version 1 or 2, so no copy of those is made.
         assert_eq!(user_version(&copy), 3);
@@ -1110,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn a_database_of_version_4_is_copied_and_then_brought_to_version_6_with_all_it_held() {
+    fn a_database_of_version_4_is_copied_and_then_brought_to_version_7_with_all_it_held() {
         let folder = Folder::new("upgrade-four");
         let old = version_four(&folder.file());
         let copy = folder.0.join(format!("{FILE_NAME}.v4"));
@@ -1224,7 +1241,7 @@ mod tests {
         assert_eq!(reviewed.attached, Some(AttachedRecord::Review));
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 6);
+        assert_eq!(user_version(&folder.file()), 7);
         // The copy is of version 4, whole, and has none of what version 5 adds. The file
         // was not of an earlier version, so no copy of those is made.
         assert_eq!(user_version(&copy), 4);
@@ -1280,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn a_database_of_version_5_is_copied_and_then_brought_to_version_6_with_all_it_held() {
+    fn a_database_of_version_5_is_copied_and_then_brought_to_version_7_with_all_it_held() {
         let folder = Folder::new("upgrade-five");
         let old = version_five(&folder.file());
         let copy = folder.0.join(format!("{FILE_NAME}.v5"));
@@ -1362,7 +1379,7 @@ mod tests {
         );
         drop(store);
 
-        assert_eq!(user_version(&folder.file()), 6);
+        assert_eq!(user_version(&folder.file()), 7);
         // The copy is of version 5, whole, and has none of what version 6 adds. The file
         // was not of an earlier version, so no copy of those is made.
         assert_eq!(user_version(&copy), 5);
@@ -1390,6 +1407,185 @@ mod tests {
         );
     }
 
+    /// Makes a database of version 6, as the build of slice 7 made them: the version 5
+    /// database with the CLI's record of session `s-1`, the turn round 2 of review `v-1`
+    /// was sent in, the states whose credits were kept and two files marked viewed, so
+    /// that every table of the file holds a row.
+    fn version_six(file: &Path) -> Connection {
+        let old = version_five(file);
+        old.execute_batch(TABLES_6).expect("make the tables of 6");
+        old.execute_batch(
+            "UPDATE session SET cli_record = x'2f732f6f6e652e6a736f6e6c' WHERE id = 's-1';
+             UPDATE round SET turn = 't-2' WHERE number = 2;
+             INSERT INTO viewed (workspace, path, content)
+                 VALUES ('w-1', x'612e7273', 'abc'), ('w-2', x'622e7273', 'def');",
+        )
+        .expect("fill what version 6 added");
+        old
+    }
+
+    #[test]
+    fn a_database_of_version_6_is_copied_and_then_brought_to_version_7_with_all_it_held() {
+        let folder = Folder::new("upgrade-six");
+        let old = version_six(&folder.file());
+        let copy = folder.0.join(format!("{FILE_NAME}.v6"));
+
+        let store = Store::open(&folder.file()).expect("open");
+        drop(old);
+        // Everything version 6 held is there: the setting of the app and of a workspace,
+        // the record of the session, the turn of the round, the credits and the states.
+        assert_eq!(
+            store.settings().expect("settings"),
+            [
+                Setting::Theme(Theme::Dark),
+                Setting::FlowForm {
+                    workspace: WorkspaceId::new("w-1"),
+                    form: FlowForm::LiveDiff,
+                },
+            ]
+        );
+        assert_eq!(
+            store
+                .session_cli_record(&SessionId::new("s-1"))
+                .expect("record"),
+            Some(PathBuf::from("/s/one.jsonl"))
+        );
+        let review = ReviewId::new("v-1");
+        assert_eq!(
+            store.round_turns(&review).expect("turns"),
+            [(2, "t-2".to_owned())]
+        );
+        let w1 = WorkspaceId::new("w-1");
+        assert_eq!(store.credits_of(&w1, "eee").expect("credits").len(), 2);
+        assert!(store.credits_were_kept(&w1, "fff").expect("kept"));
+        // What version 7 adds is there to be used on the repository the file held, and
+        // lists after the settings of the workspaces that were there.
+        let answer = Setting::ServersInRepository {
+            repository: RepositoryId::new("r-1"),
+            allowed: true,
+        };
+        store.set_setting(&answer).expect("set");
+        assert_eq!(
+            store.settings().expect("settings").last(),
+            Some(&answer),
+            "the answer on a repository is kept in a file brought forward"
+        );
+        drop(store);
+
+        assert_eq!(user_version(&folder.file()), 7);
+        // The copy is of version 6, whole, and has none of what version 7 adds. The file
+        // was not of an earlier version, so no copy of those is made.
+        assert_eq!(user_version(&copy), 6);
+        for earlier in 1..6 {
+            assert!(!folder.0.join(format!("{FILE_NAME}.v{earlier}")).exists());
+        }
+        assert!(!tables(&copy).contains(&"repository_setting".to_owned()));
+        let copied = Connection::open(&copy).expect("open the copy");
+        let held: Vec<i64> = [
+            "repository",
+            "workspace",
+            "session",
+            "round",
+            "state_credit",
+            "state_kept",
+            "setting",
+            "workspace_setting",
+        ]
+        .iter()
+        .map(|table| {
+            copied
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("everything is in the copy")
+        })
+        .collect();
+        assert_eq!(held, [1, 2, 1, 2, 4, 3, 1, 1]);
+        let record: Vec<u8> = copied
+            .query_row("SELECT cli_record FROM session", [], |row| row.get(0))
+            .expect("the copy holds the record of version 6");
+        assert_eq!(record, b"/s/one.jsonl");
+
+        // Every table the copy holds has in the upgraded file the rows it has in the
+        // copy, none lost and none changed, and the tables that hold something are the
+        // ones the file was filled with, so that the comparison is not of empty tables.
+        let upgraded = Connection::open(folder.file()).expect("open the upgraded file");
+        let names = tables(&copy);
+        assert_eq!(
+            names,
+            [
+                "comment",
+                "repository",
+                "review",
+                "round",
+                "session",
+                "setting",
+                "state_credit",
+                "state_kept",
+                "step",
+                "thread",
+                "turn",
+                "viewed",
+                "workspace",
+                "workspace_setting"
+            ]
+        );
+        let mut filled = Vec::new();
+        for name in &names {
+            let before = rows_of(&copied, name);
+            if !before.is_empty() {
+                filled.push(name.as_str());
+            }
+            assert_eq!(rows_of(&upgraded, name), before, "the rows of {name}");
+        }
+        assert_eq!(
+            filled,
+            [
+                "comment",
+                "repository",
+                "review",
+                "round",
+                "session",
+                "setting",
+                "state_credit",
+                "state_kept",
+                "step",
+                "thread",
+                "turn",
+                "viewed",
+                "workspace",
+                "workspace_setting"
+            ],
+            "the tables version 6 holds rows of"
+        );
+    }
+
+    /// Every row of a table as one line of its quoted values, in a fixed order, so that
+    /// two files can be compared row for row whatever the columns hold.
+    fn rows_of(connection: &Connection, table: &str) -> Vec<String> {
+        let columns: Vec<String> = connection
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
+            .expect("the columns")
+            .query_map([], |row| row.get(0))
+            .expect("read the columns")
+            .collect::<Result<_, _>>()
+            .expect("the names");
+        let line = columns
+            .iter()
+            .map(|column| format!("quote(\"{column}\")"))
+            .collect::<Vec<_>>()
+            .join(" || '|' || ");
+        let mut rows: Vec<String> = connection
+            .prepare(&format!("SELECT {line} FROM \"{table}\""))
+            .expect("the rows")
+            .query_map([], |row| row.get(0))
+            .expect("read the rows")
+            .collect::<Result<_, _>>()
+            .expect("the lines");
+        rows.sort();
+        rows
+    }
+
     #[test]
     fn a_second_open_copies_nothing_more_and_a_new_file_is_copied_nowhere() {
         let folder = Folder::new("copies");
@@ -1404,7 +1600,7 @@ mod tests {
 
         let fresh = Folder::new("fresh");
         drop(Store::open(&fresh.file()).expect("open"));
-        assert_eq!(user_version(&fresh.file()), 6);
+        assert_eq!(user_version(&fresh.file()), 7);
         assert_eq!(
             std::fs::read_dir(&fresh.0)
                 .expect("list")

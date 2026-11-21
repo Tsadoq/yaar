@@ -1,10 +1,16 @@
 [package]
 name = "yaar-text-search"
-description = "Text search"
+description = "Text search: whole-word search of a folder by git's ignore rules, while no language server is ready"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
+
+[dependencies]
+ignore.workspace = true
+grep-searcher.workspace = true
+grep-regex.workspace = true
+grep-matcher.workspace = true
 
 [lints]
 workspace = true
