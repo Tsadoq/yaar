@@ -715,14 +715,15 @@ enum Effect {
     /// `shift-g`, which acts only while Flow is on screen: says in the notice that nothing
     /// is paused.
     Resume,
+    /// `escape` with no file view, hover or box to close: nothing is said and nothing
+    /// changes, which the state read before and after shows.
+    Nothing,
 }
 
-/// The keys of code intelligence and of the line of the language server, which the review
-/// pane's packages of slice 8 build: each takes its keys out of this list and names their
-/// effect in [`effect_of`].
-const OF_SLICE_8: [&str; 10] = [
-    "l", "h", "shift-k", "g d", "g r", "escape", "shift-i", "shift-u", "shift-y", "shift-q",
-];
+/// The keys of the line of the language server, which the second part of the review pane's
+/// first package of slice 8 takes out of this list once the package that builds the line
+/// is merged, naming their effect in [`effect_of`]: the notice that nothing waits.
+const OF_SLICE_8: [&str; 4] = ["shift-i", "shift-u", "shift-y", "shift-q"];
 
 /// The effect of the key of a control. A control with no effect named here fails the
 /// test, so that a key added to the table is not left out of it.
@@ -748,6 +749,12 @@ fn effect_of(keystroke: &str) -> Effect {
         "shift-f" => Effect::Follow,
         "shift-l" => Effect::Form,
         "shift-g" => Effect::Resume,
+        // The name keys move the reviewer between the names of the line.
+        "l" | "h" => Effect::Moves,
+        // No Navigator is connected here, and the notice says so.
+        "shift-k" | "g d" | "g r" => Effect::Notice,
+        // No file view, no hover and no box is open to close.
+        "escape" => Effect::Nothing,
         "y" => Effect::Sends(RequestKind::CopyReview),
         "r" => Effect::Sends(RequestKind::SetViewed),
         "shift-r" => Effect::Sends(RequestKind::MarkReviewed),
@@ -806,6 +813,16 @@ impl Effect {
                 pane.read_with(cx, |pane, _| pane.notice()).as_deref(),
                 Some("Follow is not paused"),
                 "{title} by {how} did not say that nothing is paused"
+            ),
+            Effect::Nothing => assert!(
+                pane.read_with(cx, |pane, _| {
+                    pane.notice().is_none()
+                        && pane.file_view().is_none()
+                        && pane.hover().is_none()
+                        && pane.references().is_none()
+                        && pane.comment_box().is_none()
+                }),
+                "{title} by {how} said or showed something"
             ),
             Effect::Box => assert!(
                 pane.read_with(cx, |pane, _| pane.comment_box().is_some()),
@@ -906,7 +923,9 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
     // nothing, and none changes a file, which the lines read below show.
     let the_pane = stage.pane.clone();
     let state = |cx: &mut VisualTestContext| {
-        the_pane.read_with(cx, |pane, _| (pane.layout(), pane.position().cloned()))
+        the_pane.read_with(cx, |pane, _| {
+            (pane.layout(), pane.position().cloned(), pane.name_at())
+        })
     };
     // After each of them every line of every file reads as it did: a key that changed
     // one would not pass because a later key changed it back.
@@ -988,6 +1007,7 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             Effect::Box | Effect::Field => cx.simulate_keystrokes("escape"),
             Effect::Notice | Effect::Resume => cx.simulate_keystrokes("s s"),
             Effect::Moves
+            | Effect::Nothing
             | Effect::Setting
             | Effect::Sends(_)
             | Effect::Views
@@ -1023,6 +1043,18 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
             );
         } else {
             effect.shown(&mut stage, control.title, "the action", &mut cx);
+        }
+        if matches!(effect, Effect::Nothing) {
+            assert_eq!(
+                at_first, after_the_key,
+                "{} moved the reviewer",
+                control.title
+            );
+            assert_eq!(
+                after_the_key, after_the_action,
+                "{} as an action",
+                control.title
+            );
         }
         if matches!(effect, Effect::Form) {
             // The key and the action sent the two settings, and Changes sent none: the
