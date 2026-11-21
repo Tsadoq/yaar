@@ -7,7 +7,7 @@
 //! checks one; nothing that draws changes, since nothing that draws names a colour: the
 //! Frame and the panes read the toolkit's theme (`cx.theme()`), whose colours the applied
 //! definition sets ([`ThemeDefinition::onto`]), and the terminal pane reads
-//! [`TerminalColors`] of the applied definition ([`applied`]).
+//! [`TerminalColors`] of the applied definition ([`applied`], which [`set_applied`] sets).
 //!
 //! # The definitions the app is built with
 //!
@@ -21,7 +21,8 @@
 //! at least 4.5 to 1 (WCAG 2's contrast ratio of their relative luminances, alpha composited
 //! over `background` first); where a pair falls short, the text role alone is changed, in
 //! steps of 5 points of lightness in HSL (darker on a light theme, lighter on a dark one),
-//! until it passes. The terminal's colours: `foreground` and `background` those of the
+//! until it passes (and where that direction can never pass, as for the dark theme's
+//! `warning_foreground`, a dark text on a light yellow, the other direction). The terminal's colours: `foreground` and `background` those of the
 //! theme, `cursor` the theme's `foreground`, `selection` the theme's `selection`, and the
 //! sixteen of `ansi` in xterm's order: 0 black `#000000`, 1 to 6 the theme's `red`,
 //! `green`, `yellow`, `blue`, `magenta`, `cyan`, 7 white `#e5e5e5`, 8 bright black
@@ -115,8 +116,23 @@ pub fn hexa(value: u32) -> Hsla {
 /// (8 plus 10 times its step). Under 16 the theme decides ([`TerminalColors::ansi`]), and
 /// the terminal pane never asks this for those; it gives xterm's own sixteen there.
 pub fn indexed(index: u8) -> Hsla {
-    let _ = index;
-    todo!("xterm's numbered colours, as the doc says")
+    /// xterm's own sixteen, which the doc says this gives under 16.
+    const BASE: [u32; 16] = [
+        0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5, 0x7f7f7f,
+        0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
+    ];
+    let step = |n: u8| if n == 0 { 0 } else { 55 + 40 * u32::from(n) };
+    match index {
+        0..=15 => hex(BASE[usize::from(index)]),
+        16..=231 => {
+            let n = index - 16;
+            hex(step(n / 36) << 16 | step(n / 6 % 6) << 8 | step(n % 6))
+        }
+        232..=255 => {
+            let grey = 8 + 10 * u32::from(index - 232);
+            hex(grey << 16 | grey << 8 | grey)
+        }
+    }
 }
 
 /// The colour a program asks for by its value, red, green and blue.
@@ -326,9 +342,16 @@ impl Themes {
     }
 
     /// These themes and `definition` after them, when the module doc's rules accept it.
-    pub fn with(self, definition: ThemeDefinition) -> Result<Themes, ThemeError> {
-        let _ = definition;
-        todo!("check the name, then add, as the module doc says")
+    pub fn with(mut self, definition: ThemeDefinition) -> Result<Themes, ThemeError> {
+        let name = &definition.name;
+        if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
+            return Err(ThemeError::BadName(definition.name));
+        }
+        if self.named(name).is_some() {
+            return Err(ThemeError::Taken(definition.name));
+        }
+        self.definitions.push(definition);
+        Ok(self)
     }
 
     /// Every definition, in the order they were added.
@@ -338,21 +361,457 @@ impl Themes {
 
     /// The definition of this name, case aside.
     pub fn named(&self, name: &str) -> Option<&ThemeDefinition> {
-        let _ = name;
-        todo!("find by name, case aside")
+        let name = name.to_lowercase();
+        self.definitions
+            .iter()
+            .find(|definition| definition.name.to_lowercase() == name)
     }
 
     /// The definition the Window applies for the user's `choice` while the system's
     /// setting is `system`, as the module doc says.
     pub fn resolve(&self, choice: &yaar_link::ThemeChoice, system: Appearance) -> &ThemeDefinition {
-        let _ = (choice, system);
-        todo!("the chosen definition, or the built-in one of the system's appearance")
+        if let yaar_link::ThemeChoice::Named(name) = choice
+            && let Some(definition) = self.named(name)
+        {
+            return definition;
+        }
+        // `built_in` put the light one first and the dark one second, and `with` only
+        // adds after them, so these two places are the built-in definitions.
+        match system {
+            Appearance::Light => &self.definitions[0],
+            Appearance::Dark => &self.definitions[1],
+        }
     }
 }
+
+/// The definition applied, kept as a global of the app.
+struct Applied(ThemeDefinition);
+
+impl Global for Applied {}
 
 /// The definition applied now, as `crate::Looks` last applied it: [`light`] before it ever
 /// applied one. The terminal pane reads its [`TerminalColors`] here.
 pub fn applied(cx: &App) -> ThemeDefinition {
-    let _ = cx;
-    todo!("the applied definition, kept as a global of the app by Looks")
+    cx.try_global::<Applied>()
+        .map_or_else(light, |applied| applied.0.clone())
+}
+
+/// Keeps `definition` as the one [`applied`] gives. `crate::Looks` calls this as the third
+/// step of applying a definition; it writes nothing into the toolkit's colours.
+pub fn set_applied(definition: ThemeDefinition, cx: &mut App) {
+    cx.set_global(Applied(definition));
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+    use gpui_kit::component::theme::{Theme, ThemeColor, ThemeMode};
+    use yaar_link::ThemeChoice;
+
+    use super::{
+        Appearance, Colors, DARK, DISTINCT, LIGHT, READABLE, TerminalColors, ThemeDefinition,
+        ThemeError, Themes, applied, dark, hex, hexa, indexed, light, rgb24, set_applied,
+    };
+    use gpui_kit::Hsla;
+
+    /// A third theme, with every role and every terminal colour a value of its own.
+    fn sepia() -> ThemeDefinition {
+        ThemeDefinition {
+            name: "Sepia".to_owned(),
+            appearance: Appearance::Light,
+            colors: Colors {
+                background: hex(0xf4ecd8),
+                foreground: hex(0x433422),
+                border: hex(0xd8c9a8),
+                input: hex(0xd2c29d),
+                ring: hex(0xa8946a),
+                caret: hex(0x5b4636),
+                selection: hexa(0xb89b5e66),
+                primary: hex(0x704214),
+                primary_foreground: hex(0xfbf3e0),
+                secondary: hex(0xe6dabc),
+                secondary_foreground: hex(0x3a2b1a),
+                muted: hex(0xece1c5),
+                muted_foreground: hex(0x6e5a3e),
+                accent: hex(0xe0d2ae),
+                accent_foreground: hex(0x35281a),
+                list_hover: hex(0xeadfc3),
+                success: hex(0x5a7d2a),
+                warning: hex(0xc58a1b),
+                warning_foreground: hex(0x2b1d0b),
+                danger: hex(0x9c2f1f),
+                info: hex(0x2e6f7a),
+                sidebar: hex(0xeee4cb),
+                sidebar_foreground: hex(0x3d2f1f),
+                sidebar_border: hex(0xd5c6a4),
+                sidebar_accent: hex(0xdfd0ab),
+                sidebar_accent_foreground: hex(0x2f2315),
+                red: hex(0xa63d2f),
+                red_light: hex(0xc4604f),
+                green: hex(0x56742c),
+                green_light: hex(0x7a9a4a),
+                yellow: hex(0xa8791d),
+                yellow_light: hex(0xcc9a33),
+                blue: hex(0x35607f),
+                blue_light: hex(0x5a85a6),
+                magenta: hex(0x7d4a73),
+                magenta_light: hex(0xa0709a),
+                cyan: hex(0x3a7a74),
+                cyan_light: hex(0x5fa09a),
+            },
+            terminal: TerminalColors {
+                foreground: hex(0x433422),
+                background: hex(0xf4ecd8),
+                cursor: hex(0x704214),
+                selection: hexa(0xb89b5e66),
+                ansi: [
+                    hex(0x1a120a),
+                    hex(0xa63d2f),
+                    hex(0x56742c),
+                    hex(0xa8791d),
+                    hex(0x35607f),
+                    hex(0x7d4a73),
+                    hex(0x3a7a74),
+                    hex(0xd9cdb0),
+                    hex(0x7a6a52),
+                    hex(0xc4604f),
+                    hex(0x7a9a4a),
+                    hex(0xcc9a33),
+                    hex(0x5a85a6),
+                    hex(0xa0709a),
+                    hex(0x5fa09a),
+                    hex(0xfffaf0),
+                ],
+            },
+        }
+    }
+
+    fn channels(colour: Hsla) -> [u8; 4] {
+        let rgba = colour.to_rgb();
+        [rgba.r, rgba.g, rgba.b, rgba.a].map(|channel| (channel * 255.0).round() as u8)
+    }
+
+    fn role(colors: &Colors, name: &str) -> Hsla {
+        colors
+            .roles()
+            .into_iter()
+            .find(|(role, _)| *role == name)
+            .unwrap_or_else(|| panic!("`{name}` is no role of Colors"))
+            .1
+    }
+
+    /// WCAG 2's relative luminance of an opaque colour.
+    fn luminance(colour: Hsla) -> f32 {
+        let rgba = colour.to_rgb();
+        let linear = |c: f32| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * linear(rgba.r) + 0.7152 * linear(rgba.g) + 0.0722 * linear(rgba.b)
+    }
+
+    /// `colour` laid over the opaque `ground`.
+    fn composited(colour: Hsla, ground: Hsla) -> Hsla {
+        let (over, under) = (colour.to_rgb(), ground.to_rgb());
+        let mix = |a: f32, b: f32| a * over.a + b * (1.0 - over.a);
+        gpui_kit::Rgba {
+            r: mix(over.r, under.r),
+            g: mix(over.g, under.g),
+            b: mix(over.b, under.b),
+            a: 1.0,
+        }
+        .into()
+    }
+
+    /// The contrast ratio of `text` on `ground`, each laid over `backdrop` first.
+    fn contrast(text: Hsla, ground: Hsla, backdrop: Hsla) -> f32 {
+        let (a, b) = (
+            luminance(composited(text, backdrop)),
+            luminance(composited(ground, backdrop)),
+        );
+        let (lighter, darker) = if a > b { (a, b) } else { (b, a) };
+        (lighter + 0.05) / (darker + 0.05)
+    }
+
+    #[test]
+    fn a_third_theme_written_as_one_definition_is_accepted_and_applied_by_name() {
+        let themes = Themes::built_in().with(sepia()).expect("a new name");
+        assert_eq!(
+            themes
+                .all()
+                .iter()
+                .map(|theme| theme.name.as_str())
+                .collect::<Vec<_>>(),
+            [LIGHT, DARK, "Sepia"]
+        );
+        assert_eq!(themes.named("sEPia"), Some(&sepia()));
+        for system in [Appearance::Light, Appearance::Dark] {
+            assert_eq!(
+                themes.resolve(&ThemeChoice::Named("Sepia".to_owned()), system),
+                &sepia(),
+                "a chosen theme is drawn whatever the system says"
+            );
+        }
+        // Chosen by a name written another way, it is still found.
+        assert_eq!(
+            themes.resolve(&ThemeChoice::Named("SEPIA".to_owned()), Appearance::Dark),
+            &sepia()
+        );
+
+        // Applied: every role of the definition reaches the toolkit's colours, and no other.
+        let mut kit = ThemeColor::default();
+        kit.accordion = hex(0x010203);
+        sepia().onto(&mut kit);
+        let given = Colors::of(&kit).roles();
+        let wanted = sepia().colors.roles();
+        assert_eq!(given.len(), wanted.len());
+        for ((name, given), (wanted_name, wanted)) in given.into_iter().zip(wanted) {
+            assert_eq!(name, wanted_name);
+            assert_eq!(given, wanted, "role `{name}` as the toolkit holds it");
+        }
+        assert_eq!(kit.accordion, hex(0x010203), "a role of the toolkit's own");
+    }
+
+    #[test]
+    fn a_definition_is_refused_for_a_name_taken_or_not_a_name_and_the_themes_stay() {
+        let themes = Themes::built_in().with(sepia()).expect("a new name");
+        let named = |name: &str| ThemeDefinition {
+            name: name.to_owned(),
+            ..sepia()
+        };
+        assert_eq!(
+            themes.clone().with(sepia()),
+            Err(ThemeError::Taken("Sepia".to_owned()))
+        );
+        assert_eq!(
+            themes.clone().with(named("SEPIA")),
+            Err(ThemeError::Taken("SEPIA".to_owned())),
+            "case aside"
+        );
+        assert_eq!(
+            Themes::built_in().with(named("dark")),
+            Err(ThemeError::Taken("dark".to_owned()))
+        );
+        for bad in [String::new(), "x".repeat(65), "two\nlines".to_owned()] {
+            assert_eq!(
+                themes.clone().with(named(&bad)),
+                Err(ThemeError::BadName(bad.clone()))
+            );
+        }
+        let longest = "x".repeat(64);
+        let longest = Themes::built_in()
+            .with(named(&longest))
+            .expect("64 is fine");
+        assert_eq!(longest.all().len(), 3);
+        // Characters, not bytes: 64 of two bytes each is a name.
+        let wide = "é".repeat(64);
+        assert!(Themes::built_in().with(named(&wide)).is_ok());
+    }
+
+    #[test]
+    fn a_choice_that_names_no_theme_or_none_is_drawn_as_the_systems_appearance() {
+        let themes = Themes::built_in().with(sepia()).expect("a new name");
+        for choice in [
+            ThemeChoice::System,
+            ThemeChoice::Named("Nowhere".to_owned()),
+        ] {
+            assert_eq!(themes.resolve(&choice, Appearance::Dark), &dark());
+            assert_eq!(themes.resolve(&choice, Appearance::Light), &light());
+        }
+        // The built-in themes by their own names, whatever the system says.
+        assert_eq!(
+            themes.resolve(&ThemeChoice::Named(DARK.to_owned()), Appearance::Light),
+            &dark()
+        );
+        assert_eq!(
+            themes.resolve(&ThemeChoice::Named(LIGHT.to_owned()), Appearance::Dark),
+            &light()
+        );
+        // A third theme of a dark appearance is not what "as the system" gives.
+        let night = ThemeDefinition {
+            name: "Night".to_owned(),
+            appearance: Appearance::Dark,
+            ..sepia()
+        };
+        let themes = themes.with(night).expect("a new name");
+        assert_eq!(
+            themes.resolve(&ThemeChoice::System, Appearance::Dark),
+            &dark()
+        );
+    }
+
+    #[gpui_kit::test]
+    fn the_applied_definition_is_the_light_one_until_one_is_set_and_then_that_one(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(|cx| {
+            assert_eq!(applied(cx), light());
+            set_applied(sepia(), cx);
+            assert_eq!(applied(cx), sepia());
+            set_applied(dark(), cx);
+            assert_eq!(applied(cx), dark());
+        });
+    }
+
+    #[test]
+    fn every_role_has_its_own_name_and_the_lists_of_pairs_name_roles() {
+        let roles = light().colors.roles();
+        assert_eq!(roles.len(), 38);
+        let mut names: Vec<_> = roles.iter().map(|(name, _)| *name).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), 38, "no name twice");
+        for (first, second) in READABLE.iter().chain(DISTINCT) {
+            for name in [first, second] {
+                assert!(names.contains(name), "`{name}` is no role");
+            }
+        }
+    }
+
+    #[test]
+    fn in_each_built_in_theme_every_text_role_is_readable_on_its_ground() {
+        for theme in [light(), dark()] {
+            let colors = &theme.colors;
+            for (text, ground) in READABLE {
+                let ratio = contrast(role(colors, text), role(colors, ground), colors.background);
+                assert!(
+                    ratio >= 4.5,
+                    "{}: `{text}` on `{ground}` is {ratio:.2} to 1",
+                    theme.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_contrast_a_test_reads_is_wcags_and_sees_what_is_not_readable() {
+        let (black, white) = (hex(0x000000), hex(0xffffff));
+        assert!((contrast(black, white, white) - 21.0).abs() < 0.01);
+        assert!((contrast(white, black, white) - 21.0).abs() < 0.01);
+        assert!((contrast(white, white, black) - 1.0).abs() < 0.001);
+        // Mid grey on white, as WCAG's own tables have it: 4.48 to 1 for #777777.
+        assert!((contrast(hex(0x777777), white, white) - 4.48).abs() < 0.01);
+        // A ground with alpha is laid over the backdrop first: half black on white is
+        // mid grey, and white text on it reads 4.0 to 1.
+        let half = hexa(0x00000080);
+        assert!((contrast(white, half, white) - 4.0).abs() < 0.02);
+        // The kit's own pair that the built-in light theme had to leave: white text on its
+        // yellow.
+        assert!(contrast(hex(0xfafafa), hex(0xeab308), white) < 4.5);
+    }
+
+    #[test]
+    fn in_each_built_in_theme_the_roles_that_must_differ_do_and_so_do_the_terminals_colours() {
+        for theme in [light(), dark()] {
+            for (first, second) in DISTINCT {
+                assert_ne!(
+                    role(&theme.colors, first),
+                    role(&theme.colors, second),
+                    "{}: `{first}` and `{second}`",
+                    theme.name
+                );
+            }
+            let ansi = theme.terminal.ansi.map(channels);
+            for (number, colour) in ansi.iter().enumerate() {
+                assert!(
+                    !ansi[..number].contains(colour),
+                    "{}: colour {number} repeats an earlier one",
+                    theme.name
+                );
+            }
+            assert_ne!(theme.terminal.foreground, theme.terminal.background);
+        }
+        assert_eq!(
+            (light().name.as_str(), light().appearance),
+            (LIGHT, Appearance::Light)
+        );
+        assert_eq!(
+            (dark().name.as_str(), dark().appearance),
+            (DARK, Appearance::Dark)
+        );
+    }
+
+    #[test]
+    fn the_terminal_of_a_built_in_theme_is_drawn_from_its_roles_as_the_module_says() {
+        for theme in [light(), dark()] {
+            let (colors, terminal) = (&theme.colors, &theme.terminal);
+            assert_eq!(terminal.foreground, colors.foreground);
+            assert_eq!(terminal.background, colors.background);
+            assert_eq!(terminal.cursor, colors.foreground);
+            assert_eq!(terminal.selection, colors.selection);
+            let named = [
+                colors.red,
+                colors.green,
+                colors.yellow,
+                colors.blue,
+                colors.magenta,
+                colors.cyan,
+            ];
+            let bright = [
+                colors.red_light,
+                colors.green_light,
+                colors.yellow_light,
+                colors.blue_light,
+                colors.magenta_light,
+                colors.cyan_light,
+            ];
+            assert_eq!(terminal.ansi[0], hex(0x000000));
+            assert_eq!(terminal.ansi[1..7], named);
+            assert_eq!(terminal.ansi[7], hex(0xe5e5e5));
+            assert_eq!(terminal.ansi[8], hex(0x7f7f7f));
+            assert_eq!(terminal.ansi[9..15], bright);
+            assert_eq!(terminal.ansi[15], hex(0xffffff));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn the_built_in_themes_are_the_toolkits_own_colours_but_for_the_two_roles_made_readable(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        for (mode, theme, changed) in [
+            (
+                ThemeMode::Light,
+                light(),
+                &["warning_foreground", "danger"][..],
+            ),
+            (ThemeMode::Dark, dark(), &["warning_foreground"][..]),
+        ] {
+            let kit = cx.update(|cx| {
+                Theme::change(mode, None, cx);
+                Colors::of(&cx.global::<Theme>().colors)
+            });
+            for ((name, own), (_, kits)) in theme.colors.roles().into_iter().zip(kit.roles()) {
+                if changed.contains(&name) {
+                    assert_ne!(channels(own), channels(kits), "`{name}` was changed");
+                } else {
+                    assert_eq!(channels(own), channels(kits), "`{name}` as the kit has it");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_numbered_colours_above_the_sixteen_are_xterms_and_a_value_is_itself() {
+        // Corners of the cube: 16 is black, 21 full blue, 196 full red, 231 white.
+        assert_eq!(indexed(16), hex(0x000000));
+        assert_eq!(indexed(21), hex(0x0000ff));
+        assert_eq!(indexed(196), hex(0xff0000));
+        assert_eq!(indexed(231), hex(0xffffff));
+        // One step of each channel: 55, then 95 plus 40 for each step after it.
+        assert_eq!(indexed(17), hex(0x00005f));
+        assert_eq!(indexed(16 + 36), hex(0x5f0000));
+        assert_eq!(indexed(16 + 6 * 2 + 3), hex(0x0087af));
+        // The greys: 8 plus 10 a step, 232 to 255.
+        assert_eq!(indexed(232), hex(0x080808));
+        assert_eq!(indexed(244), hex(0x808080));
+        assert_eq!(indexed(255), hex(0xeeeeee));
+        // Under 16 it gives xterm's own sixteen, not the theme's.
+        assert_eq!(indexed(1), hex(0xcd0000));
+        assert_eq!(indexed(15), hex(0xffffff));
+        assert_eq!(rgb24(0x12, 0x34, 0x56), hex(0x123456));
+    }
 }
