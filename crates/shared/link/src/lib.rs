@@ -1007,6 +1007,23 @@ mod tests {
     }
 
     #[test]
+    fn a_folder_for_worktrees_is_the_same_thing_as_another_of_its_repository_and_no_other() {
+        let of = |repository: &str, folder: Option<&str>| Setting::WorktreesFolder {
+            repository: RepositoryId::new(repository.repeat(32)),
+            folder: folder.map(PathBuf::from),
+        };
+        assert!(of("3", Some("/a")).same_thing_as(&of("3", None)));
+        assert!(of("3", None).same_thing_as(&of("3", Some("/b"))));
+        assert!(!of("3", Some("/a")).same_thing_as(&of("4", Some("/a"))));
+        let answer = Setting::ServersInRepository {
+            repository: RepositoryId::new("3".repeat(32)),
+            allowed: true,
+        };
+        assert!(!of("3", None).same_thing_as(&answer) && !answer.same_thing_as(&of("3", None)));
+        assert!(!of("3", None).same_thing_as(&Setting::KeepStates { days: 30 }));
+    }
+
+    #[test]
     fn the_cache_folder_is_where_the_environment_says() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
@@ -1564,6 +1581,14 @@ mod tests {
                 Setting::OptionKey(OptionKey::ByLayout),
                 Setting::OptionKey(OptionKey::Meta),
                 Setting::OptionKey(OptionKey::Characters),
+                Setting::WorktreesFolder {
+                    repository: RepositoryId::new("33333333333333333333333333333333"),
+                    folder: Some(PathBuf::from("/src/worktrees de l'été")),
+                },
+                Setting::WorktreesFolder {
+                    repository: RepositoryId::new("44444444444444444444444444444444"),
+                    folder: None,
+                },
             ]),
             Reply::Settings(Vec::new()),
             Reply::Answer {
@@ -1720,6 +1745,10 @@ mod tests {
                 workspace: workspace.clone(),
             },
             Fact::SettingChanged(Setting::Theme(ThemeChoice::Named("Dark".to_owned()))),
+            Fact::SettingChanged(Setting::WorktreesFolder {
+                repository: RepositoryId::new("33333333333333333333333333333333"),
+                folder: None,
+            }),
             Fact::Step {
                 workspace,
                 session: session_id(),

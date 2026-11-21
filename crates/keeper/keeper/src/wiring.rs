@@ -103,6 +103,8 @@
 // A worktree made from a branch with an agent in it, which `Parts::open_terminal` serves.
 mod worktrees;
 
+pub(crate) use worktrees::set_worktrees_folder;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -1692,7 +1694,9 @@ pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
             other @ (Refused::UnknownRepository(_)
             | Refused::NotABranchName(_)
             | Refused::BranchExists(_)
-            | Refused::FolderExists(_)) => Refusal::Failed {
+            | Refused::FolderExists(_)
+            | Refused::FolderNotAbsolute(_)
+            | Refused::FolderInsideRepository(_)) => Refusal::Failed {
                 reason: other.to_string(),
             },
         },

@@ -9,7 +9,13 @@
 //!
 //! Each reader of a setting of the whole app reads it through one call below, which gives
 //! the default of `yaar_link`'s table where the user set none.
+//!
+//! The folder the user named for the worktrees of a repository is read by
+//! [`SettingList::worktrees_folder`] and set from the settings screen by
+//! [`SettingList::set_answered`], which, unlike [`SettingList::set`], gives the Keeper's
+//! answer: the Keeper refuses a folder it cannot take, and the screen shows why.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::*;
@@ -199,6 +205,14 @@ impl SettingList {
         todo!("the answers on the servers inside repositories")
     }
 
+    /// The folder the user named for the worktrees the app creates for `repository`; none
+    /// where none is set, or where `folder: None` was set last: the app then makes them
+    /// beside the repository, where it keeps its worktrees.
+    pub fn worktrees_folder(&self, repository: &RepositoryId) -> Option<PathBuf> {
+        let _ = repository;
+        todo!("the folder set for the repository, if any")
+    }
+
     /// Takes `setting` in the place of the one it is the same thing as, or last, tells the
     /// observers, and asks the Keeper to keep it with `Request::SetSetting`. The answer is
     /// not waited for; a refusal has the list asked again.
@@ -226,4 +240,22 @@ impl SettingList {
         })
         .detach();
     }
+
+    /// As [`SettingList::set`]: takes `setting` at once and asks the Keeper to keep it;
+    /// and gives the answer. `Ok` once the Keeper answered `Reply::Done`. Otherwise the
+    /// list is asked again, as `set` does, and the task gives `Err` with a sentence to show
+    /// the user: the reason of a `Refusal::Failed`, the `Display` of any other refusal, or
+    /// [`NOT_KEPT`] when the link is gone or the answer is no answer to a set.
+    pub fn set_answered(
+        &mut self,
+        setting: Setting,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), String>> {
+        let _ = (setting, cx);
+        todo!("set, and give the Keeper's answer, as the doc says")
+    }
 }
+
+/// The sentence [`SettingList::set_answered`] gives when the Keeper gave no answer to the
+/// set.
+pub const NOT_KEPT: &str = "The app could not keep the setting: the Keeper did not answer.";

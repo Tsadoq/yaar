@@ -20,6 +20,7 @@
 //! | [`Setting::TerminalPlace`] | 5 | the app's | [`TerminalPlace::Right`] |
 //! | [`Setting::KeepStates`] | 6 | the app's | 30 days |
 //! | [`Setting::OptionKey`] | 7 | the app's | [`OptionKey::ByLayout`] |
+//! | [`Setting::WorktreesFolder`] | 8 | a repository's | none: beside the repository, where it keeps its worktrees |
 //!
 //! A setting of the app's is one of its kind: two settings of one kind are the same thing,
 //! whatever their values ([`Setting::same_thing_as`]). The defaults are the Window's to
@@ -29,6 +30,15 @@
 //! lies inside a repository first runs is a setting of that repository,
 //! [`Setting::ServersInRepository`]: asked once for the repository, whichever of its
 //! worktrees is on screen, and kept across restarts.
+//!
+//! The folder the worktrees the app creates for a repository go in is a setting of that
+//! repository too, [`Setting::WorktreesFolder`], one of its kind for each repository. With
+//! none set, or with `folder: None` set, a new worktree lies where the repository already
+//! keeps its worktrees: in the folder its linked worktrees share, else in
+//! `<repository>.worktrees` beside it. Setting `folder: None` is how the user goes back to
+//! that rule.
+
+use std::path::PathBuf;
 
 use crate::LinkError;
 use crate::wire::{In, Out};
@@ -136,6 +146,14 @@ pub enum Setting {
     },
     /// What the Option key does in a terminal.
     OptionKey(OptionKey),
+    /// The folder the worktrees the app creates for a repository go in.
+    WorktreesFolder {
+        /// The repository.
+        repository: RepositoryId,
+        /// An absolute folder, outside every worktree of the repository and its git folder;
+        /// none for the rule the app follows when the user named no folder.
+        folder: Option<PathBuf>,
+    },
 }
 
 impl Setting {
@@ -152,6 +170,12 @@ impl Setting {
             (
                 Setting::ServersInRepository { repository, .. },
                 Setting::ServersInRepository {
+                    repository: other, ..
+                },
+            ) => repository == other,
+            (
+                Setting::WorktreesFolder { repository, .. },
+                Setting::WorktreesFolder {
                     repository: other, ..
                 },
             ) => repository == other,
@@ -238,6 +262,17 @@ pub(crate) fn write_setting(out: &mut Out, setting: &Setting) {
                 OptionKey::Characters => 2,
             });
         }
+        Setting::WorktreesFolder { repository, folder } => {
+            out.u8(8);
+            out.text(repository.as_str());
+            match folder {
+                None => out.u8(0),
+                Some(folder) => {
+                    out.u8(1);
+                    out.path(folder);
+                }
+            }
+        }
     }
 }
 
@@ -285,6 +320,18 @@ pub(crate) fn read_setting(input: &mut In<'_>) -> Result<Setting, LinkError> {
             2 => OptionKey::Characters,
             _ => return Err(LinkError::Malformed("an unknown setting of the Option key")),
         }),
+        8 => Setting::WorktreesFolder {
+            repository: RepositoryId::new(input.text()?),
+            folder: match input.u8()? {
+                0 => None,
+                1 => Some(input.path()?),
+                _ => {
+                    return Err(LinkError::Malformed(
+                        "a folder for worktrees neither none nor one",
+                    ));
+                }
+            },
+        },
         _ => return Err(LinkError::Malformed("an unknown kind of setting")),
     })
 }

@@ -73,7 +73,7 @@ pub use looks::Looks;
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
 pub use navigation::{Asking, NavError, Navigation};
 pub use routes::Routes;
-pub use settings::SettingList;
+pub use settings::{NOT_KEPT, SettingList};
 pub use settings_screen::SettingsScreen;
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,

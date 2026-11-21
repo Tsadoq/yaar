@@ -16,7 +16,11 @@
 //! | `Setting::TerminalPlace` | `Setting::TerminalPlace` | never |
 //! | `Setting::KeepStates` | `Setting::KeepStates` | `Failed` for 0 days |
 //! | `Setting::OptionKey` | `Setting::OptionKey` | never |
+//! | `Setting::WorktreesFolder` | `Setting::WorktreesFolder` | `Failed` for a repository it does not hold, and for a folder `Workspaces::check_worktrees_folder` refuses, with its sentence |
 //!
+//! A folder for worktrees is checked against the repository's worktrees before it is kept,
+//! which only the Workspaces part can do: its set is `wiring::worktrees::set_folder`'s,
+//! beside the creation of a worktree that reads it.
 //! Every setting the Store lists is sent, each mapped back the same way.
 //!
 //! `GetSettings` waits the Keeper's turn, and a kept setting is told as
@@ -49,6 +53,9 @@ pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Resul
             repository,
             allowed,
         } => return set_of_repository(kept, repository, *allowed, facts),
+        Setting::WorktreesFolder { repository, folder } => {
+            return crate::wiring::set_worktrees_folder(kept, repository, folder.as_deref(), facts);
+        }
         Setting::TurnEnd(_)
         | Setting::StopAfter { .. }
         | Setting::Theme(_)
@@ -136,7 +143,8 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
         | yaar_store::Setting::Theme(_)
         | yaar_store::Setting::TerminalPlace(_)
         | yaar_store::Setting::KeepStates { .. }
-        | yaar_store::Setting::OptionKey(_) => None,
+        | yaar_store::Setting::OptionKey(_)
+        | yaar_store::Setting::WorktreesFolder { .. } => None,
     }
 }
 

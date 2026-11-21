@@ -224,6 +224,12 @@ pub enum Refusal {
     BranchExists(String),
     /// Something is at this folder already.
     FolderExists(PathBuf),
+    /// A folder named for the worktrees of a repository is not an absolute path, or holds a
+    /// `..`.
+    FolderNotAbsolute(PathBuf),
+    /// A folder named for the worktrees of a repository lies inside one of its worktrees or
+    /// inside its git folder, or is one of them.
+    FolderInsideRepository(PathBuf),
 }
 
 impl fmt::Display for Refusal {
@@ -258,6 +264,16 @@ impl fmt::Display for Refusal {
             }
             Self::BranchExists(name) => write!(f, "a branch named {name} exists already"),
             Self::FolderExists(path) => write!(f, "{} is there already", path.display()),
+            Self::FolderNotAbsolute(path) => write!(
+                f,
+                "{} is not an absolute folder: name one from / on, with no ..",
+                path.display()
+            ),
+            Self::FolderInsideRepository(path) => write!(
+                f,
+                "{} lies inside a worktree or the git folder of the repository",
+                path.display()
+            ),
         }
     }
 }

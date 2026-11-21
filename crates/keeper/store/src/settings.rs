@@ -21,6 +21,7 @@
 //! | [`Setting::OptionKey`], from slice 9 | `setting` | `option_key` | `by_layout`, `meta`, `characters` |
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
 //! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
+//! | [`Setting::WorktreesFolder`], from slice 9 | `repository_setting` | `worktrees_folder` | the absolute folder as text; the empty text for `folder: None` |
 //!
 //! A setting of a repository the Store does not hold is refused, and a row of one it no longer
 //! holds is not listed. Settings of repositories come last in [`Store::settings`], after
@@ -36,6 +37,16 @@
 //! `keep_states` are read only as plain digits and never 0: a row of 0 is not listed, and
 //! [`Store::set_setting`] refuses one, as it refuses an empty or too long theme's name,
 //! with a sentence that names the setting.
+//!
+//! A folder for the worktrees of a repository is kept as the text of its path, which must
+//! be absolute and valid UTF-8 (the Store keeps text): [`Store::set_setting`] refuses any
+//! other, with a sentence that names the setting. `folder: None`, the user's way back to
+//! the rule the app follows when no folder is named, is kept as the empty text and listed
+//! as `folder: None`; a row whose text is neither empty nor an absolute path is not listed.
+//! That the folder lies outside every worktree of the repository and its git folder is the
+//! Workspaces part's to check, which knows the worktrees; the Store knows only text.
+
+use std::path::PathBuf;
 
 use rusqlite::params;
 
@@ -132,6 +143,13 @@ pub enum Setting {
         /// True for yes.
         allowed: bool,
     },
+    /// The folder the worktrees the app creates for a repository go in.
+    WorktreesFolder {
+        /// The repository.
+        repository: RepositoryId,
+        /// An absolute folder; none for the rule the app follows when the user named none.
+        folder: Option<PathBuf>,
+    },
 }
 
 /// The name and value a setting of the whole app is kept as, or the workspace, name and
@@ -139,7 +157,7 @@ pub enum Setting {
 enum Row {
     App(&'static str, String),
     Workspace(String, &'static str, &'static str),
-    Repository(String, &'static str, &'static str),
+    Repository(String, &'static str, String),
 }
 
 impl Setting {
@@ -189,8 +207,9 @@ impl Setting {
             } => Row::Repository(
                 repository.as_str().to_owned(),
                 "servers_inside",
-                if *allowed { "yes" } else { "no" },
+                if *allowed { "yes" } else { "no" }.to_owned(),
             ),
+            Self::WorktreesFolder { .. } => todo!("the row of the folder for worktrees"),
         }
     }
 
@@ -258,6 +277,7 @@ impl Setting {
             Self::OptionKey(_) => 5,
             Self::FlowForm { .. } => 6,
             Self::ServersInRepository { .. } => 7,
+            Self::WorktreesFolder { .. } => 8,
         }
     }
 }
@@ -325,7 +345,8 @@ impl Store {
     /// Keeps `setting`, in the place of the value the same setting had: one transaction
     /// that returns when the change is on the drive, so that a Keeper killed after the
     /// call finds it. A setting of a workspace or of a repository the Store does not hold
-    /// is refused with a sentence that names it.
+    /// is refused with a sentence that names it, and so is a value the module doc's table
+    /// refuses.
     pub fn set_setting(&self, setting: &Setting) -> Result<(), StoreError> {
         let row = setting.row();
         self.try_ask(move |connection| {

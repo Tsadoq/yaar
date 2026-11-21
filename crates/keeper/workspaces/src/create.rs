@@ -4,8 +4,9 @@
 //! holding anything else up (the Keeper runs it after it let go of its parts):
 //!
 //! 1. [`Workspaces::plan_worktree`]: the repository and the folder, read from the Store and
-//!    from git; nothing is written. Gives a [`Planned`], which owns what the next step
-//!    needs.
+//!    from git, in the folder the user named for the repository when the caller hands one
+//!    (the Keeper reads it from the Store's settings); nothing is written. Gives a
+//!    [`Planned`], which owns what the next step needs.
 //! 2. [`Planned::add`]: the user's own git makes the worktree on a new branch made from the
 //!    branch `from` (`yaar_recorder::Worktree::add_worktree`, which checks first and leaves
 //!    nothing when it refuses or fails). Needs no `Workspaces`.
@@ -23,11 +24,15 @@
 //!
 //! # Where the worktree lies
 //!
-//! Beside the repository, where the repository keeps its worktrees: the first of these that
-//! applies gives the folder the new worktree is made in, and the worktree is that folder
-//! joined with the branch's name in which every `/` is made `-` (`feature/login` gives
-//! `feature-login`).
+//! In the folder the user named for the repository, or else beside the repository, where
+//! the repository keeps its worktrees: the first of these that applies gives the folder the
+//! new worktree is made in, and the worktree is that folder joined with the branch's name in
+//! which every `/` is made `-` (`feature/login` gives `feature-login`).
 //!
+//! 0. The caller hands a folder (`folder` of [`Workspaces::plan_worktree`]: the user's
+//!    `WorktreesFolder` setting of the repository): that folder, as given, once
+//!    [`Workspaces::check_worktrees_folder`] passed it again and the checks of creation
+//!    below passed. Rules 1 and 2 are then not read.
 //! 1. The repository has linked worktrees, besides its main one, whose folders all lie in one
 //!    folder: that folder. A bare repository's worktrees are all linked.
 //! 2. Otherwise a folder beside the main worktree, named after it with `.worktrees` added:
@@ -36,8 +41,42 @@
 //!
 //! The folders are read from `git worktree list --porcelain` (`yaar_recorder::Worktree::list`),
 //! a worktree whose folder is gone left out; "lies in" is the parent folder of each, compared
-//! as git prints them. The folder of rule 2 is made by step 2, after its checks passed, when
-//! it is not there.
+//! as git prints them. The folder of rule 2, or of rule 0, is made by step 2, after its
+//! checks passed, when it is not there; only that one folder is made, never its parents.
+//!
+//! # A folder the user names
+//!
+//! [`Workspaces::check_worktrees_folder`] says whether a folder may hold the worktrees the
+//! app creates for a repository. The Keeper runs it when the user sets the folder, before
+//! the Store keeps it, and step 1 runs it again at each creation, since a worktree can have
+//! come to lie around the folder since. It writes nothing and refuses:
+//!
+//! | Case | Refusal |
+//! | --- | --- |
+//! | The Store holds no repository with this id, or none of its worktrees can be read | [`Refusal::UnknownRepository`] |
+//! | The folder is not absolute, or one of its parts is `..` | [`Refusal::FolderNotAbsolute`] |
+//! | The folder is, or lies inside, the folder of a worktree of the repository (the main one and every linked one `git worktree list --porcelain` lists whose folder is there) or the repository's git folder (`git rev-parse --git-common-dir`, made absolute) | [`Refusal::FolderInsideRepository`] |
+//!
+//! "Is, or lies inside" compares whole parts of paths (`Path::starts_with`), each side
+//! resolved: a worktree's folder and the git folder by `fs::canonicalize`; the named folder
+//! by `fs::canonicalize` of the longest leading part of it that exists, with the parts after
+//! it appended as written. So a folder reached through a symbolic link into a worktree, or
+//! one not made yet below a worktree, is refused. A folder beside the repository, its
+//! parent, or any other folder outside them, is taken.
+//!
+//! Checked only when a worktree is made, by step 1, after the checks above and before
+//! anything is made, since the folder may be made, mounted or moved between the setting and
+//! the creation:
+//!
+//! | Case | Refusal |
+//! | --- | --- |
+//! | Something that is not a folder is at the named folder (a symbolic link to a folder counts as the folder) | [`Refusal::NoSuchFolder`] of the named folder |
+//! | Nothing is at the named folder and nothing is at its parent folder either | [`Refusal::NoSuchFolder`] of the parent |
+//!
+//! A folder the user named that is not there is made by step 2, as rule 2's is, and taken
+//! away again with the worktree when the creation fails (`Added::made_parent`). Whether
+//! the user may write into it is git's to find: its failure is `WorkspaceError::Git`, and
+//! nothing is left.
 //!
 //! # What is refused, and what is left
 //!
@@ -45,6 +84,7 @@
 //! | --- | --- | --- |
 //! | The Store holds no repository with this id | [`Refusal::UnknownRepository`] | by step 1 |
 //! | The repository's every worktree is gone or cannot be read | [`Refusal::UnknownRepository`] | by step 1 |
+//! | The caller's `folder` is refused, as "A folder the user names" says | [`Refusal::FolderNotAbsolute`], [`Refusal::FolderInsideRepository`], [`Refusal::NoSuchFolder`] | by step 1 |
 //! | `branch` is no name git takes for a branch | [`Refusal::NotABranchName`] | by step 2, before git runs |
 //! | A branch named `branch` exists already, checked out or not | [`Refusal::BranchExists`] | by step 2, before git runs |
 //! | `from` names no branch, local or of a remote | [`Refusal::UnknownRevision`] | by step 2, before git runs |
@@ -115,15 +155,30 @@ pub struct Created {
 
 impl Workspaces {
     /// Step 1 of the module doc: the repository `repository` and the folder a new worktree
-    /// on the branch `branch`, made from the branch `from`, would lie in. Writes nothing.
+    /// on the branch `branch`, made from the branch `from`, would lie in: in `folder` when
+    /// the caller hands the one the user named for the repository, else by the rules of
+    /// the module doc. Writes nothing.
     pub fn plan_worktree(
         &self,
         repository: &RepositoryId,
         from: &str,
         branch: &str,
+        folder: Option<&Path>,
     ) -> Result<Planned, WorkspaceError> {
-        let _ = (repository, from, branch);
+        let _ = (repository, from, branch, folder);
         todo!("find the repository and place the folder, as the module doc says")
+    }
+
+    /// Whether `folder` may hold the worktrees the app creates for `repository`, as the
+    /// module doc's "A folder the user names" says: `Ok` when it may, else the refusal.
+    /// Writes nothing.
+    pub fn check_worktrees_folder(
+        &self,
+        repository: &RepositoryId,
+        folder: &Path,
+    ) -> Result<(), WorkspaceError> {
+        let _ = (repository, folder);
+        todo!("check the folder against the repository's worktrees, as the module doc says")
     }
 
     /// Step 3 of the module doc: opens the worktree `added` of `planned` as a workspace and

@@ -472,8 +472,10 @@ pub enum Request {
     /// by [`Reply::Done`] once the Keeper's database holds it, where a Keeper started again
     /// finds it; refused with [`Refusal::UnknownWorkspace`] for a setting of a workspace the
     /// Keeper does not know, and with [`Refusal::Failed`] for one of a repository it does
-    /// not know, a time of 0 ([`Setting::StopAfter`], [`Setting::KeepStates`]) and a theme
-    /// named by an empty name. Told to every Window as [`Fact::SettingChanged`].
+    /// not know, a time of 0 ([`Setting::StopAfter`], [`Setting::KeepStates`]), a theme
+    /// named by an empty name, and a folder for worktrees ([`Setting::WorktreesFolder`])
+    /// that is not absolute or lies inside a worktree or the git folder of its repository,
+    /// with the sentence that says which. Told to every Window as [`Fact::SettingChanged`].
     ///
     /// The user starts it by a control: switching the form of Flow keeps the form chosen
     /// for the workspace on screen, and each control of the settings screen keeps what it

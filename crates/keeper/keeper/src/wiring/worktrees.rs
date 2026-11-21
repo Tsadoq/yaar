@@ -10,12 +10,16 @@
 //!
 //! 1. Under the parts, at once: the agent, an Adapter by the name `agent` among the Keeper's
 //!    (`Agents::supported`), else refused with `Refusal::Failed` "there is no agent CLI named
-//!    <agent>"; then `Workspaces::plan_worktree(repository, from, branch)`, whose refusal is
-//!    given at once. Nothing is made. Otherwise the work of step 2 is given back.
+//!    <agent>"; then the folder the user named for the repository's worktrees, read from the
+//!    Store (`Store::settings`, the `yaar_store::Setting::WorktreesFolder` of `repository`;
+//!    none when it is not listed or its folder is none), handed over as `folder` to
+//!    `Workspaces::plan_worktree(repository, from, branch, folder)`, whose refusal is given
+//!    at once. Nothing is made. Otherwise the work of step 2 is given back.
 //! 2. The work, with the parts let go: `Planned::add`, the user's git. Its refusals and its
 //!    failure map to the Link's as `wiring::refusal` maps a `WorkspaceError`:
-//!    `UnknownRepository`, `NotABranchName`, `BranchExists` and `FolderExists` to
-//!    `Refusal::Failed` with the refusal's own sentence, `UnknownRevision` to
+//!    `UnknownRepository`, `NotABranchName`, `BranchExists`, `FolderExists`,
+//!    `FolderNotAbsolute` and `FolderInsideRepository` to `Refusal::Failed` with the
+//!    refusal's own sentence, `NoSuchFolder` to `Refusal::NoSuchFolder`, `UnknownRevision` to
 //!    `Refusal::UnknownRevision`, git's failure to `Refusal::Failed` with git's words.
 //!    Nothing is left made (the Recorder takes away what a failing git left).
 //! 3. Then, still in the work: the Keeper's shared state is reached again through the
@@ -39,10 +43,28 @@
 //!
 //! The Window shows that the worktree is being made until the reply comes
 //! (`yaar_terminal_pane::WORKTREE_BEING_MADE`); nothing bounds the time of the user's hooks.
+//!
+//! # The folder the user names for a repository's worktrees
+//!
+//! `Request::SetSetting` of `Setting::WorktreesFolder` is [`set_worktrees_folder`]'s (the
+//! settings module hands it over): under the Keeper's turn, as every setting is kept,
+//! 1. a repository the Store does not hold is refused with `Refusal::Failed` "the
+//!    repository <id> is not known", as for the answer on its language servers;
+//! 2. a folder (not none) is checked by `Workspaces::check_worktrees_folder(repository,
+//!    folder)`, whose refusal is mapped as step 2 above maps one; none is never refused:
+//!    it is the way back to the rule of `yaar_workspaces`' `create` module;
+//! 3. then kept, `Store::set_setting(&yaar_store::Setting::WorktreesFolder { .. })` (a
+//!    refusal of the Store is `Refusal::Failed` with its sentence), answered `Reply::Done`,
+//!    and `Fact::SettingChanged` with the Link's setting as it came is put into `facts`.
+//!
+//! A refusal keeps nothing and tells nothing. What is checked only when a worktree is made
+//! (the folder's parent is there, nothing but a folder is at it, no worktree of the
+//! repository has come to lie around it since) is `plan_worktree`'s.
 
+use std::path::Path;
 use std::sync::Arc;
 
-use yaar_link::{RepositoryId, TerminalSize};
+use yaar_link::{Fact, Refusal, Reply, RepositoryId, TerminalSize};
 
 use crate::Window;
 use crate::wiring::{Answered, Kept, Parts};
@@ -67,4 +89,18 @@ impl Parts {
         let _ = (kept, window, repository, from, branch, agent, size);
         todo!("check the agent, plan, then the work of the module doc")
     }
+}
+
+/// `Request::SetSetting` of `Setting::WorktreesFolder`: checks and keeps the folder the
+/// user named for the worktrees of `repository`, or `None` for the rule the app follows
+/// without one, as the module doc says; `Reply::Done`, and `Fact::SettingChanged` in
+/// `facts`, once the Store holds it.
+pub(crate) fn set_worktrees_folder(
+    kept: &Kept,
+    repository: &RepositoryId,
+    folder: Option<&Path>,
+    facts: &mut Vec<Fact>,
+) -> Result<Reply, Refusal> {
+    let _ = (kept, repository, folder, facts);
+    todo!("check the folder, keep it and tell it, as the module doc says")
 }

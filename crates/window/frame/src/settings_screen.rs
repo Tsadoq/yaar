@@ -26,7 +26,8 @@
 //! index in [`RowShown::values`], both from 0, `<label>` the words drawn. A click on a value chooses it; with the screen focused, `j` and
 //! `k` move the cursor (`settings-cursor` on its row) to the next and the previous row, `l`
 //! and `h` choose the next and the previous value of the row under the cursor, stopping at
-//! the last and the first, `enter` acts on a row that acts ([`SettingRow::Base`]), and
+//! the last and the first, `enter` acts on a row that acts ([`SettingRow::Base`],
+//! [`SettingRow::WorktreesFolder`]), and
 //! `shift-c` cleans up the recorded states ([`crate::CleanUpStates`]).
 //!
 //! | Row | Values (labels) | Model read | What a choice does |
@@ -40,6 +41,7 @@
 //! | [`SettingRow::OptionKey`] | [`BY_LAYOUT`], [`META`], [`CHARACTERS`] | `SettingList::option_key` | `SettingList::set(Setting::OptionKey)`; the terminal pane reads it at the next key |
 //! | [`SettingRow::Extension`], one for each question of `ConsentList` | [`INSTALL`], [`DONT_INSTALL`] | `ConsentList` | `ConsentList::answer`: `AnswerConsent` of that Adapter |
 //! | [`SettingRow::Servers`], one for each repository answered (`SettingList::servers_answers`) | [`RUN_SERVERS`], [`KEEP_SERVERS_OUT`] | `SettingList` | `SettingList::set(Setting::ServersInRepository)`; the model `Navigation` hands the Navigator the answer, and a yes searches again |
+//! | [`SettingRow::WorktreesFolder`], one for each repository the Window lists (`WorkspaceList::repositories`, in its order) | one value: the folder set (`SettingList::worktrees_folder`), written as its path, or [`DEFAULT_FOLDER`] | `SettingList` | `enter` or a click: the screen's own field for the folder opens, as the base row opens the Frame's; Enter there sends `SetSetting(WorktreesFolder)` (below) |
 //! | [`SettingRow::States`] | the size of each workspace's states and the total, and the control [`CLEAN_UP`] | `RecordedStates` | the control, `shift-c` or a click: `RecordedStates::clean_up`; while it runs the control reads [`CLEANING`] |
 //!
 //! A value that is not one of a row's values (a stop time of 7 minutes another Window set)
@@ -54,6 +56,27 @@
 //! not list; then `Total: <size>` (`settings-size-total`); each size in the words of
 //! [`size_words`].
 //!
+//! # The folder for a repository's worktrees
+//!
+//! A row [`SettingRow::WorktreesFolder`] is titled [`TITLES`]`[10]`, `": "`, and the
+//! repository's name as the sidebar shows it (`Repository::name`); its one value is always
+//! chosen (`chosen` is `Some(0)`). `enter` on it, or a click on its value, opens a one-line
+//! field (the kit's `InputState` and `Input`, as the Frame's field for the base), drawn
+//! under the row with the selector `settings-folder-field`, holding the folder set or
+//! nothing, with [`FOLDER_PLACEHOLDER`] as its placeholder, and takes the focus; one field
+//! at a time, for one row. In it:
+//! - Enter with text (trimmed of blanks at both ends) sends
+//!   `SettingList::set_answered(Setting::WorktreesFolder { repository, folder: Some(<the
+//!   text as a path>) })`; Enter with nothing sends `folder: None`, the way back to
+//!   [`DEFAULT_FOLDER`]. The field stays open, its text kept, until the answer: `Ok` closes
+//!   it and gives the focus back to the screen; `Err` keeps it open and draws the sentence
+//!   under it with the selector `settings-folder-refused` (and its words), until the next
+//!   Enter or the field closes. The row's value is what `SettingList` holds meanwhile: the
+//!   folder at once, the kept one again after a refusal.
+//! - Escape closes it, nothing sent, the focus back to the screen.
+//!
+//! The screen judges no folder: whether one is taken is the Keeper's to say.
+//!
 //! The labels are the constants of this module, which the drawing and the tests read from
 //! this one place: a control's drawn words and its selector are made from the same constant.
 
@@ -66,8 +89,10 @@ use crate::models::Models;
 pub const SETTINGS_CONTEXT: &str = "Settings";
 
 /// The title of each row, in the order of [`SettingRow`]'s first seven kinds, then the
-/// title of the rows of an extension, of a repository's servers and of the states.
-pub const TITLES: [&str; 10] = [
+/// title of the rows of an extension, of a repository's servers and of the states, then
+/// that of a repository's folder for worktrees (drawn before the states' row: the table of
+/// the module doc gives the order rows are drawn in).
+pub const TITLES: [&str; 11] = [
     "When a turn ends",
     "Language servers off screen stop after",
     "Theme",
@@ -78,6 +103,7 @@ pub const TITLES: [&str; 10] = [
     "Extension of the agent",
     "Language servers inside the repository",
     "Recorded states",
+    "New worktrees go in",
 ];
 
 /// A turn's end selects what changed since the last review.
@@ -114,6 +140,10 @@ pub const CLEAN_UP: &str = "Clean up now";
 pub const CLEANING: &str = "Cleaning up…";
 /// The line of the states of workspaces the Window does not list.
 pub const OTHER_STATES: &str = "Other recorded states";
+/// The folder row's value when the user named no folder for the repository.
+pub const DEFAULT_FOLDER: &str = "Beside the repository, where it keeps its worktrees";
+/// The placeholder of the field for a repository's folder for worktrees.
+pub const FOLDER_PLACEHOLDER: &str = "An absolute folder; empty for beside the repository";
 
 /// The stop times offered, in minutes.
 pub const STOP_AFTER_MINUTES: [u32; 7] = [1, 2, 5, 10, 15, 30, 60];
@@ -142,6 +172,8 @@ pub enum SettingRow {
     Extension(String),
     /// The answer on the servers inside a repository.
     Servers(RepositoryId),
+    /// The folder the worktrees the app creates for a repository go in.
+    WorktreesFolder(RepositoryId),
     /// The sizes of the recorded states, and the clean-up.
     States,
 }
