@@ -18,6 +18,8 @@
 //! No interface code belongs here or in any crate beside this one.
 
 mod agents;
+mod base_moves;
+mod cleaning;
 mod reviewing;
 mod settings;
 mod watching;
@@ -141,8 +143,8 @@ struct Shared {
 impl Shared {
     /// The shared state, with the parts started on it: the parts tell the Windows what a
     /// program of a terminal does, and so need a way to this state.
-    fn start(options: &Options) -> Arc<Shared> {
-        Arc::new_cyclic(|this| Shared::new(Parts::start(options, this.clone())))
+    fn start(options: &Options, clock: Arc<dyn yaar_recorder::Clock>) -> Arc<Shared> {
+        Arc::new_cyclic(|this| Shared::new(Parts::start(options, clock, this.clone())))
     }
 
     fn new(parts: Parts) -> Shared {
@@ -415,6 +417,14 @@ fn frame_of(message: &Message) -> io::Result<Vec<u8>> {
 /// parts are ended: the programs of the terminals and what they started, the git
 /// processes the Keeper keeps, and the database.
 pub fn run(options: Options) -> io::Result<Exit> {
+    run_with_clock(options, Arc::new(yaar_recorder::SystemClock))
+}
+
+/// [`run`], with the time read from `clock`: the time each recorded state is stamped with,
+/// and the time the clean-up of states counts their age to. The program as installed hands
+/// the system's clock, through [`run`]; a test of the clean-up by the set time hands one of
+/// its own that it moved forward, so that the sweep at the start finds its states that old.
+pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) -> io::Result<Exit> {
     let socket = yaar_link::socket_address(&options.socket);
     let socket = socket.as_path();
     make_its_folder(socket, socket != options.socket)?;
@@ -437,7 +447,9 @@ pub fn run(options: Options) -> io::Result<Exit> {
 
     // Only the Keeper that holds the lock opens the database, and it is open before the
     // first Window can ask for anything.
-    let shared = Shared::start(&options);
+    let shared = Shared::start(&options, clock);
+    // The clean-up of states by the set time: at once, then every hour, until the end.
+    let sweeps = cleaning::Sweeps::start(Arc::downgrade(&shared));
 
     match fs::remove_file(socket) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -461,6 +473,8 @@ pub fn run(options: Options) -> io::Result<Exit> {
         let _ = acceptor.join();
     }
 
+    // The sweep ends before the parts it reads do.
+    drop(sweeps);
     // Each thread that serves a Window ends when its connection does.
     for window in shared.tell_nobody_any_more() {
         window.let_go();

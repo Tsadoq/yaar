@@ -23,6 +23,12 @@
 //!   the worktree with no commit and says so, in a [`Recording`];
 //!   [`StateStore::compare`] and [`StateStore::content_in`], the paths that differ
 //!   between any two of commits, states and the files on disk, and a file in any of them;
+//! - what slice 9 adds: the time each state was recorded at, read from a [`Clock`]
+//!   ([`StateStore::open_with`], [`StateStore::recorded_times`]); the clean-up of
+//!   everything a store holds that the caller does not keep ([`StateStore::clean_up`],
+//!   [`Cleaned`]); the room the stores take on disk ([`sizes`], [`StoreSizes`]); and a new
+//!   worktree made by the user's own git ([`Worktree::add_worktree`], [`Added`],
+//!   [`AddError`], [`Worktree::remove_added`]);
 //! - [`history`], the commits and the states of a worktree in the order they happened,
 //!   as [`HistoryEntry`]s.
 //!
@@ -47,6 +53,7 @@
 //! store, that stays running between reads and ends with its owner; every other answer is
 //! one run of git.
 
+mod clock;
 mod contents;
 mod git;
 mod history;
@@ -54,10 +61,13 @@ mod index;
 mod states;
 mod worktree;
 
+pub use clock::{Clock, SystemClock};
 pub use git::{Git, GitError};
 pub use history::{Entry as HistoryEntry, history};
-pub use states::{RecordError, RecordedState, Recording, StateId, StateStore};
+pub use states::{
+    Cleaned, RecordError, RecordedState, Recording, StateId, StateStore, StoreSizes, sizes,
+};
 pub use worktree::{
-    Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head, Listed, LocalBranch,
-    OpenError, Refs, RemoteBranch, Worktree,
+    AddError, Added, Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head,
+    Listed, LocalBranch, OpenError, Refs, RemoteBranch, Worktree,
 };

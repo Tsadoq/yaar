@@ -27,7 +27,10 @@ use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
+use std::time::SystemTime;
+
+use crate::clock::{Clock, SystemClock};
 
 use crate::contents::{Contents, Read, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
@@ -40,6 +43,10 @@ use crate::worktree::{
 // history's package's, beside the recording's.
 mod export;
 mod versions;
+// Deleting what nothing refers to, and the room a store takes.
+mod cleaning;
+
+pub use cleaning::{Cleaned, StoreSizes, sizes};
 
 /// The old value that `git update-ref` takes for "no such ref".
 const NO_REF: &str = "0000000000000000000000000000000000000000";
@@ -148,6 +155,8 @@ pub struct StateStore {
     // The running process that hands out file contents, once one was asked for. It has a
     // lock of its own, so that a read never waits for a recording.
     contents: Mutex<Option<Contents>>,
+    // Where the time a state is recorded at is read.
+    clock: Arc<dyn Clock>,
 }
 
 impl Drop for StateStore {
@@ -158,8 +167,21 @@ impl Drop for StateStore {
 
 impl StateStore {
     /// The store in `folder`, a bare repository made there when the folder holds none.
-    /// The folder lies in the app's folder, never in a worktree or a repository.
+    /// The folder lies in the app's folder, never in a worktree or a repository. The time a
+    /// state is recorded at is the machine's: [`StateStore::open_with`] and
+    /// [`SystemClock`].
     pub fn open(git: &Git, folder: &Path) -> Result<StateStore, RecordError> {
+        StateStore::open_with(git, folder, Arc::new(SystemClock))
+    }
+
+    /// [`StateStore::open`], with the time a state is recorded at read from `clock`: each
+    /// state commit made from now on carries `clock`'s time as its committer date, to the
+    /// second, which [`StateStore::recorded_times`] gives back.
+    pub fn open_with(
+        git: &Git,
+        folder: &Path,
+        clock: Arc<dyn Clock>,
+    ) -> Result<StateStore, RecordError> {
         if !folder.join("HEAD").exists() {
             fs::create_dir_all(folder).map_err(|e| RecordError::Store {
                 folder: folder.to_owned(),
@@ -175,7 +197,20 @@ impl StateStore {
             hooks_off: hooks_off(git, Place::GitDir(folder))?,
             writing: Mutex::new(()),
             contents: Mutex::new(None),
+            clock,
         })
+    }
+
+    /// Every state of the store with the time it was recorded at, the oldest first, as
+    /// [`StateStore::states`] lists them: the committer date of its commit, to the second.
+    /// A state recorded before slice 9 carries the machine's time of then.
+    ///
+    /// For the time to be the clock's, a recording sets `GIT_COMMITTER_DATE` and
+    /// `GIT_AUTHOR_DATE` to `@<seconds since the epoch> +0000` of [`Clock::now`] on the
+    /// `commit-tree` it runs; this reads `%(committerdate:unix)` with `git for-each-ref`.
+    pub fn recorded_times(&self) -> Result<Vec<(StateId, SystemTime)>, GitError> {
+        let _ = &self.clock;
+        todo!("the committer date of every state, as the doc says")
     }
 
     /// The folder of the store.

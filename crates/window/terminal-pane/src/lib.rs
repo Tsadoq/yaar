@@ -106,6 +106,19 @@ actions!(
         /// Answers no to that question: nothing is installed, and an entry installed
         /// before is taken out.
         KeepAgentExtensionsOut,
+        /// Empties the history of the terminal with the focus and every line of its screen
+        /// above the cursor's, which becomes the first: nothing is sent to the program.
+        Clear,
+        /// Selects the whole history and screen of the terminal with the focus.
+        SelectAll,
+        /// Scrolls the history of the terminal with the focus to its first line.
+        ScrollToTop,
+        /// Scrolls it back to the newest line.
+        ScrollToBottom,
+        /// Scrolls it one line up.
+        ScrollLineUp,
+        /// Scrolls it one line down.
+        ScrollLineDown,
     ]
 );
 
@@ -120,6 +133,10 @@ pub const FIRST_SIZE: TerminalSize = TerminalSize {
     columns: 80,
     rows: 24,
 };
+
+/// What the pane's notice says while a worktree made with an agent is being made, before the
+/// branch's name.
+pub const WORKTREE_BEING_MADE: &str = "Making the worktree of";
 
 /// How long after a key the pane keeps asking for a frame at every frame: a program's
 /// answer to the key is drawn in the first frame after it arrives, not when something

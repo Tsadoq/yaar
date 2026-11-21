@@ -1,5 +1,10 @@
 //! One worktree, read through git.
 
+// A new worktree, made by the user's own git.
+mod adding;
+
+pub use adding::{AddError, Added};
+
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fmt;

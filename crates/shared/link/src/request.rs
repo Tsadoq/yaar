@@ -20,6 +20,7 @@ use crate::review::{
     read_workspace_reviews, write_draft_on, write_workspace_reviews,
 };
 use crate::setting::{Setting, read_setting, write_setting};
+use crate::states::{StateSizes, read_state_sizes, write_state_sizes};
 use crate::terminal::{
     Ending, Program, TerminalId, TerminalSize, read_ending, read_program, read_size, write_ending,
     write_program, write_size,
@@ -174,6 +175,12 @@ request_kinds! {
     AnswerConsent = 36, User;
     /// See [`Request::ExportVersion`].
     ExportVersion = 37, Window;
+    /// See [`Request::CreateWorktree`].
+    CreateWorktree = 38, User;
+    /// See [`Request::GetStateSizes`].
+    GetStateSizes = 39, Window;
+    /// See [`Request::CleanUpStates`].
+    CleanUpStates = 40, User;
 }
 
 impl RequestKind {
@@ -464,10 +471,13 @@ pub enum Request {
     /// Keep a setting the user chose, in place of the one it is the same thing as. Answered
     /// by [`Reply::Done`] once the Keeper's database holds it, where a Keeper started again
     /// finds it; refused with [`Refusal::UnknownWorkspace`] for a setting of a workspace the
-    /// Keeper does not know. Told to every Window as [`Fact::SettingChanged`].
+    /// Keeper does not know, and with [`Refusal::Failed`] for one of a repository it does
+    /// not know, a time of 0 ([`Setting::StopAfter`], [`Setting::KeepStates`]) and a theme
+    /// named by an empty name. Told to every Window as [`Fact::SettingChanged`].
     ///
     /// The user starts it by a control: switching the form of Flow keeps the form chosen
-    /// for the workspace on screen.
+    /// for the workspace on screen, and each control of the settings screen keeps what it
+    /// changes.
     SetSetting {
         /// The setting, with its value.
         setting: Setting,
@@ -596,6 +606,44 @@ pub enum Request {
         /// The folder to write it into.
         into: PathBuf,
     },
+    /// Make a new git worktree of `repository`, on a new branch `branch` made from the
+    /// branch `from`, and start the agent CLI `agent` in it, in one step: the user's own
+    /// git makes the worktree (`git worktree add -b`), beside the repository, where the
+    /// repository keeps its worktrees, in a folder named after the branch. The new
+    /// workspace has `from` as its base. The agent runs in a new terminal of that
+    /// workspace, as [`crate::Program::Agent`] runs in [`Request::OpenTerminal`], at `size`.
+    ///
+    /// Answered by [`Reply::WorktreeCreated`]; from the reply on, what the agent writes
+    /// comes to the Window that asked, as for [`Request::OpenTerminal`], and every Window is
+    /// told [`Fact::Workspaces`] with the list that holds the new workspace. Refused, with
+    /// nothing made, with [`Refusal::Failed`] naming a repository the Keeper does not hold,
+    /// an agent no Adapter has, a branch `branch` that exists already or that git does not
+    /// take as the name of a branch, and a folder that is there already;
+    /// [`Refusal::UnknownRevision`] for a `from` that names no branch. When the agent cannot
+    /// be started, the worktree and the branch the request made are removed again, and the
+    /// refusal says why.
+    CreateWorktree {
+        /// The repository.
+        repository: RepositoryId,
+        /// The branch the worktree is made from, by its short name, local (`main`) or of a
+        /// remote (`origin/main`): the base of the new workspace.
+        from: String,
+        /// The name of the new branch, which the worktree has checked out.
+        branch: String,
+        /// The Adapter of the agent CLI to start, by its name: `claude`.
+        agent: String,
+        /// How large the Window will show the agent's terminal.
+        size: TerminalSize,
+    },
+    /// How much room the recorded states take on disk, for each workspace and in total.
+    /// Answered by [`Reply::StateSizes`].
+    GetStateSizes,
+    /// Clean the recorded states up at once: delete every state of every workspace that no
+    /// thread, no round and no reviewed mark refers to, whatever its age, with what only
+    /// such states held, and the files of long reviews of agent sessions that no longer
+    /// run. Answered by [`Reply::StateSizes`], the sizes after; every Window is told
+    /// [`Fact::StatesDeleted`] of each workspace that lost a state.
+    CleanUpStates,
 }
 
 impl Request {
@@ -639,6 +687,9 @@ impl Request {
             Self::ListConsents => RequestKind::ListConsents,
             Self::AnswerConsent { .. } => RequestKind::AnswerConsent,
             Self::ExportVersion { .. } => RequestKind::ExportVersion,
+            Self::CreateWorktree { .. } => RequestKind::CreateWorktree,
+            Self::GetStateSizes => RequestKind::GetStateSizes,
+            Self::CleanUpStates => RequestKind::CleanUpStates,
         }
     }
 }
@@ -731,6 +782,15 @@ pub enum Reply {
     /// Every Adapter that needs the user's leave to write into its CLI's settings, and how
     /// that stands.
     Consents(Vec<Consent>),
+    /// The worktree is made and the agent started in it.
+    WorktreeCreated {
+        /// The workspace of the new worktree.
+        workspace: WorkspaceId,
+        /// The terminal the agent runs in.
+        terminal: TerminalId,
+    },
+    /// How much room the recorded states take on disk.
+    StateSizes(StateSizes),
 }
 
 /// Why the Keeper did not do what a request asked.
@@ -957,6 +1017,13 @@ pub enum Fact {
     /// answered, when a question waits for an answer or a CLI's settings could not be
     /// changed. A Window that is told none then has nothing to ask.
     ConsentsChanged(Vec<Consent>),
+    /// Recorded states of this workspace were deleted: by the clean-up the user asked for,
+    /// or because the set time passed. Turns of its history may be expired now, and the
+    /// sizes of the states are smaller. A Window that shows either asks again.
+    StatesDeleted {
+        /// The workspace.
+        workspace: WorkspaceId,
+    },
 }
 
 pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
@@ -1105,6 +1172,20 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
             out.text(version);
             out.path(into);
         }
+        Request::CreateWorktree {
+            repository,
+            from,
+            branch,
+            agent,
+            size,
+        } => {
+            out.text(repository.as_str());
+            out.text(from);
+            out.text(branch);
+            out.text(agent);
+            write_size(out, *size);
+        }
+        Request::GetStateSizes | Request::CleanUpStates => {}
     }
 }
 
@@ -1248,6 +1329,15 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
             version: input.text()?,
             into: input.path()?,
         },
+        RequestKind::CreateWorktree => Request::CreateWorktree {
+            repository: RepositoryId::new(input.text()?),
+            from: input.text()?,
+            branch: input.text()?,
+            agent: input.text()?,
+            size: read_size(input)?,
+        },
+        RequestKind::GetStateSizes => Request::GetStateSizes,
+        RequestKind::CleanUpStates => Request::CleanUpStates,
     };
     Ok((id, request))
 }
@@ -1351,6 +1441,18 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 Reply::Consents(consents) => {
                     out.u16(22);
                     out.list(consents, write_consent);
+                }
+                Reply::WorktreeCreated {
+                    workspace,
+                    terminal,
+                } => {
+                    out.u16(23);
+                    out.text(workspace.as_str());
+                    out.text(terminal.as_str());
+                }
+                Reply::StateSizes(sizes) => {
+                    out.u16(24);
+                    write_state_sizes(out, sizes);
                 }
             }
         }
@@ -1477,6 +1579,11 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             20 => Reply::Clis(input.list(read_agent_cli)?),
             21 => Reply::ComparedForReview(input.list(read_credited)?),
             22 => Reply::Consents(input.list(read_consent)?),
+            23 => Reply::WorktreeCreated {
+                workspace: WorkspaceId::new(input.text()?),
+                terminal: TerminalId::new(input.text()?),
+            },
+            24 => Reply::StateSizes(read_state_sizes(input)?),
             _ => return Err(LinkError::Malformed("unknown kind of reply")),
         }),
         1 => Err(match input.u16()? {
@@ -1594,6 +1701,10 @@ pub(crate) fn write_fact(out: &mut Out, fact: &Fact) {
             out.u16(9);
             out.list(consents, write_consent);
         }
+        Fact::StatesDeleted { workspace } => {
+            out.u16(10);
+            out.text(workspace.as_str());
+        }
     }
 }
 
@@ -1627,6 +1738,9 @@ pub(crate) fn read_fact(input: &mut In<'_>) -> Result<Fact, LinkError> {
         },
         8 => Fact::SettingChanged(read_setting(input)?),
         9 => Fact::ConsentsChanged(input.list(read_consent)?),
+        10 => Fact::StatesDeleted {
+            workspace: WorkspaceId::new(input.text()?),
+        },
         _ => return Err(LinkError::Malformed("unknown kind of fact")),
     })
 }

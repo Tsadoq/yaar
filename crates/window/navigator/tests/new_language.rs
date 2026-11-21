@@ -44,7 +44,7 @@ fn a_language_added_by_one_row_answers_hover() {
 
 /// Each source file of the Navigator that is not a test program: written out, and the test
 /// below asserts that the list is every such file, so that a new module is not missed.
-const SOURCES: [(&str, &str); 14] = [
+const SOURCES: [(&str, &str); 15] = [
     ("answers.rs", include_str!("../src/answers.rs")),
     ("clock.rs", include_str!("../src/clock.rs")),
     ("download.rs", include_str!("../src/download.rs")),
@@ -59,6 +59,7 @@ const SOURCES: [(&str, &str); 14] = [
     ("readiness.rs", include_str!("../src/readiness.rs")),
     ("registry.rs", include_str!("../src/registry.rs")),
     ("search.rs", include_str!("../src/search.rs")),
+    ("shell.rs", include_str!("../src/shell.rs")),
 ];
 
 /// Names that must stand in the table and in no string of the source, matched as whole

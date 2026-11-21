@@ -38,6 +38,13 @@
 //! | `ListConsents` | `Agents::consents`, each Adapter's `consent` | none |
 //! | `AnswerConsent` | `Agents::answer_consent`, the Adapter's `answer_consent` | `ConsentsChanged` with every Adapter's consent |
 //! | `ExportVersion` | `Agents::export_version`, through `StateStore::export` | none |
+//! | `CreateWorktree` | `Parts::create_worktree` (`wiring/worktrees.rs`): `Workspaces::create_worktree`, then the agent's launcher as `OpenTerminal` opens it | `Workspaces`, the list as it is then |
+//! | `GetStateSizes` | `cleaning::sizes`, through `Reviews::state_sizes` | none |
+//! | `CleanUpStates` | `cleaning::clean_up_now`: `Reviews::clean_up` of every workspace, then `Agents::remove_files_of_ended` | `StatesDeleted` of each workspace that lost a state |
+//!
+//! `SetBase` and `GetChanges` also tell `base_moves` the commit the changes are counted from,
+//! so that the threads on the old side follow the base when it moves; a thread that moved is
+//! told as `ReviewsChanged` of its workspace.
 //!
 //! A Window is also told `ConsentsChanged` alone at its first request when an Adapter's
 //! question waits for an answer or its CLI's settings could not be changed: the question
@@ -93,6 +100,9 @@
 //! them is told as `ChangesChanged`, and a change of what is checked out as `Workspaces`
 //! too. The list of every repository is read from git when a Window asks for it.
 
+// A worktree made from a branch with an agent in it, which `Parts::open_terminal` serves.
+mod worktrees;
+
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError, Weak};
 
@@ -107,6 +117,7 @@ use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
 
 use crate::agents::Agents;
+use crate::base_moves;
 use crate::watching::Watching;
 use crate::{Options, Shared, Window, frame_of};
 
@@ -145,6 +156,9 @@ pub(crate) struct Kept {
     pub(crate) workspaces: Workspaces,
     pub(crate) reviews: Reviews,
     pub(crate) store: Store,
+    /// The commit each workspace's changes were last counted from, for the threads on the
+    /// old side when the base moves.
+    pub(crate) base_seen: base_moves::Seen,
 }
 
 /// A step that waits for a reply to be queued, and runs after it.
@@ -250,6 +264,11 @@ pub(crate) fn answerer(kind: RequestKind) -> Answerer {
         // git's checkout of a whole tree, a second or more on a large repository: as a
         // comparison of two versions.
         RequestKind::ExportVersion => Answerer::Apart,
+        // Made with the user's git and its launcher opened as `OpenTerminal` opens one: on
+        // the connection's thread, in its turn.
+        RequestKind::CreateWorktree => Answerer::Here,
+        // A walk of every folder of states, and a repack of every store: apart.
+        RequestKind::GetStateSizes | RequestKind::CleanUpStates => Answerer::Apart,
     }
 }
 
@@ -335,6 +354,10 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
         RequestKind::ListConsents | RequestKind::AnswerConsent => true,
         // It leads to no fact, and no fact carries what it writes.
         RequestKind::ExportVersion => false,
+        // It changes the list of workspaces, and tells it.
+        RequestKind::CreateWorktree => true,
+        // The sizes change nothing; the clean-up's facts name workspaces, not the list.
+        RequestKind::GetStateSizes | RequestKind::CleanUpStates => false,
     }
 }
 
@@ -347,7 +370,11 @@ impl Parts {
     /// A Keeper with no git, or with a database it cannot open, still starts and answers
     /// the hello, so that a Window can say what is wrong; each request is then refused
     /// with the reason.
-    pub(crate) fn start(options: &Options, shared: Weak<Shared>) -> Parts {
+    pub(crate) fn start(
+        options: &Options,
+        clock: Arc<dyn yaar_recorder::Clock>,
+        shared: Weak<Shared>,
+    ) -> Parts {
         let watching = Arc::new(Watching::new(shared.clone()));
         let kept = Git::find().map_err(|e| e.to_string()).and_then(|git| {
             let file = options.data_dir.join(yaar_store::FILE_NAME);
@@ -355,11 +382,13 @@ impl Parts {
             // The engine asks the watching whether files changed since its newest state,
             // and tells it of every state it takes.
             let reviews = Reviews::new(store.clone(), git.clone(), options.data_dir.join("states"))
-                .watching(Arc::clone(&watching) as Arc<dyn StateWatch>);
+                .watching(Arc::clone(&watching) as Arc<dyn StateWatch>)
+                .with_clock(clock);
             Ok(Kept {
                 workspaces: Workspaces::new(git, store.clone()),
                 reviews,
                 store,
+                base_seen: base_moves::Seen::default(),
             })
         });
         let agents = Arc::new(Agents::start(
@@ -421,16 +450,29 @@ impl Parts {
         let reply = match request {
             Request::ListWorkspaces => list(workspaces).map(Reply::Workspaces),
             Request::OpenFolder { path } => open_folder(workspaces, path, &mut facts),
-            Request::SetBase { workspace, base } => workspaces
-                .set_base(&WorkspaceId::new(workspace.as_str()), &base)
-                .map(|_| {
-                    facts.push(Fact::ChangesChanged { workspace });
-                    Reply::Done
-                })
-                .map_err(refusal),
+            Request::SetBase { workspace, base } => {
+                let before = base_moves::before_set(kept, &workspace);
+                workspaces
+                    .set_base(&WorkspaceId::new(workspace.as_str()), &base)
+                    .map(|_| {
+                        base_moves::after_set(kept, &workspace, before, &mut facts);
+                        facts.push(Fact::ChangesChanged { workspace });
+                        Reply::Done
+                    })
+                    .map_err(refusal)
+            }
             Request::GetChanges { workspace } => workspaces
                 .changes(&WorkspaceId::new(workspace.as_str()))
-                .map(|found| Reply::Changes(changes(workspace, found)))
+                .map(|found| {
+                    let answered = changes(workspace.clone(), found);
+                    base_moves::changes_seen(
+                        kept,
+                        &workspace,
+                        answered.counted_from.as_deref(),
+                        &mut facts,
+                    );
+                    Reply::Changes(answered)
+                })
                 .map_err(refusal),
             Request::ReadFile {
                 workspace,
@@ -617,6 +659,31 @@ impl Parts {
             } => self
                 .agents
                 .export_version(kept, &workspace, &version, &into),
+            // A worktree made from a branch, and an agent started in it.
+            Request::CreateWorktree {
+                repository,
+                from,
+                branch,
+                agent,
+                size: at,
+            } => self
+                .create_worktree(
+                    kept,
+                    window,
+                    &repository,
+                    &from,
+                    &branch,
+                    &agent,
+                    at,
+                    &mut facts,
+                )
+                .map(|(reply, release)| {
+                    then = Some(release);
+                    reply
+                }),
+            // The room the recorded states take, and their clean-up at once.
+            Request::GetStateSizes => crate::cleaning::sizes(kept),
+            Request::CleanUpStates => crate::cleaning::clean_up_now(kept, &self.agents, &mut facts),
         };
         Answered::Now(Outcome { reply, facts, then })
     }
@@ -1633,6 +1700,14 @@ pub(crate) fn refusal(error: WorkspaceError) -> Refusal {
             },
             Refused::UnknownRevision(revision) => Refusal::UnknownRevision { revision },
             Refused::OutsideWorkspace(path) => Refusal::OutsideWorkspace { path },
+            // Refusals of a worktree made from a branch: the Link has no kind of its own for
+            // them, and the sentence names what to mend.
+            other @ (Refused::UnknownRepository(_)
+            | Refused::NotABranchName(_)
+            | Refused::BranchExists(_)
+            | Refused::FolderExists(_)) => Refusal::Failed {
+                reason: other.to_string(),
+            },
         },
         failed @ (WorkspaceError::Git(_) | WorkspaceError::Store(_) | WorkspaceError::Id(..)) => {
             Refusal::Failed {

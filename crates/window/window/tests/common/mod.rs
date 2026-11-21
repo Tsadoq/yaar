@@ -263,6 +263,7 @@ pub fn navigator_for(world: &World, found: Found, row: &str) -> NavigatorConfig 
         cache: navigator_cache(world),
         search_path,
         environment,
+        login_shell: None,
         platform: None,
         stop_after: STOP_AFTER,
         clock: std::sync::Arc::new(SystemClock),

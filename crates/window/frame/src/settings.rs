@@ -2,11 +2,21 @@
 //!
 //! Filled from the Keeper when the link connects, kept in step by
 //! `Fact::SettingChanged`, and changed by a pane that sets one. The review pane reads the
-//! form of Flow of the workspace on screen from it; the settings screen of slice 9 reads
-//! and sets the rest through the same model.
+//! form of Flow of the workspace on screen from it, and what a turn's end selects; the
+//! settings screen reads and sets every kind through the same model; the Frame reads the
+//! place of the terminal pane, `crate::Looks` the theme, the model `crate::Navigation` the
+//! stop time, the terminal pane what Option does.
+//!
+//! Each reader of a setting of the whole app reads it through one call below, which gives
+//! the default of `yaar_link`'s table where the user set none.
+
+use std::time::Duration;
 
 use gpui_kit::*;
-use yaar_link::{Fact, FlowForm, Reply, Request, Setting, WorkspaceId};
+use yaar_link::{
+    Fact, FlowForm, OptionKey, Reply, RepositoryId, Request, Setting, TerminalPlace, ThemeChoice,
+    TurnEndSelects, WorkspaceId,
+};
 
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
 
@@ -143,6 +153,50 @@ impl SettingList {
                 _ => None,
             })
             .unwrap_or_default()
+    }
+
+    /// What a turn's end selects in Changes: [`TurnEndSelects::WhatChanged`] where none is
+    /// set.
+    pub fn turn_end(&self) -> TurnEndSelects {
+        todo!("the setting, or its default")
+    }
+
+    /// The time a workspace stays off screen before its servers stop: ten minutes where none
+    /// is set.
+    pub fn stop_after(&self) -> Duration {
+        todo!("the setting, or its default")
+    }
+
+    /// Whether the user set the stop time: the model `crate::Navigation` tells the Navigator
+    /// only a time the user set.
+    pub fn stop_after_set(&self) -> Option<Duration> {
+        todo!("the setting, if set")
+    }
+
+    /// The user's choice of theme: [`ThemeChoice::System`] where none is set.
+    pub fn theme(&self) -> ThemeChoice {
+        todo!("the setting, or its default")
+    }
+
+    /// Where the terminal pane lies: [`TerminalPlace::Right`] where none is set.
+    pub fn terminal_place(&self) -> TerminalPlace {
+        todo!("the setting, or its default")
+    }
+
+    /// How long a recorded state nothing refers to is kept, in days: 30 where none is set.
+    pub fn keep_states(&self) -> u32 {
+        todo!("the setting, or its default")
+    }
+
+    /// What Option does in a terminal: [`OptionKey::ByLayout`] where none is set.
+    pub fn option_key(&self) -> OptionKey {
+        todo!("the setting, or its default")
+    }
+
+    /// Every repository the user answered on its language servers, with the answer, in the
+    /// order the Keeper listed them.
+    pub fn servers_answers(&self) -> Vec<(RepositoryId, bool)> {
+        todo!("the answers on the servers inside repositories")
     }
 
     /// Takes `setting` in the place of the one it is the same thing as, or last, tells the

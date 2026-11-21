@@ -401,7 +401,9 @@ impl ReviewPane {
                 yaar_link::HistoryEntry::Turn { turn, session, .. } => {
                     Some((turn.clone(), session.clone()))
                 }
-                yaar_link::HistoryEntry::Commit(_) => None,
+                // A turn whose state expired has no live diff to show.
+                yaar_link::HistoryEntry::Commit(_)
+                | yaar_link::HistoryEntry::ExpiredTurn { .. } => None,
             })
         });
         if let Some((turn, session)) = newest {

@@ -227,9 +227,17 @@ pub enum HistoryEntry {
         /// Its session.
         session: SessionId,
         /// The state recorded when it ended, by its full id; none when the recording
-        /// failed or the state is no longer kept. A Window shows such a turn and does not
-        /// let it be selected.
+        /// failed. A Window shows such a turn and does not let it be selected.
         state: Option<String>,
+    },
+    /// A turn of an agent that ended, whose recorded state was deleted since by the
+    /// clean-up of states nothing refers to: it stays in the history, marked as expired. A
+    /// Window shows it so and does not let it be selected.
+    ExpiredTurn {
+        /// The turn.
+        turn: TurnId,
+        /// Its session.
+        session: SessionId,
     },
 }
 
@@ -527,6 +535,11 @@ fn write_entry(out: &mut Out, entry: &HistoryEntry) {
             out.text(session.as_str());
             out.optional(state.as_deref(), Out::text);
         }
+        HistoryEntry::ExpiredTurn { turn, session } => {
+            out.u8(2);
+            out.text(turn.as_str());
+            out.text(session.as_str());
+        }
     }
 }
 
@@ -537,6 +550,10 @@ fn read_entry(input: &mut In<'_>) -> Result<HistoryEntry, LinkError> {
             turn: TurnId::new(input.text()?),
             session: SessionId::new(input.text()?),
             state: input.optional(In::text)?,
+        },
+        2 => HistoryEntry::ExpiredTurn {
+            turn: TurnId::new(input.text()?),
+            session: SessionId::new(input.text()?),
         },
         _ => return Err(LinkError::Malformed("an unknown kind of history entry")),
     })

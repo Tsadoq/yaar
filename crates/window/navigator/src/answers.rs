@@ -1051,6 +1051,7 @@ mod tests {
                 cache: PathBuf::new(),
                 search_path: Vec::new(),
                 environment: Vec::new(),
+                login_shell: None,
                 platform: None,
                 stop_after: Duration::from_secs(1),
                 clock: Arc::new(SystemClock),

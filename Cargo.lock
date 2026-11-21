@@ -9051,6 +9051,7 @@ name = "yaar-dock"
 version = "0.1.0"
 dependencies = [
  "libc",
+ "yaar-link",
 ]
 
 [[package]]

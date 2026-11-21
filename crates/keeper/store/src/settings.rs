@@ -15,8 +15,10 @@
 //! | --- | --- | --- | --- |
 //! | [`Setting::TurnEnd`] | `setting` | `turn_end` | `what_changed`, `keep_selection` |
 //! | [`Setting::StopAfter`] | `setting` | `stop_after` | the seconds, in decimal digits |
-//! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark` |
+//! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark`, from slice 9 also `named:` and a theme's name |
 //! | [`Setting::TerminalPlace`] | `setting` | `terminal_place` | `right`, `below`, `left` |
+//! | [`Setting::KeepStates`], from slice 9 | `setting` | `keep_states` | the days, in decimal digits |
+//! | [`Setting::OptionKey`], from slice 9 | `setting` | `option_key` | `by_layout`, `meta`, `characters` |
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
 //! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
 //!
@@ -26,6 +28,14 @@
 //!
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.
+//!
+//! Slice 9 adds two names and one form of value, and no table: the version of the tables
+//! stays 7. A theme other than the two built in is kept as `named:<name>`, its name as
+//! the user saw it: 1 to 64 characters, none of them a control character; `light` and
+//! `dark` stay as they were written before. The seconds of `stop_after` and the days of
+//! `keep_states` are read only as plain digits and never 0: a row of 0 is not listed, and
+//! [`Store::set_setting`] refuses one, as it refuses an empty or too long theme's name,
+//! with a sentence that names the setting.
 
 use rusqlite::params;
 
@@ -42,7 +52,7 @@ pub enum TurnEndSelects {
 }
 
 /// The theme of the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Theme {
     /// The light or the dark one, as the system's setting is: the default.
     System,
@@ -50,6 +60,19 @@ pub enum Theme {
     Light,
     /// The dark one.
     Dark,
+    /// Another theme, by its name.
+    Named(String),
+}
+
+/// What the Option key does in a terminal, on macOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OptionKey {
+    /// Meta on the U.S. layout, characters on every other: the default.
+    ByLayout,
+    /// Meta on every layout.
+    Meta,
+    /// Characters on every layout.
+    Characters,
 }
 
 /// Where the panes after the first lie beside it, the terminal pane among them.
@@ -87,6 +110,13 @@ pub enum Setting {
     Theme(Theme),
     /// Where the terminal pane lies.
     TerminalPlace(TerminalPlace),
+    /// How long a recorded state nothing refers to is kept, in whole days.
+    KeepStates {
+        /// The days; at least 1.
+        days: u32,
+    },
+    /// What the Option key does in a terminal.
+    OptionKey(OptionKey),
     /// The form of Flow chosen last in a workspace.
     FlowForm {
         /// The workspace.
@@ -128,12 +158,14 @@ impl Setting {
             Self::Theme(theme) => Row::App(
                 "theme",
                 match theme {
-                    Theme::System => "system",
-                    Theme::Light => "light",
-                    Theme::Dark => "dark",
-                }
-                .to_owned(),
+                    Theme::System => "system".to_owned(),
+                    Theme::Light => "light".to_owned(),
+                    Theme::Dark => "dark".to_owned(),
+                    Theme::Named(_) => todo!("the row of a theme kept by its name"),
+                },
             ),
+            Self::KeepStates { .. } => todo!("the row of the time states are kept"),
+            Self::OptionKey(_) => todo!("the row of the Option key"),
             Self::TerminalPlace(place) => Row::App(
                 "terminal_place",
                 match place {
@@ -222,8 +254,10 @@ impl Setting {
             Self::StopAfter { .. } => 1,
             Self::Theme(_) => 2,
             Self::TerminalPlace(_) => 3,
-            Self::FlowForm { .. } => 4,
-            Self::ServersInRepository { .. } => 5,
+            Self::KeepStates { .. } => 4,
+            Self::OptionKey(_) => 5,
+            Self::FlowForm { .. } => 6,
+            Self::ServersInRepository { .. } => 7,
         }
     }
 }

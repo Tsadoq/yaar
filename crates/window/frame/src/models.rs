@@ -20,9 +20,11 @@ use yaar_link::{
 use crate::agents::{AgentList, TerminalList};
 use crate::consents::ConsentList;
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
+use crate::looks::Looks;
 use crate::navigation::Navigation;
 use crate::routes::Routes;
 use crate::settings::SettingList;
+use crate::states::RecordedStates;
 
 /// The shared models, as one handle. Cheap to clone.
 #[derive(Clone)]
@@ -44,6 +46,10 @@ pub struct Models {
     /// The Window's way to the Navigator: no Navigator is connected until the Window
     /// program connects one.
     pub navigation: Entity<Navigation>,
+    /// The theme the Window draws in, from the user's choice and the system's setting.
+    pub looks: Entity<Looks>,
+    /// The room the recorded states take, and their clean-up.
+    pub states: Entity<RecordedStates>,
     /// Where a pane puts the actions it takes from wherever the focus is in the window.
     pub routes: Routes,
 }
@@ -66,6 +72,8 @@ impl Models {
                 cx,
             )
         });
+        let looks = cx.new(|cx| Looks::new(settings.clone(), cx));
+        let states = cx.new(|cx| RecordedStates::new(link.clone(), cx));
         Models {
             link,
             workspaces,
@@ -75,6 +83,8 @@ impl Models {
             settings,
             consents,
             navigation,
+            looks,
+            states,
             routes: Routes::default(),
         }
     }
@@ -119,6 +129,15 @@ pub struct WorkspaceList {
 }
 
 impl WorkspaceList {
+    /// Puts `workspace` on screen with the first list that holds it, as a workspace the user
+    /// just opened comes on screen: at once when the list holds it already. What a worktree
+    /// made with an agent needs, whose workspace the Keeper names in its reply before it tells
+    /// the list.
+    pub fn want_on_screen(&mut self, workspace: WorkspaceId, cx: &mut Context<Self>) {
+        let _ = (workspace, cx);
+        todo!("as open_folder's wanted workspace, as the doc says")
+    }
+
     /// An empty list, fed by `link`.
     pub fn new(link: Entity<KeeperLink>, cx: &mut Context<Self>) -> Self {
         // The link tells of a change only when the outcome of reaching a Keeper is

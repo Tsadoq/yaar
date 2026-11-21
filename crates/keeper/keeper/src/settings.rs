@@ -2,11 +2,22 @@
 //! connects, and what it keeps when the user sets one.
 //!
 //! The Store keeps every setting the user set, those of the whole app, those of each
-//! workspace and those of each repository; the Link carries the kinds a Window sets so
-//! far: the form of Flow of a workspace, and the answer on the language servers inside a
-//! repository. A setting the Store keeps that the Link has no word for yet is
-//! not sent: the settings screen of slice 9 adds the words, and nothing here changes for
-//! them but one arm of each mapping.
+//! workspace and those of each repository, and the Link carries every kind:
+//!
+//! | The Link's | The Store's | Refused, with nothing kept or told |
+//! | --- | --- | --- |
+//! | `Setting::FlowForm` | `Setting::FlowForm` | `UnknownWorkspace` for a workspace the Store does not hold |
+//! | `Setting::ServersInRepository` | `Setting::ServersInRepository` | `Failed` for a repository it does not hold |
+//! | `Setting::TurnEnd` | `Setting::TurnEnd` | never |
+//! | `Setting::StopAfter` | `Setting::StopAfter` | `Failed` for 0 seconds |
+//! | `Setting::Theme`, `System` | `Theme::System` | never |
+//! | `Setting::Theme`, `Named("Light")`, `Named("Dark")` | `Theme::Light`, `Theme::Dark`, so that a Store of slice 5 reads them as it wrote them | never |
+//! | `Setting::Theme`, any other name | `Theme::Named` | `Failed` for an empty name, or one the Store refuses |
+//! | `Setting::TerminalPlace` | `Setting::TerminalPlace` | never |
+//! | `Setting::KeepStates` | `Setting::KeepStates` | `Failed` for 0 days |
+//! | `Setting::OptionKey` | `Setting::OptionKey` | never |
+//!
+//! Every setting the Store lists is sent, each mapped back the same way.
 //!
 //! `GetSettings` waits the Keeper's turn, and a kept setting is told as
 //! `Fact::SettingChanged` to every Window under the same turn, after the reply of the
@@ -38,6 +49,12 @@ pub(crate) fn set(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Resul
             repository,
             allowed,
         } => return set_of_repository(kept, repository, *allowed, facts),
+        Setting::TurnEnd(_)
+        | Setting::StopAfter { .. }
+        | Setting::Theme(_)
+        | Setting::TerminalPlace(_)
+        | Setting::KeepStates { .. }
+        | Setting::OptionKey(_) => return set_of_app(kept, setting, facts),
     };
     let store_workspace = yaar_store::WorkspaceId::new(workspace.as_str());
     let known = kept.store.workspaces().map_err(failed)?;
@@ -87,6 +104,15 @@ fn set_of_repository(
     Ok(Reply::Done)
 }
 
+/// `Request::SetSetting` of a setting of the whole app: keeps it in the Store, as the module
+/// doc's table maps it, answers `Reply::Done` once it is there, and puts
+/// `Fact::SettingChanged` with it into `facts`. A value the table refuses is refused with
+/// `Refusal::Failed` naming the setting, and nothing is kept or told.
+fn set_of_app(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
+    let _ = (kept, setting, facts);
+    todo!("keep a setting of the app, as the module doc says")
+}
+
 /// A setting of the Store in the Link's words; none for a kind the Link has no word for.
 fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
     match setting {
@@ -104,10 +130,13 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
             repository: yaar_link::RepositoryId::new(repository.as_str()),
             allowed: *allowed,
         }),
+        // Until the settings of the app have their words here, none is sent.
         yaar_store::Setting::TurnEnd(_)
         | yaar_store::Setting::StopAfter { .. }
         | yaar_store::Setting::Theme(_)
-        | yaar_store::Setting::TerminalPlace(_) => None,
+        | yaar_store::Setting::TerminalPlace(_)
+        | yaar_store::Setting::KeepStates { .. }
+        | yaar_store::Setting::OptionKey(_) => None,
     }
 }
 

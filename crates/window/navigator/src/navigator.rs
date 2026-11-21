@@ -6,6 +6,8 @@
 //! | [`Ask::Workspaces`], [`Ask::OnScreen`], [`Ask::Consents`] | `lifecycle.rs` |
 //! | [`Ask::Download`], [`Ask::Update`], [`Event::Downloaded`] | `fetch.rs` |
 //! | [`Ask::OldSide`], [`Ask::Exported`] | `old_side.rs` |
+//! | [`Ask::StopAfter`] | here: it replaces `NavigatorConfig::stop_after`, which `lifecycle::look_at_the_clock` reads |
+//! | [`Event::Shell`] | `lifecycle.rs`, which holds the keys that wait for the login shell's environment |
 //! | [`Ask::Hover`], [`Ask::Definition`], [`Ask::References`], [`Ask::Open`], [`Ask::Cancel`], [`Ask::FilesChanged`] | `answers.rs` |
 //! | [`Event::Server`], [`Event::Trial`] | `lifecycle.rs`, which hands an answer of a server to `answers.rs` |
 //! | [`Event::Found`] | `answers.rs` |
@@ -100,6 +102,8 @@ pub(crate) enum Event {
         /// Every match, or why the search failed.
         found: Result<Vec<Found>, String>,
     },
+    /// The user's login shell printed its environment, or failed to (`shell.rs`).
+    Shell(Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, crate::shell::ShellError>),
     /// Time passed: [`LOOK_EVERY`].
     Tick,
 }
@@ -235,6 +239,7 @@ pub(crate) fn run(config: NavigatorConfig, end: PortEnd) {
                 fetch::downloaded(&mut core, language, outcome)
             }
             Event::Found { id, found } => answers::found(&mut core, id, found),
+            Event::Shell(taken) => lifecycle::shell_taken(&mut core, taken),
             Event::Tick => {}
         }
     }
@@ -258,6 +263,8 @@ fn dispatch(core: &mut Core, ask: Ask) {
         Ask::Update { language } => fetch::update(core, &language),
         Ask::OldSide { workspace, version } => old_side::shown(core, workspace, version),
         Ask::Exported { asked, failed } => old_side::exported(core, asked, failed),
+        // In force at once: the clock is looked at against it before the next event.
+        Ask::StopAfter(after) => core.config.stop_after = after,
         Ask::FilesChanged { workspace, paths } => answers::files_changed(core, &workspace, &paths),
         Ask::Hover { id, place } => answers::ask(core, id, answers::Question::Hover, place),
         Ask::Definition { id, place } => {

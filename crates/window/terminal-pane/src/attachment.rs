@@ -339,6 +339,19 @@ impl TerminalPane {
         )
     }
 
+    /// The Frame wants a worktree made with an agent in it, [`Wanted::Worktree`]: sends
+    /// `Request::CreateWorktree` with the pane's size, and on `Reply::WorktreeCreated` shows
+    /// the agent's terminal and gives it the focus as for a terminal the pane opened, in the
+    /// new workspace, which the Frame puts on screen with the list that holds it
+    /// (`WorkspaceList::want_on_screen`); the output that comes after the reply is that
+    /// terminal's. While the answer is awaited the pane's notice says the worktree of the
+    /// branch is being made ([`WORKTREE_BEING_MADE`] and the branch); a refusal is the
+    /// notice, as for a terminal.
+    pub(crate) fn worktree_wanted(&mut self, wanted: &Wanted, cx: &mut Context<Self>) {
+        let _ = (wanted, cx);
+        // Until the pane's package builds it, nothing is sent.
+    }
+
     /// A pane wants a terminal opened: for [`Wanted::AgentFor`], the launcher of that CLI
     /// in that workspace for that review, `yaar_link::Program::AgentFor`, as
     /// [`crate::NewTerminal`] opens a shell. It is shown and takes the focus as that
@@ -349,11 +362,16 @@ impl TerminalPane {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Wanted::AgentFor {
-            workspace,
-            agent,
-            review,
-        } = wanted;
+        let (workspace, agent, review) = match wanted {
+            Wanted::AgentFor {
+                workspace,
+                agent,
+                review,
+            } => (workspace, agent, review),
+            // A worktree with an agent: the terminal pane's package of slice 9 sends it, as
+            // `crate::worktree_wanted` says.
+            Wanted::Worktree { .. } => return self.worktree_wanted(wanted, cx),
+        };
         self.notice = None;
         let program = Program::AgentFor {
             agent: agent.clone(),

@@ -7,7 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use yaar_recorder::{
-    ChangedPath, CommitId, Git, GitError, RecordError, RecordedState, StateId, StateStore, Worktree,
+    ChangedPath, Clock, CommitId, Git, GitError, RecordError, RecordedState, StateId, StateStore,
+    SystemClock, Worktree,
 };
 use yaar_store::{
     Anchor, CommentId, ReviewId, SessionId, SessionRecord, Side, Store, StoreError, ThreadId,
@@ -192,6 +193,8 @@ pub struct Reviews {
     // What tells whether files changed since the newest state, and hears of each state
     // taken; none records at every new thread, as slice 3 did.
     watch: Option<Arc<dyn StateWatch>>,
+    // Where the time a state is recorded at, and the time now, are read.
+    pub(crate) clock: Arc<dyn Clock>,
 }
 
 /// What tells the engine whether the files of a worktree changed since its newest state,
@@ -232,7 +235,19 @@ impl Reviews {
             opened: Mutex::new(BTreeMap::new()),
             writing: Mutex::new(()),
             watch: None,
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// The same engine, with the time read from `clock`: the time each state is recorded
+    /// at, which every state store it opens from now on is handed, and the time now, which
+    /// [`Reviews::expire`] counts a state's age to. The Keeper hands the system's clock; a
+    /// test of the set time hands one of its own that it moves forward. Call it before the
+    /// first state store is opened.
+    pub fn with_clock(self, clock: Arc<dyn Clock>) -> Reviews {
+        let mut engine = self;
+        engine.clock = clock;
+        engine
     }
 
     /// The same engine, told by `watch` whether files changed since the newest state: a
@@ -543,7 +558,11 @@ impl Reviews {
             return Ok(Arc::clone(found));
         }
         let folder = self.states.join(format!("{workspace}.git"));
-        let store = Arc::new(StateStore::open(&self.git, &folder)?);
+        let store = Arc::new(StateStore::open_with(
+            &self.git,
+            &folder,
+            Arc::clone(&self.clock),
+        )?);
         opened.insert(workspace.clone(), Arc::clone(&store));
         Ok(store)
     }

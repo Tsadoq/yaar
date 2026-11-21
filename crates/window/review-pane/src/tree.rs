@@ -144,6 +144,7 @@ fn version_of(entry: &HistoryEntry) -> Option<&str> {
     match entry {
         HistoryEntry::Commit(commit) => Some(&commit.id),
         HistoryEntry::Turn { state, .. } => state.as_deref(),
+        HistoryEntry::ExpiredTurn { .. } => None,
     }
 }
 
@@ -167,7 +168,7 @@ pub(crate) fn checked_out(history: &History) -> Option<String> {
         .rev()
         .find_map(|entry| match entry {
             HistoryEntry::Commit(commit) => Some(commit.id.clone()),
-            HistoryEntry::Turn { .. } => None,
+            HistoryEntry::Turn { .. } | HistoryEntry::ExpiredTurn { .. } => None,
         })
         .or_else(|| history.start.clone())
 }
@@ -793,6 +794,15 @@ impl ReviewPane {
                     Some(_) => (format!("{who}, a turn"), true),
                     None => (format!("{who}, a turn (its state was not kept)"), false),
                 }
+            }
+            Some(HistoryEntry::ExpiredTurn { session, .. }) => {
+                let who = self
+                    .models
+                    .agents
+                    .read(cx)
+                    .session(session)
+                    .map_or("An agent".to_owned(), |session| session.title.clone());
+                (format!("{who}, a turn (its recording has expired)"), false)
             }
             None => {
                 let count = self.tree.uncommitted.as_ref().map_or(0, Vec::len);

@@ -67,12 +67,44 @@ actions!(
         /// Puts on screen the workspace of the notice of a turn that ended where the
         /// Window did not show it, and takes the notice away.
         ShowFinishedTurn,
+        /// Opens the settings screen in the place of the panes; closes it when it is open.
+        /// See `crate::settings_screen`.
+        OpenSettings,
+        /// Closes the settings screen and gives the focus back.
+        CloseSettings,
+        /// Moves the cursor of the settings screen to the next row.
+        NextSetting,
+        /// Moves it to the previous row.
+        PreviousSetting,
+        /// Chooses the next value of the row under the cursor of the settings screen.
+        NextValue,
+        /// Chooses the previous value of the row under the cursor.
+        PreviousValue,
+        /// Acts on the row under the cursor, where the row acts: the base opens its field.
+        OpenSetting,
+        /// Deletes at once the recorded states nothing refers to, with what only they held.
+        CleanUpStates,
+        /// Asks the user for the name of a new branch, and makes a worktree on it, from the
+        /// branch of the workspace on screen, with the chosen agent CLI started in it.
+        NewWorktree,
+        /// Closes the window: on macOS the app's window; the app quits the plain way when its
+        /// last window is closed.
+        CloseWindow,
+        /// Hides the app, on macOS.
+        HideApp,
+        /// Hides every other app, on macOS.
+        HideOtherApps,
+        /// Puts the window in the Dock, on macOS.
+        Minimize,
     ]
 );
 
 /// The key context of the Frame. Its root element sets it, so it holds wherever the focus
 /// is in what the Frame draws, a pane included.
 pub const KEY_CONTEXT: &str = "Frame";
+
+/// The key context of the settings screen while it has the focus.
+pub use crate::settings_screen::SETTINGS_CONTEXT;
 
 /// The key context of an element that hands every key to a program, as a terminal does.
 /// Inside it only the kept keys run actions of the app: see the doc of this module.

@@ -16,7 +16,9 @@
 //! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
 //!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
-//!   documented set of keys that never reach the program in a terminal.
+//!   documented set of keys that never reach the program in a terminal;
+//! - [`menus`], the menus of the app on macOS, made from [`controls`]: GPUI shows each
+//!   item's key from the binding of its action.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -58,10 +60,29 @@ pub fn kept_keys() -> Vec<Control> {
         .collect()
 }
 
+/// The menus of the app, which [`init`] hands GPUI (`App::set_menus`): on macOS the menu bar
+/// shows them, with each item's key; GPUI's Linux platforms show none, and their keys work as
+/// the table binds them.
+///
+/// | Menu | Items, in order (a line between groups) |
+/// | --- | --- |
+/// | YAAR | Settings…; Hide YAAR, Hide Others; Quit, Quit and Stop Agents |
+/// | File | New Worktree with Agent…, Open Folder…; Close Window |
+/// | Window | Minimize |
+///
+/// Each item runs the action of the row of [`controls`] whose title it bears, so that a key
+/// and an item are one control. Hide YAAR, Hide Others and Minimize are rows on macOS only;
+/// off macOS the menus leave them out.
+pub fn menus() -> Vec<Menu> {
+    todo!("the menus, as the doc says")
+}
+
 /// Every action of the Window that has a key: the Frame's, the two quits among them, then
 /// each pane's.
 pub fn controls() -> Vec<Control> {
     let mut controls = yaar_frame::controls();
+    // The settings screen is the Frame's, with keys of its own context, as a pane has.
+    controls.extend(yaar_frame::settings_screen::controls());
     for pane in panes() {
         controls.extend((pane.controls)());
     }
@@ -212,6 +233,7 @@ mod tests {
     #[test]
     fn the_table_holds_the_keys_of_the_frame_then_of_each_pane_and_quit_on_secondary_q() {
         let mut expected: Vec<_> = yaar_frame::controls().iter().map(row).collect();
+        expected.extend(yaar_frame::settings_screen::controls().iter().map(row));
         for pane in panes() {
             expected.extend((pane.controls)().iter().map(row));
         }

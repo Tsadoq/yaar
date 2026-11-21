@@ -434,6 +434,7 @@ impl Scratch {
             cache: self.root.join("navigator"),
             search_path: vec![self.root.join("bin")],
             environment: self.environment(),
+            login_shell: None,
             platform: Platform::current(),
             stop_after: STOP_AFTER,
             clock: Arc::new(SystemClock),

@@ -137,6 +137,10 @@ fn controls_that_send(kind: RequestKind) -> Vec<Control> {
     yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends == Some(Sends::Request(kind)))
+        // The keys of the settings screen, bound by the contract of slice 9 before the
+        // screen exists: the Window's package of slice 9 takes this filter away when the
+        // walk opens the screen for them.
+        .filter(|control| control.place != Place::In(yaar_frame::SETTINGS_CONTEXT))
         .collect()
 }
 
@@ -296,10 +300,16 @@ impl Composed {
             | RequestKind::ListClis
             | RequestKind::CompareForReview
             | RequestKind::ListConsents
-            | RequestKind::ExportVersion => {
+            | RequestKind::ExportVersion
+            | RequestKind::GetStateSizes => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
+            // Slice 9's two, which `OF_SLICE_9` keeps out of the walk until the Window's
+            // package gives each its step.
+            RequestKind::CreateWorktree | RequestKind::CleanUpStates => {
+                unreachable!("{kind:?} is not walked yet")
+            }
             // The answer shows in pi's settings: a yes lists the extension of the app, and a
             // no takes it out again.
             RequestKind::AnswerConsent => {
@@ -962,11 +972,17 @@ impl Composed {
                 | RequestKind::ListClis
                 | RequestKind::CompareForReview
                 | RequestKind::ListConsents
-                | RequestKind::ExportVersion => {
+                | RequestKind::ExportVersion
+                | RequestKind::GetStateSizes => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
+                }
+                // Slice 9's two, which `OF_SLICE_9` keeps out of the walk until the Window's
+                // package gives each its step.
+                RequestKind::CreateWorktree | RequestKind::CleanUpStates => {
+                    unreachable!("{kind:?} is not walked yet")
                 }
                 // The control says which answer it gives, and the Keeper is asked for pi's, the
                 // one CLI of the world that asks.
@@ -1301,6 +1317,11 @@ impl Composed {
     }
 }
 
+/// The requests a user starts from slice 9 on, whose controls the contract of slice 9 binds
+/// before anything handles them: the Window's package of slice 9 takes this filter away
+/// when each has its step in the walk.
+const OF_SLICE_9: [RequestKind; 2] = [RequestKind::CreateWorktree, RequestKind::CleanUpStates];
+
 #[gpui_kit::test]
 fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestAppContext) {
     let (mut window, mut cx) = open_composed_for_the_walk(cx);
@@ -1311,7 +1332,7 @@ fn every_request_a_user_starts_has_a_control_whose_key_sends_it(cx: &mut TestApp
 
     // Every kind there is, the kinds of the reviews among them: the first of those starts
     // the agent whose review they act on.
-    for kind in RequestKind::started_by_user() {
+    for kind in RequestKind::started_by_user().filter(|kind| !OF_SLICE_9.contains(kind)) {
         window.walk(kind, &mut cx);
     }
     window.end_the_agent();

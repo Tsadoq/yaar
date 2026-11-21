@@ -103,6 +103,7 @@ pub mod port;
 pub mod readiness;
 pub mod registry;
 pub mod search;
+pub mod shell;
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -116,6 +117,7 @@ pub use port::{
     PortEnd, RepositoryConsent, ServerState, State, Told, Tree, WorkspaceRoot, port,
 };
 pub use registry::{BUILTIN, Platform, Registry, USER_FILE};
+pub use shell::{LoginShell, SHELL_DEADLINE};
 
 /// How long a workspace stays off screen before its servers stop, when the user set no
 /// other time: ten minutes (FR-065).
@@ -157,10 +159,15 @@ pub struct NavigatorConfig {
     /// The whole environment every server, and every trial run, runs in: the Window's own.
     /// A server gets these variables and no other, with its server's `environment` added.
     pub environment: Vec<(OsString, OsString)>,
+    /// The user's login shell, whose environment the servers take in the place of
+    /// [`NavigatorConfig::environment`] and [`NavigatorConfig::search_path`], taken once at
+    /// the first search (the module `shell.rs`); none to keep those two as they are given,
+    /// as a test that hands its own environment does.
+    pub login_shell: Option<LoginShell>,
     /// The machine, for the downloads: none where no row can download for it.
     pub platform: Option<Platform>,
-    /// How long a workspace stays off screen before its servers stop: the user's setting,
-    /// or [`STOP_AFTER`].
+    /// How long a workspace stays off screen before its servers stop, until an
+    /// [`Ask::StopAfter`] says otherwise: [`STOP_AFTER`].
     pub stop_after: Duration,
     /// The time idle servers are stopped by.
     pub clock: Arc<dyn Clock>,
@@ -169,8 +176,9 @@ pub struct NavigatorConfig {
 impl NavigatorConfig {
     /// What the Window hands the Navigator: [`BUILTIN`], the user's file and the downloads
     /// in `yaar_link::data_dir()`, the cache in `yaar_link::cache_dir()`, the search path
-    /// and the whole environment of this process, [`Platform::current`], [`STOP_AFTER`]
-    /// and [`SystemClock`].
+    /// and the whole environment of this process, the user's login shell
+    /// (`yaar_link::user_shell()`, [`SHELL_DEADLINE`]) whose environment takes their place
+    /// at the first search, [`Platform::current`], [`STOP_AFTER`] and [`SystemClock`].
     pub fn for_this_user() -> NavigatorConfig {
         let data = yaar_link::data_dir();
         NavigatorConfig {
@@ -182,6 +190,10 @@ impl NavigatorConfig {
                 .map(|search| std::env::split_paths(&search).collect())
                 .unwrap_or_default(),
             environment: std::env::vars_os().collect(),
+            login_shell: Some(LoginShell {
+                program: yaar_link::user_shell(),
+                deadline: SHELL_DEADLINE,
+            }),
             platform: Platform::current(),
             stop_after: STOP_AFTER,
             clock: Arc::new(SystemClock),

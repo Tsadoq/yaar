@@ -61,6 +61,19 @@
 //! | ready | [`State::Ready`], with `update` when the program is a downloaded one of another version than the row pins | [`ServerEvent::Exited`] | the next candidate left, or none left |
 //! | none left | `search::when_none` | [`search_again`] (a yes, or `fetch.rs`) | a new search |
 //! | downloading | [`State::Downloading`] | [`search_again`], from `fetch.rs` | a new search |
+//! | waiting for the shell | [`State::Starting`] | [`shell_taken`] | a new search, with the environment it gave |
+//!
+//! "Waiting for the shell" (slice 9; the module `shell.rs`): with
+//! `NavigatorConfig::login_shell` some and the shell not yet taken, the first key that
+//! would be searched starts the shell's thread instead (`shell::take` on a thread of its
+//! own, reporting `Event::Shell`), and it and every key that would be searched after it,
+//! before the report, are held in this phase, with no generation counted. [`shell_taken`]
+//! puts the environment the shell gave (or, when it failed, leaves the configuration's, and
+//! writes the line `shell.rs` names to the standard error) into
+//! `NavigatorConfig::environment` and `NavigatorConfig::search_path`, notes the shell as
+//! taken, and searches every held key, in the order they were held, as a first search does.
+//! A held key stopped meanwhile is forgotten and not searched. With `login_shell` none, or
+//! the shell taken, no key is ever held.
 //!
 //! "The next candidate left": the head of the key's list is taken off it; one inside the
 //! repository is skipped as step 1 says; one whose server names `trial` is tried, any other
@@ -523,6 +536,16 @@ pub(crate) fn look_at_the_clock(core: &mut Core) {
     if stopped {
         publish(core);
     }
+}
+
+/// The user's login shell gave its environment, or failed to, as `shell.rs` says: takes it
+/// and searches the keys held for it, as the table "Where a key stands" says.
+pub(crate) fn shell_taken(
+    core: &mut Core,
+    taken: Result<Vec<(std::ffi::OsString, std::ffi::OsString)>, crate::shell::ShellError>,
+) {
+    let _ = (core, taken);
+    todo!("take the environment and search the held keys, as the module doc says")
 }
 
 /// At the end: drops the asks still waiting, then stops every server, each as [`stop`] does.
