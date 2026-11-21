@@ -938,6 +938,12 @@ impl ReviewPane {
         });
     }
 
+    /// The wheel scrolled: the mouse's rest ends. The pointer has not moved but the text
+    /// under it has, and a rest that went on would ask the hover of a name that is gone.
+    pub(crate) fn scrolled(&mut self) {
+        self.navigate.resting = None;
+    }
+
     /// The mouse rested on a name long enough: asks its hover, if the pointer is still on
     /// the name and the line still holds it where it was.
     fn rested(

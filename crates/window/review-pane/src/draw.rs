@@ -132,7 +132,10 @@ impl Render for ReviewPane {
                 pane.touched(cx);
             }))
             .capture_key_down(cx.listener(|pane, _: &KeyDownEvent, _, cx| pane.touched(cx)))
-            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| pane.touched(cx)));
+            .on_scroll(cx.listener(|pane, _: &ScrollEvent, _, cx| {
+                pane.scrolled();
+                pane.touched(cx);
+            }));
         // Under the rows and outside the element that sets the pane's key context, so
         // that the letters typed in the box are text and not keys of the pane.
         let notice = self.notice.as_ref().map(|notice| {

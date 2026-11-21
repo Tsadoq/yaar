@@ -19,7 +19,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{
-    Bounds, Entity, Modifiers, Pixels, Point, TestAppContext, VisualTestContext, point, px,
+    Bounds, Entity, Modifiers, Pixels, Point, ScrollDelta, ScrollEvent, TestAppContext,
+    VisualTestContext, point, px,
 };
 use yaar_diff::{Row, Side};
 use yaar_link::{FileStatus, History, HistoryEntry, SessionId, TurnId, WorkspaceId};
@@ -436,6 +437,45 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
     cx.executor().advance_clock(Duration::from_millis(1));
     let (_, asked) = hover_ask(&mut navigator, &mut cx);
     assert_eq!(asked.name, "let");
+}
+
+// RP-21, the mouse resting and the wheel
+#[gpui_kit::test]
+fn a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away_is_not_asked(
+    cx: &mut TestAppContext,
+) {
+    // Many lines after the one with the names, so that the rows can scroll.
+    let long = format!("{NEW}{}", "    keep();\n".repeat(60));
+    let (stage, mut navigator, mut cx) =
+        open_on("src/lib.rs", FileStatus::Modified, OLD, &long, cx);
+    let pane = &stage.pane;
+    let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
+    click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
+
+    // The mouse comes to rest on `sides`; before the delay is up the wheel scrolls the rows,
+    // and the pointer, which did not move, is over another line.
+    let on_sides = name_point(added, "new", ADDED, "sides", &mut cx);
+    cx.simulate_mouse_move(on_sides, None, Modifiers::none());
+    cx.executor()
+        .advance_clock(HOVER_DELAY - Duration::from_millis(1));
+    cx.simulate_event(ScrollEvent {
+        position: on_sides,
+        delta: ScrollDelta::Pixels(point(px(0.), px(-60.))),
+        ..ScrollEvent::default()
+    });
+    cx.run_until_parked();
+    assert_ne!(
+        bounds_of_row(added, &mut cx).center().y,
+        on_sides.y,
+        "the wheel did not move the rows"
+    );
+
+    // The delay is up. The key's ask is the barrier: the first ask the Navigator gets is
+    // the key's, for the name the reviewer is on, not the hover of `sides`.
+    cx.executor().advance_clock(Duration::from_millis(1));
+    cx.simulate_keystrokes("shift-k");
+    let (_, asked) = hover_ask(&mut navigator, &mut cx);
+    assert_eq!(asked.name, "perimeter", "the mouse asked after the wheel");
 }
 
 /// Where the characters of `ADDED` lie, by offset: four spaces, then `let` (4 to 7), a
