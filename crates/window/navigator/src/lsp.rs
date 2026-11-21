@@ -5,7 +5,9 @@
 //! ended by `\r\n`, then `n` bytes of one JSON value. Positions are counted the protocol's
 //! default way, lines from 0 and characters in UTF-16 code units; the Navigator's own
 //! [`crate::Place`] and [`crate::Location`] count lines from 1 and columns in bytes of the
-//! line's UTF-8 text, and the driver converts with [`utf16_column`] and [`byte_column`].
+//! line's UTF-8 text. The driver converts nothing and sends and reads positions as a server
+//! counts them: the answers module converts, with [`utf16_column`] when it asks and with
+//! [`byte_column`] when it reads a server's answer.
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
