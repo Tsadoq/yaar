@@ -435,6 +435,31 @@ fn start_the_standin_in(
     pid.expect("a server runs")
 }
 
+/// Opens `folder` in the window whose models these are, once its Keeper has answered, and
+/// gives the workspace that comes on screen.
+fn open_the_folder_in(
+    models: &yaar_frame::Models,
+    folder: &Path,
+    cx: &mut VisualTestContext,
+) -> yaar_link::WorkspaceId {
+    wait_until(cx, "the Keeper to answer the window", |cx| {
+        models.link.read_with(cx, |link, _| {
+            matches!(link.status(), LinkStatus::Connected(_))
+        })
+    });
+    models
+        .workspaces
+        .update(cx, |list, cx| list.open_folder(folder.to_owned(), cx));
+    let mut workspace = None;
+    wait_until(cx, "the workspace on screen", |cx| {
+        workspace = models
+            .workspaces
+            .read_with(cx, |list, _| list.selected().cloned());
+        workspace.is_some()
+    });
+    workspace.expect("a workspace is on screen")
+}
+
 /// Lets a server that a test stopped go on again when the test ends, so that none is left
 /// stopped by a test that failed before the Navigator killed it.
 struct Resumed(u32);
@@ -624,13 +649,15 @@ fn open_with(world: &World, cx: &mut TestAppContext) -> (yaar_frame::Models, Vis
     (models.clone(), VisualTestContext::from_window(window, cx))
 }
 
-// Of its own: `open_with`, which the program's `open` is, hands the Navigator to the window.
+// Of its own: `open_with`, which the program's `open` is, hands the Navigator to the window,
+// and the quit of the app ends it.
 #[gpui_kit::test]
 fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages(
     cx: &mut TestAppContext,
 ) {
     let mut world = World::new();
     world.start_keeper();
+    let (repository, _) = repository_with_a_change(&world);
     cx.executor().allow_parking();
     cx.update(yaar_window::init);
     let (models, mut inner) = open_with(&world, cx);
@@ -643,8 +670,18 @@ fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages
                     .any(|language| language.name == "standin")
         })
     });
+    // A server of the Navigator runs, so that its end can be read from the process.
+    let workspace = open_the_folder_in(&models, repository.path(), &mut inner);
+    let pid = start_the_standin_in(&models, &workspace, &mut inner, cx);
+    assert!(is_alive(pid));
+
     cx.update(|app| app.shutdown());
-    // Ended by the quit: nothing is connected to ask, and the model says so once it heard.
+    // The quit waited for the Navigator: no wait here.
+    assert!(
+        !is_alive(pid),
+        "the server {pid} outlived the quit of the app"
+    );
+    // The model says no Navigator is joined once it heard.
     wait_until(&mut inner, "the model to see the Navigator end", |cx| {
         models
             .navigation
@@ -657,6 +694,7 @@ fn a_window_opened_with_a_configuration_has_a_navigator_that_tells_its_languages
 fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
     let mut world = World::new();
     world.start_keeper();
+    let (repository, _) = repository_with_a_change(&world);
     cx.executor().allow_parking();
     cx.update(yaar_window::init);
     let (first, mut first_cx) = open_with(&world, cx);
@@ -668,6 +706,20 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
                 .read_with(cx, |navigation, _| !navigation.languages().is_empty())
         });
     }
+    // Each Navigator runs a server of its own, so that the end of each is read from its process.
+    let workspace = open_the_folder_in(&first, repository.path(), &mut first_cx);
+    // The Keeper tells every window of its workspaces, so the second Navigator has it too.
+    wait_until(&mut second_cx, "the workspace in the second window", |cx| {
+        second
+            .workspaces
+            .read_with(cx, |list, _| list.workspace(&workspace).is_some())
+    });
+    let first_pid = start_the_standin_in(&first, &workspace, &mut first_cx, cx);
+    let second_pid = start_the_standin_in(&second, &workspace, &mut second_cx, cx);
+    assert_ne!(
+        first_pid, second_pid,
+        "each Navigator runs a server of its own"
+    );
 
     first
         .navigation
@@ -676,6 +728,13 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
         !first
             .navigation
             .read_with(&first_cx, |navigation, _| navigation.is_connected())
+    );
+    // The first Navigator ends of itself and stops its server: nothing here waits for it, so
+    // the test waits, with a deadline, for the process to be gone.
+    wait_until(
+        &mut first_cx,
+        "the first window's server to be gone",
+        |_| !is_alive(first_pid),
     );
     // The second Navigator was not the first's: it still listens and answers. The model's
     // flags only change when the end of a Navigator reaches it, which may be a turn later
@@ -723,8 +782,17 @@ fn each_window_has_a_navigator_of_its_own(cx: &mut TestAppContext) {
     assert!(second.navigation.read_with(&second_cx, |navigation, _| {
         !navigation.languages().is_empty()
     }));
+    assert!(
+        is_alive(second_pid),
+        "the first window's end took the second window's server with it"
+    );
     // The quit of the app ends the second, which the first's end left running.
     cx.update(|app| app.shutdown());
+    // The quit waited for it: no wait here.
+    assert!(
+        !is_alive(second_pid),
+        "the server {second_pid} of the second window outlived the quit of the app"
+    );
     wait_until(&mut second_cx, "the model to see the Navigator end", |cx| {
         second
             .navigation
