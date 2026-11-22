@@ -942,7 +942,7 @@ fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
         );
         std::thread::sleep(Duration::from_millis(5));
     }
-    assert_eq!(worktree_folders(&repo), [repo.clone()]);
+    assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
     assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
     assert_eq!(snapshot(&scratch, &repo), before);
 }
