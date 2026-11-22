@@ -12,6 +12,7 @@ use std::io::{Read, Write};
 use std::os::unix::fs::{MetadataExt, symlink};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -27,6 +28,10 @@ const BASE: u64 = 1_767_225_600;
 
 /// How long a test waits for work that must end, which a deadlock never does.
 const DEADLINE: Duration = Duration::from_secs(300);
+
+/// How long a loop of calls may go on with none of its steps ending, which a deadlock never
+/// does. How long the whole loop takes is the machine's to say, so only a stop is bounded.
+const STEP_DEADLINE: Duration = Duration::from_secs(120);
 
 /// How long a clean-up that ought to be waiting is given to show that it is not. Nothing a
 /// passing run does has to end within it: a clean-up that runs on in that time is a failure,
@@ -321,18 +326,40 @@ fn files_of(store: &StateStore, state: &RecordedState) -> Vec<(PathBuf, Vec<u8>)
         .collect()
 }
 
-/// Runs `work` on a thread of its own and waits for its end for [`DEADLINE`]: a deadlock
-/// is a failure that says so, not a test that never ends.
-fn ends_in_time(what: &str, work: impl FnOnce() + Send + 'static) {
+/// The steps a loop of calls has ended, counted by every thread that takes part in it.
+#[derive(Clone, Default)]
+struct Progress(Arc<AtomicUsize>);
+
+impl Progress {
+    /// Notes that one step ended.
+    fn step(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn steps(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Runs `work` on a thread of its own and waits for its end as long as a step of it ends
+/// within [`STEP_DEADLINE`]: a deadlock is a failure that says so, not a test that never
+/// ends, and a slow machine is not a failure.
+fn ends_in_time(what: &str, work: impl FnOnce(&Progress) + Send + 'static) {
     let (done, ended) = channel();
+    let progress = Progress::default();
+    let counted = progress.clone();
     std::thread::spawn(move || {
-        work();
+        work(&counted);
         let _ = done.send(());
     });
-    match ended.recv_timeout(DEADLINE) {
-        Ok(()) => {}
-        Err(RecvTimeoutError::Timeout) => panic!("{what} did not end: a deadlock"),
-        Err(RecvTimeoutError::Disconnected) => panic!("{what} failed in a thread"),
+    loop {
+        let seen = progress.steps();
+        match ended.recv_timeout(STEP_DEADLINE) {
+            Ok(()) => return,
+            Err(RecvTimeoutError::Timeout) if progress.steps() != seen => {}
+            Err(RecvTimeoutError::Timeout) => panic!("{what} did not end: a deadlock"),
+            Err(RecvTimeoutError::Disconnected) => panic!("{what} failed in a thread"),
+        }
     }
 }
 
@@ -957,11 +984,13 @@ fn stressed(scratch: &Scratch) -> Stressed {
 }
 
 /// Deletes the kept commit and packs, `rounds` times, as the clean-up at once does.
-fn clean_up_repeatedly(store: &StateStore, commit: &str, rounds: usize) {
+fn clean_up_repeatedly(store: &StateStore, commit: &str, rounds: usize, progress: &Progress) {
     let ids: BTreeSet<String> = [commit.to_owned()].into();
     for _ in 0..rounds {
         store.delete(&ids).expect("delete");
+        progress.step();
         store.pack().expect("pack");
+        progress.step();
     }
 }
 
@@ -989,10 +1018,10 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
         .expect("compare");
     assert_eq!(against_disk.len(), 1);
 
-    ends_in_time("the comparisons and the clean-ups", move || {
+    ends_in_time("the comparisons and the clean-ups", move |progress| {
         let cleaner = {
-            let (store, commit) = (store.clone(), old_commit.clone());
-            std::thread::spawn(move || clean_up_repeatedly(&store, &commit, 50))
+            let (store, commit, progress) = (store.clone(), old_commit.clone(), progress.clone());
+            std::thread::spawn(move || clean_up_repeatedly(&store, &commit, 50, &progress))
         };
         // Two threads compare while it runs: the first against a commit of the repository
         // that the store copies and the clean-up lets go, the second against the files on
@@ -1000,12 +1029,14 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
         let with_commit = {
             let (store, worktree) = (store.clone(), worktree.clone());
             let (commit, state) = (old_commit.clone(), state.id.to_string());
+            let progress = progress.clone();
             std::thread::spawn(move || {
                 for compared in 0..200 {
                     let answer = store
                         .compare(Some(&worktree), &commit, Some(&state))
                         .unwrap_or_else(|e| panic!("comparison {compared} failed: {e}"));
                     assert_eq!(answer, against_commit, "comparison {compared}");
+                    progress.step();
                 }
             })
         };
@@ -1014,6 +1045,7 @@ fn a_comparison_never_fails_while_the_store_is_cleaned_beside_it() {
                 .compare(Some(&worktree), state.id.as_str(), None)
                 .unwrap_or_else(|e| panic!("comparison {compared} with the disk failed: {e}"));
             assert_eq!(answer, against_disk, "comparison {compared} with the disk");
+            progress.step();
         }
         with_commit.join().expect("the comparisons");
         cleaner.join().expect("the clean-ups");
@@ -1041,10 +1073,10 @@ fn every_call_that_holds_a_version_works_beside_the_clean_up_and_none_waits_fore
         .expect("content")
         .expect("a file");
 
-    ends_in_time("the calls and the clean-ups", move || {
+    ends_in_time("the calls and the clean-ups", move |progress| {
         let cleaner = {
-            let (store, commit) = (store.clone(), old_commit.clone());
-            std::thread::spawn(move || clean_up_repeatedly(&store, &commit, 25))
+            let (store, commit, progress) = (store.clone(), old_commit.clone(), progress.clone());
+            std::thread::spawn(move || clean_up_repeatedly(&store, &commit, 25, &progress))
         };
         for round in 0..40 {
             assert_eq!(
@@ -1064,6 +1096,7 @@ fn every_call_that_holds_a_version_works_beside_the_clean_up_and_none_waits_fore
             store
                 .changed_paths(state.id.as_str(), state.id.as_str())
                 .expect("changed_paths");
+            progress.step();
         }
         cleaner.join().expect("the clean-ups");
     });
