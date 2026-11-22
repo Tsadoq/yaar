@@ -28,15 +28,20 @@
 //! - in a session of its own (`setsid` before `exec`), with its standard input from
 //!   `/dev/null` and its standard error thrown away, so that it can neither take a terminal
 //!   nor wait for a key;
-//! - for at most [`LoginShell::deadline`] of real time: past it, its whole process group is
-//!   killed (`kill(-pid, SIGKILL)`) and reaped, and the take has failed.
+//! - for at most [`LoginShell::deadline`] of real time, counted from its start: past it, its
+//!   whole process group is killed (`kill(-pid, SIGKILL)`) and reaped, and the take has
+//!   failed;
+//! - never for longer than the Navigator lives: the Navigator's end kills the group of a
+//!   shell still running ([`Group`]), and on Linux the kernel does when the Window dies.
 //!
-//! Its standard output is read to its end on a second thread while the first waits for the
-//! shell with a polling `try_wait` up to the deadline. Once the shell has exited, its whole
-//! process group is killed at once (`kill(-pid, SIGKILL)`, an error of "no such process"
-//! being none): a job a start-up file left in the background would otherwise hold the pipe
-//! open, and the read would wait for it until the deadline. The output is then what the
-//! reading thread has once the pipe is closed.
+//! Two threads read what the shell leaves: one reads its standard output to the end, and one
+//! waits for the shell and reaps it, while the caller waits on that thread's channel for what
+//! is left of the deadline. Once the shell has exited, its whole process group is killed at
+//! once (`kill(-pid, SIGKILL)`, an error of "no such process" being none): a job a start-up
+//! file left in the background would otherwise hold the pipe open, and the read would wait
+//! for it. The rest of the output is then awaited only within what is left of the deadline,
+//! for a process that left the group may hold the pipe still; past it the take fails with
+//! the deadline.
 //!
 //! [`COMMAND`] prints [`MARKER`] and then has `env -0` print every variable, each
 //! `NAME=value` and a NUL. Whatever a start-up file printed before is noise and is dropped:
@@ -69,10 +74,17 @@
 //! the test wants and then runs the command it was given with `/bin/sh -c`), never the
 //! user's, and a `HOME` in its scratch folder.
 
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
+use std::io::Read;
+use std::os::unix::ffi::OsStringExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 /// How long the user's login shell may take to print its environment: ten seconds, a slow
 /// start-up file's time and more.
@@ -84,6 +96,10 @@ pub const MARKER: &str = "yaar-environment-follows";
 
 /// The command the shell is told to run.
 pub const COMMAND: &str = "printf '%s' 'yaar-environment-follows'; exec env -0";
+
+/// The variables that describe the shell's own run, not the user's setup: never taken from
+/// the shell.
+const NOT_TAKEN: [&str; 4] = ["PWD", "OLDPWD", "SHLVL", "_"];
 
 /// The user's login shell, run once for the environment of the language servers.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -119,6 +135,47 @@ impl fmt::Display for ShellError {
     }
 }
 
+/// The process group of a shell on its way, shared between the thread that runs it and the
+/// Navigator, so that the Navigator's end can kill a shell that is still running.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Group(Arc<AtomicI32>);
+
+impl Group {
+    /// No shell yet.
+    const NONE: i32 = 0;
+    /// The Navigator ended: a shell started after this is killed as it starts.
+    const ENDED: i32 = -1;
+
+    /// Notes that the shell's group is `group`; kills it at once when the Navigator has
+    /// ended already.
+    fn started(&self, group: libc::pid_t) {
+        if self
+            .0
+            .compare_exchange(Self::NONE, group, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            kill_group(group);
+        }
+    }
+
+    /// Notes that the shell was reaped: its group number may be anybody's from now on.
+    fn reaped(&self) {
+        let _ = self
+            .0
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |held| {
+                (held > Self::NONE).then_some(Self::NONE)
+            });
+    }
+
+    /// The Navigator's end: kills the shell if one runs, and any that starts later.
+    pub(crate) fn end(&self) {
+        let held = self.0.swap(Self::ENDED, Ordering::SeqCst);
+        if held > Self::NONE {
+            kill_group(held);
+        }
+    }
+}
+
 /// Runs `shell` once, as the module doc says, in the environment `base`, and gives the
 /// environment the servers run in: `base` with what the shell printed merged in, as the
 /// module doc says.
@@ -126,12 +183,289 @@ pub fn take(
     shell: &LoginShell,
     base: &[(OsString, OsString)],
 ) -> Result<Vec<(OsString, OsString)>, ShellError> {
-    let _ = (shell, base);
-    todo!("run the shell, read past the marker, merge, as the module doc says")
+    take_in(shell, base, &Group::default())
+}
+
+/// [`take`], noting the shell's process group in `group` while it runs.
+pub(crate) fn take_in(
+    shell: &LoginShell,
+    base: &[(OsString, OsString)],
+    group: &Group,
+) -> Result<Vec<(OsString, OsString)>, ShellError> {
+    let started = Instant::now();
+    let home = base
+        .iter()
+        .find(|(name, _)| name == "HOME")
+        .map(|(_, value)| PathBuf::from(value))
+        .filter(|home| home.is_dir())
+        .unwrap_or_else(|| PathBuf::from("/"));
+    let mut command = Command::new(&shell.program);
+    command
+        .args(["-l", "-i", "-c", COMMAND])
+        .env_clear()
+        .envs(base.iter().map(|(name, value)| (name, value)))
+        .current_dir(home)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(target_os = "linux")]
+    // SAFETY: `getpid` has no preconditions.
+    let parent = unsafe { libc::getpid() };
+    // SAFETY: `setsid`, `prctl`, `getppid` and `_exit` are async-signal-safe and touch no
+    // memory of the parent, as a function run between `fork` and `exec` must not.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            // On Linux the kernel kills the shell when the thread that started it ends, so
+            // that a Window that dies leaves no shell behind. The thread outlives the
+            // shell: it returns once the shell is reaped.
+            #[cfg(target_os = "linux")]
+            {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                // The parent may have ended before the request took effect: its signal
+                // would never come.
+                if libc::getppid() != parent {
+                    libc::_exit(1);
+                }
+            }
+            Ok(())
+        });
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| ShellError::Start(error.to_string()))?;
+    // The session's leader: its id is the id of the whole group.
+    let id = child.id() as libc::pid_t;
+    group.started(id);
+    let mut stdout = child.stdout.take().expect("the output was piped");
+
+    let (output_tx, output) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("navigator-shell-output".to_owned())
+        .spawn(move || {
+            let mut bytes = Vec::new();
+            let _ = stdout.read_to_end(&mut bytes);
+            let _ = output_tx.send(bytes);
+        })
+        .map_err(|error| {
+            kill_group(id);
+            let _ = child.wait();
+            ShellError::Start(error.to_string())
+        })?;
+    let (status_tx, status) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("navigator-shell-wait".to_owned())
+        .spawn(move || {
+            let _ = status_tx.send(child.wait());
+        })
+        .map_err(|error| {
+            kill_group(id);
+            ShellError::Start(error.to_string())
+        })?;
+
+    let left = |now: Instant| shell.deadline.saturating_sub(now.duration_since(started));
+    let ended = match status.recv_timeout(left(Instant::now())) {
+        Ok(ended) => ended,
+        Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => {
+            // Past its deadline: the whole group goes, and the wait returns once it is
+            // reaped. The reading thread ends by itself when every holder of the pipe is
+            // gone.
+            kill_group(id);
+            let _ = status.recv();
+            group.reaped();
+            return Err(ShellError::Deadline(shell.deadline));
+        }
+    };
+    // Whatever the shell left in the background must not hold the pipe open.
+    group.reaped();
+    kill_group(id);
+    let ended = ended.map_err(|error| ShellError::Start(error.to_string()))?;
+    if !ended.success() {
+        return Err(ShellError::Status(ended.code()));
+    }
+    // A process that left the group (a session of its own) may still hold the pipe: the
+    // deadline bounds the wait for the rest of the output.
+    let bytes = match output.recv_timeout(left(Instant::now())) {
+        Ok(bytes) => bytes,
+        Err(_) => return Err(ShellError::Deadline(shell.deadline)),
+    };
+    let printed = printed_after_marker(&bytes).ok_or(ShellError::NoMarker)?;
+    Ok(merge(base, &printed))
+}
+
+/// Kills every process of the process group `group`. A group that is gone is no error.
+fn kill_group(group: libc::pid_t) {
+    // SAFETY: a signal to the group of a process this function's caller started; a group
+    // that no longer exists answers `ESRCH`, which is no fault.
+    let _ = unsafe { libc::kill(-group, libc::SIGKILL) };
+}
+
+/// The variables the shell printed: what follows the last [`MARKER`] of `output`, each
+/// `NAME=value` ended by a NUL, split at the first `=`. An entry with no `=` or with an
+/// empty name is dropped. None when `output` holds no marker.
+fn printed_after_marker(output: &[u8]) -> Option<Vec<(OsString, OsString)>> {
+    let marker = MARKER.as_bytes();
+    let at = output
+        .windows(marker.len())
+        .enumerate()
+        .rev()
+        .find(|(_, window)| *window == marker)
+        .map(|(at, _)| at)?;
+    let after = &output[at + marker.len()..];
+    Some(
+        after
+            .split(|byte| *byte == 0)
+            .filter_map(|entry| {
+                let equals = entry.iter().position(|byte| *byte == b'=')?;
+                (equals > 0).then(|| {
+                    (
+                        OsString::from_vec(entry[..equals].to_vec()),
+                        OsString::from_vec(entry[equals + 1..].to_vec()),
+                    )
+                })
+            })
+            .collect(),
+    )
+}
+
+/// `base` with the variables of `printed` it lacks added, but the ones of [`NOT_TAKEN`],
+/// and its `PATH` followed by the entries of the printed one it does not hold.
+fn merge(
+    base: &[(OsString, OsString)],
+    printed: &[(OsString, OsString)],
+) -> Vec<(OsString, OsString)> {
+    let mut merged: Vec<(OsString, OsString)> = base.to_vec();
+    for (name, value) in printed {
+        if NOT_TAKEN.iter().any(|not| name == OsStr::new(not)) {
+            continue;
+        }
+        match merged.iter().position(|(have, _)| have == name) {
+            None => merged.push((name.clone(), value.clone())),
+            Some(at) if name == "PATH" => {
+                let mut entries: Vec<PathBuf> = std::env::split_paths(&merged[at].1).collect();
+                for entry in std::env::split_paths(value) {
+                    if !entries.contains(&entry) {
+                        entries.push(entry);
+                    }
+                }
+                if let Ok(joined) = std::env::join_paths(entries) {
+                    merged[at].1 = joined;
+                }
+            }
+            Some(_) => {}
+        }
+    }
+    merged
 }
 
 /// The search path of an environment: its `PATH`, split; none where it has no `PATH`.
 pub fn search_path(environment: &[(OsString, OsString)]) -> Vec<PathBuf> {
-    let _ = environment;
-    todo!("split the PATH of the environment")
+    environment
+        .iter()
+        .find(|(name, _)| name == "PATH")
+        .map(|(_, value)| std::env::split_paths(value).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn variables(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect()
+    }
+
+    #[test]
+    fn the_merge_keeps_the_values_of_the_base_and_adds_what_only_the_shell_has() {
+        let merged = merge(
+            &variables(&[("A", "base"), ("HOME", "/h")]),
+            &variables(&[("A", "shell"), ("B", "only"), ("HOME", "/elsewhere")]),
+        );
+        assert_eq!(
+            merged,
+            variables(&[("A", "base"), ("HOME", "/h"), ("B", "only")])
+        );
+    }
+
+    #[test]
+    fn the_merge_never_takes_the_variables_that_describe_the_shells_own_run() {
+        let merged = merge(
+            &variables(&[("A", "1")]),
+            &variables(&[
+                ("PWD", "/p"),
+                ("OLDPWD", "/o"),
+                ("SHLVL", "3"),
+                ("_", "/usr/bin/env"),
+                ("B", "2"),
+            ]),
+        );
+        assert_eq!(merged, variables(&[("A", "1"), ("B", "2")]));
+        // The base's own value of one of them stays.
+        let merged = merge(
+            &variables(&[("PWD", "/mine")]),
+            &variables(&[("PWD", "/p")]),
+        );
+        assert_eq!(merged, variables(&[("PWD", "/mine")]));
+    }
+
+    #[test]
+    fn the_merge_gives_the_path_of_the_base_then_the_entries_of_the_shell_it_lacks() {
+        let merged = merge(
+            &variables(&[("PATH", "/a:/b")]),
+            &variables(&[("PATH", "/c:/a:/d")]),
+        );
+        assert_eq!(merged, variables(&[("PATH", "/a:/b:/c:/d")]));
+    }
+
+    #[test]
+    fn the_merge_adds_a_path_the_base_lacks_and_keeps_one_the_shell_lacks() {
+        assert_eq!(
+            merge(&variables(&[("A", "1")]), &variables(&[("PATH", "/c:/d")])),
+            variables(&[("A", "1"), ("PATH", "/c:/d")])
+        );
+        assert_eq!(
+            merge(&variables(&[("PATH", "/a")]), &variables(&[("B", "2")])),
+            variables(&[("PATH", "/a"), ("B", "2")])
+        );
+    }
+
+    #[test]
+    fn the_variables_are_what_follows_the_last_marker_and_an_entry_with_no_name_is_dropped() {
+        let mut output = b"noise\n".to_vec();
+        output.extend_from_slice(MARKER.as_bytes());
+        output.extend_from_slice(b"stale=1\0");
+        // A start-up file that printed the marker too: only what follows the last counts.
+        output.extend_from_slice(MARKER.as_bytes());
+        output.extend_from_slice(b"A=1\0NOEQUALS\0=x\0B=two=parts\0C=\0multi=line\nvalue\0");
+        let printed = printed_after_marker(&output).expect("a marker");
+        assert_eq!(
+            printed,
+            variables(&[
+                ("A", "1"),
+                ("B", "two=parts"),
+                ("C", ""),
+                ("multi", "line\nvalue"),
+            ])
+        );
+        assert_eq!(printed_after_marker(b"A=1\0"), None);
+    }
+
+    #[test]
+    fn the_search_path_is_the_path_split_and_none_where_there_is_no_path() {
+        assert_eq!(
+            search_path(&variables(&[("X", "1"), ("PATH", "/a:/b")])),
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
+        assert_eq!(
+            search_path(&variables(&[("X", "1")])),
+            Vec::<PathBuf>::new()
+        );
+    }
 }

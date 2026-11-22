@@ -923,6 +923,36 @@ fn row_with_a_hung_trial(scratch: &Scratch) -> (String, PathBuf) {
     (row, noted)
 }
 
+/// Writes `<bin>/<name>`, a candidate whose trial run never ends and ignores `SIGTERM`: it
+/// ignores the signal first, then notes its process id in a file, then becomes `sleep`, which
+/// keeps the signal ignored (an ignored signal stays so across `exec`). Once the file is
+/// there, the signal is ignored, so only `SIGKILL` can end the process. Gives that file.
+#[cfg(target_os = "linux")]
+fn put_hung_ignoring_term(bin: &Path, name: &str) -> PathBuf {
+    std::fs::create_dir_all(bin).expect("make the folder");
+    let hung = bin.join(name);
+    let noted = bin.join(format!("{name}.pid"));
+    std::fs::write(
+        &hung,
+        format!(
+            "#!/bin/sh\ntrap '' TERM\necho $$ > {}\nexec sleep 600\n",
+            noted.display()
+        ),
+    )
+    .expect("write the script");
+    std::fs::set_permissions(&hung, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("make it executable");
+    noted
+}
+
+/// [`row_with_a_hung_trial`] for a trial run that ignores `SIGTERM`.
+#[cfg(target_os = "linux")]
+fn row_with_a_hung_trial_ignoring_term(scratch: &Scratch) -> (String, PathBuf) {
+    let noted = put_hung_ignoring_term(&scratch.root.join("bin"), "standin-hung");
+    let row = machine_row(&["standin-hung"], &scratch.root.join("hung.log"));
+    (row, noted)
+}
+
 #[test]
 fn a_trial_run_on_its_way_is_killed_when_the_navigator_ends() {
     let scratch = Scratch::new();
@@ -937,8 +967,9 @@ fn a_trial_run_on_its_way_is_killed_when_the_navigator_ends() {
     assert!(!is_alive(pid), "the trial run outlived the Navigator");
 }
 
-/// A trial run that does not end by itself, as the kernel's part alone: the Window that
-/// started it is killed, so nothing of the Navigator's own cleanup runs.
+/// A trial run that does not end by itself and ignores `SIGTERM`, as the kernel's part
+/// alone: the Window that started it is killed, so nothing of the Navigator's own cleanup
+/// runs, and the process still ends, so the signal the kernel sent it is `SIGKILL`.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
@@ -952,7 +983,7 @@ fn a_trial_run_ends_when_the_window_that_started_it_is_killed() {
         // leaves, ends it.
         let scratch = Scratch::new();
         let repo = scratch.repository("project", &[("main.sil", "def alpha\n")]);
-        let (row, noted) = row_with_a_hung_trial(&scratch);
+        let (row, noted) = row_with_a_hung_trial_ignoring_term(&scratch);
         let (ws, repository) = (workspace_id('1'), repository_id('1'));
         let running = Running::start(scratch.config(&row));
         running.show(&repo, &ws, &repository);
