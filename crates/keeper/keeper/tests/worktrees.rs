@@ -208,7 +208,13 @@ impl Scratch {
     /// The repository `lair/repo` with `main` at one commit, and a second branch `other`
     /// at the same commit.
     fn repository(&self) -> PathBuf {
-        let folder = self.lair().join("repo");
+        self.repository_at(&self.lair().join("repo"))
+    }
+
+    /// A repository like [`Scratch::repository`] in `folder`, which may lie anywhere in the
+    /// scratch folder.
+    fn repository_at(&self, folder: &Path) -> PathBuf {
+        let folder = folder.to_owned();
         std::fs::create_dir_all(&folder).expect("make the folder");
         git(&folder, &["init", "--quiet", "-b", "main"]);
         std::fs::write(folder.join("a.txt"), "one\n").expect("write a file");
@@ -790,21 +796,62 @@ fn each_refusal_makes_nothing_tells_nothing_and_runs_no_git() {
     window.stop(keeper);
 }
 
+/// A `post-checkout` hook that waits on a gate the test holds: while it waits, git is in the
+/// middle of making a worktree.
+///
+/// The hook reads a pipe until the test closes it, and the test cannot open the pipe for
+/// writing before the hook has it open for reading: that is how the test knows the hook
+/// runs.
+struct Gate {
+    running: mpsc::Receiver<()>,
+    opening: JoinHandle<std::fs::File>,
+}
+
+impl Gate {
+    /// Puts the hook into the repository, to be put there before the first request.
+    fn hook(scratch: &Scratch, repo: &Path) -> Gate {
+        let pipe = scratch.0.join("gate");
+        assert!(
+            Command::new("mkfifo")
+                .arg(&pipe)
+                .status()
+                .expect("start mkfifo")
+                .success()
+        );
+        scratch.hook(repo, &format!("cat '{}' > /dev/null", pipe.display()));
+        let (running, hook_runs) = mpsc::channel();
+        let opening = std::thread::spawn(move || {
+            let opened = std::fs::OpenOptions::new()
+                .write(true)
+                .open(pipe)
+                .expect("open the gate");
+            running.send(()).expect("tell the test");
+            opened
+        });
+        Gate {
+            running: hook_runs,
+            opening,
+        }
+    }
+
+    /// Waits until the hook runs.
+    fn hook_runs(&self) {
+        self.running
+            .recv_timeout(DEADLINE)
+            .expect("the hook never started");
+    }
+
+    /// Lets the hook go.
+    fn let_go(self) {
+        drop(self.opening.join().expect("the opening of the gate"));
+    }
+}
+
 #[test]
 fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
-    // The hook waits until the test closes the pipe, which the test cannot open for writing
-    // before the hook has it open for reading: that is how the test knows the hook runs.
-    let gate = scratch.0.join("gate");
-    assert!(
-        Command::new("mkfifo")
-            .arg(&gate)
-            .status()
-            .expect("start mkfifo")
-            .success()
-    );
-    scratch.hook(&repo, &format!("cat '{}' > /dev/null", gate.display()));
+    let gate = Gate::hook(&scratch, &repo);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let (repository, _) = window.open(&repo);
@@ -817,21 +864,7 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
         agent: "claude".to_owned(),
         size: SIZE,
     });
-    let (running, hook_runs) = mpsc::channel();
-    let opening = {
-        let gate = gate.clone();
-        std::thread::spawn(move || {
-            let opened = std::fs::OpenOptions::new()
-                .write(true)
-                .open(gate)
-                .expect("open the gate");
-            running.send(()).expect("tell the test");
-            opened
-        })
-    };
-    hook_runs
-        .recv_timeout(DEADLINE)
-        .expect("the hook never started");
+    gate.hook_runs();
 
     // The hook runs, so git is in the middle of the add: another Window's list, which
     // waits for the Keeper's turn, is answered, and the request has not been.
@@ -852,12 +885,100 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
     );
 
     // The gate is let go: the hook ends and the reply comes.
-    drop(opening.join().expect("the opening of the gate"));
+    gate.let_go();
     let (reply, _) = window.reply_to(id);
     assert!(
         matches!(reply, Ok(Reply::WorktreeCreated { .. })),
         "{reply:?}"
     );
+    window.stop(keeper);
+}
+
+#[test]
+fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
+    let scratch = Scratch::new(Shell::Plain);
+    let repo = scratch.repository();
+    let gate = Gate::hook(&scratch, &repo);
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (repository, _) = window.open(&repo);
+    let mut other = scratch.window();
+    // Read before the request is sent.
+    let before = snapshot(&scratch, &repo);
+
+    window.send(Request::CreateWorktree {
+        repository,
+        from: "main".to_owned(),
+        branch: "slow".to_owned(),
+        agent: "claude".to_owned(),
+        size: SIZE,
+    });
+    gate.hook_runs();
+    let made = scratch.beside().join("slow");
+    assert!(
+        worktree_folders(&repo).contains(&made),
+        "git has not made the worktree yet"
+    );
+
+    // The Keeper leaves while the hook still runs, and then the hook ends: the work finds
+    // nobody to open the agent for.
+    write_message(&mut other.stream, &Message::Shutdown).expect("ask for the stop");
+    let (stopped, stops) = mpsc::channel();
+    std::thread::spawn(move || stopped.send(keeper.join()).expect("tell the test"));
+    let exit = stops
+        .recv_timeout(DEADLINE)
+        .expect("the Keeper did not stop while git made the worktree");
+    assert_eq!(exit.expect("join").expect("run"), Exit::Shutdown);
+    gate.let_go();
+
+    // The work has no reply to give, so what it did is read from the repository: it is
+    // done when the folder it made is gone, which it removes last.
+    let deadline = Instant::now() + DEADLINE;
+    while scratch.beside().exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the worktree was not taken away: {:?}",
+            worktree_folders(&repo)
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert_eq!(worktree_folders(&repo), [repo.clone()]);
+    assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
+    assert_eq!(snapshot(&scratch, &repo), before);
+}
+
+#[test]
+fn a_git_that_fails_makes_nothing_and_tells_no_window() {
+    let scratch = Scratch::new(Shell::Plain);
+    let repo = scratch.repository();
+    let planted = plant(&scratch, &repo);
+    // A hook that fails ends the user's git with a failure after it made the worktree.
+    scratch.hook(&repo, "exit 1");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (repository, _) = window.open(&repo);
+    let (listed_before, _) = window.barrier();
+    // Read before the request is sent.
+    let before = snapshot(&scratch, &repo);
+
+    let (reply, seen) = window.create(&repository, "main", "failing", "claude");
+
+    let Err(Refusal::Failed { reason }) = reply else {
+        panic!("not refused: {reply:?}");
+    };
+    assert!(!reason.is_empty());
+    let (listed, after_the_reply) = window.barrier();
+    assert_eq!(listed, listed_before);
+    assert!(
+        !some_list_holds_a_workspace_on(&lists_told(&seen), "failing")
+            && !some_list_holds_a_workspace_on(&lists_told(&after_the_reply), "failing"),
+        "{seen:?} {after_the_reply:?}"
+    );
+    assert!(window.terminals().is_empty());
+    assert_eq!(git(&repo, &["branch", "--list", "failing"]), "");
+    assert!(!scratch.beside().exists());
+    assert_eq!(snapshot(&scratch, &repo), before);
+    still_there(&repo, &planted);
     window.stop(keeper);
 }
 
@@ -934,6 +1055,7 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     window.stop(keeper);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
+    let mut other = scratch.window();
     assert!(window.settings().contains(&named));
 
     // The next worktree lies in it, which the creation made.
@@ -950,6 +1072,8 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     );
     assert!(worktree_folders(&repo).contains(&expected));
     assert!(expected.join("a.txt").is_file());
+    // The list that came with it is not what the next fact is waited for behind.
+    assert!(matches!(other.next(), Message::Fact(Fact::Workspaces(_))));
 
     // None is the way back: told, listed as none, and the worktrees lie beside the
     // repository again (the worktrees now lie in two folders, so the rule beside it).
@@ -959,6 +1083,7 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
         Ok(Reply::Done)
     ));
     window.told(&back);
+    other.told(&back);
     assert!(window.settings().contains(&back));
     assert!(!window.settings().contains(&named));
     let (reply, seen) = window.create(&repository, "main", "beside", "claude");
@@ -1049,5 +1174,44 @@ fn a_folder_that_is_refused_is_not_kept_and_not_told() {
     other.told(&newer);
     window.told(&newer);
     assert!(window.settings().contains(&newer));
+    window.stop(keeper);
+}
+
+#[test]
+fn the_folder_named_for_one_repository_is_used_for_no_other() {
+    let scratch = Scratch::new(Shell::Plain);
+    let repo = scratch.repository();
+    let second = scratch.repository_at(&scratch.0.join("lair-two/second"));
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (first_id, _) = window.open(&repo);
+    let (second_id, _) = window.open(&second);
+    let places = scratch.0.join("places");
+    assert!(matches!(
+        window.set_folder(&first_id, Some(&places)),
+        Ok(Reply::Done)
+    ));
+
+    let (reply, seen) = window.create(&second_id, "main", "two", "claude");
+    let Ok(Reply::WorktreeCreated { workspace, .. }) = reply else {
+        panic!("no worktree: {reply:?}");
+    };
+    let beside_second = scratch.0.join("lair-two/second.worktrees/two");
+    assert_eq!(
+        lists_told(&seen)
+            .last()
+            .and_then(|list| found_in(list, &second_id, &workspace)),
+        Some((beside_second.clone(), Some(Head::Branch("two".to_owned())))),
+    );
+    assert!(worktree_folders(&second).contains(&beside_second));
+    assert!(!places.exists());
+
+    // The folder is still the first repository's.
+    let (reply, _) = window.create(&first_id, "main", "one", "claude");
+    assert!(
+        matches!(reply, Ok(Reply::WorktreeCreated { .. })),
+        "{reply:?}"
+    );
+    assert!(worktree_folders(&repo).contains(&places.join("one")));
     window.stop(keeper);
 }
