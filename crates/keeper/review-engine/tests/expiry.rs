@@ -27,6 +27,7 @@ use yaar_store::{CommentId, Store, TurnEndRecord, TurnId, TurnRecord, WorkspaceI
 /// 2026-01-01T00:00:00Z, which the clock of every test starts at.
 const BASE: u64 = 1_767_225_600;
 
+const MINUTE: Duration = Duration::from_secs(60);
 const HOUR: Duration = Duration::from_secs(60 * 60);
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const SECOND: Duration = Duration::from_secs(1);
@@ -434,6 +435,7 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     // "After the set time, 30 days with nothing set": one second short of the set time and
     // the hour after S3 was recorded, nothing goes, though S1, S2 and Sm are older.
     assert_eq!(KEEP_STATES, 30 * DAY);
+    let size_before = room_of(&run.reviews, &w);
     let short = run.expire(
         3 * DAY + KEEP_STATES + HOUR - SECOND,
         KEEP_STATES,
@@ -441,7 +443,9 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     );
     assert_eq!(short.states, Vec::<String>::new());
     assert_eq!(held(&run.reviews, &w), set(&[&s1, &s2, &sm, &s3, &s4]));
-    let size_before = room_of(&run.reviews, &w);
+    // A sweep that deletes nothing packs nothing: the room is as it was.
+    assert_eq!(room_of(&run.reviews, &w), size_before);
+    assert_eq!((short.before, short.after), (size_before, size_before));
 
     // At the set time it deletes S3 and nothing else.
     let expired = run.expire(3 * DAY + KEEP_STATES + HOUR, KEEP_STATES, Presence::Present);
@@ -659,6 +663,36 @@ fn the_clean_up_at_once_deletes_what_nothing_names_but_for_the_hour_and_lets_go_
 }
 
 #[test]
+fn the_sweep_by_the_set_time_lets_go_no_kept_commit_and_the_clean_up_at_once_does() {
+    let mut run = Setup::new();
+    let w = workspace();
+    let c1 = git(&run.repo, &["rev-parse", "HEAD"]);
+    // The states are taken on a second commit, so that c1 is reached through none of them.
+    git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
+    run.watched = watch(&run.scratch, &run.repo);
+    let (_, old) = run.end_turn(1);
+    run.clock.move_to(DAY);
+    let (_, newest) = run.end_turn(2);
+    run.reviews
+        .states_of(&w)
+        .expect("the store")
+        .keep_commit(&run.worktree, &CommitId::new(&c1))
+        .expect("keep c1");
+
+    let by_time = run.expire(40 * DAY, KEEP_STATES, Presence::Present);
+    assert_eq!(deleted(&by_time), set(&[&old]));
+    let states = run.reviews.states_of(&w).expect("the store");
+    assert_eq!(states.kept_commits().expect("list"), vec![c1.clone()]);
+
+    let at_once = run.clean_up(40 * DAY, Presence::Present);
+    assert_eq!(at_once.states, Vec::<String>::new());
+    assert_eq!(states.kept_commits().expect("list"), Vec::<String>::new());
+    assert!(!holds_object(&store_folder(&run.scratch, &w), &c1));
+    assert_eq!(run.held(), set(&[&newest]));
+    run.watched.assert_unchanged();
+}
+
+#[test]
 fn the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends() {
     let mut run = Setup::new();
     let (_, start) = run.end_turn(1);
@@ -674,7 +708,9 @@ fn the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends
         })
         .expect("keep the running turn");
     let (_, q) = run.end_turn(3);
-    run.clock.move_to(DAY);
+    // The last turn ends ten minutes before the clean-ups: young, so that it is kept
+    // whatever else is said of the newest state.
+    run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, newest) = run.end_turn(4);
 
     // By the set time: Q goes, `start` is kept though as old.
@@ -713,7 +749,7 @@ fn the_state_a_thread_was_carried_to_is_kept_with_the_one_it_was_written_in() {
         .expect("resolve");
     run.clock.move_to(DAY);
     let (_, s3) = run.end_turn(2);
-    run.clock.move_to(2 * DAY);
+    run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, s4) = run.end_turn(3);
     assert_eq!(run.thread(1).now.expect("a place").tree, s2.as_str());
     write(&run.repo, "notes.txt", "one\ntwo\nthree\n");
@@ -769,17 +805,21 @@ fn a_state_from_the_future_is_young_for_both_clean_ups() {
     run.clock.move_to(10 * DAY);
     let (_, s1) = run.end_turn(1);
     let (_, s2) = run.end_turn(2);
+    run.clock.move_to(10 * DAY + 90 * MINUTE);
+    let (_, s3) = run.end_turn(3);
 
-    // The clock goes back before both states were recorded: nothing is old.
+    // The clock goes back before all three were recorded: nothing is old.
     let by_time = run.expire(Duration::ZERO, Duration::ZERO, Presence::Present);
     assert_eq!(by_time.states, Vec::<String>::new());
     let at_once = run.clean_up(Duration::ZERO, Presence::Present);
     assert_eq!(at_once.states, Vec::<String>::new());
-    assert_eq!(run.held(), set(&[&s1, &s2]));
+    assert_eq!(run.held(), set(&[&s1, &s2, &s3]));
 
-    // Control: two hours after they were recorded the first one is old, with no set time.
+    // Control: two hours after the first two were recorded they are old, with no set time,
+    // and the third, half an hour old, is not.
     let later = run.expire(10 * DAY + 2 * HOUR, Duration::ZERO, Presence::Present);
-    assert_eq!(deleted(&later), set(&[&s1]));
+    assert_eq!(deleted(&later), set(&[&s1, &s2]));
+    assert_eq!(run.held(), set(&[&s3]));
     run.watched.assert_unchanged();
 }
 
