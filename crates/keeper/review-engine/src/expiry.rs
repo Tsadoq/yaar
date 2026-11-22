@@ -15,10 +15,11 @@
 //! | a turn that has not ended | `TurnRecord::start` of every turn of the workspace's sessions whose `ended` is none |
 //! | the worktree itself | the newest state of the store, while the workspace's worktree is there |
 //!
-//! The last two are not FR-125's three; they are what a running turn counts its change from
-//! and what the next turn will count from (the Keeper takes a turn's start as the newest
-//! state when the turn starts). Whether the newest state may outlive the set time is put to
-//! Matteo (`DECISIONS.md`, "Blockers"); until he answers it is kept.
+//! The last two are not the three of the requirement; they are what a running turn counts
+//! its change from and what the next turn will count from (the Keeper takes a turn's start
+//! as the newest state when the turn starts). The owner decided that the newest state of a
+//! worktree that is there is kept however old; the rule lives in one function, `newest_kept`,
+//! and is shown by one test, so that it can be taken out alone.
 //!
 //! A state recorded less than `yaar_recorder::SAME_STATE_FOR` ago is kept by both
 //! clean-ups too: a call that records a state (a turn's end, a round, a reviewed mark)
@@ -49,6 +50,9 @@
 //!   worktree has not. A gone worktree's reviews stay: a thread keeps its own text. The
 //!   clean-up at once deletes, of a gone worktree, what no one refers to, as for a present
 //!   one but with no newest-state referrer.
+//!   A gone worktree's store with no state has no newest state to age: the sweep removes
+//!   its folder only when it holds no kept commit either, as it lets none go; the clean-up
+//!   at once lets go the kept commits no one refers to and then removes an emptied store.
 //!
 //! A store's folder is removed, and forgotten by the engine (taken out of the stores it
 //! keeps open, so that a later call opens it anew, empty), when it is deleted as one, or
@@ -81,13 +85,21 @@
 //! stores, each store's folder mapped back to its workspace by its name, `<workspace>.git`;
 //! a folder of another name counts in the total only.
 
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::io;
+use std::os::unix::fs::MetadataExt as _;
+use std::path::Path;
+use std::time::{Duration, SystemTime};
 
+use yaar_recorder::{Deleted, RecordError, SAME_STATE_FOR, StateId, sizes};
 use yaar_store::TurnId;
 
 use crate::WorkspaceId;
 use crate::engine::{EngineError, Reviews};
+
+/// The unit `st_blocks` counts in.
+const BLOCK: u64 = 512;
 
 /// The time a state nothing refers to is kept when the user set none: 30 days (FR-125).
 pub const KEEP_STATES: Duration = Duration::from_secs(30 * 24 * 60 * 60);
@@ -136,6 +148,49 @@ pub struct StoreRoom {
     pub total: u64,
 }
 
+/// When a clean-up deletes a state.
+#[derive(Clone, Copy)]
+enum Rule {
+    /// By the set time: once `keep_for` and the hour have passed since it was recorded.
+    SetTime(Duration),
+    /// At once: once the hour has passed since it was recorded.
+    AtOnce,
+}
+
+impl Rule {
+    /// How long a state must have been recorded to go.
+    fn wait(self) -> Duration {
+        match self {
+            Rule::SetTime(keep_for) => keep_for.saturating_add(SAME_STATE_FOR),
+            Rule::AtOnce => SAME_STATE_FOR,
+        }
+    }
+}
+
+/// Whether `recorded` lies at least `wait` before `now`. A state from the future, the clock
+/// having moved back, is young.
+fn is_old(now: SystemTime, recorded: SystemTime, wait: Duration) -> bool {
+    now.duration_since(recorded).is_ok_and(|age| age >= wait)
+}
+
+/// The state of a worktree that is there which is kept as the worktree's own, whatever its
+/// age: the newest of `recorded`, which is ordered oldest first. A worktree that is gone
+/// has none. This is the one place the rule lives.
+fn newest_kept(recorded: &[(StateId, SystemTime)], presence: Presence) -> Option<&StateId> {
+    match presence {
+        Presence::Present => recorded.last().map(|(state, _)| state),
+        Presence::Gone => None,
+    }
+}
+
+/// An error of the file system, as the engine reports it for a folder of the states.
+fn on_folder(folder: &Path, e: &io::Error) -> EngineError {
+    EngineError::Record(RecordError::Store {
+        folder: folder.to_owned(),
+        reason: e.to_string(),
+    })
+}
+
 impl Reviews {
     /// Deletes the states of `workspace` that no one refers to and that were recorded at
     /// least `keep_for` and `yaar_recorder::SAME_STATE_FOR` ago, by the engine's clock, and
@@ -148,8 +203,7 @@ impl Reviews {
         keep_for: Duration,
         presence: Presence,
     ) -> Result<Expired, EngineError> {
-        let _ = (workspace, keep_for, presence);
-        todo!("delete what the set time and the references allow, as the module doc says")
+        self.clean(workspace, Rule::SetTime(keep_for), presence)
     }
 
     /// Deletes at once every state and kept commit of `workspace` that no one refers to,
@@ -160,8 +214,7 @@ impl Reviews {
         workspace: &WorkspaceId,
         presence: Presence,
     ) -> Result<Expired, EngineError> {
-        let _ = (workspace, presence);
-        todo!("delete what no one refers to, as the module doc says")
+        self.clean(workspace, Rule::AtOnce, presence)
     }
 
     /// How each turn of `workspace` stands with its recorded state, by the turn's id: every
@@ -170,13 +223,220 @@ impl Reviews {
         &self,
         workspace: &WorkspaceId,
     ) -> Result<BTreeMap<TurnId, TurnMark>, EngineError> {
-        let _ = workspace;
-        todo!("held, expired or not recorded, for each turn")
+        // The turns are read before the states: a state a turn names was recorded before the
+        // turn was kept, so it is in the list unless a clean-up took it.
+        let turns = self.store.turns_of(workspace)?;
+        let folder = self.store_folder(workspace);
+        let held: BTreeSet<String> = match fs::symlink_metadata(&folder) {
+            Ok(_) => self
+                .states_of(workspace)?
+                .states()?
+                .into_iter()
+                .map(|state| state.id.as_str().to_owned())
+                .collect(),
+            // No store: none of the states it held is there.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => BTreeSet::new(),
+            Err(e) => return Err(on_folder(&folder, &e)),
+        };
+        Ok(turns
+            .into_iter()
+            .map(|turn| {
+                let mark = match &turn.state {
+                    None => TurnMark::NotRecorded,
+                    Some(state) if held.contains(state) => TurnMark::Held,
+                    Some(_) => TurnMark::Expired,
+                };
+                (turn.id, mark)
+            })
+            .collect())
     }
 
     /// The room the recorded states take on disk, for each workspace and in total, as the
     /// module doc says.
     pub fn state_sizes(&self) -> Result<StoreRoom, EngineError> {
-        todo!("the sizes of the folder of the state stores")
+        let found = sizes(&self.states).map_err(|e| on_folder(&self.states, &e))?;
+        let workspaces = found
+            .stores
+            .into_iter()
+            .filter_map(|(name, room)| {
+                let id = name.to_str()?.strip_suffix(".git")?;
+                (!id.is_empty()).then(|| (WorkspaceId::new(id), room))
+            })
+            .collect();
+        Ok(StoreRoom {
+            workspaces,
+            total: found.total,
+        })
+    }
+
+    // The folder of the state store of `workspace`.
+    fn store_folder(&self, workspace: &WorkspaceId) -> std::path::PathBuf {
+        self.states.join(format!("{workspace}.git"))
+    }
+
+    // Every full id the Store names for `workspace` as a state or a kept commit that must
+    // stay, but for the newest state of the worktree (`newest_kept`): the module doc's table.
+    fn referred_to(&self, workspace: &WorkspaceId) -> Result<BTreeSet<String>, EngineError> {
+        let mut named = BTreeSet::new();
+        for review in self.store.reviews_of(workspace)? {
+            named.extend(review.reviewed);
+            named.extend(review.rounds.into_iter().filter_map(|round| round.state));
+            for thread in review.threads {
+                named.insert(thread.anchor.tree);
+                named.extend(thread.now.map(|place| place.tree));
+            }
+        }
+        for turn in self.store.turns_of(workspace)? {
+            if turn.ended.is_none() {
+                named.extend(turn.start);
+            }
+        }
+        Ok(named)
+    }
+
+    // Both clean-ups, as the module doc says.
+    fn clean(
+        &self,
+        workspace: &WorkspaceId,
+        rule: Rule,
+        presence: Presence,
+    ) -> Result<Expired, EngineError> {
+        let folder = self.store_folder(workspace);
+        let nothing = |room| Expired {
+            workspace: workspace.clone(),
+            states: Vec::new(),
+            before: room,
+            after: room,
+        };
+        match fs::symlink_metadata(&folder) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(nothing(0)),
+            Err(e) => return Err(on_folder(&folder, &e)),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                eprintln!(
+                    "yaar-keeper: the state store {} is a link: it is not cleaned up",
+                    folder.display()
+                );
+                return Ok(nothing(meta.blocks() * BLOCK));
+            }
+            Ok(_) => {}
+        }
+        let before = sizes(&folder).map_err(|e| on_folder(&folder, &e))?.total;
+        let states = self.states_of(workspace)?;
+        let at_once = matches!(rule, Rule::AtOnce);
+        let gone = presence == Presence::Gone;
+
+        // Step 1: what refers, what the store holds and how old it is, and the refs deleted,
+        // all under the engine's turn.
+        let turn = self.turn();
+        let referred = self.referred_to(workspace)?;
+        let recorded = states.recorded_times()?;
+        let kept = if at_once || gone {
+            states.kept_commits()?
+        } else {
+            Vec::new()
+        };
+        let now = self.clock.now();
+
+        // A gone worktree's store goes as one once its newest state is old enough.
+        let store_is_old = matches!(rule, Rule::SetTime(_))
+            && gone
+            && recorded
+                .last()
+                .is_some_and(|(_, at)| is_old(now, *at, rule.wait()));
+        if store_is_old {
+            drop(turn);
+            let states_in_it = recorded
+                .iter()
+                .map(|(state, _)| state.as_str().to_owned())
+                .collect();
+            self.remove_store(workspace, states, &folder)?;
+            return Ok(Expired {
+                workspace: workspace.clone(),
+                states: states_in_it,
+                before,
+                after: 0,
+            });
+        }
+
+        let newest = newest_kept(&recorded, presence);
+        let mut doomed: BTreeSet<String> = recorded
+            .iter()
+            .filter(|(state, at)| {
+                !referred.contains(state.as_str())
+                    && Some(state) != newest
+                    && is_old(now, *at, rule.wait())
+            })
+            .map(|(state, _)| state.as_str().to_owned())
+            .collect();
+        if at_once {
+            doomed.extend(kept.iter().filter(|id| !referred.contains(*id)).cloned());
+        }
+        let deleted = if doomed.is_empty() {
+            Deleted::default()
+        } else {
+            states.delete(&doomed)?
+        };
+        drop(turn);
+
+        // Step 2: the objects go, with the turn let go.
+        let went = !deleted.states.is_empty() || !deleted.commits.is_empty();
+        if went || at_once {
+            states.pack()?;
+        }
+
+        // A store of a gone worktree that holds nothing is removed too.
+        let left = recorded
+            .iter()
+            .any(|(state, _)| !deleted.states.contains(&state.as_str().to_owned()))
+            || kept.iter().any(|id| !deleted.commits.contains(id));
+        if gone && !left {
+            self.remove_store(workspace, states, &folder)?;
+            return Ok(Expired {
+                workspace: workspace.clone(),
+                states: deleted.states,
+                before,
+                after: 0,
+            });
+        }
+        drop(states);
+
+        // Step 3: the room after.
+        let after = if went || at_once {
+            sizes(&folder).map_err(|e| on_folder(&folder, &e))?.total
+        } else {
+            before
+        };
+        Ok(Expired {
+            workspace: workspace.clone(),
+            states: deleted.states,
+            before,
+            after,
+        })
+    }
+
+    // Removes the folder of a store and forgets it, so that a later call opens one anew,
+    // empty. The list of open stores is held meanwhile, so that no call opens the folder
+    // while it goes. `store` is let go first: its reader of contents ends with it. Never a
+    // link: removed only when it is a folder.
+    fn remove_store(
+        &self,
+        workspace: &WorkspaceId,
+        store: std::sync::Arc<yaar_recorder::StateStore>,
+        folder: &Path,
+    ) -> Result<(), EngineError> {
+        drop(store);
+        let mut opened = self
+            .opened
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        opened.remove(workspace);
+        match fs::symlink_metadata(folder) {
+            Ok(meta) if meta.is_dir() => {
+                fs::remove_dir_all(folder).map_err(|e| on_folder(folder, &e))
+            }
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(on_folder(folder, &e)),
+        }
     }
 }
