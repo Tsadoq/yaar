@@ -399,12 +399,6 @@ pub fn applied(cx: &App) -> ThemeDefinition {
 /// Keeps `definition` as the one [`applied`] gives. `crate::Looks` calls this as the third
 /// step of applying a definition; it writes nothing into the toolkit's colours. It is the
 /// crate's own: nothing outside the Frame may set the applied definition around `Looks`.
-// Nothing but a test calls it until `Looks` does its third step; whoever writes that call removes
-// this attribute.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "`Looks` is the caller, not yet written")
-)]
 pub(crate) fn set_applied(definition: ThemeDefinition, cx: &mut App) {
     cx.set_global(Applied(definition));
 }

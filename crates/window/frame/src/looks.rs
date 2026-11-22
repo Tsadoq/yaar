@@ -41,35 +41,55 @@
 //! Window program tells it at the opening is shown by the composed Window's test: until
 //! told, [`Looks::system`] is none.
 
+use gpui_kit::component::theme::{Theme, ThemeMode};
 use gpui_kit::*;
 use yaar_link::ThemeChoice;
 
 use crate::settings::SettingList;
-use crate::theme::{Appearance, ThemeDefinition, Themes};
+use crate::theme::{Appearance, ThemeDefinition, Themes, set_applied};
 
 /// The theme the Window draws in, and why.
 pub struct Looks {
     settings: Entity<SettingList>,
+    themes: Themes,
     /// The system's setting, as last told; none until told.
     system: Option<Appearance>,
+    /// The definition applied, and whether it was applied as a chosen theme (the window's
+    /// own appearance forced) or as the system's. Before the first application the light
+    /// definition, as [`crate::theme::applied`] reads it.
+    applied: ThemeDefinition,
+    forced: bool,
+    /// Whether the first application was made.
+    done: bool,
 }
 
 impl Looks {
     /// The model of one window, reading the user's choice from `settings`. It applies
     /// nothing until it is first told the system's setting.
     pub fn new(settings: Entity<SettingList>, cx: &mut Context<Self>) -> Looks {
-        let _ = cx;
+        // A choice that changes is applied at once; every other change of the list lands
+        // here too, and applies what is applied already, which does nothing.
+        cx.observe(&settings, |looks, _, cx| looks.apply(cx))
+            .detach();
+        let themes = Themes::built_in();
+        let applied = themes
+            .resolve(&ThemeChoice::System, Appearance::Light)
+            .clone();
         Looks {
             settings,
+            themes,
             system: None,
+            applied,
+            forced: false,
+            done: false,
         }
     }
 
     /// The system's light or dark setting is `appearance` now: applies what the module
     /// doc's table says.
     pub fn system_is(&mut self, appearance: Appearance, cx: &mut Context<Self>) {
-        let _ = (appearance, cx);
-        todo!("note the system's setting and apply, as the module doc says")
+        self.system = Some(appearance);
+        self.apply(cx);
     }
 
     /// The system's setting, as last told; none until [`Looks::system_is`] was first called.
@@ -80,17 +100,54 @@ impl Looks {
     /// The user's choice, as the settings hold it: [`ThemeChoice::System`] where none is
     /// set.
     pub fn chosen(&self, cx: &App) -> ThemeChoice {
-        let _ = (&self.settings, cx);
-        todo!("the choice the settings hold")
+        self.settings.read(cx).theme()
     }
 
     /// The definition applied now.
     pub fn applied(&self) -> &ThemeDefinition {
-        todo!("the definition applied now")
+        &self.applied
     }
 
     /// The themes the Window can apply.
     pub fn themes(&self) -> &Themes {
-        todo!("the themes")
+        &self.themes
+    }
+
+    /// Applies the definition the system's setting and the choice give, the steps of the
+    /// module doc's list for what differs from what is applied. Before the system's setting
+    /// is known it does nothing.
+    fn apply(&mut self, cx: &mut Context<Self>) {
+        let Some(system) = self.system else {
+            return;
+        };
+        let choice = self.chosen(cx);
+        let definition = self.themes.resolve(&choice, system).clone();
+        // A chosen theme is one the choice names and the themes hold; any other choice
+        // is the system's.
+        let forced =
+            matches!(&choice, ThemeChoice::Named(name) if self.themes.named(name).is_some());
+        let same_definition = self.done && definition == self.applied;
+        if same_definition && forced == self.forced {
+            return;
+        }
+        if !same_definition {
+            let mode = match definition.appearance {
+                Appearance::Light => ThemeMode::Light,
+                Appearance::Dark => ThemeMode::Dark,
+            };
+            Theme::change(mode, None, cx);
+            // `change` loaded the toolkit's own colours of the mode over everything: the
+            // definition's go on top, in a second update.
+            Theme::update(cx, |theme| definition.onto(&mut theme.colors));
+            set_applied(definition.clone(), cx);
+        }
+        cx.set_window_appearance(forced.then(|| match definition.appearance {
+            Appearance::Light => WindowAppearance::Light,
+            Appearance::Dark => WindowAppearance::Dark,
+        }));
+        self.applied = definition;
+        self.forced = forced;
+        self.done = true;
+        cx.notify();
     }
 }
