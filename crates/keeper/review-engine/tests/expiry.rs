@@ -435,6 +435,17 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     // "After the set time, 30 days with nothing set": one second short of the set time and
     // the hour after S3 was recorded, nothing goes, though S1, S2 and Sm are older.
     assert_eq!(KEEP_STATES, 30 * DAY);
+    // The room is read with the objects packed, as a pack after the delete leaves them, so
+    // that a smaller store below is the doing of the delete and not of the packing.
+    let blob_of_s3 = git(
+        &store_folder(&run.scratch, &w),
+        &["rev-parse", &format!("{}:turn.bin", s3.as_str())],
+    );
+    run.reviews
+        .states_of(&w)
+        .expect("the store")
+        .pack()
+        .expect("pack");
     let size_before = room_of(&run.reviews, &w);
     let short = run.expire(
         3 * DAY + KEEP_STATES + HOUR - SECOND,
@@ -456,6 +467,10 @@ fn after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_
     // and the mark's are still there.
     assert_eq!(held(&run.reviews, &w), set(&[&s1, &s2, &sm, &s4]));
     assert!(!holds_object(&store_folder(&run.scratch, &w), s3.as_str()));
+    assert!(
+        !holds_object(&store_folder(&run.scratch, &w), &blob_of_s3),
+        "the files only S3 held are gone from the disk"
+    );
 
     // The store is smaller: by the 64 KiB of S3's turn.bin and more than 32 KiB.
     let size_after = room_of(&run.reviews, &w);
@@ -538,18 +553,22 @@ fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_
     let mut run = Setup::new();
     let w = workspace();
 
-    // A thread's state recorded at B, the newest at B + 20 days.
+    // A thread's state recorded at B, a turn's state nothing names beside it, the newest at
+    // B + 20 days.
     let s_thread = StateId::new(run.thread_on_the_files(1));
+    let (_, s_unnamed) = run.end_turn(1);
     run.clock.move_to(20 * DAY);
-    let (_, s_newest) = run.end_turn(1);
-    assert_eq!(run.held(), set(&[&s_thread, &s_newest]));
+    let (_, s_newest) = run.end_turn(2);
+    assert_eq!(run.held(), set(&[&s_thread, &s_unnamed, &s_newest]));
     let folder = store_folder(&run.scratch, &w);
 
-    // At B + 31 days the thread's state is still there: it is older than the set time, but
-    // the store goes only once its newest state is.
+    // At B + 31 days the store stays, as its newest state is young: until it goes, the
+    // ordinary rule holds, so the state nothing names is deleted and the thread's is still
+    // there, older than the set time as it is.
     let at_31 = run.expire(31 * DAY, KEEP_STATES, Presence::Gone);
-    assert_eq!(at_31.states, Vec::<String>::new());
+    assert_eq!(deleted(&at_31), set(&[&s_unnamed]));
     assert_eq!(run.held(), set(&[&s_thread, &s_newest]));
+    assert!(folder.is_dir());
 
     // One second short of the set time and the hour after the newest: still there.
     let short = run.expire(
@@ -577,7 +596,7 @@ fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_
     let fresh = run.reviews.states_of(&w).expect("open anew");
     assert!(folder.is_dir());
     assert!(fresh.states().expect("list").is_empty());
-    run.end_turn(2);
+    run.end_turn(3);
     assert_eq!(run.held().len(), 1);
     run.watched.assert_unchanged();
 }
@@ -671,7 +690,9 @@ fn the_sweep_by_the_set_time_lets_go_no_kept_commit_and_the_clean_up_at_once_doe
     git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
     run.watched = watch(&run.scratch, &run.repo);
     let (_, old) = run.end_turn(1);
-    run.clock.move_to(DAY);
+    // The newest is ten minutes old when the clean-ups run: young, so that the rule of the
+    // newest state is shown by its own test and not by this one.
+    run.clock.move_to(40 * DAY - 10 * MINUTE);
     let (_, newest) = run.end_turn(2);
     run.reviews
         .states_of(&w)
@@ -800,6 +821,45 @@ fn the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a
 }
 
 #[test]
+fn the_clean_up_at_once_packs_though_it_deleted_nothing_and_the_set_time_sweep_does_not() {
+    let mut run = Setup::new();
+    let w = workspace();
+    // The one state is ten minutes old when the clean-ups run: young, so that nothing is
+    // deleted whatever is said of the newest state, which has its own test.
+    run.clock.move_to(40 * DAY - 10 * MINUTE);
+    let (_, newest) = run.end_turn(1);
+    // An object no ref reaches, in the store's own folder: what a comparison leaves behind.
+    let folder = store_folder(&run.scratch, &w);
+    let file = run.scratch.join("loose.bin");
+    std::fs::write(&file, run.noise.kib(64)).expect("write the file");
+    let loose = git(
+        &folder,
+        &["hash-object", "-w", file.to_str().expect("text")],
+    );
+    assert!(holds_object(&folder, &loose));
+
+    // By the set time nothing is deleted: no git runs, the object stays.
+    let by_time = run.expire(40 * DAY, KEEP_STATES, Presence::Present);
+    assert_eq!(by_time.states, Vec::<String>::new());
+    assert_eq!(by_time.after, by_time.before);
+    assert!(holds_object(&folder, &loose));
+
+    // At once nothing is deleted either, for the state is young; the pack still removes
+    // the object.
+    let at_once = run.clean_up(40 * DAY, Presence::Present);
+    assert_eq!(at_once.states, Vec::<String>::new());
+    assert!(!holds_object(&folder, &loose), "the pack removed it");
+    assert!(
+        at_once.after < at_once.before,
+        "the store took {} before and {} after",
+        at_once.before,
+        at_once.after
+    );
+    assert_eq!(run.held(), set(&[&newest]));
+    run.watched.assert_unchanged();
+}
+
+#[test]
 fn a_state_from_the_future_is_young_for_both_clean_ups() {
     let mut run = Setup::new();
     run.clock.move_to(10 * DAY);
@@ -848,6 +908,7 @@ fn a_workspace_with_no_state_store_deletes_nothing_and_makes_none() {
     assert!(run.reviews.turn_marks(&other).expect("marks").is_empty());
     assert!(!folder.exists(), "no store was made");
     assert!(!run.scratch.join("app/states").exists());
+    run.watched.assert_unchanged();
 }
 
 #[test]

@@ -50,6 +50,9 @@
 //!   worktree has not. A gone worktree's reviews stay: a thread keeps its own text. The
 //!   clean-up at once deletes, of a gone worktree, what no one refers to, as for a present
 //!   one but with no newest-state referrer.
+//!   A gone worktree's store with no state has no newest state to age: the sweep removes
+//!   its folder only when it holds no kept commit either, as it lets none go; the clean-up
+//!   at once lets go the kept commits no one refers to and then removes an emptied store.
 //!
 //! A store's folder is removed, and forgotten by the engine (taken out of the stores it
 //! keeps open, so that a later call opens it anew, empty), when it is deleted as one, or
