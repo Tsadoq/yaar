@@ -26,6 +26,12 @@ use yaar_link::{
 
 use crate::link_model::{AskError, KeeperLink, LinkStatus};
 
+/// The stop time of the Link's table, which holds where the user set none.
+const DEFAULT_STOP_AFTER: Duration = Duration::from_secs(600);
+
+/// The days a state is kept by the Link's table, where the user set none.
+const DEFAULT_KEEP_STATES: u32 = 30;
+
 /// The settings the user set, as the Keeper told them.
 ///
 /// When the link connects it asks `Request::GetSettings` and takes the answer; each
@@ -164,81 +170,108 @@ impl SettingList {
     /// What a turn's end selects in Changes: [`TurnEndSelects::WhatChanged`] where none is
     /// set.
     pub fn turn_end(&self) -> TurnEndSelects {
-        todo!("the setting, or its default")
+        self.settings
+            .iter()
+            .find_map(|setting| match setting {
+                Setting::TurnEnd(selects) => Some(*selects),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// The time a workspace stays off screen before its servers stop: ten minutes where none
     /// is set.
     pub fn stop_after(&self) -> Duration {
-        todo!("the setting, or its default")
+        self.stop_after_set().unwrap_or(DEFAULT_STOP_AFTER)
     }
 
     /// Whether the user set the stop time: the model `crate::Navigation` tells the Navigator
     /// only a time the user set.
     pub fn stop_after_set(&self) -> Option<Duration> {
-        todo!("the setting, if set")
+        self.settings.iter().find_map(|setting| match setting {
+            Setting::StopAfter { seconds } => Some(Duration::from_secs(u64::from(*seconds))),
+            _ => None,
+        })
     }
 
     /// The user's choice of theme: [`ThemeChoice::System`] where none is set.
     pub fn theme(&self) -> ThemeChoice {
-        todo!("the setting, or its default")
+        self.settings
+            .iter()
+            .find_map(|setting| match setting {
+                Setting::Theme(choice) => Some(choice.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// Where the terminal pane lies: [`TerminalPlace::Right`] where none is set.
     pub fn terminal_place(&self) -> TerminalPlace {
-        todo!("the setting, or its default")
+        self.settings
+            .iter()
+            .find_map(|setting| match setting {
+                Setting::TerminalPlace(place) => Some(*place),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// How long a recorded state nothing refers to is kept, in days: 30 where none is set.
     pub fn keep_states(&self) -> u32 {
-        todo!("the setting, or its default")
+        self.settings
+            .iter()
+            .find_map(|setting| match setting {
+                Setting::KeepStates { days } => Some(*days),
+                _ => None,
+            })
+            .unwrap_or(DEFAULT_KEEP_STATES)
     }
 
     /// What Option does in a terminal: [`OptionKey::ByLayout`] where none is set.
     pub fn option_key(&self) -> OptionKey {
-        todo!("the setting, or its default")
+        self.settings
+            .iter()
+            .find_map(|setting| match setting {
+                Setting::OptionKey(key) => Some(*key),
+                _ => None,
+            })
+            .unwrap_or_default()
     }
 
     /// Every repository the user answered on its language servers, with the answer, in the
     /// order the Keeper listed them.
     pub fn servers_answers(&self) -> Vec<(RepositoryId, bool)> {
-        todo!("the answers on the servers inside repositories")
+        self.settings
+            .iter()
+            .filter_map(|setting| match setting {
+                Setting::ServersInRepository {
+                    repository,
+                    allowed,
+                } => Some((repository.clone(), *allowed)),
+                _ => None,
+            })
+            .collect()
     }
 
     /// The folder the user named for the worktrees the app creates for `repository`; none
     /// where none is set, or where `folder: None` was set last: the app then makes them
     /// beside the repository, where it keeps its worktrees.
     pub fn worktrees_folder(&self, repository: &RepositoryId) -> Option<PathBuf> {
-        let _ = repository;
-        todo!("the folder set for the repository, if any")
+        self.settings.iter().find_map(|setting| match setting {
+            Setting::WorktreesFolder {
+                repository: of,
+                folder,
+            } if of == repository => folder.clone(),
+            _ => None,
+        })
     }
 
     /// Takes `setting` in the place of the one it is the same thing as, or last, tells the
     /// observers, and asks the Keeper to keep it with `Request::SetSetting`. The answer is
     /// not waited for; a refusal has the list asked again.
     pub fn set(&mut self, setting: Setting, cx: &mut Context<Self>) {
-        self.take_one(setting.clone(), cx);
-        let asked = self
-            .link
-            .update(cx, |link, cx| link.ask(Request::SetSetting { setting }, cx));
-        // An answer still on its way was made before the Keeper heard of this set, and
-        // would take the setting off the list. It is dropped, and the question is asked
-        // again, after the set, as for a fact.
-        if self.awaits_list {
-            self.refresh(cx);
-        }
-        cx.spawn(async move |list, cx| {
-            // A Keeper that refuses, or answers with anything but `Done`, leaves the list
-            // showing a setting it may not keep: ask for what it does keep. A link that is
-            // gone has nothing to ask.
-            match asked.await {
-                Ok(Reply::Done) | Err(AskError::NotLinked) => {}
-                _ => {
-                    list.update(cx, |list, cx| list.refresh(cx)).ok();
-                }
-            }
-        })
-        .detach();
+        // Nobody waits for the answer: the receiver is let go.
+        drop(self.put(setting, cx));
     }
 
     /// As [`SettingList::set`]: takes `setting` at once and asks the Keeper to keep it;
@@ -251,8 +284,57 @@ impl SettingList {
         setting: Setting,
         cx: &mut Context<Self>,
     ) -> Task<Result<(), String>> {
-        let _ = (setting, cx);
-        todo!("set, and give the Keeper's answer, as the doc says")
+        let answered = self.put(setting, cx);
+        cx.spawn(async move |_, _| {
+            answered
+                .recv()
+                .await
+                .unwrap_or_else(|_| Err(NOT_KEPT.to_owned()))
+        })
+    }
+
+    /// Takes `setting`, asks the Keeper to keep it, and gives where the outcome will be
+    /// sent. The list is asked again after a refusal by a task of its own, so that a caller
+    /// that lets go of the outcome does not leave the list showing a setting that was not
+    /// kept.
+    fn put(
+        &mut self,
+        setting: Setting,
+        cx: &mut Context<Self>,
+    ) -> async_channel::Receiver<Result<(), String>> {
+        self.take_one(setting.clone(), cx);
+        let asked = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::SetSetting { setting }, cx));
+        // An answer still on its way was made before the Keeper heard of this set, and
+        // would take the setting off the list. It is dropped, and the question is asked
+        // again, after the set, as for a fact.
+        if self.awaits_list {
+            self.refresh(cx);
+        }
+        let (outcome, answered) = async_channel::bounded(1);
+        cx.spawn(async move |list, cx| {
+            let answer = asked.await;
+            // A Keeper that refuses, or answers with anything but `Done`, leaves the list
+            // showing a setting it may not keep: ask for what it does keep. A link that is
+            // gone has nothing to ask.
+            let result = match answer {
+                Ok(Reply::Done) => Ok(()),
+                Err(AskError::NotLinked) => Err(NOT_KEPT.to_owned()),
+                Err(AskError::Refused(refusal)) => {
+                    list.update(cx, |list, cx| list.refresh(cx)).ok();
+                    Err(refusal.to_string())
+                }
+                Ok(_) | Err(AskError::Unexpected) => {
+                    list.update(cx, |list, cx| list.refresh(cx)).ok();
+                    Err(NOT_KEPT.to_owned())
+                }
+            };
+            // A caller that let go of the outcome wants none.
+            let _ = outcome.send(result).await;
+        })
+        .detach();
+        answered
     }
 }
 
