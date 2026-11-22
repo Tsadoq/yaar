@@ -8,9 +8,12 @@
 //!
 //! What "the project's own" is, each server of a row says (`project`: paths under the
 //! worktree's root, as `node_modules/@typescript/typescript-{platform}/lib/tsc` or
-//! `.venv/bin/ty`); the Rust row names none, since rust-analyzer belongs to the toolchain,
-//! whose program rustup puts on the search path and which runs the project's toolchain.
+//! `.venv/bin/ty`, or absolute paths outside it, which a variable `{env:NAME}` of the servers'
+//! environment names: the Rust row names rustup's proxy in the cargo folder, which runs the
+//! rust-analyzer of the toolchain the project pins). An entry whose variable is not set is
+//! passed over.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use crate::download::installed;
@@ -22,7 +25,8 @@ use crate::registry::{Platform, Row, Vars, expand};
 pub enum CandidateKind {
     /// A command the user registered in their own file.
     Registered,
-    /// A path of a server's `project` under the worktree's root.
+    /// A path of a server's `project` under the worktree's root, or an absolute path outside
+    /// it, once its variables are put in.
     Project,
     /// A name of a server's `machine` found in the search path.
     Machine,
@@ -94,13 +98,16 @@ pub fn order(row: &Row, found: &Found) -> Vec<Candidate> {
 }
 
 /// Looks for the candidates of `row`: the registered commands, each server's `project`
-/// paths under `root` with `{platform}` expanded, its `machine` names in each folder of
+/// paths under `root` (or outside it, where one is absolute once expanded) with `{platform}`
+/// and `{env:NAME}` expanded against `environment`, its `machine` names in each folder of
 /// `search_path`, and what `servers` holds for it (`crate::download::installed` of the
-/// server's name). Reads the file system; runs nothing.
+/// server's name). An entry that names a variable `environment` does not hold is passed over.
+/// Reads the file system; runs nothing.
 pub fn look(
     row: &Row,
     root: &Path,
     search_path: &[PathBuf],
+    environment: &[(OsString, OsString)],
     servers: &Path,
     platform: Option<Platform>,
 ) -> Found {
@@ -108,6 +115,7 @@ pub fn look(
         root: root.display().to_string(),
         worktree: root.display().to_string(),
         platform: platform.map(|p| p.name().to_string()).unwrap_or_default(),
+        env: Some(environment.to_vec()),
         ..Vars::default()
     };
     let mut found = Found::default();
@@ -142,10 +150,17 @@ pub fn look(
             }
         }
         for path in &server.project {
+            // An entry that names a variable that is not set is passed over. One that is
+            // absolute once expanded names a file outside the worktree, which is not joined to
+            // it: rustup's proxy in the user's cargo folder is no part of the repository.
             let Ok(path) = expand(path, &vars) else {
                 continue;
             };
-            let program = root.join(path);
+            let program = if Path::new(&path).is_absolute() {
+                PathBuf::from(path)
+            } else {
+                root.join(path)
+            };
             if is_executable(&program) {
                 found
                     .project
@@ -153,8 +168,11 @@ pub fn look(
             }
         }
         for name in &server.machine {
+            let Ok(name) = expand(name, &vars) else {
+                continue;
+            };
             for folder in search_path.iter().filter(|folder| folder.is_absolute()) {
-                let program = folder.join(name);
+                let program = folder.join(&name);
                 if is_executable(&program) {
                     found
                         .machine
