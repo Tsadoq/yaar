@@ -185,9 +185,11 @@ impl From<GitError> for EngineError {
 pub struct Reviews {
     pub(crate) store: Store,
     git: Git,
-    states: PathBuf,
-    // The state store of each workspace, once opened.
-    opened: Mutex<BTreeMap<WorkspaceId, Arc<StateStore>>>,
+    // The folder of the state stores; the clean-up reads it (`expiry.rs`).
+    pub(crate) states: PathBuf,
+    // The state store of each workspace, once opened. The clean-up of a gone worktree's
+    // store takes its entry out (`expiry.rs`).
+    pub(crate) opened: Mutex<BTreeMap<WorkspaceId, Arc<StateStore>>>,
     // Held by each call while it reads what it changes and keeps the change.
     writing: Mutex<()>,
     // What tells whether files changed since the newest state, and hears of each state
