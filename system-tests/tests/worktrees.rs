@@ -42,7 +42,7 @@ struct Asked {
 }
 
 /// A connection to the Keeper that reads its frames in the order they come, which a
-/// [`Client`] does not show: it keeps the facts that came while a reply was waited for, but
+/// `Client` does not show: it keeps the facts that came while a reply was waited for, but
 /// not whether a later fact came before or after the reply.
 struct Window {
     stream: UnixStream,
@@ -52,9 +52,9 @@ struct Window {
 impl Window {
     fn attach(world: &World) -> Window {
         let (stream, _) = attach(&world.socket());
-        stream
-            .set_read_timeout(Some(DEADLINE))
-            .expect("set the deadline of a read");
+        // Only a socket whose Keeper has gone refuses the option, and then the first read
+        // ends at once with the end of the stream, which it names.
+        let _ = stream.set_read_timeout(Some(DEADLINE));
         Window { stream, next_id: 0 }
     }
 
