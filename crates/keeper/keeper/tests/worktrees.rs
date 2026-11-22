@@ -952,8 +952,9 @@ fn a_git_that_fails_makes_nothing_and_tells_no_window() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
     let planted = plant(&scratch, &repo);
-    // A hook that fails ends the user's git with a failure after it made the worktree.
-    scratch.hook(&repo, "exit 1");
+    // A hook that fails ends the user's git with a failure after it made the worktree, and
+    // what it says on its error output is git's own words, which the reply must carry.
+    scratch.hook(&repo, "echo hook-said-no >&2\nexit 1");
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let (repository, _) = window.open(&repo);
@@ -966,7 +967,7 @@ fn a_git_that_fails_makes_nothing_and_tells_no_window() {
     let Err(Refusal::Failed { reason }) = reply else {
         panic!("not refused: {reply:?}");
     };
-    assert!(!reason.is_empty());
+    assert!(reason.contains("hook-said-no"), "{reason}");
     let (listed, after_the_reply) = window.barrier();
     assert_eq!(listed, listed_before);
     assert!(

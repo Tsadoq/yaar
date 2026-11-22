@@ -26,17 +26,20 @@
 //!    `Weak<Shared>` the parts hold (the field `shared` of `Parts`, cloned into the work at
 //!    step 1), its turn is taken (the field `turn` of `Shared`, with `crate::lock`, as `answer`
 //!    takes it for a request that waits its turn), and its parts are read again. When the Keeper is leaving (the `Weak` is dead,
-//!    or the parts are gone), `Planned::take_away` removes what step 2 made and the
+//!    or the parts are gone; the work's thread keeps the shared state alive, so in practice
+//!    only the parts are), `Planned::take_away` removes what step 2 made and the
 //!    refusal is `Refusal::Failed` "the Keeper is leaving". Otherwise, under the turn:
 //!    `Workspaces::open_added`, which opens the worktree and sets its base to `from`; then
 //!    the agent's launcher (`Program::Agent { agent }`) opened in the new workspace at
 //!    `size`, as `OpenTerminal` opens it (`Parts::open_terminal`), so that the CLI runs as
 //!    when the user types its name in a shell of the app. When the launcher cannot be
 //!    opened, `Workspaces::remove_created` takes the worktree and its branch away again and
-//!    the refusal of the opening is given: nothing half made is left. When it opens,
+//!    the refusal of the opening is given: nothing half made is left. When even that fails, the
+//!    sentence says which worktree stays, and the Keeper's error output has it too. When it opens,
 //!    `Fact::Workspaces` with the list as it is then is told to every Window
 //!    (`Shared::tell`), still under the turn, so that it takes its place among the other
-//!    lists told; it reaches the asking Window before the reply.
+//!    lists told; it reaches the asking Window before the reply. A list that cannot be
+//!    read is not told and is noted on the Keeper's error output.
 //! 4. The turn let go, the work gives the outcome: `Reply::WorktreeCreated { workspace,
 //!    terminal }`, no further fact, and the step that lets the terminal's output through
 //!    once the reply is queued, as for `OpenTerminal`.
@@ -131,7 +134,13 @@ fn make(
     };
     // Step 3: the Keeper's turn, then its parts again, which are gone when it is leaving.
     let leaving = || {
-        let _ = planned.take_away(&added);
+        if let Err(error) = planned.take_away(&added) {
+            // Nobody is left to tell, and a worktree stays in the user's repository.
+            eprintln!(
+                "yaar-keeper: the worktree at {} could not be taken away: {error}",
+                planned.folder().display()
+            );
+        }
         Outcome::failed("the Keeper is leaving")
     };
     let Some(shared) = shared.upgrade() else {
@@ -155,16 +164,27 @@ fn make(
     let (terminal, release) = match opened {
         Ok((Reply::TerminalOpened { terminal }, release)) => (terminal, release),
         Ok(_) => unreachable!("opening a terminal is answered by the terminal"),
-        Err(refused_by_the_dock) => {
-            // Nothing half made is left: the worktree and its branch go again.
-            let _ = kept.workspaces.remove_created(&created);
+        Err(mut refused_by_the_dock) => {
+            // Nothing half made is left: the worktree and its branch go again. When they
+            // cannot, the user is told that a worktree stays.
+            if let Err(error) = kept.workspaces.remove_created(&created) {
+                let left = format!(
+                    "the worktree at {} could not be taken away: {error}",
+                    planned.folder().display()
+                );
+                eprintln!("yaar-keeper: {left}");
+                if let Refusal::Failed { reason } = &mut refused_by_the_dock {
+                    *reason = format!("{reason} ({left})");
+                }
+            }
             return refused(refused_by_the_dock);
         }
     };
     // Told under the turn, so that the list takes its place among the others told, and
     // before the reply, which is queued once this returns.
-    if let Ok(repositories) = list(&kept.workspaces) {
-        shared.tell(&[Fact::Workspaces(repositories)]);
+    match list(&kept.workspaces) {
+        Ok(repositories) => shared.tell(&[Fact::Workspaces(repositories)]),
+        Err(error) => eprintln!("yaar-keeper: the list of workspaces could not be told: {error:?}"),
     }
     Outcome {
         reply: Ok(Reply::WorktreeCreated {
