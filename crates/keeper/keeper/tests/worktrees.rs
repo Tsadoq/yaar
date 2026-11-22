@@ -898,6 +898,8 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
 fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
+    // Planted before the hook is put, as planting checks a file out and a checkout runs it.
+    let planted = plant(&scratch, &repo);
     let gate = Gate::hook(&scratch, &repo);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
@@ -945,6 +947,7 @@ fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
     assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
     assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
     assert_eq!(snapshot(&scratch, &repo), before);
+    still_there(&repo, &planted);
 }
 
 #[test]
@@ -1021,6 +1024,76 @@ fn a_launcher_that_cannot_be_opened_takes_the_worktree_and_the_branch_away_again
     assert_eq!(snapshot(&scratch, &repo), before);
     still_there(&repo, &planted);
     window.stop(keeper);
+}
+
+#[test]
+fn a_worktree_that_cannot_be_taken_away_again_is_named_in_the_refusal_and_stays_listed() {
+    let scratch = Scratch::new(Shell::Broken);
+    let repo = scratch.repository();
+    // The user's hook locks the worktree git just made, so that git refuses to remove it:
+    // the opening of the launcher fails, and the take-away after it fails too. Put after
+    // nothing that checks out, as a hook runs for every checkout.
+    scratch.hook(&repo, "git worktree lock --reason held \"$(pwd -P)\"");
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let (repository, _) = window.open(&repo);
+    let (mut second_window, stays) = (scratch.window(), scratch.beside().join("broken"));
+
+    let (reply, seen) = window.create(&repository, "main", "broken", "claude");
+
+    // The Dock's sentence first, then which worktree stays.
+    let broken = scratch.0.join("broken-shell");
+    let Err(Refusal::Failed { reason }) = reply else {
+        panic!("not refused: {reply:?}");
+    };
+    assert!(
+        reason.starts_with(&format!("{} could not be started", broken.display())),
+        "{reason}"
+    );
+    assert!(
+        reason.contains(&format!(
+            "the worktree at {} could not be taken away",
+            stays.display()
+        )),
+        "{reason}"
+    );
+    // It stays in git's list, and no terminal was made.
+    assert!(worktree_folders(&repo).contains(&stays));
+    assert!(window.terminals().is_empty());
+    // What it left is no secret from the Windows: the list they were told last is the one
+    // they would be given now, and it holds the workspace the folder stays as.
+    let (listed, after_the_reply) = window.barrier();
+    let told = lists_told(&seen);
+    assert_eq!(told.last(), Some(&listed), "{seen:?}");
+    assert!(after_the_reply.is_empty(), "{after_the_reply:?}");
+    assert!(some_list_holds_a_workspace_on(&[listed], "broken"));
+    let heard = second_window.next();
+    assert!(
+        matches!(&heard, Message::Fact(Fact::Workspaces(list))
+            if some_list_holds_a_workspace_on(std::slice::from_ref(list), "broken")),
+        "{heard:?}"
+    );
+
+    // The scratch is cleaned: the lock lifted, the worktree and its branch taken away.
+    window.stop(keeper);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "unlock",
+            stays.to_str().expect("a path of text"),
+        ],
+    );
+    git(
+        &repo,
+        &[
+            "worktree",
+            "remove",
+            "--force",
+            stays.to_str().expect("a path of text"),
+        ],
+    );
+    git(&repo, &["branch", "-D", "broken"]);
 }
 
 #[test]

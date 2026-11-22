@@ -34,8 +34,10 @@
 //!    `size`, as `OpenTerminal` opens it (`Parts::open_terminal`), so that the CLI runs as
 //!    when the user types its name in a shell of the app. When the launcher cannot be
 //!    opened, `Workspaces::remove_created` takes the worktree and its branch away again and
-//!    the refusal of the opening is given: nothing half made is left. When even that fails, the
-//!    sentence says which worktree stays, and the Keeper's error output has it too. When it opens,
+//!    the refusal of the opening is given: nothing half made is left. When even that fails
+//!    (the user's own hook can lock the new worktree), the sentence says which worktree
+//!    stays, the Keeper's error output has it too, and the list as it is then, which holds
+//!    the worktree, is told as below. When it opens,
 //!    `Fact::Workspaces` with the list as it is then is told to every Window
 //!    (`Shared::tell`), still under the turn, so that it takes its place among the other
 //!    lists told; it reaches the asking Window before the reply. A list that cannot be
@@ -176,16 +178,16 @@ fn make(
                 if let Refusal::Failed { reason } = &mut refused_by_the_dock {
                     *reason = format!("{reason} ({left})");
                 }
+                // The worktree stays in git's list and in the Store, so that the next
+                // list a Window asks for holds it: the Windows are told the same.
+                tell_the_list(&shared, kept);
             }
             return refused(refused_by_the_dock);
         }
     };
     // Told under the turn, so that the list takes its place among the others told, and
     // before the reply, which is queued once this returns.
-    match list(&kept.workspaces) {
-        Ok(repositories) => shared.tell(&[Fact::Workspaces(repositories)]),
-        Err(error) => eprintln!("yaar-keeper: the list of workspaces could not be told: {error:?}"),
-    }
+    tell_the_list(&shared, kept);
     Outcome {
         reply: Ok(Reply::WorktreeCreated {
             workspace,
@@ -193,6 +195,15 @@ fn make(
         }),
         facts: Vec::new(),
         then: Some(release),
+    }
+}
+
+/// Tells every Window the list of workspaces as it is now; a list that cannot be read is
+/// not told and is noted on the Keeper's error output. Called under the Keeper's turn.
+fn tell_the_list(shared: &Shared, kept: &Kept) {
+    match list(&kept.workspaces) {
+        Ok(repositories) => shared.tell(&[Fact::Workspaces(repositories)]),
+        Err(error) => eprintln!("yaar-keeper: the list of workspaces could not be told: {error:?}"),
     }
 }
 
