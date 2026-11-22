@@ -236,7 +236,7 @@ fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
 
 /// Whether `name` can be one folder or file name of the app's own and no more: ASCII
 /// letters, digits, `-` and `_`, as Claude Code's session ids are.
-fn is_folder_name(name: &str) -> bool {
+pub(crate) fn is_folder_name(name: &str) -> bool {
     !name.is_empty()
         && name
             .chars()

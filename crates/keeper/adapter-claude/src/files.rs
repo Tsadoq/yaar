@@ -25,16 +25,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::SystemTime;
 
-use crate::deliver::REVIEWS;
-
-/// Whether `name` can be the id of a session of this Adapter, which the delivery writes as a
-/// folder name: ASCII letters, digits, `-` and `_`, as Claude Code's session ids are.
-fn is_folder_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
+use crate::deliver::{REVIEWS, is_folder_name};
 
 /// Removes the files of the sessions of `folder` that no longer run, as the module doc says;
 /// gives the bytes removed.
