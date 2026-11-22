@@ -169,9 +169,20 @@ fn listing(folder: &Path) -> BTreeSet<(PathBuf, char)> {
 /// in: the user's repository, which a refused request leaves as it was.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
-    git: Vec<Vec<u8>>,
+    git: Vec<Bytes>,
     objects: Vec<(PathBuf, u64)>,
     around: BTreeSet<(PathBuf, char)>,
+}
+
+/// What a read gave, compared byte for byte and shown as text when two differ.
+#[derive(PartialEq, Eq)]
+struct Bytes(Vec<u8>);
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = String::from_utf8_lossy(&self.0);
+        write!(f, "{} bytes: {text:?}", self.0.len())
+    }
 }
 
 fn reads(world: &World, repo: &Repo) -> Reads {
@@ -205,6 +216,7 @@ fn reads(world: &World, repo: &Repo) -> Reads {
             fs::read(git_folder.join("index")).expect("the index"),
             fs::read(git_folder.join("config")).expect("the configuration"),
         ])
+        .map(Bytes)
         .collect(),
         objects,
         around: listing(repo.path().parent().expect("the repository has a parent")),
@@ -384,7 +396,8 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
     let taken = client.request(create("main", "main", Dialect::ClaudeCode.name()));
     let no_base = client.request(create("nowhere", "task", Dialect::ClaudeCode.name()));
     assert!(
-        matches!(&no_agent, Err(Refusal::Failed { reason }) if reason.contains("otheragent")),
+        matches!(&no_agent, Err(Refusal::Failed { reason })
+            if reason == "there is no agent CLI named otheragent"),
         "{no_agent:?}"
     );
     assert!(matches!(taken, Err(Refusal::Failed { .. })), "{taken:?}");
