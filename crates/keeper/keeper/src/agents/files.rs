@@ -13,6 +13,7 @@
 use std::time::SystemTime;
 
 use crate::agents::Agents;
+use crate::lock;
 use crate::wiring::Kept;
 
 impl Agents {
@@ -25,7 +26,30 @@ impl Agents {
         kept: &Kept,
         written_before: Option<SystemTime>,
     ) -> u64 {
-        let _ = (kept, written_before);
-        todo!("ask each Adapter, as the module doc says")
+        let adapters = lock(&self.core.adapters);
+        let mut removed = 0;
+        for adapter in adapters.iter() {
+            let name = adapter.name();
+            let Some(folder) = self.core.folder_of(name) else {
+                continue;
+            };
+            // Asked for each session as the Adapter comes to it, so that a session that
+            // began to run since the clean-up began is not taken for one that ended. A
+            // Store that cannot say leaves every session standing.
+            let runs = |cli: &str| {
+                kept.store
+                    .session_of_cli(name, cli)
+                    .map_or(true, |found| found.is_some_and(|session| session.running))
+            };
+            match adapter.remove_files_of_ended(folder, &runs, written_before) {
+                Ok(bytes) => removed += bytes,
+                Err(e) => eprintln!(
+                    "yaar-keeper: the files of {} for sessions that ended could not all be removed from {}: {e}",
+                    adapter.title(),
+                    folder.display()
+                ),
+            }
+        }
+        removed
     }
 }
