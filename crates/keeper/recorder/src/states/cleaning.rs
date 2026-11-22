@@ -30,13 +30,16 @@
 //!
 //! 3. `git repack -a -d -q --no-write-bitmap-index`: every object a ref reaches goes into
 //!    one new pack and the old packs are removed, so that the objects only deleted states
-//!    reached are gone from disk. The store's `shallow` file stops the walk at the commits
+//!    reached are gone from disk (the packs held before and after are compared, to learn
+//!    whether one was removed). The store's `shallow` file stops the walk at the commits
 //!    a state was taken on, as it does for every read. Not `-A`, not
 //!    `--unpack-unreachable`: either would keep unreachable objects loose.
-//! 4. `git prune --expire=now`: the loose objects no ref reaches, the trees and blobs a
+//! 4. `git prune --expire=now -v`: the loose objects no ref reaches, the trees and blobs a
 //!    comparison with the files on disk wrote among them, are removed, and so are the
 //!    entries of the `shallow` file that name a commit no longer there.
-//! 5. The file `yaar-complete-head`, which names the commit the store last copied whole, is
+//! 5. The reader of contents ends when step 3 removed a pack or step 4 pruned an object (the
+//!    next section), so that the room the removed packs took is given back at once.
+//! 6. The file `yaar-complete-head`, which names the commit the store last copied whole, is
 //!    removed when that commit is no longer held (`git cat-file -e <commit>^{tree}` fails), so
 //!    that the next recording copies the commit it is taken on whole again.
 //!
@@ -61,6 +64,14 @@
 //! step 3 removed it is looked for again by git itself, which then finds the new pack. A
 //! read of a state that was deleted answers that the state holds no such file, as for any
 //! state the store does not hold.
+//!
+//! The same mapping would keep the removed packs' room allocated for as long as the reader
+//! lives, which in the Keeper is the whole run, while [`sizes`] already reports the smaller
+//! figure. So step 5 of [`StateStore::pack`] ends the reader, when step 3 removed a
+//! pack or step 4 pruned an object, under the lock a read of it takes: a read in flight
+//! answers first, then the process is stopped and waited for, and the next read starts
+//! another, as it does after a reader that died. The bytes it gives are the same. A pack that
+//! removed nothing ends nothing.
 //!
 //! # The room a store takes
 //!
@@ -192,12 +203,22 @@ impl StateStore {
             .write()
             .unwrap_or_else(PoisonError::into_inner);
         let _turn = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let packs = self.packs();
         self.run(
             None,
             ["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
         )?
         .printed()?;
-        self.run(None, ["prune", "--expire=now"])?.printed()?;
+        let pruned = self.run(None, ["prune", "--expire=now", "-v"])?.printed()?;
+        // The reader maps the packs it opened: while it lives, a pack that was removed
+        // keeps its blocks, and what the sizes report is not what the disk gives back.
+        let removed_a_pack = match (packs, self.packs()) {
+            (Some(before), Some(after)) => !before.is_subset(&after),
+            _ => true,
+        };
+        if removed_a_pack || !pruned.is_empty() {
+            self.end_reader();
+        }
         let marker = self.folder.join(COMPLETE_HEAD);
         if let Ok(noted) = fs::read_to_string(&marker) {
             let head = noted.trim();
@@ -219,6 +240,29 @@ impl StateStore {
             }
         }
         Ok(())
+    }
+
+    /// The packs the store holds by name; none when its folder cannot be read.
+    fn packs(&self) -> Option<BTreeSet<OsString>> {
+        fs::read_dir(self.folder.join("objects/pack"))
+            .ok()?
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .filter(|name| {
+                name.as_ref()
+                    .map_or(true, |name| name.as_encoded_bytes().ends_with(b".pack"))
+            })
+            .collect::<Result<_, _>>()
+            .ok()
+    }
+
+    /// Ends the process that hands out contents and waits for it, if one runs, under the
+    /// lock a read of it takes, so that a read in flight ends first. The next read starts
+    /// another, as it does after one that died.
+    fn end_reader(&self) {
+        let mut kept = self.contents.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(contents) = kept.take() {
+            contents.stop();
+        }
     }
 }
 

@@ -16,9 +16,10 @@ use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use support::{Scratch, commit_all, git, init, program, write};
+use support::{Scratch, commit_all, git, git_that_keeps_a_list, init, is_alive, program, write};
 use yaar_recorder::{
-    Clock, CommitId, Deleted, Git, RecordedState, SAME_STATE_FOR, StateStore, Worktree, sizes,
+    Change, ChangedPath, Clock, CommitId, Deleted, Git, RecordedState, SAME_STATE_FOR, StateStore,
+    Worktree, sizes,
 };
 
 /// 2026-01-01T00:00:00Z, which the clock of every test starts at.
@@ -1143,28 +1144,51 @@ fn pipe(path: &Path) -> File {
         .expect("open the pipe")
 }
 
-#[test]
-fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
-    let scratch = Scratch::new();
-    let repo = repository(&scratch, "repo");
+/// What [`clean_up_beside_a_call`] leaves for the test to read afterwards.
+struct Beside<T> {
+    /// What the call answered once it was let go.
+    answer: T,
+    repo: PathBuf,
+    store: Arc<StateStore>,
+    /// The repository's three commits, the oldest first.
+    commits: [String; 3],
+    watched: Watched,
+}
+
+/// A repository of three commits and a store whose git stops once, at the command whose name
+/// is `stop_at`: `call` is made on a thread of its own, holds a commit of the store and is
+/// stopped at that command, before it has read; the commits `released` are then deleted and
+/// packed beside it, and must not be gone while it waits. Once it is let go it reads what it
+/// held, and the clean-up ends after it. The commits `kept` are kept in the store first.
+///
+/// What the test waits on is the git's own word that the call has arrived and the call's
+/// answer. The one wait that is not on a fact is [`SETTLE`], which shows a negative: a
+/// clean-up that is blocked leaves nothing to look at.
+fn clean_up_beside_a_call<T: Send + 'static>(
+    scratch: &Scratch,
+    stop_at: &str,
+    kept: &[usize],
+    released: &[usize],
+    call: impl FnOnce(&StateStore, &Worktree, &[String; 3]) -> T + Send + 'static,
+) -> Beside<T> {
+    let repo = repository(scratch, "repo");
+    let first = git(&repo, &["rev-parse", "HEAD"]);
     let mut noise = Noise(37);
-    let content = noise.kib(8);
-    std::fs::write(repo.join("unique.bin"), &content).expect("write");
-    let commit = commit_all(&repo, "two");
+    std::fs::write(repo.join("unique.bin"), noise.kib(8)).expect("write");
+    let second = commit_all(&repo, "two");
     write(&repo, "notes.txt", "changed\n");
-    commit_all(&repo, "three");
-    let watched = watch(&scratch, &repo);
+    let third = commit_all(&repo, "three");
+    let commits = [first, second, third];
+    let watched = watch(scratch, &repo);
     let worktree = Arc::new(open(&repo));
-    // The first read of a file starts the process that hands out contents, after the
-    // commit was copied into the store and before anything is read: this git stops there,
-    // once armed, tells the test and waits for it to say go.
-    let armed = scratch.join("stop-the-reader");
+    // This git stops, once armed, at the command, tells the test and waits for it to say go.
+    let armed = scratch.join("stop-the-call");
     let (reached_path, go_path) = (scratch.join("reached"), scratch.join("go"));
     let stopping = scratch.join("bin/git-stopping");
     program(
         &stopping,
         &format!(
-            "case \" $* \" in\n*\" cat-file --batch \"*)\n  if [ -e '{armed}' ]; then\n    \
+            "case \" $* \" in\n*\" {stop_at} \"*)\n  if [ -e '{armed}' ]; then\n    \
              rm '{armed}'\n    echo reached > '{reached}'\n    read go < '{go}'\n  fi;;\nesac\n\
              exec git \"$@\"",
             armed = armed.display(),
@@ -1179,15 +1203,18 @@ fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
         &scratch.join("states/one.git"),
         &clock,
     ));
+    for index in kept {
+        store
+            .keep_commit(&worktree, &CommitId::new(commits[*index].clone()))
+            .expect("keep the commit");
+    }
     std::fs::write(&armed, "").expect("arm the git");
 
-    let reading = {
-        let (store, worktree, commit) = (store.clone(), worktree.clone(), commit.clone());
-        std::thread::spawn(move || {
-            store.content_in(Some(&worktree), &commit, Path::new("unique.bin"))
-        })
+    let calling = {
+        let (store, worktree, commits) = (store.clone(), worktree.clone(), commits.clone());
+        std::thread::spawn(move || call(&store, &worktree, &commits))
     };
-    // The read holds the commit, in the store and named by a ref, and has not read.
+    // The call holds what it reads, in the store and named by a ref, and has not read.
     let (told, arrived) = channel();
     std::thread::spawn(move || {
         let mut byte = [0u8; 1];
@@ -1195,16 +1222,19 @@ fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
     });
     arrived
         .recv_timeout(DEADLINE)
-        .expect("the read reached its process of contents")
+        .expect("the call reached the command")
         .expect("read the pipe");
 
-    // The clean-up of that commit starts now. It must not end while the read is between
-    // holding the commit and reading it.
+    // The clean-up starts now. It must not end while the call is between holding the commits
+    // and reading them.
     let (cleaned, ended) = channel();
     let cleaner = {
-        let (store, commit) = (store.clone(), commit.clone());
+        let store = store.clone();
+        let ids: BTreeSet<String> = released
+            .iter()
+            .map(|index| commits[*index].clone())
+            .collect();
         std::thread::spawn(move || {
-            let ids: BTreeSet<String> = [commit].into();
             store.delete(&ids).expect("delete");
             store.pack().expect("pack");
             let _ = cleaned.send(());
@@ -1215,18 +1245,234 @@ fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
     assert_eq!(
         ran_on,
         Err(RecvTimeoutError::Timeout),
-        "the clean-up ended while a read held the commit"
+        "the clean-up ended while a call held the commits"
     );
 
-    let read = reading.join().expect("the read").expect("content_in");
-    assert_eq!(read, Some(content), "the read found what it held");
+    let answer = calling.join().expect("the call");
     ended
         .recv_timeout(DEADLINE)
-        .expect("the clean-up ended once the read had");
+        .expect("the clean-up ended once the call had");
     cleaner.join().expect("the clean-up");
+    Beside {
+        answer,
+        repo,
+        store,
+        commits,
+        watched,
+    }
+}
+
+#[test]
+fn a_clean_up_waits_for_a_read_that_holds_a_version_until_it_has_read() {
+    let scratch = Scratch::new();
+    let held = clean_up_beside_a_call(
+        &scratch,
+        "cat-file --batch",
+        &[],
+        &[1],
+        |store, worktree, commits| {
+            // The first read of a file starts the process that hands out contents, after the
+            // commit was copied into the store and before anything is read.
+            store.content_in(Some(worktree), &commits[1], Path::new("unique.bin"))
+        },
+    );
+    let read = held.answer.expect("content_in");
+    assert_eq!(
+        read,
+        Some(std::fs::read(held.repo.join("unique.bin")).expect("the file")),
+        "the read found what it held"
+    );
     assert!(
-        store.paths(&commit).is_err(),
+        held.store.paths(&held.commits[1]).is_err(),
         "and then the clean-up took the commit away"
     );
+    held.watched.assert_unchanged();
+}
+
+#[test]
+fn a_clean_up_waits_for_a_call_that_lists_the_paths_of_a_kept_commit_until_it_has_listed_them() {
+    let scratch = Scratch::new();
+    let held = clean_up_beside_a_call(&scratch, "ls-tree", &[1], &[1], |store, _, commits| {
+        store.paths(&commits[1])
+    });
+    let expected: Vec<PathBuf> = git(
+        &held.repo,
+        &["ls-tree", "-r", "--name-only", &held.commits[1]],
+    )
+    .lines()
+    .map(PathBuf::from)
+    .collect();
+    assert!(expected.len() > 1, "the commit holds files");
+    assert_eq!(held.answer.expect("paths"), expected);
+    assert!(
+        held.store.paths(&held.commits[1]).is_err(),
+        "and then the clean-up took the commit away"
+    );
+    held.watched.assert_unchanged();
+}
+
+#[test]
+fn a_clean_up_waits_for_a_call_that_compares_two_kept_commits_until_it_has_compared_them() {
+    let scratch = Scratch::new();
+    let held = clean_up_beside_a_call(
+        &scratch,
+        "diff-tree",
+        &[1, 2],
+        &[1, 2],
+        |store, _, commits| store.changed_paths(&commits[1], &commits[2]),
+    );
+    assert_eq!(
+        held.answer.expect("changed_paths"),
+        vec![ChangedPath {
+            path: PathBuf::from("notes.txt"),
+            change: Change::Modified,
+        }]
+    );
+    assert!(
+        held.store
+            .changed_paths(&held.commits[1], &held.commits[2])
+            .is_err(),
+        "and then the clean-up took the commits away"
+    );
+    held.watched.assert_unchanged();
+}
+
+/// The process ids of the starts of the store's reader of contents, from the list of a git
+/// that writes every start of itself down, oldest first.
+fn reader_starts(list: &Path) -> Vec<String> {
+    std::fs::read_to_string(list)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains("cat-file --batch -Z"))
+        .map(|line| line.split(' ').next().expect("a process id").to_owned())
+        .collect()
+}
+
+/// The packs the store holds, by name.
+fn packs_of(store: &Path) -> BTreeSet<OsString> {
+    std::fs::read_dir(store.join("objects/pack"))
+        .expect("read the folder of packs")
+        .map(|entry| entry.expect("an entry").file_name())
+        .filter(|name| name.to_string_lossy().ends_with(".pack"))
+        .collect()
+}
+
+#[test]
+fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_next_read_starts_one_anew()
+ {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
+    let worktree = open(&repo);
+    let clock = TestClock::new();
+    let (noting, list) = git_that_keeps_a_list(&scratch);
+    let store = open_store_through(&noting, &scratch.join("states/one.git"), &clock);
+    let mut noise = Noise(41);
+    let first = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let second = record_with_noise(&store, &repo, &worktree, &mut noise);
+    store.pack().expect("pack what the recordings wrote loose");
+    let path = Path::new("turn.bin");
+    let before = store
+        .content(second.id.as_str(), path)
+        .expect("read")
+        .expect("a file");
+    let started = reader_starts(&list);
+    assert_eq!(
+        started.len(),
+        1,
+        "one reader started by the first read: {started:?}"
+    );
+    let old_reader = started[0].clone();
+    assert!(is_alive(&old_reader), "the reader waits for the next read");
+
+    // A pack that removes nothing ends nothing.
+    let packs = packs_of(store.folder());
+    store.pack().expect("pack again");
+    assert_eq!(packs_of(store.folder()), packs, "this pack removed no pack");
+    assert!(
+        is_alive(&old_reader),
+        "a pack that removed nothing ended the reader"
+    );
+    assert_eq!(reader_starts(&list), std::slice::from_ref(&old_reader));
+
+    // One that removes the old pack ends it, and waits for it: the room is given back.
+    record_with_noise(&store, &repo, &worktree, &mut noise);
+    store
+        .delete(&[first.id.to_string()].into())
+        .expect("delete");
+    store.pack().expect("pack");
+    assert!(
+        !packs_of(store.folder()).is_superset(&packs),
+        "the pack removed the old pack"
+    );
+    assert!(
+        !is_alive(&old_reader),
+        "the reader that had the old pack mapped ended with the pack, and was waited for"
+    );
+    assert_eq!(
+        reader_starts(&list),
+        std::slice::from_ref(&old_reader),
+        "none starts before a read asks"
+    );
+
+    // The next read starts a new one and reads what the old one did.
+    let after = store
+        .content(second.id.as_str(), path)
+        .expect("read")
+        .expect("a file");
+    assert_eq!(after, before, "the same bytes");
+    let starts = reader_starts(&list);
+    assert_eq!(starts.len(), 2, "one more start: {starts:?}");
+    assert_ne!(starts[1], old_reader);
+    assert!(
+        is_alive(&starts[1]),
+        "the new reader waits for the next read"
+    );
+    watched.assert_unchanged();
+
+    drop(store);
+    assert!(!is_alive(&starts[1]), "it ends with the store");
+}
+
+#[test]
+fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_only_pruned_loose_objects() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
+    let worktree = open(&repo);
+    let clock = TestClock::new();
+    let (noting, list) = git_that_keeps_a_list(&scratch);
+    let store = open_store_through(&noting, &scratch.join("states/one.git"), &clock);
+    let mut noise = Noise(43);
+    let state = record_with_noise(&store, &repo, &worktree, &mut noise);
+    store.pack().expect("pack what the recording wrote loose");
+    let path = Path::new("turn.bin");
+    let before = store
+        .content(state.id.as_str(), path)
+        .expect("read")
+        .expect("a file");
+    let started = reader_starts(&list);
+    assert_eq!(started.len(), 1, "one reader: {started:?}");
+
+    // A comparison with the files on disk writes a tree and a blob no ref names.
+    write(&repo, "notes.txt", "changed since the state\n");
+    store
+        .compare(Some(&worktree), state.id.as_str(), None)
+        .expect("compare");
+    write(&repo, "notes.txt", "one\ntwo\nthree\n");
+    let packs = packs_of(store.folder());
+    store.pack().expect("pack");
+
+    assert_eq!(packs_of(store.folder()), packs, "this pack removed no pack");
+    assert!(
+        !is_alive(&started[0]),
+        "the pack that pruned objects ended the reader, and waited for it"
+    );
+    assert_eq!(
+        store.content(state.id.as_str(), path).expect("read"),
+        Some(before),
+        "the same bytes from the next reader"
+    );
+    assert_eq!(reader_starts(&list).len(), 2, "the next read started one");
     watched.assert_unchanged();
 }
