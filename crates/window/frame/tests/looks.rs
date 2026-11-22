@@ -64,6 +64,9 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
     let Setting::Theme(choice) = setting.clone() else {
         panic!("a test of the theme tells a theme");
     };
+    // The Keeper keeps what it tells, as the real one does: the window may still ask for
+    // every setting after hearing the fact, and the answer must agree with it.
+    shown.keeper.set_settings(vec![setting.clone()]);
     shown.keeper.tell(Fact::SettingChanged(setting));
     wait_until(cx, "the choice of theme to reach the model", |cx| {
         shown
@@ -312,6 +315,9 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
     assert_eq!(background(&mut cx), marker);
 
     // A setting that is not the theme changes, and the settings model tells its observers.
+    shown
+        .keeper
+        .set_settings(vec![Setting::TurnEnd(TurnEndSelects::KeepSelection)]);
     shown.keeper.tell(Fact::SettingChanged(Setting::TurnEnd(
         TurnEndSelects::KeepSelection,
     )));

@@ -141,7 +141,7 @@ impl Looks {
             Theme::update(cx, |theme| definition.onto(&mut theme.colors));
             set_applied(definition.clone(), cx);
         }
-        cx.set_window_appearance(forced.then(|| match definition.appearance {
+        cx.set_window_appearance(forced.then_some(match definition.appearance {
             Appearance::Light => WindowAppearance::Light,
             Appearance::Dark => WindowAppearance::Dark,
         }));
