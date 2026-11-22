@@ -413,6 +413,12 @@ impl Parts {
         self.kept.as_ref().ok()
     }
 
+    /// The agents' side: the sweep of the recorded states has it remove the files of long
+    /// reviews that sessions which ended left.
+    pub(crate) fn agents(&self) -> &Agents {
+        &self.agents
+    }
+
     /// `window` has gone, whatever the way: it is no longer shown any terminal, and what
     /// it showed on screen is no longer needed on its account.
     pub(crate) fn window_gone(&self, window: &Arc<Window>) {
