@@ -86,6 +86,7 @@
 //! before the mark that follows it, which then means nothing.
 
 mod deliver;
+mod files;
 mod install;
 mod report;
 
@@ -96,6 +97,7 @@ pub use deliver::{
 
 use std::io;
 use std::path::Path;
+use std::time::SystemTime;
 
 use report::Remembered;
 use yaar_agent::{
@@ -223,5 +225,14 @@ impl Adapter for ClaudeCode {
     fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String {
         let _ = cli_record;
         deliver::resume(session)
+    }
+
+    fn remove_files_of_ended(
+        &self,
+        folder: &Path,
+        runs: &dyn Fn(&str) -> bool,
+        written_before: Option<SystemTime>,
+    ) -> io::Result<u64> {
+        files::remove_files_of_ended(folder, runs, written_before)
     }
 }
