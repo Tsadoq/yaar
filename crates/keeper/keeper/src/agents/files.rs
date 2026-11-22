@@ -4,8 +4,9 @@
 //!
 //! Each Adapter is asked to remove its own (`yaar_agent::Adapter::remove_files_of_ended`),
 //! in its folder `<data folder>/agents/<its name>`, with a test that says whether a session
-//! still runs (a session the Store holds as running, `Store::running_sessions`, by the
-//! CLI's own id of the session) and, for the sweep, a time: only files last written before
+//! still runs (a session the Store holds as running, by the CLI's own id of the session,
+//! asked as the Adapter comes to each session, so that one that began to run meanwhile is
+//! spared; a Store that cannot say leaves every session standing) and, for the sweep, a time: only files last written before
 //! it go, so that a session the user resumes the next day still finds its files. The
 //! clean-up at once gives no time. The Keeper names no file of an Adapter: which files are
 //! the Adapter's to know.

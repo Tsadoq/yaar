@@ -10,6 +10,11 @@
 //! Both are answered apart, on a thread of their own: a clean-up packs every store, and a
 //! size walks every folder of states.
 //!
+//! A workspace that cannot be cleaned up (the Store or git fails for it) does not hold up the
+//! others: each failure is written to the standard error in one line, starting `yaar-keeper:`,
+//! the `StatesDeleted` of the workspaces that did lose states are told all the same, and the
+//! first failure is what the reply says, `Refusal::Failed`, in place of the sizes.
+//!
 //! # The sweep by the set time
 //!
 //! [`Sweeps::start`] starts one thread at the Keeper's start. It wakes every [`TICK`] of

@@ -711,9 +711,14 @@ impl World {
     /// watcher runs, and nothing of the Link tells of it, so it is looked for in the state
     /// store until the deadline.
     fn work(&mut self, name: &str) -> Work {
-        self.made += 1;
         let repo = self.scratch.repository(name);
         let planted = plant(&self.scratch, &repo);
+        self.adopt(repo, planted)
+    }
+
+    /// [`World::work`] for a folder that is made and has its objects planted already.
+    fn adopt(&mut self, repo: PathBuf, planted: Vec<String>) -> Work {
+        self.made += 1;
         let workspace = self.window.open(&repo);
         let terminal = self.window.open_terminal(&workspace);
         let shown = self.window.ask(Request::ShowWorkspace {
@@ -955,6 +960,57 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
     let _ = world.finish();
 }
 
+#[test]
+fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_takes_it_from_one_that_is_gone()
+ {
+    let mut world = World::new();
+    // The one that stays is kept first, so that a fact told for it would come before the
+    // other's. The other is a linked worktree of a repository, whose folder is removed.
+    let there = world.work("there");
+    let base = world.scratch.repository("base");
+    let planted = plant(&world.scratch, &base);
+    let linked = world.scratch.0.join("linked");
+    git(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().expect("a path"),
+        ],
+    );
+    let gone = world.adopt(linked.clone(), planted);
+    assert!(!world.scratch.states_of(&gone.workspace).is_empty());
+    // Showing the first again lets the second go off screen; its folder is removed.
+    let shown = world.window.ask(Request::ShowWorkspace {
+        workspace: Some(there.workspace.clone()),
+    });
+    assert_eq!(shown, Ok(Reply::Done));
+    fs::remove_dir_all(&linked).expect("remove the worktree's folder");
+    let there_states = world.scratch.states_of(&there.workspace);
+    let base_before = reads(&base);
+    let there_before = reads(&there.repo);
+
+    world.clock.move_on(HOUR);
+    let cleaned = world.window.ask(Request::CleanUpStates);
+    assert!(matches!(cleaned, Ok(Reply::StateSizes(_))), "{cleaned:?}");
+
+    // The state of the worktree that is gone was nobody's and the worktree has no newest
+    // state to keep; the one that is there keeps its newest.
+    world.window.states_deleted(&gone.workspace);
+    world.window.barrier();
+    assert_eq!(world.window.deleted_so_far(), vec![gone.workspace.clone()]);
+    assert!(world.scratch.states_of(&gone.workspace).is_empty());
+    assert_eq!(world.scratch.states_of(&there.workspace), there_states);
+    assert_eq!(reads(&base), base_before);
+    assert_eq!(reads(&there.repo), there_before);
+    still_there(&base, &gone.planted);
+    still_there(&there.repo, &there.planted);
+    let _ = world.finish();
+}
+
 // The files of long reviews
 
 #[test]
@@ -1073,10 +1129,13 @@ fn while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_
     let before = world.window.sizes();
     let repo_before = reads(&work.repo);
 
-    // The first sweep has run, at the base: nothing a turn names was old, and no fact was
-    // told. Now the clock passes the set time and the hour, and nothing is asked.
+    // The first sweep has run, at the base: it removes the files of ended sessions after it
+    // has expired the states, so a file that is gone says the states were weighed and
+    // every one was kept, as none was old. Now the clock passes the set time and the hour,
+    // and nothing is asked.
     wait_until_gone(old.parent().expect("its folder"));
-    assert!(world.window.deleted_so_far().is_empty());
+    let states = world.scratch.states_of(&work.workspace);
+    assert!(states.contains(&one.state) && states.contains(&two.state));
     world.clock.move_on(31 * DAY + HOUR);
     world.window.states_deleted(&work.workspace);
 
