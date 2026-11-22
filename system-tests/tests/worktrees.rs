@@ -11,6 +11,7 @@ use std::fs;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::Instant;
 
 use yaar_link::{
     Fact, Head, Message, Refusal, Reply, RepositoryId, Request, RequestId, TerminalSize,
@@ -52,14 +53,11 @@ struct Window {
 impl Window {
     fn attach(world: &World) -> Window {
         let (stream, _) = attach(&world.socket());
-        // Only a socket whose Keeper has gone refuses the option, and then the first read
-        // ends at once with the end of the stream, which it names.
-        let _ = stream.set_read_timeout(Some(DEADLINE));
         Window { stream, next_id: 0 }
     }
 
     /// Sends `request` and reads until its reply. Panics, naming the request, when the reply
-    /// does not come within the deadline of one read.
+    /// does not come within one deadline for the whole wait, however many frames come first.
     fn ask(&mut self, request: Request) -> Asked {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -67,7 +65,16 @@ impl Window {
         write_message(&mut self.stream, &Message::Request { id, request })
             .unwrap_or_else(|e| panic!("the request {kind:?} could not be sent: {e}"));
         let mut facts = Vec::new();
+        let end = Instant::now() + DEADLINE;
         loop {
+            // What is left of the deadline bounds each read; a stream that never ends then
+            // cannot keep the wait going. A socket whose Keeper has gone refuses the option,
+            // and then the read ends at once with the end of the stream, which it names.
+            let left = end.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                panic!("no reply to {kind:?} within {DEADLINE:?}; facts before it: {facts:?}");
+            }
+            let _ = self.stream.set_read_timeout(Some(left));
             match read_message(&mut self.stream) {
                 Ok(Message::Reply { to, reply }) if to == id => return Asked { facts, reply },
                 Ok(Message::Fact(fact)) => facts.push(fact),
@@ -400,7 +407,12 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
             if reason == "there is no agent CLI named otheragent"),
         "{no_agent:?}"
     );
-    assert!(matches!(taken, Err(Refusal::Failed { .. })), "{taken:?}");
+    // The Keeper's own check says it, not git's failure after it.
+    assert!(
+        matches!(&taken, Err(Refusal::Failed { reason })
+            if reason == "a branch named main exists already"),
+        "{taken:?}"
+    );
     assert!(
         matches!(no_base, Err(Refusal::UnknownRevision { .. })),
         "{no_base:?}"
