@@ -840,18 +840,18 @@ fn a_folder_named_that_is_a_file_or_has_no_parent_either_is_refused_at_creation_
 }
 
 #[test]
-fn a_folder_named_that_a_worktree_came_to_lie_around_since_is_refused_at_creation() {
+fn a_folder_named_under_a_worktree_that_came_to_exist_after_the_setting_is_refused_at_creation() {
     let world = world();
-    let places = world.scratch.join("places");
-    world.create("main", "three", Some(&places));
-    // A worktree comes to lie around a folder named for the repository, which was fine
-    // when it was set.
-    let around = linked_worktree(&world, "around");
-    let named = around.join("places");
+    // The folder is under a folder where no worktree lies yet, so setting it is fine.
+    let named = world.scratch.join("around").join("places");
     world
         .workspaces
-        .check_worktrees_folder(&world.repository, &places)
-        .expect("the folder first named is still fine");
+        .check_worktrees_folder(&world.repository, &named)
+        .expect("the folder is fine when it is set");
+    // A worktree then comes to lie around it.
+    let around = linked_worktree(&world, "around");
+    assert_eq!(named, around.join("places"));
+    assert!(!named.exists());
     let before = world.snapshot();
 
     let outcome = world
@@ -869,7 +869,7 @@ fn a_hook_that_fails_in_a_folder_named_that_was_not_there_leaves_no_folder() {
     program(
         &world.repo.join(".git/hooks/post-checkout"),
         &format!(
-            "echo ran >> '{}'\nexit 1",
+            "echo \"$PWD\" > '{}'\nexit 1",
             world.scratch.join("hook-ran").display()
         ),
     );
@@ -879,6 +879,7 @@ fn a_hook_that_fails_in_a_folder_named_that_was_not_there_leaves_no_folder() {
         .workspaces
         .plan_worktree(&world.repository, "main", "task", Some(&places))
         .expect("plan");
+    assert_eq!(planned.folder(), places.join("task"));
 
     let outcome = planned.add();
 
@@ -886,8 +887,10 @@ fn a_hook_that_fails_in_a_folder_named_that_was_not_there_leaves_no_folder() {
         matches!(outcome, Err(WorkspaceError::Git(_))),
         "{outcome:?}"
     );
-    // Barrier: the hook ran, so git made the worktree before it failed.
-    assert!(world.scratch.join("hook-ran").is_file());
+    // Barrier: the hook ran, and in the folder named, so the add made `places` and the
+    // worktree in it before the failure took them away.
+    let ran = std::fs::read_to_string(world.scratch.join("hook-ran")).expect("the hook ran");
+    assert_eq!(Path::new(ran.trim()), planned.folder());
     assert!(!places.exists(), "the folder the add made is gone");
     // The hook's own file is the one thing the scratch holds that it did not.
     let after = world.snapshot();
