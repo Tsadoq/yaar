@@ -119,7 +119,7 @@ fn set_of_repository(
 /// `Refusal::Failed` naming the setting, and nothing is kept or told.
 fn set_of_app(kept: &Kept, setting: Setting, facts: &mut Vec<Fact>) -> Result<Reply, Refusal> {
     kept.store
-        .set_setting(&store_setting_of_app(&setting))
+        .set_setting(&store_setting_of_app(&setting)?)
         .map_err(failed)?;
     facts.push(Fact::SettingChanged(setting));
     Ok(Reply::Done)
@@ -178,9 +178,10 @@ fn link_setting(setting: &yaar_store::Setting) -> Option<Setting> {
 /// A setting of the whole app in the Store's words. The two themes the app is built with
 /// are the Store's `Light` and `Dark`, so that the row a Store of slice 5 wrote is read the
 /// same; any other name is `Named`, which the Store refuses when it is empty or too long.
-/// A setting that is not one of the whole app's is the caller's to have kept apart.
-fn store_setting_of_app(setting: &Setting) -> yaar_store::Setting {
-    match setting {
+/// A setting that is not one of the whole app's is refused with `Refusal::Failed`: `set`
+/// keeps those apart, so no request reaches that arm.
+fn store_setting_of_app(setting: &Setting) -> Result<yaar_store::Setting, Refusal> {
+    Ok(match setting {
         Setting::TurnEnd(selects) => yaar_store::Setting::TurnEnd(match selects {
             TurnEndSelects::WhatChanged => yaar_store::TurnEndSelects::WhatChanged,
             TurnEndSelects::KeepSelection => yaar_store::TurnEndSelects::KeepSelection,
@@ -206,9 +207,11 @@ fn store_setting_of_app(setting: &Setting) -> yaar_store::Setting {
         Setting::FlowForm { .. }
         | Setting::ServersInRepository { .. }
         | Setting::WorktreesFolder { .. } => {
-            unreachable!("`set` hands only the settings of the whole app here")
+            return Err(Refusal::Failed {
+                reason: format!("{setting:?} is not a setting of the whole app"),
+            });
         }
-    }
+    })
 }
 
 /// A form of Flow in the Store's words.
@@ -223,5 +226,51 @@ fn store_form(form: FlowForm) -> yaar_store::FlowForm {
 fn failed(error: impl std::fmt::Display) -> Refusal {
     Refusal::Failed {
         reason: error.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use yaar_link::{FlowForm, RepositoryId, Setting, WorkspaceId};
+
+    use super::*;
+
+    /// `set` keeps the settings of a workspace and of a repository apart, so that no request
+    /// reaches the conversion of the whole app's settings with one of them; the conversion
+    /// still answers with the Link's refusal, a sentence naming the setting, and does not
+    /// panic.
+    #[test]
+    fn a_setting_that_is_not_the_whole_apps_is_refused_with_the_links_refusal() {
+        let not_the_apps = [
+            Setting::FlowForm {
+                workspace: WorkspaceId::new("w"),
+                form: FlowForm::Timeline,
+            },
+            Setting::ServersInRepository {
+                repository: RepositoryId::new("r"),
+                allowed: true,
+            },
+            Setting::WorktreesFolder {
+                repository: RepositoryId::new("r"),
+                folder: Some(PathBuf::from("/a")),
+            },
+        ];
+        for setting in not_the_apps {
+            match store_setting_of_app(&setting) {
+                Err(Refusal::Failed { reason }) => {
+                    assert!(
+                        reason.contains("not a setting of the whole app"),
+                        "{reason}"
+                    );
+                    assert!(
+                        reason.contains(&format!("{setting:?}")),
+                        "the refusal names the setting: {reason}"
+                    );
+                }
+                other => panic!("{setting:?} was not refused with Failed: {other:?}"),
+            }
+        }
     }
 }
