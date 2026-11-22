@@ -30,6 +30,11 @@ use yaar_link::{
 /// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
+/// How long a Keeper that ought to be waiting is given to show that it is not. Nothing a
+/// passing run does has to end within it: a Keeper that leaves earlier is a failure, one
+/// that is slower than this on a busy machine is missed, never wrongly blamed.
+const SETTLE: Duration = Duration::from_secs(3);
+
 const SIZE: TerminalSize = TerminalSize {
     columns: 80,
     rows: 24,
@@ -594,8 +599,13 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
         panic!("no worktree: {reply:?}");
     };
     assert_ne!(workspace, first);
-    // The list that holds the workspace on its new branch came before the reply, and no
-    // output of the agent did: that waits for the reply.
+    // The list that holds the workspace on its new branch came before the reply. The output
+    // of the agent reaches the Window only after the reply (the step that lets it through is
+    // returned with the outcome, as for `OpenTerminal`), but this is a stated clause and
+    // not a shown one: no surface can hold the Keeper between the opening of the terminal
+    // and the queueing of the reply, and the shell writes later than the Keeper queues, so
+    // that the check below would pass without the step too. Slice 7's opening of a terminal
+    // is read the same way.
     assert!(
         seen.iter()
             .all(|message| matches!(message, Message::Fact(_))),
@@ -895,7 +905,8 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
 }
 
 #[test]
-fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
+fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_leaves_it_whole_or_taken_away()
+ {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
     // Planted before the hook is put, as planting checks a file out and a checkout runs it.
@@ -922,31 +933,48 @@ fn a_keeper_that_stops_while_git_makes_the_worktree_takes_it_away_again() {
         "git has not made the worktree yet"
     );
 
-    // The Keeper leaves while the hook still runs, and then the hook ends: the work finds
-    // nobody to open the agent for.
+    // The Keeper is asked to stop while the hook still runs. It lets every Window go before
+    // it waits for the work in flight, so the end of this Window's connection says that the
+    // Keeper is leaving, and that is read before the window of time is given.
     write_message(&mut other.stream, &Message::Shutdown).expect("ask for the stop");
+    loop {
+        match read_message(&mut other.stream) {
+            Err(yaar_link::LinkError::Closed) => break,
+            Ok(_) => {}
+            Err(error) => panic!("the Keeper did not let the Window go: {error}"),
+        }
+    }
     let (stopped, stops) = mpsc::channel();
     std::thread::spawn(move || stopped.send(keeper.join()).expect("tell the test"));
+    // The one timed negative: a Keeper that does not wait for the work leaves nothing to
+    // look at while the work is held. A passing run cannot fail on it, since the hook is let
+    // go only after the window; a Keeper that leaves later than this on a busy machine is
+    // missed, never wrongly blamed.
+    let left_early = stops.recv_timeout(SETTLE);
+    gate.let_go();
+    assert!(
+        matches!(left_early, Err(mpsc::RecvTimeoutError::Timeout)),
+        "the Keeper left while git still made the worktree"
+    );
     let exit = stops
         .recv_timeout(DEADLINE)
-        .expect("the Keeper did not stop while git made the worktree");
+        .expect("the Keeper did not leave once the work had ended");
     assert_eq!(exit.expect("join").expect("run"), Exit::Shutdown);
-    gate.let_go();
 
-    // The work has no reply to give, so what it did is read from the repository: it is
-    // done when the folder it made is gone, which it removes last.
-    let deadline = Instant::now() + DEADLINE;
-    while scratch.beside().exists() {
-        assert!(
-            Instant::now() < deadline,
-            "the worktree was not taken away: {:?}",
-            worktree_folders(&repo)
-        );
-        std::thread::sleep(Duration::from_millis(5));
+    // The work ended before `run` returned, so nothing is waited for here: the worktree is
+    // whole (the folder, the branch and git's list agree) or taken away, never half made.
+    let listed = worktree_folders(&repo).contains(&made);
+    let branch = !git(&repo, &["branch", "--list", "slow"]).is_empty();
+    assert_eq!(
+        (listed, branch),
+        (made.is_dir(), made.is_dir()),
+        "half a worktree is left: {:?}",
+        worktree_folders(&repo)
+    );
+    if !listed {
+        assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
+        assert_eq!(snapshot(&scratch, &repo), before);
     }
-    assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
-    assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
-    assert_eq!(snapshot(&scratch, &repo), before);
     still_there(&repo, &planted);
 }
 

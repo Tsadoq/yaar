@@ -15,12 +15,16 @@
 //!    [`Workspaces::set_base`] does: the base of a worktree the app created is the branch it
 //!    was made from, kept by its short name and followed as every branch base is. When
 //!    either fails, the worktree and its branch are taken away again
-//!    (`yaar_recorder::Worktree::remove_added`) before the error is given.
+//!    (`yaar_recorder::Worktree::remove_added`) before the error is given; when that
+//!    fails too, the error is still the opening's, and the worktree that stays is noted on
+//!    the Keeper's error output.
 //!
 //! A caller whose own step after 2 fails takes the worktree away with [`Planned::take_away`]
 //! (before step 3) or [`Workspaces::remove_created`] (after it), so that nothing half made is
 //! left; the Store's record of a workspace removed after step 3 then stays, as that of any
-//! worktree that is gone, and is not listed (it holds no review).
+//! worktree that is gone, and is not listed (it holds no review). `remove_created` lets go
+//! of the workspace, its watcher included, only once the worktree is gone: when it fails,
+//! the workspace stays listed and watched.
 //!
 //! # Where the worktree lies
 //!
@@ -217,7 +221,7 @@ impl Workspaces {
         let opened = match self.open_folder(&added.folder) {
             Ok(opened) => opened,
             Err(e) => {
-                let _ = planned.take_away(&added);
+                take_away_noting(planned, &added);
                 return Err(e);
             }
         };
@@ -227,7 +231,7 @@ impl Workspaces {
                 // Opened, so that the Store holds it and a running git is kept for it:
                 // both are let go before the folder is taken away.
                 lock(&self.worktrees).remove(&opened.workspace);
-                let _ = planned.take_away(&added);
+                take_away_noting(planned, &added);
                 return Err(e);
             }
         };
@@ -241,13 +245,16 @@ impl Workspaces {
     }
 
     /// Takes away a worktree [`Workspaces::open_added`] opened, and its branch, as the
-    /// module doc says.
+    /// module doc says. The workspace is forgotten and unwatched only once the worktree is
+    /// gone: when git cannot take it away (the user's own hook can lock it) the error is
+    /// given and the workspace stays as it was, listed and watched, so that nothing shows
+    /// a worktree that is there as one that is not.
     pub fn remove_created(&self, created: &Created) -> Result<(), WorkspaceError> {
         // Through another worktree of the repository than the one that goes.
         let found = self.find(&created.repository, Some(&created.folder))?;
+        found.worktree.remove_added(&created.added)?;
         self.unwatch(&created.workspace);
         lock(&self.worktrees).remove(&created.workspace);
-        found.worktree.remove_added(&created.added)?;
         Ok(())
     }
 
@@ -297,6 +304,18 @@ fn shared_folder(found: &Found) -> PathBuf {
     let mut name = beside.file_name().unwrap_or_default().to_owned();
     name.push(".worktrees");
     beside.with_file_name(name)
+}
+
+/// Takes away a worktree whose opening failed, and notes on the Keeper's error output when
+/// git cannot: the failure the caller is given is the opening's, and a worktree that stays
+/// in the user's repository is no secret.
+fn take_away_noting(planned: &Planned, added: &Added) {
+    if let Err(error) = planned.take_away(added) {
+        eprintln!(
+            "yaar-keeper: the worktree at {} could not be taken away: {error}",
+            added.folder.display()
+        );
+    }
 }
 
 /// The refusals of a folder named for the worktrees of a repository that do not depend on
