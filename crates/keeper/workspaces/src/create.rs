@@ -97,12 +97,13 @@
 //! The id file is written into the new worktree's git folder by step 3, as for every
 //! worktree; nothing else of the app is written into the worktree or the repository.
 
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use yaar_recorder::{Added, Worktree};
+use yaar_recorder::{AddError, Added, Listed, Worktree};
 
-use crate::{Base, RepositoryId, WorkspaceError, WorkspaceId, Workspaces};
+use crate::{Base, Refusal, RepositoryId, WorkspaceError, WorkspaceId, Workspaces, lock};
 
 /// What [`Workspaces::plan_worktree`] found: everything [`Planned::add`] needs, owned, so
 /// that it can run on any thread, after the caller let go of the parts.
@@ -111,13 +112,16 @@ pub struct Planned {
     repository: RepositoryId,
     // A worktree of the repository, through which the user's git runs.
     worktree: Arc<Worktree>,
+    // The folder of the new worktree itself: the folder it is made in, joined with the
+    // branch's name.
     folder: PathBuf,
     branch: String,
     from: String,
 }
 
 impl Planned {
-    /// The folder the new worktree is made in, as the module doc's rules give it.
+    /// The folder of the new worktree itself: the folder the module doc's rules give, joined
+    /// with the branch's name.
     pub fn folder(&self) -> &Path {
         &self.folder
     }
@@ -126,15 +130,21 @@ impl Planned {
     /// [`Refusal`](crate::Refusal) as the module doc's table says, a failure of git to
     /// `WorkspaceError::Git`.
     pub fn add(&self) -> Result<Added, WorkspaceError> {
-        let _ = (&self.repository, &self.worktree, &self.branch, &self.from);
-        todo!("add the worktree with the user's git, as the module doc says")
+        self.worktree
+            .add_worktree(&self.folder, &self.branch, &self.from)
+            .map_err(|e| match e {
+                AddError::NotABranchName(name) => Refusal::NotABranchName(name).into(),
+                AddError::BranchExists(name) => Refusal::BranchExists(name).into(),
+                AddError::UnknownBranch(name) => Refusal::UnknownRevision(name).into(),
+                AddError::FolderExists(folder) => Refusal::FolderExists(folder).into(),
+                AddError::Git(e) => WorkspaceError::Git(e),
+            })
     }
 
     /// Takes away a worktree [`Planned::add`] made and nothing opened yet, and its branch,
     /// as `yaar_recorder::Worktree::remove_added` says.
     pub fn take_away(&self, added: &Added) -> Result<(), WorkspaceError> {
-        let _ = added;
-        todo!("remove what the add made, as the module doc says")
+        self.worktree.remove_added(added).map_err(Into::into)
     }
 }
 
@@ -153,6 +163,12 @@ pub struct Created {
     added: Added,
 }
 
+/// A repository as it is now: a worktree to run git through, and every worktree it lists.
+struct Found {
+    worktree: Arc<Worktree>,
+    listed: Vec<Listed>,
+}
+
 impl Workspaces {
     /// Step 1 of the module doc: the repository `repository` and the folder a new worktree
     /// on the branch `branch`, made from the branch `from`, would lie in: in `folder` when
@@ -165,8 +181,22 @@ impl Workspaces {
         branch: &str,
         folder: Option<&Path>,
     ) -> Result<Planned, WorkspaceError> {
-        let _ = (repository, from, branch, folder);
-        todo!("find the repository and place the folder, as the module doc says")
+        let found = self.find(repository, None)?;
+        let made_in = match folder {
+            Some(named) => {
+                refuse_folder(&found, named)?;
+                refuse_unless_there(named)?;
+                named.to_owned()
+            }
+            None => shared_folder(&found),
+        };
+        Ok(Planned {
+            repository: repository.clone(),
+            worktree: found.worktree,
+            folder: made_in.join(branch.replace('/', "-")),
+            branch: branch.to_owned(),
+            from: from.to_owned(),
+        })
     }
 
     /// Whether `folder` may hold the worktrees the app creates for `repository`, as the
@@ -177,21 +207,154 @@ impl Workspaces {
         repository: &RepositoryId,
         folder: &Path,
     ) -> Result<(), WorkspaceError> {
-        let _ = (repository, folder);
-        todo!("check the folder against the repository's worktrees, as the module doc says")
+        let found = self.find(repository, None)?;
+        refuse_folder(&found, folder).map_err(Into::into)
     }
 
     /// Step 3 of the module doc: opens the worktree `added` of `planned` as a workspace and
     /// sets its base to the branch it was made from; takes it away again when either fails.
     pub fn open_added(&self, planned: &Planned, added: Added) -> Result<Created, WorkspaceError> {
-        let _ = (planned, added);
-        todo!("open and set the base, as the module doc says")
+        let opened = match self.open_folder(&added.folder) {
+            Ok(opened) => opened,
+            Err(e) => {
+                let _ = planned.take_away(&added);
+                return Err(e);
+            }
+        };
+        let base = match self.set_base(&opened.workspace, &planned.from) {
+            Ok(base) => base,
+            Err(e) => {
+                // Opened, so that the Store holds it and a running git is kept for it:
+                // both are let go before the folder is taken away.
+                lock(&self.worktrees).remove(&opened.workspace);
+                let _ = planned.take_away(&added);
+                return Err(e);
+            }
+        };
+        Ok(Created {
+            repository: planned.repository.clone(),
+            workspace: opened.workspace,
+            folder: added.folder.clone(),
+            base,
+            added,
+        })
     }
 
     /// Takes away a worktree [`Workspaces::open_added`] opened, and its branch, as the
     /// module doc says.
     pub fn remove_created(&self, created: &Created) -> Result<(), WorkspaceError> {
-        let _ = &created.added;
-        todo!("remove the worktree and its branch, as the module doc says")
+        // Through another worktree of the repository than the one that goes.
+        let found = self.find(&created.repository, Some(&created.folder))?;
+        self.unwatch(&created.workspace);
+        lock(&self.worktrees).remove(&created.workspace);
+        found.worktree.remove_added(&created.added)?;
+        Ok(())
+    }
+
+    /// The repository `repository` as git lists its worktrees now, and one of them,
+    /// other than `leaving`, to run git through.
+    fn find(
+        &self,
+        repository: &RepositoryId,
+        leaving: Option<&Path>,
+    ) -> Result<Found, WorkspaceError> {
+        let record = self
+            .store
+            .repositories()?
+            .into_iter()
+            .find(|record| &record.id == repository)
+            .ok_or_else(|| Refusal::UnknownRepository(repository.clone()))?;
+        let listed = Worktree::list_of(&self.git, &record.git_dir)?;
+        let leaving = leaving.map(resolved);
+        let worktree = listed
+            .iter()
+            .filter(|one| leaving.as_deref() != Some(one.path.as_path()))
+            // One that cannot be opened, for whatever reason, is left to the next.
+            .find_map(|one| Worktree::open(&self.git, &one.path).ok().map(Arc::new))
+            .ok_or_else(|| Refusal::UnknownRepository(repository.clone()))?;
+        Ok(Found { worktree, listed })
+    }
+}
+
+/// Rules 1 and 2 of the module doc: where the repository keeps its worktrees.
+fn shared_folder(found: &Found) -> PathBuf {
+    let mut parents = found
+        .listed
+        .iter()
+        .filter(|one| !one.main)
+        .map(|one| one.path.parent());
+    if let Some(Some(first)) = parents.next()
+        && parents.all(|parent| parent == Some(first))
+    {
+        return first.to_owned();
+    }
+    // The main worktree, else (a bare repository) the git folder.
+    let beside = found
+        .listed
+        .iter()
+        .find(|one| one.main)
+        .map_or_else(|| found.worktree.common_dir(), |main| &main.path);
+    let mut name = beside.file_name().unwrap_or_default().to_owned();
+    name.push(".worktrees");
+    beside.with_file_name(name)
+}
+
+/// The refusals of a folder named for the worktrees of a repository that do not depend on
+/// what is at it: the ones made when it is set and again when a worktree is made.
+fn refuse_folder(found: &Found, folder: &Path) -> Result<(), Refusal> {
+    if !folder.is_absolute() || folder.components().any(|part| part == Component::ParentDir) {
+        return Err(Refusal::FolderNotAbsolute(folder.to_owned()));
+    }
+    let wanted = resolved(folder);
+    let lies_in = found
+        .listed
+        .iter()
+        .map(|one| one.path.as_path())
+        .chain([found.worktree.common_dir()])
+        .any(|worktree| wanted.starts_with(worktree));
+    if lies_in {
+        return Err(Refusal::FolderInsideRepository(folder.to_owned()));
+    }
+    Ok(())
+}
+
+/// What a worktree made in the named `folder` needs of it: a folder, or a place to make one
+/// in. Asked only when a worktree is made.
+fn refuse_unless_there(folder: &Path) -> Result<(), Refusal> {
+    match fs::metadata(folder) {
+        Ok(found) if found.is_dir() => return Ok(()),
+        Ok(_) => return Err(Refusal::NoSuchFolder(folder.to_owned())),
+        Err(_) => {}
+    }
+    // Something that cannot be followed, a link to nothing, is something that is not a
+    // folder; otherwise nothing is there, and its parent folder has to be.
+    if fs::symlink_metadata(folder).is_ok() {
+        return Err(Refusal::NoSuchFolder(folder.to_owned()));
+    }
+    match folder.parent() {
+        Some(parent) if fs::metadata(parent).is_ok_and(|found| found.is_dir()) => Ok(()),
+        Some(parent) => Err(Refusal::NoSuchFolder(parent.to_owned())),
+        None => Err(Refusal::NoSuchFolder(folder.to_owned())),
+    }
+}
+
+/// `path` with its links resolved as far as it exists, and what is below that as written.
+fn resolved(path: &Path) -> PathBuf {
+    let mut rest = Vec::new();
+    let mut at = path;
+    loop {
+        if let Ok(found) = fs::canonicalize(at) {
+            return rest
+                .iter()
+                .rev()
+                .fold(found, |whole, part| whole.join(part));
+        }
+        match (at.parent(), at.file_name()) {
+            (Some(parent), Some(name)) => {
+                rest.push(name);
+                at = parent;
+            }
+            _ => return path.to_owned(),
+        }
     }
 }
