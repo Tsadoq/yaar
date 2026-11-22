@@ -653,12 +653,12 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
 }
 
 #[test]
-fn a_worktree_is_made_from_a_branch_and_claude_is_started_in_it_by_one_request() {
+fn a_worktree_is_made_from_a_branch_and_the_agent_is_started_in_it_by_one_request() {
     a_worktree_with_an_agent_in_one_request("claude");
 }
 
 #[test]
-fn a_worktree_is_made_from_a_branch_and_claude_is_started_in_it_by_one_request_as_pi() {
+fn a_worktree_is_made_from_a_branch_and_the_agent_is_started_in_it_by_one_request_as_pi() {
     a_worktree_with_an_agent_in_one_request("pi");
 }
 
@@ -1031,15 +1031,12 @@ fn a_folder_that_is_refused_is_not_kept_and_not_told() {
         let reply = window.set_folder(&repository, Some(&folder));
         assert_eq!(reply, Err(refusal), "{what}");
         // Still what was kept before, and nothing of the kind listed for the other.
-        assert_eq!(
-            window
-                .settings()
-                .into_iter()
-                .filter(|setting| matches!(setting, Setting::WorktreesFolder { .. }))
-                .collect::<Vec<_>>(),
-            [named.clone()],
-            "{what}"
-        );
+        let folders: Vec<Setting> = window
+            .settings()
+            .into_iter()
+            .filter(|setting| matches!(setting, Setting::WorktreesFolder { .. }))
+            .collect();
+        assert_eq!(folders, std::slice::from_ref(&named), "{what}");
     }
 
     // The barrier: the next setting kept is the next fact the other Window sees, so that
