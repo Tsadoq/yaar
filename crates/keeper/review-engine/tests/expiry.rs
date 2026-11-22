@@ -602,6 +602,116 @@ fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_
 }
 
 #[test]
+fn the_clean_up_at_once_of_a_gone_worktree_deletes_only_what_nothing_names_however_old_its_newest_state_is()
+ {
+    let mut run = Setup::new();
+    let w = workspace();
+    let c1 = git(&run.repo, &["rev-parse", "HEAD"]);
+    // The states are taken on a second commit, so that c1 is reached through none of them.
+    git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
+    run.watched = watch(&run.scratch, &run.repo);
+
+    // At B: a thread on the files (its state), a state nothing names, a thread written on
+    // the commit c1 and the newest state, all of them at least the set time and the hour
+    // before the clean-up: by the set time the whole store would go.
+    let s_files = StateId::new(run.thread_on_the_files(1));
+    let (_, s_unnamed) = run.end_turn(1);
+    let on_commit = DraftSave {
+        thread: ThreadId::new(id(2)),
+        comment: CommentId::new(id(1002)),
+        on: DraftOn::NewThread(NewAnchor {
+            tree: Some(c1.clone()),
+            path: PathBuf::from("notes.txt"),
+            side: Side::New,
+            first: 2,
+            last: 2,
+            text: "two".to_owned(),
+        }),
+        text: "on a commit".to_owned(),
+    };
+    run.reviews
+        .save_draft(Some(&run.worktree), &run.review, &on_commit)
+        .expect("save the draft");
+    let (_, s_newest) = run.end_turn(2);
+    let folder = store_folder(&run.scratch, &w);
+    assert_eq!(run.held(), set(&[&s_files, &s_unnamed, &s_newest]));
+
+    // Of a gone worktree the newest state is no referrer, but the store is not taken as one
+    // either: only what nothing names goes, and the folder stays with what a thread names.
+    let expired = run.clean_up(KEEP_STATES + 10 * DAY, Presence::Gone);
+    assert_eq!(deleted(&expired), set(&[&s_unnamed, &s_newest]));
+    assert_eq!(run.held(), set(&[&s_files]));
+    assert!(folder.is_dir(), "the store's folder is still there");
+    assert_eq!(run.thread(1).anchor.tree, s_files.as_str());
+    assert_eq!(
+        run.reviews
+            .states_of(&w)
+            .expect("the store")
+            .kept_commits()
+            .expect("list"),
+        vec![c1.clone()]
+    );
+    assert!(holds_object(&folder, &c1));
+    run.watched.assert_unchanged();
+}
+
+#[test]
+fn a_store_of_a_gone_worktree_that_holds_only_a_kept_commit_a_thread_names_is_not_removed() {
+    let mut run = Setup::new();
+    let w = workspace();
+    let c1 = git(&run.repo, &["rev-parse", "HEAD"]);
+    // The states are taken on a second commit, so that c1 is reached through none of them.
+    git(&run.repo, &["commit", "--allow-empty", "-q", "-m", "two"]);
+    run.watched = watch(&run.scratch, &run.repo);
+
+    // At B two states that nothing names, and a thread written on the commit c1.
+    let (_, first) = run.end_turn(1);
+    let (_, second) = run.end_turn(2);
+    let on_commit = DraftSave {
+        thread: ThreadId::new(id(2)),
+        comment: CommentId::new(id(1002)),
+        on: DraftOn::NewThread(NewAnchor {
+            tree: Some(c1.clone()),
+            path: PathBuf::from("notes.txt"),
+            side: Side::New,
+            first: 2,
+            last: 2,
+            text: "two".to_owned(),
+        }),
+        text: "on a commit".to_owned(),
+    };
+    run.reviews
+        .save_draft(Some(&run.worktree), &run.review, &on_commit)
+        .expect("save the draft");
+    let folder = store_folder(&run.scratch, &w);
+    assert_eq!(run.held(), set(&[&first, &second]));
+
+    // At once: both states go, and the store, which holds a kept commit a thread names, is
+    // not removed.
+    let expired = run.clean_up(2 * HOUR, Presence::Gone);
+    assert_eq!(deleted(&expired), set(&[&first, &second]));
+    assert!(run.held().is_empty());
+    assert!(folder.is_dir(), "the store's folder is still there");
+    let kept = |run: &Setup| {
+        run.reviews
+            .states_of(&w)
+            .expect("the store")
+            .kept_commits()
+            .expect("list")
+    };
+    assert_eq!(kept(&run), vec![c1.clone()]);
+    assert!(holds_object(&folder, &c1));
+
+    // The sweep finds a store with no state and a kept commit: it has no newest state to age
+    // and lets no kept commit go, so the store stays long after.
+    let swept = run.expire(KEEP_STATES + 10 * DAY, KEEP_STATES, Presence::Gone);
+    assert_eq!(swept.states, Vec::<String>::new());
+    assert!(folder.is_dir(), "the store's folder is still there");
+    assert_eq!(kept(&run), vec![c1]);
+    run.watched.assert_unchanged();
+}
+
+#[test]
 fn the_clean_up_at_once_deletes_what_nothing_names_but_for_the_hour_and_lets_go_a_kept_commit_nothing_names()
  {
     let mut run = Setup::new();
