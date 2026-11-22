@@ -7,7 +7,10 @@
 //! on a thread of its own, the line a script writes into a pipe. A clause that says nothing
 //! happened is read after a barrier: the Navigator handles one event at a time and tells one
 //! list of its servers for each `Workspaces` and each `OnScreen`, so a list told for a later
-//! ask comes after what the earlier ones made it do.
+//! ask comes after what the earlier ones made it do. The one clause no barrier orders is
+//! "never before a server is needed": the shell runs on a thread of its own, so the script
+//! notes whether a server was needed when it started, and [`SETTLE`] gives a shell started
+//! early the time to start.
 
 mod support;
 
@@ -56,6 +59,20 @@ fn value_of<'a>(environment: &'a [(OsString, OsString)], name: &str) -> Option<&
         .iter()
         .find(|(have, _)| have == name)
         .map(|(_, value)| value)
+}
+
+/// How long a negative clause is given to show itself: the one wait of this file that is not
+/// on a fact. A shell started early notes its start within milliseconds, so this is long
+/// enough on a machine at background priority too. A passing run cannot fail on it (the
+/// server is needed only after it); a shell started early on a machine slower than this
+/// could be missed.
+const SETTLE: Duration = Duration::from_secs(3);
+
+/// Waits [`SETTLE`], on a channel nobody sends on, so that the wait is a timeout and not a
+/// sleep.
+fn settle() {
+    let (_kept, never) = mpsc::channel::<()>();
+    let _ = never.recv_timeout(SETTLE);
 }
 
 /// A named pipe at `path`: a script that writes into it blocks until the test reads.
@@ -390,6 +407,11 @@ struct Rig {
     shell_bin: PathBuf,
     /// One line for each run of the shell: its arguments.
     runs: PathBuf,
+    /// The file the test makes when a server is needed, and that the script looks for.
+    needed: PathBuf,
+    /// One line for each run of the shell, written as its first act: `there` when the file
+    /// `needed` existed at that moment, `not there` when it did not.
+    saw: PathBuf,
     /// The whole environment the last run of the server's program had.
     env_seen: PathBuf,
     /// The stand-in's log.
@@ -424,6 +446,8 @@ impl Rig {
         );
         Rig {
             runs: scratch.root.join("shell.runs"),
+            needed: scratch.root.join("needed"),
+            saw: scratch.root.join("shell.saw"),
             scratch,
             shell_bin,
             env_seen,
@@ -453,7 +477,8 @@ impl Rig {
             &self.scratch,
             "login-shell",
             &format!(
-                "printf '%s\\n' \"$*\" >> {runs}\n\
+                "if [ -e {needed} ]; then echo there; else echo 'not there'; fi >> {saw}\n\
+                 printf '%s\\n' \"$*\" >> {runs}\n\
                  echo 'STANDIN_NOISE=yes'\n\
                  STANDIN_FROM_SHELL=yes\n\
                  STANDIN_KEPT_BY_BASE=shell\n\
@@ -461,6 +486,8 @@ impl Rig {
                  PATH={bin}:$PATH\n\
                  export STANDIN_FROM_SHELL STANDIN_KEPT_BY_BASE HOME PATH\n\
                  exec /bin/sh -c \"$4\"\n",
+                needed = quoted(&self.needed),
+                saw = quoted(&self.saw),
                 runs = quoted(&self.runs),
                 bin = quoted(&self.shell_bin),
             ),
@@ -548,13 +575,13 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         .clone();
     let mut running = Running::start(config);
 
-    // Never before a server is needed: a workspace with no file of any row on screen.
+    // Never before a server is needed: a workspace with no file of any row on screen. No
+    // surface tells when a shell starts on a thread of its own, so the script tells: its
+    // first act is to note whether the file `needed` exists. The file is made one settle time
+    // after the Navigator told its servers, and a shell started before that notes "not there".
     show_all(&mut running, roots.clone(), &w_plain);
-    assert_eq!(
-        rig.shell_runs(),
-        Vec::<String>::new(),
-        "the shell was run before a server was needed"
-    );
+    settle();
+    std::fs::write(&rig.needed, "").expect("say that a server is needed");
 
     // The first server needed.
     running.ask(Ask::OnScreen(Some(w_one.clone())));
@@ -570,6 +597,14 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         rig.shell_runs(),
         vec![format!("-l -i -c {COMMAND}")],
         "the shell runs once, as the launchers run it"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&rig.saw)
+            .expect("the shell noted whether a server was needed")
+            .lines()
+            .collect::<Vec<_>>(),
+        vec!["there"],
+        "the shell was started before a server was needed"
     );
 
     // The stand-in's `start` line, waited for: it is written by a process of its own.
