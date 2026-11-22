@@ -17,13 +17,17 @@ pub fn light() -> ThemeDefinition {
         secondary: hex(0xe5e5e5),
         secondary_foreground: hex(0x171717),
         muted: hex(0xf5f5f5),
-        muted_foreground: hex(0x737373),
+        // The toolkit's #737373 reads 3.76 to 1 on the selected and the secondary ground, where
+        // the sidebar draws it: darkened until 4.5 to 1.
+        muted_foreground: hex(0x666666),
         accent: hex(0xf5f5f5),
         accent_foreground: hex(0x171717),
         list_hover: hex(0xf5f5f5),
         success: hex(0x22c55e),
         warning: hex(0xeab308),
-        // The toolkit's #fafafa reads 1.84 to 1 on `warning`: darkened until 4.5 to 1.
+        // The toolkit's #fafafa reads 1.84 to 1 on `warning`. It lies lighter than that yellow
+        // but can go no lighter, so the steps are taken darker, to the first that reads 4.5
+        // to 1.
         warning_foreground: hex(0x474747),
         // The toolkit's #ef4444 reads 3.76 to 1 on `background`: darkened until 4.5 to 1.
         danger: hex(0xeb1515),
@@ -54,23 +58,32 @@ pub fn light() -> ThemeDefinition {
             background: colors.background,
             cursor: colors.foreground,
             selection: colors.selection,
+            // What the pane drew before, but where that read under 3 to 1 on this white ground
+            // (the numbers noted): darkened in steps of 5 points of lightness to the first
+            // that reads 3 to 1 and is no earlier colour of the palette.
             ansi: [
                 hex(0x000000),
                 colors.red,
                 colors.green,
-                colors.yellow,
+                // Colour 3, the yellow, was 2.94 to 1.
+                hex(0xb17904),
                 colors.blue,
                 colors.magenta,
                 colors.cyan,
-                hex(0xe5e5e5),
+                // Colour 7, white, was 1.26 to 1.
+                hex(0x8c8c8c),
                 hex(0x7f7f7f),
-                colors.red_light,
-                colors.green_light,
-                colors.yellow_light,
-                colors.blue_light,
-                colors.magenta_light,
-                colors.cyan_light,
-                hex(0xffffff),
+                // Colours 9 to 14, the bright ones, were 2.77, 1.74, 1.53, 2.54, 2.64 and 1.81
+                // to 1.
+                hex(0xf75959),
+                hex(0x1ea44f),
+                hex(0xa58504),
+                hex(0x2f89f8),
+                hex(0xb36bfb),
+                hex(0x0e9fb6),
+                // Colour 15, bright white, was 1.0 to 1: its first step that reads, #8c8c8c, is
+                // colour 7's, so it is one step further.
+                hex(0x808080),
             ],
         },
         colors,

@@ -23,8 +23,9 @@ pub fn dark() -> ThemeDefinition {
         list_hover: hexa(0x26262699),
         success: hex(0x4ade80),
         warning: hex(0xfacc15),
-        // The toolkit's #ca8a04 reads 1.92 to 1 on `warning`. Lightening it never reaches
-        // 4.5 to 1 on that light yellow, so it is darkened instead.
+        // The toolkit's #ca8a04 reads 1.92 to 1 on `warning`. It lies darker than that light
+        // yellow, so the steps away from the yellow's lightness are darker ones, and the first
+        // that reads 4.5 to 1 is this.
         warning_foreground: hex(0x664602),
         danger: hex(0xf87171),
         info: hex(0x22d3ee),
