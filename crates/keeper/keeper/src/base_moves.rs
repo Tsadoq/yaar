@@ -13,8 +13,8 @@
 //! | Where | What is done |
 //! | --- | --- |
 //! | `SetBase`, before the base is set | [`before_set`] reads `counted_from` now, from `Workspaces::changes` |
-//! | `SetBase`, after the base is set | [`after_set`] reads it again; when it differs from `before`, `Reviews::base_moved(before, after)`, notes `after`, and puts `ReviewsChanged` of the workspace into the facts when a thread moved |
-//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, the same as above; when none was noted, it only notes |
+//! | `SetBase`, after the base is set | [`after_set`] reads it again and carries the threads placed on the commit noted and on `before` (each one that is not `after`) to `after` with `Reviews::base_moved`; notes `after` when every carry succeeded, also when nothing differed; puts `ReviewsChanged` of the workspace into the facts when a thread was re-placed, whether its lines moved or stayed |
+//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, it carries from the noted commit to the answer's, notes it when the carry succeeded, and puts `ReviewsChanged` into the facts when a thread was re-placed; when none was noted, it only notes |
 //!
 //! `SetBase` carries from the commit noted as well as from `before` when they differ: a base
 //! that moved since the last `GetChanges` left threads on the noted commit, and the ones
@@ -22,6 +22,10 @@
 //!
 //! Two `GetChanges` of two Windows at once may both carry from the same noted commit: the
 //! second carries nothing, since the first moved every thread placed on that commit.
+//! A `GetChanges` that read its `counted_from` before another Window's `SetBase` took
+//! effect, and is answered after it, finds the newer commit noted and carries the threads
+//! back to the older one; the next answer carries them forward again. Two Windows at once
+//! are left for after the first release, and this with them.
 //! A workspace with no `counted_from` before or after carries nothing, and one with no
 //! worktree carries nothing. A failure of the carry, or of reading or writing the note, is
 //! written to the standard error in one line, starting `yaar-keeper:`, and does not change

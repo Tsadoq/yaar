@@ -185,8 +185,9 @@ pub struct Thread {
     pub state: ThreadState,
     /// Where it sits in the newest recorded state of the worktree the Keeper carried it
     /// to, with what that state did to the lines it was written on; none while it sits
-    /// where its anchor says, as before the first state after it, and for a thread the
-    /// Keeper does not carry: one on the old side, or on a file outside the worktree.
+    /// where its anchor says, as before the first state after it, and for a thread on a file
+    /// outside the worktree, which the Keeper does not carry. A thread on the old side has
+    /// one once the commit the changes are counted from moved: its place names that commit.
     pub now: Option<Placed>,
 }
 

@@ -107,8 +107,8 @@ fn step_of(
 
 impl Reviews {
     /// The commit the changes of `workspace` are counted from moved from `from` to `to`:
-    /// carries its threads on the old side, as the module doc says, and gives the ids of
-    /// those that moved.
+    /// carries its threads on the old side, as the module doc says, and gives the ids of the
+    /// threads whose place now names `to`, whether their lines moved or stayed.
     ///
     /// The commits are read through the workspace's state store, which copies from
     /// `worktree` the one it lacks; when that fails nothing is carried. A file that cannot
