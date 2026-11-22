@@ -16,8 +16,9 @@
 //!
 //! The bytes given are the blocks the removed files and links used on disk (`st_blocks`,
 //! in units of 512 bytes), the unit the recorded states are counted in: the folders
-//! themselves count for nothing. A session whose folder cannot be removed stays for the next
-//! clean-up: the others go on, and the first failure is what the call gives at the end.
+//! themselves count for nothing. A session whose folder cannot be removed, or whose entry in
+//! the folder of reviews cannot be read, stays for the next clean-up: the others go on, and
+//! the first failure is what the call gives at the end.
 
 use std::fs;
 use std::io;
@@ -45,7 +46,15 @@ pub(crate) fn remove_files_of_ended(
     let mut removed = 0;
     let mut failure = None;
     for entry in fs::read_dir(&reviews)? {
-        let entry = entry?;
+        // An entry that cannot be read is a session that cannot be cleaned: noted, and the
+        // others go on, as for one that cannot be removed.
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                failure.get_or_insert(error);
+                continue;
+            }
+        };
         let Some(id) = entry.file_name().to_str().map(str::to_owned) else {
             continue;
         };

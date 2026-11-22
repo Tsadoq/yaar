@@ -260,6 +260,45 @@ fn a_session_with_one_file_still_new_keeps_all_of_them() {
     assert_eq!(fs::read(&new).expect("kept"), b"new");
 }
 
+// Which file of a folder `read_dir` gives first depends on the file system: by name, by
+// creation, or the other way. The two sessions hold the same names with the old and the new
+// file swapped, so that in any order one of them meets its old file, which uses blocks,
+// before its new one, and a count kept from the walk so far would show.
+#[test]
+fn a_session_kept_for_a_new_file_adds_nothing_to_the_bytes_removed_in_whatever_order_its_files_come()
+ {
+    let place = Place::new();
+    let now = SystemTime::now();
+    let old = now - THIRTY_DAYS - Duration::from_secs(3600);
+    let first_old = place.write("s1", "a", &noise(9_000, 10));
+    let first_new = place.write("s1", "b", &noise(9_000, 11));
+    let second_new = place.write("s2", "a", &noise(9_000, 12));
+    let second_old = place.write("s2", "b", &noise(9_000, 13));
+    set_modified(&first_old, old);
+    set_modified(&second_old, old);
+    assert!(
+        blocks_of(&first_old) > 0,
+        "a file of 9 000 bytes uses blocks"
+    );
+
+    let removed = place
+        .remove(&[], Some(now - THIRTY_DAYS))
+        .expect("the clean-up runs");
+
+    assert_eq!(
+        removed, 0,
+        "a kept session adds nothing to what was removed"
+    );
+    for (file, seed) in [
+        (&first_old, 10),
+        (&first_new, 11),
+        (&second_new, 12),
+        (&second_old, 13),
+    ] {
+        assert_eq!(fs::read(file).expect("kept"), noise(9_000, seed));
+    }
+}
+
 #[test]
 fn a_file_in_a_folder_of_a_session_counts_for_all_it_says() {
     let place = Place::new();
@@ -322,6 +361,11 @@ fn what_is_no_session_folder_is_left_where_it_lies() {
     let place = Place::new();
     let stray = place.folder.join(REVIEWS).join("notes.txt");
     fs::write(&stray, b"not a session").expect("write a stray file");
+    // A plain file that a session's folder could be named like is no session either: only
+    // its type tells it from one.
+    let named_like_a_session = place.folder.join(REVIEWS).join("s9");
+    fs::write(&named_like_a_session, noise(9_000, 14)).expect("write a file named like a session");
+    assert!(blocks_of(&named_like_a_session) > 0, "the file uses blocks");
     let odd = place.write("not a session id", "r-1.md", b"odd");
     let beside = place.folder.join("plugin").join("plugin.json");
     fs::create_dir_all(beside.parent().expect("a parent")).expect("make the plugin folder");
@@ -331,6 +375,11 @@ fn what_is_no_session_folder_is_left_where_it_lies() {
 
     assert_eq!(removed, 0);
     assert!(stray.exists());
+    assert_eq!(
+        fs::read(&named_like_a_session).expect("kept"),
+        noise(9_000, 14),
+        "a plain file named like a session is kept byte for byte"
+    );
     assert!(odd.exists());
     assert!(beside.exists());
 }
@@ -364,4 +413,71 @@ fn a_session_folder_whose_name_is_not_text_is_passed_over() {
 
     assert_eq!(fs::read(odd.join("r-1.md")).expect("kept"), b"kept");
     assert!(!place.session("s2").exists());
+}
+
+/// Gives back the write permission of the folders a test took it from, so that the scratch
+/// folder can be removed when the test ends, also when it failed.
+#[cfg(target_os = "macos")]
+struct Unlocked(Vec<PathBuf>);
+
+#[cfg(target_os = "macos")]
+impl Drop for Unlocked {
+    fn drop(&mut self) {
+        use std::os::unix::fs::PermissionsExt;
+        for folder in &self.0 {
+            let _ = fs::set_permissions(folder, fs::Permissions::from_mode(0o755));
+        }
+    }
+}
+
+// Only macOS compiles this test: it needs a folder that refuses its owner, and the Linux
+// tests run as root, who is refused nothing (and `chattr +i` fails on an overlay file
+// system). The Mac and its CI runner run as a user who is not root.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_session_that_cannot_be_removed_stays_the_others_go_on_and_the_call_gives_the_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let place = Place::new();
+    // The session `read_dir` names first is the one that cannot be removed, whatever the
+    // order of this file system: a call that gave up at the first failure would leave the
+    // others behind.
+    let ids = ["s1", "s2", "s3", "s4"];
+    for id in ids {
+        place.write(id, "r-1.md", &noise(9_000, 20));
+    }
+    let listed: Vec<String> = fs::read_dir(place.folder.join(REVIEWS))
+        .expect("list the sessions")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .into_string()
+                .expect("text")
+        })
+        .collect();
+    let stuck = listed.first().expect("a session").clone();
+    let stuck_file = place.write(&stuck, "sub/r-2.md", &noise(9_000, 21));
+    let sub = stuck_file.parent().expect("a folder").to_owned();
+    let _unlocked = Unlocked(vec![sub.clone()]);
+    fs::set_permissions(&sub, fs::Permissions::from_mode(0o555)).expect("lock the folder");
+    assert!(
+        File::create(sub.join("probe")).is_err(),
+        "this test needs a user the folder's mode refuses, not root"
+    );
+
+    let outcome = place.remove(&[], None);
+
+    let error = outcome.expect_err("the call gives the failure at its end");
+    assert_eq!(error.kind(), io::ErrorKind::PermissionDenied, "{error}");
+    assert!(
+        stuck_file.exists(),
+        "the file that could not go is still there"
+    );
+    for id in ids.iter().filter(|id| **id != stuck) {
+        assert!(
+            !place.session(id).exists(),
+            "{id} went though {stuck} did not"
+        );
+    }
 }
