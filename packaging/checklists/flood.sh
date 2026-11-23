@@ -129,7 +129,9 @@ say "in the app: $(tr '\n' ' ' < "$OUT/in-app.txt")seconds"
 
 ALONE=$(ck_median_p95 < "$OUT/alone.txt" | sed -n 's/.*median=\([0-9.]*\).*/\1/p')
 INAPP=$(ck_median_p95 < "$OUT/in-app.txt" | sed -n 's/.*median=\([0-9.]*\).*/\1/p')
-[ -n "$ALONE" ] && [ -n "$INAPP" ] || ck_die "no time was recorded ($OUT/alone.txt, $OUT/in-app.txt)"
+if [ -z "$ALONE" ] || [ -z "$INAPP" ]; then
+  ck_die "no time was recorded ($OUT/alone.txt, $OUT/in-app.txt)"
+fi
 RATIO=$(awk -v a="$ALONE" -v b="$INAPP" 'BEGIN { printf "%.2f", b / a }')
 say "median alone $ALONE s, median in the app $INAPP s: $RATIO times"
 STATUS=0

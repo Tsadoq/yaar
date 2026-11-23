@@ -518,13 +518,16 @@ PID_A=$!
 "$S/b/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
 PID_B=$!
 SERVERS="$SERVERS $PID_A $PID_B"
-found_a() {
-  [ "$( (. "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") )" = "$PID_A" ]
+pids_of() {
+  bash -c '. "$1"; ck_pids_of "$2"' _ "$HERE/lib.sh" "$1"
 }
-wait_for found_a || fail "a process started from $S/a/yaar-review was not found by that path alone (found: $( (. "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") ))"
-[ "$( (. "$HERE/lib.sh"; ck_pids_of "$S/b/yaar-review") )" = "$PID_B" ] \
+found_a() {
+  [ "$(pids_of "$S/a/yaar-review")" = "$PID_A" ]
+}
+wait_for found_a || fail "a process started from $S/a/yaar-review was not found by that path alone (found: $(pids_of "$S/a/yaar-review"))"
+[ "$(pids_of "$S/b/yaar-review")" = "$PID_B" ] \
   || fail "a process started from $S/b/yaar-review was not found by that path alone"
-[ -z "$( (. "$HERE/lib.sh"; ck_pids_of "$S/c/yaar-review") )" ] || fail "a path nothing runs from found a process"
+[ -z "$(pids_of "$S/c/yaar-review")" ] || fail "a path nothing runs from found a process"
 kill "$PID_A" "$PID_B"
 if wait "$PID_A" "$PID_B" 2> /dev/null; then :; fi
 pass "a program is found by its full path, not by its name"
