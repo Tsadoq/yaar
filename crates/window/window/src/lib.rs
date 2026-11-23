@@ -13,8 +13,10 @@
 //! - [`open_with`] and [`open_panes`], the entries beneath `open` that the component tests of
 //!   the composed Window take: the same window with a Navigator's configuration of the
 //!   caller's, and with panes of the caller's too;
-//! - [`controls`], every action of the Window that has a key: the Frame's, each pane's,
-//!   and [`Quit`]. Every message of the Link that a user starts is the end of one of them;
+//! - [`controls`], every action of the Window that has a key: the Frame's, [`Quit`] among
+//!   them, the settings screen's, each pane's, and the Window program's own (Close Window,
+//!   and on macOS Hide, Hide Others and Minimize). Every message of the Link that a user
+//!   starts is the end of one of them;
 //! - [`kept_keys`], those of them whose key works while a terminal has the focus: the
 //!   documented set of keys that never reach the program in a terminal;
 //! - [`menus`], the menus of the app on macOS, made from [`controls`]: GPUI shows each
@@ -608,6 +610,47 @@ mod tests {
         assert_eq!(seen, if cfg!(target_os = "macos") { 9 } else { 6 });
     }
 
+    #[test]
+    fn each_row_of_a_title_of_the_menus_is_the_action_that_title_names() {
+        use yaar_frame::{CloseWindow, NewWorktree, OpenFolder, OpenSettings, QuitAndStopAgents};
+
+        // The test above ties an item to its row; this one ties the row to what the title
+        // says, so that a key and an item that run the wrong action are seen.
+        let mut expected: Vec<(&str, Box<dyn Action>)> = vec![
+            ("Settings…", Box::new(OpenSettings)),
+            ("Quit", Box::new(Quit)),
+            ("Quit and Stop Agents", Box::new(QuitAndStopAgents)),
+            ("New Worktree with Agent…", Box::new(NewWorktree)),
+            ("Open Folder…", Box::new(OpenFolder)),
+            ("Close Window", Box::new(CloseWindow)),
+        ];
+        if cfg!(target_os = "macos") {
+            expected.extend([
+                (
+                    "Hide YAAR",
+                    Box::new(yaar_frame::HideApp) as Box<dyn Action>,
+                ),
+                ("Hide Others", Box::new(yaar_frame::HideOtherApps)),
+                ("Minimize", Box::new(yaar_frame::Minimize)),
+            ]);
+        }
+        let table = controls();
+        for (title, action) in &expected {
+            let rows: Vec<&Control> = table
+                .iter()
+                .filter(|control| control.title == *title)
+                .collect();
+            assert_eq!(rows.len(), 1, "{title} is the title of {} rows", rows.len());
+            let runs = (rows[0].action)();
+            assert!(
+                runs.partial_eq(&**action),
+                "the row {title} runs {}, not {}",
+                runs.name(),
+                action.name()
+            );
+        }
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn on_macos_the_rows_of_the_items_have_the_keys_of_every_mac_app() {
@@ -693,7 +736,6 @@ mod tests {
         cx: &mut gpui_kit::TestAppContext,
     ) {
         use gpui_kit::{Context, IntoElement, Render, Window, div};
-        use yaar_frame::CloseWindow;
 
         struct Empty;
         impl Render for Empty {
@@ -715,7 +757,12 @@ mod tests {
             Some(second.window_id())
         );
 
-        cx.update(|cx| cx.dispatch_action(&CloseWindow));
+        // The action of the row of the table, which is what its key and its menu item run.
+        let close = controls()
+            .into_iter()
+            .find(|control| control.title == "Close Window")
+            .expect("the table has the row Close Window");
+        cx.update(|cx| cx.dispatch_action(&*(close.action)()));
         cx.run_until_parked();
         let left: Vec<_> = cx.update(|cx| cx.windows().iter().map(|w| w.window_id()).collect());
         assert_eq!(

@@ -36,9 +36,10 @@ program does, and the app writes nothing of pi's and does not hear it.
   branch; Enter makes a worktree of the repository on screen on that branch, from the branch
   checked out in the worktree on screen, and opens a terminal in it that runs the agent CLI
   the Window has chosen (Cmd-Alt-C chooses). With no worktree on screen, one with no branch
-  checked out or no CLI to start, no field opens and the notice says why. The worktree lies beside the repository: in the folder
-  where its linked worktrees already lie, or in `<repository>.worktrees/` when it has none,
-  or in the folder you named for that repository in the settings. The sidebar lists it, and
+  checked out or no CLI to start, no field opens and the notice says why. The worktree lies
+  beside the repository: in the folder where its linked worktrees already lie, or in
+  `<repository>.worktrees/` when it has none, or in the folder you named for that
+  repository in the settings. The sidebar lists it, and
   its base is the branch it was made from. A `/` in the branch's name is written `-` in the
   folder's (`feature/login` lies in `feature-login`). A branch that exists, a name git
   refuses, a branch to start from that is no branch and a folder that is already there are
@@ -162,8 +163,8 @@ program does, and the app writes nothing of pi's and does not hear it.
   terminal for the worktree on screen that runs that CLI, as New Terminal opens a shell.
   Cmd-Shift-T opens the chosen CLI, Claude Code until you press Cmd-Alt-C, which chooses the
   next one; the choice lasts as long as the window, is the one the review pane's offer and a
-  new worktree use, and is not kept. The launcher starts the CLI through your login shell, so it is the same program
-  as the one you type in a shell of the app.
+  new worktree use, and is not kept. The launcher starts the CLI through your login shell,
+  so it is the same program as the one you type in a shell of the app.
 - **Follows an agent that runs in no terminal of the app** by its folder, and delivers to it
   and hears its replies as to any other.
 - **Keeps reviews through a restart.** After a quit, a crash or a restart of the machine every
@@ -212,9 +213,9 @@ program does, and the app writes nothing of pi's and does not hear it.
 - **Selects what a turn changed.** When a turn ends, Changes selects what changed since you
   last reviewed. Shift-T sets the app to keep the selection instead: Changes stays as it
   is and offers what changed, which Shift-O, or a click, takes. The settings screen sets it
-  too, and the Keeper keeps it. The files Changes lists at a turn's end are those of that session's review:
-  the paths credited to the session and those no agent made, never a path only another
-  session changed.
+  too, and the Keeper keeps it. The files Changes lists at a turn's end are those of that
+  session's review: the paths credited to the session and those no agent made, never a
+  path only another session changed.
 - **Marks a file two agents changed.** Where two sessions in one worktree changed the same
   file, each session's review shows that file whole, with every change in it, and marks its
   heading "also changed by another agent". The mark is drawn in the list a turn's end selects
@@ -284,9 +285,9 @@ program does, and the app writes nothing of pi's and does not hear it.
   in the repository or not: `c` in the file view.
 - **Looks for a language server in this order**, and uses the first that starts: the one you
   registered, the project's own (`node_modules` for TypeScript, `.venv` for Python, rustup's
-  rust-analyzer for Rust), one installed on the machine, one the app downloaded. A server that fails its trial run or does
-  not start is passed over for the next. Within each of these the order is that of the
-  built-in table:
+  rust-analyzer for Rust), one installed on the machine, one the app downloaded. A server
+  that fails its trial run or does not start is passed over for the next. Within each of
+  these the order is that of the built-in table:
 
   | Language | Servers, in order | The app downloads |
   | --- | --- | --- |
