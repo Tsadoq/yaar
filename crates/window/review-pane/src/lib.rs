@@ -93,7 +93,7 @@ use yaar_frame::{AskError, Asks, BuildPane, Control, Models, Pane, PaneEntry, Pl
 use yaar_link::{
     Anchor, ChangedFile, Changes, CommentId, Comparison, Content, CreditedFile, Fact, FileSides,
     FileStatus, FlowForm, History, RequestKind, Review, ReviewId, Session, SessionId, Step,
-    ThreadId, TurnEnd, TurnId, WorkspaceId, WorkspaceReviews,
+    ThreadId, TurnEnd, TurnEndSelects, TurnId, WorkspaceId, WorkspaceReviews,
 };
 
 use crate::actions::CommitField;
@@ -153,7 +153,8 @@ actions!(
         /// or of the entry under the cursor when none is marked.
         ShowChange,
         /// Sets whether a turn that ends keeps the selection of Changes and offers what
-        /// changed since the last review, or selects it.
+        /// changed since the last review, or selects it. It sets the app's setting, which
+        /// the Keeper keeps.
         ToggleKeepSelection,
         /// Shows the change a turn end offered.
         TakeOffer,
@@ -191,11 +192,11 @@ actions!(
         /// first press the newest round with a recorded state, each press after it the
         /// round before, and after the first round the newest again.
         SinceRound,
-        /// Takes the offer to start an agent with the review attached: starts the chosen
-        /// CLI offered, the first until Next Offered Agent chooses another.
+        /// Takes the offer to start an agent with the review attached: starts the CLI the
+        /// Window has chosen, or the first one offered when the offer does not hold it.
         StartAgent,
-        /// Makes the next CLI of the offer to start an agent the chosen one, which Start
-        /// Agent starts; after the last, the first.
+        /// Makes the next CLI of the offer to start an agent the chosen one of the Window,
+        /// which Start Agent starts; after the last, the first.
         NextOfferedAgent,
         /// Puts the reviewer on the next name of the line.
         NextName,
@@ -368,6 +369,11 @@ pub const FIRST_LAYOUT: Layout = Layout::Unified;
 /// The name of the pane in the Frame.
 pub const NAME: &str = "review";
 
+/// What the tree of Changes says of a turn whose recording the Keeper deleted, after the
+/// agent's title: "<who>, a turn (its recording has expired)". The turn stays in the
+/// history, can not be selected, and has no version.
+pub const EXPIRED_TURN: &str = "a turn (its recording has expired)";
+
 /// How many files of the changes the pane has asked the Keeper for and not yet got, at
 /// the most. The other files wait their turn, in the order of the list.
 ///
@@ -427,7 +433,7 @@ pub fn pane() -> BuildPane {
 /// | [`HistoryDown`], [`HistoryUp`] | `j` and `down`, `k` and `up` | tuicr, the commit selector | nothing |
 /// | [`MarkChange`] | `space` | tuicr, the commit selector marks a commit | nothing |
 /// | [`ShowChange`] | `enter` | tuicr, the commit selector confirms | nothing; the files come by `CompareVersions` and `ReadVersions` |
-/// | [`ToggleKeepSelection`] | `shift-t` | neither | nothing |
+/// | [`ToggleKeepSelection`] | `shift-t` | neither | `SetSetting`, what a turn end selects |
 /// | [`TakeOffer`] | `shift-o` | neither | nothing; the files come by `CompareVersions` and `ReadVersions` |
 /// | [`NextReview`] | `shift-a` | neither | nothing; the uncommitted changes of the review come by `GetUncommitted` |
 /// | [`ToggleView`] | `f` | neither | nothing; Flow asks `GetTurn` for what it has not heard |
@@ -528,10 +534,13 @@ pub fn controls() -> Vec<Control> {
         in_tree("History Up", || Box::new(HistoryUp), "up"),
         in_tree("Mark Change", || Box::new(MarkChange), "space"),
         in_tree("Show Change", || Box::new(ShowChange), "enter"),
-        control(
-            "Keep Selection",
-            || Box::new(ToggleKeepSelection),
-            "shift-t",
+        sends(
+            control(
+                "Keep Selection",
+                || Box::new(ToggleKeepSelection),
+                "shift-t",
+            ),
+            RequestKind::SetSetting,
         ),
         control("Take Offer", || Box::new(TakeOffer), "shift-o"),
         control("Next Review", || Box::new(NextReview), "shift-a"),
@@ -883,7 +892,9 @@ pub struct ReviewPane {
     /// files.
     listed: Option<Source>,
     /// Whether a turn end keeps the selection and offers what changed instead of
-    /// selecting it. It outlasts the workspaces: it is the reviewer's setting.
+    /// selecting it: what `yaar_frame::SettingList::turn_end` says, as the pane last
+    /// heard it, copied so that [`ReviewPane::keeps_selection`] reads it without the
+    /// app's context. The setting outlasts the workspaces and the window.
     keep: bool,
     /// The review the reviewer, or a turn end, chose to show; none until one was chosen
     /// in the workspace on screen.
@@ -933,6 +944,7 @@ impl ReviewPane {
         })
         .detach();
         cx.observe(&models.agents, |pane, _, cx| {
+            pane.cli_chosen(cx);
             pane.sessions_changed(cx);
             pane.flow_agents(cx);
             pane.live_agents(cx);
@@ -942,6 +954,7 @@ impl ReviewPane {
         // The answers on the servers inside a repository are settings too: the line of the
         // language server is drawn again for each, whenever the Navigator told its states.
         cx.observe(&models.settings, |pane, _, cx| {
+            pane.turn_end_setting(cx);
             pane.flow_settings(cx);
             cx.notify();
         })
@@ -974,7 +987,7 @@ impl ReviewPane {
             notice: None,
             tree: Tree::new(cx),
             listed: None,
-            keep: false,
+            keep: models.settings.read(cx).turn_end() == TurnEndSelects::KeepSelection,
             chosen: None,
             sessions: Vec::new(),
             view: View::Changes,
@@ -984,7 +997,7 @@ impl ReviewPane {
             flow: flow::Timeline::new(cx),
             live: live::Live::new(cx),
             follow: follow::Follow::new(cx),
-            attaching: attaching::Attaching::default(),
+            attaching: attaching::Attaching::new(models.agents.read(cx).chosen_cli().cloned()),
             moved: moved::Moved::default(),
             navigate: navigate::Navigate::default(),
         };
@@ -1103,8 +1116,8 @@ impl ReviewPane {
     }
 
     /// Whether a turn that ends keeps the selection of Changes and offers what changed
-    /// since the last review, rather than selecting it. Off until the reviewer sets it; it
-    /// lasts as long as the window, until the settings keep it.
+    /// since the last review, rather than selecting it: what the app's setting says, which
+    /// [`ToggleKeepSelection`] and the settings screen set. Off where none is set.
     pub fn keeps_selection(&self) -> bool {
         self.keep
     }
@@ -1947,7 +1960,12 @@ mod tests {
                 ("up", HistoryUp.name(), None, Asks::Nothing),
                 ("space", MarkChange.name(), None, Asks::Nothing),
                 ("enter", ShowChange.name(), None, Asks::Nothing),
-                ("shift-t", ToggleKeepSelection.name(), None, Asks::Nothing),
+                (
+                    "shift-t",
+                    ToggleKeepSelection.name(),
+                    request(RequestKind::SetSetting),
+                    Asks::Nothing
+                ),
                 ("shift-o", TakeOffer.name(), None, Asks::Nothing),
                 ("shift-a", NextReview.name(), None, Asks::Nothing),
                 ("f", ToggleView.name(), None, Asks::Nothing),

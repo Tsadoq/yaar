@@ -4,7 +4,7 @@
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_link::{ReviewId, SessionId};
+use yaar_link::{ReviewId, SessionId, Setting, TurnEndSelects};
 
 use crate::draw::ROW_HEIGHT;
 use crate::tree::ListedFor;
@@ -20,7 +20,9 @@ pub(crate) struct Offer {
 }
 
 impl ReviewPane {
-    /// What [`ToggleKeepSelection`] does.
+    /// What [`ToggleKeepSelection`] does: sets the other of the two things a turn end
+    /// selects, flipping what the setting says now, whoever set it last, and asks the
+    /// Keeper to keep it. The pane follows the setting (`turn_end_setting`).
     pub(crate) fn toggle_keep_selection(
         &mut self,
         _: &ToggleKeepSelection,
@@ -28,8 +30,23 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        self.keep = !self.keep;
-        cx.notify();
+        let next = match self.models.settings.read(cx).turn_end() {
+            TurnEndSelects::WhatChanged => TurnEndSelects::KeepSelection,
+            TurnEndSelects::KeepSelection => TurnEndSelects::WhatChanged,
+        };
+        self.models
+            .settings
+            .update(cx, |settings, cx| settings.set(Setting::TurnEnd(next), cx));
+    }
+
+    /// The settings model changed, and when the pane is built: a turn end keeps the
+    /// selection as the setting says. What an offer already made does is left as it is.
+    pub(crate) fn turn_end_setting(&mut self, cx: &mut Context<Self>) {
+        let keep = self.models.settings.read(cx).turn_end() == TurnEndSelects::KeepSelection;
+        if keep != self.keep {
+            self.keep = keep;
+            cx.notify();
+        }
     }
 
     /// A turn of `session` ended in the workspace on screen and its state `state` was

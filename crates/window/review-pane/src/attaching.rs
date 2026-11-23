@@ -8,8 +8,9 @@
 //! shows under `review-offer-start` with one control `review-offer-start-<agent>` for each,
 //! until one is taken, the review shown changes, the workspace changes, what is attached
 //! goes, or the review's session runs. Taking one, by its control or by
-//! [`crate::StartAgent`] (the chosen CLI, the first offered until
-//! [`crate::NextOfferedAgent`] chooses the next; with none offered the notice says so),
+//! [`crate::StartAgent`] (the CLI the Window has chosen, the first offered where the offer
+//! does not hold it; [`crate::NextOfferedAgent`] moves that choice; with none offered the
+//! notice says so),
 //! asks the terminal pane, through the shared list of terminals
 //! (`yaar_frame::TerminalList::want` with `yaar_frame::Wanted::AgentFor`), to open that
 //! CLI's launcher for the review: no pane calls another.
@@ -43,18 +44,26 @@ struct Offer {
     review: ReviewId,
     /// The CLIs the Keeper named, in the order it gave them.
     start: Vec<AgentCli>,
-    /// The place in `start` of the CLI Start Agent takes: the first until the reviewer
-    /// chooses another.
-    chosen: usize,
 }
 
-/// What attaching keeps: the offer the last attach was answered with.
-#[derive(Default)]
+/// What attaching keeps: the offer the last attach was answered with, and the CLI the
+/// Window has chosen.
 pub(crate) struct Attaching {
     offer: Option<Offer>,
+    /// The CLI `yaar_frame::AgentList::chosen_cli` names, as the pane last heard it, copied
+    /// so that [`ReviewPane::offer_chosen`] reads it without the app's context.
+    window_choice: Option<AgentCli>,
 }
 
 impl Attaching {
+    /// Nothing offered, and the Window's choice as it is now.
+    pub(crate) fn new(window_choice: Option<AgentCli>) -> Self {
+        Self {
+            offer: None,
+            window_choice,
+        }
+    }
+
     /// The offer goes: the review it was made for is not the one shown any more, or the
     /// workspace is not on screen.
     pub(crate) fn forget(&mut self) {
@@ -217,7 +226,6 @@ impl ReviewPane {
                             workspace,
                             review,
                             start,
-                            chosen: 0,
                         });
                         cx.notify();
                     })
@@ -307,17 +315,35 @@ impl ReviewPane {
         self.report(asked, cx);
     }
 
-    /// The CLI of the offer that [`StartAgent`] starts: the first offered until
-    /// [`NextOfferedAgent`] chooses another, drawn with `review-offer-chosen-<agent>` over
-    /// its control; none while nothing is offered. A new offer chooses its first again.
+    /// The CLI of the offer that [`StartAgent`] starts: the one the Window has chosen
+    /// (`yaar_frame::AgentList::chosen_cli`, the first CLI the Keeper has an Adapter for
+    /// until one moves it), or the first offered where the offer does not hold it, drawn
+    /// with `review-offer-chosen-<agent>` over its control; none while nothing is offered.
+    /// A new offer keeps the choice: it is the Window's, and the terminal pane's launchers
+    /// use it too.
     pub fn offer_chosen(&self) -> Option<AgentCli> {
         let offered = self.offer_to_start();
-        let chosen = self.attaching.offer.as_ref()?.chosen;
-        offered.into_iter().nth(chosen)
+        match &self.attaching.window_choice {
+            Some(chosen) if offered.contains(chosen) => Some(chosen.clone()),
+            _ => offered.into_iter().next(),
+        }
     }
 
-    /// [`NextOfferedAgent`]: the next CLI of the offer is the chosen one, after the last the
-    /// first; with none offered the notice says so.
+    /// The agents model changed: the CLI the Window has chosen may be another, and the mark
+    /// over the control of the CLI offered moves with it.
+    pub(crate) fn cli_chosen(&mut self, cx: &mut Context<Self>) {
+        let now = self.models.agents.read(cx).chosen_cli().cloned();
+        if now != self.attaching.window_choice {
+            self.attaching.window_choice = now;
+            cx.notify();
+        }
+    }
+
+    /// [`NextOfferedAgent`]: the next CLI of the offer is the one the Window has chosen,
+    /// after the last the first. The choice is the Window's: it is moved through the shared
+    /// list of agents, over the CLIs the offer does not hold, to the next the offer holds.
+    /// With one CLI offered there is nothing to choose, and nothing happens; with none
+    /// offered the notice says so.
     pub(crate) fn next_offered_agent(
         &mut self,
         _: &NextOfferedAgent,
@@ -325,13 +351,24 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        let offered = self.offer_to_start().len();
-        match &mut self.attaching.offer {
-            Some(offer) if offered > 0 => {
-                offer.chosen = (offer.chosen + 1) % offered;
-                cx.notify();
+        let offered = self.offer_to_start();
+        let Some(current) = self.offer_chosen() else {
+            return self.say("No agent is offered to start: attach a review first", cx);
+        };
+        if offered.len() < 2 {
+            return;
+        }
+        // One step for each CLI of the list is a whole turn round it: the loop ends there
+        // when the offer holds none but the one chosen.
+        let steps = self.models.agents.read(cx).clis().len();
+        for _ in 0..steps {
+            let landed = self.models.agents.update(cx, |agents, cx| {
+                agents.choose_next_cli(cx);
+                agents.chosen_cli().cloned()
+            });
+            if landed.is_some_and(|landed| landed != current && offered.contains(&landed)) {
+                break;
             }
-            _ => self.say("No agent is offered to start: attach a review first", cx),
         }
     }
 

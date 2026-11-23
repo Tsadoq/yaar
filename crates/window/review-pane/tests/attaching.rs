@@ -717,14 +717,17 @@ fn attach_and_be_offered(
 }
 
 #[gpui_kit::test]
-fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_and_a_new_offer_chooses_the_first_again(
+fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control(
     cx: &mut TestAppContext,
 ) {
     let mut review = no_agent_review();
     review.threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
-        |keeper| keeper.set_reviews(reviews_of(vec![review.clone()])),
+        |keeper| {
+            keeper.set_reviews(reviews_of(vec![review.clone()]));
+            keeper.set_clis(vec![claude(), pi()]);
+        },
         cx,
     );
     let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
@@ -778,12 +781,9 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control_an
     assert!(!is_drawn("review-offer-chosen-pi", &mut cx));
     assert!(!is_drawn("review-offer-chosen-claude", &mut cx));
 
-    // An offer made after another chooses its first CLI, not the one chosen last: the
-    // second answer names the CLIs in the other order, so that the pane holding it shows
-    // that it was taken.
+    // The choice is the Window's, not the offer's: an offer made after another keeps the CLI
+    // chosen last, whatever order the answer names the CLIs in.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
-    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
-    cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     attach_and_be_offered(&mut stage, &review.id, vec![pi(), claude()], &mut cx);
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
@@ -801,9 +801,16 @@ fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_
 ) {
     let mut review = no_agent_review();
     review.threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
+    let third = AgentCli {
+        agent: "third".to_owned(),
+        title: "Third".to_owned(),
+    };
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
-        |keeper| keeper.set_reviews(reviews_of(vec![review.clone()])),
+        |keeper| {
+            keeper.set_reviews(reviews_of(vec![review.clone()]));
+            keeper.set_clis(vec![claude(), pi(), third.clone()]);
+        },
         cx,
     );
     let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
@@ -817,10 +824,6 @@ fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_
     cx.update(|window, cx| stage.focus.focus(window, cx));
     review.attached = Some(Attachment::Review);
     tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
-    let third = AgentCli {
-        agent: "third".to_owned(),
-        title: "Third".to_owned(),
-    };
 
     // A step is one CLI along the offer, not a toggle between two.
     attach_and_be_offered(
@@ -842,6 +845,82 @@ fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_
 
     // One CLI offered: it stays chosen, with its mark, and nothing is said.
     attach_and_be_offered(&mut stage, &review.id, vec![claude()], &mut cx);
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert!(mark_is_over("claude", &[], &mut cx));
+    assert_eq!(notice(&stage, &mut cx), None);
+}
+
+/// The CLI the Window has chosen, as the shared list of agents holds it.
+fn chosen_of_the_window(stage: &Stage, cx: &mut VisualTestContext) -> Option<AgentCli> {
+    stage
+        .models
+        .agents
+        .read_with(cx, |agents, _| agents.chosen_cli().cloned())
+}
+
+#[gpui_kit::test]
+fn the_cli_of_the_offer_is_the_one_the_window_chose_and_next_offered_agent_moves_that_choice(
+    cx: &mut TestAppContext,
+) {
+    let mut review = no_agent_review();
+    review.threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            keeper.set_reviews(reviews_of(vec![review.clone()]));
+            keeper.set_clis(vec![claude(), pi()]);
+        },
+        cx,
+    );
+    let changes = since_main(Vec::new(), vec![file("story.txt", FileStatus::Modified)]);
+    stage.keeper.show(&changes, |_| texts(OLD, NEW), &mut cx);
+    wait_for_files(&stage.pane, &mut cx);
+    wait_until(&mut cx, "the review of no agent", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.review().is_some_and(|r| !r.threads.is_empty())
+        })
+    });
+    wait_until(&mut cx, "the CLIs in the shared list", |cx| {
+        stage
+            .models
+            .agents
+            .read_with(cx, |agents, _| agents.chosen_cli().is_some())
+    });
+    cx.update(|window, cx| stage.focus.focus(window, cx));
+    review.attached = Some(Attachment::Review);
+    tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
+
+    // The first CLI of the list until one moves it.
+    attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+
+    // The key moves the Window's choice, which the shared list holds, not a choice of the
+    // pane's own.
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(pi()));
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+    assert!(mark_is_over("pi", &["claude"], &mut cx));
+
+    // Another pane moves it (the terminal pane's key does the same): the offer follows, and
+    // its mark with it.
+    stage
+        .models
+        .agents
+        .update(&mut cx, |agents, cx| agents.choose_next_cli(cx));
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert!(mark_is_over("claude", &["pi"], &mut cx));
+
+    // A choice that the answer did not offer gives way to the first CLI offered, without
+    // taking the choice from the Window; a step then goes to the next CLI offered.
+    stage
+        .models
+        .agents
+        .update(&mut cx, |agents, cx| agents.choose_next_cli(cx));
+    assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(pi()));
+    attach_and_be_offered(&mut stage, &review.id, vec![claude()], &mut cx);
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(pi()));
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     assert!(mark_is_over("claude", &[], &mut cx));
