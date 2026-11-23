@@ -445,6 +445,7 @@ BASE_NS=1000000000000
     case $i in
       1) echo "cap 0 $((t + 40000000)) rows=0-9" ;;          # no display time: the time it was seen
       2) echo "cap $((t + 50000000)) $((t + 51000000)) rows=0-9" ;;
+      28) echo "cap $((t + 250000000)) $((t + 251000000)) rows=0-9" ;;   # later than the next key plus 20 ms: not its own
       *) echo "cap $((t + 30000000)) $((t + 31000000)) rows=0-9" ;;
     esac
     i=$((i + 1))
@@ -452,7 +453,7 @@ BASE_NS=1000000000000
   echo "end"
 } > "$S/keys.cap"
 got=$("$HERE/typing.sh" --analyse "$S/keys.input" "$S/keys.cap" 2> "$S/keys.err")
-[ "$got" = "n=19 median=30.00 p95=40.00" ] || fail "typing.sh --analyse gave '$got', not 'n=19 median=30.00 p95=40.00' for 19 matched keys (stderr: $(cat "$S/keys.err"))"
+[ "$got" = "n=19 median=30.00 p95=50.00" ] || fail "typing.sh --analyse gave '$got', not 'n=19 median=30.00 p95=50.00' for 19 matched keys (stderr: $(cat "$S/keys.err"))"
 grep -qx 'missed=1 early=10' "$S/keys.err" || fail "typing.sh --analyse did not count 1 missed and 10 early keys (stderr: $(cat "$S/keys.err"))"
 pass "typing.sh reads key to screen times: the first changed frame after each post, early and missed keys counted, a missing display time falling back to the time seen"
 

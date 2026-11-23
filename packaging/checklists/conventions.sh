@@ -155,7 +155,7 @@ else
 fi
 
 ck_begin
-ck_walker_context "$DRY"
+ck_walker_context "$DRY" "$LIST"
 
 printf '%s\n' "$TITLE"
 printf 'Open the app yourself and walk each item in it, then answer here.\n'

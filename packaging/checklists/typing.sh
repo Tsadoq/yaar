@@ -137,9 +137,12 @@ reference() {
   before=$(ck_front_pid)
   open -n -a "$REFERENCE" --args "--command=$command" --window-save-state=never --confirm-close-surface=false --quit-after-last-window-closed=true
   newest_front() {
-    local front
+    local front comm
     front=$(ck_front_pid)
-    [ "$front" != "$before" ] && [ "$front" != "$APP_PID" ] && ps -p "$front" -o comm= | grep -qi "$REFERENCE"
+    [ "$front" != "$before" ] || return 1
+    [ "$front" != "$APP_PID" ] || return 1
+    comm=$(ps -p "$front" -o comm=) || return 1
+    printf '%s\n' "$comm" | grep -qi "$REFERENCE"
   }
   ck_wait_until 15 newest_front || ck_die "a second $REFERENCE did not come to the front in 15 s"
   pid=$(ck_front_pid)

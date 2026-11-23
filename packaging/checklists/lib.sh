@@ -290,7 +290,7 @@ ck_item() {
   printf '%s\t%s\t%s\t%s\n' "$id" "$title" "$verdict" "$notes" >> "$CK_WORK/rows.tsv"
 }
 
-# ck_walker_context <dry-run 0|1>: the date, the version and the system of this machine, as
+# ck_walker_context <dry-run 0|1> [macos|linux]: the date, the version and the system of this machine, as
 # lines of the file's header. In a dry run nothing of the system or of the app is asked.
 ck_walker_context() {
   ck_context "Date" "$(date +%Y-%m-%d)"
@@ -300,12 +300,15 @@ ck_walker_context() {
     ck_context "System" "not asked: dry run"
     return 0
   fi
-  local program version system product build pretty
+  local program version system product build pretty platform=${2:-}
+  if [ -z "$platform" ]; then
+    if [ "$(ck_os)" = Darwin ]; then platform=macos; else platform=linux; fi
+  fi
   program=$(ck_window_program)
   [ -x "$program" ] || ck_die "no program at $program: install the app first, or name its Window program in YAAR_REVIEW"
   version=$("$program" --version) || ck_die "$program --version failed"
   ck_context "Version" "$version"
-  if [ "$(ck_os)" = Darwin ]; then
+  if [ "$platform" = macos ]; then
     product=$(sw_vers -productVersion) || ck_die "sw_vers -productVersion failed"
     build=$(sw_vers -buildVersion) || ck_die "sw_vers -buildVersion failed"
     system="macOS $product ($build)"
@@ -412,10 +415,19 @@ ck_lit_preflight() {
   if [ "$1" = 1 ]; then
     [ -d "$cap" ] || ck_die "no adecap.app at $cap: it is the phase 4 kit's tool (YAAR_KIT or YAAR_ADECAP names it)"
   fi
-  pmset -g batt | head -n 1 | grep -q 'AC Power' || ck_die "the Mac is not on mains power, which the measures need"
-  if ioreg -n Root -d1 -a | tr -d '\n\t ' | grep -q 'CGSSessionScreenIsLocked</key><true/>'; then
-    ck_die "the screen is locked, and a locked screen shows no frames and takes no input"
-  fi
+  # Each is read whole into a variable first: a pipe into `grep -q` ends it early, and with
+  # pipefail the writer's broken pipe would turn a match into a failure.
+  local power session
+  power=$(pmset -g batt) || ck_die "pmset -g batt failed"
+  case $power in
+    *"AC Power"*) ;;
+    *) ck_die "the Mac is not on mains power, which the measures need" ;;
+  esac
+  session=$(ioreg -n Root -d1 -a) || ck_die "ioreg could not read the session"
+  session=$(printf '%s' "$session" | tr -d '\n\t ')
+  case $session in
+    *"CGSSessionScreenIsLocked</key><true/>"*) ck_die "the screen is locked, and a locked screen shows no frames and takes no input" ;;
+  esac
   info=$("$fakein" info) || ck_die "$fakein info failed"
   printf '%s\n' "$info" | grep -q '^post_event_access=true$' \
     || ck_die "this terminal may not post events: turn on Accessibility for it in System Settings, Privacy and Security"
