@@ -778,7 +778,7 @@ remove_mac_files() {
   rm -rf "${HOME:?}/Library/Saved Application State/$DESKTOP_ID.savedState"
   cache=$(getconf DARWIN_USER_CACHE_DIR) || die "getconf DARWIN_USER_CACHE_DIR failed"
   case "$cache" in
-    /?*) rm -rf "${cache%/}/$DESKTOP_ID" ;;
+    /?*) cache="${cache%/}"; rm -rf "${cache:?}/$DESKTOP_ID" ;;
     *) die "getconf DARWIN_USER_CACHE_DIR printed '$cache', not a folder" ;;
   esac
 }
