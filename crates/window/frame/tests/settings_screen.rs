@@ -397,6 +397,40 @@ impl Window9 {
         format!("settings-value-{row}-{value}:{label}")
     }
 
+    /// The words each row draws as its chosen value are the model's: the element marked
+    /// `settings-chosen-<row>` lies inside the control of the value the row's model has
+    /// chosen and inside no other control of the row, and a row with no value chosen draws
+    /// none marked.
+    fn assert_chosen_drawn(&mut self, row: &SettingRow) {
+        let at = self.index_of(row);
+        let shown = self.row(row);
+        let mark = format!("settings-chosen-{at}");
+        let Some(chosen) = shown.chosen else {
+            assert!(
+                !self.is_drawn(&mark),
+                "{row:?}: no value is drawn as chosen"
+            );
+            return;
+        };
+        let mark = self.bounds(&mark).center();
+        for (value, label) in shown.values.iter().enumerate() {
+            let control = self.bounds(&Window9::value(at, value, label));
+            assert_eq!(
+                control.contains(&mark),
+                value == chosen,
+                "{row:?}: the chosen mark is drawn on the value {value} ({label}) and the model has \
+                 {chosen} chosen"
+            );
+        }
+    }
+
+    /// Every row of the screen draws its chosen value as the model has it.
+    fn assert_every_chosen_drawn(&mut self) {
+        for row in self.rows() {
+            self.assert_chosen_drawn(&row.row);
+        }
+    }
+
     fn settings_set(&self) -> Vec<Setting> {
         self.shown.keeper.settings_set()
     }
@@ -596,6 +630,8 @@ fn the_screen_opens_with_the_rows_of_the_app_the_folder_of_the_repository_and_th
         assert_eq!(shown.values, values, "{title}");
         assert_eq!(shown.chosen, chosen, "{title}");
     }
+    // Each row draws the value its model has chosen as the chosen one.
+    window.assert_every_chosen_drawn();
     // The cursor is on the first row, which is the one drawn under it.
     assert_eq!(window.cursor(), 0);
     let row = window.bounds("settings-row-0");
@@ -627,7 +663,8 @@ fn l_on_the_turn_end_row_chooses_keep_selection_at_once_and_the_keeper_keeps_it(
     // The value drawn as chosen is the one now.
     let turn_end = window.index_of(&SettingRow::TurnEnd);
     assert!(window.is_drawn(&format!("settings-chosen-{turn_end}")));
-    assert!(window.is_drawn(&Window9::value(0, 1, KEEP_SELECTION)));
+    assert!(window.is_drawn(&Window9::value(turn_end, 1, KEEP_SELECTION)));
+    window.assert_chosen_drawn(&SettingRow::TurnEnd);
     window.no_dialog();
 }
 
@@ -688,6 +725,7 @@ fn a_click_on_a_value_chooses_it_and_puts_the_cursor_on_its_row(cx: &mut TestApp
         "the model has it at once"
     );
     window.heard_set(Setting::TerminalPlace(TerminalPlace::Below));
+    window.assert_chosen_drawn(&SettingRow::TerminalPlace);
     window.no_dialog();
 }
 
@@ -704,6 +742,7 @@ fn a_click_on_a_stop_time_sets_it_and_tells_the_navigator_at_once(cx: &mut TestA
 
     window.heard_set(Setting::StopAfter { seconds: 60 });
     assert_eq!(window.row(&SettingRow::StopAfter).chosen, Some(0));
+    window.assert_chosen_drawn(&SettingRow::StopAfter);
     window
         .shown
         .models
@@ -747,6 +786,7 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     assert_eq!(mode(&mut window), ThemeMode::Dark);
     let background = window.cx.update(|_, app| app.theme().background);
     assert_eq!(background, theme::dark().colors.background);
+    window.assert_chosen_drawn(&SettingRow::Theme);
 
     // Light by a click.
     window.click(&Window9::value(row, 1, LIGHT));
@@ -755,6 +795,7 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     assert_eq!(mode(&mut window), ThemeMode::Light);
     let background = window.cx.update(|_, app| app.theme().background);
     assert_eq!(background, theme::light().colors.background);
+    window.assert_chosen_drawn(&SettingRow::Theme);
 
     // And the system's again, which is the first value.
     window.click(&Window9::value(row, 0, SYSTEM));
@@ -943,6 +984,7 @@ fn a_stop_time_that_is_none_of_the_values_shows_none_chosen_and_l_and_h_move_fro
         !window.is_drawn(&format!("settings-chosen-{at}")),
         "no value is drawn as chosen"
     );
+    window.assert_chosen_drawn(&SettingRow::StopAfter);
 
     window.cursor_to(at);
     window.press(&key::<NextValue>());
@@ -973,6 +1015,7 @@ fn the_rows_of_the_other_settings_choose_each_of_their_values(cx: &mut TestAppCo
     window.click(&Window9::value(keep, 1, &keep_states_label(7)));
     window.heard_set(Setting::KeepStates { days: 7 });
     assert_eq!(window.row(&SettingRow::KeepStates).chosen, Some(1));
+    window.assert_chosen_drawn(&SettingRow::KeepStates);
     window.click(&Window9::value(keep, 0, &keep_states_label(1)));
     window.heard_set(Setting::KeepStates { days: 1 });
 
@@ -981,6 +1024,7 @@ fn the_rows_of_the_other_settings_choose_each_of_their_values(cx: &mut TestAppCo
     window.heard_set(Setting::OptionKey(OptionKey::Meta));
     window.click(&Window9::value(option, 2, CHARACTERS));
     window.heard_set(Setting::OptionKey(OptionKey::Characters));
+    window.assert_chosen_drawn(&SettingRow::OptionKey);
     window.click(&Window9::value(option, 0, BY_LAYOUT));
     window.heard_set(Setting::OptionKey(OptionKey::ByLayout));
 
@@ -1200,8 +1244,9 @@ fn the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_naviga
     assert_eq!(extension.chosen, None, "not asked yet");
     // The rows of the extension come first, then those of the servers, then the folders.
     let order: Vec<SettingRow> = window.rows().into_iter().map(|shown| shown.row).collect();
+    let first = window.index_of(&SettingRow::Extension("pi".to_owned()));
     assert_eq!(
-        order[7..],
+        order[first..],
         [
             SettingRow::Extension("pi".to_owned()),
             SettingRow::Servers(repo('a')),
@@ -1215,11 +1260,65 @@ fn the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_naviga
     window.press(&key::<PreviousValue>());
     window.heard_set(servers('a', true));
     assert_eq!(window.row(&SettingRow::Servers(repo('a'))).chosen, Some(0));
+    window.assert_chosen_drawn(&SettingRow::Servers(repo('a')));
     let asks = window
         .navigator
         .until(&mut window.cx, "the answer on the repository", |ask| {
             matches!(ask, Ask::Consents(answers)
                 if answers.contains(&RepositoryConsent { repository: repo('a'), allowed: true }))
+        });
+    assert!(matches!(asks.last(), Some(Ask::Consents(_))));
+    window.no_dialog();
+}
+
+#[gpui_kit::test]
+fn an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_for_no_other(
+    cx: &mut TestAppContext,
+) {
+    // `R` keeps its servers out and `S` runs them: an answer sent for the first repository
+    // listed, or for the last, is told apart from one sent for the row's own on one of the
+    // two rows.
+    let mut window = opened(
+        WINDOW,
+        vec![servers('a', false), servers('b', true)],
+        &two_repositories(),
+        cx,
+    );
+    window.open_screen(sizes(&[], 0));
+    let r = window.index_of(&SettingRow::Servers(repo('a')));
+    let s = window.index_of(&SettingRow::Servers(repo('b')));
+    assert_ne!(r, s);
+    assert_eq!(window.rows()[r].chosen, Some(1), "R: keep them out");
+    assert_eq!(window.rows()[s].chosen, Some(0), "S: run them");
+
+    // `l` on `S`'s row keeps its servers out, and `R`'s row stays as it was.
+    window.cursor_to(s);
+    window.press(&key::<NextValue>());
+    window.heard_set(servers('b', false));
+    assert_eq!(window.settings_set(), [servers('b', false)]);
+    assert_eq!(window.rows()[s].chosen, Some(1));
+    assert_eq!(window.rows()[r].chosen, Some(1), "R was not touched");
+    window.assert_chosen_drawn(&SettingRow::Servers(repo('b')));
+    window.assert_chosen_drawn(&SettingRow::Servers(repo('a')));
+
+    // A click on `R`'s value runs its servers, and `S`'s row stays as it was.
+    window.click(&Window9::value(r, 0, RUN_SERVERS));
+    window.heard_set(servers('a', true));
+    assert_eq!(
+        window.settings_set(),
+        [servers('b', false), servers('a', true)]
+    );
+    assert_eq!(window.rows()[r].chosen, Some(0));
+    assert_eq!(window.rows()[s].chosen, Some(1), "S was not touched");
+
+    // The Navigator is told each repository's own answer.
+    let asks = window
+        .navigator
+        .until(&mut window.cx, "the answers on both repositories", |ask| {
+            matches!(ask, Ask::Consents(answers)
+                if answers.len() == 2
+                    && answers.contains(&RepositoryConsent { repository: repo('a'), allowed: true })
+                    && answers.contains(&RepositoryConsent { repository: repo('b'), allowed: false }))
         });
     assert!(matches!(asks.last(), Some(Ask::Consents(_))));
     window.no_dialog();
@@ -1266,6 +1365,7 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
         window.is_drawn(&format!("settings-chosen-{at}")),
         "the answered row still has a chosen value"
     );
+    window.assert_chosen_drawn(&SettingRow::Extension("pi".to_owned()));
 
     // The answer given once is changed: the question is gone from the pane, the row stays.
     window.click(&Window9::value(at, 1, DONT_INSTALL));
@@ -1283,6 +1383,7 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
     window.wait("the second answer to show", |shown, cx| {
         rows_now(shown, cx)[at].chosen == Some(1)
     });
+    window.assert_chosen_drawn(&SettingRow::Extension("pi".to_owned()));
     window.no_dialog();
 }
 
@@ -1667,7 +1768,8 @@ fn a_click_on_another_rows_value_while_a_field_is_open_closes_the_field_and_choo
     window.press(&key::<OpenSetting>());
     assert!(window.is_drawn("settings-folder-field"));
 
-    window.click(&Window9::value(0, 1, KEEP_SELECTION));
+    let turn_end = window.index_of(&SettingRow::TurnEnd);
+    window.click(&Window9::value(turn_end, 1, KEEP_SELECTION));
 
     assert!(!window.is_drawn("settings-folder-field"));
     window.heard_set(Setting::TurnEnd(TurnEndSelects::KeepSelection));
@@ -1732,7 +1834,10 @@ fn a_repository_that_leaves_the_list_takes_its_row_and_an_open_screen_follows_th
     cx: &mut TestAppContext,
 ) {
     let (mut window, _, _) = with_folders(cx, Vec::new());
-    assert_eq!(window.rows().len(), 7 + 2 + 1);
+    // The app's own rows are the ones before the first folder row; here two folders and
+    // the states follow.
+    let app = window.index_of(&SettingRow::WorktreesFolder(repo('a')));
+    assert_eq!(window.rows().len(), app + 2 + 1);
 
     window.shown.keeper.tell(Fact::Workspaces(vec![repository(
         'a',
@@ -1745,7 +1850,7 @@ fn a_repository_that_leaves_the_list_takes_its_row_and_an_open_screen_follows_th
             .read_with(cx, |list, _| list.repositories().len() == 1)
     });
     let kinds: Vec<SettingRow> = window.rows().into_iter().map(|shown| shown.row).collect();
-    assert_eq!(kinds.len(), 7 + 1 + 1);
+    assert_eq!(kinds.len(), app + 1 + 1);
     assert!(!kinds.contains(&SettingRow::WorktreesFolder(repo('b'))));
     assert!(window.is_drawn(&format!("settings-row-{}", kinds.len() - 1)));
     assert!(!window.is_drawn(&format!("settings-row-{}", kinds.len())));
