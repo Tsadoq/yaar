@@ -17,8 +17,8 @@ pub fn light() -> ThemeDefinition {
         secondary: hex(0xe5e5e5),
         secondary_foreground: hex(0x171717),
         muted: hex(0xf5f5f5),
-        // The toolkit's #737373 reads 3.76 to 1 on the selected and the secondary ground, where
-        // the sidebar draws it: darkened until 4.5 to 1.
+        // The toolkit's #737373 reads 3.76 to 1 on the selected row's ground (`sidebar_accent`)
+        // and on `secondary`, which has the same value: darkened until 4.5 to 1.
         muted_foreground: hex(0x666666),
         accent: hex(0xf5f5f5),
         accent_foreground: hex(0x171717),
