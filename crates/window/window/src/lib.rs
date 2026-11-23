@@ -692,7 +692,7 @@ mod tests {
     fn close_window_closes_the_window_that_has_the_focus_and_leaves_the_others(
         cx: &mut gpui_kit::TestAppContext,
     ) {
-        use gpui_kit::{AppContext, Context, IntoElement, Render, Window, div};
+        use gpui_kit::{Context, IntoElement, Render, Window, div};
         use yaar_frame::CloseWindow;
 
         struct Empty;
