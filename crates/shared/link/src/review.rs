@@ -183,9 +183,12 @@ pub struct Thread {
     /// Its state, as the Keeper works it out from the fields above, by the one rule of
     /// [`ThreadState`]: what the review pane lists for it.
     pub state: ThreadState,
-    /// Where it sits in the newest recorded state of the worktree the Keeper carried it
-    /// to, with what that state did to the lines it was written on; none while it sits
-    /// where its anchor says, as before the first state after it, and for a thread on a file
+    /// Where it sits in the state the Keeper last carried it to, with what that state did
+    /// to the lines it was written on. The Keeper carries a thread forward only, to each
+    /// recorded state of the worktree it follows, so this is the newest recorded state once
+    /// the Keeper has followed that one, and an older one until then (a state recorded
+    /// outside the Keeper's own recording is never followed). None while it sits where
+    /// its anchor says, as before the first state after it, and for a thread on a file
     /// outside the worktree, which the Keeper does not carry. On the old side the place
     /// names a commit: an open thread there whose place names the commit the changes are
     /// counted from, whatever change it was written on, gets a place naming the new commit

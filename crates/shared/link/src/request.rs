@@ -610,8 +610,10 @@ pub enum Request {
     },
     /// Make a new git worktree of `repository`, on a new branch `branch` made from the
     /// branch `from`, and start the agent CLI `agent` in it, in one step: the user's own
-    /// git makes the worktree (`git worktree add -b`), beside the repository, where the
-    /// repository keeps its worktrees, in a folder named after the branch. The new
+    /// git makes the worktree (`git worktree add -b`), in a folder named after the branch
+    /// (each `/` of the name made `-`), which lies in the folder the user named for the
+    /// repository's worktrees ([`crate::Setting::WorktreesFolder`]) when one is set, and
+    /// else beside the repository, where the repository keeps its worktrees. The new
     /// workspace has `from` as its base. The agent runs in a new terminal of that
     /// workspace, as [`crate::Program::Agent`] runs in [`Request::OpenTerminal`], at `size`.
     ///
@@ -620,7 +622,11 @@ pub enum Request {
     /// told [`Fact::Workspaces`] with the list that holds the new workspace. Refused, with
     /// nothing made, with [`Refusal::Failed`] naming a repository the Keeper does not hold,
     /// an agent no Adapter has, a branch `branch` that exists already or that git does not
-    /// take as the name of a branch, and a folder that is there already;
+    /// take as the name of a branch, a folder that is there already, and a folder the user
+    /// named that is not absolute or lies inside the repository; [`Refusal::NoSuchFolder`]
+    /// for a folder the user named when something that is not a folder is at it, or when
+    /// nothing is at it and nothing is at its parent folder either (a named folder that
+    /// is not there is made, with the worktree, when its parent is); and
     /// [`Refusal::UnknownRevision`] for a `from` that names no branch. When the agent cannot
     /// be started, the worktree and the branch the request made are removed again, and the
     /// refusal says why.

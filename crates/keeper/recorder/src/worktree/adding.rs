@@ -14,7 +14,7 @@
 //! | Check | Refused with |
 //! | --- | --- |
 //! | `git check-ref-format --branch <branch>` ends with success, and `branch` does not start with `-` | [`AddError::NotABranchName`] |
-//! | `refs/heads/<branch>` does not exist (`git rev-parse -q --verify refs/heads/<branch>`) | [`AddError::BranchExists`] |
+//! | `refs/heads/<branch>` does not exist (`git show-ref --verify -q refs/heads/<branch>`) | [`AddError::BranchExists`] |
 //! | `from` is a branch: `refs/heads/<from>` or `refs/remotes/<from>` exists, read as a branch, never as a tag, as the base is read | [`AddError::UnknownBranch`] |
 //! | nothing is at `folder` (`symlink_metadata` fails with "not found") | [`AddError::FolderExists`] |
 //!
@@ -38,9 +38,10 @@
 //!
 //! git can fail after it made something: a `post-checkout` hook of the user that exits with
 //! a status other than 0 makes `git worktree add` fail and leaves the worktree and the
-//! branch. So after any failure of git the call looks: `git worktree list --porcelain` for a
-//! worktree at `folder`, and `git rev-parse -q --verify refs/heads/<branch>`. When either is
-//! there, it was made by this call (both were checked absent under the lock), and
+//! branch. So after any failure of git the call looks: `git worktree list --porcelain -z`
+//! for a worktree at `folder`, and `git show-ref --verify -q refs/heads/<branch>` (with
+//! `git rev-parse` to read the commit the branch points at). When either is there, it was
+//! made by this call (both were checked absent under the lock), and
 //! [`Worktree::remove_added`]'s steps take it away; then the parent folder is removed when
 //! this call made it and it is empty (`fs::remove_dir`, never a removal of what is inside).
 //! The call then gives [`AddError::Git`] with git's words. Nothing made by this call is left.

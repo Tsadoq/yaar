@@ -16,6 +16,9 @@
 //! definition; in any other source it is a read like the others.
 //!
 //! A line whose first characters are `//` is taken out: a doc comment may name a colour.
+//!
+//! A theme bound under another name (`let t = cx.theme(); t.some_role`) is not seen by the
+//! scan: it reads only the roles named after the spellings above.
 
 use std::collections::BTreeSet;
 use std::fs;
