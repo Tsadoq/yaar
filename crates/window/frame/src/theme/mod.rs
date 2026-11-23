@@ -26,7 +26,9 @@
 //! the same steps are taken the other way. (The dark theme's `warning_foreground`, a dark text
 //! on a light yellow, can only pass darker.) [`READABLE`] lists every pair of a text role and
 //! a ground the Frame draws, among them the quiet text of the sidebar on its own ground, on
-//! the selected row's, on the hovered row's and on `secondary`.
+//! the selected row's and on the hovered row's. It also holds the quiet text on `secondary`,
+//! which no sidebar code draws: the selected row has the same value but is drawn on
+//! `sidebar_accent`.
 //!
 //! The terminal's colours: `foreground` and `background` those of the theme, `cursor` the
 //! theme's `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in
