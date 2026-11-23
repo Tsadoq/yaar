@@ -113,8 +113,9 @@ impl Reviews {
     /// The commits are read through the workspace's state store, which copies from
     /// `worktree` the one it lacks; when that fails nothing is carried. A file that cannot
     /// be read leaves its threads where they are, the others are carried, and the first
-    /// such failure is given after they were kept. The engine's turn is held only to read
-    /// the threads again, leave out any whose place changed meanwhile (another call
+    /// such failure is given after they were kept (so their ids are not: see
+    /// [`Reviews::base_moved_in_part`], which gives both). The engine's turn is held only
+    /// to read the threads again, leave out any whose place changed meanwhile (another call
     /// carried it, or the reviewer resolved it) and keep the rest with one
     /// `Store::set_places`.
     pub fn base_moved(
@@ -124,8 +125,25 @@ impl Reviews {
         from: &CommitId,
         to: &CommitId,
     ) -> Result<Vec<ThreadId>, EngineError> {
+        match self.base_moved_in_part(workspace, worktree, from, to)? {
+            (moved, None) => Ok(moved),
+            (_, Some(failure)) => Err(failure),
+        }
+    }
+
+    /// [`Reviews::base_moved`] for a caller that tells others what was kept: the ids of the
+    /// threads whose place now names `to`, and with them the first failure to read a file,
+    /// when there was one, whose threads stay where they were. It fails as a whole only
+    /// when nothing was kept.
+    pub fn base_moved_in_part(
+        &self,
+        workspace: &WorkspaceId,
+        worktree: &Worktree,
+        from: &CommitId,
+        to: &CommitId,
+    ) -> Result<(Vec<ThreadId>, Option<EngineError>), EngineError> {
         if from == to {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
         let mut candidates = Vec::new();
         for review in self.store.reviews_of(workspace)? {
@@ -171,7 +189,7 @@ impl Reviews {
             }
         }
         if candidates.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), None));
         }
 
         let states = self.states_of(workspace)?;
@@ -233,10 +251,7 @@ impl Reviews {
             }
             self.store.set_places(&kept)?;
         }
-        match failure {
-            Some(e) => Err(e),
-            None => Ok(moved),
-        }
+        Ok((moved, failure))
     }
 }
 

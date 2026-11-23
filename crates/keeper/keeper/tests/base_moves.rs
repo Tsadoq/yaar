@@ -667,3 +667,36 @@ fn a_base_set_and_then_moved_by_a_pull_carries_the_threads_again_from_where_the_
     sits_on(&window.thread(&workspace, &thread_id(1)), &history.m3, 6);
     window.stop(keeper);
 }
+
+#[test]
+fn a_base_set_that_carried_nothing_is_noted_so_that_the_next_pull_carries_from_it() {
+    let scratch = Scratch::new();
+    let history = scratch.history();
+    let keeper = scratch.keeper();
+    let mut window = scratch.window();
+    let workspace = window.open(&history.repo);
+    assert_eq!(window.counted_from(&workspace), history.m1);
+
+    // No thread exists yet, so the set carries nothing; it still has to note `m2`.
+    let (reply, _) = window.ask_noting_facts(Request::SetBase {
+        workspace: workspace.clone(),
+        base: "mid".to_owned(),
+    });
+    assert!(matches!(reply, Ok(Reply::Done)), "{reply:?}");
+
+    // A thread written on the old side of `m2`, then a pull that moves the base on. With
+    // `m1` still noted the answer would carry from `m1` and leave this thread behind.
+    let (review, _) = window.threads(&workspace);
+    // Line 3 of `m2` is the first of the two lines `mid` put there; `m3` puts one above it.
+    let anchor = Anchor {
+        text: "new 1".to_owned(),
+        ..history.on_line_3_of_the_old_side(&history.m2)
+    };
+    window.start(&review, 1, anchor);
+    history.move_branch("mid", &history.m3);
+    let (counted, moved) = window.counted_from_noting_facts(&workspace);
+    assert_eq!(counted, history.m3);
+    sits_on(&window.thread(&workspace, &thread_id(1)), &history.m3, 4);
+    window.wait_for_reviews_changed_from(moved);
+    window.stop(keeper);
+}

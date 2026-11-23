@@ -13,8 +13,8 @@
 //! | Where | What is done |
 //! | --- | --- |
 //! | `SetBase`, before the base is set | [`before_set`] reads `counted_from` now, from `Workspaces::changes` |
-//! | `SetBase`, after the base is set | [`after_set`] reads it again and carries the threads placed on the commit noted and on `before` (each one that is not `after`) to `after` with `Reviews::base_moved`; notes `after` when every carry succeeded, also when nothing differed; puts `ReviewsChanged` of the workspace into the facts when a thread was re-placed, whether its lines moved or stayed |
-//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, it carries from the noted commit to the answer's, notes it when the carry succeeded, and puts `ReviewsChanged` into the facts when a thread was re-placed; when none was noted, it only notes |
+//! | `SetBase`, after the base is set | [`after_set`] reads it again and carries the threads placed on the commit noted and on `before` (each one that is not `after`) to `after` with `Reviews::base_moved`; notes `after` when every carry succeeded, also when nothing differed; puts `ReviewsChanged` of the workspace into the facts when a thread was re-placed, whether its lines moved or stayed, also in a carry that failed on a file and so noted nothing |
+//! | `GetChanges`, answered | [`changes_seen`] compares the answer's `counted_from` with the one noted; when both are there and differ, it carries from the noted commit to the answer's, notes it when the carry succeeded, and puts `ReviewsChanged` into the facts when a thread was re-placed, also in a carry that failed on a file; when none was noted, it only notes |
 //!
 //! `SetBase` carries from the commit noted as well as from `before` when they differ: a base
 //! that moved since the last `GetChanges` left threads on the noted commit, and the ones
@@ -30,7 +30,9 @@
 //! worktree carries nothing. A failure of the carry, or of reading or writing the note, is
 //! written to the standard error in one line, starting `yaar-keeper:`, and does not change
 //! the reply; after a failed carry the note is left as it was, so that the next
-//! `GetChanges` tries again.
+//! `GetChanges` tries again. A carry that fails on one file keeps the threads of the other
+//! files, and `ReviewsChanged` is told for them. No surface makes a commit's file unreadable
+//! while the rest are read, so these two clauses are stated here and held by no test.
 
 use yaar_link::{Fact, WorkspaceId};
 use yaar_recorder::CommitId;
@@ -140,14 +142,18 @@ fn carry(
     let mut moved = false;
     let mut failed = false;
     for from in from.iter().filter(|from| *from != to) {
-        match kept.reviews.base_moved(&id, &worktree, from, to) {
-            Ok(threads) => moved |= !threads.is_empty(),
-            Err(e) => {
-                failed = true;
-                eprintln!(
-                    "yaar-keeper: the threads of {workspace} could not follow the base to {to}: {e}"
-                );
-            }
+        // A carry that failed on one file still kept the threads of the others, which a
+        // Window is told of; the failure leaves the note as it was.
+        let (threads, failure) = match kept.reviews.base_moved_in_part(&id, &worktree, from, to) {
+            Ok(done) => done,
+            Err(e) => (Vec::new(), Some(e)),
+        };
+        moved |= !threads.is_empty();
+        if let Some(e) = failure {
+            failed = true;
+            eprintln!(
+                "yaar-keeper: the threads of {workspace} could not follow the base to {to}: {e}"
+            );
         }
     }
     if !failed {

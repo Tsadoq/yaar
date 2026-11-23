@@ -186,8 +186,10 @@ pub struct Thread {
     /// Where it sits in the newest recorded state of the worktree the Keeper carried it
     /// to, with what that state did to the lines it was written on; none while it sits
     /// where its anchor says, as before the first state after it, and for a thread on a file
-    /// outside the worktree, which the Keeper does not carry. A thread on the old side has
-    /// one once the commit the changes are counted from moved: its place names that commit.
+    /// outside the worktree, which the Keeper does not carry. An open thread on the old
+    /// side that is placed on the commit the changes are counted from has one once that
+    /// commit moved: its place names the new commit. A resolved thread on the old side, and
+    /// one placed on a state or on a commit's parent, has none.
     pub now: Option<Placed>,
 }
 
