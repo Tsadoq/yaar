@@ -51,8 +51,8 @@ pub(crate) fn remove_files_of_ended(
     let mut failure = None;
     for entry in fs::read_dir(&reviews)? {
         // An error reading the listing is noted. The listing gives nothing after it, so the
-        // walk ends here: what was removed stays removed, and the sessions not reached stay
-        // for the next clean-up.
+        // next look ends the walk: what was removed stays removed, and the sessions not
+        // reached stay for the next clean-up.
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {

@@ -40,7 +40,7 @@
 //! 5. The reader of contents ends when step 3 removed a pack or step 4 pruned an object (the
 //!    next section), so that the room the removed packs took is given back at once. It ends
 //!    when step 3 removed a pack though step 4 then failed, and the failure of step 4 is
-//!    given after that; steps 5 and 6 do not run for it.
+//!    given after that; step 6 does not run for it.
 //! 6. The file `yaar-complete-head`, which names the commit the store last copied whole, is
 //!    removed when that commit is no longer held (`git cat-file -e <commit>^{tree}` fails), so
 //!    that the next recording copies the commit it is taken on whole again.
@@ -215,10 +215,9 @@ impl StateStore {
         .printed()?;
         // A failed prune is given after the reader ended, for the repack has removed its
         // packs by now whatever the prune does.
-        let pruned = match self.run(None, ["prune", "--expire=now", "-v"]) {
-            Ok(answer) => answer.printed(),
-            Err(error) => Err(error),
-        };
+        let pruned = self
+            .run(None, ["prune", "--expire=now", "-v"])
+            .and_then(|answer| answer.printed());
         // The reader maps the packs it opened: while it lives, a pack that was removed
         // keeps its blocks, and what the sizes report is not what the disk gives back.
         let removed_a_pack = match (packs, self.packs()) {
