@@ -28,7 +28,13 @@
 #                           (the .dmg, the .deb, the apt source), the uninstall line; no
 #                           script, no style or font from another host, no analytics
 #              install.sh   packaging/install.sh with its line DEFAULT_BASE_URL="@BASE_URL@"
-#                           replaced by the one value of packaging/site/base-url
+#                           replaced by the one value of packaging/site/base-url, and its line
+#                           TEAM_ID="@TEAM_ID@" replaced by the one line of
+#                           packaging/macos/team-id that is not a comment; while that file
+#                           holds no such line (before the owner wrote it, and in every
+#                           rehearsal until then) @TEAM_ID@ stays, which install.sh accepts
+#                           only from a loopback address (verify-signed.sh refuses it in a
+#                           release)
 #              apt/         packaging/apt/make-apt-repo.sh's repository of the new .deb files
 #                           and those of PREVIOUS: pool/, dists/stable/{InRelease,Release,
 #                           Release.gpg,main/binary-amd64/,main/binary-arm64/}, and
@@ -38,7 +44,11 @@
 #
 # The base address is read from packaging/site/base-url and nowhere else. Refuses, changing
 # nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, or
-# when a .deb's Version or Architecture does not match its name.
+# when a .deb's Version or Architecture does not match its name. Refuses, after writing, when
+# site/ holds more than 900 MB (`du -sk`): a Pages site may hold 1 GB, and the pool grows by
+# two .deb files a release; the sentence names the versions in the pool, oldest first, and
+# says that the oldest must leave the pool (a later decision of the owner's: they stay on the
+# releases page).
 #
 # Exit codes: 0 written; 1 refused or failed (a sentence says why); 2 usage error.
 #

@@ -14,9 +14,17 @@
 #   3. a "Used by:" line added for a crate the lock file does not hold ("planted-crate 9.9.9"):
 #      must fail, naming planted-crate;
 #   4. the copy unchanged: must pass (the control: the archive as built counts).
+# Then from the .zip of <packages-dir> (yaar-review-<V>-macos-universal.zip), in the same way,
+# a folder holding only a copy whose YAAR.app/Contents/Resources/THIRD-PARTY-NOTICES.txt lost
+# every "Used by:" line that names gpui-pre-apple (the toolkit's Apple crate, which the
+# workspace patches in from vendor/ and which is third-party code all the same), unpacked
+# with `unzip` and packed again with `python3 -m zipfile -c` (the job's container has no
+# zip; the count reads only the notices file):
+#   5. must fail, naming gpui-pre-apple;
+#   6. the .zip unchanged: must pass.
 # Each check prints what it did and what the count said.
 #
-# Exit codes: 0 all four as above; 1 one of them not (a sentence says which); 2 usage error.
+# Exit codes: 0 all six as above; 1 one of them not (a sentence says which); 2 usage error.
 #
 # Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
 # package fills the body.

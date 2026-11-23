@@ -127,11 +127,12 @@ decides which of the two a run is, in its step "What this run is", and says so i
 A run that publishes signs the app with the Developer ID in a keychain of its own on
 GitHub's Mac, has Apple notarise the app and the disk image, staples both, checks them with
 `codesign`, `spctl` and `stapler`, removes the keychain; signs the apt repository and the
-checksum file with the project's key; and only once every job has passed makes the GitHub
+checksum file with the project's key; and then waits for the owner's approval. Once he has
+walked the release's checklists on those very files and approved, it makes the GitHub
 release (a draft first), deploys the Pages site, and then publishes the release as the
 latest.
 
-### The secrets
+### The secrets, and two public files
 
 Six secrets of the environment `release`, which only the jobs `release-sign-macos` and
 `assemble-release` name, and which the environment gives to runs on the tags `v*` only. A
@@ -139,22 +140,41 @@ run of a pull request or of a branch never sees them.
 
 | Secret | What it holds | Form |
 | --- | --- | --- |
-| `MACOS_CERTIFICATE_P12` | The Developer ID Application certificate with its private key | The exported `.p12` file, in base64 |
+| `MACOS_CERTIFICATE_P12` | The Developer ID Application certificate with its private key, and Apple's Developer ID Certification Authority (G2) certificate | The `.p12` file the two were exported into together, in base64 |
 | `MACOS_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with | Text |
 | `APPLE_NOTARY_KEY_P8` | An App Store Connect API key, for `notarytool` | The text of the file `AuthKey_<key id>.p8` |
 | `APPLE_NOTARY_KEY_ID` | That key's id | Text, ten characters |
 | `APPLE_NOTARY_ISSUER_ID` | The issuer id of the team's keys | Text, a UUID |
 | `APT_SIGNING_KEY` | The project's OpenPGP key that signs the apt repository and `SHA256SUMS` | The armoured secret key, ed25519, no passphrase on this copy |
 
-The fingerprint of the apt key is public and lies in `apt/project-key.fingerprint`; the job
-refuses a key whose fingerprint differs. The key is made once and never replaced: a client
-that trusts the old key meets a new one with a warning and no error, and stops receiving
-updates.
+Two public facts lie in the repository, each one line under its comments:
+`apt/project-key.fingerprint`, the apt key's fingerprint, and `macos/team-id`, the Team ID of
+the Developer ID. The job refuses an apt key whose fingerprint differs and a certificate of
+another team, and the install script on the site refuses an app that another team signed. The
+apt key is made once and never replaced: a client that trusts the old key meets a new one
+with a warning and no error, and stops receiving updates.
+
+### What guards a release
+
+- The environments `release` and `github-pages` admit the tags `v*` only, and
+  `github-pages` waits for the owner's approval.
+- The job `version` refuses to publish a tag whose commit is not on `main`.
+- A pull request from a branch of this repository runs its own copy of the workflow, which
+  could ask for more permissions than `ci.yml` gives it. The environments keep the secrets
+  and the site from it; nothing keeps it from writing a release with its own token. Review
+  is the guard, as in any repository, and the optional step 6 below narrows who may push a
+  tag `v*`.
 
 ### Before the first release, once
 
 Each command reads a value from a file, the pasteboard or a prompt; none puts a secret on a
-command line or into a log. `gh` must be logged in as the owner of `Tsadoq/yaar`.
+command line or into a log. `gh` must be logged in as the owner of `Tsadoq/yaar`. Every file
+a step makes goes into one temporary folder, which macOS keeps under `/private/var/folders`,
+outside the Desktop and Documents that iCloud may sync, and which the last step deletes:
+
+```sh
+D="$(mktemp -d)"; echo "$D"; open "$D"
+```
 
 1. The Pages site is built by the workflow:
 
@@ -162,54 +182,74 @@ command line or into a log. `gh` must be logged in as the owner of `Tsadoq/yaar`
    gh api -X POST repos/Tsadoq/yaar/pages -f build_type=workflow
    ```
 
-2. The environment `release`, for the tags `v*` only, and the same rule on the environment
-   `github-pages` that step 1 made:
+2. The environment `release`, for the tags `v*` only; the same rule on the environment
+   `github-pages` that step 1 made, and the owner's approval before it deploys:
 
    ```sh
    echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
      | gh api -X PUT repos/Tsadoq/yaar/environments/release --input -
    gh api -X POST repos/Tsadoq/yaar/environments/release/deployment-branch-policies -f name='v*' -f type=tag
-   echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
-     | gh api -X PUT repos/Tsadoq/yaar/environments/github-pages --input -
+   printf '{"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+     "$(gh api user --jq .id)" | gh api -X PUT repos/Tsadoq/yaar/environments/github-pages --input -
    gh api -X POST repos/Tsadoq/yaar/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag
    ```
 
-3. The certificate. In Keychain Access, under My Certificates, select "Developer ID
-   Application: …" with its key, File > Export Items…, format Personal Information
-   Exchange (`.p12`), saved as `~/Desktop/developer-id.p12` with a new password. Then:
+3. The certificate. In Keychain Access select both "Developer ID Application: … (<Team
+   ID>)" with its key, under My Certificates, and "Developer ID Certification Authority"
+   (G2), under Certificates; File > Export Items…, format Personal Information Exchange
+   (`.p12`), saved into the folder `$D` opened above as `developer-id.p12`, with a new
+   password. The Team ID is the ten characters in parentheses. Then:
 
    ```sh
-   base64 -i ~/Desktop/developer-id.p12 | gh secret set MACOS_CERTIFICATE_P12 --env release --repo Tsadoq/yaar
+   base64 -i "$D/developer-id.p12" | gh secret set MACOS_CERTIFICATE_P12 --env release --repo Tsadoq/yaar
    gh secret set MACOS_CERTIFICATE_PASSWORD --env release --repo Tsadoq/yaar   # asks; type the password
-   rm ~/Desktop/developer-id.p12
    ```
 
-4. The notary key. In App Store Connect, Users and Access > Integrations > App Store Connect
-   API > Team Keys, add a key with the access Developer and download it (it can be
-   downloaded once). The page shows its Key ID and the Issuer ID. Then:
+4. The notary key. The first time, the Account Holder of the developer account must request
+   access to the App Store Connect API (Users and Access > Integrations > App Store Connect
+   API, "Request Access") and accept its terms. Then, on the same page, under Team Keys, add
+   a key with the access Developer and download it (it can be downloaded once). Apple
+   documents no smallest role for `notarytool`; Developer is reported to work, and the first
+   publishing run checks the key with Apple before it signs anything, so a key that cannot
+   notarise stops the run there. The page shows the Key ID and the Issuer ID. Then:
 
    ```sh
-   gh secret set APPLE_NOTARY_KEY_P8 --env release --repo Tsadoq/yaar < ~/Downloads/AuthKey_<KEY ID>.p8
+   mv ~/Downloads/AuthKey_<KEY ID>.p8 "$D"/
+   gh secret set APPLE_NOTARY_KEY_P8 --env release --repo Tsadoq/yaar < "$D"/AuthKey_<KEY ID>.p8
    gh secret set APPLE_NOTARY_KEY_ID --env release --repo Tsadoq/yaar      # asks; paste the Key ID
    gh secret set APPLE_NOTARY_ISSUER_ID --env release --repo Tsadoq/yaar   # asks; paste the Issuer ID
    ```
 
-   Keep the `.p8` file where you keep keys; it is not needed on this Mac again.
+   Copy the `.p8` file to where you keep keys offline, if you want one.
 
 5. The apt key, in a checkout of the repository on a branch of its own:
 
    ```sh
-   export GNUPGHOME="$(mktemp -d)"
+   export GNUPGHOME="$D/gnupg"; mkdir -m 700 "$GNUPGHOME"
    gpg --batch --passphrase '' --quick-generate-key 'YAAR apt repository' ed25519 sign never
    gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr"{print $10; exit}' \
      >> packaging/apt/project-key.fingerprint
    gpg --batch --armor --export-secret-keys | gh secret set APT_SIGNING_KEY --env release --repo Tsadoq/yaar
-   gpg --batch --armor --export-secret-keys > ~/Desktop/yaar-apt-key.asc   # the copy offline
-   gpgconf --kill gpg-agent; rm -rf "$GNUPGHOME"; unset GNUPGHOME
+   gpg --batch --armor --export-secret-keys | gpg --symmetric --armor --output "$D/yaar-apt-key.asc.gpg"   # asks for a passphrase
+   gpgconf --kill gpg-agent; unset GNUPGHOME
    ```
 
-   Move `yaar-apt-key.asc` to where you keep keys offline, then delete it from the Desktop.
-   Commit `packaging/apt/project-key.fingerprint` through a pull request.
+   Copy `yaar-apt-key.asc.gpg`, the key under that passphrase, to where you keep keys
+   offline. Add the Team ID of step 3 as the last line of `packaging/macos/team-id`, and
+   commit both files through a pull request.
+
+6. Optional: only the owner may push a tag `v*`:
+
+   ```sh
+   echo '{"name":"release tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}' \
+     | gh api -X POST repos/Tsadoq/yaar/rulesets --input -
+   ```
+
+7. Delete the folder and everything in it:
+
+   ```sh
+   rm -rf "$D"; unset D
+   ```
 
 ### The day of a release
 
@@ -221,7 +261,42 @@ git tag v<version> && git push origin v<version>        # a rehearsal runs on th
 gh workflow run ci.yml --repo Tsadoq/yaar --ref v<version> -f publish=true
 ```
 
-The run refuses a tag that is not `v` and the version of `Cargo.toml`.
+The run refuses a tag that is not `v` and the version of `Cargo.toml`, and a tag whose commit
+is not on `main`. When every job before `publish` is green, the run waits for the approval.
+Meanwhile, the checklists are walked on the files the run made (`packaging/checklists/`,
+whose README names a command for each item):
+
+```sh
+gh run download <run id> --repo Tsadoq/yaar -n release-final -D ~/yaar-release-<version>
+packaging/checklists/serve-release.sh ~/yaar-release-<version>
+```
+
+Then approve on the run's page (Review deployments), or:
+
+```sh
+gh api -X POST repos/Tsadoq/yaar/actions/runs/<run id>/pending_deployments \
+  -F "environment_ids[]=$(gh api repos/Tsadoq/yaar/environments/github-pages --jq .id)" \
+  -f state=approved -f comment='checklists walked'
+```
+
+A run left waiting is not published; rejecting it ends it with nothing published.
+
+### Taking a release back
+
+A version that apt users have installed stays installed: a fixed version `V+1`, by the same
+steps, is the remedy. To stop new installs of a bad version `V` at once:
+
+1. `gh release edit v<V> --draft=true --repo Tsadoq/yaar`: the macOS route, the archive route
+   and `latest/download` go back to the release before it.
+2. Within 30 days of the last good publishing run (GitHub re-runs nothing older), open that
+   run's page and re-run its job `publish` alone (Re-run this job). It reuses that run's
+   artifact `release-final`, builds and signs nothing, deploys that run's site, in which
+   `V`'s packages are not, and finds its own release already published with the same files,
+   which it leaves as it is. After 30 days there is no step 2: `V+1` is the only way to take
+   `V` out of the apt repository.
+
+A tag that was pushed but never published is deleted with `git push --delete origin v<V>`;
+nothing else exists for it.
 
 ## What was checked, and where
 

@@ -5,6 +5,7 @@
 //! ```text
 //! yaar-script worktree-with-agent --repository <folder> --branch <new branch> --agent <claude|pi>
 //!             [--socket <path>] [--deadline <seconds>]
+//! yaar-script stop [--socket <path>] [--deadline <seconds>]
 //! ```
 //!
 //! Connects to the Keeper that already listens at `--socket` (default: the socket of
@@ -23,6 +24,12 @@
 //! `worktree=<absolute folder> workspace=<id> session=<id>`, and exits 0. A refusal prints the
 //! Keeper's sentence and exits 1; a deadline passed prints which wait ran out and what had
 //! arrived, and exits 1. A command line it does not take prints the usage above and exits 2.
+//!
+//! `stop` is the quit that also stops the agents: it connects as above (exit 2 when no Keeper
+//! listens), says hello, sends the Link's stop (`Message::Shutdown`, whose shape no version
+//! changes), and waits until the socket no longer answers (a connect refused or the socket
+//! gone), for at most `--deadline` seconds (default 20). Done, it prints `stopped` and exits
+//! 0; past the deadline it says so and exits 1.
 
 fn main() -> std::process::ExitCode {
     todo!()

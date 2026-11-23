@@ -9,7 +9,9 @@
 # Release, and release/SHA256SUMS.asc against release/SHA256SUMS; the key's fingerprint
 # equals packaging/apt/project-key.fingerprint; every Packages file's hash is the one
 # InRelease names; every .deb the Packages files name is in the pool with the size and SHA-256
-# they name.
+# they name. And the site's install.sh is the one a user may run: it holds neither
+# "@BASE_URL@" nor "@TEAM_ID@", its DEFAULT_BASE_URL is the line of packaging/site/base-url,
+# and its team id is the line of packaging/macos/team-id.
 #
 # Exit codes: 0 all verify; 1 one does not; 2 usage error.
 #

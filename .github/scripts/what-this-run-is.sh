@@ -22,6 +22,10 @@
 #
 # Refusals, each a sentence on standard error and exit 1:
 #   - PUBLISH is true and the run is not on a tag;
+#   - PUBLISH is true and the commit of the tag is not on main: `git merge-base --is-ancestor
+#     HEAD origin/main` fails (the job checks out with fetch-depth 0, so origin/main is
+#     there). A tag on an unmerged branch, whose workflow may have been changed, never
+#     reaches the secrets;
 #   - the run is on a tag (published or rehearsed) and the tag is not v<version>: a tag
 #     that differs from the manifest is refused, so a release always carries the version
 #     its programs print.
@@ -37,6 +41,10 @@ case "${PUBLISH:-false}" in
 esac
 if [ "$PUBLISH" = true ] && [ "${REF_TYPE:-}" != tag ]; then
   echo "what-this-run-is.sh: a release is published from a tag, and this run is on the ${REF_TYPE:-unknown} '${REF_NAME:-}'" >&2
+  exit 1
+fi
+if [ "$PUBLISH" = true ] && ! git -C "$HERE/../.." merge-base --is-ancestor HEAD origin/main; then
+  echo "what-this-run-is.sh: a release is published only from a commit on main, and the commit of '${REF_NAME:-}' is not on origin/main" >&2
   exit 1
 fi
 if [ "${REF_TYPE:-}" = tag ] && [ "${REF_NAME:-}" != "v$VERSION" ]; then

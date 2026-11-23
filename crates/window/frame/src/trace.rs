@@ -16,3 +16,16 @@ pub fn mark(name: &str) {
         .unwrap_or(0);
     eprintln!("yaar-trace {name} epoch_ms={ms}");
 }
+
+/// Prints the mark `name` as [`mark`] does, the first time this process asks for `name`
+/// only: a mark such as the first diff drawn is called from code that runs on every frame.
+pub fn mark_once(_name: &'static str) {
+    todo!()
+}
+
+/// Whether this is the first time this process asks for `name`: true once, false after.
+/// [`mark_once`] prints only on true, so a test that drew a diff can read here whether the
+/// mark of the first diff was taken.
+pub fn first_of(_name: &'static str) -> bool {
+    todo!()
+}

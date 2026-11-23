@@ -25,10 +25,12 @@
 #                   an App Store Connect API key: the path of its .p8 file, its id, the
 #                   issuer id. Set together with a Developer ID identity, they UPLOAD the app
 #                   and the disk image to Apple (`xcrun notarytool submit --key --key-id
-#                   --issuer --wait`), and staple the tickets to both. Unset, nothing leaves
-#                   this machine.
+#                   --issuer --wait --timeout 30m`), and staple the tickets to both. Unset,
+#                   nothing leaves this machine. Set with SIGN_IDENTITY "-" (or unset), or only
+#                   some of the three set: refused before anything is built (Apple would
+#                   refuse an ad hoc app after the upload).
 #   NOTARY_PROFILE  a keychain profile of `xcrun notarytool store-credentials`, in place of
-#                   the three above, for a run by hand.
+#                   the three above, for a run by hand; the same refusal with "-".
 #   NOTICES         The third-party notices to put inside the app, from packaging/notices.sh.
 #                   Required: a package without them may not be handed to anyone.
 #   MIN_MACOS       LSMinimumSystemVersion (default 12.0, the declared floor).
@@ -47,6 +49,25 @@
 # The Keeper finds the other three beside its own program. Signed from the inside out, each
 # under the hardened runtime with no entitlement, with a secure timestamp unless ad hoc; then
 # the bundle, which seals them; then the disk image.
+#
+# The order, which a notarised release depends on (a .zip cannot be stapled, so the
+# published .zip must hold the stapled app, and the .dmg must be made from the stapled app
+# and then notarised and stapled itself). Steps 3 to 6 and 10 to 11 run only when notarising:
+#    1. the four helpers signed, each with its identifier;
+#    2. the bundle signed; `codesign --verify --deep --strict` on it;
+#    3. a .zip of the bundle made with `ditto -c -k --keepParent` into the scratch: the upload;
+#    4. that .zip submitted with `--wait --timeout 30m --output-format json`; the status read
+#       from the output must be "Accepted", else `notarytool log <id>` is printed and the
+#       script fails (notarytool exits 0 on "Invalid");
+#    5. `xcrun stapler staple` on YAAR.app;
+#    6. `xcrun stapler validate` on YAAR.app;
+#    7. the published .zip made again from the stapled bundle (`ditto -c -k --keepParent`);
+#    8. the .dmg made with hdiutil from a folder holding a copy of the stapled bundle and a
+#       link Applications to /Applications;
+#    9. the .dmg signed;
+#   10. the .dmg submitted as in 4, status "Accepted";
+#   11. `xcrun stapler staple` and `xcrun stapler validate` on the .dmg.
+# Without notarising, 3 to 6 and 10 to 11 are skipped and 7 is the only .zip.
 #
 # The log says which signature it made, in one line starting "signature: ":
 #   "signature: ad hoc, not notarised (for tests; Gatekeeper refuses it on another Mac)"

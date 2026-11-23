@@ -1,8 +1,8 @@
 #!/bin/bash
-# The step "What the Mac bundle holds" of the job macos: the app as it ships, read from the
-# bundle.
+# The step "What the Mac bundle holds" of the jobs macos and release-sign-macos: the app as
+# it ships, read from the bundle, and the two files users download, read from the files.
 #
-#   .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices>
+#   .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices> [<packages-dir>]
 #
 # Fails with a sentence naming what is wrong when any of these does not hold:
 #   - Contents/Info.plist: CFBundleIdentifier io.github.tsadoq.yaar, CFBundleExecutable
@@ -21,6 +21,15 @@
 #   - no file named standin-lsp, standin-agent or yaar-script anywhere in the bundle;
 #   - Contents/Resources/THIRD-PARTY-NOTICES.txt has the bytes of <notices>, and
 #     Contents/Resources/LICENSE is the LICENSE of the repository.
+# With <packages-dir>, which holds yaar-review-<version>-macos-universal.zip and .dmg made
+# from that app, also:
+#   - the .zip unpacked with `ditto -x -k` into a temporary folder holds YAAR.app and nothing
+#     else, and that app is <YAAR.app> file for file and byte for byte (`diff -r`, which also
+#     names a file one side lacks);
+#   - the .dmg mounted read-only (`hdiutil attach -nobrowse -readonly -mountpoint <temp>`,
+#     detached at the end whatever happens) holds YAAR.app and a link Applications to
+#     /Applications, and that app is <YAAR.app> in the same way; so the notices and the
+#     Info.plist users get by either file are those checked above.
 #
 # Exit codes: 0 all hold; 1 one does not; 2 usage error.
 #

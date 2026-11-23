@@ -4,61 +4,113 @@
 # "yaar-claude-tools" and "yaar-pi-report").
 #
 #   curl -fsSL <base>/install.sh | bash
-#   curl -fsSL <base>/install.sh | bash -s -- --uninstall
-#   curl -fsSL <base>/install.sh | bash -s -- --uninstall --purge
+#   curl -fsSL <base>/install.sh | bash -s -- --uninstall [--purge] [--stop-agents]
 #   curl -fsSL <base>/install.sh | bash -s -- --dry-run   # say what would be done, change nothing
 #
 # <base> is the one value of packaging/site/base-url. The copy in the repository holds the
-# line DEFAULT_BASE_URL="@BASE_URL@", which packaging/release/assemble.sh replaces when it
-# puts the script on the site; run from the repository unreplaced, the script needs
-# YAAR_BASE_URL and says so.
+# lines DEFAULT_BASE_URL="@BASE_URL@" and TEAM_ID="@TEAM_ID@", which
+# packaging/release/assemble.sh replaces when it puts the script on the site (the team id
+# from packaging/macos/team-id). Run from the repository with @BASE_URL@ unreplaced, the
+# script needs YAAR_BASE_URL and says so.
+#
+# Before anything else: HOME must name a folder that exists (refused otherwise, with a
+# sentence). Run as root (uid 0), the user's folders are root's: the script says so in one
+# line ("running as root: the files of <HOME> are removed, not another user's") before an
+# uninstall, and acts on them.
 #
 # What it does, by system:
 #   Debian, Ubuntu and systems built on them (ID or ID_LIKE in /etc/os-release names debian or
 #   ubuntu, and apt-get exists): saves the repository key to /etc/apt/keyrings/yaar-review.asc,
 #   writes /etc/apt/sources.list.d/yaar-review.sources (Signed-By that file; never apt-key),
 #   runs apt-get update and apt-get install yaar-review. Uses sudo only when not already root.
-#   If apt refuses, the key and the source file are put back as they were.
+#   Each of the two files is written only when its bytes differ from what is there, so a
+#   second run leaves both as they were, modification time included. If apt refuses, the key
+#   and the source file are put back as they were.
 #   Other Linux: downloads the plain archive, checks its SHA-256 against SHA256SUMS, copies the
 #   programs, the desktop entry, the icon and the licence texts under ~/.local (bin/,
 #   libexec/yaar-review/, share/). No root needed. The run-time libraries are then the user's
 #   business; the script lists what the dynamic linker misses.
 #   macOS: downloads yaar-review-<version>-macos-universal.zip, checks its SHA-256 against
-#   SHA256SUMS, unpacks it with ditto, and before it copies anything checks the app: its code
-#   signature (codesign --verify --deep --strict), Gatekeeper's verdict (spctl --assess
-#   --type execute: accepted, from a notarised Developer ID) and the stapled ticket (stapler
-#   validate). Then copies YAAR.app to /Applications (or ~/Applications when that is not
-#   writable). The app came by curl and carries no quarantine mark; the script adds none, as
-#   its own Gatekeeper check stands for the one macOS makes at a first open. When the app
-#   there already has the version downloaded, a second run changes nothing and says so. It
-#   never starts the app.
+#   SHA256SUMS, unpacks it with ditto into its temporary folder, and before it copies anything
+#   checks the app: its code signature and its team (`codesign --verify --deep --strict
+#   -R='anchor apple generic and certificate leaf[subject.OU] = "<TEAM_ID>"'`), Gatekeeper's
+#   verdict (spctl --assess --type execute: accepted, from a notarised Developer ID) and the
+#   stapled ticket (stapler validate). The team check pins the signer: any notarised app of
+#   another team, put in place of the release's .zip, is refused although Gatekeeper would
+#   accept it. The destination is /Applications, or ~/Applications when that is not
+#   writable. At the start, leftovers of an interrupted run, `.YAAR.app.new.*` and
+#   `.yaar-review-old.*` in either folder, are removed. The app is copied with ditto into
+#   <dest>/.YAAR.app.new.<pid> (the same file system), then an older YAAR.app is moved to
+#   <dest>/.yaar-review-old.<pid>, the new one is moved to <dest>/YAAR.app, and the old one is
+#   deleted: no run leaves a half-copied YAAR.app. The app came by curl and carries no
+#   quarantine mark; the script adds none, as its own Gatekeeper check stands for the one
+#   macOS makes at a first open. "Already installed", which changes nothing and says so,
+#   means both: <dest>/YAAR.app's CFBundleShortVersionString is the version downloaded, and
+#   `codesign --verify --deep --strict` passes on it; otherwise the app is replaced. It never
+#   starts the app.
 #
-# The uninstall, run as the user (it uses sudo only for apt):
-#   1. asks the app to stop: the user's processes whose program is one this script is about
-#      to remove, matched by its full path (the bundle's Contents/MacOS/yaar-review and
-#      Contents/Helpers/yaar-keeper; /usr/bin/yaar-review and
-#      /usr/libexec/yaar-review/yaar-keeper; the same under the archive's prefix), get
-#      SIGTERM, and the script waits up to 10 s for them to end (then SIGKILL). A Keeper of
-#      another copy, a build folder's, is left alone. An agent running in a
-#      terminal of the app ends with them; the script says so before it does it.
+# YAAR_ALLOW_UNNOTARIZED=1, for the rehearsal's app signed ad hoc: taken only when
+# YAAR_DOWNLOAD_URL starts with http://127.0.0.1: or http://localhost: (a server on the
+# machine itself); then the checks of Gatekeeper's verdict, of the ticket and of the team are
+# skipped and the signature is still verified. With any other download address the script
+# refuses before it downloads anything: "YAAR_ALLOW_UNNOTARIZED is taken only for a download
+# from 127.0.0.1 or localhost". A TEAM_ID that is still "@TEAM_ID@" is likewise taken only
+# under that rule; otherwise the macOS route refuses: "this copy of the install script names
+# no team".
+#
+# The uninstall, run as the user (it uses sudo only for apt). It removes what this script
+# installed by any route, and on macOS looks in both /Applications and ~/Applications (and
+# YAAR_INSTALL_DIR when set). With nothing installed it still does 3 and 4 and succeeds.
+#   1. The app must have stopped. Its processes are the user's processes whose program is one
+#      this script is about to remove, matched by its full path (the bundle's
+#      Contents/MacOS/yaar-review and Contents/Helpers/yaar-keeper; /usr/bin/yaar-review and
+#      /usr/libexec/yaar-review/yaar-keeper; the same under the archive's prefix): on macOS
+#      `ps -axo pid=,comm=`, on Linux /proc/<pid>/exe; never `pgrep -f`, never a name alone. A
+#      Keeper of another copy, a build folder's, is left alone. When only a Keeper runs, the
+#      script waits up to 10 s for it to leave by itself (it lingers 5 s after its last
+#      Window when no agent runs in its terminals). If one still runs after that, the
+#      uninstall refuses, changing nothing: "YAAR is running, and agents may be running in
+#      its terminals: quit YAAR (with the menu entry that also stops the agents, if you want
+#      them stopped) and run the uninstall again, or add --stop-agents". With --stop-agents it
+#      says that the agents running in YAAR's terminals end with it, sends SIGTERM to those
+#      processes, waits up to 10 s, and sends SIGKILL to what of them remains. It never
+#      signals any other process; an agent's own process is not matched.
 #   2. removes the app: the package (apt-get remove), the files of the archive route, or the
-#      bundle.
+#      bundle, wherever it is.
 #   3. removes the app's own files from the user's folders: the cache folder
 #      (~/Library/Caches/yaar-review; ${XDG_CACHE_HOME:-~/.cache}/yaar-review); the runtime
-#      folder ($XDG_RUNTIME_DIR/yaar-review); in the data folder (~/Library/Application
-#      Support/yaar-review; ${XDG_DATA_HOME:-~/.local/share}/yaar-review) everything but the
-#      user's reviews: the socket keeper.sock, its lock keeper.sock.lock, the pieces the
-#      Keeper wrote for the agent CLIs (agents/) and any other file; on macOS also what the
-#      system keeps under the app's identifier (~/Library/Saved Application State/
-#      io.github.tsadoq.yaar.savedState, ~/Library/Preferences/io.github.tsadoq.yaar.plist,
-#      the folder io.github.tsadoq.yaar in `getconf DARWIN_USER_CACHE_DIR`); and the folders
-#      /tmp/yaar-review-<16 hex digits> the user owns (the short socket of a long path).
+#      folder ($XDG_RUNTIME_DIR/yaar-review, on Linux and only when XDG_RUNTIME_DIR is set);
+#      in the data folder (~/Library/Application Support/yaar-review;
+#      ${XDG_DATA_HOME:-~/.local/share}/yaar-review) everything but the user's reviews and
+#      pi's extension: the socket keeper.sock, its lock keeper.sock.lock, the pieces the
+#      Keeper wrote for Claude Code under agents/ (all of agents/ but agents/pi) and any other
+#      file; on macOS also what the system keeps under the app's identifier: `defaults delete
+#      io.github.tsadoq.yaar` (the documented way, which cfprefsd does not write back), then
+#      ~/Library/Preferences/io.github.tsadoq.yaar.plist if still there, ~/Library/Saved
+#      Application State/io.github.tsadoq.yaar.savedState, and the folder
+#      io.github.tsadoq.yaar in `getconf DARWIN_USER_CACHE_DIR`. And the short socket folder
+#      of the user's own Keeper, if there is one: the Link puts the socket at
+#      /tmp/yaar-review-<hash>/keeper.sock when <data or runtime folder>/keeper.sock is longer
+#      than the system allows (103 bytes on macOS, 107 on Linux), <hash> being the 64-bit
+#      FNV-1a hash of that path's bytes as 16 lowercase hexadecimal digits (offset
+#      0xcbf29ce484222325, prime 0x100000001b3, computed in bash's 64-bit arithmetic, which
+#      wraps as the Link's does, one byte at a time under LC_ALL=C (it holds under macOS's
+#      bash 3.2 and under bash 5); the Link's test vector is the check: the path its test
+#      `the_address_of_a_path_too_long_keeps_its_value` names gives ad4c554483ec5ddb). Only
+#      that one folder, under /private/tmp on macOS (/tmp is a link there) and /tmp on Linux,
+#      and only when it is a folder (`find <tmp> -maxdepth 1 -name <it> -type d -user <uid>`,
+#      never through a link): the short folders of other Keepers of the same user, a build's
+#      or a test's, are not the app's.
 #   4. keeps the user's reviews, the data folder's store.db (with -wal and -shm) and states/,
-#      and says where they are and that --purge removes them. With --purge the data folder
-#      goes whole.
+#      and pi's extension, agents/pi/ (pi's own settings may name its file; removing it
+#      would leave pi pointing at a file that is gone), and says where they are and that
+#      --purge removes them. With --purge the data folder goes whole.
 #   It touches nothing of the user's repositories and nothing of pi's or Claude Code's own
 #   settings. If the user let the app add its extension to pi's settings, the line naming it
-#   stays there; the script says which line to remove by hand, without reading the file.
+#   stays there: the script prints which line to remove by hand (the entry ending
+#   "agents/pi/extension/yaar.ts" in the list "extensions" of ~/.pi/agent/settings.json),
+#   without reading the file, and, with --purge, that pi will not find the file any more
+#   until that line is removed.
 #
 # The script never asks a question: it prints what it is about to do and does it. (sudo may ask
 # for its password on the terminal; that is sudo, not this script.)
@@ -75,8 +127,7 @@
 #   YAAR_INSTALL_DIR   target folder of the macOS app     (default: /Applications, else $HOME/Applications)
 #   YAAR_OS_RELEASE    file read instead of /etc/os-release   (for tests)
 #   YAAR_ARCH          processor name instead of `uname -m`   (for tests)
-#   YAAR_ALLOW_UNNOTARIZED   1: on macOS, skip only the check of Gatekeeper's verdict and of
-#                      the ticket, for the rehearsal's app signed ad hoc   (for tests)
+#   YAAR_ALLOW_UNNOTARIZED   1: see above; from a loopback download address only   (for tests)
 #
 # Exit codes: 0 done (or nothing to do); 1 refused or failed, with nothing changed that was
 # not put back (a sentence says why); 2 a usage error.

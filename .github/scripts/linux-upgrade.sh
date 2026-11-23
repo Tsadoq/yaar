@@ -13,8 +13,9 @@
 #      both versions from 127.0.0.1:8000 (the first was not unsigned by adding the second);
 #      `apt-get update` printed no "W:" and no "E:" line; /usr/bin/yaar-review is still the
 #      program of the package (`dpkg -S /usr/bin/yaar-review`).
-#   5. serve-site.sh switch back to the site of <version>, so that the steps after this one
-#      find the site they expect.
+# The server stays on <site-later-dir>: the steps after this one run on the newest site, as a
+# user's system does after a release (the second run of the install line then meets the
+# version it has installed as the newest, which is the state a first run leaves).
 #
 # Exit codes: 0 holds; 1 does not; 2 usage error.
 #
