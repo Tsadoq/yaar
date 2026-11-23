@@ -11,14 +11,14 @@ use std::path::PathBuf;
 use gpui_kit::{Bounds, Entity, Modifiers, Pixels, TestAppContext, VisualTestContext};
 use yaar_link::{
     ChangedFile, CreditedFile, Fact, FileStatus, History, HistoryEntry, Reply, Request, RequestId,
-    ReviewId, SessionId, TurnId, WorkspaceReviews,
+    ReviewId, SessionId, Setting, TurnEndSelects, TurnId, WorkspaceReviews,
 };
-use yaar_review_pane::{ChangeShown, PaneRow, ReviewPane};
+use yaar_review_pane::{ChangeShown, EXPIRED_TURN, PaneRow, ReviewPane};
 
 use common::{
-    COMMIT, Stage, commit, drawn, file, id, link_up, no_agent_review, open_window, read_file,
-    repository, review_id, review_with, reviews_of, rows, since_main, texts, wait_for_files,
-    wait_until, workspace,
+    COMMIT, Stage, commit, drawn, file, id, link_up, link_up_staged, no_agent_review, open_window,
+    read_file, repository, review_id, review_with, reviews_of, rows, since_main, texts,
+    wait_for_files, wait_until, workspace,
 };
 
 /// The id of a commit or a state that is this digit forty times.
@@ -1562,4 +1562,236 @@ fn the_marks_of_the_reviewer_stay_when_the_history_is_read_again_under_a_selecti
         shown(&stage.pane, &mut cx),
         ChangeShown::Entries { first: 1, last: 1 }
     );
+}
+
+/// Whether the pane keeps the selection at a turn end, as it says.
+fn keeps(stage: &Stage, cx: &mut VisualTestContext) -> bool {
+    stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
+}
+
+fn turn_end_setting(selects: TurnEndSelects) -> Fact {
+    Fact::SettingChanged(Setting::TurnEnd(selects))
+}
+
+#[gpui_kit::test]
+fn what_a_turn_end_selects_follows_the_setting_the_keeper_tells_with_no_key_pressed(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    assert!(!keeps(&stage, &mut cx), "none is set: the turn end selects");
+
+    // Another Window, or the settings screen, set it: the pane keeps the selection.
+    stage
+        .keeper
+        .tell(turn_end_setting(TurnEndSelects::KeepSelection));
+    wait_until(&mut cx, "the pane to keep the selection", |cx| {
+        stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
+    });
+    wait_drawn("review-keeps-selection", &mut cx);
+    stage.keeper.tell(turn_ended(Some(s2()), Some(s1())));
+    wait_drawn("review-offer", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        Some(ChangeShown::Since {
+            from: Some(s1()),
+            to: s2()
+        })
+    );
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    // Nothing was selected, so nothing was asked for: the next request is a click's.
+    nothing_else_was_asked(&mut stage, &mut cx);
+
+    // Set back, the next turn end selects what changed.
+    stage
+        .keeper
+        .tell(turn_end_setting(TurnEndSelects::WhatChanged));
+    wait_until(&mut cx, "the pane to select at a turn end", |cx| {
+        !stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
+    });
+    assert!(drawn("review-keeps-selection", &mut cx).is_none());
+    stage.keeper.tell(turn_ended(Some(s3()), Some(s2())));
+    wait_until(&mut cx, "the change since the last review", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown()
+                == ChangeShown::Since {
+                    from: Some(s2()),
+                    to: s3(),
+                }
+        })
+    });
+    show_the_end_of_the_turn(&mut stage, s2(), s3(), "later.txt", &mut cx);
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.offer().cloned()),
+        None
+    );
+}
+
+#[gpui_kit::test]
+fn a_pane_opened_where_the_setting_is_already_set_keeps_the_selection_before_any_key_or_fact(
+    cx: &mut TestAppContext,
+) {
+    let (models, keeper) = link_up_staged(
+        vec![workspace('1', "feature")],
+        |keeper| keeper.set_settings(vec![Setting::TurnEnd(TurnEndSelects::KeepSelection)]),
+        cx,
+    );
+    wait_until(cx, "the settings in the models", |cx| {
+        models
+            .settings
+            .read_with(cx, |settings, _| settings.turn_end())
+            == TurnEndSelects::KeepSelection
+    });
+    let (stage, mut cx) = open_window(models, keeper, cx);
+    assert!(keeps(&stage, &mut cx));
+    cx.run_until_parked();
+    assert!(drawn("review-keeps-selection", &mut cx).is_some());
+}
+
+#[gpui_kit::test]
+fn the_key_that_keeps_the_selection_sets_the_setting_and_flips_what_the_setting_says_now(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_the_review_of_the_session(cx);
+    focus_the_rows(&stage, &mut cx);
+    let turn_end = |stage: &Stage, cx: &mut VisualTestContext| {
+        stage
+            .models
+            .settings
+            .read_with(cx, |settings, _| settings.turn_end())
+    };
+
+    cx.simulate_keystrokes("shift-t");
+    // At once in the models, and the Keeper keeps it.
+    assert_eq!(turn_end(&stage, &mut cx), TurnEndSelects::KeepSelection);
+    assert!(keeps(&stage, &mut cx));
+    wait_until(&mut cx, "the setting to reach the Keeper", |_| {
+        stage.keeper.settings_set() == [Setting::TurnEnd(TurnEndSelects::KeepSelection)]
+    });
+
+    // A change told from outside is what the key flips, not what the pane did last.
+    stage
+        .keeper
+        .tell(turn_end_setting(TurnEndSelects::WhatChanged));
+    wait_until(&mut cx, "the pane to follow the setting", |cx| {
+        !stage.pane.read_with(cx, |pane, _| pane.keeps_selection())
+    });
+    cx.simulate_keystrokes("shift-t");
+    assert!(keeps(&stage, &mut cx));
+    cx.simulate_keystrokes("shift-t");
+    assert!(!keeps(&stage, &mut cx));
+    assert_eq!(turn_end(&stage, &mut cx), TurnEndSelects::WhatChanged);
+    wait_until(&mut cx, "the three sets to reach the Keeper", |_| {
+        stage.keeper.settings_set()
+            == [
+                Setting::TurnEnd(TurnEndSelects::KeepSelection),
+                Setting::TurnEnd(TurnEndSelects::KeepSelection),
+                Setting::TurnEnd(TurnEndSelects::WhatChanged),
+            ]
+    });
+}
+
+/// The history of the tests with the turn T1 expired, between the two commits, and a turn
+/// after the second commit whose state is still there.
+fn history_with_an_expired_turn() -> History {
+    History {
+        workspace: id('1'),
+        start: Some(start()),
+        entries: vec![
+            HistoryEntry::Commit(commit('1', "First")),
+            HistoryEntry::ExpiredTurn {
+                turn: TurnId::new("a".repeat(32)),
+                session: session(),
+            },
+            HistoryEntry::Commit(commit('2', "Second")),
+            turn('b', Some(s2())),
+        ],
+    }
+}
+
+#[gpui_kit::test]
+fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history_with_an_expired_turn(), uncommitted(), cx);
+    assert_eq!(EXPIRED_TURN, "a turn (its recording has expired)");
+    // The words of a row are in the selector of its text.
+    let says = |index: &str, words: &str, cx: &mut VisualTestContext| {
+        drawn(&format!("review-history-{index}:{words}"), cx).is_some()
+    };
+    assert!(says("1", &format!("An agent, {EXPIRED_TURN}"), &mut cx));
+    assert!(says("3", "An agent, a turn", &mut cx));
+    assert!(says("uncommitted", "Uncommitted changes (2)", &mut cx));
+    assert!(!says("1", "An agent, a turn", &mut cx));
+    assert!(entry_bounds(Some(1), &mut cx).is_some(), "the row is drawn");
+
+    // A click on it selects nothing, and neither does Enter on the cursor that the click
+    // left on it.
+    click_entry(Some(1), Modifiers::none(), &mut cx);
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    focus_the_rows(&stage, &mut cx);
+    cx.simulate_keystrokes("tab");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.history_cursor()),
+        Some(1)
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    // It cannot be marked for a range either: Enter with nothing marked shows nothing.
+    cx.simulate_keystrokes("space");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.marked_changes()),
+        Vec::<usize>::new()
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    // Nothing was asked for either: the next request is the click on the first commit's.
+    nothing_else_was_asked(&mut stage, &mut cx);
+
+    // A turn below it is selected as before, from the commit above it.
+    click_entry(Some(3), Modifiers::none(), &mut cx);
+    show_the_turn(&mut stage, c2(), s2(), "later.txt", &mut cx);
+    // The commit just below it counts from the nearest version above it, which is the commit
+    // before the expired turn: no recording of the turn is looked for.
+    click_entry(Some(2), Modifiers::none(), &mut cx);
+    compared(&mut stage, c1(), Some(c2()), Vec::new(), &mut cx);
+    wait_until(&mut cx, "the second commit shown", |cx| {
+        stage.pane.read_with(cx, |pane, _| {
+            pane.change_shown() == ChangeShown::Entries { first: 2, last: 2 }
+        })
+    });
+}
+
+#[gpui_kit::test]
+fn the_history_is_asked_again_when_the_states_of_the_workspace_on_screen_were_deleted(
+    cx: &mut TestAppContext,
+) {
+    let (mut stage, mut cx) = open_with_history(history(), uncommitted(), cx);
+    let asked = stage.keeper.history_asked();
+    let expired = History {
+        entries: vec![
+            HistoryEntry::Commit(commit('1', "First")),
+            HistoryEntry::ExpiredTurn {
+                turn: TurnId::new("a".repeat(32)),
+                session: session(),
+            },
+            HistoryEntry::Commit(commit('2', "Second")),
+        ],
+        ..history()
+    };
+    stage.keeper.set_history(expired.clone());
+    // Another workspace's states went: this pane does not ask. The Keeper answers the
+    // questions of one Window in order, so when the answer to the question the next fact
+    // makes is shown, any question this one made was heard before it.
+    stage
+        .keeper
+        .tell(Fact::StatesDeleted { workspace: id('2') });
+    stage
+        .keeper
+        .tell(Fact::StatesDeleted { workspace: id('1') });
+    wait_until(&mut cx, "the history with the expired turn", |cx| {
+        stage
+            .pane
+            .read_with(cx, |pane, _| pane.history() == Some(&expired))
+    });
+    assert_eq!(stage.keeper.history_asked(), asked + 1);
 }
