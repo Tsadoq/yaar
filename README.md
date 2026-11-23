@@ -6,8 +6,10 @@ on lines, and send the comments back to the agent.
 
 **Pre-release.** Today the app opens a git repository, shows what a branch changed, lets
 you comment on any line of the diff and keeps those comments, and runs terminals beside the
-diff. It answers what a name in the diff is, where it is defined and who uses it, from a
-language server (below). It hears Claude Code, which you run in one of those terminals as
+diff. It makes a worktree on a new branch and starts an agent in it in one step, has a
+settings screen and a light and a dark theme, and cleans up the states it recorded. It
+answers what a name in the diff is, where it is defined and who uses it, from a language
+server (below). It hears Claude Code, which you run in one of those terminals as
 always, and pi, once you have said yes to one question the app asks (below): the sidebar
 shows whether each works, waits for you or has finished a turn, Flow shows what it does as
 it works, and Changes shows what the turn changed. A review round with either works end to
@@ -25,7 +27,75 @@ program does, and the app writes nothing of pi's and does not hear it.
   the default branch of its repository, from the point where it left it. On the default
   branch itself the app lists the commits that are not on its upstream and shows the
   uncommitted changes.
-- **Lets you set another base**, a branch or a commit, and keeps it.
+- **Lets you set another base**, a branch or a commit, and keeps it. The settings screen has
+  a row for it. When the base moves, a branch pulled while the app was not running included,
+  an open thread on a removed line is carried to the code of the new base by the rule the
+  threads on the new side follow; a resolved thread stays.
+- **Makes a worktree on a new branch and starts an agent in it.** Cmd-Shift-N, or File > New
+  Worktree with Agent… in the menu bar, opens a one-line field for the name of the new
+  branch; Enter makes a worktree of the repository on screen on that branch, from the branch
+  checked out in the worktree on screen, and opens a terminal in it that runs the agent CLI
+  the Window has chosen (Cmd-Alt-C chooses). With no worktree on screen, one with no branch
+  checked out or no CLI to start, no field opens and the notice says why. The worktree lies beside the repository: in the folder
+  where its linked worktrees already lie, or in `<repository>.worktrees/` when it has none,
+  or in the folder you named for that repository in the settings. The sidebar lists it, and
+  its base is the branch it was made from. A `/` in the branch's name is written `-` in the
+  folder's (`feature/login` lies in `feature-login`). A branch that exists, a name git
+  refuses, a branch to start from that is no branch and a folder that is already there are
+  refused with the reason, and nothing is made. While git makes the worktree the rest of the
+  app goes on, and the terminal pane says which branch is being made. Your own git makes it,
+  as `git worktree add -b`, with your hooks; when the agent's terminal cannot be opened, the
+  worktree and its branch are taken away again.
+- **Has a settings screen.** Cmd-comma (Ctrl-comma on Linux), or YAAR > Settings… in the menu
+  bar on macOS, shows it in the place of the panes, the sidebar beside it; the same key or
+  Escape closes it. It opens no dialog and no window. `j` and `k` move between its rows, `l`
+  and `h` choose the next and the previous value, Enter acts on a row that has a field, a click
+  chooses a value and the wheel scrolls. A choice is in force at once and is kept: it is still
+  set after the app is quit and started again. The rows, in order:
+
+  | Row | Values | In force |
+  | --- | --- | --- |
+  | When a turn ends | Select what changed (the default), Keep the selection | at the next turn's end |
+  | Language servers off screen stop after | 1, 2, 5, 10 (the default), 15, 30 or 60 minutes | at once |
+  | Theme | As the system (the default), Light, Dark | at once, the whole window |
+  | Base of this worktree | Enter opens the field for the base, as Cmd-Shift-B does | as Cmd-Shift-B sets it |
+  | Keep recorded states nothing refers to for | 1, 7, 14, 30 (the default), 60, 90, 180 or 365 days | a sweep runs at once |
+  | Terminal pane | Right (the default), Below, Left | at once |
+  | Option key in a terminal (macOS) | By the keyboard layout (the default), Meta, Characters | at the next key |
+  | Extension of the agent | one row for each agent CLI that asked leave to write into its settings: Install, Don't install | as the two keys answer |
+  | Language servers inside the repository | one row for each repository you answered: Run them, Keep them out | a yes searches again |
+  | New worktrees go in | one row for each repository: Enter opens a field for an absolute folder; an empty field goes back to beside the repository | at the next worktree of that repository |
+  | Recorded states | the size of each worktree's states and the total, and Clean up now | see "Shows the room the recorded states take" |
+
+  A folder that is not absolute, or that is or lies inside a worktree or the git folder of the
+  repository, is refused when you name it and again when a worktree is made, and the screen
+  shows the reason under the field. A value another window set, a stop time of 7 minutes
+  say, is shown with no value chosen, and `l` and `h` move from the value above or below it.
+- **Has a light and a dark theme.** Until you choose one, the whole window follows the system's
+  light or dark setting, from the first frame and again when the system changes it while the
+  app runs. A choice of Light or Dark in the settings is followed at once and the window no
+  longer follows the system; "As the system" follows it again. On macOS a chosen theme also
+  sets the window's own appearance. On Linux the system's setting comes from the desktop's
+  portal, and where there is none the app is light. The terminal's foreground, background,
+  cursor, selection and sixteen colours are the theme's, and a program that asks for its
+  colours (OSC 4, 10, 11 and 12) is answered from it, so Claude Code, vim and neovim see a
+  light background under the light theme. The numbers 16 to 255 and a colour a program gives by
+  value are xterm's under both.
+- **Shows the room the recorded states take, and cleans them up.** The settings screen lists
+  the disk space of the recorded states of each worktree, as `du` counts blocks, a line for the
+  states of worktrees it does not list, and the total. Clean up now, or Shift-C on the screen,
+  deletes at once the states nothing refers to, with every object only they held, and asks no
+  question. A state is referred to while a thread sits on it, a round names it or a reviewed
+  mark names it; the newest state of each worktree that is there, the start of a turn
+  that runs and a state recorded in the last hour are kept too. By themselves, the states
+  nothing refers to go once the time the settings give (30 days unless you change it) and one
+  hour more have passed since they were recorded: the Keeper looks once the app has started,
+  then every hour, and at once when you shorten the time. A turn whose state went stays in the
+  history of Changes, drawn "<who>, a turn (its recording has expired)", and cannot be
+  selected. The store of a worktree that is gone goes once its newest state is older than that.
+  The files of a Claude Code review longer than 10,000 units, under `agents/claude/reviews/`,
+  go too once their session no longer runs; a sweep removes only those last written before the
+  set time.
 - **Comments on any line of a diff**, removed lines included, in the unified and in the
   split view. A comment belongs to a path, a side of the diff, its lines and their text.
 - **Keeps a draft from the first key.** What you type in a comment box is saved at every
@@ -85,12 +155,14 @@ program does, and the app writes nothing of pi's and does not hear it.
   offers to start that CLI in the worktree with that review (its control, or Shift-N); the
   new session takes that review and its first message carries it. The review of no agent
   offers each CLI the app supports, Claude Code and pi: `ctrl-n` chooses the next one, and
-  Shift-N starts the chosen one, the first until you choose another.
+  Shift-N starts the chosen one. The choice is the Window's one, the same as Cmd-Alt-C
+  makes: where the offer lacks the chosen CLI, Shift-N starts the first it offers.
 - **Offers a launcher for each agent CLI next to the shell.** A row at the top of the terminal
   pane holds a button for a shell and one for each CLI, Claude Code and pi. A click opens a
   terminal for the worktree on screen that runs that CLI, as New Terminal opens a shell.
   Cmd-Shift-T opens the chosen CLI, Claude Code until you press Cmd-Alt-C, which chooses the
-  next one. The launcher starts the CLI through your login shell, so it is the same program
+  next one; the choice lasts as long as the window, is the one the review pane's offer and a
+  new worktree use, and is not kept. The launcher starts the CLI through your login shell, so it is the same program
   as the one you type in a shell of the app.
 - **Follows an agent that runs in no terminal of the app** by its folder, and delivers to it
   and hears its replies as to any other.
@@ -139,8 +211,8 @@ program does, and the app writes nothing of pi's and does not hear it.
   and those no agent made, which are marked.
 - **Selects what a turn changed.** When a turn ends, Changes selects what changed since you
   last reviewed. Shift-T sets the app to keep the selection instead: Changes stays as it
-  is and offers what changed, which Shift-O, or a click, takes. The setting lasts until the
-  window closes. The files Changes lists at a turn's end are those of that session's review:
+  is and offers what changed, which Shift-O, or a click, takes. The settings screen sets it
+  too, and the Keeper keeps it. The files Changes lists at a turn's end are those of that session's review:
   the paths credited to the session and those no agent made, never a path only another
   session changed.
 - **Marks a file two agents changed.** Where two sessions in one worktree changed the same
@@ -178,6 +250,12 @@ program does, and the app writes nothing of pi's and does not hear it.
   branch.
 - **Quits two ways.** Cmd-Q quits the window and the agents and terminals go on. Cmd-Alt-Q
   quits and stops every agent and program the app holds. Plain quit is the default.
+- **Closes, hides and minimises the window.** Cmd-W closes the window, the agents and
+  terminals going on; the app quits the plain way when its last window is closed. On macOS
+  Cmd-H hides the app, Cmd-Alt-H hides the others and Cmd-M puts the window in the Dock. The
+  menu bar holds YAAR (Settings…, Hide YAAR, Hide Others, Quit, Quit and Stop Agents), File
+  (New Worktree with Agent…, Open Folder…, Close Window) and Window (Minimize), each item
+  with its key. Linux has no menu bar, and no Hide and no Minimize: the keys are Ctrl keys.
 - **Shows it all again when a window opens.** Start the app again, and every terminal the
   Keeper still holds comes back with its screen, each review with its drafts, and the
   turns that ended meanwhile in the tree.
@@ -205,8 +283,8 @@ program does, and the app writes nothing of pi's and does not hear it.
 - **Comments on a line reached through a definition or a reference**, in the diff or not,
   in the repository or not: `c` in the file view.
 - **Looks for a language server in this order**, and uses the first that starts: the one you
-  registered, the project's own (`node_modules` for TypeScript, `.venv` for Python), one
-  installed on the machine, one the app downloaded. A server that fails its trial run or does
+  registered, the project's own (`node_modules` for TypeScript, `.venv` for Python, rustup's
+  rust-analyzer for Rust), one installed on the machine, one the app downloaded. A server that fails its trial run or does
   not start is passed over for the next. Within each of these the order is that of the
   built-in table:
 
@@ -214,15 +292,27 @@ program does, and the app writes nothing of pi's and does not hear it.
   | --- | --- | --- |
   | TypeScript and JavaScript | tsgo, typescript-language-server, vtsls | tsgo |
   | Python | basedpyright, pyright, ty, pyrefly | ty |
-  | Rust | rust-analyzer: the first program of that name on the search path of the Window (rustup's runs the project's toolchain), and no copy of the project's own | rust-analyzer |
+  | Rust | rust-analyzer: rustup's, in `$CARGO_HOME/bin` or `~/.cargo/bin`, as the project's own; then the first program of that name on the search path of the Window | rust-analyzer |
 
-  For Rust, a rust-analyzer that lies earlier on the search path than rustup's, Homebrew's
-  for one, runs first, before the one rustup runs for the project's toolchain.
+  For Rust, rustup's rust-analyzer runs the rust-analyzer of the toolchain the project pins,
+  and is tried before a copy that lies earlier on the search path, Homebrew's for one. It lies
+  outside the repository, so it asks no question. The app starts it with `RUSTUP_AUTO_INSTALL=0`,
+  so it never installs a toolchain: where the machine lacks the toolchain the project pins it
+  fails at once and the next candidate runs.
 
-  "On the machine" means in a folder of the search path the Window was started with. A Window
-  started from the Finder or the Dock on macOS has the system's short search path and finds
-  none of rustup's, Homebrew's or nvm's; one started with `cargo run` from a shell has the
-  shell's.
+  "On the machine" means in a folder of the search path the Window's servers run with, which
+  is the Window's own followed by the folders your login shell adds (below).
+- **Gives the language servers your login shell's environment.** The first time a server is
+  needed, and never before, the Window runs your login shell once (`-l -i -c`, on a thread of
+  its own, for at most 10 seconds) and adds what it prints to the servers' environment. The
+  Window's variables keep their values; the shell's other variables are added, but `PWD`,
+  `OLDPWD`, `SHLVL` and `_`; the search path is the Window's folders, then the shell's folders
+  that the Window lacks. A Window started from a project's own shell (`nix develop`, direnv, a
+  virtual environment) keeps that setup first. A Window started from the Finder or the Dock on
+  macOS has the system's short search path and gains what your start-up files set, so it finds
+  rustup's, Homebrew's and nvm's programs. A shell that fails, prints no environment or runs
+  past 10 seconds leaves the Window's own environment, and one line goes to the standard
+  error.
 - **Downloads a language server only after you say yes.** When none is found for a language
   that has a download for your machine, the line offers "Download" with the server's name and
   version (Shift-I). Nothing is fetched before that. The download is one plain GET of the
@@ -253,8 +343,9 @@ program does, and the app writes nothing of pi's and does not hear it.
   the workspace comes on screen, if its worktree holds a file the row names (a `Cargo.toml`
   for Rust, a `tsconfig.json` or `package.json` for TypeScript, a `pyproject.toml` or
   `requirements.txt` for Python), and otherwise at the first question about one of its files.
-  A workspace off screen for ten minutes has its servers stopped, the old side's included, and
-  they start again when it comes back; the ten minutes are fixed. Quitting the
+  A workspace off screen for the stop time, ten minutes unless the settings say otherwise,
+  has its servers stopped, the old side's included, and they start again when it comes back; a
+  new stop time is in force at once. Quitting the
   window stops every server, and waits up to three seconds for them. Each window has a
   Navigator of its own.
 - **Keeps a language server out of your repository.** rust-analyzer builds into the app's cache
@@ -267,11 +358,18 @@ program does, and the app writes nothing of pi's and does not hear it.
   pane shows the terminals of the worktree on screen, one, or two side by side in the
   split view; each worktree keeps its own terminals, which run on while another worktree
   is on screen, and they come back with it, with the focus and the split they had. The
-  pane moves to the left of the diff, or below it. The window's title is the one the
-  program of the focused terminal sets.
-- **Writes to your repository only when you commit.** The diff, the comments and the
-  states the app records are read from git or kept in the app's own folder. What you run
-  in a terminal is your own doing.
+  pane moves to the left of the diff, or below it, with Cmd-Alt-P or in the settings, and the
+  Keeper keeps where it lies. The window's title is the one the program of the focused terminal
+  sets.
+- **Clears, selects and scrolls a terminal with the Mac's keys.** On macOS, in a terminal,
+  Cmd-K empties the history and the screen above the prompt's line, Cmd-A selects everything,
+  Cmd-Home and Cmd-End scroll to the top and to the bottom of the history, and Cmd-Up and
+  Cmd-Down scroll one line. None sends a byte to the program. On Linux these have no key and
+  reach the program, as does every key but Ctrl-Shift-C and Ctrl-Shift-V, which are kept.
+- **Writes to your repository only when you commit or make a worktree.** The diff, the
+  comments and the states the app records are read from git or kept in the app's own folder.
+  A worktree is made by your own git, as `git worktree add -b`. What you run in a terminal is
+  your own doing.
 - **Adds its pieces to Claude Code only through its own extension points.** Every shell of
   the app sets `CLAUDE_CODE_PLUGIN_DIRS`, after any value you have, to a plugin folder in
   the app's own data folder, and sets `YAAR_SOCKET` and `YAAR_TERMINAL`. The plugin, named
@@ -307,12 +405,11 @@ program does, and the app writes nothing of pi's and does not hear it.
   nothing of pi's, and pi runs in the app as any program. Your answer, a no as well, is kept
   in `agents/pi/consent` in the app's data folder.
 
-### Not there yet
+### Not there
 
-- A settings screen (the form of Flow, and your answers about language servers inside a
-  repository, are the settings kept, set by their keys; your answer about pi's extension is
-  changed by its two keys alone), and creating a worktree. The registry of language servers
-  is a file you edit by hand.
+- The registry of language servers is a file you edit by hand: the settings screen has no row
+  for it. The form of Flow is set by its key, not on the screen.
+- A worktree is made in the app and removed with git.
 - Follow is not kept: every new window starts with it on, however you left the last one.
 - Older turns in the timeline: it holds the turns the window has seen in this worktree,
   or the newest one when it opens. An earlier turn cannot be picked.
@@ -337,6 +434,23 @@ program does, and the app writes nothing of pi's and does not hear it.
 
 Known limits of what is there:
 
+- Your own hooks run when a worktree is made, and the app does not end a hook. The creation
+  of a worktree holds its lock while your git and your hooks run, so a hook that never ends
+  holds every later creation of a worktree until the Keeper ends; one that takes minutes, an
+  install of packages, holds them for as long. A `post-checkout` hook
+  that exits 1 leaves the worktree and the branch git made, and the app takes them away.
+- The Keeper runs your git, the creation of a worktree and the commit control, with the
+  search path it was started with. Started from the Finder or the Dock on macOS that is the
+  system's short one, so a hook that needs a program found only on your login path,
+  `git-lfs` of Homebrew or a signing `gpg`, fails there and passes under `cargo run`.
+- The Window's environment for its servers comes from running your start-up files: one that
+  prompts or hangs costs the 10 seconds and leaves the Window's own environment.
+- `RUSTUP_AUTO_INSTALL=0`, which keeps rustup's rust-analyzer from installing a toolchain, is
+  honoured from rustup 1.28 on. An older rustup ignores it and may begin a download, which
+  the trial run's deadline cuts off.
+- A stop time of 0 that an earlier build kept counts as not set: the stop time is ten minutes
+  until you choose one.
+
 - A language server that was running when the Window crashed may go on running on macOS:
   rust-analyzer did not end when its input closed. On Linux the kernel kills each server when
   the thread that started it ends, which a crash of the Window brings. A quit of the Window
@@ -348,7 +462,7 @@ Known limits of what is there:
 - A change an agent makes reaches a server only through the list of changed files of the
   worktree on screen, which the app sends it; tsgo and rust-analyzer watch the folder too.
 - The question about a repository takes the line until you answer it, even when a later
-  candidate is ready, and nothing lets you change an answer once given.
+  candidate is ready. An answer is changed in the settings.
 - Two windows that update one language server: the second window keeps running the older
   version until it searches again.
 - Claude Code reports a permission prompt and no other dialog, and pi reports none, so the
@@ -392,6 +506,8 @@ Known limits of what is there:
 | --- | --- | --- | --- |
 | Cmd-O | Ctrl-O | Opens a folder | anywhere |
 | Cmd-Shift-B | Ctrl-Shift-B | Asks for a branch or a commit and makes it the base | anywhere |
+| Cmd-comma | Ctrl-comma | Opens the settings screen in the place of the panes, and closes it | anywhere |
+| Cmd-Shift-N | Ctrl-Shift-N | Asks for the name of a new branch and makes a worktree on it, with the chosen agent CLI started in it | anywhere |
 | Cmd-B | Ctrl-B | Pins the sidebar as a rail, or as the full list | anywhere |
 | Cmd-Alt-B | Ctrl-Alt-B | Lets the width of the window choose the form of the sidebar again | anywhere |
 | Cmd-Alt-Down, Cmd-Alt-Up | Ctrl-Alt-Down, Ctrl-Alt-Up | Next and previous worktree | anywhere, but on macOS not in the field for the base |
@@ -407,6 +523,14 @@ Known limits of what is there:
 | Ctrl-Tab, Ctrl-Shift-Tab | the same | Moves the focus to the next and the previous pane | anywhere, a terminal included |
 | Cmd-C, Cmd-V | Ctrl-Shift-C, Ctrl-Shift-V | Copies the selected text of a terminal, pastes into it | in a terminal |
 | Shift-PageUp, Shift-PageDown | the same | Scrolls the history of a terminal | in a terminal |
+| Cmd-W | Ctrl-W | Closes the window; the agents and terminals go on | anywhere |
+| Cmd-H | none | Hides the app | anywhere |
+| Cmd-Alt-H | none | Hides every other app | anywhere |
+| Cmd-M | none | Puts the window in the Dock | anywhere |
+| Cmd-K | none; the key reaches the program | Empties the history and the screen above the prompt's line | in a terminal |
+| Cmd-A | none; the key reaches the program | Selects everything in the terminal | in a terminal |
+| Cmd-Home, Cmd-End | none; the keys reach the program | Scrolls the terminal to the top of its history and back to the bottom | in a terminal |
+| Cmd-Up, Cmd-Down | none; the keys reach the program | Scrolls the terminal one line up and one line down | in a terminal |
 | Cmd-Q | Ctrl-Q | Quits; the agents and terminals go on | anywhere |
 | Cmd-Alt-Q | Ctrl-Alt-Q | Quits and stops every agent and program the app holds | anywhere |
 | Cmd-Alt-N | Ctrl-Alt-N | Shows the worktree where an agent just finished a turn | anywhere |
@@ -494,6 +618,22 @@ at the agent's terminal act on the terminal that has the focus in the pane, and 
 review pane, as every key of the app does there. With nothing pinned, the sidebar is a rail
 in a window narrower than 1000 px.
 
+### Keys on the settings screen
+
+They work while the screen has the focus, as plain keys. The screen's keys follow the review
+pane's: vim's motions, and Escape to leave a mode.
+
+| Key | Does |
+| --- | --- |
+| `escape` | Closes the screen and gives the focus back to where it was |
+| `j`, `k` | Moves the cursor to the next and the previous row |
+| `l`, `h` | Chooses the next and the previous value of the row under the cursor, stopping at the last and the first |
+| `enter` | Acts on the row under the cursor where the row acts: the base and the folder for worktrees open their field |
+| `shift-c` | Cleans up the recorded states at once |
+
+In the field for a folder, Enter sends the text, an empty field meaning beside the repository,
+and Escape closes it; a refusal keeps the field open under its reason.
+
 ### Keys in a terminal
 
 Every key typed in a focused terminal reaches its program, but the kept keys. These never
@@ -505,13 +645,18 @@ as GPUI writes them.
 | `ctrl-tab`, `ctrl-shift-tab`: the next and the previous pane | the same |
 | `shift-pageup`, `shift-pagedown`: scroll the history | the same |
 | `cmd-c`, `cmd-v`: copy and paste | `ctrl-shift-c`, `ctrl-shift-v` |
-| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r`, `cmd-alt-e`, `cmd-alt-shift-e` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
+| `cmd-k`, `cmd-a`, `cmd-home`, `cmd-end`, `cmd-up`, `cmd-down`: empty the history and the screen above the prompt's line, select everything, scroll to the top, to the bottom, one line up, one line down; none sends a byte to the program | none: the keys reach the program |
+| every Cmd key: `cmd-o`, `cmd-shift-b`, `cmd-,`, `cmd-shift-n`, `cmd-b`, `cmd-alt-b`, `cmd-alt-down`, `cmd-alt-up`, `cmd-alt-p`, `cmd-alt-n`, `cmd-t`, `cmd-]`, `cmd-[`, `cmd-d`, `cmd-w`, `cmd-h`, `cmd-alt-h`, `cmd-m`, `cmd-q`, `cmd-alt-q`, `cmd-alt-v`, `cmd-alt-x`, `cmd-alt-a`, `cmd-shift-t`, `cmd-alt-c`, `cmd-shift-r`, `cmd-alt-e`, `cmd-alt-shift-e` run their action, and a Cmd key that has none sends nothing, but Cmd-Left, Cmd-Right and Cmd-Backspace edit the line as in other Mac terminals and send `^A`, `^E` and `^U` | none: the keys of the app are Ctrl keys |
 
 On Linux the keys of the app that are not kept, New Terminal, Split View, Quit and the rest,
 work only outside a terminal: in a terminal `ctrl-t`, `ctrl-d`, `ctrl-q` and the others
-belong to the program. Leave the terminal with `ctrl-tab` first, then press them. On macOS
-the Option key types characters, as the keyboard layout says; on the U.S. layout it acts as
-Meta, so that Option-B is `ESC b`. Text typed through an input method or a dead key reaches
+belong to the program. Leave the terminal with `ctrl-tab` first, then press them. Besides
+`ctrl-tab`, `ctrl-shift-tab`, `shift-pageup` and `shift-pagedown`, the only keys kept in a
+terminal on Linux are `ctrl-shift-c` and `ctrl-shift-v`. On macOS the row "Option key in a
+terminal" of the settings chooses what Option does. By the keyboard layout, the default, it
+types characters as the layout says, and on the U.S. layout it acts as Meta, so that Option-B
+is `ESC b`; Meta makes it Meta whatever the layout; Characters makes it type characters. On
+Linux Alt is always Meta. Text typed through an input method or a dead key reaches
 the program once it is composed.
 
 ### A Keeper left running
@@ -555,13 +700,14 @@ drafts, replies, rounds and attachments in one database, in
 `~/Library/Application Support/yaar-review/` on macOS and in `$XDG_DATA_HOME/yaar-review/` or
 `~/.local/share/yaar-review/` on Linux, which also holds the plugin folder for Claude Code and
 the files of the long reviews it delivered, under `agents/claude/reviews/`, kept as a record
-of what was sent. For pi it holds `agents/pi/extension/yaar.ts`, the extension, written again at
+of what was sent until the clean-up of the recorded states removes those of sessions that no
+longer run. For pi it holds `agents/pi/extension/yaar.ts`, the extension, written again at
 each start of the Keeper, and `agents/pi/consent`, your answer to the question about it. The states of
 a worktree that the app records for its reviews are kept beside it, in a git repository of
 the app's own under `states/`, never in yours. In the git folder of every worktree of an
 opened repository it writes one small file, `ade-id`, by which it knows the worktree again
 after its folder moved. It writes nothing else into a repository, but the commit you ask for
-with Shift-C.
+with Shift-C and the worktree you ask for with Cmd-Shift-N, which your own git makes.
 
 ## Build
 
@@ -637,18 +783,18 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 | `patches`, `vendor` | The one patched file of GPUI and the script that reapplies the patch |
 | `packaging` | The Mac app, the `.deb`, the archive, the apt repository, the install script |
 
-Built so far: the Link and the diff; in the Keeper, the reading of git, the recording of
-states and the commit, the database, the workspaces with their watcher, the review engine
-(threads, rounds, the send, the follower that moves threads), the terminals (the Dock), the
-Switchboard that follows each agent session with the steps it takes, and the adapters of
-Claude Code and of pi, with the companion of Claude Code (its hook program and its tool server),
-the extension of pi and its reporting program; in the Window, the Navigator, which finds,
-starts and asks the language servers, with the registry of servers, the downloader, the old
-side of a diff and the search by text match, the frame with its sidebar and
-its settings, the review pane with Changes and Flow and the file view, and the terminal pane with the launchers,
-the resume line, the question about pi's extension and the attachment at the agent's terminal.
-Every other crate is still a shell that says in its `lib.rs` which part of the app it will
-hold.
+What the crates hold: the Link and the diff; in the Keeper, the reading of git, the recording,
+deleting and packing of states, the commit and the making of worktrees, the database, the
+workspaces with their watcher, the review engine (threads, rounds, the send, the follower that
+moves threads, the clean-up of states), the terminals (the Dock), the Switchboard that follows
+each agent session with the steps it takes, and the adapters of Claude Code and of pi, with the
+companion of Claude Code (its hook program and its tool server), the extension of pi and its
+reporting program; in the Window, the Navigator, which finds, starts and asks the language
+servers, with the registry of servers, the downloader, the old side of a diff, the search by
+text match and the login shell's environment, the frame with its sidebar, its settings screen
+and its two themes, the review pane with Changes and Flow and the file view, and the terminal
+pane with the launchers, the resume line, the question about pi's extension and the
+attachment at the agent's terminal; and the Window program, which binds the keys and the menus.
 
 Tests come at three levels. Unit tests sit in a crate's source. Component tests sit in its
 `tests/` folder and use only what other crates may use; those of the Window run on GPUI's
