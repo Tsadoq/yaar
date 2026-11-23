@@ -97,7 +97,7 @@ for key in LSUIElement LSBackgroundOnly; do
 done
 
 # What a folder holds, by name, sorted, hidden files included.
-names_in() { (cd "$1" && ls -A | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'); }
+names_in() { (cd "$1" && find . -mindepth 1 -maxdepth 1 -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'); }
 [ -d "$APP/Contents/MacOS" ] || fail "$APP/Contents/MacOS is missing"
 [ -d "$APP/Contents/Helpers" ] || fail "$APP/Contents/Helpers is missing"
 got=$(names_in "$APP/Contents/MacOS")
@@ -181,7 +181,7 @@ hdiutil attach -quiet -nobrowse -readonly -mountpoint "$WORK/mnt" "$DMG" > /dev/
   fail "$(basename "$DMG") cannot be mounted"
 MNT="$WORK/mnt"
 # The volume may carry the system's own hidden bookkeeping (.fseventsd); nothing else shows.
-shown=$(cd "$MNT" && ls | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+shown=$(cd "$MNT" && find . -mindepth 1 -maxdepth 1 ! -name '.*' -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
 [ "$shown" = "Applications YAAR.app" ] || fail "$(basename "$DMG") holds \"$shown\", not YAAR.app and Applications"
 [ -L "$MNT/Applications" ] || fail "Applications in $(basename "$DMG") is not a link"
 link=$(readlink "$MNT/Applications")

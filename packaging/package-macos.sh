@@ -135,6 +135,7 @@ if [ -n "$NOTARY_SET" ]; then
   else
     [ "$NOTARY_SET" = "NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER" ] ||
       refuse "only $NOTARY_SET set: NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER are set together"
+    # shellcheck disable=SC2153 # NOTARY_KEY is the variable of the header, set by the caller
     [ -f "$NOTARY_KEY" ] || refuse "NOTARY_KEY names $NOTARY_KEY, which is not a file"
     NOTARY_AUTH=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
   fi
@@ -150,7 +151,6 @@ sign() { # codesign with the identity and the keychain: <codesign arguments>
   codesign --force --sign "$SIGN_IDENTITY" ${KEYCHAIN[@]+"${KEYCHAIN[@]}"} "$@"
 }
 
-ID=io.github.tsadoq.yaar
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 APP="$OUT/YAAR.app"
 WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
