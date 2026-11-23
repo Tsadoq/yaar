@@ -1693,16 +1693,22 @@ fn the_text_of_the_field_replaced_by_a_new_folder_is_what_enter_sends(cx: &mut T
     let (mut window, r, _) = with_folders(cx, vec![folder_of('a', Some(FOLDER))]);
     window.cursor_to(r);
     window.press(&key::<OpenSetting>());
+    // The Keeper keeps what it hears and says so only when the test lets it.
+    window.shown.keeper.hold_settings();
 
     // The folder is as long as the backspaces that empty the field.
     window.press(&vec!["backspace"; FOLDER.len()].join(" "));
     window.cx.simulate_input("/x/places");
     window.press("enter");
 
-    // Read right after the key and the frame, before the Keeper is heard: the row shows the
-    // folder at once, and not only once the Keeper has answered.
+    // Read right after the key and the frame, while the Keeper's answer is held: the row
+    // shows the folder at once, and not only once the Keeper has answered.
     assert_eq!(window.rows()[r].values, ["/x/places"]);
     window.heard_set(folder_of('a', Some("/x/places")));
+    window.wait("the answer to be held", |shown, _| {
+        shown.keeper.held_settings() == 1
+    });
+    window.shown.keeper.release_settings(1);
     assert_eq!(window.rows()[r].values, ["/x/places"]);
     window.wait("the field to close", |_, cx| {
         drawn("settings-folder-field", cx).is_none()
