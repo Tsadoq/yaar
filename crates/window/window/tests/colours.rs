@@ -7,7 +7,8 @@
 //! sources: every `.rs` file of each `src/` folder is written out below and read with
 //! `include_str!`, and a test holds the list to what is on disk, so that a new module is not
 //! missed. The theme definitions (the Frame's `src/theme/`) are the one place a colour may
-//! be written, and are left out.
+//! be written, and are left out, but for one function of the terminal pane: `colour_of` picks
+//! xterm's own colours (`indexed(`, `rgb24(`), which no theme has, and nowhere else may.
 //!
 //! A line whose first characters are `//` is taken out: a doc comment may name a colour.
 
@@ -92,7 +93,7 @@ const SOURCES: &[(&str, &str, &str)] = sources!(
 
 /// What writes a colour, each matched only where the character before it is no letter, digit
 /// or `_`: `transparent_black()` is no `black()`, and `theme::hex(` is a `hex(`.
-const COLOUR_WRITES: [&str; 17] = [
+const COLOUR_WRITES: [&str; 19] = [
     "rgb(",
     "rgba(",
     "hsla(",
@@ -110,7 +111,18 @@ const COLOUR_WRITES: [&str; 17] = [
     "green()",
     "blue()",
     "yellow()",
+    "rgb24(",
+    "indexed(",
 ];
+
+/// What the terminal pane's `colour_of` alone may write: xterm's numbered colours and a
+/// colour a program gives by value, which are no theme's (the Frame's `theme/mod.rs` says
+/// where colours may be written).
+const XTERM_COLOURS: [&str; 2] = ["rgb24(", "indexed("];
+
+/// The one function that may write [`XTERM_COLOURS`], and the file it is in.
+const XTERM_FILE: (&str, &str) = ("terminal-pane", "draw.rs");
+const XTERM_FUNCTION: &str = "pub fn colour_of(";
 
 /// The fields of the toolkit's theme that are no colour, and may be read.
 const NOT_COLOURS: [&str; 9] = [
@@ -147,7 +159,20 @@ fn found<'a>(line: &'a str, pattern: &'a str) -> impl Iterator<Item = usize> + '
         .filter(|&at| !line[..at].chars().next_back().is_some_and(is_name))
 }
 
-/// The colours `source` writes: the line and what is written there.
+/// The lines of the function that opens at the line holding `opening`, from 1: that line to
+/// the first line after it that is a `}` at the start. None when no line holds `opening`.
+fn function_span(source: &str, opening: &str) -> Option<std::ops::RangeInclusive<usize>> {
+    let first = source.lines().position(|line| line.contains(opening))? + 1;
+    let last = source
+        .lines()
+        .enumerate()
+        .skip(first)
+        .find(|(_, line)| *line == "}")
+        .map_or(usize::MAX, |(at, _)| at + 1);
+    Some(first..=last)
+}
+
+/// Every colour `source` writes: the line and what is written there.
 fn colours_written(source: &str) -> Vec<(usize, &'static str)> {
     let mut hits = Vec::new();
     for (number, line) in code_lines(source) {
@@ -160,6 +185,24 @@ fn colours_written(source: &str) -> Vec<(usize, &'static str)> {
     hits
 }
 
+/// The colours `source` of `folder/file` writes where none may be: every one of
+/// [`colours_written`] but xterm's two, written in the function of [`XTERM_FUNCTION`] of
+/// [`XTERM_FILE`].
+fn colours_not_allowed(folder: &str, file: &str, source: &str) -> Vec<(usize, &'static str)> {
+    let allowed = if (folder, file) == XTERM_FILE {
+        function_span(source, XTERM_FUNCTION)
+    } else {
+        None
+    };
+    colours_written(source)
+        .into_iter()
+        .filter(|(number, pattern)| {
+            !(XTERM_COLOURS.contains(pattern)
+                && allowed.as_ref().is_some_and(|span| span.contains(number)))
+        })
+        .collect()
+}
+
 /// The name read at the start of `text`: its letters, digits and `_`.
 fn name_at(text: &str) -> &str {
     let end = text.find(|c| !is_name(c)).unwrap_or(text.len());
@@ -169,9 +212,11 @@ fn name_at(text: &str) -> &str {
 /// The names `source` reads of the toolkit's theme (`theme.<name>`, `theme().<name>`) that are
 /// none of `roles` and no field that is no colour: the line and the name.
 ///
-/// `theme.colors` as a whole is no read of a colour: it is the structure a definition is
-/// written into, and the one place that names it is the model that applies a definition. A
-/// role read through it, `theme.colors.<name>`, is judged as any other.
+/// `theme.colors` as a whole is no read of a colour only where it is the target of a write,
+/// `&mut theme.colors`: the structure a definition is written into, which the model that
+/// applies a definition names. Anywhere else it hands every role on, unread by name, and is
+/// judged as the name `colors`. A role read through it, `theme.colors.<name>`, is judged as
+/// any other.
 fn roles_unknown(source: &str, roles: &BTreeSet<&str>) -> Vec<(usize, String)> {
     let mut hits = Vec::new();
     for (number, line) in code_lines(source) {
@@ -182,7 +227,7 @@ fn roles_unknown(source: &str, roles: &BTreeSet<&str>) -> Vec<(usize, String)> {
                 if name == "colors" && rest[name.len()..].starts_with('.') {
                     rest = &rest[name.len() + 1..];
                     name = name_at(rest);
-                } else if name == "colors" {
+                } else if name == "colors" && line[..at].ends_with("&mut ") {
                     continue;
                 }
                 if !name.is_empty() && !roles.contains(name) && !NOT_COLOURS.contains(&name) {
@@ -251,7 +296,7 @@ fn no_source_of_the_frame_the_panes_or_the_window_program_writes_a_colour() {
     let hits: Vec<String> = SOURCES
         .iter()
         .flat_map(|(folder, file, source)| {
-            colours_written(source)
+            colours_not_allowed(folder, file, source)
                 .into_iter()
                 .map(move |(line, what)| format!("{folder}/src/{file}:{line}: writes `{what}`"))
         })
@@ -296,6 +341,8 @@ fn the_scan_for_written_colours_finds_each_way_to_write_one() {
         ("let c = Rgb { r, g, b };", "Rgb {"),
         ("div().text_color(white())", "white()"),
         ("div().text_color(red())", "red()"),
+        ("div().bg(crate::theme::rgb24(0xff, 0xaa, 0x00))", "rgb24("),
+        ("div().bg(theme::indexed(196))", "indexed("),
     ];
     for (text, pattern) in written {
         assert_eq!(
@@ -317,6 +364,8 @@ fn the_scan_for_written_colours_passes_what_draws_nothing_and_what_is_said_in_a_
     assert!(colours_written("div().bg(transparent_white())").is_empty());
     assert!(colours_written("let s = my_rgb(1);").is_empty());
     assert!(colours_written("let s = colour_hex(1);").is_empty());
+    assert!(colours_written("let s = my_indexed(1);").is_empty());
+    assert!(colours_written("use yaar_frame::theme::{indexed, rgb24};").is_empty());
     assert!(colours_written("    // theme::hex(0x1) and rgb(0x2)").is_empty());
     assert!(colours_written("/// It is `Hsla {` and `black()`.").is_empty());
     assert!(colours_written("let s = theme.accent;").is_empty());
@@ -343,6 +392,15 @@ fn the_scan_for_roles_finds_a_name_no_definition_holds_and_passes_the_rest() {
         unknown("let c = theme.colors.accent_hover;"),
         [(1, "accent_hover".to_string())]
     );
+    // The roles handed on whole are read by names this scan cannot see.
+    assert_eq!(
+        unknown("let c = &theme.colors;"),
+        [(1, "colors".to_string())]
+    );
+    assert_eq!(
+        unknown("let c = cx.theme().colors;\nc.button_hover"),
+        [(1, "colors".to_string())]
+    );
 
     assert!(unknown("div().bg(theme.muted_foreground)").is_empty());
     assert!(unknown("div().bg(cx.theme().warning)").is_empty());
@@ -353,9 +411,69 @@ fn the_scan_for_roles_finds_a_name_no_definition_holds_and_passes_the_rest() {
             "{field}"
         );
     }
+    // Only the target of a write is no read.
     assert!(unknown("Theme::update(cx, |theme| definition.onto(&mut theme.colors));").is_empty());
     assert!(unknown("let c = theme.colors.border;").is_empty());
     assert!(unknown("/// The theme.accent_hover is not read.").is_empty());
     assert!(unknown("let c = my_theme.accent_hover;").is_empty());
     assert!(unknown("\"the theme. Next\"").is_empty());
+}
+
+#[test]
+fn xterm_colours_are_written_in_the_terminal_panes_colour_of_and_nowhere_else() {
+    let (folder, file) = XTERM_FILE;
+    let text = "\
+pub fn colour_of(colour: Color) -> Colour {
+    match colour {
+        Color::Indexed(number) => indexed(number),
+        Color::Spec(value) => rgb24(value.r, value.g, value.b),
+    }
+}
+
+fn elsewhere() -> Colour {
+    rgb24(1, 2, 3)
+}
+";
+    // In its function, in its file: allowed; the same function written after it is not.
+    assert_eq!(
+        colours_not_allowed(folder, file, text),
+        [(9, "rgb24(")],
+        "only the line outside the function is found"
+    );
+    // The same text in any other file or crate: every use is found.
+    assert_eq!(colours_not_allowed(folder, "keys.rs", text).len(), 3);
+    assert_eq!(colours_not_allowed("frame", file, text).len(), 3);
+    assert_eq!(colours_not_allowed("window", "lib.rs", text).len(), 3);
+    // What the exception allows is those two, and no other colour, in that function.
+    let other = "pub fn colour_of(c: Color) -> Colour {\n    rgb(0x123456)\n}\n";
+    assert_eq!(colours_not_allowed(folder, file, other), [(2, "rgb(")]);
+    // Without the function in the file, nothing is allowed.
+    assert_eq!(
+        colours_not_allowed(folder, file, "fn x() { rgb24(1, 2, 3) }").len(),
+        1
+    );
+}
+
+#[test]
+fn the_terminal_pane_really_writes_its_xterm_colours_in_the_function_the_exception_names() {
+    // The exception is for something that is there: a rename of the function would make the
+    // scan pass for the wrong reason, or fail on a use it was meant to allow.
+    let (folder, file) = XTERM_FILE;
+    let (_, _, source) = SOURCES
+        .iter()
+        .find(|(of, name, _)| (*of, *name) == (folder, file))
+        .expect("the file of the exception is in the list");
+    let span = function_span(source, XTERM_FUNCTION).expect("the function of the exception");
+    let mut inside: Vec<&str> = colours_written(source)
+        .into_iter()
+        .filter(|(number, _)| span.contains(number))
+        .map(|(_, pattern)| pattern)
+        .collect();
+    inside.sort_unstable();
+    assert_eq!(
+        inside,
+        ["indexed(", "rgb24("],
+        "the function writes both, once"
+    );
+    assert!(colours_not_allowed(folder, file, source).is_empty());
 }
