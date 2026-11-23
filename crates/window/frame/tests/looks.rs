@@ -359,6 +359,53 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
 }
 
+#[gpui_kit::test]
+fn a_named_theme_given_back_to_the_system_while_the_definition_stays_runs_the_last_step_only(
+    cx: &mut TestAppContext,
+) {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (mut shown, mut cx) = opened(cx);
+    system_is(&shown, Appearance::Light, &mut cx);
+    // The light theme chosen while the system is light: the definition stays, and only the
+    // window's own appearance is forced.
+    told(&mut shown, named(LIGHT), &mut cx);
+    // The toolkit's colours are changed by hand: a step that writes the definition again
+    // would write it over this.
+    let marker = gpui_kit::hsla(0.5, 0.5, 0.5, 1.0);
+    cx.update(|_, app| {
+        Theme::update(app, |theme| theme.colors.background = marker);
+    });
+    cx.run_until_parked();
+    let applied_before = cx.update(|_, app| applied(app));
+
+    let told_to = Rc::new(Cell::new(0));
+    let _watch = cx.update({
+        let looks = shown.models.looks.clone();
+        let told_to = told_to.clone();
+        move |_, app| app.observe(&looks, move |_, _| told_to.set(told_to.get() + 1))
+    });
+    // The choice goes back to the system, which is light still.
+    told(&mut shown, Setting::Theme(ThemeChoice::System), &mut cx);
+
+    assert_eq!(
+        told_to.get(),
+        1,
+        "the change of the forced appearance is told once"
+    );
+    assert_eq!(background(&mut cx), marker, "no step wrote the definition");
+    assert_eq!(
+        cx.update(|_, app| applied(app)),
+        applied_before,
+        "`applied` is as it was"
+    );
+    shown.models.looks.read_with(&cx, |looks, cx| {
+        assert_eq!(looks.chosen(cx), ThemeChoice::System);
+        assert_eq!(looks.applied().name, LIGHT);
+    });
+}
+
 fn hello() -> yaar_link::Hello {
     yaar_link::Hello {
         protocol: yaar_link::PROTOCOL_VERSION,

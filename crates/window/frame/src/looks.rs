@@ -26,7 +26,10 @@
 //!    window again. (A forced appearance stops them: the toolkit's doc of that call.)
 //!
 //! Every window is drawn again by the toolkit's update. Applying the definition applied
-//! already does nothing, and tells nobody.
+//! already, with the window's own appearance as it was, does nothing and tells nobody. A
+//! change of the forced appearance alone (a theme chosen that is the system's own, or the
+//! choice given back to the system while the definition stays) runs the last step only,
+//! and tells the observers once.
 //!
 //! The system's setting comes from the Window program, which tells it at the window's
 //! opening (`Window::appearance`) and at every change the window observes
