@@ -73,38 +73,117 @@
 #   "signature: ad hoc, not notarised (for tests; Gatekeeper refuses it on another Mac)"
 #   "signature: Developer ID <the identity's name>, notarised and stapled"
 set -euo pipefail
-VER=$1; OUT=$2; shift 2
-WINDOW=(); KEEPER=(); side=window
-for a in "$@"; do
-  if [ "$a" = "--" ]; then side=keeper
-  elif [ "$side" = window ]; then WINDOW+=("$a")
-  else KEEPER+=("$a"); fi
-done
-[ ${#WINDOW[@]} -gt 0 ] && [ ${#KEEPER[@]} -gt 0 ] || { echo "usage: $0 <version> <out-dir> <window>... -- <keeper>..." >&2; exit 2; }
 
-[ -n "${NOTICES:-}" ] && [ -s "$NOTICES" ] || { echo "$0: set NOTICES to the file packaging/notices.sh wrote" >&2; exit 2; }
-
+SELF=$(basename "$0")
 HERE=$(cd "$(dirname "$0")" && pwd)
-ID=io.github.tsadoq.yaar
-SIGN_IDENTITY=${SIGN_IDENTITY:--}
+
+# Exit 2: a wrong call or a refused configuration, before anything is built. Exit 1: a step
+# of the build failed.
+usage() { echo "usage: $SELF <version> <out-dir> <programs-dir>..." >&2; exit 2; }
+refuse() { echo "$SELF: $*" >&2; exit 2; }
+fail() { echo "$SELF: $*" >&2; exit 1; }
+
+[ $# -ge 3 ] || usage
+VER=$1; OUT=$2; shift 2
+PROGDIRS=("$@")
+
+VERSION_RE='^[0-9]+\.[0-9]+\.[0-9]+$'
+[[ $VER =~ $VERSION_RE ]] || refuse "the version \"$VER\" is not X.Y.Z"
+[ ${#PROGDIRS[@]} -le 2 ] || refuse "at most two folders of programs (one per processor) are taken, not ${#PROGDIRS[@]}"
+if [ -z "${NOTICES:-}" ] || [ ! -s "${NOTICES:-}" ]; then
+  refuse "set NOTICES to the file packaging/notices.sh wrote; a package without notices may not be handed to anyone"
+fi
 MIN_MACOS=${MIN_MACOS:-12.0}
+VERSION_RE='^[0-9]+(\.[0-9]+)*$'
+[[ $MIN_MACOS =~ $VERSION_RE ]] || refuse "MIN_MACOS \"$MIN_MACOS\" is not a version"
+
+# The five programs, and the identifier each helper is signed with.
+PROGRAMS=(yaar-review yaar-keeper yaar-claude-hook yaar-claude-tools yaar-pi-report)
+helper_identifier() {
+  case $1 in
+    yaar-keeper) echo io.github.tsadoq.yaar.keeper ;;
+    yaar-claude-hook) echo io.github.tsadoq.yaar.claude-hook ;;
+    yaar-claude-tools) echo io.github.tsadoq.yaar.claude-tools ;;
+    yaar-pi-report) echo io.github.tsadoq.yaar.pi-report ;;
+    *) fail "no identifier for $1" ;;
+  esac
+}
+for d in "${PROGDIRS[@]}"; do
+  [ -d "$d" ] || refuse "$d is not a folder of programs"
+  for p in "${PROGRAMS[@]}"; do
+    [ -f "$d/$p" ] || refuse "$d/$p is missing: each folder holds the five programs"
+  done
+done
+
+# Signing and notarising, decided and refused before anything is built.
+SIGN_IDENTITY=${SIGN_IDENTITY:--}
+NOTARY_SET=""
+for v in NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER NOTARY_PROFILE; do
+  if [ -n "${!v:-}" ]; then NOTARY_SET="$NOTARY_SET $v"; fi
+done
+NOTARY_SET=${NOTARY_SET# }
+NOTARIZE=no
+NOTARY_AUTH=()
+if [ -n "$NOTARY_SET" ]; then
+  if [ "$SIGN_IDENTITY" = "-" ]; then
+    refuse "$NOTARY_SET set with an ad hoc signature: Apple refuses an ad hoc app after the upload; set SIGN_IDENTITY to a Developer ID Application identity or unset NOTARY_*"
+  fi
+  if [ -n "${NOTARY_PROFILE:-}" ]; then
+    [ "$NOTARY_SET" = "NOTARY_PROFILE" ] ||
+      refuse "NOTARY_PROFILE is set together with $NOTARY_SET: name the notary credentials one way"
+    NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+  else
+    [ "$NOTARY_SET" = "NOTARY_KEY NOTARY_KEY_ID NOTARY_ISSUER" ] ||
+      refuse "only $NOTARY_SET set: NOTARY_KEY, NOTARY_KEY_ID and NOTARY_ISSUER are set together"
+    [ -f "$NOTARY_KEY" ] || refuse "NOTARY_KEY names $NOTARY_KEY, which is not a file"
+    NOTARY_AUTH=(--key "$NOTARY_KEY" --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER")
+  fi
+  command -v xcrun > /dev/null || refuse "xcrun is not here: notarisation needs the Xcode command line tools"
+  NOTARIZE=yes
+fi
+TS=(--timestamp)
+if [ "$SIGN_IDENTITY" = "-" ]; then TS=(--timestamp=none); fi
+KEYCHAIN=()
+if [ -n "${SIGN_KEYCHAIN:-}" ]; then KEYCHAIN=(--keychain "$SIGN_KEYCHAIN"); fi
+
+sign() { # codesign with the identity and the keychain: <codesign arguments>
+  codesign --force --sign "$SIGN_IDENTITY" ${KEYCHAIN[@]+"${KEYCHAIN[@]}"} "$@"
+}
+
+ID=io.github.tsadoq.yaar
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
 APP="$OUT/YAAR.app"
-ZIP="$OUT/yaar-review-$VER-macos.zip"
-DMG="$OUT/yaar-review-$VER-macos.dmg"
-rm -rf "$APP" "$ZIP" "$DMG"
+WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
+rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Resources"
 
-merge() { # <out> <in>...
-  local out=$1; shift
-  if [ $# -gt 1 ]; then lipo -create "$@" -output "$out"; else cp "$1" "$out"; fi
-  chmod 755 "$out"
+# One folder is copied, two are merged into one program for both processors. Either way the
+# program is made executable here: a downloaded artifact keeps no execute bit.
+merge() { # <program> <where it goes>
+  local ins=() d
+  for d in "${PROGDIRS[@]}"; do ins+=("$d/$1"); done
+  if [ ${#ins[@]} -gt 1 ]; then
+    lipo -create "${ins[@]}" -output "$2" || fail "lipo could not join $1 of the two folders"
+  else
+    cp "${ins[0]}" "$2"
+  fi
+  chmod 755 "$2"
 }
-merge "$APP/Contents/MacOS/yaar-review" "${WINDOW[@]}"
-merge "$APP/Contents/Helpers/yaar-keeper" "${KEEPER[@]}"
+merge yaar-review "$APP/Contents/MacOS/yaar-review"
+for p in "${PROGRAMS[@]}"; do
+  if [ "$p" != yaar-review ]; then merge "$p" "$APP/Contents/Helpers/$p"; fi
+done
+
+archs=$(lipo -archs "$APP/Contents/MacOS/yaar-review")
+case $archs in
+  *" "*) SUFFIX=universal ;;
+  *) SUFFIX=$archs ;;
+esac
+ZIP="$OUT/yaar-review-$VER-macos-$SUFFIX.zip"
+DMG="$OUT/yaar-review-$VER-macos-$SUFFIX.dmg"
+rm -f "$ZIP" "$DMG"
 
 # The icon: one PNG scaled into an icon set. sips and iconutil ship with macOS.
-WORK=$(mktemp -d); trap 'rm -rf "$WORK"' EXIT
 I="$WORK/AppIcon.iconset"; mkdir -p "$I"
 for s in 16 32 128 256 512; do
   sips -z $s $s "$HERE/macos/icon-1024.png" --out "$I/icon_${s}x${s}.png" > /dev/null
@@ -115,40 +194,80 @@ iconutil -c icns "$I" -o "$APP/Contents/Resources/AppIcon.icns"
 cp "$HERE/../LICENSE" "$APP/Contents/Resources/LICENSE"
 cp "$NOTICES" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt"
 
-sed -e "s/@VERSION@/$VER/" -e "s/@BUILD@/${BUILD_NUMBER:-1}/" -e "s/@MINOS@/$MIN_MACOS/" \
+sed -e "s/@VERSION@/$VER/" -e "s/@BUILD@/$VER/" -e "s/@MINOS@/$MIN_MACOS/" \
   "$HERE/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist" > /dev/null
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# Sign from the inside out: the Keeper first, with its own identifier, then the bundle,
-# which seals the Keeper. Hardened runtime, no entitlement.
-TS=(--timestamp); [ "$SIGN_IDENTITY" = "-" ] && TS=(--timestamp=none)
-codesign --force --sign "$SIGN_IDENTITY" --options runtime "${TS[@]}" \
-  --identifier "$ID.keeper" "$APP/Contents/Helpers/yaar-keeper"
-codesign --force --sign "$SIGN_IDENTITY" --options runtime "${TS[@]}" "$APP"
+notarise() { # <file> <what it is called in a sentence>
+  local file=$1 what=$2 json="$WORK/notary.json" status id
+  echo "$SELF: sending the $what to Apple and waiting for the verdict (up to 30 minutes)"
+  # notarytool exits 0 on "Invalid": the verdict is read from its output.
+  if ! xcrun notarytool submit "$file" "${NOTARY_AUTH[@]}" --wait --timeout 30m --output-format json > "$json"; then
+    cat "$json" >&2
+    fail "notarytool did not finish for the $what"
+  fi
+  status=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | tail -n 1)
+  id=$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | sed -n '1p')
+  if [ "$status" != "Accepted" ]; then
+    if [ -z "$id" ]; then
+      cat "$json" >&2
+    elif ! xcrun notarytool log "$id" "${NOTARY_AUTH[@]}" >&2; then
+      echo "$SELF: the log of submission $id could not be fetched" >&2
+    fi
+    fail "Apple's verdict on the $what is \"$status\", not \"Accepted\""
+  fi
+}
+
+# 1. The four helpers, each with its identifier, hardened runtime, no entitlement. The
+#    bundle is signed after them, never with --deep, which is for verifying only.
+for p in "${PROGRAMS[@]}"; do
+  if [ "$p" != yaar-review ]; then
+    sign --options runtime "${TS[@]}" --identifier "$(helper_identifier "$p")" "$APP/Contents/Helpers/$p"
+  fi
+done
+# 2. The bundle, which seals the helpers and signs the Window with the bundle's identifier.
+sign --options runtime "${TS[@]}" "$APP"
 codesign --verify --deep --strict --verbose=2 "$APP"
 
-NOTARIZE=no
-if [ "$SIGN_IDENTITY" != "-" ] && [ -n "${NOTARY_PROFILE:-}" ]; then NOTARIZE=yes; fi
-
 if [ "$NOTARIZE" = yes ]; then
-  # Apple takes an archive, not a folder. The ticket is then stapled to the app itself,
-  # so that the .zip and the .dmg made below both carry an app that opens offline.
+  # 3, 4. Apple takes an archive, not a folder.
   ditto -c -k --keepParent "$APP" "$WORK/submit.zip"
-  xcrun notarytool submit "$WORK/submit.zip" --keychain-profile "$NOTARY_PROFILE" --wait
+  notarise "$WORK/submit.zip" "app"
+  # 5, 6. The ticket goes into the app itself, so that the .zip and the .dmg made below both
+  #       carry an app that opens offline.
   xcrun stapler staple "$APP"
+  xcrun stapler validate "$APP"
+  codesign --verify --deep --strict --verbose=2 "$APP"
 fi
 
+# 7. The published .zip: the stapled app when there is a ticket.
 ditto -c -k --keepParent "$APP" "$ZIP"
 
-S="$WORK/dmg"; mkdir -p "$S"; cp -R "$APP" "$S/"; ln -s /Applications "$S/Applications"
+# 8. The disk image, made from that app and a link to /Applications.
+S="$WORK/dmg"; mkdir -p "$S"
+ditto "$APP" "$S/YAAR.app"
+ln -s /Applications "$S/Applications"
 hdiutil create -quiet -volname "YAAR" -srcfolder "$S" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
-codesign --force --sign "$SIGN_IDENTITY" "${TS[@]}" "$DMG"
+# 9. The image is signed (no runtime option: it holds no code of its own).
+sign "${TS[@]}" "$DMG"
 
 if [ "$NOTARIZE" = yes ]; then
-  xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+  # 10, 11.
+  notarise "$DMG" "disk image"
   xcrun stapler staple "$DMG"
+  xcrun stapler validate "$DMG"
 fi
 
-( cd "$OUT" && shasum -a 256 "$(basename "$ZIP")" "$(basename "$DMG")" > SHA256SUMS-macos && cat SHA256SUMS-macos )
+if [ "$SIGN_IDENTITY" = "-" ]; then
+  echo "signature: ad hoc, not notarised (for tests; Gatekeeper refuses it on another Mac)"
+else
+  name=$(codesign -dvv "$APP" 2>&1 | sed -n 's/^Authority=Developer ID Application: //p' | sed -n '1p')
+  if [ -z "$name" ]; then name=$SIGN_IDENTITY; fi
+  if [ "$NOTARIZE" = yes ]; then
+    echo "signature: Developer ID $name, notarised and stapled"
+  else
+    echo "signature: Developer ID $name, not notarised (Gatekeeper refuses it on another Mac)"
+  fi
+fi
 ls -l "$OUT"
