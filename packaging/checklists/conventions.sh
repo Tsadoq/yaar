@@ -155,28 +155,7 @@ else
 fi
 
 ck_begin
-ck_context "Date" "$(date +%Y-%m-%d)"
-if [ "$DRY" -eq 1 ]; then
-  ck_context "Run" "dry run: nothing of the system or of the app was asked"
-  ck_context "Version" "not asked: dry run"
-  ck_context "System" "not asked: dry run"
-else
-  PROGRAM=$(ck_window_program)
-  [ -x "$PROGRAM" ] || ck_die "no program at $PROGRAM: install the app first, or name its Window program in YAAR_REVIEW"
-  VERSION=$("$PROGRAM" --version) || ck_die "$PROGRAM --version failed"
-  ck_context "Version" "$VERSION"
-  if [ "$LIST" = macos ]; then
-    PRODUCT=$(sw_vers -productVersion) || ck_die "sw_vers -productVersion failed"
-    BUILD=$(sw_vers -buildVersion) || ck_die "sw_vers -buildVersion failed"
-    SYSTEM="macOS $PRODUCT ($BUILD)"
-  else
-    [ -r /etc/os-release ] || ck_die "/etc/os-release cannot be read, so the system cannot be named"
-    PRETTY=$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/os-release | head -n 1)
-    SYSTEM="${PRETTY:-unknown} / session ${XDG_SESSION_TYPE:-unknown} / desktop ${XDG_CURRENT_DESKTOP:-unknown}"
-  fi
-  ck_context "System" "$SYSTEM"
-  ck_context "Program" "$PROGRAM"
-fi
+ck_walker_context "$DRY"
 
 printf '%s\n' "$TITLE"
 printf 'Open the app yourself and walk each item in it, then answer here.\n'

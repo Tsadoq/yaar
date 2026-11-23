@@ -87,7 +87,10 @@ ck_wait_until() {
 }
 
 # ck_pids_of <program path>: the pids of this user's processes whose program is that file,
-# matched by its full path and never by a name alone.
+# matched by its full path and never by a name alone. On macOS `ps -o comm=` shows the path the
+# program was started by (the one the system's `open` uses is absolute); on Linux
+# /proc/<pid>/exe is the file with every link followed, so a path that goes through a link
+# is not matched there.
 ck_pids_of() {
   local want=$1
   if [ "$(ck_os)" = Darwin ]; then
@@ -144,6 +147,12 @@ ck_rss_kb() {
   if out=$(ps -o rss= -p "$1" 2>/dev/null); then
     printf '%s\n' "${out// /}"
   fi
+}
+
+# ck_mark_ms <file> <name>: the time of the first line `yaar-trace <name> epoch_ms=<n>` in a
+# file the app wrote with YAAR_TRACE_START set; nothing when there is none.
+ck_mark_ms() {
+  sed -n "s/^yaar-trace $2 epoch_ms=\([0-9][0-9]*\)\$/\1/p" "$1" | head -n 1
 }
 
 # ck_median_p95: reads numbers, one a line, from standard input and prints
@@ -255,6 +264,34 @@ ck_item() {
   printf '%s\t%s\t%s\t%s\n' "$id" "$title" "$verdict" "$notes" >> "$CK_WORK/rows.tsv"
 }
 
+# ck_walker_context <dry-run 0|1>: the date, the version and the system of this machine, as
+# lines of the file's header. In a dry run nothing of the system or of the app is asked.
+ck_walker_context() {
+  ck_context "Date" "$(date +%Y-%m-%d)"
+  if [ "$1" -eq 1 ]; then
+    ck_context "Run" "dry run: nothing of the system or of the app was asked"
+    ck_context "Version" "not asked: dry run"
+    ck_context "System" "not asked: dry run"
+    return 0
+  fi
+  local program version system product build pretty
+  program=$(ck_window_program)
+  [ -x "$program" ] || ck_die "no program at $program: install the app first, or name its Window program in YAAR_REVIEW"
+  version=$("$program" --version) || ck_die "$program --version failed"
+  ck_context "Version" "$version"
+  if [ "$(ck_os)" = Darwin ]; then
+    product=$(sw_vers -productVersion) || ck_die "sw_vers -productVersion failed"
+    build=$(sw_vers -buildVersion) || ck_die "sw_vers -buildVersion failed"
+    system="macOS $product ($build)"
+  else
+    [ -r /etc/os-release ] || ck_die "/etc/os-release cannot be read, so the system cannot be named"
+    pretty=$(sed -n 's/^PRETTY_NAME="\{0,1\}\([^"]*\)"\{0,1\}$/\1/p' /etc/os-release | head -n 1)
+    system="${pretty:-unknown} / session ${XDG_SESSION_TYPE:-unknown} / desktop ${XDG_CURRENT_DESKTOP:-unknown}"
+  fi
+  ck_context "System" "$system"
+  ck_context "Program" "$program"
+}
+
 # ck_walk <function that calls ck_item for each item>: counts, then walks.
 ck_walk() {
   CK_MODE=count
@@ -306,4 +343,152 @@ ck_write() {
     printf '\n## Sign-off\n\n%s\n' "$sign"
   } > "$tmp" || ck_die "cannot write $tmp"
   mv "$tmp" "$out" || ck_die "cannot move $tmp to $out"
+}
+
+# ---------------------------------------------------------------------------------------
+# The measuring kit on the Mac (typing.sh, scroll.sh, flood.sh)
+# ---------------------------------------------------------------------------------------
+# The kit is the one the phase 4 measures used, read and never rebuilt or edited:
+#   fakeinput   posts real key and scroll events to the system, and logs the moment of each
+#               post on the system's uptime clock in nanoseconds; it refuses to post unless
+#               the target process is the frontmost one
+#   adecap.app  logs the display time of every frame of one process's window whose pixels
+#               changed, on the same clock, through the screen capture of the system
+# Where they are: YAAR_KIT (default ~/ade-phase4-2026-11-12/gpui-measure), or YAAR_FAKEINPUT
+# and YAAR_ADECAP outright.
+
+ck_kit_dir() {
+  printf '%s\n' "${YAAR_KIT:-$HOME/ade-phase4-2026-11-12/gpui-measure}"
+}
+
+ck_fakeinput() {
+  printf '%s\n' "${YAAR_FAKEINPUT:-$(ck_kit_dir)/tools/fakeinput}"
+}
+
+ck_adecap() {
+  printf '%s\n' "${YAAR_ADECAP:-$(ck_kit_dir)/tools/adecap.app}"
+}
+
+# ck_front_pid: the pid of the frontmost application.
+ck_front_pid() {
+  "$(ck_fakeinput)" info | sed -n 's/^front_pid=\([0-9]*\).*/\1/p'
+}
+
+# ck_lit_preflight <need capture: 0|1>: what a measure that posts input needs, each refusal
+# one sentence: a Mac, the tools, mains power, an unlocked screen, the right to post
+# events, and for a capture the right to record the screen.
+ck_lit_preflight() {
+  [ "$(ck_os)" = Darwin ] || ck_die "this measure runs on the Mac only"
+  local fakein cap info
+  fakein=$(ck_fakeinput)
+  cap=$(ck_adecap)
+  [ -x "$fakein" ] || ck_die "no fakeinput at $fakein: it is the phase 4 kit's tool, built once (YAAR_KIT or YAAR_FAKEINPUT names it)"
+  if [ "$1" = 1 ]; then
+    [ -d "$cap" ] || ck_die "no adecap.app at $cap: it is the phase 4 kit's tool (YAAR_KIT or YAAR_ADECAP names it)"
+  fi
+  pmset -g batt | head -n 1 | grep -q 'AC Power' || ck_die "the Mac is not on mains power, which the measures need"
+  if ioreg -n Root -d1 -a | tr -d '\n\t ' | grep -q 'CGSSessionScreenIsLocked</key><true/>'; then
+    ck_die "the screen is locked, and a locked screen shows no frames and takes no input"
+  fi
+  info=$("$fakein" info) || ck_die "$fakein info failed"
+  printf '%s\n' "$info" | grep -q '^post_event_access=true$' \
+    || ck_die "this terminal may not post events: turn on Accessibility for it in System Settings, Privacy and Security"
+  printf '%s\n' "$info"
+}
+
+# ck_go <what will be posted>: nothing is posted before the owner types the word go.
+ck_go() {
+  printf '%s\nType go to start, anything else to stop: ' "$1"
+  ck_read_line "the go"
+  [ "$CK_LINE" = go ] || ck_die "you did not type go, so nothing was posted"
+}
+
+# ck_cap_start <log file> <pid> <stop file>: starts adecap on the process and waits until it
+# says it runs.
+ck_cap_start() {
+  rm -f "$3"
+  open -n -g "$(ck_adecap)" --args --pid "$2" --log "$1" --seconds 150 --stop "$3"
+  capture_up() {
+    grep -q '^start' "$1" 2> /dev/null || grep -q '^error\|^access=false' "$1" 2> /dev/null
+  }
+  ck_wait_until 10 capture_up "$1" || ck_die "adecap said nothing in 10 s ($1)"
+  if grep -q '^error\|^access=false' "$1"; then
+    ck_die "adecap cannot capture the window: $(grep '^error\|^access' "$1" | head -n 1) (Screen Recording is given to adecap.app, not to the terminal)"
+  fi
+}
+
+# ck_cap_stop <log file> <stop file>: asks adecap to end and waits for its last line.
+ck_cap_stop() {
+  : > "$2"
+  capture_ended() {
+    grep -q '^end' "$1"
+  }
+  ck_wait_until 15 capture_ended "$1" || ck_die "adecap did not end in 15 s ($1)"
+}
+
+# ck_key_latencies <input log> <capture log>: one number a line, the milliseconds from each
+# posted key to the first captured frame that changed after it. A key with no changed frame
+# before the next key (plus 20 ms) or within 400 ms is counted as missed; a frame sooner than
+# 12 ms after the post is not this key's (the system cannot show one so soon) and is counted
+# as early. "missed=<n> early=<n>" goes to standard error.
+ck_key_latencies() {
+  local sorted
+  sorted=$(mktemp "${TMPDIR:-/tmp}/yaar-caps.XXXXXX") || ck_die "cannot make a scratch file"
+  awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
+  awk -v caps="$sorted" '
+    BEGIN {
+      nc = 0
+      while ((getline line < caps) > 0) { D[nc++] = line + 0 }
+    }
+    $1 == "post" { P[np++] = $2 + 0 }
+    END {
+      j = 0; missed = 0; early = 0
+      for (i = 0; i < np; i++) {
+        t = P[i]
+        nxt = (i + 1 < np) ? P[i + 1] : t + 400000000
+        while (j < nc && D[j] <= t) j++
+        lim = nxt + 20000000
+        if (t + 400000000 < lim) lim = t + 400000000
+        if (j >= nc || D[j] >= lim) { missed++; continue }
+        ms = (D[j] - t) / 1000000
+        if (ms < 12) { early++; continue }
+        printf "%.3f\n", ms
+      }
+      printf "missed=%d early=%d\n", missed, early > "/dev/stderr"
+    }' "$1"
+  rm -f "$sorted"
+}
+
+# ck_frame_stats <input log> <capture log> <refresh Hz>: for each scroll phase of the input
+# log (a `sstart` line to the next `send` line), the changed frames the capture saw in it,
+# and in total: "frames=<n> seconds=<s> fps=<f> long=<n> long_pct=<p>", where long counts
+# the gaps between consecutive frames longer than two refresh intervals.
+ck_frame_stats() {
+  local sorted
+  sorted=$(mktemp "${TMPDIR:-/tmp}/yaar-caps.XXXXXX") || ck_die "cannot make a scratch file"
+  awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
+  awk -v caps="$sorted" -v hz="$3" '
+    BEGIN {
+      nc = 0
+      while ((getline line < caps) > 0) { D[nc++] = line + 0 }
+      limit = 2 * 1000000000 / hz
+    }
+    $1 == "sstart" { start = $2 + 0; open = 1; next }
+    $1 == "send" && open {
+      end = $2 + 0; open = 0
+      frames = 0; long = 0; prev = 0
+      for (k = 0; k < nc; k++) {
+        if (D[k] < start || D[k] > end) continue
+        frames++
+        if (prev > 0 && D[k] - prev > limit) long++
+        prev = D[k]
+      }
+      secs = (end - start) / 1000000000
+      printf "phase %d: frames=%d seconds=%.2f fps=%.1f long=%d long_pct=%.2f\n", ++ph, frames, secs, (secs > 0 ? frames / secs : 0), long, (frames > 1 ? 100 * long / (frames - 1) : 0)
+      tf += frames; ts += secs; tl += long
+    }
+    END {
+      printf "total: frames=%d seconds=%.2f fps=%.1f long=%d long_pct=%.2f\n", tf, ts, (ts > 0 ? tf / ts : 0), tl, (tf > ph ? 100 * tl / (tf - ph) : 0)
+    }' "$1"
+  rm -f "$sorted"
 }

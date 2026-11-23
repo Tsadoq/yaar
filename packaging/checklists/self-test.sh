@@ -66,6 +66,35 @@ pass() {
   printf '%s: ok: %s\n' "$CK_NAME" "$1"
 }
 
+wait_for() {
+  local deadline=$((SECONDS + 20))
+  until "$@"; do
+    [ "$SECONDS" -lt "$deadline" ] || return 1
+    sleep 0.2
+  done
+}
+
+# refuse <what> <out file> <err file> <serve-release.sh arguments>: runs it detached and
+# waits for it to end by itself; one that is still serving after 20 s did not refuse. The
+# status is left in REFUSAL_STATUS.
+refuse() {
+  local what=$1 out=$2 err=$3
+  shift 3
+  "$HERE/serve-release.sh" "$@" > "$out" 2> "$err" < /dev/null &
+  local pid=$!
+  SERVERS="$SERVERS $pid"
+  has_ended() { ! kill -0 "$pid" 2> /dev/null; }
+  if ! wait_for has_ended; then
+    kill "$pid"
+    fail "$what: serve-release.sh did not refuse, it was still running after 20 s"
+  fi
+  if wait "$pid"; then
+    REFUSAL_STATUS=0
+  else
+    REFUSAL_STATUS=$?
+  fi
+}
+
 real_state_before=none
 if [ -e "$REAL_HOME/yaar-checklists" ]; then
   real_state_before=$(ls -ld "$REAL_HOME/yaar-checklists" | awk '{ print $6, $7, $8 }')
@@ -271,16 +300,16 @@ serve_status=0
 pass "serve-release.sh with no folder is exit 2"
 
 mkdir -p "$S/not-final/release"
-serve_status=0
-"$HERE/serve-release.sh" "$S/not-final" > /dev/null 2> "$S/serve-nosite.err" < /dev/null || serve_status=$?
+refuse "a folder with no site/" "$S/serve-nosite.out" "$S/serve-nosite.err" "$S/not-final"
+serve_status=$REFUSAL_STATUS
 [ "$serve_status" -eq 1 ] || fail "serve-release.sh on a folder with no site/ gave exit $serve_status, not 1"
 grep -q '^serve-release.sh: .*site' "$S/serve-nosite.err" || fail "the refusal of a folder with no site/ does not name serve-release.sh and site"
 pass "a folder that is not laid out as release-final is refused"
 
 cp -R "$F" "$S/release-changed"
 printf 'changed after the sums were made\n' >> "$S/release-changed/release/yaar-review_0.1.0_amd64.deb"
-serve_status=0
-"$HERE/serve-release.sh" "$S/release-changed" > /dev/null 2> "$S/serve-sums.err" < /dev/null || serve_status=$?
+refuse "a file that disagrees with SHA256SUMS" "$S/serve-sums.out" "$S/serve-sums.err" "$S/release-changed"
+serve_status=$REFUSAL_STATUS
 [ "$serve_status" -eq 1 ] || fail "serve-release.sh on a changed file gave exit $serve_status, not 1"
 grep -q 'yaar-review_0.1.0_amd64.deb' "$S/serve-sums.err" || fail "the refusal of a changed file does not name the file"
 pass "a file that disagrees with SHA256SUMS is refused, by name"
@@ -291,13 +320,6 @@ nohup "$HERE/serve-release.sh" "$F" --port 0 > "$S/serve.out" 2> "$S/serve.err" 
 SERVE_PID=$!
 SERVERS="$SERVERS $SERVE_PID"
 have_install_line() { grep -q '^  curl ' "$S/serve.out"; }
-wait_for() {
-  local deadline=$((SECONDS + 20))
-  until "$@"; do
-    [ "$SECONDS" -lt "$deadline" ] || return 1
-    sleep 0.2
-  done
-}
 line_or_dead() { have_install_line || ! kill -0 "$SERVE_PID" 2> /dev/null; }
 wait_for line_or_dead
 have_install_line || fail "serve-release.sh printed no install line in 20 s (stdout: $(cat "$S/serve.out"); stderr: $(cat "$S/serve.err"))"
@@ -350,8 +372,8 @@ SERVER_PID=$(sed -n 's/^serve-release.sh: server pid \([0-9][0-9]*\)$/\1/p' "$S/
 kill -0 "$SERVER_PID" 2> /dev/null || fail "the server pid $SERVER_PID that serve-release.sh printed is not running"
 
 # A second server on the busy port is refused.
-serve_status=0
-"$HERE/serve-release.sh" "$F" --port "$PORT" > "$S/serve2.out" 2> "$S/serve2.err" < /dev/null || serve_status=$?
+refuse "a busy port" "$S/serve2.out" "$S/serve2.err" "$F" --port "$PORT"
+serve_status=$REFUSAL_STATUS
 [ "$serve_status" -eq 1 ] || fail "a second serve-release.sh on the busy port $PORT gave exit $serve_status, not 1"
 grep -q '^serve-release.sh: ' "$S/serve2.err" || fail "the refusal of a busy port does not name serve-release.sh"
 kill -0 "$SERVE_PID" 2> /dev/null || fail "the second start stopped the first server"
@@ -369,6 +391,139 @@ fi
 leftover=$(find "$TMPDIR" -maxdepth 1 -name 'yaar-serve-release*' | head -n 1)
 [ -z "$leftover" ] || fail "serve-release.sh left its scratch $leftover"
 pass "stopped by its pid, the script and its server are gone, the port refuses, no scratch is left"
+
+# ---------------------------------------------------------------------------------------
+# The other walkers, in a dry run: their items, once each
+# ---------------------------------------------------------------------------------------
+
+walk_count() {
+  # walk_count <script> <items> <dry-run file name>: all yes, then the signature.
+  local script=$1 items=$2 file=$3
+  { lines "$items" yes; echo yes; } > "$S/answers-count.txt"
+  CONV_STATUS=0
+  "$HERE/$script" --dry-run < "$S/answers-count.txt" > "$S/out-count.txt" 2> "$S/out-count.txt.err" || CONV_STATUS=$?
+  [ "$CONV_STATUS" -eq 0 ] || fail "$script --dry-run with $items answers did not exit 0 (it said: $(cat "$S/out-count.txt.err"))"
+  [ "$(grep -c "^Item [0-9]* of $items: " "$S/out-count.txt")" -eq "$items" ] \
+    || fail "$script did not print its $items items, each once"
+  [ "$(( $(grep -c '^| ' "$RESULTS/$file") - 2 ))" -eq "$items" ] || fail "$RESULTS/$file does not hold $items rows"
+  grep -q '^Signed: ' "$RESULTS/$file" || fail "$RESULTS/$file is not signed after all yes"
+}
+walk_count screen-walk.sh 5 screen-walk-dry-run.md
+[ -s "$RESULTS/term-06.txt" ] || fail "screen-walk.sh wrote no test file of text for TERM-06"
+grep -q "$(printf '\033\\[1mbold')" "$RESULTS/term-06.txt" || fail "the TERM-06 file holds no bold text"
+grep -q "$(printf '\033\\[3mitalic')" "$RESULTS/term-06.txt" || fail "the TERM-06 file holds no italic text"
+grep -q "$(printf '\033\\[1;3mbold italic')" "$RESULTS/term-06.txt" || fail "the TERM-06 file holds no combined text"
+grep -q "$(printf '\342\224\214')" "$RESULTS/term-06.txt" || fail "the TERM-06 file holds no box-drawing text"
+walk_count real-clis.sh 15 real-clis-dry-run.md
+walk_count linux-hardware.sh 8 linux-hardware-dry-run.md
+pass "screen-walk.sh, real-clis.sh and linux-hardware.sh print their 5, 15 and 8 checks once each and sign"
+
+# ---------------------------------------------------------------------------------------
+# What the measuring scripts read, on files made here: nothing is started or posted
+# ---------------------------------------------------------------------------------------
+
+BASE_NS=1000000000000
+{
+  i=0
+  while [ "$i" -lt 30 ]; do
+    echo "post $((BASE_NS + i * 200000000)) $i a"
+    i=$((i + 1))
+  done
+  echo "done $((BASE_NS + 6000000000))"
+} > "$S/keys.input"
+{
+  echo "start"
+  i=0
+  while [ "$i" -lt 29 ]; do
+    t=$((BASE_NS + i * 200000000))
+    # Every third key is first met by a frame 5 ms after it that is not its own.
+    if [ $((i % 3)) -eq 0 ]; then echo "cap $((t + 5000000)) $((t + 9000000)) rows=0-9"; fi
+    case $i in
+      1) echo "cap 0 $((t + 40000000)) rows=0-9" ;;          # no display time: the time it was seen
+      2) echo "cap $((t + 50000000)) $((t + 51000000)) rows=0-9" ;;
+      *) echo "cap $((t + 30000000)) $((t + 31000000)) rows=0-9" ;;
+    esac
+    i=$((i + 1))
+  done
+  echo "end"
+} > "$S/keys.cap"
+got=$("$HERE/typing.sh" --analyse "$S/keys.input" "$S/keys.cap" 2> "$S/keys.err")
+[ "$got" = "n=19 median=30.00 p95=40.00" ] || fail "typing.sh --analyse gave '$got', not 'n=19 median=30.00 p95=40.00' for 19 matched keys (stderr: $(cat "$S/keys.err"))"
+grep -qx 'missed=1 early=10' "$S/keys.err" || fail "typing.sh --analyse did not count 1 missed and 10 early keys (stderr: $(cat "$S/keys.err"))"
+pass "typing.sh reads key to screen times: the first changed frame after each post, early and missed keys counted, a missing display time falling back to the time seen"
+
+T1=2000000000000
+{
+  echo "sstart $BASE_NS dy=30 hz=100 n=100"
+  echo "spost $((BASE_NS + 10000000)) 0"
+  echo "send $((BASE_NS + 1000000000))"
+  echo "sstart $T1 dy=-30 hz=100 n=50"
+  echo "send $((T1 + 500000000))"
+} > "$S/scroll.input"
+{
+  echo "start"
+  k=1
+  while [ "$k" -le 100 ]; do
+    if [ "$k" -ne 50 ] && [ "$k" -ne 51 ]; then echo "cap $((BASE_NS + k * 10000000)) $((BASE_NS + k * 10000000 + 1000000)) rows=0-9"; fi
+    k=$((k + 1))
+  done
+  k=1
+  while [ "$k" -le 50 ]; do
+    echo "cap $((T1 + k * 10000000)) $((T1 + k * 10000000 + 1000000)) rows=0-9"
+    k=$((k + 1))
+  done
+  echo "end"
+} > "$S/scroll.cap"
+"$HERE/scroll.sh" --analyse "$S/scroll.input" "$S/scroll.cap" 100 > "$S/scroll.got"
+grep -qx 'phase 1: frames=98 seconds=1.00 fps=98.0 long=1 long_pct=1.03' "$S/scroll.got" \
+  || fail "scroll.sh --analyse did not read phase 1 as 98 frames and 1 long gap (got: $(cat "$S/scroll.got"))"
+grep -qx 'phase 2: frames=50 seconds=0.50 fps=100.0 long=0 long_pct=0.00' "$S/scroll.got" \
+  || fail "scroll.sh --analyse did not read phase 2 as 50 frames and no long gap (got: $(cat "$S/scroll.got"))"
+grep -qx 'total: frames=148 seconds=1.50 fps=98.7 long=1 long_pct=0.68' "$S/scroll.got" \
+  || fail "scroll.sh --analyse did not total 148 frames and 1 long gap (got: $(cat "$S/scroll.got"))"
+pass "scroll.sh reads frames a second and gaps longer than two refresh intervals, phase by phase"
+
+{
+  echo "2026-11-24 some line of the app's own"
+  echo "yaar-trace main epoch_ms=1000100"
+  echo "yaar-trace first_frame epoch_ms=1000180"
+  echo "a line that merely mentions yaar-trace first_diff epoch_ms=5"
+  echo "yaar-trace first_diff epoch_ms=1000250"
+  echo "yaar-trace first_diff epoch_ms=1000900"
+} > "$S/marks.err"
+got=$("$HERE/start-time.sh" --read "$S/marks.err" 1000000 | tail -n 1)
+[ "$got" = "100 180 250" ] || fail "start-time.sh --read gave '$got', not '100 180 250' for the marks main, first_frame and the first first_diff"
+grep -v 'first_diff' "$S/marks.err" > "$S/marks-nodiff.err"
+got=$("$HERE/start-time.sh" --read "$S/marks-nodiff.err" 1000000 | tail -n 1)
+[ "$got" = "100 180 none" ] || fail "start-time.sh --read gave '$got', not '100 180 none' with no first_diff mark"
+pass "start-time.sh reads the marks main, first_frame and first_diff, the first of each, and says none for one that is not there"
+
+# The programs of the app are found by their full path: two copies of one program at two
+# paths are two programs.
+mkdir -p "$S/a" "$S/b"
+cp /bin/sleep "$S/a/yaar-review"
+cp /bin/sleep "$S/b/yaar-review"
+if [ "$(uname -s)" = Darwin ]; then
+  # A copy of a system program is killed by the kernel until it is signed again, ad hoc and
+  # without a keychain, as a copy of ours.
+  codesign -s - --force "$S/a/yaar-review" 2> /dev/null
+  codesign -s - --force "$S/b/yaar-review" 2> /dev/null
+fi
+"$S/a/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
+PID_A=$!
+"$S/b/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
+PID_B=$!
+SERVERS="$SERVERS $PID_A $PID_B"
+found_a() {
+  [ "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") )" = "$PID_A" ]
+}
+wait_for found_a || fail "a process started from $S/a/yaar-review was not found by that path alone (found: $( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") ))"
+[ "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/b/yaar-review") )" = "$PID_B" ] \
+  || fail "a process started from $S/b/yaar-review was not found by that path alone"
+[ -z "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/c/yaar-review") )" ] || fail "a path nothing runs from found a process"
+kill "$PID_A" "$PID_B"
+if wait "$PID_A" "$PID_B" 2> /dev/null; then :; fi
+pass "a program is found by its full path, not by its name"
 
 # ---------------------------------------------------------------------------------------
 
