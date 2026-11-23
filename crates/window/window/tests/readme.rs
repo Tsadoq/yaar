@@ -2,7 +2,13 @@
 //! the system the test runs on, as the app binds it, in backquotes, and the key of every
 //! other control of the app's own, as the tables write it; and the other way, every key
 //! the tables name for the system is the key of a control, so that a key the app lost does
-//! not stay in the README.
+//! not stay in the README. The tables are the two of the key tables headed `On macOS | On
+//! Linux` (the keys of the app, and the keys kept in a terminal) and the table headed
+//! `Key | Does` under "Keys on the settings screen", which is held to the keys of
+//! `yaar_frame::settings_screen::controls()` in both directions. Every scan has a control
+//! half: a copy of the README with a key added or a row taken away, which the scan must
+//! find. The other tables of the README, the keys of the review pane among them, are read
+//! by no test here.
 
 const README: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/../../../README.md"));
 
@@ -293,5 +299,113 @@ fn the_readme_says_that_on_linux_only_ctrl_shift_c_and_ctrl_shift_v_are_kept_in_
             "`shift-pagedown`, the only keys kept in a terminal on Linux are `ctrl-shift-c` and `ctrl-shift-v`"
         ),
         "the README does not say which keys are kept in a terminal on Linux"
+    );
+}
+
+/// The heading of the section whose table `keys_of_the_screens_table` reads.
+const SCREEN_HEADING: &str = "### Keys on the settings screen";
+
+/// The keys the table of the settings screen names: the backquoted items of the first cell
+/// of each row of the table under [`SCREEN_HEADING`], up to the next heading, as written.
+fn keys_of_the_screens_table(readme: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    let mut in_section = false;
+    for line in readme.lines() {
+        if line.starts_with('#') {
+            in_section = line == SCREEN_HEADING;
+        } else if in_section && line.starts_with('|') {
+            let cell = line.split('|').nth(1).unwrap_or("");
+            // The header and the rule of the table hold no backquote.
+            keys.extend(cell.split('`').skip(1).step_by(2).map(str::to_owned));
+        }
+    }
+    keys
+}
+
+/// The keys of the screen that the table of `readme` does not name, and the keys it names
+/// that no control of the screen has, each in the order they come.
+fn the_screens_table_and_its_controls_part(
+    readme: &str,
+    controls: &[String],
+) -> (Vec<String>, Vec<String>) {
+    let named = keys_of_the_screens_table(readme);
+    let unnamed = controls
+        .iter()
+        .filter(|key| !named.contains(key))
+        .cloned()
+        .collect();
+    let lost = named
+        .iter()
+        .filter(|key| !controls.contains(key))
+        .cloned()
+        .collect();
+    (unnamed, lost)
+}
+
+fn the_screens_keys() -> Vec<String> {
+    yaar_frame::settings_screen::controls()
+        .iter()
+        .map(yaar_frame::Control::key)
+        .collect()
+}
+
+#[test]
+fn the_readme_table_of_the_settings_screen_names_the_key_of_every_control_of_the_screen_and_no_other()
+ {
+    let controls = the_screens_keys();
+    assert!(!controls.is_empty());
+    assert!(!keys_of_the_screens_table(README).is_empty());
+    let (unnamed, lost) = the_screens_table_and_its_controls_part(README, &controls);
+    assert!(
+        unnamed.is_empty(),
+        "the table of the settings screen in the README does not name these keys: {}",
+        unnamed.join(", ")
+    );
+    assert!(
+        lost.is_empty(),
+        "the table of the settings screen in the README names keys no control of the screen has: {}",
+        lost.join(", ")
+    );
+}
+
+#[test]
+fn the_scan_of_the_screens_table_finds_a_key_added_to_the_table_and_a_row_taken_from_it() {
+    let controls = the_screens_keys();
+    let row = "| `shift-c` | Cleans up the recorded states at once |\n";
+    assert!(README.contains(row), "the row this test works on is there");
+
+    // A key the app does not have, in a row of its own and in a cell of two keys.
+    let added = README.replace(row, &format!("{row}| `x` | Does what no control does |\n"));
+    assert_eq!(
+        the_screens_table_and_its_controls_part(&added, &controls),
+        (Vec::new(), vec!["x".to_owned()])
+    );
+    let shared = README.replace("| `j`, `k` |", "| `j`, `k`, `y` |");
+    assert_ne!(shared, README, "the cell this test works on is there");
+    assert_eq!(
+        the_screens_table_and_its_controls_part(&shared, &controls),
+        (Vec::new(), vec!["y".to_owned()])
+    );
+
+    // A key the app has and the table lost: the row, and one key of a shared cell.
+    let removed = README.replace(row, "");
+    assert_eq!(
+        the_screens_table_and_its_controls_part(&removed, &controls),
+        (vec!["shift-c".to_owned()], Vec::new())
+    );
+    let one_of_two = README.replace("| `j`, `k` |", "| `j` |");
+    assert_eq!(
+        the_screens_table_and_its_controls_part(&one_of_two, &controls),
+        (vec!["k".to_owned()], Vec::new())
+    );
+
+    // A key named in another table or in a sentence is no key of this one.
+    let elsewhere = README.replace(
+        "### Keys in a terminal",
+        "### Keys in a terminal\n\n| Key | Does |\n| --- | --- |\n| `zz` | Elsewhere |\n",
+    );
+    assert_eq!(
+        the_screens_table_and_its_controls_part(&elsewhere, &controls),
+        (Vec::new(), Vec::new())
     );
 }
