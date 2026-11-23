@@ -184,6 +184,20 @@ pub const STOP_AFTER_MINUTES: [u32; 7] = [1, 2, 5, 10, 15, 30, 60];
 /// The times recorded states are kept, in days.
 pub const KEEP_STATES_DAYS: [u32; 8] = [1, 7, 14, 30, 60, 90, 180, 365];
 
+/// The words of a stop time on its row: `"N min"`.
+pub fn stop_after_label(minutes: u32) -> String {
+    format!("{minutes} min")
+}
+
+/// The words of a kept time on its row: `"N days"`, and `"1 day"` for one.
+pub fn keep_states_label(days: u32) -> String {
+    if days == 1 {
+        "1 day".to_owned()
+    } else {
+        format!("{days} days")
+    }
+}
+
 /// One row of the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SettingRow {
@@ -462,7 +476,7 @@ impl SettingsScreen {
                 .iter()
                 .map(|minutes| {
                     choice(
-                        &format!("{minutes} min"),
+                        &stop_after_label(*minutes),
                         Setting::StopAfter {
                             seconds: minutes * 60,
                         },
@@ -529,12 +543,10 @@ impl SettingsScreen {
             KEEP_STATES_DAYS
                 .iter()
                 .map(|days| {
-                    let label = if *days == 1 {
-                        "1 day".to_owned()
-                    } else {
-                        format!("{days} days")
-                    };
-                    choice(&label, Setting::KeepStates { days: *days })
+                    choice(
+                        &keep_states_label(*days),
+                        Setting::KeepStates { days: *days },
+                    )
                 })
                 .collect(),
             KEEP_STATES_DAYS.iter().position(|days| *days == keep),

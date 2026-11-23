@@ -26,7 +26,8 @@ use yaar_frame::settings_screen::{
     BELOW, BY_LAYOUT, CHARACTERS, CLEAN_UP, CLEANING, DEFAULT_FOLDER, DONT_INSTALL, INSTALL,
     KEEP_SELECTION, KEEP_SERVERS_OUT, KEEP_STATES_DAYS, LEFT, META, NO_BASE, NO_WORKSPACE,
     OTHER_STATES, RIGHT, RUN_SERVERS, RowShown, SETTINGS_CONTEXT, STOP_AFTER_MINUTES, SYSTEM,
-    SettingRow, SettingsScreen, TITLES, WHAT_CHANGED, controls,
+    SettingRow, SettingsScreen, TITLES, TOTAL_STATES, WHAT_CHANGED, controls, keep_states_label,
+    stop_after_label,
 };
 use yaar_frame::theme::{self, Appearance, DARK, LIGHT};
 use yaar_frame::{
@@ -425,14 +426,28 @@ impl Window9 {
         assert_eq!(self.cx.windows().len(), 1, "no second window");
     }
 
-    /// A barrier: the first request after it is the Keeper hearing this set, which a
-    /// request the screen made before it would have come before.
+    /// A barrier for what the test-Keeper answers itself: the first request after it is the
+    /// Keeper hearing this set, which a set the screen made before it would have come before.
     fn barrier(&mut self) -> Vec<Setting> {
         let marker = Setting::TurnEnd(TurnEndSelects::KeepSelection);
-        self.cursor_to(0);
+        let turn_end = self.index_of(&SettingRow::TurnEnd);
+        self.cursor_to(turn_end);
         self.press(&key::<NextValue>());
         self.heard_set(marker);
         self.settings_set()
+    }
+
+    /// A barrier for the requests the test-Keeper hands to the test (a clean-up, an answer
+    /// for leave, a base): a request the screen sent before it comes first, and fails the
+    /// expect. Used after `barrier`, which covers the sets the test-Keeper answers itself.
+    fn handed_barrier(&mut self) {
+        self.shown
+            .models
+            .workspaces
+            .update(&mut self.cx, |list, cx| list.refresh(cx));
+        self.shown
+            .keeper
+            .expect(Request::ListWorkspaces, &mut self.cx);
     }
 }
 
@@ -539,14 +554,11 @@ fn the_screen_opens_with_the_rows_of_the_app_the_folder_of_the_repository_and_th
     // Each row, with its title, its values and the chosen one, from the defaults.
     let minutes: Vec<String> = STOP_AFTER_MINUTES
         .iter()
-        .map(|minutes| format!("{minutes} min"))
+        .map(|minutes| stop_after_label(*minutes))
         .collect();
     let days: Vec<String> = KEEP_STATES_DAYS
         .iter()
-        .map(|days| match days {
-            1 => "1 day".to_owned(),
-            days => format!("{days} days"),
-        })
+        .map(|days| keep_states_label(*days))
         .collect();
     let expected = [
         (
@@ -613,7 +625,8 @@ fn l_on_the_turn_end_row_chooses_keep_selection_at_once_and_the_keeper_keeps_it(
     assert_eq!(window.row(&SettingRow::TurnEnd).chosen, Some(1));
     window.heard_set(Setting::TurnEnd(TurnEndSelects::KeepSelection));
     // The value drawn as chosen is the one now.
-    assert!(window.is_drawn("settings-chosen-0"));
+    let turn_end = window.index_of(&SettingRow::TurnEnd);
+    assert!(window.is_drawn(&format!("settings-chosen-{turn_end}")));
     assert!(window.is_drawn(&Window9::value(0, 1, KEEP_SELECTION)));
     window.no_dialog();
 }
@@ -641,7 +654,8 @@ fn j_and_k_move_the_cursor_and_stop_at_the_first_and_the_last_row_and_l_and_h_st
     assert_eq!(window.cursor(), last, "no row after the last");
 
     // On the turn-end row: the last value, again `l`, and `h` back to the first.
-    window.cursor_to(0);
+    let turn_end = window.index_of(&SettingRow::TurnEnd);
+    window.cursor_to(turn_end);
     window.press(&key::<NextValue>());
     window.press(&key::<NextValue>());
     window.heard_set(Setting::TurnEnd(TurnEndSelects::KeepSelection));
@@ -686,7 +700,7 @@ fn a_click_on_a_stop_time_sets_it_and_tells_the_navigator_at_once(cx: &mut TestA
     assert_eq!(window.cursor(), stop);
     assert_eq!(window.row(&SettingRow::StopAfter).chosen, Some(3));
 
-    window.click(&Window9::value(stop, 0, "1 min"));
+    window.click(&Window9::value(stop, 0, &stop_after_label(1)));
 
     window.heard_set(Setting::StopAfter { seconds: 60 });
     assert_eq!(window.row(&SettingRow::StopAfter).chosen, Some(0));
@@ -835,11 +849,13 @@ fn with_no_workspace_on_screen_the_base_row_says_so_and_nothing_opens(cx: &mut T
     window.click(&Window9::value(base, 0, NO_WORKSPACE));
 
     assert!(!window.is_drawn("frame-base-field"), "no field opens");
-    // Nothing was sent for it: the first request after the barrier is its own.
+    // Nothing was set for it: the first request after the barrier is its own.
     assert_eq!(
         window.barrier(),
         [Setting::TurnEnd(TurnEndSelects::KeepSelection)]
     );
+    // And no base was asked for: that request is the test's, so the barrier for it is next.
+    window.handed_barrier();
 }
 
 #[gpui_kit::test]
@@ -921,13 +937,14 @@ fn a_stop_time_that_is_none_of_the_values_shows_none_chosen_and_l_and_h_move_fro
     let stop = window.row(&SettingRow::StopAfter);
     assert_eq!(stop.chosen, None);
     assert_eq!(stop.values.len(), STOP_AFTER_MINUTES.len());
-    assert!(window.is_drawn("settings-row-1"));
+    let at = window.index_of(&SettingRow::StopAfter);
+    assert!(window.is_drawn(&format!("settings-row-{at}")));
     assert!(
-        !window.is_drawn("settings-chosen-1"),
+        !window.is_drawn(&format!("settings-chosen-{at}")),
         "no value is drawn as chosen"
     );
 
-    window.cursor_to(1);
+    window.cursor_to(at);
     window.press(&key::<NextValue>());
     window.heard_set(Setting::StopAfter { seconds: 600 });
     assert_eq!(window.row(&SettingRow::StopAfter).chosen, Some(3), "10 min");
@@ -953,10 +970,10 @@ fn the_rows_of_the_other_settings_choose_each_of_their_values(cx: &mut TestAppCo
     window.open_screen(sizes(&[], 0));
 
     let keep = window.index_of(&SettingRow::KeepStates);
-    window.click(&Window9::value(keep, 1, "7 days"));
+    window.click(&Window9::value(keep, 1, &keep_states_label(7)));
     window.heard_set(Setting::KeepStates { days: 7 });
     assert_eq!(window.row(&SettingRow::KeepStates).chosen, Some(1));
-    window.click(&Window9::value(keep, 0, "1 day"));
+    window.click(&Window9::value(keep, 0, &keep_states_label(1)));
     window.heard_set(Setting::KeepStates { days: 1 });
 
     let option = window.index_of(&SettingRow::OptionKey);
@@ -992,7 +1009,7 @@ fn the_screen_shows_the_size_of_each_workspace_the_states_of_none_and_the_total(
     assert!(window.is_drawn("settings-size-other"));
     assert!(window.is_drawn(&format!("settings-size-other:{OTHER_STATES}: 8 KB")));
     assert!(window.is_drawn("settings-size-total"));
-    assert!(window.is_drawn("settings-size-total:Total: 2.5 MB"));
+    assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 2.5 MB")));
     // The control of the clean-up is the one value of the row of the states.
     let states = window.index_of(&SettingRow::States);
     assert!(window.is_drawn(&Window9::value(states, 0, CLEAN_UP)));
@@ -1011,7 +1028,7 @@ fn a_workspace_the_window_does_not_list_is_in_the_other_states_and_no_line_of_it
     assert!(window.is_drawn(&format!("settings-size-{}:main: 1 KB", id('1'))));
     assert!(!window.is_drawn(&format!("settings-size-{}", id('9'))));
     assert!(window.is_drawn(&format!("settings-size-other:{OTHER_STATES}: 6 KB")));
-    assert!(window.is_drawn("settings-size-total:Total: 7 KB"));
+    assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 7 KB")));
 }
 
 #[gpui_kit::test]
@@ -1020,7 +1037,7 @@ fn with_no_state_beyond_the_listed_workspaces_there_is_no_line_of_other_states(
 ) {
     let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
     window.open_screen(sizes(&[('1', 1_024), ('2', 2_048)], 3_072));
-    assert!(window.is_drawn("settings-size-total:Total: 3 KB"));
+    assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 3 KB")));
     assert!(!window.is_drawn("settings-size-other"));
 }
 
@@ -1064,7 +1081,7 @@ fn shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_clic
     });
     assert!(window.is_drawn(&control));
     assert!(window.is_drawn(&format!("settings-size-{}:main: 4 KB", id('1'))));
-    assert!(window.is_drawn("settings-size-total:Total: 4 KB"));
+    assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 4 KB")));
     assert!(!window.is_drawn("settings-size-other"));
     assert!(!window.is_drawn(&format!("settings-size-{}", id('2'))));
 
@@ -1122,7 +1139,7 @@ fn a_deletion_the_keeper_tells_while_the_screen_is_open_has_the_sizes_asked_agai
             states.sizes().map(|s| s.total) == Some(4_096)
         })
     });
-    assert!(window.is_drawn("settings-size-total:Total: 4 KB"));
+    assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 4 KB")));
 }
 
 #[gpui_kit::test]
@@ -1246,7 +1263,7 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
         rows_now(shown, cx)[at].chosen == Some(0)
     });
     assert!(
-        window.is_drawn("settings-chosen-7"),
+        window.is_drawn(&format!("settings-chosen-{at}")),
         "the answered row still has a chosen value"
     );
 
@@ -1266,6 +1283,85 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
     window.wait("the second answer to show", |shown, cx| {
         rows_now(shown, cx)[at].chosen == Some(1)
     });
+    window.no_dialog();
+}
+
+#[gpui_kit::test]
+fn an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other(
+    cx: &mut TestAppContext,
+) {
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    // Two Adapters, `claude` first: an answer sent for the first Adapter of the list, or for
+    // the last, is told apart from one sent for the row's own on one of the two rows.
+    let listed = |claude, pi| vec![consent("claude", claude), consent("pi", pi)];
+    window.shown.keeper.tell(Fact::ConsentsChanged(listed(
+        ConsentAnswer::NotAsked,
+        ConsentAnswer::NotAsked,
+    )));
+    window.wait("the two questions for leave", |shown, cx| {
+        shown
+            .models
+            .consents
+            .read_with(cx, |consents, _| consents.all().len() == 2)
+    });
+    window.open_screen(sizes(&[], 0));
+    let claude = window.index_of(&SettingRow::Extension("claude".to_owned()));
+    let pi = window.index_of(&SettingRow::Extension("pi".to_owned()));
+    assert_ne!(claude, pi);
+
+    // The second Adapter's row: its answer is `pi`'s.
+    window.click(&Window9::value(pi, 0, INSTALL));
+    let asked = window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::Yes,
+        },
+        &mut window.cx,
+    );
+    window.shown.keeper.reply(
+        asked,
+        Ok(Reply::Consents(listed(
+            ConsentAnswer::NotAsked,
+            ConsentAnswer::Yes,
+        ))),
+    );
+    window.wait("pi's answer to show", |shown, cx| {
+        rows_now(shown, cx)[pi].chosen == Some(0)
+    });
+    assert_eq!(window.rows()[claude].chosen, None, "claude was not asked");
+
+    // The first Adapter's row: its answer is `claude`'s, and `pi`'s row stays as it was.
+    window.click(&Window9::value(claude, 1, DONT_INSTALL));
+    let asked = window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "claude".to_owned(),
+            answer: ConsentAnswer::No,
+        },
+        &mut window.cx,
+    );
+    window.shown.keeper.reply(
+        asked,
+        Ok(Reply::Consents(listed(
+            ConsentAnswer::No,
+            ConsentAnswer::Yes,
+        ))),
+    );
+    window.wait("claude's answer to show", |shown, cx| {
+        rows_now(shown, cx)[claude].chosen == Some(1)
+    });
+    assert_eq!(window.rows()[pi].chosen, Some(0));
+
+    // An answer given is changed by a key on its own row too: `l` on `pi`'s row, whose
+    // chosen value is the first, chooses the second.
+    window.cursor_to(pi);
+    window.press(&key::<NextValue>());
+    window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        },
+        &mut window.cx,
+    );
     window.no_dialog();
 }
 
@@ -1312,9 +1408,9 @@ fn each_listed_repository_has_a_row_for_its_folder_after_the_servers_and_before_
     let (mut window, r, s) = with_folders(cx, vec![servers('b', true)]);
 
     let rows = window.rows();
+    let servers_at = window.index_of(&SettingRow::Servers(repo('b')));
     assert_eq!(s, r + 1);
-    assert_eq!(r, 8, "after the row of the servers");
-    assert_eq!(rows[7].row, SettingRow::Servers(repo('b')));
+    assert_eq!(r, servers_at + 1, "after the row of the servers");
     assert_eq!(
         rows[s + 1].row,
         SettingRow::States,
@@ -1580,9 +1676,38 @@ fn a_click_on_another_rows_value_while_a_field_is_open_closes_the_field_and_choo
 
 #[gpui_kit::test]
 fn enter_on_a_row_that_does_not_act_sends_nothing(cx: &mut TestAppContext) {
-    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    // Every kind of row there is that enter does nothing on: the choice rows of the app, the
+    // repository's servers and an Adapter's extension, whose requests the test-Keeper hands
+    // to the test and does not answer itself.
+    let mut window = opened(WINDOW, vec![servers('a', false)], &one_repository(), cx);
+    window.shown.keeper.tell(Fact::ConsentsChanged(vec![consent(
+        "pi",
+        ConsentAnswer::NotAsked,
+    )]));
+    window.wait("the question for leave", |shown, cx| {
+        shown
+            .models
+            .consents
+            .read_with(cx, |consents, _| !consents.all().is_empty())
+    });
     window.open_screen(sizes(&[], 0));
-    for row in [0, 1, 2, 4, 5, 6] {
+    let quiet: Vec<usize> = window
+        .rows()
+        .iter()
+        .enumerate()
+        .filter(|(_, shown)| {
+            !matches!(
+                shown.row,
+                SettingRow::Base | SettingRow::WorktreesFolder(_) | SettingRow::States
+            )
+        })
+        .map(|(at, _)| at)
+        .collect();
+    assert!(
+        quiet.len() >= 8,
+        "the six choice rows of the app, the servers and the extension: {quiet:?}"
+    );
+    for row in quiet {
         window.cursor_to(row);
         window.press(&key::<OpenSetting>());
     }
@@ -1591,11 +1716,15 @@ fn enter_on_a_row_that_does_not_act_sends_nothing(cx: &mut TestAppContext) {
     window.press(&key::<OpenSetting>());
     assert!(!window.is_drawn("settings-folder-field"));
     assert!(!window.is_drawn("frame-base-field"));
+    // The first barrier is for the sets the test-Keeper answers itself.
     assert_eq!(
         window.barrier(),
         [Setting::TurnEnd(TurnEndSelects::KeepSelection)],
-        "nothing was sent before the barrier"
+        "nothing was set before the barrier"
     );
+    // The second is for the requests it hands to the test.
+    window.handed_barrier();
+    window.no_dialog();
 }
 
 #[gpui_kit::test]
@@ -1702,7 +1831,9 @@ fn a_workspace_on_screen_whose_changes_name_no_base_says_so_and_the_row_still_op
         })),
     );
     window.wait("no base", |shown, cx| {
-        rows_now(shown, cx)[3].values == [NO_BASE]
+        rows_now(shown, cx)
+            .iter()
+            .any(|shown| shown.row == SettingRow::Base && shown.values == [NO_BASE])
     });
     let row = window.row(&SettingRow::Base);
     assert_eq!(row.chosen, None);
