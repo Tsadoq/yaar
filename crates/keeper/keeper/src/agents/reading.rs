@@ -253,7 +253,9 @@ enum Place {
 /// state that is a turn's becomes that turn (the turns that ended on one state, in the
 /// order they started), any other state is left out.
 ///
-/// A turn with no state, or whose state is not held, has no place of its own: it goes right
+/// A turn whose state the Store names and `held` does not has expired: it is an
+/// `ExpiredTurn`; one with no state named is a recording that failed and stays a `Turn` with
+/// no state. Either has no place of its own: it goes right
 /// after the turn that started before it, or, when none did, before the turn that started
 /// after it, or, with none known, at the end. When the turn it follows is left out as before
 /// the start, the place is the start of the history: it ended after that turn. When the turn
@@ -319,10 +321,24 @@ fn with_turns(
     let mut at_start = Vec::new();
     let mut at_end = Vec::new();
     for (turn, place) in turns.into_iter().zip(placed) {
-        let entry = HistoryEntry::Turn {
-            turn: TurnId::new(turn.id.as_str()),
-            session: SessionId::new(turn.session.as_str()),
-            state: turn.state.filter(|state| held.contains(state)),
+        let (id, session) = (
+            TurnId::new(turn.id.as_str()),
+            SessionId::new(turn.session.as_str()),
+        );
+        let entry = match turn.state {
+            Some(state) if held.contains(&state) => HistoryEntry::Turn {
+                turn: id,
+                session,
+                state: Some(state),
+            },
+            // A state the Store names and the store no longer holds was deleted by a
+            // clean-up: the turn stays, marked so. No state named is a recording that failed.
+            Some(_) => HistoryEntry::ExpiredTurn { turn: id, session },
+            None => HistoryEntry::Turn {
+                turn: id,
+                session,
+                state: None,
+            },
         };
         match place {
             Place::After(index) => after.entry(index).or_default().push(entry),
