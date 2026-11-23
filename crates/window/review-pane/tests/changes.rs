@@ -1779,12 +1779,27 @@ fn the_history_is_asked_again_when_the_states_of_the_workspace_on_screen_were_de
         ..history()
     };
     stage.keeper.set_history(expired.clone());
-    // Another workspace's states went: this pane does not ask. The Keeper answers the
-    // questions of one Window in order, so when the answer to the question the next fact
-    // makes is shown, any question this one made was heard before it.
+    // Another workspace's states went: this pane does not ask. Nothing shows a question
+    // that is not asked, so a fact of another kind that makes a question follows it: the
+    // Keeper answers the questions of one Window in order, so when that question is heard
+    // any question the first fact made was heard before it.
+    let uncommitted = stage.keeper.uncommitted_asked();
     stage
         .keeper
         .tell(Fact::StatesDeleted { workspace: id('2') });
+    stage
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
+    wait_until(&mut cx, "the barrier's question to be heard", |_| {
+        stage.keeper.uncommitted_asked() > uncommitted
+    });
+    assert_eq!(
+        stage.keeper.history_asked(),
+        asked,
+        "the states of another workspace went: no history was asked for"
+    );
+    // The states of the workspace on screen went: the history is asked for again, and the
+    // turn that expired shows.
     stage
         .keeper
         .tell(Fact::StatesDeleted { workspace: id('1') });
