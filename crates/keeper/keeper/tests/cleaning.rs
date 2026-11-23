@@ -1121,7 +1121,11 @@ fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_tak
 }
 
 /// How long a test lets the sweep's thread come due and look, which is a few of its own looks
-/// at the clock: a wait for a fact that a correct Keeper never makes happen.
+/// at the clock: a wait for a fact that a correct Keeper never makes happen. Nothing tells
+/// that a sweep is held at a lock, or that it has not begun, so there is no barrier to read
+/// instead. A run that passes cannot fail on this wait, since what it waits for is let go
+/// only after it; a break could be missed only on a machine that takes longer than this for
+/// one sweep of a workspace.
 const SWEEP_LOOKS: Duration = Duration::from_secs(5);
 
 #[test]
@@ -1288,6 +1292,46 @@ fn at_its_start_the_keeper_deletes_the_states_nothing_refers_to_once_the_set_tim
     );
     let after = world.window.sizes();
     assert!(after.total < before.total, "{after:?} against {before:?}");
+    let states = world.scratch.states_of(&work.workspace);
+    assert!(states.contains(&two.state) && !states.contains(&one.state));
+    assert_eq!(reads(&work.repo), repo_before);
+    still_there(&work.repo, &work.planted);
+    let _ = world.finish();
+}
+
+#[test]
+fn at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_reply() {
+    let mut world = World::new();
+    let mut work = world.work("repo");
+    let [one, two] = world.two_turns(&mut work);
+    let repo_before = reads(&work.repo);
+
+    // The Keeper starts again with the clock past the set time, and the Window that attaches
+    // asks nothing: the Keeper has no reply to queue. The wait is for a sweep that a correct
+    // Keeper does not make, so the old state is looked for until `SWEEP_LOOKS` is over, and
+    // the look ends early only on a break.
+    world.restart_at(31 * DAY + HOUR);
+    let started = Instant::now();
+    while world
+        .scratch
+        .states_of(&work.workspace)
+        .contains(&one.state)
+        && started.elapsed() < SWEEP_LOOKS
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let states = world.scratch.states_of(&work.workspace);
+    assert!(
+        states.contains(&one.state) && states.contains(&two.state),
+        "a sweep ran before the Keeper had queued a reply: {states:?}"
+    );
+
+    // The first request is answered; the sweep then runs, and tells.
+    world.window.barrier();
+    world.window.states_deleted(&work.workspace);
+    let history = world.window.history(&work.workspace);
+    assert!(is_expired(&history, &one.turn), "{history:?}");
+    assert_eq!(state_in(&history, &two.turn), Some(two.state.clone()));
     let states = world.scratch.states_of(&work.workspace);
     assert!(states.contains(&two.state) && !states.contains(&one.state));
     assert_eq!(reads(&work.repo), repo_before);

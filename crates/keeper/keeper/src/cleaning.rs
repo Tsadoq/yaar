@@ -46,6 +46,9 @@
 //!    (`Agents::remove_files_of_ended` with that time);
 //! 3. tells every Window `StatesDeleted` of each workspace that lost a state.
 //!
+//! The files are removed before the Windows are told. No surface holds a sweep between the
+//! two steps, so the order is stated and no test holds it.
+//!
 //! [`SWEEP_EVERY`] and the age of a state are the clock's; only [`TICK`], how often the
 //! thread looks, is real time. A test moves its clock past the set time, or changes the set
 //! time, and waits for the sweep's `StatesDeleted` or for `GetHistory` to show the turn
@@ -80,6 +83,10 @@ const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 /// its folder under the pack, ends in a failure the user is told of though the clean-up
 /// worked, or in a folder that is no repository any more. Held for one workspace at a time
 /// and never across a whole sweep or clean-up, so a wait for it is for one workspace's work.
+///
+/// The lock is the process's and not a Keeper's: the app has one Keeper in a process, and
+/// any new caller of `Reviews::expire` or `Reviews::clean_up` has to go through [`clean`],
+/// since the engine itself lets two callers on one workspace interleave.
 static CLEANING: Mutex<()> = Mutex::new(());
 
 /// `Request::GetStateSizes`, as the module doc says.

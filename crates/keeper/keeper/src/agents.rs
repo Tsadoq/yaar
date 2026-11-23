@@ -99,8 +99,9 @@ struct Core {
     // Per session, whether the turn it has now began with a message of the user. Kept in
     // memory: a Keeper that starts has no turn running.
     turns_from_user: Mutex<HashMap<String, bool>>,
-    // Called from the one thread that works the queue. Never held together with the
-    // Switchboard's lock, in either order.
+    // Called from the one thread that works the queue, and from the sweep's and the
+    // clean-up's threads, which lock it to remove the files of sessions that ended. Never
+    // held together with the Switchboard's lock, in either order.
     adapters: Mutex<Vec<Box<dyn Adapter>>>,
     switchboard: Mutex<Switchboard>,
     // The sessions a terminal of the user's resume is open for, until that terminal ends.
