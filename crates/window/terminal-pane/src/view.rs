@@ -30,7 +30,7 @@ use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, TerminalOutput};
+use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, SettingList, TerminalOutput};
 use yaar_link::{Ending, Request, TerminalId, TerminalSize};
 
 use crate::MouseButton as ReportedButton;
@@ -79,6 +79,8 @@ struct Geometry {
 pub struct TerminalView {
     id: TerminalId,
     link: Entity<KeeperLink>,
+    /// The user's settings, which say what Option does.
+    settings: Entity<SettingList>,
     emulator: Emulator,
     focus: FocusHandle,
     /// The size the Keeper was last told.
@@ -117,6 +119,7 @@ impl TerminalView {
         id: TerminalId,
         size: TerminalSize,
         link: Entity<KeeperLink>,
+        settings: Entity<SettingList>,
         output: Option<TerminalOutput>,
         cut: bool,
         cx: &mut Context<Self>,
@@ -145,6 +148,7 @@ impl TerminalView {
         Self {
             id,
             link,
+            settings,
             emulator,
             focus: cx.focus_handle(),
             size,
@@ -259,14 +263,20 @@ impl TerminalView {
         self.forget_selection();
     }
 
-    /// The Option setting for the keyboard layout in use.
-    fn option_key(cx: &App) -> OptionKey {
-        OptionKey::for_layout(cx.keyboard_layout().id(), cfg!(target_os = "macos"))
+    /// What Option does now: the user's setting, and where it says nothing the keyboard
+    /// layout in use. Read at every key, so that a change of the setting is in force at
+    /// once.
+    fn option_key(&self, cx: &App) -> OptionKey {
+        OptionKey::of_setting(
+            self.settings.read(cx).option_key(),
+            cx.keyboard_layout().id(),
+            cfg!(target_os = "macos"),
+        )
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let modes = self.emulator.modes();
-        let option = Self::option_key(cx);
+        let option = self.option_key(cx);
         let keystroke = &event.keystroke;
         let modifiers = &keystroke.modifiers;
         // A key that types text has no bytes here: it is left alone, and the platform
@@ -288,7 +298,7 @@ impl TerminalView {
 
     fn key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         let modes = self.emulator.modes();
-        let option = Self::option_key(cx);
+        let option = self.option_key(cx);
         if let Some(bytes) = encode_release(&event.keystroke, &modes, option) {
             self.send(bytes, cx);
             cx.stop_propagation();

@@ -707,8 +707,10 @@ impl TerminalPane {
         cx: &mut Context<Self>,
     ) -> Entity<TerminalView> {
         let link = self.models.link.clone();
+        let settings = self.models.settings.clone();
         let output = link.update(cx, |link, _| link.take_output(&id));
-        let view = cx.new(|cx| TerminalView::new(id.clone(), size, link, output, cut, cx));
+        let view =
+            cx.new(|cx| TerminalView::new(id.clone(), size, link, settings, output, cut, cx));
         let of = workspace.clone();
         let events = cx.subscribe(&view, move |pane, _, event: &ViewEvent, _| {
             pane.viewed(&of, event);
