@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// The variables with which a process tells git which repository to use, whatever
 /// folder it runs in. A Keeper started from a shell that has one of them set would read
@@ -128,9 +128,6 @@ struct Inner {
     take: Mutex<Take>,
     /// Wakes the runs that wait, when the take ends.
     ended: Condvar,
-    /// When the take was announced: the wait of a run is counted from here, so that all the
-    /// runs of a take that never ends together wait no longer than the deadline.
-    since: Instant,
     /// How long a run of the user's own git waits for the take.
     deadline: Duration,
 }
@@ -161,7 +158,6 @@ impl GitEnvironment {
             inner: Arc::new(Inner {
                 take: Mutex::new(take),
                 ended: Condvar::new(),
-                since: Instant::now(),
                 deadline,
             }),
         }
@@ -192,17 +188,16 @@ impl GitEnvironment {
         }
     }
 
-    /// What a run of the user's own git gets: waits for the take to end, for at most what
-    /// is left of the deadline, then as [`GitEnvironment::now`].
+    /// What a run of the user's own git gets: waits for the take to end, for at most the
+    /// deadline, then as [`GitEnvironment::now`]. The take ends by itself within its own
+    /// deadline, so a run that comes late waits for what is left of it only.
     fn after_waiting(&self) -> Option<Arc<Vec<(OsString, OsString)>>> {
-        let left = self
-            .inner
-            .deadline
-            .saturating_sub(self.inner.since.elapsed());
         let (take, _) = self
             .inner
             .ended
-            .wait_timeout_while(self.lock(), left, |take| matches!(take, Take::UnderWay))
+            .wait_timeout_while(self.lock(), self.inner.deadline, |take| {
+                matches!(take, Take::UnderWay)
+            })
             .unwrap_or_else(PoisonError::into_inner);
         match &*take {
             Take::Ended(taken) => taken.clone(),

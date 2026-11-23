@@ -59,6 +59,9 @@ pub(crate) fn start(options: &Options, environment: GitEnvironment) -> Take {
         std::thread::Builder::new()
             .name("keeper-login-environment".to_owned())
             .spawn(move || {
+                // Whatever happens below, the take ends: a run that waits for it is woken.
+                let ends = EndsTheTake(environment);
+                let environment = &ends.0;
                 let own: Vec<_> = std::env::vars_os().collect();
                 match login::take_in(&shell, &own, &group) {
                     Ok(merged) => environment.ended(Some(merged)),
@@ -92,6 +95,16 @@ pub(crate) fn start(options: &Options, environment: GitEnvironment) -> Take {
         group,
         leaving,
         thread,
+    }
+}
+
+/// Ends the take with none when it is dropped, if nothing ended it before: so that a thread
+/// that panics cannot leave the user's own git waiting for its whole deadline.
+struct EndsTheTake(GitEnvironment);
+
+impl Drop for EndsTheTake {
+    fn drop(&mut self) {
+        self.0.ended(None);
     }
 }
 
