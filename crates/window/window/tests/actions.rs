@@ -1087,7 +1087,45 @@ impl Composed {
     /// a line of the notes, which the stand-in's row also serves, and the key of Find
     /// References; waits for the answer, which the Navigator finds by text match or from the
     /// server, and for the focus to be in the list.
+    ///
+    /// The key of an earlier step may have set off a comparison that the Keeper answers on a
+    /// thread of its own (`CompareVersions`, then `ReadVersions`: the tree's keys select a
+    /// change, which is read apart), and its answer reaches the pane when it comes: it
+    /// takes the rows and the place of the reviewer away, whatever a click chose before, and
+    /// nothing in the Window says one is on its way. When that happens between the click
+    /// and the key, the pane says "The reviewer is on no line" and asks nothing. A user whose
+    /// click the screen took away clicks again, and so does this: the whole opening is
+    /// repeated until the list is there, which the deadline bounds. Each try that fails
+    /// says why, and the failure at the deadline names every reason.
     fn open_the_list_of_references(&mut self, cx: &mut VisualTestContext) {
+        let deadline = Instant::now() + DEADLINE;
+        let mut tried: Vec<String> = Vec::new();
+        loop {
+            match self.try_to_open_the_list_of_references(deadline, cx) {
+                Ok(()) => break,
+                Err(why) => tried.push(why),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited in vain for the list of references; each try ended as follows: {tried:#?}; \
+                 the Window's last requests were {:?}",
+                self.tap.requests().iter().rev().take(6).collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            self.focus_is_in(yaar_review_pane::REFERENCES_CONTEXT, cx),
+            "the list of references took no focus"
+        );
+    }
+
+    /// One try of [`Composed::open_the_list_of_references`]: Err says why the pane held no
+    /// list after the key, when it did not ask for one, and nothing else is waited for
+    /// after the deadline.
+    fn try_to_open_the_list_of_references(
+        &mut self,
+        deadline: Instant,
+        cx: &mut VisualTestContext,
+    ) -> Result<(), String> {
         self.show_changes(cx);
         self.click_into_the_review_pane(cx);
         let mut row = None;
@@ -1119,16 +1157,46 @@ impl Composed {
             },
         );
         cx.simulate_keystrokes(&key_of("Find References"));
-        wait_until(cx, "the list of references", |cx| {
-            self.review.read_with(cx, |pane, _| {
-                pane.references()
-                    .is_some_and(|references| !references.waiting)
-            })
+        // The key either asked, so that the pane holds a list that waits or is there, or it
+        // did not and said why in the notice, at once. The pane holds a list or a notice
+        // before the keystrokes return, so no more is waited for to tell the two apart.
+        let held = self.review.read_with(cx, |pane, _| {
+            (
+                pane.references().map(|references| references.waiting),
+                pane.notice(),
+            )
         });
-        assert!(
-            self.focus_is_in(yaar_review_pane::REFERENCES_CONTEXT, cx),
-            "the list of references took no focus"
-        );
+        if let (None, Some(notice)) = &held {
+            return Err(format!(
+                "the key of Find References asked nothing and said {notice:?}"
+            ));
+        }
+        loop {
+            cx.run_until_parked();
+            let (list, notice) = self.review.read_with(cx, |pane, _| {
+                (
+                    pane.references().map(|references| references.waiting),
+                    pane.notice(),
+                )
+            });
+            match list {
+                Some(false) => return Ok(()),
+                // The answer left no list, and the notice says why: no references were
+                // found, or the Navigator refused.
+                None if notice.is_some() => {
+                    return Err(format!(
+                        "the answer left no list and the pane said {notice:?}"
+                    ));
+                }
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited in vain for the list of references: the pane holds {list:?} (Some(true): \
+                 the Navigator never answered; None: no list was asked and nothing was said)"
+            );
+            std::thread::park_timeout(Duration::from_millis(1));
+        }
     }
 
     /// Fails when the Window is asking the user for something after the key of `control`,

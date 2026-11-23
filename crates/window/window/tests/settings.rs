@@ -431,6 +431,54 @@ fn world_with_two_turns() -> World {
     world
 }
 
+// WIN-11, the opening as the program makes it: the program opens its window from the
+// application's start, outside any update of the app, where the toolkit has told the window's
+// observers by the time the window is open. The test opens its window inside an update, where
+// that notice comes only when the update ends, so the model is read inside the update, before
+// it can come: what the model holds then is what the Window program told it at the opening.
+#[gpui_kit::test]
+fn the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_program_has_the_window(
+    cx: &mut TestAppContext,
+) {
+    let mut world = World::new();
+    world.start_keeper();
+    let navigator = navigator_for(
+        &world,
+        Found::OnTheMachine,
+        &standin_row(Found::OnTheMachine, "main.sil", &[]),
+    );
+    let tap = world.tap();
+    cx.executor().allow_parking();
+    let (window, told, applied_then) = cx.update(|app| {
+        yaar_window::init(app);
+        let builders = yaar_window::panes()
+            .into_iter()
+            .map(|entry| (entry.build)())
+            .collect();
+        let opened = yaar_window::open_panes(tap.socket(), builders, navigator, app)
+            .expect("open the Window on the test platform");
+        let told = opened.models.looks.read(app).system();
+        (opened.window, told, theme::applied(app).name)
+    });
+    let mut cx = VisualTestContext::from_window(window, cx);
+    let platform = cx.update(|window, _| window.appearance());
+    assert_eq!(
+        platform,
+        WindowAppearance::Light,
+        "GPUI's test platform has a light window"
+    );
+    assert_eq!(
+        told,
+        Some(Appearance::Light),
+        "the model of the theme knew the window's appearance when the opening returned"
+    );
+    assert_eq!(
+        applied_then, LIGHT,
+        "the definition applied then is the light one"
+    );
+    cx.quit();
+}
+
 // WIN-11, the opening: once the opening has run, the theme follows the system.
 #[gpui_kit::test]
 fn the_window_tells_its_theme_the_systems_appearance_at_its_opening(cx: &mut TestAppContext) {

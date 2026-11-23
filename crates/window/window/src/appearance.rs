@@ -1,15 +1,19 @@
 //! The system's light or dark setting, told to the window's model of the theme
 //! (`yaar_frame::Looks`, NFR-018).
 //!
-//! [`follow_system`] runs once a window is opened, before it is first drawn:
+//! [`follow_system`] runs as soon as a window is opened:
 //!
 //! 1. it tells `Looks::system_is` the window's appearance at once (`Window::appearance`,
 //!    turned into `yaar_frame::theme::Appearance`), so that the model holds it as soon as
 //!    the Window program has the window. The first frame is drawn inside the toolkit's
-//!    opening of the window, before this runs, and the toolkit tells an observer of the
-//!    window's appearance once the opening's effects have run: step 2's observer is told
-//!    the same value then, so this tell and that notification agree and no test can tell
-//!    either from the other;
+//!    opening of the window, before this runs, in the toolkit's own colours of the
+//!    system's mode. The toolkit tells an observer of the window's appearance when the
+//!    outermost update of the app ends. The program opens its window outside any update,
+//!    so there that notice has come before this runs and step 2's observer does not exist
+//!    yet: this tell is the only one at the opening, and without it the model would know
+//!    nothing of the system until it changed. A window opened inside an update, as the
+//!    component tests open theirs, has the notice come after step 2's observer is in
+//!    place, which tells the model the same value;
 //! 2. it observes the window's appearance (`Window::observe_window_appearance`, the
 //!    subscription detached for the window's life) and tells `Looks::system_is` each change;
 //! 3. it observes `Looks`: when a forced appearance is let go, which is when the user's
