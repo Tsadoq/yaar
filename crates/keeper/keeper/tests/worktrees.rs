@@ -904,18 +904,66 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
     window.stop(keeper);
 }
 
+/// A stand-in `claude` that tells the test when its program ends: it prints a marker once
+/// its traps are set and then reads its terminal, and writes to the fifo `ended` as it
+/// exits, which the hang-up that ends a terminal brings about. The test reads the fifo from
+/// a thread: the channel it gives holds a message once the program has ended.
+fn an_agent_that_tells_when_it_ends(scratch: &Scratch) -> mpsc::Receiver<()> {
+    let pipe = scratch.0.join("ended");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .expect("start mkfifo")
+            .success()
+    );
+    scratch.program(
+        &scratch.0.join("fake").join("claude"),
+        &format!(
+            "trap 'echo ended > \"{pipe}\"' EXIT\n\
+             trap 'exit 0' HUP TERM\n\
+             echo AGENT-READY\n\
+             cat > /dev/null",
+            pipe = pipe.display()
+        ),
+    );
+    let (ended, hears) = mpsc::channel();
+    std::thread::spawn(move || {
+        // Opened for reading once the program opens it for writing, and read to its end.
+        let mut said = String::new();
+        std::fs::File::open(pipe)
+            .and_then(|mut file| file.read_to_string(&mut said))
+            .expect("read what the agent said");
+        let _ = ended.send(());
+    });
+    hears
+}
+
 #[test]
-fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_leaves_it_whole_or_taken_away()
- {
+fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_takes_it_away() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
     // Planted before the hook is put, as planting checks a file out and a checkout runs it.
     let planted = plant(&scratch, &repo);
     let gate = Gate::hook(&scratch, &repo);
+    let agent_ended = an_agent_that_tells_when_it_ends(&scratch);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
-    let (repository, _) = window.open(&repo);
+    let (repository, first) = window.open(&repo);
     let mut other = scratch.window();
+    // An agent runs in the repository's own workspace: the end of its program says that the
+    // Keeper has ended its parts.
+    let opened = window.ask(Request::OpenTerminal {
+        workspace: first,
+        program: Program::Agent {
+            agent: "claude".to_owned(),
+        },
+        size: SIZE,
+    });
+    let Ok(Reply::TerminalOpened { terminal }) = opened else {
+        panic!("no terminal: {opened:?}");
+    };
+    window.output_holds(&terminal, "AGENT-READY");
     // Read before the request is sent.
     let before = snapshot(&scratch, &repo);
 
@@ -933,19 +981,16 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
         "git has not made the worktree yet"
     );
 
-    // The Keeper is asked to stop while the hook still runs. It lets every Window go before
-    // it waits for the work in flight, so the end of this Window's connection says that the
-    // Keeper is leaving, and that is read before the window of time is given.
+    // The Keeper is asked to stop while the hook still runs. It lets every Window go and
+    // takes the parts away before it waits for the work in flight, which ends the program of
+    // the terminal: that is read before the window of time is given, so that the work finds
+    // the parts gone whenever it is let go.
     write_message(&mut other.stream, &Message::Shutdown).expect("ask for the stop");
-    loop {
-        match read_message(&mut other.stream) {
-            Err(yaar_link::LinkError::Closed) => break,
-            Ok(_) => {}
-            Err(error) => panic!("the Keeper did not let the Window go: {error}"),
-        }
-    }
     let (stopped, stops) = mpsc::channel();
     std::thread::spawn(move || stopped.send(keeper.join()).expect("tell the test"));
+    agent_ended
+        .recv_timeout(DEADLINE)
+        .expect("the Keeper did not end the program of the terminal");
     // The one timed negative: a Keeper that does not wait for the work leaves nothing to
     // look at while the work is held. A passing run cannot fail on it, since the hook is let
     // go only after the window; a Keeper that leaves later than this on a busy machine is
@@ -961,20 +1006,13 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
         .expect("the Keeper did not leave once the work had ended");
     assert_eq!(exit.expect("join").expect("run"), Exit::Shutdown);
 
-    // The work ended before `run` returned, so nothing is waited for here: the worktree is
-    // whole (the folder, the branch and git's list agree) or taken away, never half made.
-    let listed = worktree_folders(&repo).contains(&made);
-    let branch = !git(&repo, &["branch", "--list", "slow"]).is_empty();
-    assert_eq!(
-        (listed, branch),
-        (made.is_dir(), made.is_dir()),
-        "half a worktree is left: {:?}",
-        worktree_folders(&repo)
-    );
-    if !listed {
-        assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
-        assert_eq!(snapshot(&scratch, &repo), before);
-    }
+    // The work found the parts gone and took the worktree away before `run` returned, so
+    // nothing is waited for here: the repository is as it was, with no worktree, no branch
+    // and no folder.
+    assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
+    assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
+    assert!(!made.exists(), "the folder of the worktree is left");
+    assert_eq!(snapshot(&scratch, &repo), before);
     still_there(&repo, &planted);
 }
 

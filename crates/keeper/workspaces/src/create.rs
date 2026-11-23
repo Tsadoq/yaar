@@ -248,7 +248,11 @@ impl Workspaces {
     /// module doc says. The workspace is forgotten and unwatched only once the worktree is
     /// gone: when git cannot take it away (the user's own hook can lock it) the error is
     /// given and the workspace stays as it was, listed and watched, so that nothing shows
-    /// a worktree that is there as one that is not.
+    /// a worktree that is there as one that is not. The cached [`Worktree`] of the workspace,
+    /// and a process kept for its folder, therefore outlive the folder for the length of the
+    /// removal (a folder that goes does not stop a process that works in it), which is why
+    /// this order differs from the one of [`Workspaces::open_added`]'s failed opening, where
+    /// nothing is kept to restore.
     pub fn remove_created(&self, created: &Created) -> Result<(), WorkspaceError> {
         // Through another worktree of the repository than the one that goes.
         let found = self.find(&created.repository, Some(&created.folder))?;
