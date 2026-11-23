@@ -217,7 +217,8 @@ pub enum ThreadState {
 /// Where a thread sits now, after the code it was written on changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
-    /// The version it sits in now: the full id of the recorded state it was carried to.
+    /// The version it sits in now: the full id of the recorded state it was carried to, or,
+    /// for a thread on the old side, the commit the changes are counted from.
     pub tree: String,
     /// The path of the file in that version: the path a renamed file has now. A file that
     /// was deleted keeps the path it had.

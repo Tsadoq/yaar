@@ -134,7 +134,9 @@ impl Reviews {
     /// [`Reviews::base_moved`] for a caller that tells others what was kept: the ids of the
     /// threads whose place now names `to`, and with them the first failure to read a file,
     /// when there was one, whose threads stay where they were. It fails as a whole only
-    /// when nothing was kept.
+    /// when nothing was kept. No surface makes one file of a commit unreadable while the
+    /// rest are read, so that a carry keeps the threads of the other files is stated here
+    /// and held by no test.
     pub fn base_moved_in_part(
         &self,
         workspace: &WorkspaceId,

@@ -16,9 +16,13 @@
 //!
 //! The bytes given are the blocks the removed files and links used on disk (`st_blocks`,
 //! in units of 512 bytes), the unit the recorded states are counted in: the folders
-//! themselves count for nothing. A session whose folder cannot be removed, or whose entry in
-//! the folder of reviews cannot be read, stays for the next clean-up: the others go on, and
-//! the first failure is what the call gives at the end.
+//! themselves count for nothing. A session whose folder cannot be removed stays for the next
+//! clean-up: the others go on, and the first failure is what the call gives at the end.
+//!
+//! An error reading the folder of reviews ends the walk: the standard library's listing gives
+//! that error once and nothing after it. The error is noted, what was removed stays removed,
+//! the sessions not reached stay for the next clean-up, and the failure is given at the end.
+//! No test holds this clause, for no surface makes a folder's listing fail partway.
 
 use std::fs;
 use std::io;
@@ -46,8 +50,9 @@ pub(crate) fn remove_files_of_ended(
     let mut removed = 0;
     let mut failure = None;
     for entry in fs::read_dir(&reviews)? {
-        // An entry that cannot be read is a session that cannot be cleaned: noted, and the
-        // others go on, as for one that cannot be removed.
+        // An error reading the listing is noted. The listing gives nothing after it, so the
+        // walk ends here: what was removed stays removed, and the sessions not reached stay
+        // for the next clean-up.
         let entry = match entry {
             Ok(entry) => entry,
             Err(error) => {
