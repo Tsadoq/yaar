@@ -298,10 +298,13 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
             .read_with(&cx, |pane, _| pane.keeps_selection())
     );
     let selected = window.review.read_with(&cx, |pane, _| pane.change_shown());
-    wait_until(&mut cx, "the file of the first turn in Changes", |cx| {
-        files_of_changes(&window, cx).contains(&PathBuf::from("first.txt"))
+    // What changed since the base: the file the turn wrote and the one the worktree held changed.
+    let files = ["first.txt", "notes.txt"].map(PathBuf::from).to_vec();
+    wait_until(&mut cx, "the files of the first turn in Changes", |cx| {
+        let mut listed = files_of_changes(&window, cx);
+        listed.sort();
+        listed == files
     });
-    let files = files_of_changes(&window, &mut cx);
 
     // The screen, opened by its key, shows the room the recorded states take: the workspace
     // of the world with more than nothing, and the total.

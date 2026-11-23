@@ -1694,13 +1694,27 @@ fn walk_the_silent_keys(
         .into_iter()
         .filter(|control| control.sends.is_none())
         .collect();
-    // Quit comes last: in the app nothing comes after it. The test platform does not
-    // end the app, so the window is still there to close the step.
-    let quit = yaar_window::Quit.name();
-    silent.sort_by_key(|control| (control.action)().name() == quit);
-    assert_eq!(
-        silent.last().map(|control| (control.action)().name()),
-        Some(quit)
+    // Quit and Close Window come last: in the app nothing comes after them. The test platform
+    // does not end the app on Quit, so the window is still there to close the step; Close
+    // Window closes the window that is active, which the step makes another (below).
+    let (quit, close) = (yaar_window::Quit.name(), CloseWindow.name());
+    let ends_the_app = |control: &Control| {
+        let name = (control.action)().name();
+        name == quit || name == close
+    };
+    silent.sort_by_key(|control| ends_the_app(control));
+    assert!(
+        silent
+            .iter()
+            .rev()
+            .take(2)
+            .all(|control| ends_the_app(control))
+            && silent
+                .iter()
+                .filter(|control| ends_the_app(control))
+                .count()
+                == 2,
+        "Quit and Close Window are the last two keys of the walk"
     );
 
     // This shows an absence, and is as strong as its end: each step is closed by a
