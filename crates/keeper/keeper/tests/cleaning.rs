@@ -1153,6 +1153,8 @@ fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_
     });
     assert_eq!(shown, Ok(Reply::Done));
     fs::remove_dir_all(&linked).expect("remove the worktree's folder");
+    let base_before = reads(&base);
+    let there_before = reads(&there.repo);
     let store = format!("{}.git", gone.workspace);
     let store_folder = world.scratch.data().join("states").join(&store);
     gate.hold_store(&store);
@@ -1186,7 +1188,10 @@ fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_
         !store_folder.exists(),
         "the folder of the store of a worktree that is gone is left behind"
     );
+    assert_eq!(reads(&base), base_before);
+    assert_eq!(reads(&there.repo), there_before);
     still_there(&base, &gone.planted);
+    still_there(&there.repo, &there.planted);
     let _ = world.finish();
 }
 
@@ -1406,6 +1411,7 @@ fn a_longer_set_time_keeps_what_the_default_would_have_deleted() {
     let mut recent = world.work("recent");
     let [one, two] = world.two_turns(&mut recent);
     let repo_before = reads(&recent.repo);
+    let old_before = reads(&old.repo);
 
     // At 61 days and an hour the old workspace's states are past the 60 days and the
     // hour, which says a sweep ran with the time set; the recent one's are 31 days and an
@@ -1419,6 +1425,9 @@ fn a_longer_set_time_keeps_what_the_default_would_have_deleted() {
     let states = world.scratch.states_of(&recent.workspace);
     assert!(states.contains(&one.state) && states.contains(&two.state));
     assert_eq!(reads(&recent.repo), repo_before);
+    assert_eq!(reads(&old.repo), old_before);
+    still_there(&recent.repo, &recent.planted);
+    still_there(&old.repo, &old.planted);
     let _ = world.finish();
 }
 
@@ -1431,6 +1440,7 @@ fn a_shortened_time_is_in_force_at_once() {
     let mut recent = world.work("recent");
     let [one, two] = world.two_turns(&mut recent);
     let repo_before = reads(&recent.repo);
+    let old_before = reads(&old.repo);
 
     // At 31 days and an hour the old workspace's states are past the default; the recent
     // one's are two days and an hour old. A sweep ran, and it kept them.
@@ -1449,7 +1459,9 @@ fn a_shortened_time_is_in_force_at_once() {
     assert!(is_expired(&history, &one.turn), "{history:?}");
     assert_eq!(state_in(&history, &two.turn), Some(two.state.clone()));
     assert_eq!(reads(&recent.repo), repo_before);
+    assert_eq!(reads(&old.repo), old_before);
     still_there(&recent.repo, &recent.planted);
+    still_there(&old.repo, &old.planted);
     let _ = world.finish();
 }
 
@@ -1552,5 +1564,6 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     assert!(!old_of_ended.exists(), "a file 31 days old stayed");
     assert_eq!(fs::read(&old_of_running).expect("read it"), running_bytes);
     assert_eq!(reads(&work.repo), repo_before);
+    still_there(&work.repo, &work.planted);
     let _ = world.finish();
 }
