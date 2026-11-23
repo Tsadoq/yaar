@@ -228,9 +228,7 @@ fn the_cmd_scroll_keys_move_to_the_top_the_bottom_and_one_line_and_send_nothing(
 }
 
 #[gpui_kit::test]
-fn the_cmd_keys_of_the_history_are_the_terminals_and_do_nothing_elsewhere(
-    cx: &mut TestAppContext,
-) {
+fn the_cmd_keys_of_the_history_are_the_terminals_and_do_nothing_elsewhere(cx: &mut TestAppContext) {
     let mut screen = Screen::new(cx);
     let before = screen.lines();
     screen.panes.click_elsewhere(&mut screen.cx);

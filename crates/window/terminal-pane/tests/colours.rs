@@ -73,7 +73,11 @@ fn the_default_colours_and_the_cursor_are_the_themes_own() {
         (NamedColor::Background, terminal.background),
         (NamedColor::Cursor, terminal.cursor),
     ] {
-        assert_eq!(colour_of(Color::Named(name), &terminal), expected, "{name:?}");
+        assert_eq!(
+            colour_of(Color::Named(name), &terminal),
+            expected,
+            "{name:?}"
+        );
     }
 }
 
@@ -139,15 +143,8 @@ fn the_numbers_above_fifteen_are_xterms_whatever_the_theme() {
 #[test]
 fn a_colour_by_its_value_is_that_value_whatever_the_theme() {
     let terminal = own();
-    let by_value = Rgb {
-        r: 1,
-        g: 2,
-        b: 3,
-    };
-    assert_eq!(
-        colour_of(Color::Spec(by_value), &terminal),
-        rgb24(1, 2, 3)
-    );
+    let by_value = Rgb { r: 1, g: 2, b: 3 };
+    assert_eq!(colour_of(Color::Spec(by_value), &terminal), rgb24(1, 2, 3));
     assert_eq!(colour_of(Color::Spec(by_value), &terminal), hex(0x010203));
 }
 
@@ -215,7 +212,10 @@ fn the_answers_follow_the_colours_handed_last() {
     let own_background = answers(&mut emulator, b"\x1b]11;?\x07");
     emulator.set_colours(light);
     let again = answers(&mut emulator, b"\x1b]11;?\x07");
-    assert_eq!(light_background, format!("\x1b]11;{}\x07", rgb(255, 255, 255)));
+    assert_eq!(
+        light_background,
+        format!("\x1b]11;{}\x07", rgb(255, 255, 255))
+    );
     assert_eq!(own_background, format!("\x1b]11;{}\x07", rgb(2, 2, 2)));
     assert_eq!(again, light_background);
 }

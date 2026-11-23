@@ -483,6 +483,9 @@ pub struct TerminalPane {
     /// Until when each frame asks for the next one: the end of the second after the
     /// last key.
     frames_until: Option<Instant>,
+    /// The workspace of a worktree made with an agent, until it comes on screen: its
+    /// terminal takes the focus then, wherever the focus was.
+    focus_on_arrival: Option<WorkspaceId>,
     /// The title the pane last gave the window.
     window_title: Option<String>,
     /// The terminals the pane asked the Keeper to attach and has no answer for.
@@ -557,6 +560,7 @@ impl TerminalPane {
             on_screen,
             layouts: HashMap::new(),
             frames_until: None,
+            focus_on_arrival: None,
             window_title: None,
             attaching: HashMap::new(),
             attachments: attachment::Attachments::default(),
@@ -668,7 +672,13 @@ impl TerminalPane {
         // Read before the frame that leaves the old terminal is drawn.
         let had_the_focus = self.focus.contains_focused(window, cx);
         self.on_screen = now;
-        if had_the_focus {
+        // The worktree a user asked for with an agent: its terminal has the focus, as a
+        // terminal the user opens does, whoever had it.
+        let arrived = self.focus_on_arrival.is_some() && self.focus_on_arrival == self.on_screen;
+        if arrived {
+            self.focus_on_arrival = None;
+        }
+        if had_the_focus || arrived {
             if self.focused().is_some() {
                 self.focus_terminal(window, cx);
             } else {
