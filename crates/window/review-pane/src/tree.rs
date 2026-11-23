@@ -799,16 +799,6 @@ impl ReviewPane {
         }
     }
 
-    /// The words the row of entry `index` of the tree draws: a commit's short id and
-    /// summary, "<who>, a turn" with the title of the agent session (or "An agent" where
-    /// the agents model holds none), the same followed by what says why a turn can not be
-    /// selected, and "Uncommitted changes (<count>)" for the entry after the history's.
-    /// None past it.
-    pub fn history_label(&self, index: usize, cx: &App) -> Option<String> {
-        let held = self.tree.history.as_ref()?.entries.len();
-        (index <= held).then(|| self.entry_words(index, cx).0)
-    }
-
     /// The entry at `index` of the tree as a row.
     fn draw_entry(&self, index: usize, window: &Window, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
@@ -826,6 +816,13 @@ impl ReviewPane {
         let here = self.tree.cursor == Some(index) && self.tree.focus.is_focused(window);
         let marked = self.tree.marked.contains(&index);
         let (label, selectable) = self.entry_words(index, cx);
+        // The words the row draws are in the selector of the text, as the other labels'
+        // are: "review-history-<index>:<words>", "review-history-uncommitted:<words>".
+        let words_selector = if uncommitted {
+            format!("review-history-uncommitted:{label}")
+        } else {
+            format!("review-history-{index}:{label}")
+        };
         let row = div()
             .h(ROW_HEIGHT)
             .w_full()
@@ -855,7 +852,11 @@ impl ReviewPane {
                     .w(px(10.))
                     .child(if marked { "●" } else { "" }),
             )
-            .child(label);
+            .child(
+                div()
+                    .child(label)
+                    .debug_selector(move || words_selector.clone()),
+            );
         if uncommitted {
             row.debug_selector(|| "review-history-uncommitted".to_owned())
         } else {

@@ -1714,24 +1714,14 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
 ) {
     let (mut stage, mut cx) = open_with_history(history_with_an_expired_turn(), uncommitted(), cx);
     assert_eq!(EXPIRED_TURN, "a turn (its recording has expired)");
-    let label = |index, stage: &Stage, cx: &mut VisualTestContext| {
-        stage
-            .pane
-            .read_with(cx, |pane, cx| pane.history_label(index, cx))
+    // The words of a row are in the selector of its text.
+    let says = |index: &str, words: &str, cx: &mut VisualTestContext| {
+        drawn(&format!("review-history-{index}:{words}"), cx).is_some()
     };
-    assert_eq!(
-        label(1, &stage, &mut cx),
-        Some(format!("An agent, {EXPIRED_TURN}"))
-    );
-    assert_eq!(
-        label(3, &stage, &mut cx),
-        Some("An agent, a turn".to_owned())
-    );
-    assert_eq!(
-        label(4, &stage, &mut cx),
-        Some("Uncommitted changes (2)".to_owned())
-    );
-    assert_eq!(label(5, &stage, &mut cx), None);
+    assert!(says("1", &format!("An agent, {EXPIRED_TURN}"), &mut cx));
+    assert!(says("3", "An agent, a turn", &mut cx));
+    assert!(says("uncommitted", "Uncommitted changes (2)", &mut cx));
+    assert!(!says("1", "An agent, a turn", &mut cx));
     assert!(entry_bounds(Some(1), &mut cx).is_some(), "the row is drawn");
 
     // A click on it selects nothing, and neither does Enter on the cursor that the click
@@ -1743,6 +1733,14 @@ fn a_turn_whose_recording_expired_is_drawn_with_its_words_and_cannot_be_selected
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.history_cursor()),
         Some(1)
+    );
+    cx.simulate_keystrokes("enter");
+    assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
+    // It cannot be marked for a range either: Enter with nothing marked shows nothing.
+    cx.simulate_keystrokes("space");
+    assert_eq!(
+        stage.pane.read_with(&cx, |pane, _| pane.marked_changes()),
+        Vec::<usize>::new()
     );
     cx.simulate_keystrokes("enter");
     assert_eq!(shown(&stage.pane, &mut cx), ChangeShown::Comparison);
