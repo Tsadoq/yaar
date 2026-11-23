@@ -917,6 +917,7 @@ impl Composed {
     /// until it has the focus: its keys work from there.
     fn open_the_settings(&mut self, cx: &mut VisualTestContext) {
         if !self.settings_are_open(cx) {
+            self.leave_the_terminal_off_macos(cx);
             cx.simulate_keystrokes(&key_of("Settings…"));
         }
         wait_until(cx, "the settings screen to have the focus", |cx| {

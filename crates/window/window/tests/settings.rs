@@ -159,6 +159,7 @@ fn row_and_cursor(
 
 /// Opens the settings screen by its key and waits until it has the focus.
 fn open_the_screen(window: &Composed, cx: &mut VisualTestContext) {
+    window.leave_the_terminal_off_macos(cx);
     cx.simulate_keystrokes(&key_of("Settings…"));
     wait_until(cx, "the settings screen with the focus", |cx| {
         window
