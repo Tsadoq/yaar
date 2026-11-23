@@ -11,7 +11,9 @@
 //! it belongs there.
 
 use std::cell::RefCell;
+use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -213,6 +215,133 @@ fn controls_that_send(kind: RequestKind) -> Vec<Control> {
         .into_iter()
         .filter(|control| control.sends == Some(Sends::Request(kind)))
         .collect()
+}
+
+/// What a read gave, compared byte for byte and shown as text when two differ.
+#[derive(PartialEq, Eq)]
+struct Bytes(Vec<u8>);
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} bytes: {:?}",
+            self.0.len(),
+            String::from_utf8_lossy(&self.0)
+        )
+    }
+}
+
+/// What a clean-up must leave as it was in the user's repository: the seven reads of it and
+/// every file of its objects with its size.
+#[derive(Debug, PartialEq, Eq)]
+struct Reads {
+    git: Vec<Bytes>,
+    objects: Vec<(PathBuf, u64)>,
+}
+
+/// Runs git in `folder` as a reader of a repository does: with no optional lock, so that
+/// reading never rewrites the index, and with nothing of the user's configuration.
+fn read_git(home: &Path, folder: &Path, args: &[&str]) -> Vec<u8> {
+    let mut git = Command::new("git");
+    git.env_clear();
+    if let Some(search) = std::env::var_os("PATH") {
+        git.env("PATH", search);
+    }
+    let output = git
+        .current_dir(folder)
+        .args(args)
+        .env("HOME", home)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "A Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z")
+        .env("GIT_COMMITTER_NAME", "A Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+/// Every file below `folder` with its size, the path relative to `below`.
+fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
+    for entry in fs::read_dir(folder).expect("read the folder") {
+        let path = entry.expect("an entry").path();
+        let meta = fs::symlink_metadata(&path).expect("the kind");
+        if meta.is_dir() {
+            files_below(&path, below, found);
+        } else {
+            found.push((
+                path.strip_prefix(below).expect("below").to_owned(),
+                meta.len(),
+            ));
+        }
+    }
+}
+
+/// The repository's reads: status with the ignored files, the refs, the worktrees, the
+/// stashes, the unreachable objects, the bytes of the index and of the configuration, and
+/// the sorted list of every file of the objects with its size.
+fn reads(home: &Path, repo: &Repo) -> Reads {
+    let git_folder = repo.path().join(".git");
+    let mut objects = Vec::new();
+    files_below(
+        &git_folder.join("objects"),
+        &git_folder.join("objects"),
+        &mut objects,
+    );
+    objects.sort();
+    let git = [
+        &[
+            "status",
+            "--porcelain=v2",
+            "--ignored",
+            "--untracked-files=all",
+        ][..],
+        &["for-each-ref"],
+        &["worktree", "list", "--porcelain"],
+        &["stash", "list"],
+        &["fsck", "--unreachable", "--no-reflogs"],
+    ]
+    .iter()
+    .map(|args| read_git(home, repo.path(), args))
+    .chain([
+        fs::read(git_folder.join("index")).expect("the index"),
+        fs::read(git_folder.join("config")).expect("the configuration"),
+    ])
+    .map(Bytes)
+    .collect();
+    Reads { git, objects }
+}
+
+/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
+/// Gives their ids, which [`still_there`] finds again.
+fn plant(home: &Path, repo: &Repo) -> Vec<String> {
+    let file = home.join("planted.txt");
+    fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
+    let blob = repo.git(&["hash-object", "-w", file.to_str().expect("a path of text")]);
+    repo.write("README.md", "edited\n");
+    let dangling = repo.git(&["stash", "create"]);
+    repo.git(&["checkout", "--quiet", "--", "README.md"]);
+    assert!(!dangling.is_empty(), "the edit left no commit to plant");
+    vec![blob, dangling]
+}
+
+/// `git cat-file -e` of each planted object succeeds.
+fn still_there(repo: &Repo, planted: &[String]) {
+    for id in planted {
+        repo.git(&["cat-file", "-e", id]);
+    }
 }
 
 impl Composed {
@@ -1086,6 +1215,9 @@ impl Composed {
             // and the stand-in a launcher started, which the step has to end.
             let mut back_to: Option<WorkspaceId> = None;
             let mut launched_after: Option<u32> = None;
+            // What a clean-up has to leave as it was: the reads of each repository the walk
+            // opened before the step, with the objects planted in it.
+            let mut untouched: Vec<(Reads, Vec<String>)> = Vec::new();
             // No arm catches the rest: a kind added to the Link stops this from
             // compiling until somebody says here how to walk it.
             let (answer, wanted): (Answer, Wanted) = match kind {
@@ -1353,6 +1485,9 @@ impl Composed {
                         .read_with(cx, |pane, cx| pane.chosen_cli(cx))
                         .expect("the Keeper names the CLIs the launchers start")
                         .agent;
+                    // The world's agent is the stand-in as Claude Code: the request names
+                    // that Adapter, whatever the pane's reader of the choice says.
+                    assert_eq!(agent, "claude", "the CLI the walk chooses");
                     let branch = format!("made-{}", self.next());
                     back_to = Some(on_screen.id);
                     launched_after = Some(self.world.agent_log("default").pid);
@@ -1367,7 +1502,18 @@ impl Composed {
                 }
                 RequestKind::CleanUpStates => {
                     // The screen opened by the key of the walk's step: the states of the
-                    // workspaces are cleaned up from there.
+                    // workspaces are cleaned up from there. The repositories the walk has
+                    // opened are the user's: each gets two objects no ref reaches, and is
+                    // read before the key and after the answer.
+                    let home = self.world.home();
+                    untouched = self
+                        .repositories
+                        .iter()
+                        .map(|repository| {
+                            let planted = plant(&home, repository);
+                            (reads(&home, repository), planted)
+                        })
+                        .collect();
                     (
                         Answer::Nothing,
                         Box::new(|passed| matches!(passed, Request::CleanUpStates)),
@@ -1433,6 +1579,16 @@ impl Composed {
             // hold.
             let passed = self.wait_for_the_request(from, |passed| wanted(passed), cx);
             self.settle(kind, &passed, from, cx);
+            let home = self.world.home();
+            for (repository, (before, planted)) in self.repositories.iter().zip(&untouched) {
+                assert_eq!(
+                    &reads(&home, repository),
+                    before,
+                    "the clean-up wrote into the repository {}",
+                    repository.path().display()
+                );
+                still_there(repository, planted);
+            }
             if let Some(before) = launched_after {
                 self.end_the_stand_in_started_after(before);
             }

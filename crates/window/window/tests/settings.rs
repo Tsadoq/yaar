@@ -10,7 +10,9 @@
 mod common;
 
 use std::cell::RefCell;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -289,6 +291,133 @@ fn files_of_changes(window: &Composed, cx: &mut VisualTestContext) -> Vec<PathBu
     })
 }
 
+/// What a read gave, compared byte for byte and shown as text when two differ.
+#[derive(PartialEq, Eq)]
+struct Bytes(Vec<u8>);
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} bytes: {:?}",
+            self.0.len(),
+            String::from_utf8_lossy(&self.0)
+        )
+    }
+}
+
+/// What a clean-up must leave as it was in the user's repository: the seven reads of it and
+/// every file of its objects with its size.
+#[derive(Debug, PartialEq, Eq)]
+struct Reads {
+    git: Vec<Bytes>,
+    objects: Vec<(PathBuf, u64)>,
+}
+
+/// Runs git in `folder` as a reader of a repository does: with no optional lock, so that
+/// reading never rewrites the index, and with nothing of the user's configuration.
+fn read_git(home: &Path, folder: &Path, args: &[&str]) -> Vec<u8> {
+    let mut git = Command::new("git");
+    git.env_clear();
+    if let Some(search) = std::env::var_os("PATH") {
+        git.env("PATH", search);
+    }
+    let output = git
+        .current_dir(folder)
+        .args(args)
+        .env("HOME", home)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "A Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z")
+        .env("GIT_COMMITTER_NAME", "A Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+/// Every file below `folder` with its size, the path relative to `below`.
+fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
+    for entry in fs::read_dir(folder).expect("read the folder") {
+        let path = entry.expect("an entry").path();
+        let meta = fs::symlink_metadata(&path).expect("the kind");
+        if meta.is_dir() {
+            files_below(&path, below, found);
+        } else {
+            found.push((
+                path.strip_prefix(below).expect("below").to_owned(),
+                meta.len(),
+            ));
+        }
+    }
+}
+
+/// The repository's reads: status with the ignored files, the refs, the worktrees, the
+/// stashes, the unreachable objects, the bytes of the index and of the configuration, and
+/// the sorted list of every file of the objects with its size.
+fn reads(home: &Path, repo: &Repo) -> Reads {
+    let git_folder = repo.path().join(".git");
+    let mut objects = Vec::new();
+    files_below(
+        &git_folder.join("objects"),
+        &git_folder.join("objects"),
+        &mut objects,
+    );
+    objects.sort();
+    let git = [
+        &[
+            "status",
+            "--porcelain=v2",
+            "--ignored",
+            "--untracked-files=all",
+        ][..],
+        &["for-each-ref"],
+        &["worktree", "list", "--porcelain"],
+        &["stash", "list"],
+        &["fsck", "--unreachable", "--no-reflogs"],
+    ]
+    .iter()
+    .map(|args| read_git(home, repo.path(), args))
+    .chain([
+        fs::read(git_folder.join("index")).expect("the index"),
+        fs::read(git_folder.join("config")).expect("the configuration"),
+    ])
+    .map(Bytes)
+    .collect();
+    Reads { git, objects }
+}
+
+/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
+/// Gives their ids, which [`still_there`] finds again.
+fn plant(home: &Path, repo: &Repo) -> Vec<String> {
+    let file = home.join("planted.txt");
+    fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
+    let blob = repo.git(&["hash-object", "-w", file.to_str().expect("a path of text")]);
+    repo.write("README.md", "edited\n");
+    let dangling = repo.git(&["stash", "create"]);
+    repo.git(&["checkout", "--quiet", "--", "README.md"]);
+    assert!(!dangling.is_empty(), "the edit left no commit to plant");
+    vec![blob, dangling]
+}
+
+/// `git cat-file -e` of each planted object succeeds.
+fn still_there(repo: &Repo, planted: &[String]) {
+    for id in planted {
+        repo.git(&["cat-file", "-e", id]);
+    }
+}
+
 /// The world of the settings' test: the stand-in as the agent CLI, which does a turn that
 /// writes `first.txt` and one that writes `second.txt`, and then ends.
 fn world_with_two_turns() -> World {
@@ -302,7 +431,7 @@ fn world_with_two_turns() -> World {
     world
 }
 
-// WIN-11, the opening: the theme follows the system from the first frame.
+// WIN-11, the opening: once the opening has run, the theme follows the system.
 #[gpui_kit::test]
 fn the_window_tells_its_theme_the_systems_appearance_at_its_opening(cx: &mut TestAppContext) {
     let mut world = World::new();
@@ -353,6 +482,10 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         .read_with(&cx, |list, _| list.selected().cloned())
         .expect("the opened folder is on screen");
     assert!(folder.exists());
+    // The repository is the user's: two objects no ref reaches are planted in it before the
+    // first read, so that a clean-up that reaches past the states shows.
+    let home = window.world.home();
+    let planted = plant(&home, &window.repositories[0]);
 
     // A turn of the agent is recorded. Nothing is set: the turn's end selects what changed
     // since the review, which is what the pane holds afterwards.
@@ -399,13 +532,33 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
         })
     });
     let before = before.expect("the Keeper gave the sizes");
-    let id = workspace.as_str().to_owned();
+    // The workspace's line: its name (the branch checked out) and its bytes in words.
+    let name = window
+        .models
+        .workspaces
+        .read_with(&cx, |list, _| {
+            list.workspace(&workspace)
+                .and_then(|held| held.head.clone())
+        })
+        .expect("the workspace has a branch checked out")
+        .label();
+    let bytes = before
+        .workspaces
+        .iter()
+        .find(|size| size.workspace == workspace)
+        .expect("the sizes name the workspace")
+        .bytes;
+    let drawn_workspace = format!(
+        "settings-size-{}:{name}: {}",
+        workspace.as_str(),
+        size_words(bytes)
+    );
     let drawn_total = format!(
         "settings-size-total:{TOTAL_STATES}: {}",
         size_words(before.total)
     );
     wait_until(&mut cx, "the screen to draw the sizes", |cx| {
-        drawn(&format!("settings-size-{id}"), cx).is_some() && drawn(&drawn_total, cx).is_some()
+        drawn(&drawn_workspace, cx).is_some() && drawn(&drawn_total, cx).is_some()
     });
 
     // What a turn end selects: `l` on its row. The model has it before anything is waited for.
@@ -535,6 +688,7 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
     wait_until(&mut cx, "the control of the clean-up to be drawn", |cx| {
         drawn(&control, cx).is_some()
     });
+    let repository_before = reads(&home, &window.repositories[0]);
     cx.simulate_keystrokes(&key_of("Clean Up Recorded States"));
     wait_for_request(
         &window,
@@ -548,6 +702,10 @@ fn each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_kee
             .states
             .read_with(cx, |states, _| !states.cleaning())
     });
+    // Nothing of the user's was written: every read of the repository is as it was, and the
+    // objects nothing refers to are still there.
+    assert_eq!(reads(&home, &window.repositories[0]), repository_before);
+    still_there(&window.repositories[0], &planted);
     let after = window
         .models
         .states

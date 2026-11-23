@@ -4,8 +4,12 @@
 //! [`follow_system`] runs once a window is opened, before it is first drawn:
 //!
 //! 1. it tells `Looks::system_is` the window's appearance at once (`Window::appearance`,
-//!    turned into `yaar_frame::theme::Appearance`), so that the theme of the system is
-//!    applied from the first frame;
+//!    turned into `yaar_frame::theme::Appearance`), so that the model holds it as soon as
+//!    the Window program has the window. The first frame is drawn inside the toolkit's
+//!    opening of the window, before this runs, and the toolkit tells an observer of the
+//!    window's appearance once the opening's effects have run: step 2's observer is told
+//!    the same value then, so this tell and that notification agree and no test can tell
+//!    either from the other;
 //! 2. it observes the window's appearance (`Window::observe_window_appearance`, the
 //!    subscription detached for the window's life) and tells `Looks::system_is` each change;
 //! 3. it observes `Looks`: when a forced appearance is let go, which is when the user's
