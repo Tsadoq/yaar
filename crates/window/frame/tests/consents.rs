@@ -409,6 +409,48 @@ fn an_answer_when_every_question_held_is_answered_already_asks_the_list_first(
 }
 
 #[gpui_kit::test]
+fn a_refresh_asks_for_the_whole_list_and_takes_it_and_a_refusal_leaves_the_list_as_it_was(
+    cx: &mut TestAppContext,
+) {
+    let (list, mut keeper) = linked(cx);
+    let refreshed = list.update(cx, |list, cx| list.refresh(cx));
+    let refreshed = start(refreshed, cx);
+    let asking = keeper.expect(Request::ListConsents, cx);
+    keeper.reply(
+        asking,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::Yes),
+            consent("b", ConsentAnswer::No),
+        ])),
+    );
+    assert!(matches!(finished(&refreshed, cx), Ok(())));
+    // What was answered long ago is held, though no question of it is shown.
+    assert_eq!(
+        list.read_with(cx, |list, _| list.all().to_vec()),
+        [
+            consent("a", ConsentAnswer::Yes),
+            consent("b", ConsentAnswer::No)
+        ]
+    );
+    assert_eq!(asked(&list, cx), Vec::<String>::new());
+
+    let refused = list.update(cx, |list, cx| list.refresh(cx));
+    let refused = start(refused, cx);
+    let asking = keeper.expect(Request::ListConsents, cx);
+    keeper.reply(
+        asking,
+        Err(Refusal::Failed {
+            reason: "no list".to_owned(),
+        }),
+    );
+    assert!(matches!(
+        finished(&refused, cx),
+        Err(AskError::Refused(Refusal::Failed { .. }))
+    ));
+    assert_eq!(list.read_with(cx, |list, _| list.all().len()), 2);
+}
+
+#[gpui_kit::test]
 fn the_list_holds_every_adapter_the_keeper_told_answered_or_not(cx: &mut TestAppContext) {
     let (list, mut keeper) = linked(cx);
     assert_eq!(list.read_with(cx, |list, _| list.all().to_vec()), []);

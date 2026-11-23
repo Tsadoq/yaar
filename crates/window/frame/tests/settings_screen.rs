@@ -285,13 +285,25 @@ fn opened(
 }
 
 impl Window9 {
-    /// Opens the screen with its key and answers its question for the sizes.
+    /// Opens the screen with its key and answers its two questions, the sizes of the states
+    /// and then the list of the extensions: the Keeper of the test holds what it has told the
+    /// Window, so that is the list it answers with.
     fn open_screen(&mut self, answer: StateSizes) -> Entity<SettingsScreen> {
         self.cx.simulate_keystrokes(&pressed::<OpenSettings>());
         let asked = self
             .shown
             .keeper
             .expect(Request::GetStateSizes, &mut self.cx);
+        let listing = self
+            .shown
+            .keeper
+            .expect(Request::ListConsents, &mut self.cx);
+        let told = self
+            .shown
+            .models
+            .consents
+            .read_with(&self.cx, |consents, _| consents.all().to_vec());
+        self.shown.keeper.reply(listing, Ok(Reply::Consents(told)));
         self.shown
             .keeper
             .reply(asked, Ok(Reply::StateSizes(answer.clone())));
@@ -305,13 +317,24 @@ impl Window9 {
         self.screen()
     }
 
-    /// Opens the screen again, which asks for the sizes again; the answer is that of none.
+    /// Opens the screen again, which asks for the sizes and the extensions again; the answer
+    /// to the first is that of none, and to the second what the Keeper has told.
     fn open_screen_again(&mut self) {
         self.cx.simulate_keystrokes(&pressed::<OpenSettings>());
         let asked = self
             .shown
             .keeper
             .expect(Request::GetStateSizes, &mut self.cx);
+        let listing = self
+            .shown
+            .keeper
+            .expect(Request::ListConsents, &mut self.cx);
+        let told = self
+            .shown
+            .models
+            .consents
+            .read_with(&self.cx, |consents, _| consents.all().to_vec());
+        self.shown.keeper.reply(listing, Ok(Reply::Consents(told)));
         self.shown
             .keeper
             .reply(asked, Ok(Reply::StateSizes(sizes(&[], 0))));
@@ -1203,6 +1226,14 @@ fn a_refused_question_for_the_sizes_shows_its_reason_and_the_control_stays(
         .shown
         .keeper
         .expect(Request::GetStateSizes, &mut window.cx);
+    let listing = window
+        .shown
+        .keeper
+        .expect(Request::ListConsents, &mut window.cx);
+    window
+        .shown
+        .keeper
+        .reply(listing, Ok(Reply::Consents(Vec::new())));
     window.shown.keeper.reply(
         asked,
         Err(Refusal::Failed {
@@ -1391,6 +1422,69 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
         rows_now(shown, cx)[at].chosen == Some(1)
     });
     window.assert_chosen_drawn(&SettingRow::Extension("pi".to_owned()));
+    window.no_dialog();
+}
+
+#[gpui_kit::test]
+fn an_extension_answered_before_the_window_started_is_asked_for_at_the_opening_and_listed_with_its_answer(
+    cx: &mut TestAppContext,
+) {
+    // The Keeper told this Window nothing: it tells a Window of an Adapter only while a
+    // question waits or something went wrong, and pi was answered yes long ago.
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    window
+        .shown
+        .models
+        .consents
+        .read_with(&window.cx, |consents, _| assert!(consents.all().is_empty()));
+
+    window.cx.simulate_keystrokes(&pressed::<OpenSettings>());
+    // The sizes first, then the extensions.
+    let sizes_asked = window
+        .shown
+        .keeper
+        .expect(Request::GetStateSizes, &mut window.cx);
+    let listing = window
+        .shown
+        .keeper
+        .expect(Request::ListConsents, &mut window.cx);
+    window
+        .shown
+        .keeper
+        .reply(sizes_asked, Ok(Reply::StateSizes(sizes(&[], 0))));
+    window.shown.keeper.reply(
+        listing,
+        Ok(Reply::Consents(vec![consent("pi", ConsentAnswer::Yes)])),
+    );
+    let pi = SettingRow::Extension("pi".to_owned());
+    window.wait("the row of the extension", |shown, cx| {
+        rows_now(shown, cx).iter().any(|shown| shown.row == pi)
+    });
+    let at = window.index_of(&pi);
+    assert_eq!(
+        window.row(&pi).chosen,
+        Some(0),
+        "the answer given before is the one chosen"
+    );
+    assert!(window.is_drawn(&Window9::value(at, 0, INSTALL)));
+    window.assert_chosen_drawn(&pi);
+
+    // The answer is changed from here.
+    window.click(&Window9::value(at, 1, DONT_INSTALL));
+    let asked = window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        },
+        &mut window.cx,
+    );
+    window.shown.keeper.reply(
+        asked,
+        Ok(Reply::Consents(vec![consent("pi", ConsentAnswer::No)])),
+    );
+    window.wait("the answer to show", |shown, cx| {
+        rows_now(shown, cx)[at].chosen == Some(1)
+    });
     window.no_dialog();
 }
 

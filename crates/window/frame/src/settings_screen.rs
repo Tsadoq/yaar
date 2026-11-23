@@ -52,7 +52,12 @@
 //! is shown as the row's value with no value chosen, and `l`, `h` move from the value
 //! above, or below, it.
 //!
-//! The sizes are asked for when the screen opens (`RecordedStates::refresh`), and shown as
+//! At each opening the screen asks the Keeper two questions, in this order: `GetStateSizes`
+//! (`RecordedStates::refresh`) and `ListConsents` (`ConsentList::refresh`), so that an
+//! extension answered before this Window started, of which the Keeper tells a Window nothing,
+//! has its row with its answer chosen. A refusal of the second leaves the rows as they were.
+//!
+//! The sizes are asked for when the screen opens, and shown as
 //! `<workspace's name>: <size>` (selector `settings-size-<workspace id>`) for each workspace
 //! of the answer that the Window lists; then, when the total is larger than the sum of
 //! those, `<OTHER_STATES>: <the difference>` (selector `settings-size-other`,
@@ -110,6 +115,7 @@ use crate::controls::{
     Asks, CleanUpStates, CloseSettings, Control, NextSetting, NextValue, OpenSetting, Place,
     PreviousSetting, PreviousValue, Sends, SetBase,
 };
+use crate::link_model::AskError;
 use crate::models::Models;
 use crate::sidebar::workspace_name;
 
@@ -350,6 +356,8 @@ pub struct SettingsScreen {
     field: Option<FolderField>,
     /// Why the Keeper refused the last answer to a question for leave.
     notice: Option<String>,
+    /// The question for the list of the extensions, asked when the screen opened.
+    _listing: Task<Result<(), AskError>>,
     _watching: Vec<Subscription>,
 }
 
@@ -364,9 +372,14 @@ fn is_choice(row: &SettingRow) -> bool {
 
 impl SettingsScreen {
     /// The screen of one window, over its shared models. It asks for the sizes of the states
-    /// when it is made, which is when it opens.
+    /// and then for the list of the extensions when it is made, which is when it opens: the
+    /// Keeper tells a Window an Adapter only while a question waits or something went wrong,
+    /// so an answer given before this Window started is in the list only because it asks.
     pub fn new(models: Models, cx: &mut Context<Self>) -> SettingsScreen {
         models.states.update(cx, |states, cx| states.refresh(cx));
+        let listing = models
+            .consents
+            .update(cx, |consents, cx| consents.refresh(cx));
         // The screen holds nothing it shows: each model that does, when it changes, has the
         // screen drawn again, with the cursor still on a row there is.
         let keep = |screen: &mut Self, cx: &mut Context<Self>| {
@@ -388,6 +401,7 @@ impl SettingsScreen {
             scroll: ScrollHandle::new(),
             field: None,
             notice: None,
+            _listing: listing,
             _watching: watching,
         }
     }
