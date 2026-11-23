@@ -7,6 +7,7 @@
 mod common;
 
 use std::cell::RefCell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui_kit::{
@@ -15,11 +16,11 @@ use gpui_kit::{
 };
 use yaar_frame::{
     Beside, BuildPane, CloseSettings, FocusNextPane, FocusPreviousPane, MovePanes, NewWorktree,
-    OpenSettings, Pane, SetBase, Wanted,
+    OpenFolder, OpenSettings, Pane, SetBase, Wanted,
 };
 use yaar_link::{
-    AgentCli, Fact, Head, Hello, PROTOCOL_VERSION, Repository, RepositoryId, Request, Setting,
-    TerminalPlace, Workspace,
+    AgentCli, Fact, Head, Hello, PROTOCOL_VERSION, Refusal, Repository, RepositoryId, Request,
+    Setting, TerminalPlace, Workspace,
 };
 
 use common::{
@@ -379,6 +380,10 @@ fn field_is_open(cx: &mut VisualTestContext) -> bool {
     is_drawn("frame-worktree-field", cx)
 }
 
+fn field_is_open_for_base(cx: &mut VisualTestContext) -> bool {
+    is_drawn("frame-base-field", cx)
+}
+
 #[gpui_kit::test]
 fn a_branch_typed_in_the_field_of_a_new_worktree_wants_a_worktree_from_the_branch_on_screen_with_the_chosen_cli(
     cx: &mut TestAppContext,
@@ -504,16 +509,18 @@ fn with_a_detached_workspace_on_screen_the_notice_says_so_and_no_worktree_is_wan
     let wanted = wanted_log(&shown, &mut cx);
     let key = pressed::<NewWorktree>();
 
+    // The key alone gives the reason and opens no field; what is typed after it, and
+    // Enter, go nowhere.
     cx.simulate_keystrokes(&key);
-    cx.simulate_input("task");
-    cx.simulate_keystrokes("enter");
-
+    assert!(!field_is_open(&mut cx), "no field asks for a name");
     let said = notice(&shown, &mut cx).expect("the notice says why");
     assert!(
         said.contains("no branch"),
         "the notice names the reason: {said}"
     );
-    assert!(!field_is_open(&mut cx), "no field asks for a name");
+    cx.simulate_input("task");
+    cx.simulate_keystrokes("enter");
+    assert!(!field_is_open(&mut cx));
     let marker = barrier(&shown, &mut cx);
     assert_eq!(*wanted.borrow(), [marker], "nothing was wanted");
 
@@ -588,14 +595,14 @@ fn with_no_workspace_on_screen_the_notice_says_so_and_no_field_opens(cx: &mut Te
     let wanted = wanted_log(&shown, &mut cx);
 
     cx.simulate_keystrokes(&pressed::<NewWorktree>());
-    cx.simulate_input("task");
-    cx.simulate_keystrokes("enter");
-
+    assert!(!field_is_open(&mut cx), "no field asks for a name");
     let said = notice(&shown, &mut cx).expect("the notice says why");
     assert!(
         said.contains("No worktree is on screen"),
         "the notice names the reason: {said}"
     );
+    cx.simulate_input("task");
+    cx.simulate_keystrokes("enter");
     assert!(!field_is_open(&mut cx));
     let marker = barrier(&shown, &mut cx);
     assert_eq!(*wanted.borrow(), [marker]);
@@ -614,17 +621,109 @@ fn with_no_agent_cli_the_notice_says_so_and_no_field_opens(cx: &mut TestAppConte
     let wanted = wanted_log(&shown, &mut cx);
 
     cx.simulate_keystrokes(&pressed::<NewWorktree>());
-    cx.simulate_input("task");
-    cx.simulate_keystrokes("enter");
-
+    assert!(!field_is_open(&mut cx), "no field asks for a name");
     let said = notice(&shown, &mut cx).expect("the notice says why");
     assert!(
         said.contains("agent CLI"),
         "the notice names the reason: {said}"
     );
+    cx.simulate_input("task");
+    cx.simulate_keystrokes("enter");
     assert!(!field_is_open(&mut cx));
     let marker = barrier(&shown, &mut cx);
     assert_eq!(*wanted.borrow(), [marker]);
+}
+
+#[gpui_kit::test]
+fn with_a_workspace_that_is_gone_on_screen_the_notice_says_so_and_no_field_opens(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let gone = Workspace {
+        head: None,
+        ..workspace('1', "gone")
+    };
+    let mut listed = one_repository();
+    listed[0].workspaces.insert(0, gone);
+    let (shown, mut cx) = showing(
+        &listed,
+        two_panes(&handles),
+        vec![cli("claude", "Claude Code")],
+        cx,
+    );
+    wait_for_clis(&shown, &mut cx, 1);
+    // The workspace that came on screen is the first, which is gone.
+    let wanted = wanted_log(&shown, &mut cx);
+
+    cx.simulate_keystrokes(&pressed::<NewWorktree>());
+    assert!(!field_is_open(&mut cx), "no field asks for a name");
+    let said = notice(&shown, &mut cx).expect("the notice says why");
+    assert!(
+        said.contains("is gone"),
+        "the notice names the reason: {said}"
+    );
+    cx.simulate_input("task");
+    cx.simulate_keystrokes("enter");
+    assert!(!field_is_open(&mut cx));
+    let marker = barrier(&shown, &mut cx);
+    assert_eq!(*wanted.borrow(), [marker], "nothing was wanted");
+}
+
+#[gpui_kit::test]
+fn a_notice_of_a_new_worktree_is_taken_away_when_the_user_asks_the_keeper_for_the_next_thing(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let detached = Workspace {
+        head: Some(Head::Detached("a".repeat(40))),
+        ..workspace('1', "unused")
+    };
+    let mut listed = one_repository();
+    listed[0].workspaces.insert(0, detached);
+    let (mut shown, mut cx) = showing(
+        &listed,
+        two_panes(&handles),
+        vec![cli("claude", "Claude Code")],
+        cx,
+    );
+    wait_for_clis(&shown, &mut cx, 1);
+
+    // A new base: the notice of the worktree is gone as soon as the user sends it, and
+    // the reason the Keeper gives is the one that shows, not the older sentence.
+    cx.simulate_keystrokes(&pressed::<NewWorktree>());
+    assert!(notice(&shown, &mut cx).is_some());
+    cx.simulate_keystrokes(&pressed::<SetBase>());
+    assert!(field_is_open_for_base(&mut cx));
+    cx.simulate_input("origin/none");
+    cx.simulate_keystrokes("enter");
+    assert_eq!(notice(&shown, &mut cx), None);
+    let asked = shown.keeper.expect(
+        Request::SetBase {
+            workspace: id('1'),
+            base: "origin/none".to_owned(),
+        },
+        &mut cx,
+    );
+    let refusal = Refusal::UnknownRevision {
+        revision: "origin/none".to_owned(),
+    };
+    shown.keeper.reply(asked, Err(refusal.clone()));
+    wait_until(&mut cx, "the Keeper's reason", |cx| {
+        shown.frame.read_with(cx, |frame, cx| frame.notice(cx)) == Some(refusal.to_string())
+    });
+
+    // A folder: the same, before any answer.
+    cx.simulate_keystrokes(&pressed::<NewWorktree>());
+    assert!(notice(&shown, &mut cx).is_some_and(|said| said.contains("no branch")));
+    cx.simulate_keystrokes(&pressed::<OpenFolder>());
+    cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/gits/other")]));
+    shown.keeper.expect(
+        Request::OpenFolder {
+            path: PathBuf::from("/gits/other"),
+        },
+        &mut cx,
+    );
+    assert_eq!(notice(&shown, &mut cx), None);
 }
 
 // The place of the panes.

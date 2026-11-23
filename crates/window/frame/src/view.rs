@@ -614,7 +614,9 @@ impl Frame {
         if base.is_empty() {
             return;
         }
-        if composed.no_dialog.take().is_some() {
+        // The user asks for something the Keeper can refuse: what was said of the last
+        // ask, of a dialog or of a new worktree, is no longer the news.
+        if composed.no_dialog.take().is_some() | composed.worktree_notice.take().is_some() {
             cx.notify();
         }
         let workspaces = composed.models.workspaces.clone();
@@ -694,12 +696,12 @@ impl Frame {
             Some(Head::Branch(from)) => from.clone(),
             Some(Head::Detached(_)) => {
                 return Err(format!(
-                    "{name} has no branch checked out, and a new worktree is made from a branch."
+                    "The worktree on screen has no branch checked out ({name}); a new worktree is made from a branch."
                 ));
             }
             None => {
                 return Err(format!(
-                    "{name} is gone, and a new worktree cannot be made from it."
+                    "The worktree on screen ({name}) is gone, and a new worktree cannot be made from it."
                 ));
             }
         };
