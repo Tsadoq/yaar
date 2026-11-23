@@ -89,7 +89,8 @@
 //!   name (no letter, digit or `_` just before it), so that `transparent_black()` and
 //!   `transparent_white()`, which draw nothing, stay allowed;
 //! - on a role of the toolkit's theme read that is not one of [`Colors`]: every name read
-//!   as `theme.<name>` or `theme().<name>` is a role of [`Colors::roles`] or one of the
+//!   as `theme.<name>`, `theme().<name>` or `Theme::global(..).<name>` is a role of
+//!   [`Colors::roles`] or one of the
 //!   toolkit theme's fields that are no colour (`mode`, `font_family`, `font_size`,
 //!   `mono_font_family`, `mono_font_size`, `radius`, `radius_lg`, `window_radius`,
 //!   `shadow`). A role the definition does not hold would keep the toolkit's colour of the

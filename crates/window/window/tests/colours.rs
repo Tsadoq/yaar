@@ -10,6 +10,11 @@
 //! be written, and are left out, but for one function of the terminal pane: `colour_of` picks
 //! xterm's own colours (`indexed(`, `rgb24(`), which no theme has, and nowhere else may.
 //!
+//! The roles of the toolkit's theme that a source reads are those named after `theme.`,
+//! `theme().` and `Theme::global(..).`. The structure a definition is written into,
+//! `&mut theme.colors`, is named in one place only, `frame/src/looks.rs`, which applies a
+//! definition; in any other source it is a read like the others.
+//!
 //! A line whose first characters are `//` is taken out: a doc comment may name a colour.
 
 use std::collections::BTreeSet;
@@ -209,30 +214,60 @@ fn name_at(text: &str) -> &str {
     &text[..end]
 }
 
-/// The names `source` reads of the toolkit's theme (`theme.<name>`, `theme().<name>`) that are
-/// none of `roles` and no field that is no colour: the line and the name.
+/// The one source that may name `&mut theme.colors`: the model that applies a definition.
+const WRITES_THE_KITS_COLOURS: (&str, &str) = ("frame", "looks.rs");
+
+/// What stands for a read of the kit's theme in a line: the text before it, and the text
+/// where the name read begins. `theme.<name>` and `theme().<name>` have it right after the
+/// prefix; `Theme::global(<argument>).<name>` after the call's closing bracket and the dot.
+fn theme_reads(line: &str) -> Vec<(&str, &str)> {
+    let mut reads = Vec::new();
+    for prefix in ["theme().", "theme."] {
+        for at in found(line, prefix) {
+            reads.push((&line[..at], &line[at + prefix.len()..]));
+        }
+    }
+    const GLOBAL: &str = "Theme::global(";
+    for at in found(line, GLOBAL) {
+        let rest = &line[at + GLOBAL.len()..];
+        let tail = rest
+            .find(')')
+            .and_then(|close| rest[close + 1..].strip_prefix('.'));
+        if let Some(tail) = tail {
+            reads.push((&line[..at], tail));
+        }
+    }
+    reads
+}
+
+/// The names `source` of `folder/file` reads of the toolkit's theme (`theme.<name>`,
+/// `theme().<name>`, `Theme::global(..).<name>`) that are none of `roles` and no field that
+/// is no colour: the line and the name.
 ///
 /// `theme.colors` as a whole is no read of a colour only where it is the target of a write,
-/// `&mut theme.colors`: the structure a definition is written into, which the model that
-/// applies a definition names. Anywhere else it hands every role on, unread by name, and is
-/// judged as the name `colors`. A role read through it, `theme.colors.<name>`, is judged as
-/// any other.
-fn roles_unknown(source: &str, roles: &BTreeSet<&str>) -> Vec<(usize, String)> {
+/// `&mut theme.colors`, and only in [`WRITES_THE_KITS_COLOURS`]: the structure a definition
+/// is written into, which the model that applies a definition names. Anywhere else it hands
+/// every role on, unread by name, and is judged as the name `colors`. A role read through
+/// it, `theme.colors.<name>`, is judged as any other.
+fn roles_unknown(
+    folder: &str,
+    file: &str,
+    source: &str,
+    roles: &BTreeSet<&str>,
+) -> Vec<(usize, String)> {
+    let may_write = (folder, file) == WRITES_THE_KITS_COLOURS;
     let mut hits = Vec::new();
     for (number, line) in code_lines(source) {
-        for prefix in ["theme().", "theme."] {
-            for at in found(line, prefix) {
-                let mut rest = &line[at + prefix.len()..];
-                let mut name = name_at(rest);
-                if name == "colors" && rest[name.len()..].starts_with('.') {
-                    rest = &rest[name.len() + 1..];
-                    name = name_at(rest);
-                } else if name == "colors" && line[..at].ends_with("&mut ") {
-                    continue;
-                }
-                if !name.is_empty() && !roles.contains(name) && !NOT_COLOURS.contains(&name) {
-                    hits.push((number, name.to_string()));
-                }
+        for (before, mut rest) in theme_reads(line) {
+            let mut name = name_at(rest);
+            if name == "colors" && rest[name.len()..].starts_with('.') {
+                rest = &rest[name.len() + 1..];
+                name = name_at(rest);
+            } else if name == "colors" && may_write && before.ends_with("&mut ") {
+                continue;
+            }
+            if !name.is_empty() && !roles.contains(name) && !NOT_COLOURS.contains(&name) {
+                hits.push((number, name.to_string()));
             }
         }
     }
@@ -314,7 +349,7 @@ fn no_source_of_the_frame_the_panes_or_the_window_program_reads_a_colour_no_defi
     let hits: Vec<String> = SOURCES
         .iter()
         .flat_map(|(folder, file, source)| {
-            roles_unknown(source, &roles)
+            roles_unknown(folder, file, source, &roles)
                 .into_iter()
                 .map(move |(line, name)| format!("{folder}/src/{file}:{line}: reads `{name}`"))
         })
@@ -378,7 +413,7 @@ fn the_scan_for_roles_finds_a_name_no_definition_holds_and_passes_the_rest() {
         !roles.is_empty(),
         "the roles of a definition are what the scan reads against"
     );
-    let unknown = |text: &str| roles_unknown(text, &roles);
+    let unknown = |text: &str| roles_unknown("frame", "view.rs", text, &roles);
 
     assert_eq!(
         unknown("div().bg(theme.accent_hover)"),
@@ -411,12 +446,65 @@ fn the_scan_for_roles_finds_a_name_no_definition_holds_and_passes_the_rest() {
             "{field}"
         );
     }
-    // Only the target of a write is no read.
-    assert!(unknown("Theme::update(cx, |theme| definition.onto(&mut theme.colors));").is_empty());
+    // Only the target of a write, and only in the model that applies a definition, is no
+    // read.
+    let write = "Theme::update(cx, |theme| definition.onto(&mut theme.colors));";
+    assert!(roles_unknown("frame", "looks.rs", write, &roles).is_empty());
+    for (folder, file) in [
+        ("frame", "view.rs"),
+        ("frame", "settings_screen.rs"),
+        ("review-pane", "looks.rs"),
+        ("terminal-pane", "draw.rs"),
+        ("window", "appearance.rs"),
+    ] {
+        assert_eq!(
+            roles_unknown(folder, file, write, &roles),
+            [(1, "colors".to_string())],
+            "{folder}/src/{file} may not write the kit's colours"
+        );
+    }
     assert!(unknown("let c = theme.colors.border;").is_empty());
     assert!(unknown("/// The theme.accent_hover is not read.").is_empty());
     assert!(unknown("let c = my_theme.accent_hover;").is_empty());
     assert!(unknown("\"the theme. Next\"").is_empty());
+}
+
+#[test]
+fn the_scan_for_roles_reads_the_themes_global_as_it_reads_the_theme_of_a_context() {
+    let roles = roles();
+    let unknown = |text: &str| roles_unknown("review-pane", "draw.rs", text, &roles);
+
+    // A name no definition holds, read through the global, in every shape of the argument.
+    assert_eq!(
+        unknown("div().bg(Theme::global(cx).accent_hover)"),
+        [(1, "accent_hover".to_string())]
+    );
+    assert_eq!(
+        unknown("let a = 1;\nlet c = Theme::global(&*cx).accent_hover;"),
+        [(2, "accent_hover".to_string())]
+    );
+    assert_eq!(
+        unknown("let c = Theme::global(cx).colors.accent_hover;"),
+        [(1, "accent_hover".to_string())]
+    );
+    assert_eq!(
+        unknown("let c = &Theme::global(cx).colors;"),
+        [(1, "colors".to_string())]
+    );
+    // Two reads in a line are two reads.
+    assert_eq!(
+        unknown("(Theme::global(cx).danger, Theme::global(cx).nonsense)"),
+        [(1, "nonsense".to_string())]
+    );
+
+    // What the definitions hold and what is no colour pass, as they do through `theme.`.
+    assert!(unknown("div().bg(Theme::global(cx).muted_foreground)").is_empty());
+    assert!(unknown("let m = Theme::global(cx).mode;").is_empty());
+    assert!(unknown("let c = Theme::global(cx).colors.border;").is_empty());
+    // A call with no read after it, a longer name, a comment and another type are no read.
+    assert!(unknown("let t = Theme::global(cx);").is_empty());
+    assert!(unknown("let c = MyTheme::global(cx).accent_hover;").is_empty());
+    assert!(unknown("// Theme::global(cx).accent_hover is not read").is_empty());
 }
 
 #[test]
