@@ -30,11 +30,12 @@ use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
+use yaar_frame::theme::{self, TerminalColors};
 use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, SettingList, TerminalOutput};
 use yaar_link::{Ending, Request, TerminalId, TerminalSize};
 
 use crate::MouseButton as ReportedButton;
-use crate::draw::{self, Grid, Palette};
+use crate::draw::{self, Grid};
 use crate::{
     CellPlace, Clear, Copy, Emulator, MouseAction, MouseMode, OptionKey, Paste, ScrollLineDown,
     ScrollLineUp, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SelectAll,
@@ -83,6 +84,9 @@ pub struct TerminalView {
     /// The user's settings, which say what Option does.
     settings: Entity<SettingList>,
     emulator: Emulator,
+    /// The terminal colours of the theme the emulator answers a program's questions from:
+    /// the ones last handed to it.
+    colours: TerminalColors,
     focus: FocusHandle,
     /// The size the Keeper was last told.
     size: TerminalSize,
@@ -143,6 +147,9 @@ impl TerminalView {
             })
         });
         let mut emulator = Emulator::new(size);
+        // A program may ask for its colours before the first frame is drawn.
+        let colours = theme::applied(cx).terminal;
+        emulator.set_colours(colours);
         if cut {
             emulator.advance(CUT_NOTICE.as_bytes());
         }
@@ -151,6 +158,7 @@ impl TerminalView {
             link,
             settings,
             emulator,
+            colours,
             focus: cx.focus_handle(),
             size,
             marked: None,
@@ -611,7 +619,14 @@ impl Render for TerminalView {
             theme.muted_foreground,
             theme.border,
         );
-        let palette = Palette::of(theme);
+        // The colours are the applied definition's. A program asks for them with a question
+        // the emulator answers at once, so a change of theme is handed on here, at the
+        // frame that draws with the new definition.
+        let colours = theme::applied(cx).terminal;
+        if colours != self.colours {
+            self.colours = colours;
+            self.emulator.set_colours(colours);
+        }
         let screen = self.emulator.screen();
         let at = screen
             .cursor
@@ -721,7 +736,7 @@ impl Render for TerminalView {
                             cell,
                             font,
                             font_size,
-                            palette: &palette,
+                            colours: &colours,
                             focused,
                             selection,
                         };

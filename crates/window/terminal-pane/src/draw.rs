@@ -6,71 +6,44 @@
 //! line `l` starts `c` cell widths right of the left edge and `l` cell heights below the
 //! top edge.
 
-use gpui_kit::component::theme::Theme;
+use alacritty_terminal::vte::ansi::NamedColor;
 use gpui_kit::*;
+use yaar_frame::theme::{TerminalColors, indexed, rgb24};
 
 use crate::emulator::{CellPlace, Color, Screen, Style};
 
-/// The colours a terminal is drawn in: the theme's own for the text, the background and
-/// the six colours it names, and the fixed palette of xterm for the rest.
-pub(crate) struct Palette {
-    foreground: Hsla,
-    background: Hsla,
-    selection: Hsla,
-    ansi: [Hsla; 16],
-}
-
-fn hex(value: u32) -> Hsla {
-    rgb(value).into()
-}
-
-impl Palette {
-    /// The palette of the theme in force.
-    pub(crate) fn of(theme: &Theme) -> Palette {
-        Palette {
-            foreground: theme.foreground,
-            background: theme.background,
-            selection: theme.selection,
-            ansi: [
-                // Black, then the theme's colours, then white.
-                hex(0x000000),
-                theme.red,
-                theme.green,
-                theme.yellow,
-                theme.blue,
-                theme.magenta,
-                theme.cyan,
-                hex(0xe5e5e5),
-                // The bright forms.
-                hex(0x7f7f7f),
-                theme.red_light,
-                theme.green_light,
-                theme.yellow_light,
-                theme.blue_light,
-                theme.magenta_light,
-                theme.cyan_light,
-                hex(0xffffff),
-            ],
-        }
-    }
-
-    /// The colour the program asked for.
-    fn color(&self, color: Color) -> Hsla {
-        match color {
-            Color::Foreground => self.foreground,
-            Color::Background => self.background,
-            Color::Indexed(index @ 0..=15) => self.ansi[usize::from(index)],
-            Color::Indexed(index @ 16..=231) => {
-                let step = |n: u8| if n == 0 { 0 } else { 55 + 40 * u32::from(n) };
-                let n = index - 16;
-                hex(step(n / 36) << 16 | step(n / 6 % 6) << 8 | step(n % 6))
+/// The colour a program's `colour` is drawn in, under the theme whose terminal colours are
+/// `terminal`.
+///
+/// The names: the text and the background and the cursor are the theme's, and so is each of
+/// the sixteen the names red to white and their bright forms stand for. The dim forms of
+/// the eight are those eight, since the faint style dims whatever the colour is; the bright
+/// and dim forms of the text are the text. The numbers 0 to 15 are the theme's too; 16 to
+/// 255 are xterm's cube and greys, and a colour a program gives by its value is that value,
+/// whatever the theme ([`yaar_frame::theme::indexed`] and [`yaar_frame::theme::rgb24`]).
+pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Hsla {
+    match colour {
+        Color::Named(name) => match name {
+            NamedColor::Background => terminal.background,
+            NamedColor::Cursor => terminal.cursor,
+            NamedColor::Foreground | NamedColor::BrightForeground | NamedColor::DimForeground => {
+                terminal.foreground
             }
-            Color::Indexed(index) => {
-                let grey = 8 + 10 * u32::from(index - 232);
-                hex(grey << 16 | grey << 8 | grey)
+            // The sixteen are numbered 0 to 15, and the dim eight come after the text's
+            // own names, in the same order as the first eight.
+            name => {
+                let number = name as usize;
+                let first_dim = NamedColor::DimBlack as usize;
+                match number {
+                    0..=15 => terminal.ansi[number],
+                    n if (first_dim..first_dim + 8).contains(&n) => terminal.ansi[n - first_dim],
+                    _ => terminal.foreground,
+                }
             }
-            Color::Rgb(r, g, b) => hex(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b)),
-        }
+        },
+        Color::Indexed(number @ 0..=15) => terminal.ansi[usize::from(number)],
+        Color::Indexed(number) => indexed(number),
+        Color::Spec(value) => rgb24(value.r, value.g, value.b),
     }
 }
 
@@ -84,8 +57,8 @@ pub(crate) struct Grid<'a> {
     pub font: Font,
     /// Its size.
     pub font_size: Pixels,
-    /// The colours.
-    pub palette: &'a Palette,
+    /// The colours of the theme's terminal.
+    pub colours: &'a TerminalColors,
     /// Whether the terminal has the focus: the cursor is a block then, an outline else.
     pub focused: bool,
     /// The cells the user selected, both included, in the order read.
@@ -101,7 +74,7 @@ struct Segment {
 
 /// Draws the screen.
 pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut App) {
-    let palette = grid.palette;
+    let colours = grid.colours;
     let at = |line: usize, column: usize| {
         grid.origin
             + point(
@@ -128,8 +101,8 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
             if cell.text.is_empty() {
                 continue;
             }
-            let (mut text, mut back) = (palette.color(cell.fg), palette.color(cell.bg));
-            let mut has_background = cell.bg != Color::Background;
+            let (mut text, mut back) = (colour_of(cell.fg, colours), colour_of(cell.bg, colours));
+            let mut has_background = cell.bg != Color::Named(NamedColor::Background);
             if cell.style.inverse {
                 std::mem::swap(&mut text, &mut back);
                 has_background = true;
@@ -138,7 +111,7 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
                 text.a *= 0.6;
             }
             if selected(line, column) {
-                back = palette.selection;
+                back = colours.selection;
                 has_background = true;
             }
             let width = if cell.wide { 2 } else { 1 };
@@ -154,7 +127,7 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
                 .cursor
                 .is_some_and(|cursor| cursor.line == line && cursor.column == column)
             {
-                under_cursor = Some((cell.text.clone(), palette.background));
+                under_cursor = Some((cell.text.clone(), colours.background));
             }
             let blank = cell.text == " " || cell.style.hidden;
             if blank && !cell.style.underline && !cell.style.strike {
@@ -250,7 +223,7 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
     if let Some(cursor) = screen.cursor {
         let bounds = Bounds::new(at(cursor.line, cursor.column), grid.cell);
         if grid.focused {
-            window.paint_quad(fill(bounds, palette.foreground));
+            window.paint_quad(fill(bounds, colours.cursor));
             // The character under the block is drawn again in the colour of the
             // background, or it would vanish into the block.
             if let Some((text, color)) = under_cursor
@@ -280,7 +253,7 @@ pub(crate) fn paint(screen: &Screen, grid: &Grid, window: &mut Window, cx: &mut 
                     .ok();
             }
         } else {
-            window.paint_quad(outline(bounds, palette.foreground, BorderStyle::Solid));
+            window.paint_quad(outline(bounds, colours.cursor, BorderStyle::Solid));
         }
     }
 }

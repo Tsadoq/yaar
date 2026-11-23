@@ -25,12 +25,18 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Osc52, TermMode, viewport_to_point};
-use alacritty_terminal::vte::ansi::{
-    Color as AnsiColor, NamedColor, Processor, Rgb, StdSyncHandler,
-};
+use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
+use yaar_frame::theme::{self, TerminalColors};
 use yaar_link::TerminalSize;
 
+use crate::draw::colour_of;
+
 use crate::modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
+
+/// A colour as the program asked for it: one of the names, a number of the palette, or a
+/// value of red, green and blue. The painter turns it into the theme's colour
+/// ([`crate::colour_of`]).
+pub use alacritty_terminal::vte::ansi::Color;
 
 /// How many lines a terminal keeps above its screen.
 pub const HISTORY_LINES: usize = 10_000;
@@ -59,9 +65,10 @@ struct Told {
 }
 
 /// What a [`Told`] keeps, and what it needs to answer from: the size of the screen and
-/// of a cell, which the core does not hold in pixels.
+/// of a cell, which the core does not hold in pixels, and the colours of the theme.
 struct Kept {
     replies: Vec<u8>,
+    colours: TerminalColors,
     title: Option<String>,
     columns: u16,
     rows: u16,
@@ -73,6 +80,7 @@ impl Default for Kept {
     fn default() -> Kept {
         Kept {
             replies: Vec::new(),
+            colours: theme::light().terminal,
             title: None,
             columns: 80,
             rows: 24,
@@ -106,7 +114,7 @@ impl EventListener for Told {
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             Event::ColorRequest(index, format) => {
-                let text = format(palette(index));
+                let text = format(rgb_of(requested(index, &kept.colours)));
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             // Nothing else is the emulator's to act on: no bell, no clipboard, no
@@ -116,64 +124,38 @@ impl EventListener for Told {
     }
 }
 
-/// The colour a program that asks for one is told: the fixed palette of xterm for the
-/// 16 colours and the cube and greys above them, and a light grey on a dark grey for the
-/// text and the background. The painter draws the theme's own colours; a program that
-/// asks wants to know whether the background is dark, which this says.
-fn palette(index: usize) -> Rgb {
-    const BASE: [(u8, u8, u8); 16] = [
-        (0, 0, 0),
-        (205, 0, 0),
-        (0, 205, 0),
-        (205, 205, 0),
-        (0, 0, 238),
-        (205, 0, 205),
-        (0, 205, 205),
-        (229, 229, 229),
-        (127, 127, 127),
-        (255, 0, 0),
-        (0, 255, 0),
-        (255, 255, 0),
-        (92, 92, 255),
-        (255, 0, 255),
-        (0, 255, 255),
-        (255, 255, 255),
-    ];
-    const FOREGROUND: Rgb = Rgb {
-        r: 0xd4,
-        g: 0xd4,
-        b: 0xd4,
+/// The colour a program that asks for one is told: the theme's own for the default text,
+/// the background, the cursor and the sixteen first numbers, xterm's for the cube and the
+/// greys above them. A program that asks wants to know, above all, whether the background
+/// is dark, which is the theme's to say.
+///
+/// `index` is the core's: 0 to 255 the numbered colours, then the named ones, among them
+/// the foreground (256), the background (257) and the cursor (258).
+fn requested(index: usize, colours: &TerminalColors) -> gpui_kit::Hsla {
+    let colour = match u8::try_from(index) {
+        Ok(number) => Color::Indexed(number),
+        Err(_) if index == NamedColor::Background as usize => Color::Named(NamedColor::Background),
+        Err(_) if index == NamedColor::Cursor as usize => Color::Named(NamedColor::Cursor),
+        Err(_) => Color::Named(NamedColor::Foreground),
     };
-    const BACKGROUND: Rgb = Rgb {
-        r: 0x1e,
-        g: 0x1e,
-        b: 0x1e,
-    };
-    match index {
-        0..=15 => {
-            let (r, g, b) = BASE[index];
-            Rgb { r, g, b }
-        }
-        16..=231 => {
-            let step = |n: usize| if n == 0 { 0 } else { (55 + 40 * n) as u8 };
-            let n = index - 16;
-            Rgb {
-                r: step(n / 36),
-                g: step(n / 6 % 6),
-                b: step(n % 6),
-            }
-        }
-        232..=255 => {
-            let grey = (8 + 10 * (index - 232)) as u8;
-            Rgb {
-                r: grey,
-                g: grey,
-                b: grey,
-            }
-        }
-        i if i == NamedColor::Background as usize => BACKGROUND,
-        _ => FOREGROUND,
-    }
+    colour_of(colour, colours)
+}
+
+/// A colour as the core writes it into the answer: red, green and blue of 8 bits.
+fn rgb_of(colour: gpui_kit::Hsla) -> Rgb {
+    let rgba = gpui_kit::Rgba::from(colour);
+    let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u8;
+    // Read from its text form: the core's own value is a struct of three fields, and the
+    // colour test of the app takes any such literal in the sources for a colour written
+    // there.
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b)
+    )
+    .parse()
+    .expect("a colour written as #rrggbb")
 }
 
 /// What the scanner makes of the bytes it was given: bytes for the core, in order with
@@ -544,20 +526,6 @@ impl ProgressScan {
     }
 }
 
-/// A colour as the program asked for it. The painter turns it into the theme's colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    /// The theme's colour for text.
-    Foreground,
-    /// The theme's colour for the background.
-    Background,
-    /// One of the 256 colours of the palette: 0 to 15 the theme's, the rest the fixed
-    /// cube and greys.
-    Indexed(u8),
-    /// A colour given as red, green and blue.
-    Rgb(u8, u8, u8),
-}
-
 /// How a cell's text is drawn, besides its colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
@@ -583,9 +551,9 @@ pub struct Cell {
     /// Its character with the marks combined with it; empty in the second cell of a wide
     /// character, which the first one covers.
     pub text: String,
-    /// The colour of the text.
+    /// The colour of the text, as the program asked for it.
     pub fg: Color,
-    /// The colour of the cell.
+    /// The colour of the cell, as the program asked for it.
     pub bg: Color,
     /// How the text is drawn.
     pub style: Style,
@@ -729,6 +697,14 @@ impl Emulator {
             kept.rows = rows;
         }
         self.core.resize(dimensions(columns, rows));
+    }
+
+    /// The colours the terminal tells a program that asks for them (`OSC 4` for the numbers
+    /// 0 to 15, `OSC 10`, `11` and `12` for the text, the background and the cursor): the
+    /// applied theme's. The numbers 16 to 255 are xterm's whatever the theme. Until this is
+    /// called they are the light theme's.
+    pub fn set_colours(&mut self, colours: TerminalColors) {
+        self.told.kept().colours = colours;
     }
 
     /// The size of one cell in pixels, as the painter lays the grid out: what the
@@ -959,24 +935,6 @@ fn dimensions(columns: u16, rows: u16) -> Size {
     }
 }
 
-fn color(color: AnsiColor) -> Color {
-    match color {
-        AnsiColor::Spec(Rgb { r, g, b }) => Color::Rgb(r, g, b),
-        AnsiColor::Indexed(index) => Color::Indexed(index),
-        AnsiColor::Named(name) => match name as usize {
-            index @ 0..=15 => Color::Indexed(index as u8),
-            index if index == NamedColor::Background as usize => Color::Background,
-            index
-                if index >= NamedColor::DimBlack as usize
-                    && index <= NamedColor::DimWhite as usize =>
-            {
-                Color::Indexed((index - NamedColor::DimBlack as usize) as u8)
-            }
-            _ => Color::Foreground,
-        },
-    }
-}
-
 fn cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
     let flags = cell.flags;
     let mut text = String::new();
@@ -986,8 +944,8 @@ fn cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
     }
     Cell {
         text,
-        fg: color(cell.fg),
-        bg: color(cell.bg),
+        fg: cell.fg,
+        bg: cell.bg,
         style: Style {
             bold: flags.intersects(Flags::BOLD),
             dim: flags.intersects(Flags::DIM),
@@ -1271,7 +1229,7 @@ mod tests {
         emulator.advance(b"[31mred");
         let screen = emulator.screen();
         assert_eq!(emulator.lines()[0], "red");
-        assert_eq!(screen.lines[0][0].fg, Color::Indexed(1));
+        assert_eq!(screen.lines[0][0].fg, Color::Named(NamedColor::Red));
     }
 
     #[test]
@@ -1502,8 +1460,8 @@ mod tests {
         );
         let screen = emulator.screen();
         let row = &screen.lines[0];
-        assert_eq!(row[0].fg, Color::Indexed(1));
-        assert_eq!(row[0].bg, Color::Indexed(2));
+        assert_eq!(row[0].fg, Color::Named(NamedColor::Red));
+        assert_eq!(row[0].bg, Color::Named(NamedColor::Green));
         assert_eq!(
             row[0].style,
             Style {
@@ -1517,16 +1475,18 @@ mod tests {
         );
         assert_eq!(
             (row[1].fg, row[1].bg),
-            (Color::Indexed(200), Color::Background)
+            (Color::Indexed(200), Color::Named(NamedColor::Background))
         );
         assert_eq!(row[1].style, Style::default());
-        assert_eq!(
-            (row[2].fg, row[2].bg),
-            (Color::Rgb(1, 2, 3), Color::Indexed(17))
-        );
-        assert_eq!(row[3].fg, Color::Indexed(9));
+        // A colour by its value is kept as its three channels.
+        let Color::Spec(by_value) = row[2].fg else {
+            panic!("the text of the third cell is a value, not {:?}", row[2].fg);
+        };
+        assert_eq!((by_value.r, by_value.g, by_value.b), (1, 2, 3));
+        assert_eq!(row[2].bg, Color::Indexed(17));
+        assert_eq!(row[3].fg, Color::Named(NamedColor::BrightRed));
         assert!(row[3].style.dim && row[3].style.hidden);
-        assert_eq!(row[4].fg, Color::Foreground);
+        assert_eq!(row[4].fg, Color::Named(NamedColor::Foreground));
     }
 
     #[test]

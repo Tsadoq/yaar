@@ -49,6 +49,7 @@ use yaar_link::{
 
 pub use attachment::ADDRESS_EACH_COMMENT;
 pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
+pub use draw::colour_of;
 pub use emulator::{
     Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
 };
