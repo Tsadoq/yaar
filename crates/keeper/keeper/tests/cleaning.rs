@@ -855,6 +855,10 @@ fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no
     let stranger = world.scratch.data().join("states").join("stranger.git");
     fs::create_dir_all(&stranger).expect("make the stranger's folder");
     fs::write(stranger.join("blob"), noise(7)).expect("write the stranger's file");
+    // And room that is no store at all, a plain file of the folder of states: no line holds
+    // it, and the total is what the whole folder takes.
+    fs::write(world.scratch.data().join("states").join("junk"), noise(8))
+        .expect("write the junk file");
 
     let sizes = world.window.sizes();
     let named: Vec<&WorkspaceId> = sizes
@@ -867,12 +871,18 @@ fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no
     assert!(sizes.workspaces.iter().all(|size| size.bytes > 0));
     let sum: u64 = sizes.workspaces.iter().map(|size| size.bytes).sum();
     assert!(
-        sizes.total >= sum + 64 * 1024,
-        "the total {} holds the {sum} of the workspaces and the stranger's 64 KB",
+        sizes.total >= sum + 2 * 64 * 1024,
+        "the total {} holds the {sum} of the workspaces and the 64 KB of each stranger",
         sizes.total
     );
     // Each line is what its store takes on disk: the test's own count of the folder.
     let states = world.scratch.data().join("states");
+    let whole = blocks_of(&states);
+    assert!(
+        whole.abs_diff(sizes.total) <= 16 * 1024,
+        "the total is told {} and the folder holds {whole} when counted again",
+        sizes.total
+    );
     for size in &sizes.workspaces {
         let walked = blocks_of(&states.join(format!("{}.git", size.workspace)));
         let tolerance = 16 * 1024;
@@ -1149,23 +1159,71 @@ fn while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_
     let _ = world.finish();
 }
 
+/// A state goes once the set time and the hour have passed since it was recorded, not a day
+/// before and not a day after. Two workspaces have two turns each, `early` at the base and
+/// `late` an hour after it, and the Keeper starts again with the clock half an hour past
+/// `early`'s edge: `early`'s states are past it and `late`'s, an hour younger, half an hour
+/// short of it. The clock then moves an hour on, past `late`'s edge too. `keep` is the days
+/// the user set, none for the default of 30.
+fn a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(keep: Option<u32>) {
+    let days = keep.unwrap_or(30);
+    let mut world = World::new();
+    if let Some(days) = keep {
+        world.window.keep_for(days);
+    }
+    let mut early = world.work("early");
+    let [early_one, early_two] = world.two_turns(&mut early);
+    world.clock.move_on(HOUR);
+    let mut late = world.work("late");
+    let [late_one, late_two] = world.two_turns(&mut late);
+    let early_before = reads(&early.repo);
+    let late_before = reads(&late.repo);
+
+    world.restart_at(DAY * days + HOUR + HOUR / 2);
+    // The first sweep waits for the Keeper's first reply, which this request is. The fact
+    // of `early` is the barrier: a sweep ran, and it told its facts in one batch after it
+    // had weighed every workspace, `late` included.
+    world.window.barrier();
+    world.window.states_deleted(&early.workspace);
+    world.window.barrier();
+    assert_eq!(world.window.deleted_so_far(), [early.workspace.clone()]);
+    let history = world.window.history(&early.workspace);
+    assert!(is_expired(&history, &early_one.turn), "{history:?}");
+    assert_eq!(state_in(&history, &early_two.turn), Some(early_two.state));
+    // Half an hour short of its edge, `late` keeps everything.
+    let history = world.window.history(&late.workspace);
+    assert_eq!(
+        state_in(&history, &late_one.turn),
+        Some(late_one.state.clone())
+    );
+    assert_eq!(
+        state_in(&history, &late_two.turn),
+        Some(late_two.state.clone())
+    );
+    let states = world.scratch.states_of(&late.workspace);
+    assert!(states.contains(&late_one.state) && states.contains(&late_two.state));
+
+    // An hour on it is past the edge, and the sweep that is due tells it with nothing asked.
+    world.clock.move_on(HOUR);
+    world.window.states_deleted(&late.workspace);
+    let history = world.window.history(&late.workspace);
+    assert!(is_expired(&history, &late_one.turn), "{history:?}");
+    assert_eq!(state_in(&history, &late_two.turn), Some(late_two.state));
+    assert_eq!(reads(&early.repo), early_before);
+    assert_eq!(reads(&late.repo), late_before);
+    still_there(&early.repo, &early.planted);
+    still_there(&late.repo, &late.planted);
+    let _ = world.finish();
+}
+
 #[test]
 fn the_set_time_the_user_set_is_the_one_the_sweep_counts_by() {
-    let mut world = World::new();
-    world.window.keep_for(7);
-    let mut work = world.work("repo");
-    let [one, two] = world.two_turns(&mut work);
-    let repo_before = reads(&work.repo);
+    a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(Some(7));
+}
 
-    // Eight days and an hour: past 7 days and the hour, far short of the default.
-    world.restart_at(8 * DAY + HOUR);
-    world.window.barrier();
-    world.window.states_deleted(&work.workspace);
-    let history = world.window.history(&work.workspace);
-    assert!(is_expired(&history, &one.turn), "{history:?}");
-    assert_eq!(state_in(&history, &two.turn), Some(two.state.clone()));
-    assert_eq!(reads(&work.repo), repo_before);
-    let _ = world.finish();
+#[test]
+fn the_default_set_time_is_thirty_days_and_a_state_goes_when_it_and_the_hour_have_passed() {
+    a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(None);
 }
 
 #[test]
@@ -1253,15 +1311,37 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     }
 
     // The sweep's time will be 31 days and an hour on the clock, so the set time of 30
-    // days reaches back to a day and an hour past the base. Files: one of an ended session
-    // written at the clock's own time then, one 31 days before it, one of the session that
-    // runs, as old as that.
+    // days reaches back to a day and an hour past the base. Files, each of a session of its
+    // own that is not held as running: one written at the clock's own time then, one a day
+    // before it and one at the very edge of the set time (all inside it, so kept), one a
+    // second past the edge and one 31 days before it (outside it, so gone), and one of the
+    // session that runs, as old as that.
     let then = world.clock.now() + 31 * DAY + HOUR;
     let fresh = review_file(
         &world.scratch,
         &cli_ended,
         "written at the clock's now\n",
         then,
+    );
+    let inside = [
+        review_file(
+            &world.scratch,
+            "an-ended-session-a-day-old",
+            "written a day before\n",
+            then - DAY,
+        ),
+        review_file(
+            &world.scratch,
+            "an-ended-session-at-the-edge",
+            "written exactly one set time before\n",
+            then - 30 * DAY,
+        ),
+    ];
+    let past_the_edge = review_file(
+        &world.scratch,
+        "an-ended-session-past-the-edge",
+        "written a second more than the set time before\n",
+        then - 30 * DAY - Duration::from_secs(1),
     );
     let old_of_ended = review_file(
         &world.scratch,
@@ -1283,7 +1363,20 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     // The sweep told its fact after it removed the files.
     let history = world.window.history(&work.workspace);
     assert!(is_expired(&history, &one.turn), "{history:?}");
+    // A session's files go by their age and by the set time, not by the sweep's own time:
+    // one resumed the next day still finds what it wrote.
     assert!(fresh.exists(), "a file written at the clock's now went");
+    for file in &inside {
+        assert!(
+            file.exists(),
+            "{} is inside the set time and went",
+            file.display()
+        );
+    }
+    assert!(
+        !past_the_edge.exists(),
+        "a file a second older than the set time stayed"
+    );
     assert!(!old_of_ended.exists(), "a file 31 days old stayed");
     assert_eq!(fs::read(&old_of_running).expect("read it"), running_bytes);
     assert_eq!(reads(&work.repo), repo_before);

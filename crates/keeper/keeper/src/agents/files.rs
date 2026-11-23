@@ -10,6 +10,12 @@
 //! it go, so that a session the user resumes the next day still finds its files. The
 //! clean-up at once gives no time. The Keeper names no file of an Adapter: which files are
 //! the Adapter's to know.
+//!
+//! The Adapters are held under their one lock for the whole removal: every Adapter's walk of
+//! its folder, its removals and the Store's question for each session. A report from a CLI
+//! that needs an Adapter waits for it, so a very large folder of reviews delays the agents'
+//! reports for as long as the removal takes. The trait gives the Keeper no way to list the
+//! candidates first and remove them after letting the lock go.
 
 use std::time::SystemTime;
 
