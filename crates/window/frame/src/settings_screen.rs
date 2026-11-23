@@ -8,7 +8,8 @@
 //! still beside it: no dialog, no window of its own (`cx.has_pending_prompt()` stays false
 //! and the app holds one window). The same key, or Escape ([`crate::CloseSettings`]), closes
 //! it and gives the focus back to where it was. While it is open it has the focus and sets
-//! the key context [`SETTINGS_CONTEXT`]; the Frame's keys still work. It is drawn inside
+//! the key context [`SETTINGS_CONTEXT`], except while a field of the screen is open; the
+//! Frame's keys still work. It is drawn inside
 //! an element with the selector `settings-screen`, which scrolls with the wheel when the
 //! rows are taller than the room.
 //!
