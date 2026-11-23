@@ -11,10 +11,12 @@ use std::fs;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::Instant;
 
 use yaar_link::{
-    Fact, Head, Message, Refusal, Reply, RepositoryId, Request, RequestId, TerminalSize,
+    Fact, Head, LinkError, Message, Refusal, Reply, RepositoryId, Request, RequestId, TerminalSize,
     WorkspaceId, read_message, write_message,
 };
 use yaar_system_tests::standin::{Did, Script, Step};
@@ -28,11 +30,13 @@ const SIZE: TerminalSize = TerminalSize {
 /// The file the stand-in's one step writes, in the folder it works in.
 const MARKER_FILE: &str = "agent-was-here";
 
-/// A world whose stand-in, as `dialect`, follows a script of one step: it writes
-/// [`MARKER_FILE`] into its working folder.
-fn world_for(dialect: Dialect) -> (World, Repo) {
+/// A world whose stand-in follows a script of one step: it writes [`MARKER_FILE`] into its
+/// working folder. Pi is installed and allowed in both runs, so that a Keeper that started
+/// the other CLI than the one the request names fails at the sentence that says which
+/// started, and not at a wait that runs out.
+fn world_for() -> (World, Repo) {
     let script = Script(vec![Step::Write(PathBuf::from(MARKER_FILE), "yes".into())]);
-    World::with_standin_as(dialect, "default", &script)
+    World::with_standin_and_pi("default", &script)
 }
 
 /// One request sent on a connection of its own and read as that Window reads it: every fact
@@ -45,15 +49,36 @@ struct Asked {
 /// A connection to the Keeper that reads its frames in the order they come, which a
 /// `Client` does not show: it keeps the facts that came while a reply was waited for, but
 /// not whether a later fact came before or after the reply.
+///
+/// A thread of its own reads the frames and hands each one over a channel, so that the wait
+/// for a reply is a `recv_timeout` against one deadline and no option is set on a socket
+/// whose Keeper may have gone.
 struct Window {
     stream: UnixStream,
+    frames: Receiver<Result<Message, LinkError>>,
     next_id: u32,
 }
 
 impl Window {
     fn attach(world: &World) -> Window {
         let (stream, _) = attach(&world.socket());
-        Window { stream, next_id: 0 }
+        let mut reading = stream.try_clone().expect("clone the connection to read it");
+        let (hand_over, frames) = mpsc::channel();
+        thread::spawn(move || {
+            loop {
+                let frame = read_message(&mut reading);
+                let ended = frame.is_err();
+                // The thread ends with the stream, or when the Window is gone.
+                if hand_over.send(frame).is_err() || ended {
+                    break;
+                }
+            }
+        });
+        Window {
+            stream,
+            frames,
+            next_id: 0,
+        }
     }
 
     /// Sends `request` and reads until its reply. Panics, naming the request, when the reply
@@ -67,21 +92,19 @@ impl Window {
         let mut facts = Vec::new();
         let end = Instant::now() + DEADLINE;
         loop {
-            // What is left of the deadline bounds each read; a stream that never ends then
-            // cannot keep the wait going. A socket whose Keeper has gone refuses the option,
-            // and then the read ends at once with the end of the stream, which it names.
             let left = end.saturating_duration_since(Instant::now());
-            if left.is_zero() {
-                panic!("no reply to {kind:?} within {DEADLINE:?}; facts before it: {facts:?}");
-            }
-            let _ = self.stream.set_read_timeout(Some(left));
-            match read_message(&mut self.stream) {
-                Ok(Message::Reply { to, reply }) if to == id => return Asked { facts, reply },
-                Ok(Message::Fact(fact)) => facts.push(fact),
+            match self.frames.recv_timeout(left) {
+                Ok(Ok(Message::Reply { to, reply })) if to == id => return Asked { facts, reply },
+                Ok(Ok(Message::Fact(fact))) => facts.push(fact),
                 // What the program of a terminal writes comes to the Window that asked.
-                Ok(Message::Output { .. }) => {}
-                Ok(other) => panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}"),
-                Err(e) => panic!("no reply to {kind:?}: {e}; facts before it: {facts:?}"),
+                Ok(Ok(Message::Output { .. })) => {}
+                Ok(Ok(other)) => {
+                    panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}")
+                }
+                Ok(Err(e)) => panic!("no reply to {kind:?}: {e}; facts before it: {facts:?}"),
+                Err(_) => {
+                    panic!("no reply to {kind:?} within {DEADLINE:?}; facts before it: {facts:?}")
+                }
             }
         }
     }
@@ -244,7 +267,7 @@ fn plant(world: &World, repo: &Repo) -> Vec<String> {
 }
 
 fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
-    let (world, repo) = world_for(dialect);
+    let (world, repo) = world_for();
     // The workspace on screen is on another branch, one commit ahead of `main`: the worktree
     // is made from the branch the request names and not from what is checked out.
     let main_commit = repo.git(&["rev-parse", "main"]);
@@ -381,7 +404,7 @@ fn one_request_makes_a_worktree_from_a_branch_name_and_starts_the_agent_in_it_as
 
 #[test]
 fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
-    let (world, repo) = world_for(Dialect::ClaudeCode);
+    let (world, repo) = world_for();
     let mut client = world.client();
     let (repository, _) = client
         .open_folder(repo.path())
