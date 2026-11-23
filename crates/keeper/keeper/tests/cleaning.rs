@@ -1308,19 +1308,14 @@ fn at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_repl
 
     // The Keeper starts again with the clock past the set time, and the Window that attaches
     // asks nothing: the Keeper has no reply to queue. The wait is for a sweep that a correct
-    // Keeper does not make, so the old state is looked for until `SWEEP_LOOKS` is over, and
-    // the look ends early only on a break.
+    // Keeper does not make, so there is nothing to wait for and the settle is one wait of
+    // `SWEEP_LOOKS`, on a channel that never gets a message while its sender is held, and
+    // the store is read once after it (a look at each tick would start a git each time).
     world.restart_at(31 * DAY + HOUR);
-    let started = Instant::now();
-    while world
-        .scratch
-        .states_of(&work.workspace)
-        .contains(&one.state)
-        && started.elapsed() < SWEEP_LOOKS
-    {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let (hold, never) = std::sync::mpsc::channel::<()>();
+    let _ = never.recv_timeout(SWEEP_LOOKS);
     let states = world.scratch.states_of(&work.workspace);
+    drop(hold);
     assert!(
         states.contains(&one.state) && states.contains(&two.state),
         "a sweep ran before the Keeper had queued a reply: {states:?}"
