@@ -481,3 +481,79 @@ fn a_session_that_cannot_be_removed_stays_the_others_go_on_and_the_call_gives_th
         );
     }
 }
+
+/// Gives back the right to remove the files a test marked immutable, so that the scratch
+/// folder can be removed when the test ends, also when it failed.
+#[cfg(target_os = "macos")]
+struct Unflagged(Vec<PathBuf>);
+
+#[cfg(target_os = "macos")]
+impl Drop for Unflagged {
+    fn drop(&mut self) {
+        for file in &self.0 {
+            let _ = std::process::Command::new("/usr/bin/chflags")
+                .arg("nouchg")
+                .arg(file)
+                .status();
+        }
+    }
+}
+
+// Only macOS compiles this test, for the reason of the one above. Two sessions that cannot
+// be removed fail with errors that differ in their number (a folder that refuses its owner
+// gives EACCES, a file marked immutable EPERM, both "permission denied" by kind), so the
+// number tells which of the two the call gave: the one met first, not the one met last.
+#[cfg(target_os = "macos")]
+#[test]
+fn the_failure_the_call_gives_is_the_first_of_two_sessions_that_cannot_be_removed() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // The numbers of the two errors, as the system's headers give them.
+    const EPERM: i32 = 1;
+    const EACCES: i32 = 13;
+
+    let place = Place::new();
+    for id in ["s1", "s2", "s3"] {
+        place.write(id, "r-1.md", &noise(9_000, 22));
+    }
+    let listed: Vec<String> = fs::read_dir(place.folder.join(REVIEWS))
+        .expect("list the sessions")
+        .map(|entry| {
+            entry
+                .expect("an entry")
+                .file_name()
+                .into_string()
+                .expect("text")
+        })
+        .collect();
+    let (first, second) = (&listed[0], &listed[1]);
+    let refusing_folder = place
+        .write(first, "sub/r-2.md", &noise(9_000, 23))
+        .parent()
+        .expect("a folder")
+        .to_owned();
+    let immutable_file = place.write(second, "r-3.md", &noise(9_000, 24));
+    let _unlocked = Unlocked(vec![refusing_folder.clone()]);
+    let _unflagged = Unflagged(vec![immutable_file.clone()]);
+    fs::set_permissions(&refusing_folder, fs::Permissions::from_mode(0o555))
+        .expect("lock the folder");
+    assert!(
+        File::create(refusing_folder.join("probe")).is_err(),
+        "this test needs a user the folder's mode refuses, not root"
+    );
+    let flagged = std::process::Command::new("/usr/bin/chflags")
+        .arg("uchg")
+        .arg(&immutable_file)
+        .status()
+        .expect("run chflags");
+    assert!(flagged.success(), "mark the file immutable");
+
+    let outcome = place.remove(&[], None);
+
+    let error = outcome.expect_err("the call gives a failure at its end");
+    assert_eq!(
+        error.raw_os_error(),
+        Some(EACCES),
+        "the folder of {first} refused first, the file of {second} (EPERM = {EPERM}) after: {error}"
+    );
+}

@@ -842,6 +842,7 @@ fn a_folder_named_that_is_a_file_or_has_no_parent_either_is_refused_at_creation_
 #[test]
 fn a_folder_named_under_a_worktree_that_came_to_exist_after_the_setting_is_refused_at_creation() {
     let world = world();
+    let planted = plant(&world);
     // The folder is under a folder where no worktree lies yet, so setting it is fine.
     let named = world.scratch.join("around").join("places");
     world
@@ -860,6 +861,9 @@ fn a_folder_named_under_a_worktree_that_came_to_exist_after_the_setting_is_refus
 
     assert_eq!(refused(outcome), Refusal::FolderInsideRepository(named));
     assert_eq!(world.snapshot(), before);
+    for id in planted {
+        git(&world.repo, &["cat-file", "-e", &id]);
+    }
 }
 
 #[test]
