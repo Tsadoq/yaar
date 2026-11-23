@@ -29,7 +29,7 @@ use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
 use yaar_frame::theme::{self, TerminalColors};
 use yaar_link::TerminalSize;
 
-use crate::draw::colour_of;
+use crate::draw::{Colour, colour_of};
 
 use crate::modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
 
@@ -114,7 +114,7 @@ impl EventListener for Told {
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             Event::ColorRequest(index, format) => {
-                let text = format(rgb_of(requested(index, &kept.colours)));
+                let text = answer_with(requested(index, &kept.colours), &*format);
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             // Nothing else is the emulator's to act on: no bell, no clipboard, no
@@ -131,7 +131,7 @@ impl EventListener for Told {
 ///
 /// `index` is the core's: 0 to 255 the numbered colours, then the named ones, among them
 /// the foreground (256), the background (257) and the cursor (258).
-fn requested(index: usize, colours: &TerminalColors) -> gpui_kit::Hsla {
+fn requested(index: usize, colours: &TerminalColors) -> Colour {
     let colour = match u8::try_from(index) {
         Ok(number) => Color::Indexed(number),
         Err(_) if index == NamedColor::Background as usize => Color::Named(NamedColor::Background),
@@ -141,21 +141,22 @@ fn requested(index: usize, colours: &TerminalColors) -> gpui_kit::Hsla {
     colour_of(colour, colours)
 }
 
-/// A colour as the core writes it into the answer: red, green and blue of 8 bits.
-fn rgb_of(colour: gpui_kit::Hsla) -> Rgb {
+/// The answer to a question for a colour: what the core writes, given the colour as red,
+/// green and blue of 8 bits.
+fn answer_with(colour: Colour, format: &dyn Fn(Rgb) -> String) -> String {
     let rgba = gpui_kit::Rgba::from(colour);
     let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u8;
-    // Read from its text form: the core's own value is a struct of three fields, and the
-    // colour test of the app takes any such literal in the sources for a colour written
-    // there.
-    format!(
+    // The core's value is made from its text form: a value written field by field is what
+    // the colour test of the app takes for a colour written in code.
+    let value = format!(
         "#{:02x}{:02x}{:02x}",
         byte(rgba.r),
         byte(rgba.g),
         byte(rgba.b)
     )
     .parse()
-    .expect("a colour written as #rrggbb")
+    .expect("a colour written as #rrggbb");
+    format(value)
 }
 
 /// What the scanner makes of the bytes it was given: bytes for the core, in order with

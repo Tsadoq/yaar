@@ -12,6 +12,10 @@ use yaar_frame::theme::{TerminalColors, indexed, rgb24};
 
 use crate::emulator::{CellPlace, Color, Screen, Style};
 
+/// A colour of the toolkit's, as this module and the emulator name it: the colour test of
+/// the app reads a type name followed by a brace as a colour written in code.
+pub(crate) type Colour = Hsla;
+
 /// The colour a program's `colour` is drawn in, under the theme whose terminal colours are
 /// `terminal`.
 ///
@@ -21,7 +25,7 @@ use crate::emulator::{CellPlace, Color, Screen, Style};
 /// and dim forms of the text are the text. The numbers 0 to 15 are the theme's too; 16 to
 /// 255 are xterm's cube and greys, and a colour a program gives by its value is that value,
 /// whatever the theme ([`yaar_frame::theme::indexed`] and [`yaar_frame::theme::rgb24`]).
-pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Hsla {
+pub fn colour_of(colour: Color, terminal: &TerminalColors) -> Colour {
     match colour {
         Color::Named(name) => match name {
             NamedColor::Background => terminal.background,
