@@ -8,9 +8,10 @@
 //! the Window makes itself. Every read is of the toolkit's theme, which every control
 //! draws with, and of what `yaar_frame::theme::applied` gives the terminal pane.
 //!
-//! Nothing here is waited for but the settings reaching the model, which the test waits
-//! for with the deadline; applying a definition is synchronous, so a negative clause ("it
-//! does not follow", "nothing is rewritten") is read right after the call it follows.
+//! Every telling, and every choice the test makes, is followed by a barrier
+//! (`run_until_parked`) before anything is read: a negative clause ("it does not follow",
+//! "nothing is rewritten", "told to nobody") would otherwise pass on a model that follows
+//! one task late. The settings reaching the model are waited for with the deadline.
 
 mod common;
 
@@ -50,12 +51,14 @@ fn applied_name(cx: &mut VisualTestContext) -> String {
     cx.update(|_, app| applied(app).name)
 }
 
-/// Tells the Looks what the platform would say of the system.
+/// Tells the Looks what the platform would say of the system, and lets everything the
+/// telling set off run, so that a read after it sees what the model came to, late or not.
 fn system_is(shown: &Shown, appearance: Appearance, cx: &mut VisualTestContext) {
     shown
         .models
         .looks
         .update(cx, |looks, cx| looks.system_is(appearance, cx));
+    cx.run_until_parked();
 }
 
 /// The Keeper tells every Window that the theme is this; waits for the model of the
@@ -64,9 +67,16 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
     let Setting::Theme(choice) = setting.clone() else {
         panic!("a test of the theme tells a theme");
     };
-    // The Keeper keeps what it tells, as the real one does: the window may still ask for
+    // The Keeper keeps what it tells, as the real one does: the setting takes the place of
+    // the one it is the same thing as and the others stay, for the window may still ask for
     // every setting after hearing the fact, and the answer must agree with it.
-    shown.keeper.set_settings(vec![setting.clone()]);
+    let mut kept = shown
+        .models
+        .settings
+        .read_with(cx, |list, _| list.all().to_vec());
+    kept.retain(|held| !held.same_thing_as(&setting));
+    kept.push(setting.clone());
+    shown.keeper.set_settings(kept);
     shown.keeper.tell(Fact::SettingChanged(setting));
     wait_until(cx, "the choice of theme to reach the model", |cx| {
         shown
@@ -74,6 +84,8 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
             .settings
             .read_with(cx, |list, _| list.theme() == choice)
     });
+    // What the choice set off has run before anything is read.
+    cx.run_until_parked();
 }
 
 /// Whether the toolkit and the terminal pane's global show this definition: its mode, every
@@ -290,11 +302,13 @@ fn a_choice_the_window_makes_is_in_force_before_the_keeper_answers(cx: &mut Test
     shown.models.settings.update(&mut cx, |list, cx| {
         list.set(named(DARK), cx);
     });
+    cx.run_until_parked();
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
 
     shown.models.settings.update(&mut cx, |list, cx| {
         list.set(Setting::Theme(ThemeChoice::System), cx);
     });
+    cx.run_until_parked();
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
 }
 
@@ -309,6 +323,7 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
     cx.update(|_, app| {
         Theme::update(app, |theme| theme.colors.background = marker);
     });
+    cx.run_until_parked();
 
     // The system's setting told again as it was.
     system_is(&shown, Appearance::Light, &mut cx);
@@ -327,6 +342,7 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
                 .contains(&Setting::TurnEnd(TurnEndSelects::KeepSelection))
         })
     });
+    cx.run_until_parked();
     assert_eq!(background(&mut cx), marker);
 
     // The theme chosen as it already is in force: the system's light one, by its name.
