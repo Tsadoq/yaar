@@ -407,3 +407,81 @@ fn an_answer_when_every_question_held_is_answered_already_asks_the_list_first(
     assert!(matches!(finished(&sent, cx), Ok(true)));
     assert_eq!(asked(&list, cx), Vec::<String>::new());
 }
+
+#[gpui_kit::test]
+fn the_list_holds_every_adapter_the_keeper_told_answered_or_not(cx: &mut TestAppContext) {
+    let (list, mut keeper) = linked(cx);
+    assert_eq!(list.read_with(cx, |list, _| list.all().to_vec()), []);
+
+    let told = vec![
+        consent("a", ConsentAnswer::NotAsked),
+        consent("b", ConsentAnswer::Yes),
+        consent("c", ConsentAnswer::No),
+    ];
+    tell(&list, &mut keeper, told.clone(), cx);
+
+    // The questions are the first of them alone; the list holds all three, in order.
+    assert_eq!(asked(&list, cx), ["a"]);
+    assert_eq!(list.read_with(cx, |list, _| list.all().to_vec()), told);
+}
+
+#[gpui_kit::test]
+fn an_answer_for_one_adapter_goes_for_that_adapter_alone_and_the_keepers_list_replaces_the_held(
+    cx: &mut TestAppContext,
+) {
+    let (list, mut keeper) = linked(cx);
+    tell(
+        &list,
+        &mut keeper,
+        vec![
+            consent("a", ConsentAnswer::Yes),
+            consent("b", ConsentAnswer::NotAsked),
+        ],
+        cx,
+    );
+
+    // A yes can be changed to a no, and the other Adapter is left as it was.
+    let sent = list.update(cx, |list, cx| {
+        list.answer("a".to_owned(), ConsentAnswer::No, cx)
+    });
+    let sent = start(sent, cx);
+    let (id, request) = keeper.request(cx);
+    assert_eq!(request, answering("a", ConsentAnswer::No));
+    keeper.reply(
+        id,
+        Ok(Reply::Consents(vec![
+            consent("a", ConsentAnswer::No),
+            consent("b", ConsentAnswer::NotAsked),
+        ])),
+    );
+    assert!(matches!(finished(&sent, cx), Ok(())));
+    assert_eq!(
+        list.read_with(cx, |list, _| list.all().to_vec()),
+        [
+            consent("a", ConsentAnswer::No),
+            consent("b", ConsentAnswer::NotAsked)
+        ]
+    );
+
+    // The Keeper's refusal is what the task gives, and the list stays as it was.
+    let sent = list.update(cx, |list, cx| {
+        list.answer("b".to_owned(), ConsentAnswer::Yes, cx)
+    });
+    let sent = start(sent, cx);
+    let (id, request) = keeper.request(cx);
+    assert_eq!(request, answering("b", ConsentAnswer::Yes));
+    keeper.reply(
+        id,
+        Err(Refusal::Failed {
+            reason: "no such adapter".to_owned(),
+        }),
+    );
+    assert!(matches!(
+        finished(&sent, cx),
+        Err(AskError::Refused(Refusal::Failed { .. }))
+    ));
+    assert_eq!(
+        list.read_with(cx, |list, _| list.all()[1].answer),
+        ConsentAnswer::NotAsked
+    );
+}

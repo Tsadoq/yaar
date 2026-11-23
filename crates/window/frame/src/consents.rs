@@ -54,6 +54,27 @@ impl ConsentList {
             .collect()
     }
 
+    /// Every Adapter the Keeper last told or answered, answered or not, in the order of its
+    /// Adapters: what the settings screen lists, so that an answer given once can be changed.
+    /// Empty until the Keeper tells a list, which it does when a question waits or after an
+    /// answer.
+    pub fn all(&self) -> &[Consent] {
+        &self.consents
+    }
+
+    /// Sends `answer` for the Adapter named `agent` alone, whatever it was before, and takes
+    /// the list the Keeper answers with. The task resolves once the list is taken, or to the
+    /// Keeper's refusal or the loss of the connection. The task is the caller's to keep: a
+    /// dropped one stops waiting, though the request stays sent.
+    pub fn answer(
+        &mut self,
+        agent: String,
+        answer: ConsentAnswer,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), AskError>> {
+        self.send_answer(agent, answer, cx)
+    }
+
     /// Sends `answer` for every Adapter that needs leave: for those [`ConsentList::asked`]
     /// shows while it shows any, else for every Adapter the Keeper lists, asked with
     /// `Request::ListConsents` first, so that the answer can be changed once the question
