@@ -24,9 +24,9 @@ use gpui_kit::{
 };
 use yaar_frame::settings_screen::{
     BELOW, BY_LAYOUT, CHARACTERS, CLEAN_UP, CLEANING, DEFAULT_FOLDER, DONT_INSTALL, INSTALL,
-    KEEP_SELECTION, KEEP_SERVERS_OUT, KEEP_STATES_DAYS, LEFT, META, NO_WORKSPACE, OTHER_STATES,
-    RIGHT, RUN_SERVERS, RowShown, SETTINGS_CONTEXT, STOP_AFTER_MINUTES, SYSTEM, SettingRow,
-    SettingsScreen, TITLES, WHAT_CHANGED, controls,
+    KEEP_SELECTION, KEEP_SERVERS_OUT, KEEP_STATES_DAYS, LEFT, META, NO_BASE, NO_WORKSPACE,
+    OTHER_STATES, RIGHT, RUN_SERVERS, RowShown, SETTINGS_CONTEXT, STOP_AFTER_MINUTES, SYSTEM,
+    SettingRow, SettingsScreen, TITLES, WHAT_CHANGED, controls,
 };
 use yaar_frame::theme::{self, Appearance, DARK, LIGHT};
 use yaar_frame::{
@@ -34,9 +34,9 @@ use yaar_frame::{
     OpenSettings, Pane, Place, PreviousSetting, PreviousValue, Sends, bind,
 };
 use yaar_link::{
-    Base, BaseSource, Changes, Comparison, Consent, ConsentAnswer, Fact, Hello, OptionKey,
-    PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId, Request, RequestKind, Setting,
-    StateSize, StateSizes, TerminalPlace, ThemeChoice, TurnEndSelects,
+    Base, BaseSource, Changes, Comparison, Consent, ConsentAnswer, Fact, Hello, NoComparison,
+    OptionKey, PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId, Request, RequestKind,
+    Setting, StateSize, StateSizes, TerminalPlace, ThemeChoice, TurnEndSelects,
 };
 use yaar_navigator::{Ask, RepositoryConsent, Told, port};
 
@@ -1620,4 +1620,179 @@ fn a_repository_that_leaves_the_list_takes_its_row_and_an_open_screen_follows_th
     assert!(!kinds.contains(&SettingRow::WorktreesFolder(repo('b'))));
     assert!(window.is_drawn(&format!("settings-row-{}", kinds.len() - 1)));
     assert!(!window.is_drawn(&format!("settings-row-{}", kinds.len())));
+}
+
+#[gpui_kit::test]
+fn the_cursor_stays_on_a_row_there_is_when_a_repository_leaves_the_list(cx: &mut TestAppContext) {
+    let (mut window, _, _) = with_folders(cx, Vec::new());
+    let last = window.rows().len() - 1;
+    window.cursor_to(last);
+
+    window.shown.keeper.tell(Fact::Workspaces(vec![repository(
+        'a',
+        vec![workspace('1', "main")],
+    )]));
+    window.wait("the shorter list", |shown, cx| {
+        shown
+            .models
+            .workspaces
+            .read_with(cx, |list, _| list.repositories().len() == 1)
+    });
+
+    let rows = window.rows();
+    assert_eq!(window.cursor(), rows.len() - 1, "on the row of the states");
+    assert_eq!(rows[window.cursor()].row, SettingRow::States);
+    let row = window.bounds(&format!("settings-row-{}", rows.len() - 1));
+    let cursor = window.bounds("settings-cursor");
+    assert!(row.contains(&cursor.origin));
+}
+
+#[gpui_kit::test]
+fn a_theme_named_in_other_letters_is_the_one_chosen_and_a_name_no_theme_has_is_the_systems(
+    cx: &mut TestAppContext,
+) {
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    window.open_screen(sizes(&[], 0));
+    let tell = |window: &mut Window9, name: &str| {
+        window
+            .shown
+            .keeper
+            .tell(Fact::SettingChanged(Setting::Theme(ThemeChoice::Named(
+                name.to_owned(),
+            ))));
+        window.wait("the theme", |shown, cx| {
+            shown.models.settings.read_with(cx, |settings, _| {
+                settings.theme() == ThemeChoice::Named(name.to_owned())
+            })
+        });
+    };
+
+    tell(&mut window, "dark");
+    assert_eq!(window.row(&SettingRow::Theme).chosen, Some(2));
+    tell(&mut window, "Nowhere");
+    assert_eq!(
+        window.row(&SettingRow::Theme).chosen,
+        Some(0),
+        "no theme has the name: the system's is what is in force"
+    );
+}
+
+#[gpui_kit::test]
+fn a_workspace_on_screen_whose_changes_name_no_base_says_so_and_the_row_still_opens_the_field(
+    cx: &mut TestAppContext,
+) {
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    window.open_screen(sizes(&[], 0));
+    window
+        .shown
+        .keeper
+        .tell(Fact::ChangesChanged { workspace: id('1') });
+    let asked = window
+        .shown
+        .keeper
+        .expect(Request::GetChanges { workspace: id('1') }, &mut window.cx);
+    window.shown.keeper.reply(
+        asked,
+        Ok(Reply::Changes(Changes {
+            comparison: Comparison::NothingToCompare {
+                base: None,
+                why: NoComparison::NoBase,
+            },
+            ..changes_since('1', "main")
+        })),
+    );
+    window.wait("no base", |shown, cx| {
+        rows_now(shown, cx)[3].values == [NO_BASE]
+    });
+    let row = window.row(&SettingRow::Base);
+    assert_eq!(row.chosen, None);
+
+    let base = window.index_of(&SettingRow::Base);
+    window.cursor_to(base);
+    window.press(&key::<OpenSetting>());
+    assert!(window.is_drawn("frame-base-field"));
+}
+
+/// A window whose Keeper has told one question for leave, `pi`'s, not answered yet, and
+/// whose screen is open on its row.
+fn with_a_question(cx: &mut TestAppContext) -> (Window9, usize) {
+    let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
+    window.shown.keeper.tell(Fact::ConsentsChanged(vec![consent(
+        "pi",
+        ConsentAnswer::NotAsked,
+    )]));
+    window.wait("the question for leave", |shown, cx| {
+        shown
+            .models
+            .consents
+            .read_with(cx, |consents, _| !consents.all().is_empty())
+    });
+    window.open_screen(sizes(&[], 0));
+    let at = window.index_of(&SettingRow::Extension("pi".to_owned()));
+    (window, at)
+}
+
+#[gpui_kit::test]
+fn l_and_h_on_an_unanswered_extension_choose_the_first_and_the_last_value(cx: &mut TestAppContext) {
+    let (mut window, at) = with_a_question(cx);
+    window.cursor_to(at);
+
+    window.press(&key::<NextValue>());
+    window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::Yes,
+        },
+        &mut window.cx,
+    );
+    window.press(&key::<PreviousValue>());
+    // Nothing answered the first: the row is still unanswered, and `h` chooses the last.
+    window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        },
+        &mut window.cx,
+    );
+}
+
+#[gpui_kit::test]
+fn a_refused_answer_to_a_question_for_leave_is_drawn_above_the_rows_until_the_next_answer(
+    cx: &mut TestAppContext,
+) {
+    let (mut window, at) = with_a_question(cx);
+    assert!(!window.is_drawn("settings-notice"));
+
+    window.click(&Window9::value(at, 0, INSTALL));
+    let asked = window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::Yes,
+        },
+        &mut window.cx,
+    );
+    window.shown.keeper.reply(
+        asked,
+        Err(Refusal::Failed {
+            reason: "pi is not installed".to_owned(),
+        }),
+    );
+    window.wait("the reason", |_, cx| {
+        drawn("settings-notice:pi is not installed", cx).is_some()
+    });
+    assert_eq!(
+        window.row(&SettingRow::Extension("pi".to_owned())).chosen,
+        None
+    );
+
+    // The next answer takes the sentence away, whatever the Keeper says of it.
+    window.click(&Window9::value(at, 1, DONT_INSTALL));
+    window.shown.keeper.expect(
+        Request::AnswerConsent {
+            agent: "pi".to_owned(),
+            answer: ConsentAnswer::No,
+        },
+        &mut window.cx,
+    );
+    assert!(!window.is_drawn("settings-notice"));
 }

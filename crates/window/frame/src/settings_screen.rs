@@ -23,24 +23,27 @@
 //! under `settings-chosen-<row>`: `<row>` is the row's index in [`SettingsScreen::rows`] as
 //! they are drawn (so it depends on how many rows of extensions and of repositories come
 //! before; a test finds a row's index in `rows()`, never writes it), `<value>` the value's
-//! index in [`RowShown::values`], both from 0, `<label>` the words drawn. A click on a value chooses it; with the screen focused, `j` and
-//! `k` move the cursor (`settings-cursor` on its row) to the next and the previous row, `l`
-//! and `h` choose the next and the previous value of the row under the cursor, stopping at
-//! the last and the first, `enter` acts on a row that acts ([`SettingRow::Base`],
-//! [`SettingRow::WorktreesFolder`]), and
-//! `shift-c` cleans up the recorded states ([`crate::CleanUpStates`]).
+//! index in [`RowShown::values`], both from 0, `<label>` the words drawn. A click on a value
+//! chooses it, and puts the cursor on its row. With the screen focused, `j` and `k` move the
+//! cursor (`settings-cursor` on its row) to the next and the previous row, stopping at the
+//! last and the first, and scroll the row into the room; `l` and `h` choose the next and the
+//! previous value of the row under the cursor, stopping at the last and the first (a value
+//! chosen already is not set again by them; a click always acts), `enter` acts on a row that
+//! acts ([`SettingRow::Base`], [`SettingRow::WorktreesFolder`]), and `shift-c` cleans up the
+//! recorded states ([`crate::CleanUpStates`]). `l` and `h` do nothing on the rows that act on
+//! their one value (the base, a folder, the states).
 //!
 //! | Row | Values (labels) | Model read | What a choice does |
 //! | --- | --- | --- | --- |
 //! | [`SettingRow::TurnEnd`] | [`WHAT_CHANGED`], [`KEEP_SELECTION`] | `SettingList::turn_end` | `SettingList::set(Setting::TurnEnd)`; the review pane reads it at the next turn's end |
 //! | [`SettingRow::StopAfter`] | each of [`STOP_AFTER_MINUTES`], "N min" | `SettingList::stop_after` | `SettingList::set(Setting::StopAfter)`; the model `Navigation` tells the Navigator `Ask::StopAfter` at once |
 //! | [`SettingRow::Theme`] | [`SYSTEM`], then the name of every theme of `Looks::themes` | `Looks::chosen` | `SettingList::set(Setting::Theme)`; `Looks` applies it at once |
-//! | [`SettingRow::Base`] | the base of the workspace on screen (`WorkspaceChanges`'s comparison), one value, or [`NO_WORKSPACE`] | `WorkspaceChanges` | `enter` or a click: the Frame's field for the base opens, as [`crate::SetBase`] opens it; Enter there sends `SetBase` |
+//! | [`SettingRow::Base`] | the base of the workspace on screen (`WorkspaceChanges`'s comparison), one value; [`NO_BASE`] where its changes name none; [`NO_WORKSPACE`] where none is on screen | `WorkspaceChanges` | `enter` or a click: the Frame's field for the base opens, as [`crate::SetBase`] opens it; Enter there sends `SetBase` |
 //! | [`SettingRow::KeepStates`] | each of [`KEEP_STATES_DAYS`], "N days" ("1 day") | `SettingList::keep_states` | `SettingList::set(Setting::KeepStates)` |
 //! | [`SettingRow::TerminalPlace`] | [`RIGHT`], [`BELOW`], [`LEFT`] | `SettingList::terminal_place` | `SettingList::set(Setting::TerminalPlace)`; the Frame lays the panes out at once |
 //! | [`SettingRow::OptionKey`] | [`BY_LAYOUT`], [`META`], [`CHARACTERS`] | `SettingList::option_key` | `SettingList::set(Setting::OptionKey)`; the terminal pane reads it at the next key |
-//! | [`SettingRow::Extension`], one for each question of `ConsentList` | [`INSTALL`], [`DONT_INSTALL`] | `ConsentList` | `ConsentList::answer`: `AnswerConsent` of that Adapter |
-//! | [`SettingRow::Servers`], one for each repository answered (`SettingList::servers_answers`) | [`RUN_SERVERS`], [`KEEP_SERVERS_OUT`] | `SettingList` | `SettingList::set(Setting::ServersInRepository)`; the model `Navigation` hands the Navigator the answer, and a yes searches again |
+//! | [`SettingRow::Extension`], one for each Adapter of `ConsentList::all`, answered or not, titled `TITLES[7]`, `": "` and the Adapter's name | [`INSTALL`], [`DONT_INSTALL`]; none chosen until answered | `ConsentList` | `ConsentList::answer`: `AnswerConsent` of that Adapter; the Adapter's own question is drawn under the row (`settings-question-<row>`) and what went wrong in the colour of a failure (`settings-problem-<row>`) |
+//! | [`SettingRow::Servers`], one for each repository answered (`SettingList::servers_answers`), titled `TITLES[8]`, `": "` and the repository's name | [`RUN_SERVERS`], [`KEEP_SERVERS_OUT`] | `SettingList` | `SettingList::set(Setting::ServersInRepository)`; the model `Navigation` hands the Navigator the answer, and a yes searches again |
 //! | [`SettingRow::WorktreesFolder`], one for each repository the Window lists (`WorkspaceList::repositories`, in its order) | one value: the folder set (`SettingList::worktrees_folder`), written as its path, or [`DEFAULT_FOLDER`] | `SettingList` | `enter` or a click: the screen's own field for the folder opens, as the base row opens the Frame's; Enter there sends `SetSetting(WorktreesFolder)` (below) |
 //! | [`SettingRow::States`] | the size of each workspace's states and the total, and the control [`CLEAN_UP`] | `RecordedStates` | the control, `shift-c` or a click: `RecordedStates::clean_up`; while it runs the control reads [`CLEANING`] |
 //!
@@ -53,8 +56,15 @@
 //! of the answer that the Window lists; then, when the total is larger than the sum of
 //! those, `<OTHER_STATES>: <the difference>` (selector `settings-size-other`,
 //! [`OTHER_STATES`]'s words): the stores of worktrees that are gone or that this Window does
-//! not list; then `Total: <size>` (`settings-size-total`); each size in the words of
-//! [`size_words`].
+//! not list; then `<TOTAL_STATES>: <size>` (`settings-size-total`); each size in the words of
+//! [`size_words`]. Each line is drawn as an element with the selector named, which holds an
+//! element with the same selector, a colon and the words drawn, so that a test reads the
+//! words as it does a control's. They lie under the control of the clean-up. A refusal of the
+//! question for the sizes is drawn there in the colour of a failure (`settings-size-problem`)
+//! and the control stays. A refusal of an answer to a question for leave is drawn above the
+//! rows (`settings-notice`) until the next answer.
+//!
+//! The screen scrolls with the wheel and keeps the row under the cursor in the room.
 //!
 //! # The folder for a repository's worktrees
 //!
@@ -74,6 +84,11 @@
 //!   Enter or the field closes. The row's value is what `SettingList` holds meanwhile: the
 //!   folder at once, the kept one again after a refusal.
 //! - Escape closes it, nothing sent, the focus back to the screen.
+//!
+//! A click on another row's value while a field is open closes the field first: what was
+//! typed is given up, and one field is never open for two rows. While the field is open the
+//! screen sets no key context ([`controls`]): the letters of its keys are typed there, and
+//! Enter and Escape are the field's.
 //!
 //! The screen judges no folder: whether one is taken is the Keeper's to say.
 //!
@@ -338,13 +353,18 @@ impl SettingsScreen {
     pub fn new(models: Models, cx: &mut Context<Self>) -> SettingsScreen {
         models.states.update(cx, |states, cx| states.refresh(cx));
         // The screen holds nothing it shows: each model that does, when it changes, has the
-        // screen drawn again.
+        // screen drawn again, with the cursor still on a row there is.
+        let keep = |screen: &mut Self, cx: &mut Context<Self>| {
+            let rows = screen.built(cx).len();
+            screen.cursor = screen.clamped_cursor(rows);
+            cx.notify();
+        };
         let watching = vec![
-            cx.observe(&models.settings, |_, _, cx| cx.notify()),
-            cx.observe(&models.workspaces, |_, _, cx| cx.notify()),
-            cx.observe(&models.changes, |_, _, cx| cx.notify()),
-            cx.observe(&models.states, |_, _, cx| cx.notify()),
-            cx.observe(&models.consents, |_, _, cx| cx.notify()),
+            cx.observe(&models.settings, move |screen, _, cx| keep(screen, cx)),
+            cx.observe(&models.workspaces, move |screen, _, cx| keep(screen, cx)),
+            cx.observe(&models.changes, move |screen, _, cx| keep(screen, cx)),
+            cx.observe(&models.states, move |screen, _, cx| keep(screen, cx)),
+            cx.observe(&models.consents, move |screen, _, cx| keep(screen, cx)),
         ];
         SettingsScreen {
             models,
