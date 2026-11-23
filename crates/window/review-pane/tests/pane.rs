@@ -19,7 +19,7 @@ use yaar_frame::{Place, SetBase};
 use yaar_link::{
     Anchor, Author, Changes, Comment, CommentId, Comparison, Content, Fact, FileSides, FileStatus,
     FlowForm, Lines, NoComparison, Refusal, Reply, Request, RequestKind, Setting, Side as LinkSide,
-    Thread, ThreadId, ThreadState,
+    Thread, ThreadId, ThreadState, TurnEndSelects,
 };
 use yaar_review_pane::{
     FILES_ON_THEIR_WAY, Following, HISTORY_CONTEXT, Layout, PaneRow, Position, REFERENCES_CONTEXT,
@@ -1062,15 +1062,39 @@ fn no_key_and_no_action_changes_the_content_of_a_file_the_pane_shows(cx: &mut Te
                 control.title
             );
         }
+        // The settings the keys sent, in the order of the table: Keep Selection sets what a
+        // turn end selects, once by its key and once as an action; the key of the form comes
+        // after it.
+        let turn_end = |selects| Setting::TurnEnd(selects);
+        if matches!(effect, Effect::Setting) {
+            wait_until(
+                &mut cx,
+                "the two sets of the turn end to reach the Keeper",
+                |_| {
+                    stage.keeper.settings_set()
+                        == [
+                            turn_end(TurnEndSelects::KeepSelection),
+                            turn_end(TurnEndSelects::WhatChanged),
+                        ]
+                },
+            );
+        }
         if matches!(effect, Effect::Form) {
             // The key and the action sent the two settings, and Changes sent none: the
-            // Keeper holds exactly these, in this order, for the workspace on screen.
+            // Keeper holds exactly these after those of the turn end, in this order, for the
+            // workspace on screen.
             let form = |form| Setting::FlowForm {
                 workspace: id('1'),
                 form,
             };
             wait_until(&mut cx, "the two forms to reach the Keeper", |_| {
-                stage.keeper.settings_set() == [form(FlowForm::LiveDiff), form(FlowForm::Timeline)]
+                stage.keeper.settings_set()
+                    == [
+                        turn_end(TurnEndSelects::KeepSelection),
+                        turn_end(TurnEndSelects::WhatChanged),
+                        form(FlowForm::LiveDiff),
+                        form(FlowForm::Timeline),
+                    ]
             });
         }
         if only_in_flow {
