@@ -384,12 +384,16 @@ impl Window9 {
 
     /// Moves the cursor to row `to` with `j` and `k`.
     fn cursor_to(&mut self, to: usize) {
-        while self.cursor() < to {
+        // Exactly as many presses as rows lie between: a cursor that does not move as
+        // told fails here, and does not leave the test pressing for ever.
+        let from = self.cursor();
+        for _ in from..to {
             self.press(&key::<NextSetting>());
         }
-        while self.cursor() > to {
+        for _ in to..from {
             self.press(&key::<PreviousSetting>());
         }
+        assert_eq!(self.cursor(), to, "the cursor moved from row {from}");
     }
 
     /// The selector of the control of this value of row `row`.
@@ -778,9 +782,12 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     // `l` until Dark is chosen: Light first, then Dark.
     window.press(&key::<NextValue>());
     window.heard_set(Setting::Theme(ThemeChoice::Named(LIGHT.to_owned())));
-    while window.row(&SettingRow::Theme).chosen != Some(2) {
-        window.press(&key::<NextValue>());
-    }
+    window.press(&key::<NextValue>());
+    assert_eq!(
+        window.row(&SettingRow::Theme).chosen,
+        Some(2),
+        "Dark is the third value"
+    );
     window.heard_set(Setting::Theme(ThemeChoice::Named(DARK.to_owned())));
     window.cx.run_until_parked();
     assert_eq!(mode(&mut window), ThemeMode::Dark);
