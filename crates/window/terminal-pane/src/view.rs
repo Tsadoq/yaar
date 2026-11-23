@@ -675,6 +675,9 @@ impl Render for TerminalView {
             .size_full()
             .relative()
             .overflow_hidden()
+            // The ground a cell with the default background shows is the one a program is
+            // told by its question about colours, not the window's behind the view.
+            .bg(colours.background)
             .key_context(PROGRAM_CONTEXT)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
