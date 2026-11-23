@@ -541,6 +541,8 @@ Known limits of what is there:
 | `j` or Down, `k` or Up | the same | One line down, one line up | in the diff |
 | `s` | the same | Switches between the unified and the split diff, on the same line | in the diff |
 
+On Linux, while a terminal has the focus, only the keys the Window keeps reach the app: Ctrl-Tab, Ctrl-Shift-Tab, Shift-PageUp, Shift-PageDown, Ctrl-Shift-C and Ctrl-Shift-V. The other Ctrl keys of this table go to the program in the terminal, so leave the terminal with Ctrl-Tab first.
+
 ### Keys in the review pane
 
 They work in the diff and in Flow, as plain keys. The review keys follow vim and tuicr (0.29.0,
