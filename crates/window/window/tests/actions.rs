@@ -2154,8 +2154,8 @@ fn walk_the_silent_keys(
                     .read_with(cx, |pane, _| pane.comment_box().is_none())
             });
         }
-        // No such branch exists. The Keeper refuses it, which is all the same here: the
-        // request has passed the tap.
+        // The Keeper refuses the base, as no such branch exists. The step is closed once
+        // the request has passed the tap and the Frame holds that refusal.
         // The stop frame is no request, so the loop below does not see it. A key that
         // sent it would end the Keeper, and the request that closes the step would never
         // pass: the step is closed on that frame as well, and it is told apart here.
@@ -2166,10 +2166,7 @@ fn walk_the_silent_keys(
                 control.title
             );
         };
-        // The Keeper answers a Window's requests one at a time, on the connection's thread.
-        // A step that went on before the answer to its base was here would leave the
-        // requests of the steps after it queued behind the git work of this one, and a
-        // wait of a later step would count that queue against its deadline.
+        // See the doc of `Composed::set_base`: this fails if the wait is ever taken out of it.
         let base = format!("after-{}-{step}", control.key());
         let refusal = window
             .models
