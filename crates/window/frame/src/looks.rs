@@ -31,12 +31,16 @@
 //! choice given back to the system while the definition stays) runs the last step only,
 //! and tells the observers once.
 //!
-//! The system's setting comes from the Window program, which tells it at the window's
-//! opening (`Window::appearance`) and at every change the window observes
-//! (`Window::observe_window_appearance`). While a theme is chosen the observed appearance
-//! is the forced one, so it is noted and not acted on; when the choice goes back to the
-//! system, the Window program reads `Window::appearance` again once the forced one is let
-//! go, and tells it.
+//! The system's setting is read from the application (`App::window_appearance`, what the
+//! system reports for the application's windows), and told by two parties. [`crate::open`]
+//! tells it first, before the window exists, so that the first frame is in the definition of
+//! the system's mode. The Window program tells it after that: at the window's opening
+//! (`Window::appearance`, a repeat of the first) and at every change the window observes
+//! (`Window::observe_window_appearance`). While a theme is chosen the observed appearance is
+//! the forced one, so it is noted and not acted on. The forced appearance is let go in two
+//! ways, when the choice goes back to the system and when it becomes a name no theme has, and
+//! after either the Window program reads `App::window_appearance` again, not the window's,
+//! which keeps the forced value until the platform tells it otherwise, and tells it.
 //!
 //! A test plays the system at [`Looks::system_is`]: GPUI's test platform reports a light
 //! system and gives a test no way to change it (its window's `simulate_appearance_change`
