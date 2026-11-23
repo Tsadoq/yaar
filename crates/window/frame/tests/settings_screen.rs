@@ -427,7 +427,9 @@ impl Window9 {
     /// The control each row draws as its chosen value is the model's: the element marked
     /// `settings-chosen-<row>` is the control of the value the row's model has chosen (the
     /// same bounds) and lies inside no other control of the row, and a row with no value
-    /// chosen draws none marked.
+    /// chosen draws none marked. What was painted agrees: the quad at the chosen control's
+    /// bounds has the applied theme's `primary` for its ground, and the quad at each other
+    /// value's control has its `secondary`.
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -456,6 +458,54 @@ impl Window9 {
                  {chosen} chosen"
             );
         }
+        // The mark says which control is chosen; the grounds that were painted say how it
+        // looks. The roles are the applied theme's, read where the kit holds it.
+        let (primary, secondary) = self.cx.update(|_, app| {
+            let theme = app.theme();
+            (theme.primary, theme.secondary)
+        });
+        for (value, label) in shown.values.iter().enumerate() {
+            let (role, wanted) = if value == chosen {
+                ("primary", primary)
+            } else {
+                ("secondary", secondary)
+            };
+            let ground = self.painted_ground(&Window9::value(at, value, label));
+            assert_eq!(
+                ground, wanted,
+                "{row:?}: the control of the value {value} ({label}) is painted in {ground:?}, \
+                 and the theme's {role} is {wanted:?} (the model has {chosen} chosen)"
+            );
+        }
+    }
+
+    /// The ground of the quad that was painted at the bounds of the element drawn under
+    /// `selector`, read from the last frame's scene. The scene counts in device pixels, so
+    /// the element's bounds are scaled by the window's factor first. Fails when no quad, or
+    /// more than one, was painted there, or when its ground is not one solid colour.
+    fn painted_ground(&mut self, selector: &str) -> gpui_kit::Hsla {
+        let bounds = self.bounds(selector);
+        let (scale, quads) = self
+            .cx
+            .update(|window, _| (window.scale_factor(), window.painted_quads()));
+        let at = bounds.scale(scale);
+        let grounds: Vec<_> = quads
+            .iter()
+            .filter(|quad| quad.bounds == at)
+            .map(|quad| quad.background)
+            .collect();
+        assert_eq!(
+            grounds.len(),
+            1,
+            "{selector}: one quad was painted at its bounds {at:?} (scale {scale}), not {} of \
+             the {} painted: {:?}",
+            grounds.len(),
+            quads.len(),
+            quads.iter().map(|quad| quad.bounds).collect::<Vec<_>>()
+        );
+        grounds[0]
+            .as_solid()
+            .unwrap_or_else(|| panic!("{selector}: the ground painted is not one solid colour"))
     }
 
     /// Every row of the screen draws its chosen value as the model has it.

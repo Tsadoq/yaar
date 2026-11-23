@@ -12,6 +12,10 @@
 //! (`run_until_parked`) before anything is read: a negative clause ("it does not follow",
 //! "nothing is rewritten", "told to nobody") would otherwise pass on a model that follows
 //! one task late. The settings reaching the model are waited for with the deadline.
+//!
+//! The test of `yaar_frame::open` tells the model nothing: it reads what `open` itself told
+//! it, from a pane built inside the opening, before the window exists, and from the model
+//! afterwards.
 
 mod common;
 
