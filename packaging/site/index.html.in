@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>YAAR</title>
+<meta name="description" content="YAAR is a desktop app for reviewing what a coding agent changes, while it changes it.">
+<style>
+  :root {
+    --bg: #fbfbfa;
+    --fg: #1d1f21;
+    --muted: #5b6168;
+    --rule: #dcdfe2;
+    --code-bg: #f0f1f2;
+    --link: #0b57b7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #17181a;
+      --fg: #e6e7e8;
+      --muted: #9aa0a6;
+      --rule: #34373b;
+      --code-bg: #232528;
+      --link: #7db3f5;
+    }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 17px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  main { max-width: 44rem; margin: 0 auto; padding: 3rem 1rem 4rem; }
+  h1 { font-size: 2.4rem; letter-spacing: 0.02em; margin: 0 0 0.25rem; }
+  h2 { font-size: 1.15rem; margin: 2.5rem 0 0.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); }
+  p, ul { margin: 0.6rem 0; }
+  ul { padding-left: 1.25rem; }
+  li { margin: 0.2rem 0; }
+  a { color: var(--link); }
+  .lead { font-size: 1.1rem; }
+  .muted { color: var(--muted); }
+  pre {
+    margin: 0.6rem 0;
+    padding: 0.75rem 1rem;
+    overflow-x: auto;
+    background: var(--code-bg);
+    border-radius: 6px;
+    font: 0.9rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  }
+  code { font: 0.9em ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--code-bg); padding: 0.1em 0.3em; border-radius: 4px; }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  footer { margin-top: 3rem; font-size: 0.9rem; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+<h1>YAAR</h1>
+<p class="lead">Yet another agent reviewer: a desktop app for reviewing what a coding agent changes, while it changes it. You run Claude Code or pi in its terminal, read the diff beside it, comment on lines, and send the comments back to the agent.</p>
+
+<h2>Install</h2>
+<pre><code>curl -fsSL @BASE_URL@/install.sh | bash</code></pre>
+<p>On macOS it installs the notarised app into <code>/Applications</code>. On Debian and Ubuntu it installs the package from the signed apt repository at <code>@BASE_URL@/apt</code>, which stays among apt's sources. On another Linux it unpacks the plain archive under <code>~/.local</code>. Add <code>--dry-run</code> to see what it would do and change nothing.</p>
+
+<h2>Systems</h2>
+<ul>
+  <li>macOS 26 and 27, on Apple silicon.</li>
+  <li>Debian 12 and 13, and Ubuntu 22.04, 24.04 and 26.04, each on x86-64 and on arm64.</li>
+</ul>
+<p>An Intel Mac and other Linux systems get builds that nobody has tested.</p>
+
+<h2>Remove</h2>
+<p>Quit YAAR first, then:</p>
+<pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall</code></pre>
+<p>That removes the app and the files it keeps in your cache and runtime folders. It keeps your reviews, and the extension the app wrote for pi.</p>
+<pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall --purge</code></pre>
+<p><code>--purge</code> removes your reviews and the whole data folder too.</p>
+<pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall --stop-agents</code></pre>
+<p>If YAAR is still running, the uninstall stops and says so, because agents may be running in its terminals. <code>--stop-agents</code> ends YAAR and those agents.</p>
+
+<h2>By hand</h2>
+<p>Every release is on the <a href="https://github.com/Tsadoq/yaar/releases">releases page</a>: the <code>.dmg</code> for macOS, the <code>.deb</code> for each processor, and a plain archive for each Linux processor. <code>SHA256SUMS</code> lists them all, and <code>SHA256SUMS.asc</code> is its signature by the key below.</p>
+<p>To use the apt repository without the install line, put the key in place and write one source file:</p>
+<pre><code>sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/yaar-review.asc @BASE_URL@/apt/yaar-review.asc</code></pre>
+<p>Then <code>/etc/apt/sources.list.d/yaar-review.sources</code> holds:</p>
+<pre><code>Types: deb
+URIs: @BASE_URL@/apt
+Suites: stable
+Components: main
+Signed-By: /etc/apt/keyrings/yaar-review.asc</code></pre>
+<pre><code>sudo apt-get update
+sudo apt-get install yaar-review</code></pre>
+
+<h2>The key</h2>
+<p>The apt repository and <code>SHA256SUMS</code> are signed by one key, served at <a href="@BASE_URL@/apt/yaar-review.asc"><code>@BASE_URL@/apt/yaar-review.asc</code></a>. Its fingerprint:</p>
+<pre><code>@FINGERPRINT@</code></pre>
+<p>Compare it with what your own copy shows:</p>
+<pre><code>curl -fsSL @BASE_URL@/apt/yaar-review.asc | gpg --show-keys --fingerprint</code></pre>
+
+<footer>Version @VERSION@.</footer>
+</main>
+</body>
+</html>
