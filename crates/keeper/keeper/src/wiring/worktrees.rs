@@ -28,7 +28,11 @@
 //!    takes it for a request that waits its turn), and its parts are read again. When the Keeper is leaving (the `Weak` is dead,
 //!    or the parts are gone; the work's thread keeps the shared state alive, so in practice
 //!    only the parts are), `Planned::take_away` removes what step 2 made and the
-//!    refusal is `Refusal::Failed` "the Keeper is leaving". Otherwise, under the turn:
+//!    refusal is `Refusal::Failed` "the Keeper is leaving". `run` waits for this work, for
+//!    at most its deadline, before it returns, so that the take-away is done before the
+//!    process of the Keeper ends; past the deadline it leaves and names the work on its
+//!    error output, and the user's git finishes what it was doing without it. Otherwise,
+//!    under the turn:
 //!    `Workspaces::open_added`, which opens the worktree and sets its base to `from`; then
 //!    the agent's launcher (`Program::Agent { agent }`) opened in the new workspace at
 //!    `size`, as `OpenTerminal` opens it (`Parts::open_terminal`), so that the CLI runs as
@@ -37,7 +41,13 @@
 //!    the refusal of the opening is given: nothing half made is left. When even that fails
 //!    (the user's own hook can lock the new worktree), the sentence says which worktree
 //!    stays, the Keeper's error output has it too, and the list as it is then, which holds
-//!    the worktree, is told as below. When it opens,
+//!    the worktree, is told as below. The clause that names the worktree is kept whatever
+//!    the Dock's refusal is: one that is not `Refusal::Failed` becomes a `Failed` holding its
+//!    sentence and the clause. The opening is answered by a terminal or refused; an answer
+//!    that is neither is no case the Dock has, and is a `Failed` that names the worktree
+//!    that stays (it is left, the list is told, and the error output has the sentence), never
+//!    a panic after git made the worktree. No surface of the Keeper provokes either of
+//!    these two, so no test shows them. When it opens,
 //!    `Fact::Workspaces` with the list as it is then is told to every Window
 //!    (`Shared::tell`), still under the turn, so that it takes its place among the other
 //!    lists told; it reaches the asking Window before the reply. A list that cannot be
@@ -165,24 +175,33 @@ fn make(
     let opened = parts.open_terminal(kept, window, &workspace, &Program::Agent { agent }, size);
     let (terminal, release) = match opened {
         Ok((Reply::TerminalOpened { terminal }, release)) => (terminal, release),
-        Ok(_) => unreachable!("opening a terminal is answered by the terminal"),
-        Err(mut refused_by_the_dock) => {
+        Ok(_) => {
+            // Opening a terminal is answered by the terminal and nothing else, so this is
+            // not reached. Should it be, the worktree is opened as a workspace, and what the
+            // Dock did is not known: it is left, and the user is told which one stays.
+            let left = format!(
+                "the worktree at {} stays: opening the launcher gave no terminal",
+                planned.folder().display()
+            );
+            eprintln!("yaar-keeper: {left}");
+            tell_the_list(&shared, kept);
+            return refused(Refusal::Failed { reason: left });
+        }
+        Err(refused_by_the_dock) => {
             // Nothing half made is left: the worktree and its branch go again. When they
             // cannot, the user is told that a worktree stays.
-            if let Err(error) = kept.workspaces.remove_created(&created) {
-                let left = format!(
-                    "the worktree at {} could not be taken away: {error}",
-                    planned.folder().display()
-                );
-                eprintln!("yaar-keeper: {left}");
-                if let Refusal::Failed { reason } = &mut refused_by_the_dock {
-                    *reason = format!("{reason} ({left})");
-                }
-                // The worktree stays in git's list and in the Store, so that the next
-                // list a Window asks for holds it: the Windows are told the same.
-                tell_the_list(&shared, kept);
-            }
-            return refused(refused_by_the_dock);
+            let Err(error) = kept.workspaces.remove_created(&created) else {
+                return refused(refused_by_the_dock);
+            };
+            let left = format!(
+                "the worktree at {} could not be taken away: {error}",
+                planned.folder().display()
+            );
+            eprintln!("yaar-keeper: {left}");
+            // The worktree stays in git's list and in the Store, so that the next list a
+            // Window asks for holds it: the Windows are told the same.
+            tell_the_list(&shared, kept);
+            return refused(with_the_worktree_that_stays(refused_by_the_dock, &left));
         }
     };
     // Told under the turn, so that the list takes its place among the others told, and
@@ -204,6 +223,19 @@ fn tell_the_list(shared: &Shared, kept: &Kept) {
     match list(&kept.workspaces) {
         Ok(repositories) => shared.tell(&[Fact::Workspaces(repositories)]),
         Err(error) => eprintln!("yaar-keeper: the list of workspaces could not be told: {error:?}"),
+    }
+}
+
+/// The refusal of the Dock with the clause that names the worktree that stays, in the
+/// words of the Dock's reason: a refusal of another kind than `Failed` (the Dock gives none
+/// today) becomes a `Failed` that holds its sentence, so that the clause is never lost.
+fn with_the_worktree_that_stays(refusal: Refusal, left: &str) -> Refusal {
+    let reason = match refusal {
+        Refusal::Failed { reason } => reason,
+        other => other.to_string(),
+    };
+    Refusal::Failed {
+        reason: format!("{reason} ({left})"),
     }
 }
 

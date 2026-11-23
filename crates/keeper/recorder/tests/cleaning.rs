@@ -1390,6 +1390,200 @@ fn packs_of(store: &Path) -> BTreeSet<OsString> {
         .collect()
 }
 
+/// The processes of the store's reader of contents that this test process started and that
+/// still run: its children whose command line is `git cat-file --batch`. A child exists
+/// before the call that started it returns, so this holds a fact of the moment it is asked
+/// in, which a note the child writes itself does not (it writes after it was started).
+fn readers_running() -> Vec<u32> {
+    let me = std::process::id();
+    let is_reader = |command: &str| command.contains("cat-file --batch");
+    if cfg!(target_os = "linux") {
+        std::fs::read_dir("/proc")
+            .expect("read /proc")
+            .filter_map(|entry| entry.ok()?.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| {
+                let parent = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+                    .ok()
+                    .and_then(|stat| {
+                        // The parent is the second field after the last `)`.
+                        let (_, rest) = stat.rsplit_once(')')?;
+                        rest.split_whitespace().nth(1)?.parse::<u32>().ok()
+                    });
+                // The arguments are separated by NUL bytes.
+                parent == Some(me)
+                    && std::fs::read(format!("/proc/{pid}/cmdline")).is_ok_and(|bytes| {
+                        is_reader(&String::from_utf8_lossy(&bytes).replace('\0', " "))
+                    })
+            })
+            .collect()
+    } else {
+        let listing = Command::new("ps")
+            .args(["-axo", "pid=,ppid=,command="])
+            .output()
+            .expect("start ps");
+        assert!(listing.status.success(), "ps failed");
+        String::from_utf8_lossy(&listing.stdout)
+            .lines()
+            .filter_map(|line| {
+                let (pid, rest) = line.trim_start().split_once(' ')?;
+                let (parent, command) = rest.trim_start().split_once(' ')?;
+                if parent.parse::<u32>().ok()? == me && is_reader(command) {
+                    pid.parse::<u32>().ok()
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+}
+
+/// Waits on a thread of its own for one byte of the pipe and tells the channel it came.
+fn byte_of(mut pipe: File) -> std::sync::mpsc::Receiver<std::io::Result<()>> {
+    let (told, came) = channel();
+    std::thread::spawn(move || {
+        let mut byte = [0u8; 1];
+        let _ = told.send(pipe.read_exact(&mut byte));
+    });
+    came
+}
+
+#[test]
+fn a_pack_that_removes_a_pack_waits_for_a_read_in_flight_before_it_ends_the_reader() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
+    let worktree = open(&repo);
+    let clock = TestClock::new();
+    // This git writes down every start of itself. Once armed, it tells the test at the
+    // start of `prune`, and stops at the start of the reader of contents, which the first
+    // read has by then asked for under the lock a read takes, until the test says go.
+    let list = scratch.join("starts-of-git");
+    let (pack_armed, read_armed) = (scratch.join("arm-the-prune"), scratch.join("arm-the-read"));
+    let (pruning_path, reached_path, go_path) = (
+        scratch.join("pruning"),
+        scratch.join("reached"),
+        scratch.join("go"),
+    );
+    let stopping = scratch.join("bin/git-listed-and-stopping");
+    program(
+        &stopping,
+        &format!(
+            "printf '%s\\n' \"$$ $*\" >> '{list}'\n\
+             case \" $* \" in\n\
+             *\" prune \"*)\n  if [ -e '{pack_armed}' ]; then\n    rm '{pack_armed}'\n    \
+             echo pruning > '{pruning}'\n  fi;;\n\
+             *\" cat-file --batch \"*)\n  if [ -e '{read_armed}' ]; then\n    rm '{read_armed}'\n    \
+             echo reached > '{reached}'\n    read go < '{go}'\n  fi;;\nesac\n\
+             exec git \"$@\"",
+            list = list.display(),
+            pack_armed = pack_armed.display(),
+            read_armed = read_armed.display(),
+            pruning = pruning_path.display(),
+            reached = reached_path.display(),
+            go = go_path.display(),
+        ),
+    );
+    let (pruning, reached, mut go) = (pipe(&pruning_path), pipe(&reached_path), pipe(&go_path));
+    let store = Arc::new(open_store_through(
+        &stopping,
+        &scratch.join("states/one.git"),
+        &clock,
+    ));
+    let mut noise = Noise(47);
+    let first = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let second = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let kept_bytes = std::fs::read(repo.join("turn.bin")).expect("what the second state holds");
+    store.pack().expect("pack what the recordings wrote loose");
+    record_with_noise(&store, &repo, &worktree, &mut noise);
+    let packs = packs_of(store.folder());
+    assert!(reader_starts(&list).is_empty(), "no read has asked yet");
+
+    // The first read of a state asks for the reader and stops at its start, holding the lock
+    // of the reader.
+    std::fs::write(&read_armed, "").expect("arm the read");
+    let reading = {
+        let (store, id) = (store.clone(), second.id.to_string());
+        std::thread::spawn(move || store.content(&id, Path::new("turn.bin")))
+    };
+    byte_of(reached)
+        .recv_timeout(DEADLINE)
+        .expect("the read reached the start of the reader")
+        .expect("read the pipe");
+    let started = reader_starts(&list);
+    assert_eq!(
+        started.len(),
+        1,
+        "the read asked for one reader: {started:?}"
+    );
+
+    // A pack that removes the old pack runs beside it, up to the start of its prune.
+    std::fs::write(&pack_armed, "").expect("arm the prune");
+    let (cleaned, ended) = channel();
+    let cleaner = {
+        let (store, ids) = (store.clone(), BTreeSet::from([first.id.to_string()]));
+        std::thread::spawn(move || {
+            store.delete(&ids).expect("delete");
+            store.pack().expect("pack");
+            let _ = cleaned.send(());
+        })
+    };
+    byte_of(pruning)
+        .recv_timeout(DEADLINE)
+        .expect("the pack reached its prune")
+        .expect("read the pipe");
+    // The one timed negative: a pack that does not wait for the read leaves nothing to look
+    // at, as `clean_up_beside_a_call` says. A passing run cannot fail on it: the read is let
+    // go only after the window.
+    let ran_on = ended.recv_timeout(SETTLE);
+    go.write_all(b"go\n").expect("say go");
+    assert_eq!(
+        ran_on,
+        Err(RecvTimeoutError::Timeout),
+        "the pack ended while a read of the reader was in flight"
+    );
+
+    let read = reading.join().expect("the read").expect("read");
+    assert_eq!(
+        read,
+        Some(kept_bytes.clone()),
+        "the read answered its bytes"
+    );
+    ended
+        .recv_timeout(DEADLINE)
+        .expect("the pack ended once the read had");
+    cleaner.join().expect("the clean-up");
+    assert!(
+        !packs_of(store.folder()).is_superset(&packs),
+        "the pack removed the old pack"
+    );
+    assert!(
+        !is_alive(&started[0]),
+        "the reader the read started ended with the pack, and was waited for"
+    );
+    assert_eq!(
+        readers_running(),
+        Vec::<u32>::new(),
+        "none starts before a read asks"
+    );
+
+    // The next read starts another reader, and the bytes are the same.
+    assert_eq!(
+        store
+            .content(second.id.as_str(), Path::new("turn.bin"))
+            .expect("read"),
+        Some(kept_bytes),
+        "the same bytes"
+    );
+    let starts = reader_starts(&list);
+    assert_eq!(starts.len(), 2, "one more start: {starts:?}");
+    assert_ne!(starts[1], started[0]);
+    assert!(
+        is_alive(&starts[1]),
+        "the new reader waits for the next read"
+    );
+    watched.assert_unchanged();
+}
+
 #[test]
 fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_next_read_starts_one_anew()
  {
@@ -1443,8 +1637,8 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_
         "the reader that had the old pack mapped ended with the pack, and was waited for"
     );
     assert_eq!(
-        reader_starts(&list),
-        std::slice::from_ref(&old_reader),
+        readers_running(),
+        Vec::<u32>::new(),
         "none starts before a read asks"
     );
 
