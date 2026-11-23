@@ -498,6 +498,11 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-004", "FR-014"]
+built = [
+    "crates/keeper/workspaces/tests/create.rs::a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_named_and_has_that_branch_as_its_base",
+    "crates/keeper/workspaces/tests/create.rs::each_refusal_makes_nothing_and_leaves_the_repository_the_folder_beside_it_and_the_store_as_they_were",
+    "crates/keeper/workspaces/tests/create.rs::a_folder_that_is_not_absolute_or_holds_a_dot_dot_is_refused",
+]
 note = "Changed in slice 9: the user names the new branch and the worktree is made from the branch of the workspace on screen, which FR-004 calls the branch it was made from. The folder the user named is the repository's setting, which the Keeper reads and hands over; the test hands it as the Keeper does. What is refused when the folder is set or at creation is shown by tests of the same packages, not by this row."
 
 [[test]]
@@ -712,6 +717,13 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-124", "NFR-017"]
+built = [
+    "crates/window/frame/tests/settings_screen.rs::l_on_the_turn_end_row_chooses_keep_selection_at_once_and_the_keeper_keeps_it",
+    "crates/window/frame/tests/settings_screen.rs::a_click_on_a_stop_time_sets_it_and_tells_the_navigator_at_once",
+    "crates/window/frame/tests/settings_screen.rs::the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back",
+    "crates/window/frame/tests/settings_screen.rs::the_base_row_opens_the_frames_field_and_what_the_keeper_answers_shows_in_the_row",
+    "crates/window/frame/tests/settings_screen.rs::the_wheel_scrolls_the_screen_until_the_row_of_the_states_is_drawn",
+]
 note = "The base is set through the Frame's field, as Set Base sets it; the stop time reaches the Navigator at once (NAV-17 shows the Navigator acts on it at once); what a turn end then selects is shown by WIN-11."
 
 [[test]]
@@ -723,16 +735,29 @@ through = "keys, clicks and the wheel in; read back through the model it shows"
 driver = "test-platform"
 runs = "ci"
 proves = ["FR-126"]
+built = [
+    "crates/window/frame/tests/settings_screen.rs::the_screen_shows_the_size_of_each_workspace_the_states_of_none_and_the_total",
+    "crates/window/frame/tests/settings_screen.rs::shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_click_cleans_up_again",
+    "crates/window/frame/tests/settings_screen.rs::a_deletion_the_keeper_tells_while_the_screen_is_open_has_the_sizes_asked_again",
+]
 
 [[test]]
 id = "FRAME-14"
 what = "With no theme chosen the app follows the system's light or dark setting as it changes; after a choice it does not."
 level = "component"
 part = "frame"
-through = "keys, clicks and the wheel in, and the system's setting told to the Frame's model as the Window tells it; read back through the model it shows"
+through = "the system's setting told to the Frame's model as the Window tells it, and the user's choice told as the Keeper tells it; read back through the model and the theme the toolkit draws with"
 driver = "test-platform"
 runs = "ci"
 proves = ["NFR-018"]
+built = [
+    "crates/window/frame/tests/looks.rs::with_no_theme_chosen_the_app_follows_the_system_as_it_changes",
+    "crates/window/frame/tests/looks.rs::after_a_choice_the_system_is_not_followed",
+    "crates/window/frame/tests/looks.rs::a_choice_of_the_system_follows_it_again_at_once",
+    "crates/window/frame/tests/looks.rs::a_name_no_theme_has_is_the_system_s_setting",
+    "crates/window/window/tests/settings.rs::the_window_tells_its_theme_the_systems_appearance_at_its_opening",
+    "crates/window/frame/tests/looks.rs::a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_with_nobody_telling_it",
+]
 note = "Changed in slice 9: GPUI's test platform reports a light system and gives a test no way to change it, so the test tells the Frame's model what the platform would. WIN-11 shows the composed Window telling the model the platform's setting at its opening; a change of the system's setting while the app runs is checked on a real screen, by the conventions checklist."
 
 [[test]]
@@ -745,6 +770,13 @@ driver = "test-platform"
 runs = "ci"
 proves = ["FR-062", "NFR-020"]
 slice = 9
+built = [
+    "crates/window/frame/tests/settings_screen.rs::the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_navigator_is_told",
+    "crates/window/frame/tests/settings_screen.rs::the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_changed_later",
+    "crates/window/frame/tests/settings_screen.rs::an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_for_no_other",
+    "crates/window/frame/tests/settings_screen.rs::an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other",
+    "crates/window/frame/tests/settings_screen.rs::an_extension_answered_before_the_window_started_is_asked_for_at_the_opening_and_listed_with_its_answer",
+]
 note = "Added in slice 9: an answer given once can be changed."
 
 [[test]]
@@ -756,6 +788,12 @@ through = "its public functions"
 driver = "call"
 runs = "ci"
 proves = ["NFR-019"]
+built = [
+    "crates/window/frame/src/theme/mod.rs::a_third_theme_written_as_one_definition_is_accepted_and_applied_by_name",
+    "crates/window/frame/src/theme/mod.rs::a_definition_is_refused_for_a_name_taken_or_not_a_name_and_the_themes_stay",
+    "crates/window/window/tests/colours.rs::no_source_of_the_frame_the_panes_or_the_window_program_writes_a_colour",
+    "crates/window/window/tests/colours.rs::no_source_of_the_frame_the_panes_or_the_window_program_reads_a_colour_no_definition_holds",
+]
 note = "From slice 9 a second test scans the sources of the Frame, the panes and the Window program: none outside the theme definitions writes a colour or reads a colour the definitions do not hold."
 
 [[test]]
@@ -768,6 +806,12 @@ driver = "call"
 runs = "ci"
 proves = ["NFR-017"]
 slice = 9
+built = [
+    "crates/window/frame/src/theme/mod.rs::in_each_built_in_theme_every_text_role_is_readable_on_its_ground",
+    "crates/window/frame/src/theme/mod.rs::in_each_built_in_theme_the_roles_that_must_differ_do_and_so_do_the_terminals_colours",
+    "crates/window/frame/src/theme/mod.rs::the_contrast_a_test_reads_is_wcags_and_sees_what_is_not_readable",
+    "crates/window/frame/src/theme/mod.rs::the_pairs_the_panes_and_the_settings_screen_draw_are_all_listed_as_readable",
+]
 note = "Added in slice 9: the guard of the light theme's values, which nobody has looked at on a screen before the release's checklist."
 
 [[test]]
@@ -1543,7 +1587,13 @@ through = "its calls, with the real Store and the real Recorder beneath, on a re
 driver = "git"
 runs = "ci"
 proves = ["FR-125"]
-note = "A running turn's start, the newest state of a worktree that is there, and a state recorded within the last hour are kept too; the set time is counted with that hour added, so no state goes before the set time has passed since its turn. Whether the newest state stays past the set time is put to the owner (slice 9 ruling 10)."
+built = [
+    "crates/keeper/review-engine/tests/expiry.rs::after_the_set_time_the_state_of_a_turn_nothing_names_is_deleted_and_the_turn_stays_in_the_history_marked_expired",
+    "crates/keeper/review-engine/tests/expiry.rs::the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a_gone_worktree_is_not",
+    "crates/keeper/review-engine/tests/expiry.rs::a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_taken_with_the_old_one",
+    "crates/keeper/review-engine/tests/expiry.rs::the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends",
+]
+note = "A running turn's start, the newest state of a worktree that is there, and a state recorded within the last hour are kept too; the set time is counted with that hour added, so no state goes before the set time has passed since its turn. The newest state of a worktree that is there stays however old: the owner decided it on 21 November 2026 (FR-125 as of v1.6 of the requirements)."
 
 [[test]]
 id = "STATE-10"
@@ -1555,6 +1605,12 @@ driver = "client"
 runs = "ci"
 proves = ["FR-125", "FR-126"]
 slice = 9
+built = [
+    "crates/keeper/keeper/tests/cleaning.rs::at_its_start_the_keeper_deletes_the_states_nothing_refers_to_once_the_set_time_has_passed_and_the_history_marks_the_turn_expired",
+    "crates/keeper/keeper/tests/cleaning.rs::while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_passes_the_set_time",
+    "crates/keeper/keeper/tests/cleaning.rs::a_shortened_time_is_in_force_at_once",
+    "crates/keeper/keeper/tests/cleaning.rs::at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_reply",
+]
 note = "Added in slice 9: STATE-09 is the engine's; this row shows the Keeper's own clean-up and the history's mark through the Link. The Keeper's clock is handed in by the test."
 
 [[test]]
@@ -1611,6 +1667,11 @@ through = "its calls, on a real git repository the test makes"
 driver = "git"
 runs = "ci"
 proves = ["FR-126"]
+built = [
+    "crates/keeper/recorder/tests/cleaning.rs::the_sizes_of_the_recorded_states_are_what_they_take_on_disk_and_the_clean_up_removes_what_nothing_refers_to",
+    "crates/keeper/recorder/tests/cleaning.rs::a_reader_of_a_state_that_stays_reads_the_same_bytes_after_the_clean_up",
+    "crates/keeper/recorder/tests/cleaning.rs::the_reader_of_contents_ends_at_the_end_of_a_pack_that_removed_a_pack_and_the_next_read_starts_one_anew",
+]
 note = "Sizes are blocks on disk, as du counts. What nothing refers to is what the engine names for deletion; the Recorder deletes it and every object only it reached, the trees and blobs of comparisons among them."
 
 [[test]]
@@ -1707,6 +1768,7 @@ runs = "ci"
 proves = ["FR-032", "FR-124"]
 built = [
     "crates/keeper/store/tests/settings.rs::every_setting_is_still_set_after_the_process_that_set_it_is_killed",
+    "crates/keeper/keeper/tests/app_settings.rs::every_setting_of_the_app_is_listed_by_a_keeper_started_again_on_the_same_data_folder",
 ]
 note = "The base is kept with its workspace since slice 1; the five others since slice 5. The screen that sets them is slice 9 (FRAME-11): only the form of Flow is set from the Window before it."
 
@@ -2213,6 +2275,11 @@ driver = "git"
 runs = "ci"
 proves = ["FR-124"]
 slice = 9
+built = [
+    "crates/keeper/review-engine/tests/base_moves.rs::a_thread_on_a_removed_line_is_carried_to_the_new_base_and_the_others_stay",
+    "crates/keeper/keeper/tests/base_moves.rs::a_base_that_moved_while_the_keeper_was_stopped_moves_the_threads_at_its_first_answer",
+    "crates/keeper/keeper/tests/base_moves.rs::a_base_set_to_a_branch_with_another_fork_point_moves_the_old_side_and_tells_after_the_reply",
+]
 note = "Added in slice 9: the base of a workspace is a setting, and a changed base moves the old side of its threads."
 
 [[test]]
@@ -2859,6 +2926,12 @@ driver = "language-servers"
 runs = "ci"
 proves = ["FR-060"]
 slice = 9
+built = [
+    "crates/window/navigator/tests/shell.rs::the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_taken_once_and_not_before_a_server_is_needed",
+    "crates/window/navigator/tests/shell.rs::a_shell_that_fails_leaves_the_windows_own_environment_and_is_not_run_again",
+    "crates/window/navigator/tests/shell.rs::a_shell_that_prints_no_environment_leaves_the_windows_own",
+    "crates/window/navigator/tests/shell.rs::a_shell_that_outlasts_its_deadline_leaves_the_windows_own_and_is_gone",
+]
 note = "Added in slice 9: a window started from the Dock has the system's short search path. No test runs the user's own shell."
 
 [[test]]
@@ -2871,6 +2944,10 @@ driver = "language-servers"
 runs = "ci"
 proves = ["FR-065", "FR-124"]
 slice = 9
+built = [
+    "crates/window/navigator/tests/stop_after.rs::a_shorter_stop_time_told_to_a_running_navigator_stops_an_idle_server_that_the_old_one_would_keep",
+    "crates/window/navigator/tests/stop_after.rs::a_longer_stop_time_told_to_a_running_navigator_keeps_an_idle_server_past_the_old_one",
+]
 note = "Added in slice 9: what makes FRAME-11's at once hold for a Navigator that runs."
 
 [[test]]
@@ -2883,6 +2960,11 @@ driver = "language-servers"
 runs = "ci"
 proves = ["FR-060"]
 slice = 9
+built = [
+    "crates/window/navigator/tests/search.rs::rustups_rust_analyzer_found_through_the_cargo_home_is_the_projects_own_and_tried_before_a_copy_on_the_search_path",
+    "crates/window/navigator/tests/search.rs::with_no_cargo_home_the_proxy_in_the_home_folder_is_the_projects_own",
+    "crates/window/navigator/tests/search.rs::a_navigator_tries_rustups_proxy_before_the_machines_copy_with_no_question_and_with_no_install_asked_for",
+]
 note = "Added in slice 9: the order of DEC-067, the project's own before the machine's, where another copy lies earlier on the search path (slice 8 ruling 54)."
 
 [[test]]
@@ -3231,6 +3313,11 @@ through = "the Link on one side, the agent's side on the other"
 driver = "agent"
 runs = "ci"
 proves = ["FR-014"]
+built = [
+    "system-tests/tests/worktrees.rs::one_request_makes_a_worktree_from_a_branch_name_and_starts_claude_code_in_it",
+    "system-tests/tests/worktrees.rs::one_request_makes_a_worktree_from_a_branch_name_and_starts_the_agent_in_it_as_pi",
+    "system-tests/tests/worktrees.rs::a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was",
+]
 note = "Runs for both CLIs, with the slice that builds it (FR-023). The agent is the CLI the request names, the Window's one chosen CLI. A refused request makes nothing."
 
 [[test]]
@@ -3727,8 +3814,14 @@ part = "terminal-pane"
 through = "keys in; read back as the bytes the program gets"
 driver = "test-platform"
 runs = "ci"
-proves = ["FR-016"]
+proves = ["FR-122"]
 slice = 9
+built = [
+    "crates/window/terminal-pane/tests/option.rs::with_no_setting_option_types_the_characters_the_layout_gives_on_macos",
+    "crates/window/terminal-pane/tests/option.rs::option_set_to_meta_sends_escape_and_the_key_on_every_layout_on_macos",
+    "crates/window/terminal-pane/tests/option.rs::option_set_to_characters_types_the_characters_of_the_layout_on_macos",
+    "crates/window/terminal-pane/tests/option.rs::option_is_always_meta_off_macos_whatever_the_setting",
+]
 note = "Added in slice 9: the setting of DEC-112."
 
 [[test]]
@@ -3741,6 +3834,12 @@ driver = "test-platform"
 runs = "ci"
 proves = ["FR-122"]
 slice = 9
+built = [
+    "crates/window/terminal-pane/tests/history.rs::cmd_k_empties_the_history_and_the_screen_above_the_prompt_and_sends_nothing",
+    "crates/window/terminal-pane/tests/history.rs::cmd_a_selects_the_whole_history_and_screen_and_copy_puts_it_on_the_clipboard",
+    "crates/window/terminal-pane/tests/history.rs::the_cmd_scroll_keys_move_to_the_top_the_bottom_and_one_line_and_send_nothing",
+    "crates/window/terminal-pane/tests/keys_table.rs::off_macos_none_of_the_six_has_a_key",
+]
 note = "Added in slice 9. On Linux these have no key: only Ctrl-Shift-C and Ctrl-Shift-V are kept in a terminal there (DEC-112)."
 
 [[test]]
@@ -3882,7 +3981,7 @@ part = "window"
 through = "keys in, with a real Keeper beneath; read back as the requests that reach it"
 driver = "test-platform"
 runs = "ci"
-proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", "FR-101", "FR-107", "FR-109", "FR-120"]
+proves = ["FR-121", "FR-003", "FR-014", "FR-076", "FR-078", "FR-080", "FR-087", "FR-101", "FR-107", "FR-109", "FR-120", "FR-126"]
 built = [
     "crates/window/window/tests/actions.rs::every_request_a_user_starts_has_a_control_whose_key_sends_it",
     "crates/window/window/tests/actions.rs::no_key_of_a_control_that_names_no_message_sends_what_a_user_starts",
@@ -3983,6 +4082,13 @@ driver = "test-platform"
 runs = "ci"
 proves = ["FR-124", "FR-126", "NFR-017", "NFR-018"]
 slice = 9
+built = [
+    "crates/window/window/tests/settings.rs::the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_program_has_the_window",
+    "crates/window/window/tests/settings.rs::the_window_tells_its_theme_the_systems_appearance_at_its_opening",
+    "crates/window/window/tests/settings.rs::each_setting_of_the_screen_is_in_force_at_once_and_is_still_set_after_the_keeper_restarts_and_the_screen_shows_the_sizes_and_cleans_up",
+    "crates/window/window/tests/settings.rs::a_stop_time_chosen_on_the_screen_is_the_one_the_navigator_stops_the_servers_off_screen_by",
+    "crates/window/window/tests/settings.rs::a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told",
+]
 note = "Added in slice 9: the rows of the Frame play the Keeper with data; this row joins the settings screen and the real Keeper, as WIN-10 joined the Navigator."
 
 [[test]]
