@@ -420,7 +420,7 @@ program does, and the app writes nothing of pi's and does not hear it.
   counts from the state the worktree was in when that turn started.
 - The live diff finds its files with one `git status` for each question, one question at a
   time, so on a large repository it can lag behind the writes by about a second.
-- The pieces of the CLIs are not packaged yet: the Mac app and the `.deb` hold the Window and
+- The pieces of the CLIs are not packaged: the Mac app and the `.deb` hold the Window and
   the Keeper only. Build the workspace, which puts `yaar-claude-hook`, `yaar-claude-tools`
   and `yaar-pi-report`, pi's reporting program, beside `yaar-keeper`.
 - The state of a session that waits for permission stays on until the tool ends: after you
