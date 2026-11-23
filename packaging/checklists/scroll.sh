@@ -75,7 +75,9 @@ fi
 INFO=$(ck_lit_preflight 1)
 FAKEINPUT=$(ck_fakeinput)
 HZ=$(printf '%s\n' "$INFO" | sed -n 's/^display_mode_hz=\([0-9][0-9]*\).*/\1/p')
-[ -n "$HZ" ] && [ "$HZ" -gt 0 ] || ck_die "fakeinput does not report the display's refresh rate ($(printf '%s' "$INFO" | grep display_mode_hz))"
+if [ -z "$HZ" ] || [ "$HZ" -le 0 ]; then
+  ck_die "fakeinput does not report the display's refresh rate ($(printf '%s' "$INFO" | grep display_mode_hz))"
+fi
 APP=$(ck_app_bundle)
 WINDOW_PROGRAM=$(ck_window_program)
 APP_PIDS=$(ck_pids_of "$WINDOW_PROGRAM")

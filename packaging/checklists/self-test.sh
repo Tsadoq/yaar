@@ -95,10 +95,14 @@ refuse() {
   fi
 }
 
-real_state_before=none
-if [ -e "$REAL_HOME/yaar-checklists" ]; then
-  real_state_before=$(ls -ld "$REAL_HOME/yaar-checklists" | awk '{ print $6, $7, $8 }')
-fi
+real_state() {
+  if [ -e "$REAL_HOME/yaar-checklists" ]; then
+    find "$REAL_HOME/yaar-checklists" | sort | cksum
+  else
+    echo none
+  fi
+}
+real_state_before=$(real_state)
 
 mkdir -p "$S/home" "$S/tmp" "$S/bin"
 export HOME="$S/home" TMPDIR="$S/tmp"
@@ -165,8 +169,8 @@ done
 [ "$(grep -c '^Item ' "$S/out-mixed.txt")" -eq 17 ] || fail "conventions.sh macos printed other than 17 items"
 pass "conventions.sh macos prints its 17 items once each, with their place"
 
-grep -q 'Light' "$S/out-mixed.txt" && grep -q 'as the system' "$S/out-mixed.txt" \
-  || fail "conventions.sh macos does not print the light and dark steps of item 11"
+grep -q 'Light' "$S/out-mixed.txt" || fail "conventions.sh macos does not print the light steps of item 11"
+grep -q 'as the system' "$S/out-mixed.txt" || fail "conventions.sh macos does not print the follow-the-system step of item 11"
 awk '/^Item 16 of 17/ { on = 1 } on && /ground/ { found = 1 } END { exit !found }' "$S/out-mixed.txt" \
   || fail "conventions.sh macos does not print the light theme steps of item 16"
 pass "items 11 and 16 carry the light theme steps"
@@ -515,22 +519,19 @@ PID_A=$!
 PID_B=$!
 SERVERS="$SERVERS $PID_A $PID_B"
 found_a() {
-  [ "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") )" = "$PID_A" ]
+  [ "$( (. "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") )" = "$PID_A" ]
 }
-wait_for found_a || fail "a process started from $S/a/yaar-review was not found by that path alone (found: $( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") ))"
-[ "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/b/yaar-review") )" = "$PID_B" ] \
+wait_for found_a || fail "a process started from $S/a/yaar-review was not found by that path alone (found: $( (. "$HERE/lib.sh"; ck_pids_of "$S/a/yaar-review") ))"
+[ "$( (. "$HERE/lib.sh"; ck_pids_of "$S/b/yaar-review") )" = "$PID_B" ] \
   || fail "a process started from $S/b/yaar-review was not found by that path alone"
-[ -z "$( (CK_NAME=lib; . "$HERE/lib.sh"; ck_pids_of "$S/c/yaar-review") )" ] || fail "a path nothing runs from found a process"
+[ -z "$( (. "$HERE/lib.sh"; ck_pids_of "$S/c/yaar-review") )" ] || fail "a path nothing runs from found a process"
 kill "$PID_A" "$PID_B"
 if wait "$PID_A" "$PID_B" 2> /dev/null; then :; fi
 pass "a program is found by its full path, not by its name"
 
 # ---------------------------------------------------------------------------------------
 
-real_state_after=none
-if [ -e "$REAL_HOME/yaar-checklists" ]; then
-  real_state_after=$(ls -ld "$REAL_HOME/yaar-checklists" | awk '{ print $6, $7, $8 }')
-fi
+real_state_after=$(real_state)
 [ "$real_state_before" = "$real_state_after" ] || fail "the real $REAL_HOME/yaar-checklists changed during the run"
 pass "nothing was written to the real home"
 echo "$CK_NAME: all checks hold"

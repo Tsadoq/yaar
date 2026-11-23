@@ -123,7 +123,7 @@ cleanup() {
   fi
   rm -rf "$W"
 }
-trap cleanup EXIT
+CK_EXTRA_CLEANUP=cleanup
 trap 'exit 130' INT
 trap 'exit 143' TERM
 

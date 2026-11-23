@@ -86,10 +86,8 @@ else
   printf '%s: running the suite in %s (log: %s)\n' "$CK_NAME" "$REPO" "$LOG"
   if (cd "$REPO" && cargo nextest run --locked --workspace) 2>&1 | tee "$LOG"; then
     SUITE="passed"
-    SUITE_OK=1
   else
     SUITE="FAILED"
-    SUITE_OK=0
   fi
   ck_context "Suite (SYS-04)" "$SUITE: $(tail -n 3 "$LOG" | tr '\n' ' ')"
   printf '\n%s: the suite %s\n' "$CK_NAME" "$SUITE"

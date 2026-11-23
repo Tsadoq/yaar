@@ -31,6 +31,35 @@ fi
 
 CK_NAME=${CK_NAME:-lib.sh}
 
+# What the script leaves behind is removed by one trap on EXIT: the walker's scratch folder
+# (CK_WORK), the folder of ck_tmpdir (CK_TMPDIR), and then the function a script names in
+# CK_EXTRA_CLEANUP (the one place a script ends what it started). The exit status is the
+# script's own.
+CK_WORK=""
+CK_TMPDIR=""
+CK_EXTRA_CLEANUP=""
+
+ck_cleanup() {
+  if [ -n "$CK_WORK" ]; then
+    rm -rf "$CK_WORK"
+  fi
+  if [ -n "$CK_TMPDIR" ]; then
+    rm -rf "$CK_TMPDIR"
+  fi
+  if [ -n "$CK_EXTRA_CLEANUP" ]; then
+    "$CK_EXTRA_CLEANUP"
+  fi
+}
+trap ck_cleanup EXIT
+
+# ck_tmpdir: this script's scratch folder, made on first use, under `mktemp -d`.
+ck_tmpdir() {
+  if [ -z "$CK_TMPDIR" ]; then
+    CK_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/yaar-checklist.XXXXXX") || ck_die "cannot make a scratch folder under ${TMPDIR:-/tmp}"
+  fi
+  printf '%s\n' "$CK_TMPDIR"
+}
+
 ck_die() {
   printf '%s: %s\n' "$CK_NAME" "$1" >&2
   exit 1
@@ -52,7 +81,9 @@ ck_os() {
 
 # The day's folder of results, made when asked for: ~/yaar-checklists/<YYYY-MM-DD>/
 ck_results_dir() {
-  [ -n "${HOME:-}" ] && [ -d "$HOME" ] || ck_die "HOME names no folder, so there is nowhere to write the results"
+  if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then
+    ck_die "HOME names no folder, so there is nowhere to write the results"
+  fi
   local d
   d="$HOME/yaar-checklists/$(date +%Y-%m-%d)"
   mkdir -p "$d" || ck_die "cannot make the results folder $d"
@@ -174,18 +205,13 @@ ck_median_p95() {
 # The walker
 # ---------------------------------------------------------------------------------------
 
-CK_WORK=""
 CK_MODE=walk
 CK_TOTAL=0
 CK_N=0
-CK_ASK_VERDICT=""
-CK_ASK_NOTE=""
 
-# ck_begin: makes the walker's scratch folder, removed when the script ends.
+# ck_begin: makes the walker's scratch folder, removed when the script ends (ck_cleanup).
 ck_begin() {
   CK_WORK=$(mktemp -d "${TMPDIR:-/tmp}/yaar-checklist.XXXXXX") || ck_die "cannot make a scratch folder under ${TMPDIR:-/tmp}"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$CK_WORK'" EXIT
   : > "$CK_WORK/rows.tsv"
   : > "$CK_WORK/context.txt"
   CK_N=0
@@ -433,7 +459,7 @@ ck_cap_stop() {
 # as early. "missed=<n> early=<n>" goes to standard error.
 ck_key_latencies() {
   local sorted
-  sorted=$(mktemp "${TMPDIR:-/tmp}/yaar-caps.XXXXXX") || ck_die "cannot make a scratch file"
+  sorted="$(ck_tmpdir)/caps.$$.$RANDOM"
   awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
   awk -v caps="$sorted" '
     BEGIN {
@@ -465,7 +491,7 @@ ck_key_latencies() {
 # the gaps between consecutive frames longer than two refresh intervals.
 ck_frame_stats() {
   local sorted
-  sorted=$(mktemp "${TMPDIR:-/tmp}/yaar-caps.XXXXXX") || ck_die "cannot make a scratch file"
+  sorted="$(ck_tmpdir)/caps.$$.$RANDOM"
   awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
   awk -v caps="$sorted" -v hz="$3" '
     BEGIN {

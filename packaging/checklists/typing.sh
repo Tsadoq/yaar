@@ -143,8 +143,11 @@ reference() {
   }
   ck_wait_until 15 newest_front || ck_die "a second $REFERENCE did not come to the front in 15 s"
   pid=$(ck_front_pid)
-  local settled=$((SECONDS + 2))
-  while [ "$SECONDS" -lt "$settled" ]; do sleep 0.2; done
+  # The reference is ready for keys when its terminal has started the command: a child of it.
+  has_child() {
+    ps -axo pid=,ppid= | awk -v p="$pid" '$2 == p { found = 1 } END { exit !found }'
+  }
+  ck_wait_until 15 has_child || ck_die "the second $REFERENCE (pid $pid) started no command in 15 s"
   type_into "$name" "$pid" "$REFERENCE" 210 30
   kill "$pid"
   gone() { ! kill -0 "$pid" 2> /dev/null; }

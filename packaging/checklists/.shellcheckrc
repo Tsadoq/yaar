@@ -1,0 +1,3 @@
+# Functions here are handed by name to ck_wait_until and to the walker, which shellcheck
+# cannot follow: SC2317 (unreachable command) would flag each of them.
+disable=SC2317

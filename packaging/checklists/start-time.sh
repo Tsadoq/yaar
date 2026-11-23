@@ -126,10 +126,10 @@ if [ "$LINUX" -eq 1 ] && [ "$(ck_os)" = Darwin ]; then
     running*) ;;
     *) ck_die "the virtual machine is not running ($VM_STATE): start it with '$VM start', restart it for a cold start, and run this again" ;;
   esac
+  # shellcheck disable=SC2016 # the remote shell expands $HOME
   "$VM" ssh 'rm -rf "$HOME/yaar-checklists-kit"' || ck_die "could not clear yaar-checklists-kit in the virtual machine"
   "$VM" scp-to "$HERE" yaar-checklists-kit > /dev/null || ck_die "could not copy $HERE to the virtual machine"
-  REMOTE_LOG=$(mktemp "${TMPDIR:-/tmp}/yaar-start-time.XXXXXX") || ck_die "cannot make a scratch file"
-  trap 'rm -f "$REMOTE_LOG"' EXIT
+  REMOTE_LOG="$(ck_tmpdir)/remote.log"
   # The session words are quoted for the remote shell with single quotes.
   SESSION=${YAAR_SESSION_ENV:-}
   case $SESSION in
@@ -245,7 +245,7 @@ stop_app() {
 not_running() {
   ! running
 }
-trap 'stop_app' EXIT
+CK_EXTRA_CLEANUP=stop_app
 
 RUN=1
 FIRST_DIFF=""
@@ -277,7 +277,7 @@ while [ "$RUN" -le "$RUNS" ]; do
   stop_app
   RUN=$((RUN + 1))
 done
-trap - EXIT
+CK_EXTRA_CLEANUP=""
 
 if [ "$FIRST_DIFF" = none ]; then
   VERDICT="PERF-01/02: no first_diff mark in the first start: the workspace the app reopens drew no diff, or the app did not start (see $OUT/start-1.err)"
