@@ -7,7 +7,7 @@
 //! behaviour and fails here. It reads what the Window reads, the pane's `controls()`.
 
 use gpui_kit::Action;
-use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place};
+use yaar_frame::Control;
 use yaar_terminal_pane::{
     Clear, ScrollLineDown, ScrollLineUp, ScrollToBottom, ScrollToTop, SelectAll, controls,
 };
@@ -34,6 +34,8 @@ fn the_six() -> [(&'static str, &'static str); 6] {
 #[cfg(target_os = "macos")]
 #[test]
 fn the_history_and_screen_keys_are_cmd_k_cmd_a_and_the_cmd_scroll_keys_in_a_terminal() {
+    use yaar_frame::{Asks, PROGRAM_CONTEXT, Place};
+
     let keys = [
         (Clear.name(), "cmd-k"),
         (SelectAll.name(), "cmd-a"),
