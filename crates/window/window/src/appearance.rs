@@ -82,7 +82,9 @@ fn is_forced(looks: &Entity<Looks>, cx: &App) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use gpui_kit::WindowAppearance;
+
+    use super::{Appearance, light_or_dark};
 
     #[test]
     fn the_vibrant_appearances_are_the_light_and_the_dark_ones() {
