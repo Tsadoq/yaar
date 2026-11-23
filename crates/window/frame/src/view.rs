@@ -204,10 +204,12 @@ struct Composed {
     /// Where the panes after the first lie: the setting of the place, as the settings
     /// model told it last.
     beside: Beside,
-    /// Why a new worktree was not asked for, the last time it was tried; the next try
-    /// takes it away.
+    /// Why a new worktree was not asked for, the last time it was tried; the user asking
+    /// for anything that could be refused takes it away.
     worktree_notice: Option<String>,
-    /// Why the dialog for a folder could not be shown, the last time it was asked for.
+    /// Why the dialog for a folder could not be shown, the last time it was asked for; the
+    /// user asking for anything that could be refused takes it away, a new worktree
+    /// included.
     no_dialog: Option<String>,
     /// The workspace and the session of the last turn that ended where the window did not
     /// look, until its workspace comes on screen.
@@ -649,7 +651,12 @@ impl Frame {
             open.input.update(cx, |input, cx| input.focus(window, cx));
             return;
         }
+        // A new worktree is an ask that can be refused: the notice of an older one, of a
+        // dialog that failed included, is no longer the news. The dialog's case has no
+        // test: GPUI's test platform answers a path prompt with a folder or none and
+        // cannot make it fail.
         composed.worktree_notice = None;
+        composed.no_dialog = None;
         // The user is not asked for a name that could not be taken: the reasons that do
         // not depend on the name are told first.
         if let Err(why) = self.worktree_wanted(String::new(), cx) {
@@ -675,11 +682,10 @@ impl Frame {
     /// screen, the branch checked out in it, and the agent of the chosen CLI. Why it cannot
     /// be asked for otherwise, as a sentence.
     fn worktree_wanted(&self, branch: String, cx: &App) -> Result<Wanted, String> {
+        const NONE_ON_SCREEN: &str = "No worktree is on screen to make a new one from.";
         let composed = self.composed.as_ref().ok_or("There is no window.")?;
         let list = composed.models.workspaces.read(cx);
-        let selected = list
-            .selected()
-            .ok_or("No worktree is on screen to make a new one from.")?;
+        let selected = list.selected().ok_or(NONE_ON_SCREEN)?;
         let (repository, workspace) = list
             .repositories()
             .iter()
@@ -690,7 +696,7 @@ impl Frame {
                     .find(|workspace| &workspace.id == selected)?;
                 Some((repository, workspace))
             })
-            .ok_or("No worktree is on screen to make a new one from.")?;
+            .ok_or(NONE_ON_SCREEN)?;
         let name = workspace_name(workspace);
         let from = match &workspace.head {
             Some(Head::Branch(from)) => from.clone(),
@@ -743,6 +749,7 @@ impl Frame {
         match wanted {
             Ok(wanted) => {
                 composed.worktree_notice = None;
+                composed.no_dialog = None;
                 composed
                     .models
                     .terminals

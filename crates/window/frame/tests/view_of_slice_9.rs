@@ -15,8 +15,8 @@ use gpui_kit::{
     Styled, TestAppContext, VisualTestContext, Window, div, px,
 };
 use yaar_frame::{
-    Beside, BuildPane, CloseSettings, FocusNextPane, FocusPreviousPane, MovePanes, NewWorktree,
-    OpenFolder, OpenSettings, Pane, SetBase, Wanted,
+    Beside, BuildPane, CloseSettings, FocusNextPane, FocusPreviousPane, Frame, MovePanes,
+    NewWorktree, OpenFolder, OpenSettings, Pane, SetBase, Wanted,
 };
 use yaar_link::{
     AgentCli, Fact, Head, Hello, PROTOCOL_VERSION, Refusal, Repository, RepositoryId, Request,
@@ -712,9 +712,17 @@ fn a_notice_of_a_new_worktree_is_taken_away_when_the_user_asks_the_keeper_for_th
         shown.frame.read_with(cx, |frame, cx| frame.notice(cx)) == Some(refusal.to_string())
     });
 
-    // A folder: the same, before any answer.
+    // A refused new worktree after the Keeper's refusal: the reason of the newer ask
+    // is the one that shows. The Keeper's sentence also says "no branch", so the
+    // worktree's own words are the ones read.
     cx.simulate_keystrokes(&pressed::<NewWorktree>());
-    assert!(notice(&shown, &mut cx).is_some_and(|said| said.contains("no branch")));
+    let said = notice(&shown, &mut cx).expect("the notice says why");
+    assert!(
+        said.contains("no branch checked out") && !said.contains("origin/none"),
+        "the older reason of the Keeper hides the newer one: {said}"
+    );
+
+    // A folder: the same, before any answer.
     cx.simulate_keystrokes(&pressed::<OpenFolder>());
     cx.simulate_path_prompt_response(|_| Some(vec![PathBuf::from("/gits/other")]));
     shown.keeper.expect(
@@ -833,5 +841,33 @@ fn a_place_the_keeper_holds_is_where_the_panes_lie_from_the_first_frame_after_it
     assert!(
         second.top() >= first.bottom(),
         "below: {first:?} {second:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn a_frame_composed_over_models_that_already_hold_the_place_has_the_panes_there_at_once(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let (shown, mut cx) = open_frame_staged(hello(), WINDOW, two_panes(&handles), cx, |keeper| {
+        keeper.set_settings(vec![Setting::TerminalPlace(TerminalPlace::Below)]);
+    });
+    wait_until(&mut cx, "the setting listed", |cx| {
+        shown
+            .models
+            .settings
+            .read_with(cx, |settings, _| settings.terminal_place())
+            == TerminalPlace::Below
+    });
+
+    // No answer is on its way to the second Frame: the models hold the place already, and
+    // the Frame has it from the start, not from the next change.
+    let models = shown.models.clone();
+    let second = cx.update(|window, cx| {
+        cx.new(|cx| Frame::with_panes(models, two_panes(&handles), window, cx))
+    });
+    assert_eq!(
+        second.read_with(&cx, |frame, _| frame.beside()),
+        Beside::Below
     );
 }
