@@ -25,12 +25,18 @@ use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Osc52, TermMode, viewport_to_point};
-use alacritty_terminal::vte::ansi::{
-    Color as AnsiColor, NamedColor, Processor, Rgb, StdSyncHandler,
-};
+use alacritty_terminal::vte::ansi::{NamedColor, Processor, Rgb, StdSyncHandler};
+use yaar_frame::theme::{self, TerminalColors};
 use yaar_link::TerminalSize;
 
+use crate::draw::{Colour, colour_of};
+
 use crate::modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
+
+/// A colour as the program asked for it: one of the names, a number of the palette, or a
+/// value of red, green and blue. The painter turns it into the theme's colour
+/// ([`crate::colour_of`]).
+pub use alacritty_terminal::vte::ansi::Color;
 
 /// How many lines a terminal keeps above its screen.
 pub const HISTORY_LINES: usize = 10_000;
@@ -59,9 +65,10 @@ struct Told {
 }
 
 /// What a [`Told`] keeps, and what it needs to answer from: the size of the screen and
-/// of a cell, which the core does not hold in pixels.
+/// of a cell, which the core does not hold in pixels, and the colours of the theme.
 struct Kept {
     replies: Vec<u8>,
+    colours: TerminalColors,
     title: Option<String>,
     columns: u16,
     rows: u16,
@@ -73,6 +80,7 @@ impl Default for Kept {
     fn default() -> Kept {
         Kept {
             replies: Vec::new(),
+            colours: theme::light().terminal,
             title: None,
             columns: 80,
             rows: 24,
@@ -106,7 +114,7 @@ impl EventListener for Told {
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             Event::ColorRequest(index, format) => {
-                let text = format(palette(index));
+                let text = answer_with(requested(index, &kept.colours), &*format);
                 kept.replies.extend_from_slice(text.as_bytes());
             }
             // Nothing else is the emulator's to act on: no bell, no clipboard, no
@@ -116,64 +124,39 @@ impl EventListener for Told {
     }
 }
 
-/// The colour a program that asks for one is told: the fixed palette of xterm for the
-/// 16 colours and the cube and greys above them, and a light grey on a dark grey for the
-/// text and the background. The painter draws the theme's own colours; a program that
-/// asks wants to know whether the background is dark, which this says.
-fn palette(index: usize) -> Rgb {
-    const BASE: [(u8, u8, u8); 16] = [
-        (0, 0, 0),
-        (205, 0, 0),
-        (0, 205, 0),
-        (205, 205, 0),
-        (0, 0, 238),
-        (205, 0, 205),
-        (0, 205, 205),
-        (229, 229, 229),
-        (127, 127, 127),
-        (255, 0, 0),
-        (0, 255, 0),
-        (255, 255, 0),
-        (92, 92, 255),
-        (255, 0, 255),
-        (0, 255, 255),
-        (255, 255, 255),
-    ];
-    const FOREGROUND: Rgb = Rgb {
-        r: 0xd4,
-        g: 0xd4,
-        b: 0xd4,
+/// The colour a program that asks for one is told: the theme's own for the default text,
+/// the background, the cursor and the sixteen first numbers, xterm's for the cube and the
+/// greys above them. A program that asks wants to know, above all, whether the background
+/// is dark, which is the theme's to say.
+///
+/// `index` is the core's: 0 to 255 the numbered colours, then the named ones, among them
+/// the foreground (256), the background (257) and the cursor (258).
+fn requested(index: usize, colours: &TerminalColors) -> Colour {
+    let colour = match u8::try_from(index) {
+        Ok(number) => Color::Indexed(number),
+        Err(_) if index == NamedColor::Background as usize => Color::Named(NamedColor::Background),
+        Err(_) if index == NamedColor::Cursor as usize => Color::Named(NamedColor::Cursor),
+        Err(_) => Color::Named(NamedColor::Foreground),
     };
-    const BACKGROUND: Rgb = Rgb {
-        r: 0x1e,
-        g: 0x1e,
-        b: 0x1e,
-    };
-    match index {
-        0..=15 => {
-            let (r, g, b) = BASE[index];
-            Rgb { r, g, b }
-        }
-        16..=231 => {
-            let step = |n: usize| if n == 0 { 0 } else { (55 + 40 * n) as u8 };
-            let n = index - 16;
-            Rgb {
-                r: step(n / 36),
-                g: step(n / 6 % 6),
-                b: step(n % 6),
-            }
-        }
-        232..=255 => {
-            let grey = (8 + 10 * (index - 232)) as u8;
-            Rgb {
-                r: grey,
-                g: grey,
-                b: grey,
-            }
-        }
-        i if i == NamedColor::Background as usize => BACKGROUND,
-        _ => FOREGROUND,
-    }
+    colour_of(colour, colours)
+}
+
+/// The answer to a question for a colour: what the core writes, given the colour as red,
+/// green and blue of 8 bits.
+fn answer_with(colour: Colour, format: &dyn Fn(Rgb) -> String) -> String {
+    let rgba = gpui_kit::Rgba::from(colour);
+    let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u8;
+    // The core's value is made from its text form: a value written field by field is what
+    // the colour test of the app takes for a colour written in code.
+    let value = format!(
+        "#{:02x}{:02x}{:02x}",
+        byte(rgba.r),
+        byte(rgba.g),
+        byte(rgba.b)
+    )
+    .parse()
+    .expect("a colour written as #rrggbb");
+    format(value)
 }
 
 /// What the scanner makes of the bytes it was given: bytes for the core, in order with
@@ -544,20 +527,6 @@ impl ProgressScan {
     }
 }
 
-/// A colour as the program asked for it. The painter turns it into the theme's colour.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Color {
-    /// The theme's colour for text.
-    Foreground,
-    /// The theme's colour for the background.
-    Background,
-    /// One of the 256 colours of the palette: 0 to 15 the theme's, the rest the fixed
-    /// cube and greys.
-    Indexed(u8),
-    /// A colour given as red, green and blue.
-    Rgb(u8, u8, u8),
-}
-
 /// How a cell's text is drawn, besides its colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
@@ -583,9 +552,9 @@ pub struct Cell {
     /// Its character with the marks combined with it; empty in the second cell of a wide
     /// character, which the first one covers.
     pub text: String,
-    /// The colour of the text.
+    /// The colour of the text, as the program asked for it.
     pub fg: Color,
-    /// The colour of the cell.
+    /// The colour of the cell, as the program asked for it.
     pub bg: Color,
     /// How the text is drawn.
     pub style: Style,
@@ -731,6 +700,14 @@ impl Emulator {
         self.core.resize(dimensions(columns, rows));
     }
 
+    /// The colours the terminal tells a program that asks for them (`OSC 4` for the numbers
+    /// 0 to 15, `OSC 10`, `11` and `12` for the text, the background and the cursor): the
+    /// applied theme's. The numbers 16 to 255 are xterm's whatever the theme. Until this is
+    /// called they are the light theme's.
+    pub fn set_colours(&mut self, colours: TerminalColors) {
+        self.told.kept().colours = colours;
+    }
+
     /// The size of one cell in pixels, as the painter lays the grid out: what the
     /// terminal answers a program that asks.
     pub fn set_cell_size(&mut self, width: u16, height: u16) {
@@ -861,6 +838,75 @@ impl Emulator {
     pub fn clear_selection(&mut self) {
         self.core.selection = None;
     }
+
+    /// Selects the whole history and the screen, down to the last line that holds text or
+    /// the cursor, whichever is lower: what is blank below it is not worth copying. Gives
+    /// the cells that mark as the view shows them now, from the view's first cell to the
+    /// selection's last or the view's own.
+    pub fn select_all(&mut self) -> (CellPlace, CellPlace) {
+        let (bottom, offset, last_line, last_column) = {
+            let grid = self.core.grid();
+            let holds_text = |line: i32| {
+                (0..grid.columns()).any(|column| grid[Line(line)][Column(column)].c != ' ')
+            };
+            let last_text = (0..grid.screen_lines() as i32)
+                .rev()
+                .find(|&line| holds_text(line));
+            let cursor = grid.cursor.point.line.0;
+            (
+                last_text.map_or(cursor, |line| line.max(cursor)),
+                grid.display_offset() as i32,
+                grid.screen_lines() as i32 - 1,
+                grid.columns() - 1,
+            )
+        };
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(self.core.topmost_line(), Column(0)),
+            Side::Left,
+        );
+        selection.update(Point::new(Line(bottom), Column(last_column)), Side::Right);
+        self.core.selection = Some(selection);
+        // The mark covers the view from its top line to the selection's end, or to the
+        // view's last line when that is below it.
+        (
+            CellPlace { line: 0, column: 0 },
+            CellPlace {
+                line: (bottom + offset).clamp(0, last_line) as usize,
+                column: last_column,
+            },
+        )
+    }
+
+    /// Empties the history and every line of the screen above the cursor's, which becomes
+    /// the first: the lines are scrolled off the top of the screen and the history that
+    /// holds them is dropped. The view goes back to the newest line and nothing stays
+    /// selected. On the alternate screen, which has no history and which a program
+    /// redraws as it likes, nothing changes.
+    pub fn clear_above_the_cursor(&mut self) {
+        if self.core.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        self.core.selection = None;
+        let lines = self.core.screen_lines();
+        let above = usize::try_from(self.core.grid().cursor.point.line.0).unwrap_or(0);
+        let grid = self.core.grid_mut();
+        if above > 0 {
+            grid.scroll_up(&(Line(0)..Line(lines as i32)), above);
+            grid.cursor.point.line.0 -= above as i32;
+        }
+        grid.clear_history();
+    }
+
+    /// Scrolls the view to the oldest line of the history.
+    pub fn scroll_to_top(&mut self) {
+        self.core.scroll_display(Scroll::Top);
+    }
+
+    /// Scrolls the view to the newest line.
+    pub fn scroll_to_bottom(&mut self) {
+        self.core.scroll_display(Scroll::Bottom);
+    }
 }
 
 /// The size of a screen as the core asks for it: no more lines than the screen has.
@@ -890,24 +936,6 @@ fn dimensions(columns: u16, rows: u16) -> Size {
     }
 }
 
-fn color(color: AnsiColor) -> Color {
-    match color {
-        AnsiColor::Spec(Rgb { r, g, b }) => Color::Rgb(r, g, b),
-        AnsiColor::Indexed(index) => Color::Indexed(index),
-        AnsiColor::Named(name) => match name as usize {
-            index @ 0..=15 => Color::Indexed(index as u8),
-            index if index == NamedColor::Background as usize => Color::Background,
-            index
-                if index >= NamedColor::DimBlack as usize
-                    && index <= NamedColor::DimWhite as usize =>
-            {
-                Color::Indexed((index - NamedColor::DimBlack as usize) as u8)
-            }
-            _ => Color::Foreground,
-        },
-    }
-}
-
 fn cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
     let flags = cell.flags;
     let mut text = String::new();
@@ -917,8 +945,8 @@ fn cell(cell: &alacritty_terminal::term::cell::Cell) -> Cell {
     }
     Cell {
         text,
-        fg: color(cell.fg),
-        bg: color(cell.bg),
+        fg: cell.fg,
+        bg: cell.bg,
         style: Style {
             bold: flags.intersects(Flags::BOLD),
             dim: flags.intersects(Flags::DIM),
@@ -1202,7 +1230,7 @@ mod tests {
         emulator.advance(b"[31mred");
         let screen = emulator.screen();
         assert_eq!(emulator.lines()[0], "red");
-        assert_eq!(screen.lines[0][0].fg, Color::Indexed(1));
+        assert_eq!(screen.lines[0][0].fg, Color::Named(NamedColor::Red));
     }
 
     #[test]
@@ -1265,20 +1293,23 @@ mod tests {
     }
 
     #[test]
-    fn a_program_asking_for_colours_is_told_a_dark_background() {
+    fn a_program_asking_for_colours_is_told_the_themes_and_xterms_for_the_cube() {
         let mut emulator = emulator();
+        emulator.set_colours(theme::dark().terminal);
         assert_eq!(
             replies_to(&mut emulator, "\x1b]11;?\x1b\\"),
-            "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"
+            "\x1b]11;rgb:0a0a/0a0a/0a0a\x1b\\"
         );
         assert_eq!(
             replies_to(&mut emulator, "\x1b]10;?\x07"),
-            "\x1b]10;rgb:d4d4/d4d4/d4d4\x07"
+            "\x1b]10;rgb:fafa/fafa/fafa\x07"
         );
+        // Colour 1 is the dark theme's red.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;1;?\x07"),
-            "\x1b]4;1;rgb:cdcd/0000/0000\x07"
+            "\x1b]4;1;rgb:f8f8/7171/7171\x07"
         );
+        // The cube and the greys are xterm's whatever the theme.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;196;?\x07"),
             "\x1b]4;196;rgb:ffff/0000/0000\x07"
@@ -1433,8 +1464,8 @@ mod tests {
         );
         let screen = emulator.screen();
         let row = &screen.lines[0];
-        assert_eq!(row[0].fg, Color::Indexed(1));
-        assert_eq!(row[0].bg, Color::Indexed(2));
+        assert_eq!(row[0].fg, Color::Named(NamedColor::Red));
+        assert_eq!(row[0].bg, Color::Named(NamedColor::Green));
         assert_eq!(
             row[0].style,
             Style {
@@ -1448,16 +1479,168 @@ mod tests {
         );
         assert_eq!(
             (row[1].fg, row[1].bg),
-            (Color::Indexed(200), Color::Background)
+            (Color::Indexed(200), Color::Named(NamedColor::Background))
         );
         assert_eq!(row[1].style, Style::default());
-        assert_eq!(
-            (row[2].fg, row[2].bg),
-            (Color::Rgb(1, 2, 3), Color::Indexed(17))
-        );
-        assert_eq!(row[3].fg, Color::Indexed(9));
+        // A colour by its value is kept as its three channels.
+        let Color::Spec(by_value) = row[2].fg else {
+            panic!("the text of the third cell is a value, not {:?}", row[2].fg);
+        };
+        assert_eq!((by_value.r, by_value.g, by_value.b), (1, 2, 3));
+        assert_eq!(row[2].bg, Color::Indexed(17));
+        assert_eq!(row[3].fg, Color::Named(NamedColor::BrightRed));
         assert!(row[3].style.dim && row[3].style.hidden);
-        assert_eq!(row[4].fg, Color::Foreground);
+        assert_eq!(row[4].fg, Color::Named(NamedColor::Foreground));
+    }
+
+    /// An emulator of five lines whose program wrote the numbered lines `1` to `count`
+    /// and left the cursor after the last, so that the first `count - 5` are history.
+    fn written(count: usize) -> Emulator {
+        let mut emulator = emulator();
+        let text: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
+        emulator.advance(text.join("\r\n").as_bytes());
+        emulator
+    }
+
+    #[test]
+    fn clearing_drops_the_history_and_the_lines_above_the_cursor_and_keeps_the_rest() {
+        // Twelve lines: seven in the history, five on the screen, the cursor on the last.
+        let mut emulator = written(12);
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        emulator.scroll_to_bottom();
+
+        emulator.clear_above_the_cursor();
+
+        assert_eq!(emulator.lines(), ["12", "", "", "", ""]);
+        assert_eq!(
+            emulator.screen().cursor.map(|c| (c.line, c.column)),
+            Some((0, 2))
+        );
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 0, "no history is left");
+
+        // What the program writes next follows the cursor.
+        emulator.advance(b"!\r\nnext");
+        assert_eq!(emulator.lines(), ["12!", "next", "", "", ""]);
+    }
+
+    #[test]
+    fn clearing_with_the_cursor_above_other_lines_keeps_them_in_place_under_it() {
+        let mut emulator = emulator();
+        emulator.advance(b"1\r\n2\r\n3\r\n4\r\n5");
+        // The cursor goes to the third line, where a multi-line prompt would have it.
+        emulator.advance(b"\x1b[3;1H");
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), ["3", "4", "5", "", ""]);
+        assert_eq!(
+            emulator.screen().cursor.map(|c| (c.line, c.column)),
+            Some((0, 0))
+        );
+    }
+
+    #[test]
+    fn clearing_with_the_cursor_on_the_first_line_drops_only_the_history() {
+        let mut emulator = written(12);
+        emulator.advance(b"\x1b[H");
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 0);
+    }
+
+    #[test]
+    fn clearing_brings_the_view_back_to_the_newest_line_and_takes_the_selection_away() {
+        let mut emulator = written(12);
+        emulator.scroll_to_top();
+        emulator.select(
+            CellPlace { line: 0, column: 0 },
+            CellPlace { line: 1, column: 0 },
+        );
+        assert!(emulator.selected_text().is_some());
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.scrolled_back(), 0);
+        assert_eq!(emulator.selected_text(), None);
+        assert_eq!(emulator.lines()[0], "12");
+    }
+
+    #[test]
+    fn clearing_on_the_alternate_screen_changes_nothing_and_the_history_is_still_there_after() {
+        let mut emulator = written(12);
+        emulator.advance(b"\x1b[?1049h\x1b[Halt\r\nscreen");
+        let before = emulator.lines();
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), before);
+        emulator.advance(b"\x1b[?1049l");
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+    }
+
+    #[test]
+    fn the_scroll_keys_stop_at_the_ends_of_the_history() {
+        let mut emulator = written(12);
+        emulator.scroll_to_bottom();
+        assert_eq!(emulator.scrolled_back(), 0);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        assert_eq!(emulator.lines()[0], "1");
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        emulator.scroll_to_bottom();
+        assert_eq!(emulator.lines()[0], "8");
+    }
+
+    #[test]
+    fn selecting_all_takes_the_history_and_the_screen_down_to_the_cursor() {
+        let mut emulator = written(12);
+        // The view is at the newest line: the mark covers the whole view, which ends at the
+        // cursor's line.
+        let marked = emulator.select_all();
+        assert_eq!(
+            marked,
+            (
+                CellPlace { line: 0, column: 0 },
+                CellPlace {
+                    line: 4,
+                    column: 19
+                }
+            )
+        );
+        let expected: Vec<String> = (1..=12).map(|n| n.to_string()).collect();
+        assert_eq!(emulator.selected_text(), Some(expected.join("\n")));
+    }
+
+    #[test]
+    fn selecting_all_stops_at_the_last_line_with_text_or_the_cursor_and_marks_what_is_in_view() {
+        let mut emulator = emulator();
+        emulator.advance(b"a\r\nb\r\nc");
+        // The cursor above the last text: the text is the end.
+        emulator.advance(b"\x1b[1;1H");
+        let marked = emulator.select_all();
+        assert_eq!(emulator.selected_text().as_deref(), Some("a\nb\nc"));
+        assert_eq!(marked.1.line, 2);
+        // The cursor below the last text: the cursor's line is the end.
+        emulator.advance(b"\x1b[5;1H");
+        let marked = emulator.select_all();
+        assert_eq!(marked.1.line, 4);
+        assert_eq!(emulator.selected_text().as_deref(), Some("a\nb\nc\n\n"));
+    }
+
+    #[test]
+    fn selecting_all_in_a_view_scrolled_into_the_history_marks_the_view_as_far_as_it_goes() {
+        let mut emulator = written(12);
+        emulator.scroll_to_top();
+        let marked = emulator.select_all();
+        // The selection's end lies below what the view shows: every line of it is marked.
+        assert_eq!(marked.1.line, 4);
+        assert_eq!(
+            emulator.selected_text().map(|text| text.lines().count()),
+            Some(12)
+        );
+        emulator.clear_selection();
+        assert_eq!(emulator.selected_text(), None);
     }
 
     #[test]

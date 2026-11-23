@@ -58,12 +58,11 @@ struct Resume {
     terminal: Option<TerminalId>,
 }
 
-/// What the pane keeps of its launchers: which CLI is the chosen one, and the resumes it
-/// asked for.
+/// What the pane keeps of its launchers: the resumes it asked for. Which CLI is the chosen
+/// one is the Frame's to keep ([`yaar_frame::AgentList::chosen_cli`]), as the review pane
+/// and a worktree made with an agent read it too.
 #[derive(Default)]
 pub(crate) struct Launchers {
-    /// The chosen CLI, by its index in the CLIs the Keeper named.
-    chosen: usize,
     /// The resumes the pane asked for, until their session is listed resumable no more or
     /// their terminal ends.
     resumed: Vec<Resume>,
@@ -83,13 +82,10 @@ impl TerminalPane {
         self.models.agents.read(cx).clis().to_vec()
     }
 
-    /// The CLI [`crate::NewAgentTerminal`] opens now; none while the Keeper names none.
+    /// The CLI [`crate::NewAgentTerminal`] opens now; none while the Keeper names none. The
+    /// choice is the Window's one, the Frame's [`yaar_frame::AgentList::chosen_cli`].
     pub fn chosen_cli(&self, cx: &App) -> Option<AgentCli> {
-        let agents = self.models.agents.read(cx);
-        agents
-            .clis()
-            .get(self.chosen_index(agents.clis().len()))
-            .cloned()
+        self.models.agents.read(cx).chosen_cli().cloned()
     }
 
     /// The sessions of the workspace on screen the pane offers to resume, in the order the
@@ -99,16 +95,6 @@ impl TerminalPane {
             .into_iter()
             .map(|session| session.id)
             .collect()
-    }
-
-    /// The index of the chosen CLI among `count`: the first when the one that was chosen
-    /// is not among the CLIs the Keeper names now.
-    fn chosen_index(&self, count: usize) -> usize {
-        if self.launchers.chosen < count {
-            self.launchers.chosen
-        } else {
-            0
-        }
     }
 
     /// The sessions of the workspace on screen the agents model lists as resumable.
@@ -424,12 +410,11 @@ impl TerminalPane {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let count = self.models.agents.read(cx).clis().len();
-        if count == 0 {
-            return;
-        }
-        self.launchers.chosen = (self.chosen_index(count) + 1) % count;
-        cx.notify();
+        self.models
+            .agents
+            .update(cx, |agents, cx| agents.choose_next_cli(cx));
+        // The pane draws the mark of the chosen launcher from the model, which notifies the
+        // pane when the choice moves.
     }
 
     /// What [`crate::ResumeAgent`] does: resumes the first session of the workspace on
