@@ -36,11 +36,19 @@ gpg --batch --list-secret-keys "$YAAR_APT_KEY" > /dev/null 2>&1 \
 
 mkdir -p "$REPO/pool/$COMP"
 for deb in "$@"; do
-  pkg=$(dpkg-deb -f "$deb" Package)
+  [ -f "$deb" ] || { echo "make-apt-repo.sh: $deb is not a file" >&2; exit 1; }
+  pkg=$(dpkg-deb -f "$deb" Package 2> /dev/null) \
+    || { echo "make-apt-repo.sh: $deb is not a .deb that dpkg-deb can read" >&2; exit 1; }
+  [ -n "$pkg" ] || { echo "make-apt-repo.sh: $deb has no Package field" >&2; exit 1; }
   d="$REPO/pool/$COMP/$(printf %.1s "$pkg")/$pkg"; mkdir -p "$d"
   [ -e "$d/$(basename "$deb")" ] || cp "$deb" "$d/"
 done
 cd "$REPO"
+# A file in pool/ that dpkg-deb cannot read would be left out of the index without a word.
+while IFS= read -r deb; do
+  dpkg-deb -f "$deb" Architecture > /dev/null 2>&1 \
+    || { echo "make-apt-repo.sh: $REPO/$deb is not a .deb that dpkg-deb can read" >&2; exit 1; }
+done < <(find pool -name '*.deb')
 ARCHS=$(find pool -name '*.deb' -exec dpkg-deb -f {} Architecture \; | sort -u | grep -v '^all$' | tr '\n' ' ')
 ARCHS=${ARCHS% }
 [ -n "$ARCHS" ] || { echo "make-apt-repo.sh: no package in $REPO/pool" >&2; exit 1; }

@@ -66,6 +66,10 @@
 # apt/yaar-review.asc gives it.
 set -euo pipefail
 umask 022
+# Whatever fails without a sentence of its own ends the script with 1, never with the failing
+# tool's own code (gpg's 2 would read as a usage error).
+set -E
+trap 'echo "$NAME: line $LINENO: a command failed" >&2; exit 1' ERR
 NAME=assemble.sh
 fail() {
   echo "$NAME: $*" >&2
@@ -180,7 +184,7 @@ fi
 
 gpg --batch --list-secret-keys "$YAAR_APT_KEY" > /dev/null 2>&1 \
   || fail "no secret key $YAAR_APT_KEY in $GNUPGHOME"
-[ ! -e "$OUT" ] && [ ! -L "$OUT" ] || fail "$OUT exists already: assemble into a folder that is not there"
+if [ -e "$OUT" ] || [ -L "$OUT" ]; then fail "$OUT exists already: assemble into a folder that is not there"; fi
 
 # Nothing is changed before this line. From here a failure takes back what was written,
 # but for the size refusal, whose files stay for the owner to look at.

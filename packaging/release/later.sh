@@ -19,6 +19,10 @@
 # Exit codes: 0 written; 1 failed; 2 usage error.
 set -euo pipefail
 umask 022
+# Whatever fails without a sentence of its own ends the script with 1, never with the failing
+# tool's own code (gpg's 2 would read as a usage error).
+set -E
+trap 'echo "$NAME: line $LINENO: a command failed" >&2; exit 1' ERR
 NAME=later.sh
 fail() {
   echo "$NAME: $*" >&2
@@ -38,9 +42,9 @@ export GNUPGHOME
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
 
-[ -d "$OUTDIR/site" ] && [ -d "$OUTDIR/release" ] || fail "$OUTDIR holds no site/ and release/ of assemble.sh"
+if [ ! -d "$OUTDIR/site" ] || [ ! -d "$OUTDIR/release" ]; then fail "$OUTDIR holds no site/ and release/ of assemble.sh"; fi
 OUTDIR=$(cd "$OUTDIR" && pwd)
-[ ! -e "$OUTDIR/site-later" ] && [ ! -L "$OUTDIR/site-later" ] || fail "$OUTDIR/site-later exists already"
+if [ -e "$OUTDIR/site-later" ] || [ -L "$OUTDIR/site-later" ]; then fail "$OUTDIR/site-later exists already"; fi
 DEBS=$(find "$OUTDIR/release" -maxdepth 1 -type f -name '*.deb' | LC_ALL=C sort)
 [ -n "$DEBS" ] || fail "$OUTDIR/release holds no .deb"
 

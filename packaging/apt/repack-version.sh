@@ -14,6 +14,10 @@
 # Needs: dpkg-deb and dpkg (package dpkg).
 set -euo pipefail
 umask 022
+# Whatever fails without a sentence of its own ends the script with 1, never with the failing
+# tool's own code (gpg's 2 would read as a usage error).
+set -E
+trap 'echo "$NAME: line $LINENO: a command failed" >&2; exit 1' ERR
 NAME=repack-version.sh
 if [ $# -ne 3 ]; then
   sed -n '5p' "$0" >&2
@@ -38,7 +42,7 @@ done
 PKG=$(dpkg-deb -f "$IN" Package) || fail "$IN is not a .deb that dpkg-deb can read"
 OLD=$(dpkg-deb -f "$IN" Version)
 ARCH=$(dpkg-deb -f "$IN" Architecture)
-[ -n "$PKG" ] && [ -n "$OLD" ] && [ -n "$ARCH" ] || fail "$IN has no Package, Version or Architecture field"
+if [ -z "$PKG" ] || [ -z "$OLD" ] || [ -z "$ARCH" ]; then fail "$IN has no Package, Version or Architecture field"; fi
 dpkg --compare-versions "$NEW" gt "$OLD" || fail "the version $NEW does not sort after $OLD, the version of $IN"
 
 mkdir -p "$OUT"

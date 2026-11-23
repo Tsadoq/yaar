@@ -59,7 +59,10 @@ fault() {
 
 # 1. The folder holds these eight and nothing else (a folder, a link or a hidden file is
 # something else too).
-LC_ALL=C ls -A "$DIR" > "$TMP/present"
+if ! LC_ALL=C ls -A "$DIR" > "$TMP/present" 2> "$TMP/ls.err"; then
+  echo "$NAME: $DIR cannot be listed: $(tr '\n' ' ' < "$TMP/ls.err")" >&2
+  exit 1
+fi
 LC_ALL=C comm -13 "$TMP/expected" "$TMP/present" > "$TMP/extra"
 LC_ALL=C comm -23 "$TMP/expected" "$TMP/present" > "$TMP/missing"
 while IFS= read -r f; do
