@@ -10,6 +10,10 @@
 //! Both are answered apart, on a thread of their own: a clean-up packs every store, and a
 //! size walks every folder of states.
 //!
+//! One workspace is cleaned by one caller at a time, the sweep's or the user's: a sweep that
+//! comes due while a clean-up packs waits for it, for it would find the emptied store of a
+//! gone worktree and remove its folder under the pack.
+//!
 //! A workspace that cannot be cleaned up (the Store or git fails for it) does not hold up the
 //! others: each failure is written to the standard error in one line, starting `yaar-keeper:`,
 //! the `StatesDeleted` of the workspaces that did lose states are told all the same, and the
@@ -49,7 +53,7 @@
 //! line, starting `yaar-keeper:`, and the others go on.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
-use std::sync::{Arc, PoisonError, Weak};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
 
@@ -69,6 +73,14 @@ pub(crate) const TICK: Duration = Duration::from_secs(1);
 
 /// One day, the unit the set time is kept in.
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Held for the whole of one workspace's clean, by the sweep and by the clean-up at once
+/// alike, so that two of them never work on a store together. A clean-up that lets go of a
+/// gone worktree's last state and packs, with a sweep that finds the store empty and removes
+/// its folder under the pack, ends in a failure the user is told of though the clean-up
+/// worked, or in a folder that is no repository any more. Held for one workspace at a time
+/// and never across a whole sweep or clean-up, so a wait for it is for one workspace's work.
+static CLEANING: Mutex<()> = Mutex::new(());
 
 /// `Request::GetStateSizes`, as the module doc says.
 pub(crate) fn sizes(kept: &Kept) -> Result<Reply, Refusal> {
@@ -134,6 +146,7 @@ fn clean(
     workspace: &yaar_store::WorkspaceId,
     keep_for: Option<Duration>,
 ) -> Result<bool, String> {
+    let _alone = CLEANING.lock().unwrap_or_else(PoisonError::into_inner);
     let presence = match kept.workspaces.worktree(workspace) {
         Ok(Some(_)) => Presence::Present,
         Ok(None) => Presence::Gone,

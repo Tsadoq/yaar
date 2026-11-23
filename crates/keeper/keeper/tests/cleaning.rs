@@ -305,6 +305,100 @@ impl Drop for Scratch {
     }
 }
 
+/// A `git` of the test's own, first on the search path: it runs the real git for every call
+/// but one. The `prune` of the store named by [`PruneGate::hold_store`] is held, the first
+/// time only, until [`PruneGate::release`], and `held` appears in the gate's folder once the
+/// call has reached it. Its fifo is kept open by the test for reading and writing, so that a
+/// release is never lost and a test that fails lets the held call go when the gate drops.
+struct PruneGate {
+    folder: PathBuf,
+    go: fs::File,
+}
+
+impl PruneGate {
+    /// Puts the git in front of the search path of this process. It has to be called right
+    /// after [`Scratch::new`], before anything starts a thread.
+    fn new(scratch: &Scratch) -> PruneGate {
+        let folder = scratch.0.join("gate");
+        fs::create_dir_all(&folder).expect("make the gate's folder");
+        let fifo = folder.join("go");
+        let made = Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .expect("start mkfifo");
+        assert!(made.success(), "mkfifo failed");
+        let go = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&fifo)
+            .expect("open the fifo");
+        let search = std::env::var_os("PATH").expect("a search path");
+        let real = std::env::split_paths(&search)
+            .map(|place| place.join("git"))
+            .find(|candidate| candidate.is_file())
+            .expect("a git on the search path");
+        let script = format!(
+            "#!/bin/sh\n\
+             gate='{gate}'\n\
+             if [ -f \"$gate/target\" ]; then\n\
+             target=$(cat \"$gate/target\")\n\
+             is_prune=0\n\
+             is_target=0\n\
+             for argument in \"$@\"; do\n\
+             case \"$argument\" in\n\
+             prune) is_prune=1 ;;\n\
+             *\"$target\") is_target=1 ;;\n\
+             esac\n\
+             done\n\
+             if [ $is_prune = 1 ] && [ $is_target = 1 ] && mkdir \"$gate/held\" 2>/dev/null; then\n\
+             read -r _ < \"$gate/go\"\n\
+             fi\n\
+             fi\n\
+             exec '{real}' \"$@\"\n",
+            gate = folder.display(),
+            real = real.display(),
+        );
+        let bin = scratch.0.join("gate-bin");
+        fs::create_dir_all(&bin).expect("make the folder of the git");
+        let program = bin.join("git");
+        fs::write(&program, script).expect("write the git");
+        fs::set_permissions(
+            &program,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .expect("make the git a program");
+        let mut places = vec![bin];
+        places.extend(std::env::split_paths(&search));
+        // SAFETY: as in `Scratch::new`: no other thread exists yet, and each test has a
+        // process of its own.
+        unsafe {
+            std::env::set_var("PATH", std::env::join_paths(places).expect("a search path"));
+        }
+        PruneGate { folder, go }
+    }
+
+    /// Holds the first `prune` of the state store `store` (its folder's name, `<id>.git`).
+    fn hold_store(&self, store: &str) {
+        fs::write(self.folder.join("target"), store).expect("name the store");
+    }
+
+    /// Waits, up to the deadline, until a `prune` is held.
+    fn wait_held(&self) {
+        let held = self.folder.join("held");
+        let deadline = Instant::now() + DEADLINE;
+        while !held.exists() {
+            assert!(Instant::now() < deadline, "no prune was held");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Lets the held `prune` go on. The fifo stays open until the gate drops, so that the
+    /// word waits in it for a call that has not yet opened it.
+    fn release(&self) {
+        (&self.go).write_all(b"go\n").expect("let it go");
+    }
+}
+
 /// Runs git in `folder` and gives what it printed, trimmed.
 fn git(folder: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
@@ -509,6 +603,11 @@ impl Window {
     /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
+        self.reply_to(id)
+    }
+
+    /// Waits for the reply to the request `id`.
+    fn reply_to(&mut self, id: RequestId) -> Result<Reply, Refusal> {
         loop {
             if let Some(at) = self.replies.iter().position(|(to, _)| *to == id) {
                 return self.replies.remove(at).1;
@@ -1021,6 +1120,76 @@ fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_tak
     let _ = world.finish();
 }
 
+/// How long a test lets the sweep's thread come due and look, which is a few of its own looks
+/// at the clock: a wait for a fact that a correct Keeper never makes happen.
+const SWEEP_LOOKS: Duration = Duration::from_secs(5);
+
+#[test]
+fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_comes_due_while_it_packs()
+ {
+    let scratch = Scratch::new();
+    let gate = PruneGate::new(&scratch);
+    let mut world = World::on(scratch);
+    // As in the test before: the one that stays is kept first; the other is a linked
+    // worktree whose folder is removed.
+    let there = world.work("there");
+    let base = world.scratch.repository("base");
+    let planted = plant(&world.scratch, &base);
+    let linked = world.scratch.0.join("linked");
+    git(
+        &base,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "linked",
+            linked.to_str().expect("a path"),
+        ],
+    );
+    let gone = world.adopt(linked.clone(), planted);
+    let shown = world.window.ask(Request::ShowWorkspace {
+        workspace: Some(there.workspace.clone()),
+    });
+    assert_eq!(shown, Ok(Reply::Done));
+    fs::remove_dir_all(&linked).expect("remove the worktree's folder");
+    let store = format!("{}.git", gone.workspace);
+    let store_folder = world.scratch.data().join("states").join(&store);
+    gate.hold_store(&store);
+
+    // The clean-up deletes the state of the worktree that is gone and, with its turn let go,
+    // packs the store: its `prune` is held.
+    world.clock.move_on(HOUR);
+    let asked = world.window.send(Request::CleanUpStates);
+    gate.wait_held();
+    // Now a sweep comes due. It finds the store empty, as the clean-up left it, and, if it
+    // went on beside the clean-up, would remove the folder the held `prune` is to run in.
+    // The wait is for that: a correct Keeper lets the sweep wait for the clean-up, so the
+    // folder stays, and it is let go after `SWEEP_LOOKS` all the same.
+    world.clock.move_on(HOUR);
+    let started = Instant::now();
+    while store_folder.exists() && started.elapsed() < SWEEP_LOOKS {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    gate.release();
+    let cleaned = world.window.reply_to(asked);
+    assert!(
+        matches!(cleaned, Ok(Reply::StateSizes(_))),
+        "the clean-up that worked was told it failed: {cleaned:?}"
+    );
+
+    world.window.states_deleted(&gone.workspace);
+    world.window.barrier();
+    assert_eq!(world.window.deleted_so_far(), vec![gone.workspace.clone()]);
+    assert!(world.scratch.states_of(&gone.workspace).is_empty());
+    assert!(
+        !store_folder.exists(),
+        "the folder of the store of a worktree that is gone is left behind"
+    );
+    still_there(&base, &gone.planted);
+    let _ = world.finish();
+}
+
 // The files of long reviews
 
 #[test]
@@ -1360,7 +1529,10 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
 
     world.clock.move_on(31 * DAY + HOUR);
     world.window.states_deleted(&work.workspace);
-    // The sweep told its fact after it removed the files.
+    // The sweep removes the files (its step 2) before it tells its fact (step 3): that order
+    // is the barrier every assertion below rests on, for no surface of the Keeper holds a
+    // sweep between the two. A Keeper that told first would be caught here only if the
+    // removal lost the race against the round trip of `GetHistory`.
     let history = world.window.history(&work.workspace);
     assert!(is_expired(&history, &one.turn), "{history:?}");
     // A session's files go by their age and by the set time, not by the sweep's own time:
