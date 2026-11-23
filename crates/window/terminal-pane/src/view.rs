@@ -36,8 +36,9 @@ use yaar_link::{Ending, Request, TerminalId, TerminalSize};
 use crate::MouseButton as ReportedButton;
 use crate::draw::{self, Grid, Palette};
 use crate::{
-    CellPlace, Copy, Emulator, MouseAction, MouseMode, OptionKey, Paste, ScrollPageDown,
-    ScrollPageUp, encode_focus, encode_key, encode_mouse, encode_paste, encode_release,
+    CellPlace, Clear, Copy, Emulator, MouseAction, MouseMode, OptionKey, Paste, ScrollLineDown,
+    ScrollLineUp, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SelectAll,
+    encode_focus, encode_key, encode_mouse, encode_paste, encode_release,
 };
 
 /// How many lines of history a step of the wheel scrolls while the program takes no
@@ -201,6 +202,12 @@ impl TerminalView {
     /// underlined at the cursor and has not sent; none while nothing is composed.
     pub fn marked_text(&self) -> Option<String> {
         self.marked.clone()
+    }
+
+    /// How many lines the view is scrolled back into the history: 0 while it shows the
+    /// newest.
+    pub fn scrolled_back(&self) -> usize {
+        self.emulator.scrolled_back()
     }
 
     /// The title the program gave the terminal; none before it gave one.
@@ -497,6 +504,39 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Moves the view with `scroll`, which takes the selection's mark away as every other
+    /// scroll of the history does. Nothing is sent to the program.
+    fn scroll_with(&mut self, scroll: fn(&mut Emulator), cx: &mut Context<Self>) {
+        self.forget_selection();
+        scroll(&mut self.emulator);
+        cx.notify();
+    }
+
+    /// Scrolls the view `lines` into the history, or back towards the newest line when
+    /// negative.
+    fn scroll_by(&mut self, lines: i32, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.emulator.scroll_lines(lines);
+        cx.notify();
+    }
+
+    /// [`Clear`]: the history and the screen above the cursor's line go, and the view
+    /// shows the newest line. Nothing is sent to the program: a shell that wants its
+    /// prompt drawn again is asked by the user, as in every terminal.
+    fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.emulator.clear_above_the_cursor();
+        cx.notify();
+    }
+
+    /// [`SelectAll`]: the whole history and screen, marked as far as the view shows it.
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.selection = Some(self.emulator.select_all());
+        self.selected_text = self.emulator.selected_text();
+        cx.notify();
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.emulator.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -629,6 +669,16 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(|view, _: &ScrollPageUp, _, cx| view.scroll_page(true, cx)))
             .on_action(cx.listener(|view, _: &ScrollPageDown, _, cx| view.scroll_page(false, cx)))
+            .on_action(cx.listener(Self::clear))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(|view, _: &ScrollToTop, _, cx| {
+                view.scroll_with(Emulator::scroll_to_top, cx)
+            }))
+            .on_action(cx.listener(|view, _: &ScrollToBottom, _, cx| {
+                view.scroll_with(Emulator::scroll_to_bottom, cx)
+            }))
+            .on_action(cx.listener(|view, _: &ScrollLineUp, _, cx| view.scroll_by(1, cx)))
+            .on_action(cx.listener(|view, _: &ScrollLineDown, _, cx| view.scroll_by(-1, cx)))
             .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_down))
             .on_mouse_down(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_down))

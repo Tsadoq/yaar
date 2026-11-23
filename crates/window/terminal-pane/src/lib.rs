@@ -188,7 +188,7 @@ pub fn controls() -> Vec<Control> {
         sends: None,
         asks: Asks::Nothing,
     };
-    vec![
+    let mut table = vec![
         Control {
             title: "New Terminal",
             action: || Box::new(NewTerminal),
@@ -308,7 +308,39 @@ pub fn controls() -> Vec<Control> {
             sends: Some(Sends::Request(RequestKind::AnswerConsent)),
             asks: Asks::Nothing,
         },
-    ]
+    ];
+    // The Mac terminals' keys. On Linux only Ctrl-Shift-C and Ctrl-Shift-V are kept in a
+    // terminal, and every other key reaches the program.
+    #[cfg(target_os = "macos")]
+    table.extend([
+        nothing("Clear", || Box::new(Clear), "cmd-k", in_a_terminal),
+        nothing("Select All", || Box::new(SelectAll), "cmd-a", in_a_terminal),
+        nothing(
+            "Scroll to Top",
+            || Box::new(ScrollToTop),
+            "cmd-home",
+            in_a_terminal,
+        ),
+        nothing(
+            "Scroll to Bottom",
+            || Box::new(ScrollToBottom),
+            "cmd-end",
+            in_a_terminal,
+        ),
+        nothing(
+            "Scroll Line Up",
+            || Box::new(ScrollLineUp),
+            "cmd-up",
+            in_a_terminal,
+        ),
+        nothing(
+            "Scroll Line Down",
+            || Box::new(ScrollLineDown),
+            "cmd-down",
+            in_a_terminal,
+        ),
+    ]);
+    table
 }
 
 /// One terminal of the pane, with what the pane keeps beside its view.

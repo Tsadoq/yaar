@@ -861,6 +861,75 @@ impl Emulator {
     pub fn clear_selection(&mut self) {
         self.core.selection = None;
     }
+
+    /// Selects the whole history and the screen, down to the last line that holds text or
+    /// the cursor, whichever is lower: what is blank below it is not worth copying. Gives
+    /// the cells that mark as the view shows them now, from the view's first cell to the
+    /// selection's last or the view's own.
+    pub fn select_all(&mut self) -> (CellPlace, CellPlace) {
+        let (bottom, offset, last_line, last_column) = {
+            let grid = self.core.grid();
+            let holds_text = |line: i32| {
+                (0..grid.columns()).any(|column| grid[Line(line)][Column(column)].c != ' ')
+            };
+            let last_text = (0..grid.screen_lines() as i32)
+                .rev()
+                .find(|&line| holds_text(line));
+            let cursor = grid.cursor.point.line.0;
+            (
+                last_text.map_or(cursor, |line| line.max(cursor)),
+                grid.display_offset() as i32,
+                grid.screen_lines() as i32 - 1,
+                grid.columns() - 1,
+            )
+        };
+        let mut selection = Selection::new(
+            SelectionType::Simple,
+            Point::new(self.core.topmost_line(), Column(0)),
+            Side::Left,
+        );
+        selection.update(Point::new(Line(bottom), Column(last_column)), Side::Right);
+        self.core.selection = Some(selection);
+        // The mark covers the view from its top line to the selection's end, or to the
+        // view's last line when that is below it.
+        (
+            CellPlace { line: 0, column: 0 },
+            CellPlace {
+                line: (bottom + offset).clamp(0, last_line) as usize,
+                column: last_column,
+            },
+        )
+    }
+
+    /// Empties the history and every line of the screen above the cursor's, which becomes
+    /// the first: the lines are scrolled off the top of the screen and the history that
+    /// holds them is dropped. The view goes back to the newest line and nothing stays
+    /// selected. On the alternate screen, which has no history and which a program
+    /// redraws as it likes, nothing changes.
+    pub fn clear_above_the_cursor(&mut self) {
+        if self.core.mode().contains(TermMode::ALT_SCREEN) {
+            return;
+        }
+        self.core.selection = None;
+        let lines = self.core.screen_lines();
+        let above = usize::try_from(self.core.grid().cursor.point.line.0).unwrap_or(0);
+        let grid = self.core.grid_mut();
+        if above > 0 {
+            grid.scroll_up(&(Line(0)..Line(lines as i32)), above);
+            grid.cursor.point.line.0 -= above as i32;
+        }
+        grid.clear_history();
+    }
+
+    /// Scrolls the view to the oldest line of the history.
+    pub fn scroll_to_top(&mut self) {
+        self.core.scroll_display(Scroll::Top);
+    }
+
+    /// Scrolls the view to the newest line.
+    pub fn scroll_to_bottom(&mut self) {
+        self.core.scroll_display(Scroll::Bottom);
+    }
 }
 
 /// The size of a screen as the core asks for it: no more lines than the screen has.
