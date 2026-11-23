@@ -19,15 +19,28 @@
 //! where its alpha is below 1), rounding each channel to the nearest of 0 to 255. Then, for
 //! each pair of [`READABLE`], the text role must stand out from its ground by a contrast of
 //! at least 4.5 to 1 (WCAG 2's contrast ratio of their relative luminances, alpha composited
-//! over `background` first); where a pair falls short, the text role alone is changed, in
-//! steps of 5 points of lightness in HSL (darker on a light theme, lighter on a dark one),
-//! until it passes (and where that direction can never pass, as for the dark theme's
-//! `warning_foreground`, a dark text on a light yellow, the other direction). The terminal's
-//! colours: `foreground` and `background` those of the theme, `cursor` the theme's
-//! `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in xterm's order:
-//! 0 black `#000000`, 1 to 6 the theme's `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`,
-//! 7 white `#e5e5e5`, 8 bright black `#7f7f7f`, 9 to 14 the theme's `red_light` to `cyan_light`,
-//! 15 bright white `#ffffff`: what the terminal pane drew before slice 9.
+//! over `background` first). Where a role falls short on a ground it is drawn on, it alone is
+//! changed: moved away from the lightness of that ground, by 5 points of lightness in HSL a
+//! step, to the first step that passes on every ground it is drawn on. Where no step that way
+//! can pass, as for the light theme's `warning_foreground`, a near white text on a mid yellow,
+//! the same steps are taken the other way. (The dark theme's `warning_foreground`, a dark text
+//! on a light yellow, can only pass darker.) [`READABLE`] lists every pair of a text role and
+//! a ground the Frame draws, among them the quiet text of the sidebar on its own ground, on
+//! the selected row's and on the hovered row's. It also holds the quiet text on `secondary`,
+//! which no sidebar code draws: the selected row has the same value but is drawn on
+//! `sidebar_accent`.
+//!
+//! The terminal's colours: `foreground` and `background` those of the theme, `cursor` the
+//! theme's `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in
+//! xterm's order: 0 black `#000000`, 1 to 6 the theme's `red`, `green`, `yellow`, `blue`,
+//! `magenta`, `cyan`, 7 white `#e5e5e5`, 8 bright black `#7f7f7f`, 9 to 14 the theme's
+//! `red_light` to `cyan_light`, 15 bright white `#ffffff`: what the terminal pane drew before
+//! slice 9. The dark theme's palette is that. The light theme's is that with each of 1 to 15
+//! that reads under 3 to 1 on its white ground moved by the same steps, away from the ground's
+//! lightness, to the first that reads 3 to 1 and is no colour of the palette before it (with
+//! the dark theme's palette, white, bright white and yellow read 1.3 to 1.5 to 1 on white);
+//! colour 0 is as it was. The roles `red` to `cyan_light` stay as they are: they are marks as
+//! well as a palette.
 //!
 //! # What the definitions must hold
 //!
@@ -35,7 +48,8 @@
 //! character, and differs from every name it holds, case aside; else [`ThemeError`]. The
 //! unit tests of this module (THEME-03, proposed) hold each built-in definition to
 //! [`READABLE`] and to [`DISTINCT`]: no two roles of a pair of [`DISTINCT`] are the same
-//! colour, so that a selection, a hover or a mark never vanishes into its ground.
+//! colour, so that a selection, a hover or a mark never vanishes into its ground, and hold
+//! the light theme's colours 1 to 15 of the terminal to 3 to 1 on its ground.
 //!
 //! # Which definition is applied
 //!
@@ -252,10 +266,17 @@ roles! {
 }
 
 /// The pairs of roles whose first is text drawn on the second, and must be readable there:
-/// a contrast of at least 4.5 to 1.
+/// a contrast of at least 4.5 to 1. Every pair of a text role and a ground that the Frame
+/// draws is listed: the sidebar draws quiet text on its own ground, on the selected row's and
+/// on the hovered row's, and its plain text on the hovered row's.
 pub const READABLE: &[(&str, &str)] = &[
     ("foreground", "background"),
     ("muted_foreground", "background"),
+    ("muted_foreground", "sidebar"),
+    ("muted_foreground", "sidebar_accent"),
+    ("muted_foreground", "secondary"),
+    ("muted_foreground", "list_hover"),
+    ("sidebar_foreground", "list_hover"),
     ("primary_foreground", "primary"),
     ("secondary_foreground", "secondary"),
     ("accent_foreground", "accent"),
@@ -543,6 +564,37 @@ mod tests {
         (lighter + 0.05) / (darker + 0.05)
     }
 
+    /// `colour` with each channel rounded to the nearest of 0 to 255, as a literal of this
+    /// folder writes it.
+    fn rounded(colour: Hsla) -> Hsla {
+        let [r, g, b, _] = channels(colour);
+        hex(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b))
+    }
+
+    /// The rule that makes a colour readable: `start` moved away from the lightness of
+    /// `ground` by 5 points of HSL lightness a step, to the first step (the colour itself
+    /// being step 0) that `passes`; and where no step that way passes before the lightness
+    /// runs out, the same steps the other way.
+    fn moved(start: Hsla, ground: Hsla, passes: impl Fn(Hsla) -> bool) -> Hsla {
+        let away = if start.l > ground.l { 1.0 } else { -1.0 };
+        for direction in [away, -away] {
+            for step in 0..=20 {
+                let lightness = start.l + direction * 0.05 * step as f32;
+                if !(-1e-4..=1.0 + 1e-4).contains(&lightness) {
+                    break;
+                }
+                let candidate = rounded(Hsla {
+                    l: lightness.clamp(0.0, 1.0),
+                    ..start
+                });
+                if passes(candidate) {
+                    return candidate;
+                }
+            }
+        }
+        panic!("no step of 5 points makes {start:?} pass");
+    }
+
     #[test]
     fn a_third_theme_written_as_one_definition_is_accepted_and_applied_by_name() {
         let themes = Themes::built_in().with(sepia()).expect("a new name");
@@ -751,40 +803,18 @@ mod tests {
     }
 
     #[test]
-    fn the_terminal_of_a_built_in_theme_is_drawn_from_its_roles_as_the_module_says() {
+    fn the_terminal_of_a_built_in_theme_takes_its_ground_and_marks_from_its_roles() {
         for theme in [light(), dark()] {
             let (colors, terminal) = (&theme.colors, &theme.terminal);
             assert_eq!(terminal.foreground, colors.foreground);
             assert_eq!(terminal.background, colors.background);
             assert_eq!(terminal.cursor, colors.foreground);
             assert_eq!(terminal.selection, colors.selection);
-            let named = [
-                colors.red,
-                colors.green,
-                colors.yellow,
-                colors.blue,
-                colors.magenta,
-                colors.cyan,
-            ];
-            let bright = [
-                colors.red_light,
-                colors.green_light,
-                colors.yellow_light,
-                colors.blue_light,
-                colors.magenta_light,
-                colors.cyan_light,
-            ];
-            assert_eq!(terminal.ansi[0], hex(0x000000));
-            assert_eq!(terminal.ansi[1..7], named);
-            assert_eq!(terminal.ansi[7], hex(0xe5e5e5));
-            assert_eq!(terminal.ansi[8], hex(0x7f7f7f));
-            assert_eq!(terminal.ansi[9..15], bright);
-            assert_eq!(terminal.ansi[15], hex(0xffffff));
         }
     }
 
     #[gpui_kit::test]
-    fn the_built_in_themes_are_the_toolkits_own_colours_but_for_the_two_roles_made_readable(
+    fn the_built_in_themes_are_the_toolkits_own_colours_but_for_the_roles_made_readable_by_the_rule(
         cx: &mut TestAppContext,
     ) {
         cx.update(gpui_kit::init);
@@ -792,7 +822,7 @@ mod tests {
             (
                 ThemeMode::Light,
                 light(),
-                &["warning_foreground", "danger"][..],
+                &["warning_foreground", "danger", "muted_foreground"][..],
             ),
             (ThemeMode::Dark, dark(), &["warning_foreground"][..]),
         ] {
@@ -801,12 +831,111 @@ mod tests {
                 Colors::of(&cx.global::<Theme>().colors)
             });
             for ((name, own), (_, kits)) in theme.colors.roles().into_iter().zip(kit.roles()) {
-                if changed.contains(&name) {
-                    assert_ne!(channels(own), channels(kits), "`{name}` was changed");
-                } else {
+                if !changed.contains(&name) {
                     assert_eq!(channels(own), channels(kits), "`{name}` as the kit has it");
+                    continue;
                 }
+                assert_ne!(channels(own), channels(kits), "`{name}` was changed");
+                // A changed role is what the rule gives from the toolkit's colour: the
+                // first step that reads 4.5 to 1 on every ground it is drawn on.
+                let grounds: Vec<Hsla> = READABLE
+                    .iter()
+                    .filter(|(text, _)| *text == name)
+                    .map(|(_, ground)| {
+                        composited(role(&theme.colors, ground), theme.colors.background)
+                    })
+                    .collect();
+                let readable = |colour: Hsla| {
+                    grounds
+                        .iter()
+                        .all(|ground| contrast(colour, *ground, theme.colors.background) >= 4.5)
+                };
+                let backdrop = theme.colors.background;
+                let worst = grounds
+                    .iter()
+                    .min_by(|a, b| {
+                        let (a, b) = (contrast(kits, **a, backdrop), contrast(kits, **b, backdrop));
+                        a.total_cmp(&b)
+                    })
+                    .expect("a ground for a changed role");
+                assert_eq!(
+                    channels(own),
+                    channels(moved(kits, *worst, readable)),
+                    "{}: `{name}` is the first step of 5 points that reads",
+                    theme.name
+                );
             }
+        }
+    }
+
+    /// The colour the terminal pane drew for each of the sixteen before slice 9: xterm's
+    /// own black, the theme's six and their bright ones, xterm's white, bright black and
+    /// bright white.
+    fn drawn_before(colors: &Colors) -> [Hsla; 16] {
+        [
+            hex(0x000000),
+            colors.red,
+            colors.green,
+            colors.yellow,
+            colors.blue,
+            colors.magenta,
+            colors.cyan,
+            hex(0xe5e5e5),
+            hex(0x7f7f7f),
+            colors.red_light,
+            colors.green_light,
+            colors.yellow_light,
+            colors.blue_light,
+            colors.magenta_light,
+            colors.cyan_light,
+            hex(0xffffff),
+        ]
+    }
+
+    #[test]
+    fn the_dark_terminal_keeps_the_palette_the_pane_drew_before() {
+        let theme = dark();
+        assert_eq!(theme.terminal.ansi, drawn_before(&theme.colors));
+    }
+
+    #[test]
+    fn each_colour_of_the_light_terminal_but_black_reads_three_to_one_on_its_ground() {
+        let theme = light();
+        let (terminal, before) = (&theme.terminal, drawn_before(&theme.colors));
+        assert_eq!(terminal.ansi[0], hex(0x000000), "colour 0 is as it was");
+        let mut expected: Vec<Hsla> = vec![before[0]];
+        for start in &before[1..] {
+            let taken = expected.iter().copied().map(channels).collect::<Vec<_>>();
+            expected.push(moved(*start, terminal.background, |candidate| {
+                contrast(candidate, terminal.background, terminal.background) >= 3.0
+                    && !taken.contains(&channels(candidate))
+            }));
+        }
+        for (number, (colour, wanted)) in terminal.ansi.iter().zip(&expected).enumerate().skip(1) {
+            let ratio = contrast(*colour, terminal.background, terminal.background);
+            assert!(ratio >= 3.0, "colour {number} reads {ratio:.2} to 1");
+            // Moved by the rule from the colour drawn before, and still not another's.
+            assert_eq!(
+                channels(*colour),
+                channels(*wanted),
+                "colour {number} is the first step of 5 points that reads 3 to 1 and is no \
+                 earlier colour"
+            );
+        }
+    }
+
+    #[test]
+    fn the_sidebars_pairs_of_a_text_role_and_a_ground_are_all_listed_as_readable() {
+        for pair in [
+            ("sidebar_foreground", "sidebar"),
+            ("sidebar_accent_foreground", "sidebar_accent"),
+            ("muted_foreground", "sidebar"),
+            ("muted_foreground", "sidebar_accent"),
+            ("muted_foreground", "list_hover"),
+            ("sidebar_foreground", "list_hover"),
+            ("muted_foreground", "secondary"),
+        ] {
+            assert!(READABLE.contains(&pair), "{pair:?} is drawn and not listed");
         }
     }
 

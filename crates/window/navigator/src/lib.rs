@@ -160,9 +160,11 @@ pub struct NavigatorConfig {
     /// A server gets these variables and no other, with its server's `environment` added.
     pub environment: Vec<(OsString, OsString)>,
     /// The user's login shell, whose environment fills in what
-    /// [`NavigatorConfig::environment`] lacks and whose `PATH` extends
-    /// [`NavigatorConfig::search_path`]'s, taken once at the first search (the module
-    /// `shell.rs`); none to keep those two as they are given, as a test that hands its own
+    /// [`NavigatorConfig::environment`] lacks and whose `PATH` entries the Window's lacks
+    /// are added after the Window's own, taken once at the first search (the module
+    /// `shell.rs`). Once it is taken, the search path is the `PATH` of the merged result,
+    /// split, so that an entry of [`NavigatorConfig::search_path`] the merged `PATH` does not
+    /// hold is dropped. None keeps both as they are given, as a test that hands its own
     /// environment does.
     pub login_shell: Option<LoginShell>,
     /// The machine, for the downloads: none where no row can download for it.

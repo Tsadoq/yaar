@@ -233,7 +233,8 @@ cargo = { targetDir = "{target}" }
 # Cargo, which the server runs to read the project, fetches nothing: no crate index and no
 # crate reaches the user's cargo folder because a review looked at the code. rustup's proxy
 # installs no toolchain a project names and the machine lacks: it fails at once, and the next
-# copy is tried.
+# copy is tried. RUSTUP_AUTO_INSTALL=0 is honoured from rustup 1.28 on; an older proxy ignores
+# it and may begin a download, which the trial's deadline cuts off.
 [rust.server.environment]
 CARGO_TARGET_DIR = "{target}"
 CARGO_NET_OFFLINE = "true"
