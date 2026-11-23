@@ -38,9 +38,12 @@
 //! slice 9. The dark theme's palette is that. The light theme's is that with each of 1 to 15
 //! that reads under 3 to 1 on its white ground moved by the same steps, away from the ground's
 //! lightness, to the first that reads 3 to 1 and is no colour of the palette before it (with
-//! the dark theme's palette, white, bright white and yellow read 1.3 to 1.5 to 1 on white);
-//! colour 0 is as it was. The roles `red` to `cyan_light` stay as they are: they are marks as
-//! well as a palette.
+//! the dark theme's palette, white, bright white and yellow read 1.3 to 1.5 to 1 on white),
+//! but for the three greys: 8 bright black `#595959`, 7 white `#737373` and 15 bright white
+//! `#8c8c8c` are set by hand, in the order light terminal themes use (7.0, 4.7 and 3.4 to 1
+//! on white), so that bright black is darker than white and white darker than bright white,
+//! each 1.3 to 1 or more from the next. Colour 0 is as it was. The roles `red` to
+//! `cyan_light` stay as they are: they are marks as well as a palette.
 //!
 //! # What the definitions must hold
 //!
@@ -892,6 +895,48 @@ mod tests {
         assert_eq!(theme.terminal.ansi, drawn_before(&theme.colors));
     }
 
+    /// The numbers of the light terminal's greys, which are set by hand: 7 white, 8 bright
+    /// black and 15 bright white.
+    const GREYS: [usize; 3] = [7, 8, 15];
+
+    #[test]
+    fn the_light_terminals_greys_are_set_by_hand_in_the_order_light_themes_use_and_apart() {
+        let theme = light();
+        let ansi = &theme.terminal.ansi;
+        // Bright black is darker than white, and white darker than bright white.
+        assert_eq!(
+            [channels(ansi[8]), channels(ansi[7]), channels(ansi[15])],
+            [
+                [0x59, 0x59, 0x59, 255],
+                [0x73, 0x73, 0x73, 255],
+                [0x8c, 0x8c, 0x8c, 255],
+            ],
+            "bright black, white and bright white"
+        );
+        let ground = theme.terminal.background;
+        let lightness = |colour: Hsla| luminance(composited(colour, ground));
+        assert!(
+            lightness(ansi[8]) < lightness(ansi[7]),
+            "bright black darker than white"
+        );
+        assert!(
+            lightness(ansi[7]) < lightness(ansi[15]),
+            "white darker than bright white"
+        );
+        // Each differs from the next by 1.3 to 1 or more, and reads 3 to 1 on the ground.
+        for (darker, lighter) in [(8, 7), (7, 15)] {
+            let apart = contrast(ansi[darker], ansi[lighter], ground);
+            assert!(
+                apart >= 1.3,
+                "colours {darker} and {lighter} are {apart:.2} to 1 apart"
+            );
+        }
+        for number in GREYS {
+            let ratio = contrast(ansi[number], ground, ground);
+            assert!(ratio >= 3.0, "colour {number} reads {ratio:.2} to 1");
+        }
+    }
+
     #[test]
     fn each_colour_of_the_light_terminal_but_black_reads_three_to_one_on_its_ground() {
         let theme = light();
@@ -908,6 +953,10 @@ mod tests {
         for (number, (colour, wanted)) in terminal.ansi.iter().zip(&expected).enumerate().skip(1) {
             let ratio = contrast(*colour, terminal.background, terminal.background);
             assert!(ratio >= 3.0, "colour {number} reads {ratio:.2} to 1");
+            // The three greys are set by hand, as the next test holds them.
+            if GREYS.contains(&number) {
+                continue;
+            }
             // Moved by the rule from the colour drawn before, and still not another's.
             assert_eq!(
                 channels(*colour),

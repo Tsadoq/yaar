@@ -60,7 +60,11 @@ pub fn light() -> ThemeDefinition {
             selection: colors.selection,
             // What the pane drew before, but where that read under 3 to 1 on this white ground
             // (the numbers noted): darkened in steps of 5 points of lightness to the first
-            // that reads 3 to 1 and is no earlier colour of the palette.
+            // that reads 3 to 1 and is no earlier colour of the palette. The three greys, 7, 8
+            // and 15, are set by hand instead, in the order light terminal themes use: bright
+            // black darker than white, and white darker than bright white, each 1.3 to 1 or
+            // more from the next. The steps alone gave bright black and bright white one level
+            // apart, and bright white darker than white.
             ansi: [
                 hex(0x000000),
                 colors.red,
@@ -70,9 +74,10 @@ pub fn light() -> ThemeDefinition {
                 colors.blue,
                 colors.magenta,
                 colors.cyan,
-                // Colour 7, white, was 1.26 to 1.
-                hex(0x8c8c8c),
-                hex(0x7f7f7f),
+                // Colour 7, white, was 1.26 to 1; it reads 4.7 to 1 now, and colour 8, bright
+                // black, 7.0 to 1.
+                hex(0x737373),
+                hex(0x595959),
                 // Colours 9 to 14, the bright ones, were 2.77, 1.74, 1.53, 2.54, 2.64 and 1.81
                 // to 1.
                 hex(0xf75959),
@@ -81,9 +86,8 @@ pub fn light() -> ThemeDefinition {
                 hex(0x2f89f8),
                 hex(0xb36bfb),
                 hex(0x0e9fb6),
-                // Colour 15, bright white, was 1.0 to 1: its first step that reads, #8c8c8c, is
-                // colour 7's, so it is one step further.
-                hex(0x808080),
+                // Colour 15, bright white, was 1.0 to 1; it reads 3.4 to 1 now.
+                hex(0x8c8c8c),
             ],
         },
         colors,
