@@ -20,8 +20,9 @@
 //! # The rows, in order
 //!
 //! Each row is one [`SettingRow`], with a title ([`TITLES`]) and its values, each drawn as a
-//! control under the selector `settings-value-<row>-<value>:<label>`, the chosen one also
-//! under `settings-chosen-<row>`: `<row>` is the row's index in [`SettingsScreen::rows`] as
+//! control under the selector `settings-value-<row>-<value>:<label>`, an element around the
+//! control with the control's own bounds, and the chosen control itself, the element that
+//! has the colours of a chosen value, under `settings-chosen-<row>`: `<row>` is the row's index in [`SettingsScreen::rows`] as
 //! they are drawn (so it depends on how many rows of extensions and of repositories come
 //! before; a test finds a row's index in `rows()`, never writes it), `<value>` the value's
 //! index in [`RowShown::values`], both from 0, `<label>` the words drawn. A click on a value
@@ -992,16 +993,9 @@ impl Render for SettingsScreen {
             for (j, label) in row.shown.values.iter().enumerate() {
                 let chosen = row.shown.chosen == Some(j);
                 let selector = format!("settings-value-{i}-{j}:{label}");
-                let label_words = div().child(label.clone());
-                let label_words = if chosen {
-                    label_words.debug_selector(move || format!("settings-chosen-{i}"))
-                } else {
-                    label_words
-                };
                 let id = SharedString::from(selector.clone());
                 let control = div()
                     .id(id)
-                    .debug_selector(move || selector.clone())
                     .px_2()
                     .py_0p5()
                     .rounded_sm()
@@ -1010,15 +1004,28 @@ impl Render for SettingsScreen {
                     .on_click(cx.listener(move |screen, _: &ClickEvent, window, cx| {
                         screen.choose(i, j, window, cx);
                     }))
-                    .child(label_words);
-                values = values.child(if chosen {
-                    control.bg(primary).text_color(primary_text)
+                    .child(label.clone());
+                // The chosen mark and the colours of a chosen value are set in this one
+                // branch, on the control itself: a value cannot be marked chosen and drawn
+                // as another.
+                let control = if chosen {
+                    control
+                        .debug_selector(move || format!("settings-chosen-{i}"))
+                        .bg(primary)
+                        .text_color(primary_text)
                 } else {
                     control
                         .bg(secondary)
                         .text_color(secondary_text)
                         .hover(|style| style.bg(accent).text_color(accent_text))
-                });
+                };
+                // One selector to an element: the control has the chosen mark, so the value's
+                // own is on an element around it, which is as large as the control is.
+                values = values.child(
+                    div()
+                        .debug_selector(move || selector.clone())
+                        .child(control),
+                );
             }
             let block = div()
                 .flex()

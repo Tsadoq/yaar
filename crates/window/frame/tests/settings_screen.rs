@@ -424,10 +424,10 @@ impl Window9 {
         format!("settings-value-{row}-{value}:{label}")
     }
 
-    /// The words each row draws as its chosen value are the model's: the element marked
-    /// `settings-chosen-<row>` lies inside the control of the value the row's model has
-    /// chosen and inside no other control of the row, and a row with no value chosen draws
-    /// none marked.
+    /// The control each row draws as its chosen value is the model's: the element marked
+    /// `settings-chosen-<row>` is the control of the value the row's model has chosen (the
+    /// same bounds) and lies inside no other control of the row, and a row with no value
+    /// chosen draws none marked.
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -439,6 +439,13 @@ impl Window9 {
             );
             return;
         };
+        // The mark is on the control itself, the element that has the colours of a chosen
+        // value, and not on the words inside it: its bounds are the value's.
+        assert_eq!(
+            self.bounds(&mark),
+            self.bounds(&Window9::value(at, chosen, &shown.values[chosen])),
+            "{row:?}: the chosen mark is the control of the value {chosen}, not words inside it"
+        );
         let mark = self.bounds(&mark).center();
         for (value, label) in shown.values.iter().enumerate() {
             let control = self.bounds(&Window9::value(at, value, label));
@@ -1692,6 +1699,9 @@ fn the_text_of_the_field_replaced_by_a_new_folder_is_what_enter_sends(cx: &mut T
     window.cx.simulate_input("/x/places");
     window.press("enter");
 
+    // Read right after the key and the frame, before the Keeper is heard: the row shows the
+    // folder at once, and not only once the Keeper has answered.
+    assert_eq!(window.rows()[r].values, ["/x/places"]);
     window.heard_set(folder_of('a', Some("/x/places")));
     assert_eq!(window.rows()[r].values, ["/x/places"]);
     window.wait("the field to close", |_, cx| {
