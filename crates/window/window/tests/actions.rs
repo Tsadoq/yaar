@@ -10,7 +10,9 @@
 //! the Window's own is outside the walk, and only a reader of that table can tell whether
 //! it belongs there.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
@@ -22,9 +24,9 @@ use yaar_frame::{
     Asks, Beside, CloseWindow, Control, PROGRAM_CONTEXT, Place, SETTINGS_CONTEXT, Sends,
 };
 use yaar_link::{
-    Attachment, CommentId, ConsentAnswer, FlowForm, Head, Origin, Program, Request, RequestKind,
-    ReviewId, Setting, TerminalPlace, ThreadId, ThreadState, TurnEndSelects, Workspace,
-    WorkspaceId,
+    Attachment, CommentId, ConsentAnswer, Fact, FlowForm, Head, Origin, Program, Request,
+    RequestKind, ReviewId, Setting, TerminalPlace, ThreadId, ThreadState, TurnEndSelects,
+    Workspace, WorkspaceId,
 };
 use yaar_review_pane::{PaneRow, View};
 use yaar_system_tests::standin::{Did, Script};
@@ -33,6 +35,12 @@ use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 mod common;
 
 use common::{Composed, Found, RunningAgent, key_of, wait_until};
+
+thread_local! {
+    /// The settings the Keeper told the Window of this test, in the order the Window heard
+    /// them (`hear_the_settings`).
+    static ECHOES: Rc<RefCell<Vec<Setting>>> = Rc::default();
+}
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -75,12 +83,34 @@ fn open_with_a_navigator(world: World, cx: &mut TestAppContext) -> (Composed, Vi
         Found::InTheProject,
         &common::standin_row(Found::InTheProject, "notes.txt", &["txt"]),
     );
-    check_the_panes(common::open_composed_with_a_navigator(
+    let (window, mut cx) = check_the_panes(common::open_composed_with_a_navigator(
         world,
         cx,
         Vec::new(),
         navigator,
-    ))
+    ));
+    hear_the_settings(&window, &mut cx);
+    (window, cx)
+}
+
+/// Has what the Keeper tells the Window of the settings kept in order, as the Window hears it
+/// (what the Frame's list of settings hears, which is subscribed first, has been taken by the
+/// time this is told). The Keeper tells a setting to every Window once it keeps it, the
+/// Window that set it included, and that echo takes the setting the Window shows to the value
+/// it had when the Keeper kept it: two sets of one setting in quick succession show the first
+/// value again for a moment, until the second echo comes. A step that reads the setting
+/// waits for every echo first ([`Composed::wait_for_the_echoes`]).
+fn hear_the_settings(window: &Composed, cx: &mut VisualTestContext) {
+    let echoes = ECHOES.with(Rc::clone);
+    echoes.borrow_mut().clear();
+    cx.update(|_, app| {
+        app.subscribe(&window.models.link, move |_, fact: &Fact, _| {
+            if let Fact::SettingChanged(setting) = fact {
+                echoes.borrow_mut().push(setting.clone());
+            }
+        })
+        .detach();
+    });
 }
 
 /// [`open_composed`] in a world whose agent CLI is the stand-in, with a script that runs and
@@ -286,64 +316,71 @@ impl Composed {
                     cx.debug_bounds("terminal-slot-0").is_some()
                 });
             }
-            RequestKind::SetSetting => match passed {
-                // The pane shows the form it set as soon as the key is pressed.
-                Request::SetSetting {
-                    setting: Setting::FlowForm { .. },
-                } => wait_until(cx, "the live diff as the form of Flow", |cx| {
-                    self.review
-                        .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
-                }),
-                // The Keeper answers the question for the repository and tells it back; the
-                // model of the Frame shows the answer, and the pane no longer asks.
-                Request::SetSetting {
-                    setting:
-                        Setting::ServersInRepository {
-                            repository,
-                            allowed,
-                        },
-                } => {
-                    wait_until(
+            RequestKind::SetSetting => {
+                let Request::SetSetting { setting } = passed else {
+                    panic!("the step of SetSetting waited for {passed:?}")
+                };
+                self.wait_for_the_echoes(setting, cx);
+                match passed {
+                    // The pane shows the form it set as soon as the key is pressed.
+                    Request::SetSetting {
+                        setting: Setting::FlowForm { .. },
+                    } => wait_until(cx, "the live diff as the form of Flow", |cx| {
+                        self.review
+                            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+                    }),
+                    // The Keeper answers the question for the repository and tells it back; the
+                    // model of the Frame shows the answer, and the pane no longer asks.
+                    Request::SetSetting {
+                        setting:
+                            Setting::ServersInRepository {
+                                repository,
+                                allowed,
+                            },
+                    } => {
+                        wait_until(
+                            cx,
+                            "the answer to the question in the Window's model",
+                            |cx| {
+                                self.models.navigation.read_with(cx, |navigation, cx| {
+                                    navigation.consent(repository, cx) == Some(*allowed)
+                                })
+                            },
+                        );
+                        wait_until(cx, "the question to leave the line of the pane", |cx| {
+                            cx.debug_bounds("review-servers-yes").is_none()
+                        });
+                        // A yes lets the server run, which the Navigator heard of through the
+                        // Frame: the line of the pane shows it ready.
+                        if *allowed {
+                            wait_until(cx, "the server of the repository ready", |cx| {
+                                cx.debug_bounds("review-servers-state:ready").is_some()
+                            });
+                        }
+                    }
+                    // The Frame lays the panes out as the setting says as soon as it is set.
+                    Request::SetSetting {
+                        setting: Setting::TerminalPlace(place),
+                    } => wait_until(cx, "the panes laid out as the setting says", |cx| {
+                        self.frame
+                            .read_with(cx, |frame, _| place_of(frame.beside()) == *place)
+                    }),
+                    // The review pane reads what a turn end selects as soon as it is set.
+                    Request::SetSetting {
+                        setting: Setting::TurnEnd(selects),
+                    } => wait_until(
                         cx,
-                        "the answer to the question in the Window's model",
+                        "the review pane to follow what a turn end selects",
                         |cx| {
-                            self.models.navigation.read_with(cx, |navigation, cx| {
-                                navigation.consent(repository, cx) == Some(*allowed)
+                            self.review.read_with(cx, |pane, _| {
+                                pane.keeps_selection()
+                                    == (*selects == TurnEndSelects::KeepSelection)
                             })
                         },
-                    );
-                    wait_until(cx, "the question to leave the line of the pane", |cx| {
-                        cx.debug_bounds("review-servers-yes").is_none()
-                    });
-                    // A yes lets the server run, which the Navigator heard of through the
-                    // Frame: the line of the pane shows it ready.
-                    if *allowed {
-                        wait_until(cx, "the server of the repository ready", |cx| {
-                            cx.debug_bounds("review-servers-state:ready").is_some()
-                        });
-                    }
+                    ),
+                    other => panic!("the step of SetSetting waited for {other:?}"),
                 }
-                // The Frame lays the panes out as the setting says as soon as it is set.
-                Request::SetSetting {
-                    setting: Setting::TerminalPlace(place),
-                } => wait_until(cx, "the panes laid out as the setting says", |cx| {
-                    self.frame
-                        .read_with(cx, |frame, _| place_of(frame.beside()) == *place)
-                }),
-                // The review pane reads what a turn end selects as soon as it is set.
-                Request::SetSetting {
-                    setting: Setting::TurnEnd(selects),
-                } => wait_until(
-                    cx,
-                    "the review pane to follow what a turn end selects",
-                    |cx| {
-                        self.review.read_with(cx, |pane, _| {
-                            pane.keeps_selection() == (*selects == TurnEndSelects::KeepSelection)
-                        })
-                    },
-                ),
-                other => panic!("the step of SetSetting waited for {other:?}"),
-            },
+            }
             RequestKind::OpenFolder | RequestKind::SetBase | RequestKind::DeleteDraft => {}
             RequestKind::ListWorkspaces
             | RequestKind::GetChanges
@@ -704,6 +741,36 @@ impl Composed {
             );
             std::thread::park_timeout(Duration::from_millis(1));
         }
+    }
+
+    /// Waits, with the app running, until the Window has heard the Keeper's word on every set
+    /// of the kind of `setting` that has passed the tap: until then the setting it shows may
+    /// be the value of an earlier set, which the Keeper's echo of that set brings back for a
+    /// moment. The step that sent the last of them is the one that caused the echo.
+    fn wait_for_the_echoes(&mut self, setting: &Setting, cx: &mut VisualTestContext) {
+        wait_until(
+            cx,
+            &format!("the Keeper's word on every set of {setting:?}'s kind"),
+            |_| {
+                let sent = self
+                    .tap
+                    .requests()
+                    .iter()
+                    .filter(|request| {
+                        matches!(request, Request::SetSetting { setting: set }
+                            if set.same_thing_as(setting))
+                    })
+                    .count();
+                let heard = ECHOES.with(|echoes| {
+                    echoes
+                        .borrow()
+                        .iter()
+                        .filter(|told| told.same_thing_as(setting))
+                        .count()
+                });
+                heard >= sent
+            },
+        );
     }
 
     /// Whether the settings screen is open.
@@ -1704,11 +1771,7 @@ fn walk_the_silent_keys(
     };
     silent.sort_by_key(|control| ends_the_app(control));
     assert!(
-        silent
-            .iter()
-            .rev()
-            .take(2)
-            .all(|control| ends_the_app(control))
+        silent.iter().rev().take(2).all(ends_the_app)
             && silent
                 .iter()
                 .filter(|control| ends_the_app(control))

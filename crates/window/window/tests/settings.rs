@@ -9,7 +9,9 @@
 
 mod common;
 
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,6 +36,12 @@ use common::{
     open_composed_with_a_navigator, standin_row, wait_until,
 };
 
+thread_local! {
+    /// The settings the Keeper told the Window of this test, in the order the Window heard
+    /// them (`hear_the_settings`).
+    static ECHOES: Rc<RefCell<Vec<Setting>>> = Rc::default();
+}
+
 /// The Window as the program opens it, with the Navigator and the real Keeper of `world`.
 fn open_the_window(world: World, cx: &mut TestAppContext) -> (Composed, VisualTestContext) {
     let navigator = navigator_for(
@@ -41,7 +49,69 @@ fn open_the_window(world: World, cx: &mut TestAppContext) -> (Composed, VisualTe
         Found::OnTheMachine,
         &standin_row(Found::OnTheMachine, "main.sil", &[]),
     );
-    open_composed_with_a_navigator(world, cx, Vec::new(), navigator)
+    let (window, mut cx) = open_composed_with_a_navigator(world, cx, Vec::new(), navigator);
+    hear_the_settings(&window, &mut cx);
+    (window, cx)
+}
+
+/// Has what the Keeper tells the Window of the settings kept in order, as the Window hears it
+/// (what the Frame's list of settings hears, which is subscribed first, has been taken by the
+/// time this is told). The Keeper tells a setting to every Window once it keeps it, the
+/// Window that set it included, and that echo takes the setting the Window shows to the value
+/// it had when the Keeper kept it: two sets of one setting in quick succession show the first
+/// value again for a moment, until the second echo comes. A test that sets one setting twice
+/// waits for the echoes before it reads or sets it again ([`wait_for_the_echoes`]).
+fn hear_the_settings(window: &Composed, cx: &mut VisualTestContext) {
+    let echoes = ECHOES.with(Rc::clone);
+    echoes.borrow_mut().clear();
+    cx.update(|_, app| {
+        app.subscribe(&window.models.link, move |_, fact: &Fact, _| {
+            if let Fact::SettingChanged(setting) = fact {
+                echoes.borrow_mut().push(setting.clone());
+            }
+        })
+        .detach();
+    });
+}
+
+/// Waits, with the app running, until the Window has heard the Keeper's word on every set of
+/// the kind of `setting` that has passed the tap.
+fn wait_for_the_echoes(window: &Composed, setting: &Setting, cx: &mut VisualTestContext) {
+    wait_until(
+        cx,
+        &format!("the Keeper's word on every set of {setting:?}'s kind"),
+        |_| {
+            let sent = window
+                .tap
+                .requests()
+                .iter()
+                .filter(|request| {
+                    matches!(request, Request::SetSetting { setting: set }
+                        if set.same_thing_as(setting))
+                })
+                .count();
+            let heard = ECHOES.with(|echoes| {
+                echoes
+                    .borrow()
+                    .iter()
+                    .filter(|told| told.same_thing_as(setting))
+                    .count()
+            });
+            heard >= sent
+        },
+    );
+}
+
+/// A setting of the kind the screen's `row` sets.
+fn kind_of(row: &SettingRow) -> Setting {
+    match row {
+        SettingRow::TurnEnd => Setting::TurnEnd(TurnEndSelects::WhatChanged),
+        SettingRow::StopAfter => Setting::StopAfter { seconds: 0 },
+        SettingRow::Theme => Setting::Theme(ThemeChoice::System),
+        SettingRow::KeepStates => Setting::KeepStates { days: 0 },
+        SettingRow::TerminalPlace => Setting::TerminalPlace(TerminalPlace::Right),
+        other => panic!("the test sets no setting of the row {other:?}"),
+    }
 }
 
 /// The theme's mode the toolkit draws in now.
@@ -120,7 +190,12 @@ fn go_to(window: &Composed, row: &SettingRow, cx: &mut VisualTestContext) {
 
 /// Chooses the value of `row` labelled `label`, by the cursor and `l` or `h`, as a user
 /// does; it is the model's, once the last key is pressed.
+///
+/// The echoes of the earlier sets of the row's setting are heard first, so that what the row
+/// shows when the keys are pressed is what was last chosen, and what the model shows after
+/// the last key is that choice, which the test reads at once.
 fn choose(window: &Composed, row: &SettingRow, label: &str, cx: &mut VisualTestContext) {
+    wait_for_the_echoes(window, &kind_of(row), cx);
     go_to(window, row, cx);
     let (next, previous) = (key_of("Next Value"), key_of("Previous Value"));
     let shown = |window: &Composed, cx: &mut VisualTestContext| {
@@ -724,6 +799,7 @@ fn a_forced_appearance_let_go_has_the_windows_appearance_read_again_and_told(
     choose(&window, &SettingRow::Theme, DARK, &mut cx);
     noted_dark(&window, &mut cx);
     assert_eq!(applied(&mut cx), DARK);
+    wait_for_the_echoes(&window, &Setting::Theme(ThemeChoice::System), &mut cx);
     window.models.settings.update(&mut cx, |settings, cx| {
         settings.set(
             Setting::Theme(ThemeChoice::Named("No such theme".to_owned())),
