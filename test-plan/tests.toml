@@ -391,10 +391,11 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-024"]
+note = "On macOS LaunchServices starts the installed bundle (`open -a`), as the Dock and the Finder do; on Linux GLib's launcher starts the installed desktop entry (`gio launch`) in a display the job makes, as a desktop's menu does, and the window it maps is asserted."
 
 [[test]]
 id = "PKG-09"
-what = "After the uninstall no file of the app remains in the user's folders, the Keeper's lock file included."
+what = "After the uninstall no file of the app remains in the user's folders, the Keeper's lock file included, but the user's reviews and pi's extension file, which stay until the uninstall is asked to remove them too; then nothing remains. Nothing of the user's is removed."
 level = "component"
 part = "package"
 through = "the commands and the packages of the build"
@@ -423,6 +424,18 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "release"
 proves = ["NFR-025"]
+
+[[test]]
+id = "PKG-12"
+what = "From the installed app started by the system (not from a shell), a worktree is made with an agent in a repository whose `post-checkout` hook runs a program found only on the user's login path, and the hook runs."
+level = "component"
+part = "package"
+through = "the installed app, started as the system starts it"
+driver = "workflow"
+runs = "ci"
+proves = ["FR-014", "NFR-024"]
+slice = 10
+note = "The stand-in agent speaks as Claude Code. On macOS LaunchServices starts the installed bundle (`open -a`); on Linux GLib's launcher starts the installed desktop entry (`gio launch`) with the environment `env -i` leaves, in a display the job makes, as a desktop's menu does. The same step name in install-macos and install-linux."
 
 [[test]]
 id = "SYS-01"
