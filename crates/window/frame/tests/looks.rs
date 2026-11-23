@@ -16,9 +16,12 @@
 mod common;
 
 use gpui_kit::component::theme::{Theme, ThemeMode};
-use gpui_kit::{AppContext, Size, TestAppContext, VisualTestContext, px, size};
+use gpui_kit::{
+    AppContext, Context, InteractiveElement, IntoElement, Render, Size, Styled, TestAppContext,
+    VisualTestContext, Window, div, px, size,
+};
 use yaar_frame::theme::{Appearance, Colors, DARK, LIGHT, applied, dark, light};
-use yaar_frame::{KeeperLink, Models};
+use yaar_frame::{BuildPane, KeeperLink, Models, Pane};
 use yaar_link::{Fact, Setting, ThemeChoice, TurnEndSelects};
 
 use common::{Shown, open_frame, open_frame_staged, wait_until};
@@ -108,6 +111,42 @@ fn shows(
     );
 }
 
+/// What a pane finds when the Frame builds it: the system the model holds, and the kit's
+/// mode and colours.
+type Found = (Option<Appearance>, ThemeMode, Colors);
+
+/// A pane that draws nothing.
+struct Empty {
+    focus: gpui_kit::FocusHandle,
+}
+
+impl Render for Empty {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().track_focus(&self.focus).size_full()
+    }
+}
+
+/// A pane whose building writes down what the model and the kit hold at that moment. The
+/// Frame builds its panes inside the toolkit's opening of the window, before the first
+/// frame is drawn, so what is found is what the first frame is drawn in.
+fn finding(found: &std::rc::Rc<std::cell::RefCell<Option<Found>>>) -> BuildPane {
+    let found = found.clone();
+    Box::new(move |models, _, cx| {
+        let system = models.looks.read(cx).system();
+        let theme = cx.global::<Theme>();
+        *found.borrow_mut() = Some((system, theme.mode, Colors::of(&theme.colors)));
+        let focus = cx.focus_handle();
+        let view = cx.new(|_| Empty {
+            focus: focus.clone(),
+        });
+        Pane {
+            name: "finding",
+            view: view.into(),
+            focus,
+        }
+    })
+}
+
 #[gpui_kit::test]
 fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_with_nobody_telling_it(
     cx: &mut TestAppContext,
@@ -118,15 +157,39 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
     cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
     // The Keeper is not reached from here: no socket answers at this place, and the
     // program that would be started is looked for beside the test, where there is none.
+    let found = std::rc::Rc::new(std::cell::RefCell::new(None));
     let opened = cx.update(|cx| {
         yaar_frame::open(
             std::path::PathBuf::from("/nonexistent/yaar/keeper.sock"),
             "9.9.9",
-            Vec::new(),
+            vec![finding(&found)],
             cx,
         )
         .expect("open the window")
     });
+
+    // The first frame is drawn in the definition, not only the window once it is open: what
+    // a pane finds as the Frame builds it, inside the opening and before the first draw, is
+    // the application's appearance and the built-in light colours.
+    let (system, mode, colors) = found
+        .borrow_mut()
+        .take()
+        .expect("the pane was built while the window was opened");
+    assert_eq!(
+        system,
+        Some(Appearance::Light),
+        "the system the model holds when the panes are built"
+    );
+    assert_eq!(
+        mode,
+        ThemeMode::Light,
+        "the toolkit's mode when the panes are built"
+    );
+    assert_eq!(
+        colors,
+        light().colors,
+        "the toolkit's colours when the panes are built"
+    );
 
     // Nobody told the model the system's setting, and it holds the application's: the
     // test platform's, which is light. The definition applied is the built-in light one, in
