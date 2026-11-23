@@ -36,7 +36,7 @@ use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, Found, RunningAgent, key_of, wait_until};
+use common::{Composed, Found, RunningAgent, key_of, wait_until, wait_until_telling};
 
 thread_local! {
     /// The settings the Keeper told the Window of this test, in the order the Window heard
@@ -544,15 +544,20 @@ impl Composed {
                     panic!("the step of CreateWorktree waited for {passed:?}")
                 };
                 let mut made = None;
-                wait_until(cx, "the new worktree on screen", |cx| {
-                    made = self.on_screen(cx).filter(|shown| {
-                        shown
-                            .path
-                            .file_name()
-                            .is_some_and(|name| name == branch.as_str())
-                    });
-                    made.is_some()
-                });
+                wait_until_telling(
+                    cx,
+                    "the new worktree on screen",
+                    |cx| {
+                        made = self.on_screen(cx).filter(|shown| {
+                            shown
+                                .path
+                                .file_name()
+                                .is_some_and(|name| name == branch.as_str())
+                        });
+                        made.is_some()
+                    },
+                    |cx| Some(self.what_the_frame_and_the_terminals_show(cx)),
+                );
                 let made = made.expect("the worktree is on screen").id;
                 wait_until(
                     cx,
@@ -1095,14 +1100,17 @@ impl Composed {
     /// nothing in the Window says one is on its way. When that happens between the click
     /// and the key, the pane says "The reviewer is on no line" and asks nothing. A user whose
     /// click the screen took away clicks again, and so does this: the whole opening is
-    /// repeated until the list is there, which the deadline bounds. Each try that fails
+    /// repeated until the list is there. A try is begun only before the deadline taken here
+    /// has passed, which bounds how many there are; the wait of a try for the answer to its
+    /// key has a deadline of its own, taken when the try presses the key, so that a try that
+    /// came late is not starved of the time one answer is given. Each try that fails
     /// says why on the standard error as it fails, and the failure at the deadline names
-    /// every reason.
+    /// every reason and what the pane held.
     fn open_the_list_of_references(&mut self, cx: &mut VisualTestContext) {
         let deadline = Instant::now() + DEADLINE;
         let mut tried: Vec<String> = Vec::new();
         loop {
-            match self.try_to_open_the_list_of_references(deadline, cx) {
+            match self.try_to_open_the_list_of_references(cx) {
                 Ok(()) => break,
                 Err(why) => {
                     // Said at once, so that a run that needed a repetition and passed shows
@@ -1117,8 +1125,8 @@ impl Composed {
             assert!(
                 Instant::now() < deadline,
                 "waited in vain for the list of references; each try ended as follows: {tried:#?}; \
-                 the Window's last requests were {:?}",
-                self.tap.requests().iter().rev().take(6).collect::<Vec<_>>()
+                 at the deadline {}",
+                self.what_the_review_pane_holds(cx)
             );
         }
         assert!(
@@ -1128,26 +1136,30 @@ impl Composed {
     }
 
     /// One try of [`Composed::open_the_list_of_references`]: Err says why the pane held no
-    /// list after the key, when it did not ask for one, and nothing else is waited for
-    /// after the deadline.
+    /// list after the key, when it did not ask for one. The wait for the answer ends
+    /// [`DEADLINE`] after the key of this try, whatever the tries before it took.
     fn try_to_open_the_list_of_references(
         &mut self,
-        deadline: Instant,
         cx: &mut VisualTestContext,
     ) -> Result<(), String> {
         self.show_changes(cx);
         self.click_into_the_review_pane(cx);
         let mut row = None;
-        wait_until(cx, "a line of the notes with a name drawn", |cx| {
-            let rows = self.review.read_with(cx, |pane, _| pane.rows().len());
-            row = (0..rows).find_map(|row| {
-                ["new", "old"].into_iter().find_map(|side| {
-                    cx.debug_bounds(leak(format!("review-text-{row}-{side}:three")))
-                        .map(|_| (row, side))
-                })
-            });
-            row.is_some()
-        });
+        wait_until_telling(
+            cx,
+            "a line of the notes with a name drawn",
+            |cx| {
+                let rows = self.review.read_with(cx, |pane, _| pane.rows().len());
+                row = (0..rows).find_map(|row| {
+                    ["new", "old"].into_iter().find_map(|side| {
+                        cx.debug_bounds(leak(format!("review-text-{row}-{side}:three")))
+                            .map(|_| (row, side))
+                    })
+                });
+                row.is_some()
+            },
+            |cx| Some(self.what_the_review_pane_holds(cx)),
+        );
         let (row, side) = row.expect("a row");
         let selector = leak(format!("review-text-{row}-{side}:three"));
         let bounds = cx.debug_bounds(selector).expect("the text is drawn");
@@ -1165,6 +1177,9 @@ impl Composed {
                     && !self.focus_is_in(PROGRAM_CONTEXT, cx)
             },
         );
+        // This try's own deadline: the answer is waited for from the key on, and the time the
+        // steps before it took, in this try or in an earlier one, is not taken from it.
+        let deadline = Instant::now() + DEADLINE;
         cx.simulate_keystrokes(&key_of("Find References"));
         // The key either asked, so that the pane holds a list that waits or is there, or it
         // did not and said why in the notice, at once. The pane holds a list or a notice
@@ -1202,7 +1217,8 @@ impl Composed {
             assert!(
                 Instant::now() < deadline,
                 "waited in vain for the list of references: the pane holds {list:?} (Some(true): \
-                 the Navigator never answered; None: no list was asked and nothing was said)"
+                 the Navigator never answered; None: no list was asked and nothing was said); {}",
+                self.what_the_review_pane_holds(cx)
             );
             std::thread::park_timeout(Duration::from_millis(1));
         }

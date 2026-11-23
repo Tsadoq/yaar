@@ -512,7 +512,20 @@ fn session_where(
 pub fn wait_until(
     cx: &mut VisualTestContext,
     what: &str,
+    holds: impl FnMut(&mut VisualTestContext) -> bool,
+) {
+    wait_until_telling(cx, what, holds, |_| None);
+}
+
+/// Like [`wait_until`], and the failure at the deadline also says what `held` reads of the
+/// app at that moment, so that a wait that failed on a loaded machine can be told from one
+/// that failed on a fault. `held` is read once, after the deadline, and no wait lasts
+/// longer for it.
+pub fn wait_until_telling(
+    cx: &mut VisualTestContext,
+    what: &str,
     mut holds: impl FnMut(&mut VisualTestContext) -> bool,
+    held: impl FnOnce(&mut VisualTestContext) -> Option<String>,
 ) {
     let deadline = Instant::now() + DEADLINE;
     loop {
@@ -520,7 +533,12 @@ pub fn wait_until(
         if holds(cx) {
             return;
         }
-        assert!(Instant::now() < deadline, "waited in vain for {what}");
+        if Instant::now() >= deadline {
+            match held(cx) {
+                Some(held) => panic!("waited in vain for {what}; at the deadline {held}"),
+                None => panic!("waited in vain for {what}"),
+            }
+        }
         std::thread::park_timeout(PAUSE);
     }
 }
@@ -551,7 +569,79 @@ pub fn control_of(key: &str) -> Option<Control> {
         .find(|control| control.key() == key)
 }
 
+/// How many rows of the review pane a failure message lists.
+const ROWS_TOLD: usize = 12;
+
 impl Composed {
+    /// What the review pane holds, as a sentence for the message of a wait that failed: the
+    /// view, the notice, the list of references, how many rows there are and the first of
+    /// them, which rows have a name of the notes drawn, and the last requests that reached
+    /// the Keeper through the tap. Read from the pane's own surface, nothing is changed.
+    pub fn what_the_review_pane_holds(&self, cx: &mut VisualTestContext) -> String {
+        let (view, notice, references, rows) = self.review.read_with(cx, |pane, _| {
+            (
+                pane.view(),
+                pane.notice(),
+                pane.references()
+                    .map(|list| (list.waiting, list.locations.len(), list.guessed)),
+                pane.rows().to_vec(),
+            )
+        });
+        let named: Vec<usize> = (0..rows.len())
+            .filter(|row| {
+                ["new", "old"]
+                    .into_iter()
+                    .any(|side| drawn(&format!("review-text-{row}-{side}:three"), cx).is_some())
+            })
+            .collect();
+        format!(
+            "the review pane showed {view:?} with the notice {notice:?} and the list of \
+             references {references:?} (waiting, found, guessed); it held {} rows, of which the \
+             first {ROWS_TOLD} were {:?}; a name of the notes was drawn on the rows {named:?}; \
+             the Window's last requests, newest first, were {:?}",
+            rows.len(),
+            rows.iter().take(ROWS_TOLD).collect::<Vec<_>>(),
+            self.tap.requests().iter().rev().take(6).collect::<Vec<_>>()
+        )
+    }
+
+    /// What the Frame and the terminal pane show, as a sentence for the message of a wait
+    /// that failed: the workspaces listed with the one on screen, the notice of the Frame,
+    /// the terminal pane's notice, and the non-empty lines of the terminal that has its keys.
+    pub fn what_the_frame_and_the_terminals_show(&self, cx: &mut VisualTestContext) -> String {
+        let (on_screen, listed) = self.models.workspaces.read_with(cx, |list, _| {
+            let listed: Vec<String> = list
+                .repositories()
+                .iter()
+                .flat_map(|repository| {
+                    repository.workspaces.iter().map(|workspace| {
+                        format!("{} {:?}", workspace.path.display(), workspace.head)
+                    })
+                })
+                .collect();
+            (list.selected().cloned(), listed)
+        });
+        let notice = self.frame.read_with(cx, |frame, cx| frame.notice(cx));
+        let (terminals_notice, focused) = self
+            .terminals
+            .read_with(cx, |pane, _| (pane.notice(), pane.focused()));
+        let lines = focused
+            .and_then(|id| self.terminals.read_with(cx, |pane, _| pane.terminal(&id)))
+            .map(|view| view.read_with(cx, |view, _| view.lines()))
+            .map(|lines| {
+                lines
+                    .into_iter()
+                    .filter(|line| !line.is_empty())
+                    .collect::<Vec<_>>()
+            });
+        format!(
+            "the workspaces listed were {listed:?} with {on_screen:?} on screen; the Frame's \
+             notice was {notice:?}; the terminal pane's notice was {terminals_notice:?} and the \
+             lines of its focused terminal were {lines:?}; the Window's last requests, newest first, were {:?}",
+            self.tap.requests().iter().rev().take(6).collect::<Vec<_>>()
+        )
+    }
+
     /// Waits for an element that is drawn under `selector`, and gives the point `inset`
     /// right of its left edge, in the middle of its height.
     pub fn point_in(
