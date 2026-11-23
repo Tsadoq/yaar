@@ -266,6 +266,25 @@ fn plant(world: &World, repo: &Repo) -> Vec<String> {
     vec![blob, dangling]
 }
 
+/// A file that exists once git checks anything out or moves a ref in the repository, which
+/// the user's own hooks tell. It lies in the world's home, outside the repository and the
+/// folder beside it. Written after `plant`, whose own checkout would run the hook.
+fn witness_of_any_checkout(world: &World, repo: &Repo) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let witness = world.home().join("hook.runs");
+    let script = format!(
+        "#!/bin/sh\nprintf '%s\\n' \"$0 $*\" >> '{}'\n",
+        witness.display()
+    );
+    for hook in ["post-checkout", "reference-transaction"] {
+        let file = repo.path().join(".git/hooks").join(hook);
+        fs::write(&file, &script).expect("write the hook");
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o755)).expect("make it run");
+    }
+    witness
+}
+
 fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
     let (world, repo) = world_for();
     // The workspace on screen is on another branch, one commit ahead of `main`: the worktree
@@ -410,6 +429,7 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
         .open_folder(repo.path())
         .expect("open the folder of the repository");
     let planted = plant(&world, &repo);
+    let witness = witness_of_any_checkout(&world, &repo);
     let before = reads(&world, &repo);
     let workspaces = client.workspaces();
     let terminals = client.terminals();
@@ -456,5 +476,12 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
             .expect("the repository has a parent")
             .join("app.worktrees")
             .exists()
+    );
+    // A worktree made and taken away again would leave the same reads; the user's own hooks
+    // run when it is made, and neither ran.
+    assert!(
+        !witness.exists(),
+        "git made something and took it away again: {}",
+        fs::read_to_string(&witness).unwrap_or_default()
     );
 }
