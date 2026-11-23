@@ -104,6 +104,7 @@ impl Scratch {
             data_dir: self.data(),
             companions: None,
             home: self.home(),
+            login_shell: None,
         };
         std::thread::spawn(move || run(options))
     }
