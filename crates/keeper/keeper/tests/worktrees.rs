@@ -175,16 +175,21 @@ impl Scratch {
         self.program(&repo.join(".git/hooks/post-checkout"), body);
     }
 
-    /// Starts the Keeper's library on a thread of this test.
-    fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
-        let options = Options {
+    /// What the Keeper of this test is started with.
+    fn options(&self) -> Options {
+        Options {
             socket: self.socket(),
             linger: Duration::from_secs(60),
             app_version: "test-keeper".to_owned(),
             data_dir: self.0.join("data"),
             companions: None,
             home: self.home(),
-        };
+        }
+    }
+
+    /// Starts the Keeper's library on a thread of this test.
+    fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
+        let options = self.options();
         std::thread::spawn(move || run(options))
     }
 
@@ -996,10 +1001,23 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
     // go only after the window; a Keeper that leaves later than this on a busy machine is
     // missed, never wrongly blamed.
     let left_early = stops.recv_timeout(SETTLE);
+    // The lock of the Keeper is held until the work ends, as the next Keeper may start as
+    // soon as it is let go: another one started now on the same data steps back. A Keeper
+    // that let the lock go before the wait would start, and not answer within the deadline.
+    let (second, seconds) = mpsc::channel();
+    let options = scratch.options();
+    std::thread::spawn(move || {
+        let _ = second.send(run(options));
+    });
+    let second = seconds.recv_timeout(DEADLINE);
     gate.let_go();
     assert!(
         matches!(left_early, Err(mpsc::RecvTimeoutError::Timeout)),
         "the Keeper left while git still made the worktree"
+    );
+    assert!(
+        matches!(second, Ok(Ok(Exit::AlreadyRunning))),
+        "a second Keeper was not turned away while the first one waited: {second:?}"
     );
     let exit = stops
         .recv_timeout(DEADLINE)
