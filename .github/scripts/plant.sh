@@ -51,8 +51,9 @@ case "$KIND" in
   licence) SECTIONS="dependencies dev-dependencies build-dependencies" ;;
   *)       SECTIONS="dependencies" ;;
 esac
-# The programs the packages ship, and the Companion.
-MANIFESTS="crates/window/window/Cargo.toml crates/keeper/keeper/Cargo.toml companions/claude/Cargo.toml"
+# The programs the packages ship: the Window, the Keeper, pi's reporting program and the
+# Companion.
+MANIFESTS="crates/window/window/Cargo.toml crates/keeper/keeper/Cargo.toml crates/keeper/adapter-pi/Cargo.toml companions/claude/Cargo.toml"
 # The interface toolkit, by the crate the app names in its manifests.
 TOOLKIT=gpui-kit
 # The step of the run that meets a real dependency, and the whole of what it may be.

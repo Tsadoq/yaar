@@ -22,4 +22,4 @@ if [ "$(uname -s)" = Darwin ]; then
   export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 fi
 cd "$ROOT"
-exec cargo build --release --locked -p yaar-window -p yaar-keeper "$@"
+exec cargo build --release --locked -p yaar-window -p yaar-keeper -p yaar-companion-claude -p yaar-adapter-pi "$@"

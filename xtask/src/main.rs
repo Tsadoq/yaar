@@ -52,7 +52,8 @@ fn check_layout() -> ExitCode {
         let metadata = cargo(&["metadata", "--format-version", "1", "--locked"])?;
         let graph = layout::Graph::from_metadata(&metadata)?;
         let mut breaches = layout::check(&graph);
-        // What the two programs are built from when built for a user: no test support.
+        // What the programs the packages ship are built from when built for a user: no
+        // test support.
         let features = cargo(&[
             "tree",
             "--locked",
@@ -60,6 +61,10 @@ fn check_layout() -> ExitCode {
             "yaar-window",
             "-p",
             "yaar-keeper",
+            "-p",
+            "yaar-companion-claude",
+            "-p",
+            "yaar-adapter-pi",
             "-e",
             "normal,build",
             "--prefix",
