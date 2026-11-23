@@ -106,7 +106,9 @@ part_title() {
 (cd "$ROOT" && cargo metadata --locked --offline --no-deps --format-version 1) \
   > "$TMP/metadata.json" 2> "$TMP/metadata.err" \
   || { cat "$TMP/metadata.err" >&2; fail "cargo metadata of $ROOT failed"; }
-jq -r '.packages[].name' "$TMP/metadata.json" | LC_ALL=C sort -u > "$TMP/workspace"
+jq -r '.packages[].name' "$TMP/metadata.json" > "$TMP/workspace.unsorted" \
+  || fail "jq cannot read the packages of cargo metadata"
+LC_ALL=C sort -u "$TMP/workspace.unsorted" > "$TMP/workspace"
 [ -s "$TMP/workspace" ] || fail "cargo metadata of $ROOT names no workspace crate"
 
 # The crates cargo links into a part for one target, as lines "name version", sorted and
@@ -225,7 +227,8 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
   fi
 
   # Two packages of one system and processor hold one notices file.
-  KEY=$(echo "$TARGETS" | tr ' ' '-')
+  KEY=${TARGETS%% *}
+  case "$TARGETS" in *" "*) KEY=universal ;; esac
   if [ -f "$TMP/first.$KEY" ]; then
     if ! cmp -s "$TMP/first.$KEY" "$NOTICES"; then
       echo "$NAME: $base: its notices differ from those of $(cat "$TMP/first.$KEY.name"), which are for the same system and processor" >&2
@@ -248,8 +251,8 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       continue
     fi
     # What the part says it holds, without the workspace's own crates.
-    awk -v part="$part" '$1 == "C" && $2 == part { print $3, $4 }' "$TMP/parsed.$IDX" \
-      | LC_ALL=C sort -u > "$TMP/found.all"
+    awk -v part="$part" '$1 == "C" && $2 == part { print $3, $4 }' "$TMP/parsed.$IDX" > "$TMP/found.raw"
+    LC_ALL=C sort -u "$TMP/found.raw" > "$TMP/found.all"
     awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/found.all" > "$TMP/found"
     # What cargo links into it, for every target of the package.
     : > "$TMP/want.all"
@@ -278,7 +281,7 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
     awk -v part="$part" '$1 == "B" && $2 == part && $3 == 0 { $1 = $2 = $3 = ""; print substr($0, 4) }' "$TMP/parsed.$IDX" > "$TMP/notext"
     if [ -s "$TMP/notext" ]; then
       while IFS= read -r block; do
-        echo "$NAME: $base: PART $part ($title): no licence text for the licence block of ${block#*|} ($(echo "${block%%|*}" | tr _ ' '))" >&2
+        echo "$NAME: $base: PART $part ($title): no licence text for the licence block of ${block#*|} ($(printf '%s' "${block%%|*}" | tr _ ' '))" >&2
       done < "$TMP/notext"
       OK=0
     fi

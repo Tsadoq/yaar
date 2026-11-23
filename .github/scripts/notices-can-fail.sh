@@ -149,7 +149,7 @@ count() {
 show() { # what was done
   echo "$NAME: $1"
   if [ -s "$TMP/said" ]; then
-    head -n 4 "$TMP/said" | sed 's/^/    the count said: /'
+    awk 'NR <= 4 { print "    the count said: " $0 }' "$TMP/said"
   fi
 }
 # Check that the count failed (exit 1) and said every word given.
