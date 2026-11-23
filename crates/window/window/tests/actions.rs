@@ -1864,11 +1864,13 @@ impl Composed {
                 control.title
             );
             let world = &mut self.world;
+            let gone = yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none());
             assert!(
-                yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none()),
-                "the Keeper still runs after the key {} of {}",
+                gone,
+                "the Keeper still runs after the key {} of {}\n{}",
                 control.key(),
-                control.title
+                control.title,
+                self.keeper_that_stays()
             );
         }
         // The stop frame has the Keeper end what it holds, the shell the walk opened with
@@ -1881,6 +1883,38 @@ impl Composed {
                 .filter(|pid| is_alive(**pid))
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// What there is to read about a Keeper that does not end when told to, for the message
+    /// of the test that waited for it: what the Keeper wrote on its error output, which names
+    /// the work it left or waited for, and the processes under it, which are removed with the
+    /// world and so cannot be looked at afterwards.
+    fn keeper_that_stays(&mut self) -> String {
+        let errors = fs::read_to_string(self.world.home().with_file_name("keeper.err"))
+            .unwrap_or_else(|error| format!("(unreadable: {error})"));
+        let processes = match self.world.keeper_pid() {
+            None => "the Keeper ended meanwhile".to_owned(),
+            Some(keeper) => {
+                let mut pids = vec![keeper];
+                pids.extend(descendants_of(keeper));
+                let listing = Command::new("ps")
+                    .arg("-o")
+                    .arg("pid,ppid,stat,etime,command")
+                    .arg("-p")
+                    .arg(
+                        pids.iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                    .output();
+                match listing {
+                    Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+                    Err(error) => format!("ps could not be run: {error}"),
+                }
+            }
+        };
+        format!("the Keeper's error output:\n{errors}\nthe processes under it:\n{processes}")
     }
 
     fn wait_until_on_screen(&mut self, folder: &Path, cx: &mut VisualTestContext) {
