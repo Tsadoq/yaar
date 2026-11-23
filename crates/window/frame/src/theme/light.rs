@@ -23,14 +23,18 @@ pub fn light() -> ThemeDefinition {
         accent: hex(0xf5f5f5),
         accent_foreground: hex(0x171717),
         list_hover: hex(0xf5f5f5),
-        success: hex(0x22c55e),
-        warning: hex(0xeab308),
-        // The toolkit's #fafafa reads 1.84 to 1 on `warning`. It lies lighter than that yellow
-        // but can go no lighter, so the steps are taken darker, to the first that reads 4.5
-        // to 1.
-        warning_foreground: hex(0x474747),
-        // The toolkit's #ef4444 reads 3.76 to 1 on `background`: darkened until 4.5 to 1.
-        danger: hex(0xeb1515),
+        // The toolkit's #22c55e reads 2.28, 2.09 and 1.81 to 1 on `background`, `muted` and
+        // `secondary`, where the panes draw it as words: darkened until 4.5 to 1 on each.
+        success: hex(0x136e35),
+        // The toolkit's #eab308 reads 1.92, 1.76 and 1.52 to 1 on the same three: darkened
+        // until 4.5 to 1 on each.
+        warning: hex(0x6f5504),
+        // The toolkit's own #fafafa: it reads 6.8 to 1 on the darkened `warning` (it read 1.84
+        // to 1 on the toolkit's yellow, which is why this role was once darker).
+        warning_foreground: hex(0xfafafa),
+        // The toolkit's #ef4444 reads 3.76 to 1 on `background` and 3.45 to 1 on `muted`:
+        // darkened until 4.5 to 1 on both.
+        danger: hex(0xd41212),
         info: hex(0x06b6d4),
         sidebar: hex(0xfafafa),
         sidebar_foreground: hex(0x171717),

@@ -22,13 +22,24 @@
 //! over `background` first). Where a role falls short on a ground it is drawn on, it alone is
 //! changed: moved away from the lightness of that ground, by 5 points of lightness in HSL a
 //! step, to the first step that passes on every ground it is drawn on. Where no step that way
-//! can pass, as for the light theme's `warning_foreground`, a near white text on a mid yellow,
-//! the same steps are taken the other way. (The dark theme's `warning_foreground`, a dark text
-//! on a light yellow, can only pass darker.) [`READABLE`] lists every pair of a text role and
-//! a ground the Frame draws, among them the quiet text of the sidebar on its own ground, on
-//! the selected row's and on the hovered row's. It also holds the quiet text on `secondary`,
-//! which no sidebar code draws: the selected row has the same value but is drawn on
-//! `sidebar_accent`.
+//! can pass, the same steps are taken the other way. (The dark theme's `warning_foreground`,
+//! a dark text on a light yellow, can only pass darker.) A role that is also the ground of a
+//! pair is moved first, and the pair's text role then by the same rule from the toolkit's own
+//! colour. [`READABLE`] lists every pair of a text role and a ground the Frame, the terminal
+//! pane and the review pane draw, among them the quiet text of the sidebar on its own ground,
+//! on the selected row's and on the hovered row's. It also holds the quiet text on
+//! `secondary`, which no sidebar code draws: the selected row has the same value but is drawn
+//! on `sidebar_accent`.
+//!
+//! What moved from the toolkit's colour, in the light theme: `muted_foreground` #737373 to
+//! #666666; `danger` #ef4444 to #d41212 (it is drawn on `background` and `muted`);
+//! `success` #22c55e to #136e35 and `warning` #eab308 to #6f5504 (each drawn on `background`,
+//! `muted` and `secondary`); `warning_foreground` is the toolkit's own #fafafa again, which
+//! reads on the darker `warning`. In the dark theme only `warning_foreground` moved, #ca8a04
+//! to #664602. The light theme's `success` and `warning` are also the colours of the marks
+//! the panes draw as dots and tints, which turn darker with them. The line numbers of a
+//! diff lie on a tint of `danger` or `success` over `background`, which is no role and so
+//! no pair of [`READABLE`].
 //!
 //! The terminal's colours: `foreground` and `background` those of the theme, `cursor` the
 //! theme's `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in
@@ -269,9 +280,11 @@ roles! {
 }
 
 /// The pairs of roles whose first is text drawn on the second, and must be readable there:
-/// a contrast of at least 4.5 to 1. Every pair of a text role and a ground that the Frame
-/// draws is listed: the sidebar draws quiet text on its own ground, on the selected row's and
-/// on the hovered row's, and its plain text on the hovered row's.
+/// a contrast of at least 4.5 to 1. Every pair of a text role and a ground that the Frame,
+/// the terminal pane and the review pane draw is listed: the sidebar draws quiet text on its
+/// own ground, on the selected row's and on the hovered row's, and its plain text on the
+/// hovered row's; the panes draw `danger`, `success` and `warning` as words on the window's
+/// ground, on `muted` and on `secondary`, and plain text on `muted`.
 pub const READABLE: &[(&str, &str)] = &[
     ("foreground", "background"),
     ("muted_foreground", "background"),
@@ -289,6 +302,14 @@ pub const READABLE: &[(&str, &str)] = &[
     ("foreground", "secondary"),
     ("foreground", "list_hover"),
     ("danger", "background"),
+    ("foreground", "muted"),
+    ("danger", "muted"),
+    ("success", "background"),
+    ("success", "muted"),
+    ("success", "secondary"),
+    ("warning", "background"),
+    ("warning", "muted"),
+    ("warning", "secondary"),
 ];
 
 /// The pairs of roles that must never be the same colour.
@@ -819,7 +840,7 @@ mod tests {
             (
                 ThemeMode::Light,
                 light(),
-                &["warning_foreground", "danger", "muted_foreground"][..],
+                &["danger", "muted_foreground", "success", "warning"][..],
             ),
             (ThemeMode::Dark, dark(), &["warning_foreground"][..]),
         ] {
@@ -977,6 +998,42 @@ mod tests {
             ("muted_foreground", "list_hover"),
             ("sidebar_foreground", "list_hover"),
             ("muted_foreground", "secondary"),
+        ] {
+            assert!(READABLE.contains(&pair), "{pair:?} is drawn and not listed");
+        }
+    }
+
+    #[test]
+    fn the_pairs_the_panes_and_the_settings_screen_draw_are_all_listed_as_readable() {
+        for pair in [
+            // The terminal pane: its notice and quiet lines on the window's ground, its
+            // launchers' line, consent block and attachment line on `muted`, its buttons
+            // on `primary` and `secondary`, its waiting mark on `warning`.
+            ("foreground", "background"),
+            ("muted_foreground", "background"),
+            ("danger", "background"),
+            ("foreground", "muted"),
+            ("danger", "muted"),
+            ("primary_foreground", "primary"),
+            ("secondary_foreground", "secondary"),
+            ("warning_foreground", "warning"),
+            // The review pane: the comparison row's "Reviewed at" on `muted`, the file
+            // row's marks on `secondary`, the rounds' words, the thread states, the marks
+            // of a shared file and the attached review on the pane's own ground, the
+            // flow's entry of the reviewer on `muted`, the hover and the references on
+            // `secondary`.
+            ("success", "background"),
+            ("success", "muted"),
+            ("success", "secondary"),
+            ("warning", "background"),
+            ("warning", "muted"),
+            ("warning", "secondary"),
+            ("muted_foreground", "secondary"),
+            ("foreground", "secondary"),
+            // The settings screen: its notes on the window's ground, its cursor's row on
+            // the hovered row's ground, the control under the pointer on `accent`.
+            ("foreground", "list_hover"),
+            ("accent_foreground", "accent"),
         ] {
             assert!(READABLE.contains(&pair), "{pair:?} is drawn and not listed");
         }
