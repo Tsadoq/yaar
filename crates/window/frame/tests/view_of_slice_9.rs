@@ -532,6 +532,22 @@ fn with_a_detached_workspace_on_screen_the_notice_says_so_and_no_worktree_is_wan
         .workspaces
         .update(&mut cx, |list, cx| list.select(&id('2'), cx));
     cx.simulate_keystrokes(&key);
+    // The key itself takes the notice away, before anything is typed: the field is open
+    // and nothing is said, and Escape does not bring the notice back.
+    assert!(field_is_open(&mut cx), "the field asks for a name");
+    assert_eq!(
+        notice(&shown, &mut cx),
+        None,
+        "the user asking again takes the notice away"
+    );
+    cx.simulate_keystrokes("escape");
+    assert!(!field_is_open(&mut cx), "Escape closes the field");
+    assert_eq!(
+        notice(&shown, &mut cx),
+        None,
+        "Escape brings no notice back"
+    );
+    cx.simulate_keystrokes(&key);
     cx.simulate_input("task");
     cx.simulate_keystrokes("enter");
     let marker = barrier(&shown, &mut cx);
