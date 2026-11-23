@@ -625,8 +625,8 @@ pub enum Request {
     /// take as the name of a branch, a folder that is there already, and a folder the user
     /// named that is not absolute or lies inside the repository; [`Refusal::NoSuchFolder`]
     /// for a folder the user named when something that is not a folder is at it, or when
-    /// nothing is at it and nothing is at its parent folder either (a named folder that
-    /// is not there is made, with the worktree, when its parent is); and
+    /// nothing is at it and its parent folder is not a folder either (a named folder that
+    /// is not there is made, with the worktree, when its parent is a folder); and
     /// [`Refusal::UnknownRevision`] for a `from` that names no branch. When the agent cannot
     /// be started, the worktree and the branch the request made are removed again, and the
     /// refusal says why.

@@ -16,7 +16,9 @@ use gpui_kit::{
     AnyView, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
     point, px,
 };
-use yaar_frame::{BuildPane, Control, Frame, LinkStatus, Models, Opened, Pane, Wanted};
+use yaar_frame::{
+    BuildPane, Control, Frame, LinkStatus, Models, Opened, PROGRAM_CONTEXT, Pane, Wanted,
+};
 use yaar_link::{
     ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
 };
@@ -663,6 +665,21 @@ impl Composed {
     pub fn click_into_the_review_pane(&self, cx: &mut VisualTestContext) {
         let at = self.point_in("review-bar", cx);
         cx.simulate_click(at, Modifiers::none());
+    }
+
+    /// Puts the focus out of a terminal, as a user does with the pane's bar, and waits until
+    /// it is out. Off macOS the keys of the app that are not kept belong to the program while
+    /// a terminal has the focus, so a step that presses one first leaves the terminal. On
+    /// macOS the Cmd keys work in a terminal, and the focus stays where it is: that is what
+    /// the step is shown with there.
+    pub fn leave_the_terminal_off_macos(&self, cx: &mut VisualTestContext) {
+        if cfg!(target_os = "macos") || !self.focus_is_in(PROGRAM_CONTEXT, cx) {
+            return;
+        }
+        self.click_into_the_review_pane(cx);
+        wait_until(cx, "the focus out of the terminal", |cx| {
+            !self.focus_is_in(PROGRAM_CONTEXT, cx)
+        });
     }
 
     /// Clicks at the left end of an element, once it is drawn.

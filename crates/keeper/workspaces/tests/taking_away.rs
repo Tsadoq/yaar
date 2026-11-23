@@ -292,6 +292,12 @@ const CHILD: &str = "YAAR_TAKING_AWAY_IN_THE_CHILD";
 fn opening_fails_and_so_does_the_take_away() {
     let world = world();
     lock_what_is_made(&world);
+    // The test deletes branches below, and git 2.43 leaves a `packed-refs` with only its
+    // header in a repository where a branch that was never packed is deleted, which newer
+    // git does not. A branch made and deleted here has the file there before the snapshot
+    // whichever git runs, so the snapshot shows what the creation and the take-away did.
+    git(&world.repo, &["branch", "spare"]);
+    git(&world.repo, &["branch", "-D", "spare"]);
     git(&world.repo, &["branch", "side"]);
     let before = world.snapshot();
     let planned = world
