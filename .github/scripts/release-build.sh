@@ -1,5 +1,9 @@
 #!/bin/sh
-# Builds the two programs for release, the same way on every machine.
+# Builds the programs the packages ship for release, the same way on every machine: the
+# Window yaar-review, the Keeper yaar-keeper, Claude Code's hook program yaar-claude-hook and
+# tool server yaar-claude-tools, and pi's reporting program yaar-pi-report (packages
+# yaar-window, yaar-keeper, yaar-companion-claude, yaar-adapter-pi). Never standin-lsp, which
+# is a program of the Navigator's tests and of no package.
 #
 #   release-build.sh [cargo arguments, such as --target aarch64-apple-darwin]
 #

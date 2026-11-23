@@ -3,24 +3,32 @@
 # plain archive. Run it on the system the programs were built on (Ubuntu 22.04 for a
 # release), for the processor of that system.
 #
-#   NOTICES=<file> package-linux.sh <window-program> <keeper-program> <version> <out-dir>
+#   NOTICES=<file> package-linux.sh <programs-dir> <version> <out-dir>
+#
+# <programs-dir> holds the five programs as cargo builds them (target/release): yaar-review,
+# yaar-keeper, yaar-claude-hook, yaar-claude-tools, yaar-pi-report. Any other program there
+# (standin-lsp, standin-agent, yaar-script) is never taken.
 #
 # Writes into <out-dir>, and nothing else:
 #   yaar-review_<version>_<arm64|amd64>.deb
 #   yaar-review-<version>-linux-<aarch64|x86_64>.tar.gz
-#   SHA256SUMS      of the .deb and the archives in <out-dir>, so a second run for the other
-#                   processor into the same folder names all four
+# No checksum file: the release's one checksum file is packaging/release/assemble.sh's.
 #
-# Needs: dpkg-deb and dpkg-shlibdeps (packages dpkg, dpkg-dev), tar, gzip, sha256sum.
+# Needs: dpkg-deb and dpkg-shlibdeps (packages dpkg, dpkg-dev), tar, gzip.
 #
 # Layout of the installed .deb:
-#   /usr/bin/yaar-review                    the Window (on PATH, named in the desktop entry)
-#   /usr/libexec/yaar-review/yaar-keeper    the Keeper (not on PATH; the Window starts it)
+#   /usr/bin/yaar-review                          the Window (on PATH, named in the desktop entry)
+#   /usr/libexec/yaar-review/yaar-keeper          the Keeper (not on PATH; the Window starts it)
+#   /usr/libexec/yaar-review/yaar-claude-hook     Claude Code's hook program  } beside the Keeper,
+#   /usr/libexec/yaar-review/yaar-claude-tools    Claude Code's tool server   } which finds them
+#   /usr/libexec/yaar-review/yaar-pi-report       pi's reporting program      } there
 #   /usr/share/applications/io.github.tsadoq.yaar.desktop
 #   /usr/share/icons/hicolor/256x256/apps/io.github.tsadoq.yaar.png
 #   /usr/share/doc/yaar-review/copyright, NOTICE, THIRD-PARTY-NOTICES.txt.gz
 # The archive holds the same tree under yaar-review/ in place of /usr, with LICENSE added
 # and the notices not compressed.
+#
+# Depends: what dpkg-shlibdeps finds in the five programs, then the hand-written part below.
 #
 # Environment:
 #   NOTICES            the third-party notices to put in both packages, from

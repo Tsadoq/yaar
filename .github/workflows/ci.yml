@@ -1,30 +1,54 @@
-# The checks that run on every change.
+# The checks that run on every change, and the release, which is the same run with one
+# condition turned on.
 #
-#   checks-linux    formatting, lints, tests, licences, dependencies planted to see them
-#                   refused, unused dependencies, layout rules, test plan; Node for the
-#                   one test of pi's extension; the real language servers of the tests of
-#                   the Navigator
-#   package-linux   release build on Ubuntu 22.04, the .deb, the archive, an apt repository
-#   install-linux   the install script, piped as a user would, on five releases
-#   macos           lints, tests, layout rules, test plan, release build for both
-#                   processors, the app; Node for the one test of pi's extension; the real
-#                   language servers of the tests of the Navigator
+#   version             the one version number, and whether this run publishes
+#   checks-linux        formatting, lints, tests, licences, dependencies planted to see them
+#                       refused, unused dependencies, layout rules, test plan; Node for the
+#                       one test of pi's extension; the real language servers of the tests of
+#                       the Navigator
+#   macos               lints, tests, layout rules, test plan, release build for both
+#                       processors, the app signed ad hoc; Node for the one test of pi's
+#                       extension; the real language servers of the tests of the Navigator
+#   package-linux       release build on Ubuntu 22.04, the .deb and the archive
+#   assemble            the notices counted against the lock file; the release files, one
+#                       checksum file, the site and the apt repository, signed with a key made
+#                       here and thrown away: the rehearsal of a release, kept as an artifact
+#   install-linux       the install line, the upgrade, the refusals of apt, the start from the
+#                       app menu and the uninstall, on five releases
+#   install-macos       the install line, the start from the Dock, a worktree made by the app
+#                       the system started, and the uninstall
+#   release-sign-macos  PUBLISHING ONLY: the app signed with the Developer ID and notarised
+#   assemble-release    PUBLISHING ONLY: the release files and the site signed with the
+#                       project's key
+#   publish             PUBLISHING ONLY: the GitHub release and the Pages site
 #
-# Linux runs on x86-64 and on arm64. No job needs a display.
+# Linux runs on x86-64 and on arm64. Nothing is published, uploaded or sent to Apple unless
+# the owner starts this workflow by hand on a version tag with the input `publish` on: the
+# job `version` computes that condition once, in its step "What this run is", and the three
+# jobs marked PUBLISHING ONLY run only when it holds. Every other run, a pull request's, a
+# push's and a tag's among them, is the rehearsal and keeps what it built as artifacts.
 name: ci
 
 on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish this tag as a release. Off: a rehearsal that publishes nothing."
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+# A pull request's run gives way to a newer one. A run that publishes is never cancelled,
+# and never cancels the rehearsal of the same tag.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'publish' || 'check' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -34,9 +58,31 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   CARGO_NET_RETRY: "5"
-  APP_VERSION: 0.1.0
 
 jobs:
+  version:
+    name: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.run.outputs.version }}
+      later: ${{ steps.run.outputs.later }}
+      publish: ${{ steps.run.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # THE ONE CONDITION. This run publishes only when the owner started the workflow by
+      # hand with the input `publish` on; the script then refuses unless the run is on the
+      # tag v<version of Cargo.toml>. A push, a tag pushed, a pull request and a run started
+      # by hand with the input off all rehearse and publish nothing.
+      - name: What this run is
+        id: run
+        env:
+          PUBLISH: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: .github/scripts/what-this-run-is.sh
+
   checks-linux:
     name: checks linux ${{ matrix.arch }}
     strategy:
@@ -66,7 +112,7 @@ jobs:
       # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
       # the user's pi runs the extension.
       - name: Node, for the test of pi's extension
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.11.1
           package-manager-cache: false
@@ -168,169 +214,15 @@ jobs:
       - name: Test plan
         run: cargo xtask coverage
 
-  package-linux:
-    name: package linux ${{ matrix.arch }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runner }}
-    # Built on the oldest promised release: a program built on a newer one does not start
-    # on an older one.
-    container: ubuntu:22.04
-    timeout-minutes: 45
-    steps:
-      - name: System packages
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git gcc g++ libc6-dev pkg-config libfontconfig-dev \
-            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file
-
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Rust toolchain named in rust-toolchain.toml
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
-          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
-          "$HOME/.cargo/bin/rustup" toolchain install
-          "$HOME/.cargo/bin/rustc" -vV
-
-      - name: Restore crates and build output
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target
-          key: package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: |
-            package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - name: Notices tool
-        run: .github/scripts/install-tools.sh "$HOME/.cargo/bin" about
-
-      - name: Fetch crates
-        run: cargo fetch --locked
-
-      - name: Release build
-        run: .github/scripts/release-build.sh
-
-      - name: Third-party notices
-        run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt ${{ matrix.arch }}-unknown-linux-gnu
-
-      - name: The .deb and the archive
-        run: |
-          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-linux.sh \
-            target/release/yaar-review target/release/yaar-keeper "$APP_VERSION" site/download
-
-      - name: Package check
-        run: |
-          dpkg-deb --info site/download/*.deb
-          dpkg-deb --contents site/download/*.deb
-          apt-get install -y --no-install-recommends ./site/download/*.deb
-          yaar-review --version
-          ldd /usr/bin/yaar-review
-          test -x /usr/libexec/yaar-review/yaar-keeper
-          dpkg-deb --contents site/download/*.deb > contents.txt
-          grep -q 'usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz' contents.txt
-
-      # The key is made here and thrown away with the job. The key of the published
-      # repository belongs to the release job and is never in this workflow.
-      - name: An apt repository signed with a throwaway key, and the install script beside it
-        run: |
-          eval "$(packaging/apt/make-test-key.sh)"
-          export GNUPGHOME YAAR_APT_KEY
-          packaging/apt/make-apt-repo.sh site/apt site/download/*.deb
-          cp packaging/install.sh site/install.sh
-          gpgconf --homedir "$GNUPGHOME" --kill gpg-agent || true
-          rm -rf "$GNUPGHOME"
-          find site -type f | sort
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: linux-${{ matrix.arch }}
-          path: site/
-          if-no-files-found: error
-
-  install-linux:
-    name: install ${{ matrix.image }} ${{ matrix.arch }}
-    needs: package-linux
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [x86_64, aarch64]
-        image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:12", "debian:13"]
-    runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
-    container: ${{ matrix.image }}
-    timeout-minutes: 15
-    steps:
-      - name: What a user's system has, and a user
-        run: |
-          apt-get update
-          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl sudo python3 procps
-          useradd --create-home tester
-          echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
-
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: linux-${{ matrix.arch }}
-          path: site
-
-      - name: Serve the site as GitHub Pages would
-        run: |
-          cd site
-          nohup python3 -m http.server 8000 --bind 127.0.0.1 > /tmp/server.log 2>&1 &
-          for _ in $(seq 1 50); do curl -fsS http://127.0.0.1:8000/install.sh > /dev/null && break; sleep 0.1; done
-
-      - name: The install line, as a user
-        run: |
-          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
-            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
-            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
-          dpkg-query -W yaar-review
-          apt-cache policy yaar-review
-
-      - name: The programs run, and the Keeper outlives the Window program
-        run: |
-          yaar-review --version
-          sudo -u tester bash -c '
-            set -euo pipefail
-            first=$(yaar-review --keeper-status); echo "$first"
-            second=$(yaar-review --keeper-status); echo "$second"
-            case "$first" in *"started=true"*) ;; *) echo "the first call did not start a Keeper"; exit 1 ;; esac
-            case "$second" in *"started=false"*) ;; *) echo "the second call started another Keeper"; exit 1 ;; esac
-            pid=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^pid=//p")
-            session=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^session=//p")
-            [ "$pid" = "$session" ] || { echo "the Keeper does not lead its own session"; exit 1; }
-            readlink "/proc/$pid/exe"
-            [ "$(readlink "/proc/$pid/exe")" = /usr/libexec/yaar-review/yaar-keeper ]
-          '
-
-      - name: A second run changes nothing, and the uninstall leaves nothing
-        run: |
-          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
-            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
-            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
-          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
-            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash -s -- --uninstall'
-          ! command -v yaar-review
-          ! test -e /etc/apt/sources.list.d/yaar-review.sources
-          ! test -e /etc/apt/keyrings/yaar-review.asc
-
   macos:
     name: macos universal
+    needs: version
     # macOS 26: the version before the current one, which the first release promises on
-    # the strength of this job. No hosted machine runs the current macOS yet.
+    # the strength of this job. The current one is tested on the reference Mac (SYS-04).
     runs-on: macos-26
     timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -338,7 +230,7 @@ jobs:
       # under Node's own type stripping (row PIX-01). Nothing the packages ship holds Node:
       # the user's pi runs the extension.
       - name: Node, for the test of pi's extension
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24.11.1
           package-manager-cache: false
@@ -392,26 +284,33 @@ jobs:
       - name: Test plan
         run: cargo xtask coverage
 
+      # The stand-in agent and the scripted Window, which install-macos drives the
+      # installed app with. Test support, shipped by no package.
+      - name: The programs the install job drives the app with
+        run: cargo build --locked -p yaar-system-tests --bins
+
       - name: Release build, both processors
         run: .github/scripts/release-build.sh --target aarch64-apple-darwin --target x86_64-apple-darwin
 
       - name: Third-party notices
         run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt aarch64-apple-darwin x86_64-apple-darwin
 
-      # Ad hoc: the Developer ID and the notarization login are not in this workflow.
+      # Ad hoc: the Developer ID and the notary key are secrets of the environment
+      # `release`, which only the job release-sign-macos may name.
       - name: The app, the .zip and the disk image, signed ad hoc
         run: |
-          T=target
-          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$APP_VERSION" dist \
-            $T/aarch64-apple-darwin/release/yaar-review $T/x86_64-apple-darwin/release/yaar-review \
-            -- $T/aarch64-apple-darwin/release/yaar-keeper $T/x86_64-apple-darwin/release/yaar-keeper
+          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$VERSION" dist \
+            target/aarch64-apple-darwin/release target/x86_64-apple-darwin/release
 
       - name: Signature and processors
         run: |
           codesign --verify --deep --strict --verbose=2 dist/YAAR.app
           codesign --display --verbose=4 dist/YAAR.app
-          lipo -archs dist/YAAR.app/Contents/MacOS/yaar-review
-          lipo -archs dist/YAAR.app/Contents/Helpers/yaar-keeper
+          for p in MacOS/yaar-review Helpers/yaar-keeper Helpers/yaar-claude-hook \
+                   Helpers/yaar-claude-tools Helpers/yaar-pi-report; do
+            lipo -archs "dist/YAAR.app/Contents/$p"
+            codesign --verify --strict --verbose=1 "dist/YAAR.app/Contents/$p"
+          done
 
       - name: The packaged Window program starts the packaged Keeper, which outlives it
         run: |
@@ -425,11 +324,461 @@ jobs:
           ps -o command= -p "$pid" | grep -q 'YAAR.app/Contents/Helpers/yaar-keeper'
           codesign --verify --verbose=1 "$pid"
 
+      - name: What the Mac bundle holds
+        run: .github/scripts/macos-bundle-check.sh dist/YAAR.app "$VERSION" dist/THIRD-PARTY-NOTICES.txt
+
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-universal
           path: |
             dist/*.dmg
             dist/*.zip
-            dist/SHA256SUMS-macos
           if-no-files-found: error
+
+      # The five programs of each processor, unsigned, and their notices: what the job
+      # release-sign-macos signs. An artifact keeps no execute bit; the packaging script
+      # sets it again.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-programs
+          path: |
+            target/aarch64-apple-darwin/release/yaar-review
+            target/aarch64-apple-darwin/release/yaar-keeper
+            target/aarch64-apple-darwin/release/yaar-claude-hook
+            target/aarch64-apple-darwin/release/yaar-claude-tools
+            target/aarch64-apple-darwin/release/yaar-pi-report
+            target/x86_64-apple-darwin/release/yaar-review
+            target/x86_64-apple-darwin/release/yaar-keeper
+            target/x86_64-apple-darwin/release/yaar-claude-hook
+            target/x86_64-apple-darwin/release/yaar-claude-tools
+            target/x86_64-apple-darwin/release/yaar-pi-report
+            dist/THIRD-PARTY-NOTICES.txt
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-test-programs
+          path: |
+            target/debug/standin-agent
+            target/debug/yaar-script
+          if-no-files-found: error
+
+  package-linux:
+    name: package linux ${{ matrix.arch }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    # Built on the oldest promised release: a program built on a newer one does not start
+    # on an older one.
+    container: ubuntu:22.04
+    timeout-minutes: 45
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git gcc g++ libc6-dev pkg-config libfontconfig-dev \
+            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Rust toolchain named in rust-toolchain.toml
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+          "$HOME/.cargo/bin/rustc" -vV
+
+      - name: Restore crates and build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            package-${{ runner.os }}-${{ matrix.arch }}-ubuntu22.04-${{ hashFiles('rust-toolchain.toml') }}-
+
+      - name: Notices tool
+        run: .github/scripts/install-tools.sh "$HOME/.cargo/bin" about
+
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - name: Release build
+        run: .github/scripts/release-build.sh
+
+      - name: Third-party notices
+        run: packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt ${{ matrix.arch }}-unknown-linux-gnu
+
+      - name: The .deb and the archive
+        run: |
+          NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-linux.sh \
+            target/release "$VERSION" dist
+
+      - name: Package check
+        run: .github/scripts/linux-package-check.sh dist "$VERSION" dist/THIRD-PARTY-NOTICES.txt
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            dist/*.deb
+            dist/*.tar.gz
+          if-no-files-found: error
+
+  assemble:
+    name: assemble
+    needs: [version, macos, package-linux]
+    runs-on: ubuntu-24.04
+    container: ubuntu:24.04
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      LATER: ${{ needs.version.outputs.later }}
+    steps:
+      - name: System packages
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl git dpkg-dev apt-utils gnupg jq unzip xz-utils python3
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # cargo reads the lock file to count what each package links; nothing is compiled.
+      - name: Rust toolchain named in rust-toolchain.toml
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --no-modify-path --profile minimal --default-toolchain none
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" toolchain install
+          "$HOME/.cargo/bin/rustc" -vV
+
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-universal
+          path: packages
+
+      - name: The notices count every linked dependency of the lock file
+        run: packaging/notices-count.sh packages
+
+      - name: The count of the notices can fail
+        run: .github/scripts/notices-can-fail.sh packages
+
+      # The key is made here and thrown away with the job. The project's key is a secret
+      # of the environment `release`, which only the job assemble-release may name.
+      - name: The release files, the site and the apt repository, signed with a throwaway key
+        run: |
+          eval "$(packaging/apt/make-test-key.sh)"
+          export GNUPGHOME YAAR_APT_KEY
+          packaging/release/assemble.sh "$VERSION" packages rehearsal
+          packaging/release/later.sh rehearsal "$LATER"
+          gpgconf --homedir "$GNUPGHOME" --kill gpg-agent || true
+          rm -rf "$GNUPGHOME"
+
+      - name: One checksum file lists every package of the release
+        run: .github/scripts/release-files-check.sh rehearsal/release "$VERSION"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: rehearsal
+          path: rehearsal/
+          if-no-files-found: error
+
+  install-linux:
+    name: install ${{ matrix.image }} ${{ matrix.arch }}
+    needs: [version, assemble]
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        image: ["ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04", "debian:12", "debian:13"]
+    runs-on: ${{ matrix.arch == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      LATER: ${{ needs.version.outputs.later }}
+    steps:
+      - name: What a user's system has, and a user
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            ca-certificates curl sudo python3 procps
+          useradd --create-home tester
+          echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rehearsal
+          path: rehearsal
+
+      - name: Serve the site as GitHub Pages would
+        run: |
+          .github/scripts/serve-site.sh start rehearsal/site rehearsal/release 8000
+          .github/scripts/user-files.sh snapshot tester "$RUNNER_TEMP/user-files-before"
+
+      - name: apt refuses the repository when its index or a package was changed after signing
+        run: .github/scripts/linux-tampered.sh rehearsal
+
+      - name: The install line, as a user
+        run: |
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
+          dpkg-query -W yaar-review
+          apt-cache policy yaar-review
+
+      - name: The programs run, and the Keeper outlives the Window program
+        run: |
+          yaar-review --version
+          sudo -u tester bash -c '
+            set -euo pipefail
+            first=$(yaar-review --keeper-status); echo "$first"
+            second=$(yaar-review --keeper-status); echo "$second"
+            case "$first" in *"started=true"*) ;; *) echo "the first call did not start a Keeper"; exit 1 ;; esac
+            case "$second" in *"started=false"*) ;; *) echo "the second call started another Keeper"; exit 1 ;; esac
+            pid=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^pid=//p")
+            session=$(printf "%s\n" "$first" | tr " " "\n" | sed -n "s/^session=//p")
+            [ "$pid" = "$session" ] || { echo "the Keeper does not lead its own session"; exit 1; }
+            readlink "/proc/$pid/exe"
+            [ "$(readlink "/proc/$pid/exe")" = /usr/libexec/yaar-review/yaar-keeper ]
+          '
+
+      - name: The app starts from the app menu with no terminal
+        run: .github/scripts/linux-launch.sh tester
+
+      - name: A later version arrives with apt-get upgrade
+        run: .github/scripts/linux-upgrade.sh tester rehearsal/site-later "$LATER"
+
+      - name: A second run changes nothing, and the uninstall leaves nothing
+        run: |
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
+          sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
+            bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash -s -- --uninstall'
+          ! command -v yaar-review
+          ! test -e /etc/apt/sources.list.d/yaar-review.sources
+          ! test -e /etc/apt/keyrings/yaar-review.asc
+
+      - name: No file of the app is left in the user's folders
+        run: .github/scripts/user-files.sh check tester "$RUNNER_TEMP/user-files-before"
+
+  install-macos:
+    name: install macos
+    needs: [version, macos, assemble]
+    runs-on: macos-26
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: rehearsal
+          path: rehearsal
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-test-programs
+          path: test-programs
+
+      - name: Serve the site as GitHub Pages would
+        run: |
+          .github/scripts/serve-site.sh start rehearsal/site rehearsal/release 8000
+          .github/scripts/user-files.sh snapshot "$(id -un)" "$RUNNER_TEMP/user-files-before"
+
+      - name: The install line installs the app on macOS
+        run: .github/scripts/macos-install.sh install
+
+      - name: The app starts from the Dock with no terminal
+        run: .github/scripts/macos-launch.sh
+
+      - name: From the app the system started, a worktree is made with an agent, and its hook finds a program of the login path
+        run: .github/scripts/macos-login-path.sh test-programs
+
+      - name: The uninstall removes the app
+        run: .github/scripts/macos-install.sh uninstall
+
+      - name: No file of the app is left in the user's folders
+        run: .github/scripts/user-files.sh check "$(id -un)" "$RUNNER_TEMP/user-files-before"
+
+  # ---------------------------------------------------------------- PUBLISHING ONLY
+  # The three jobs below run only when the job `version` found THE ONE CONDITION true.
+  # Their secrets live in the environments `release` and `github-pages`, which the owner
+  # limits to the tags v*: a job of a pull request or a branch can name neither.
+
+  release-sign-macos:
+    name: release sign macos
+    needs: [version, macos]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: macos-26
+    environment: release
+    timeout-minutes: 60
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-programs
+          path: programs
+
+      - name: A keychain of this job's own, with the Developer ID and the notary key
+        env:
+          MACOS_CERTIFICATE_P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_NOTARY_KEY_P8: ${{ secrets.APPLE_NOTARY_KEY_P8 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+        run: .github/scripts/macos-keychain.sh import
+
+      - name: The app, the .zip and the disk image, signed with the Developer ID and notarised
+        run: |
+          NOTICES=programs/dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$VERSION" signed \
+            programs/target/aarch64-apple-darwin/release programs/target/x86_64-apple-darwin/release
+
+      - name: Gatekeeper accepts the notarized disk image and the app
+        run: .github/scripts/gatekeeper-check.sh signed "$VERSION"
+
+      - name: The keychain and the notary key are removed
+        if: always()
+        run: .github/scripts/macos-keychain.sh remove
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-release
+          path: |
+            signed/*.dmg
+            signed/*.zip
+          if-no-files-found: error
+
+  assemble-release:
+    name: assemble release
+    needs: [version, package-linux, release-sign-macos]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            dpkg-dev apt-utils gnupg jq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: linux-*
+          path: packages
+          merge-multiple: true
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: macos-release
+          path: packages
+
+      - name: The project's key, checked against the fingerprint in the repository
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: .github/scripts/project-key.sh import
+
+      - name: The packages already published
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: .github/scripts/fetch-published-debs.sh previous
+
+      - name: The release files, the site and the apt repository, signed with the project's key
+        run: |
+          PREVIOUS=previous packaging/release/assemble.sh "$VERSION" packages final
+
+      - name: One checksum file lists every package of the release
+        run: .github/scripts/release-files-check.sh final/release "$VERSION"
+
+      - name: The index and the checksums verify with the key the site publishes
+        run: .github/scripts/verify-signed.sh final
+
+      - name: The project's key is removed
+        if: always()
+        run: .github/scripts/project-key.sh remove
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-final
+          path: final/
+          if-no-files-found: error
+
+  # Nothing above has left the runner. This job publishes, in an order in which a failure at
+  # any step leaves every address answering with a whole release: the draft is invisible,
+  # the Pages deployment replaces the site at once, and only the last step makes the new
+  # release the one the install line on macOS and the download page name.
+  publish:
+    name: publish
+    needs: [version, checks-linux, macos, install-linux, install-macos, assemble-release]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    timeout-minutes: 20
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-final
+          path: final
+
+      - name: A draft release with every file
+        run: .github/scripts/publish.sh draft final/release "$VERSION"
+
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: final/site
+
+      - name: The site, deployed
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+      - name: The release, published as the latest
+        run: .github/scripts/publish.sh publish final/release "$VERSION"
+
+      - name: The release is tagged on the public repository, and its source holds the licence
+        run: .github/scripts/publish.sh check final/release "$VERSION"

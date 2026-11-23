@@ -115,6 +115,114 @@ A release therefore publishes, on the site: `install.sh` and `apt/`. As assets o
 release: the archives, the `.zip`, and one `SHA256SUMS` that names them all (the Linux
 and the macOS packaging each write their own list; the release job joins them).
 
+## The release, and what the owner does once
+
+A release is the workflow `ci` run by hand on a version tag with the input `publish` on.
+Every other run of it, a pull request's, a push's or a tag's, is a rehearsal: it builds,
+signs the app ad hoc and the apt repository with a key it makes and throws away, makes the
+checksums, the site and the repository as files, tests them, and keeps them as the artifact
+`rehearsal` of the run. It publishes nothing and sends nothing to Apple. The job `version`
+decides which of the two a run is, in its step "What this run is", and says so in its log.
+
+A run that publishes signs the app with the Developer ID in a keychain of its own on
+GitHub's Mac, has Apple notarise the app and the disk image, staples both, checks them with
+`codesign`, `spctl` and `stapler`, removes the keychain; signs the apt repository and the
+checksum file with the project's key; and only once every job has passed makes the GitHub
+release (a draft first), deploys the Pages site, and then publishes the release as the
+latest.
+
+### The secrets
+
+Six secrets of the environment `release`, which only the jobs `release-sign-macos` and
+`assemble-release` name, and which the environment gives to runs on the tags `v*` only. A
+run of a pull request or of a branch never sees them.
+
+| Secret | What it holds | Form |
+| --- | --- | --- |
+| `MACOS_CERTIFICATE_P12` | The Developer ID Application certificate with its private key | The exported `.p12` file, in base64 |
+| `MACOS_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with | Text |
+| `APPLE_NOTARY_KEY_P8` | An App Store Connect API key, for `notarytool` | The text of the file `AuthKey_<key id>.p8` |
+| `APPLE_NOTARY_KEY_ID` | That key's id | Text, ten characters |
+| `APPLE_NOTARY_ISSUER_ID` | The issuer id of the team's keys | Text, a UUID |
+| `APT_SIGNING_KEY` | The project's OpenPGP key that signs the apt repository and `SHA256SUMS` | The armoured secret key, ed25519, no passphrase on this copy |
+
+The fingerprint of the apt key is public and lies in `apt/project-key.fingerprint`; the job
+refuses a key whose fingerprint differs. The key is made once and never replaced: a client
+that trusts the old key meets a new one with a warning and no error, and stops receiving
+updates.
+
+### Before the first release, once
+
+Each command reads a value from a file, the pasteboard or a prompt; none puts a secret on a
+command line or into a log. `gh` must be logged in as the owner of `Tsadoq/yaar`.
+
+1. The Pages site is built by the workflow:
+
+   ```sh
+   gh api -X POST repos/Tsadoq/yaar/pages -f build_type=workflow
+   ```
+
+2. The environment `release`, for the tags `v*` only, and the same rule on the environment
+   `github-pages` that step 1 made:
+
+   ```sh
+   echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+     | gh api -X PUT repos/Tsadoq/yaar/environments/release --input -
+   gh api -X POST repos/Tsadoq/yaar/environments/release/deployment-branch-policies -f name='v*' -f type=tag
+   echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+     | gh api -X PUT repos/Tsadoq/yaar/environments/github-pages --input -
+   gh api -X POST repos/Tsadoq/yaar/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag
+   ```
+
+3. The certificate. In Keychain Access, under My Certificates, select "Developer ID
+   Application: …" with its key, File > Export Items…, format Personal Information
+   Exchange (`.p12`), saved as `~/Desktop/developer-id.p12` with a new password. Then:
+
+   ```sh
+   base64 -i ~/Desktop/developer-id.p12 | gh secret set MACOS_CERTIFICATE_P12 --env release --repo Tsadoq/yaar
+   gh secret set MACOS_CERTIFICATE_PASSWORD --env release --repo Tsadoq/yaar   # asks; type the password
+   rm ~/Desktop/developer-id.p12
+   ```
+
+4. The notary key. In App Store Connect, Users and Access > Integrations > App Store Connect
+   API > Team Keys, add a key with the access Developer and download it (it can be
+   downloaded once). The page shows its Key ID and the Issuer ID. Then:
+
+   ```sh
+   gh secret set APPLE_NOTARY_KEY_P8 --env release --repo Tsadoq/yaar < ~/Downloads/AuthKey_<KEY ID>.p8
+   gh secret set APPLE_NOTARY_KEY_ID --env release --repo Tsadoq/yaar      # asks; paste the Key ID
+   gh secret set APPLE_NOTARY_ISSUER_ID --env release --repo Tsadoq/yaar   # asks; paste the Issuer ID
+   ```
+
+   Keep the `.p8` file where you keep keys; it is not needed on this Mac again.
+
+5. The apt key, in a checkout of the repository on a branch of its own:
+
+   ```sh
+   export GNUPGHOME="$(mktemp -d)"
+   gpg --batch --passphrase '' --quick-generate-key 'YAAR apt repository' ed25519 sign never
+   gpg --batch --with-colons --list-secret-keys | awk -F: '$1=="fpr"{print $10; exit}' \
+     >> packaging/apt/project-key.fingerprint
+   gpg --batch --armor --export-secret-keys | gh secret set APT_SIGNING_KEY --env release --repo Tsadoq/yaar
+   gpg --batch --armor --export-secret-keys > ~/Desktop/yaar-apt-key.asc   # the copy offline
+   gpgconf --kill gpg-agent; rm -rf "$GNUPGHOME"; unset GNUPGHOME
+   ```
+
+   Move `yaar-apt-key.asc` to where you keep keys offline, then delete it from the Desktop.
+   Commit `packaging/apt/project-key.fingerprint` through a pull request.
+
+### The day of a release
+
+The version in `Cargo.toml` (`[workspace.package]`) is the one number; the pull request
+that raises it is merged first. Then, from the merged commit:
+
+```sh
+git tag v<version> && git push origin v<version>        # a rehearsal runs on the tag
+gh workflow run ci.yml --repo Tsadoq/yaar --ref v<version> -f publish=true
+```
+
+The run refuses a tag that is not `v` and the version of `Cargo.toml`.
+
 ## What was checked, and where
 
 On 2026-11-17, on arm64, in containers inside the VM, with everything served from a local

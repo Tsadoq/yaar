@@ -2,27 +2,55 @@
 # Builds YAAR.app, a .zip and a .dmg from release programs that are already built.
 # Opens nothing and mounts nothing.
 #
-#   package-macos.sh <version> <out-dir> <window-program>... -- <keeper-program>...
+#   package-macos.sh <version> <out-dir> <programs-dir>...
 #
-# One program per processor on each side of `--`; two are merged into a universal file.
+# Each <programs-dir> holds the five programs of one processor as cargo builds them
+# (target/<triple>/release): yaar-review, yaar-keeper, yaar-claude-hook, yaar-claude-tools,
+# yaar-pi-report. Two folders are merged into universal programs with lipo; one is copied. A
+# downloaded artifact keeps no execute bit: each program is made executable here. Any other
+# program of the folder (standin-lsp, standin-agent, yaar-script) is never taken.
+#
+# Writes into <out-dir>, and nothing else:
+#   YAAR.app
+#   yaar-review-<version>-macos-universal.zip   (two folders; -macos-<arm64|x86_64> for one)
+#   yaar-review-<version>-macos-universal.dmg
+# No checksum file: the release's one checksum file is packaging/release/assemble.sh's.
 #
 # Environment:
 #   SIGN_IDENTITY   "-" (default) signs ad hoc, which Gatekeeper rejects on another Mac.
-#                   "Developer ID Application: Name (TEAMID)" signs for distribution.
-#   NOTARY_PROFILE  A keychain profile made with `xcrun notarytool store-credentials`.
-#                   Set together with a Developer ID identity, it UPLOADS the app and the
-#                   disk image to Apple, waits for the verdict and staples the tickets.
-#                   Unset, nothing leaves this machine.
+#                   Otherwise a Developer ID Application identity, by its SHA-1 hash or name.
+#   SIGN_KEYCHAIN   the keychain that holds that identity (codesign --keychain); unset, the
+#                   user's search list.
+#   NOTARY_KEY, NOTARY_KEY_ID, NOTARY_ISSUER
+#                   an App Store Connect API key: the path of its .p8 file, its id, the
+#                   issuer id. Set together with a Developer ID identity, they UPLOAD the app
+#                   and the disk image to Apple (`xcrun notarytool submit --key --key-id
+#                   --issuer --wait`), and staple the tickets to both. Unset, nothing leaves
+#                   this machine.
+#   NOTARY_PROFILE  a keychain profile of `xcrun notarytool store-credentials`, in place of
+#                   the three above, for a run by hand.
 #   NOTICES         The third-party notices to put inside the app, from packaging/notices.sh.
 #                   Required: a package without them may not be handed to anyone.
 #   MIN_MACOS       LSMinimumSystemVersion (default 12.0, the declared floor).
-#   BUILD_NUMBER    CFBundleVersion (default 1).
 #
-# Layout:
-#   YAAR.app/Contents/MacOS/yaar-review      the Window (CFBundleExecutable)
-#   YAAR.app/Contents/Helpers/yaar-keeper    the Keeper, signed with its own identifier
-#   YAAR.app/Contents/Resources/AppIcon.icns
-#   YAAR.app/Contents/Resources/LICENSE, THIRD-PARTY-NOTICES.txt
+# <version> is X.Y.Z (packaging/version.sh refuses anything else) and is both
+# CFBundleShortVersionString and CFBundleVersion.
+#
+# Layout and signing identifiers:
+#   YAAR.app                                   io.github.tsadoq.yaar
+#   YAAR.app/Contents/MacOS/yaar-review        the Window (CFBundleExecutable)
+#   YAAR.app/Contents/Helpers/yaar-keeper      io.github.tsadoq.yaar.keeper
+#   YAAR.app/Contents/Helpers/yaar-claude-hook io.github.tsadoq.yaar.claude-hook
+#   YAAR.app/Contents/Helpers/yaar-claude-tools io.github.tsadoq.yaar.claude-tools
+#   YAAR.app/Contents/Helpers/yaar-pi-report   io.github.tsadoq.yaar.pi-report
+#   YAAR.app/Contents/Resources/AppIcon.icns, LICENSE, THIRD-PARTY-NOTICES.txt
+# The Keeper finds the other three beside its own program. Signed from the inside out, each
+# under the hardened runtime with no entitlement, with a secure timestamp unless ad hoc; then
+# the bundle, which seals them; then the disk image.
+#
+# The log says which signature it made, in one line starting "signature: ":
+#   "signature: ad hoc, not notarised (for tests; Gatekeeper refuses it on another Mac)"
+#   "signature: Developer ID <the identity's name>, notarised and stapled"
 set -euo pipefail
 VER=$1; OUT=$2; shift 2
 WINDOW=(); KEEPER=(); side=window

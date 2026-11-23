@@ -1,12 +1,17 @@
 #!/bin/sh
-# Writes the third-party notices of the two programs for the given targets.
+# Writes the third-party notices of the programs the packages ship, for the given targets.
 #
 #   notices.sh <out-file> <target-triple>...
 #
-# The file opens with the words at the top of notices.hbs, once, and then has one part
-# for each program: what is linked into yaar-review, then what is linked into yaar-keeper.
-# Neither program's dependencies hold the other's. The Keeper links SQLite and its
-# binding, which the Window does not; the Window links the interface toolkit.
+# The file opens with the words at the top of notices.hbs, once, and then has one part for
+# each group of programs, each opened by a line of 80 "=" and a title line:
+#   PART 1 OF 3: THE WINDOW, yaar-review                          (crate yaar-window)
+#   PART 2 OF 3: THE KEEPER, yaar-keeper, AND PI'S REPORTING PROGRAM, yaar-pi-report
+#                                                     (crates yaar-keeper, yaar-adapter-pi)
+#   PART 3 OF 3: CLAUDE CODE'S HOOK PROGRAM AND TOOL SERVER, yaar-claude-hook and
+#                yaar-claude-tools                                (crate yaar-companion-claude)
+# Each part lists what is linked into its programs, from the lock file, with every licence
+# text. packaging/notices-count.sh counts each part against `cargo tree` (row LIC-02).
 #
 # Needs cargo-about (.github/scripts/install-tools.sh <dir> about). Fails when a linked
 # dependency is under a licence that about.toml does not accept.

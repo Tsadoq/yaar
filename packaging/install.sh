@@ -1,30 +1,71 @@
 #!/usr/bin/env bash
-# Installs YAAR (the window program "yaar-review" and the background program "yaar-keeper").
+# Installs YAAR (the window program "yaar-review", the background program "yaar-keeper" and
+# the three programs beside it that the agent CLIs run: "yaar-claude-hook",
+# "yaar-claude-tools" and "yaar-pi-report").
 #
-#   curl -fsSL https://tsadoq.github.io/yaar/install.sh | bash
-#   curl -fsSL https://tsadoq.github.io/yaar/install.sh | bash -s -- --uninstall
-#   curl -fsSL https://tsadoq.github.io/yaar/install.sh | bash -s -- --dry-run   # say what would be done, change nothing
+#   curl -fsSL <base>/install.sh | bash
+#   curl -fsSL <base>/install.sh | bash -s -- --uninstall
+#   curl -fsSL <base>/install.sh | bash -s -- --uninstall --purge
+#   curl -fsSL <base>/install.sh | bash -s -- --dry-run   # say what would be done, change nothing
+#
+# <base> is the one value of packaging/site/base-url. The copy in the repository holds the
+# line DEFAULT_BASE_URL="@BASE_URL@", which packaging/release/assemble.sh replaces when it
+# puts the script on the site; run from the repository unreplaced, the script needs
+# YAAR_BASE_URL and says so.
 #
 # What it does, by system:
 #   Debian, Ubuntu and systems built on them (ID or ID_LIKE in /etc/os-release names debian or
 #   ubuntu, and apt-get exists): saves the repository key to /etc/apt/keyrings/yaar-review.asc,
-#   writes /etc/apt/sources.list.d/yaar-review.sources, runs apt-get update and
-#   apt-get install yaar-review. Uses sudo only when not already root. If apt refuses, the key
-#   and the source file are put back as they were.
+#   writes /etc/apt/sources.list.d/yaar-review.sources (Signed-By that file; never apt-key),
+#   runs apt-get update and apt-get install yaar-review. Uses sudo only when not already root.
+#   If apt refuses, the key and the source file are put back as they were.
 #   Other Linux: downloads the plain archive, checks its SHA-256 against SHA256SUMS, copies the
-#   two programs, the desktop entry, the icon and the licence texts under ~/.local (bin/,
-#   libexec/yaar-review/, share/). No root needed. The run-time libraries are then the user's business; the script
-#   lists what the dynamic linker misses.
-#   macOS: downloads the app as a .zip, checks its SHA-256, unpacks it with ditto, verifies the
-#   code signature, copies YAAR.app to /Applications (or ~/Applications when that is not
-#   writable). It never starts the app.
+#   programs, the desktop entry, the icon and the licence texts under ~/.local (bin/,
+#   libexec/yaar-review/, share/). No root needed. The run-time libraries are then the user's
+#   business; the script lists what the dynamic linker misses.
+#   macOS: downloads yaar-review-<version>-macos-universal.zip, checks its SHA-256 against
+#   SHA256SUMS, unpacks it with ditto, and before it copies anything checks the app: its code
+#   signature (codesign --verify --deep --strict), Gatekeeper's verdict (spctl --assess
+#   --type execute: accepted, from a notarised Developer ID) and the stapled ticket (stapler
+#   validate). Then copies YAAR.app to /Applications (or ~/Applications when that is not
+#   writable). The app came by curl and carries no quarantine mark; the script adds none, as
+#   its own Gatekeeper check stands for the one macOS makes at a first open. When the app
+#   there already has the version downloaded, a second run changes nothing and says so. It
+#   never starts the app.
+#
+# The uninstall, run as the user (it uses sudo only for apt):
+#   1. asks the app to stop: the user's processes whose program is one this script is about
+#      to remove, matched by its full path (the bundle's Contents/MacOS/yaar-review and
+#      Contents/Helpers/yaar-keeper; /usr/bin/yaar-review and
+#      /usr/libexec/yaar-review/yaar-keeper; the same under the archive's prefix), get
+#      SIGTERM, and the script waits up to 10 s for them to end (then SIGKILL). A Keeper of
+#      another copy, a build folder's, is left alone. An agent running in a
+#      terminal of the app ends with them; the script says so before it does it.
+#   2. removes the app: the package (apt-get remove), the files of the archive route, or the
+#      bundle.
+#   3. removes the app's own files from the user's folders: the cache folder
+#      (~/Library/Caches/yaar-review; ${XDG_CACHE_HOME:-~/.cache}/yaar-review); the runtime
+#      folder ($XDG_RUNTIME_DIR/yaar-review); in the data folder (~/Library/Application
+#      Support/yaar-review; ${XDG_DATA_HOME:-~/.local/share}/yaar-review) everything but the
+#      user's reviews: the socket keeper.sock, its lock keeper.sock.lock, the pieces the
+#      Keeper wrote for the agent CLIs (agents/) and any other file; on macOS also what the
+#      system keeps under the app's identifier (~/Library/Saved Application State/
+#      io.github.tsadoq.yaar.savedState, ~/Library/Preferences/io.github.tsadoq.yaar.plist,
+#      the folder io.github.tsadoq.yaar in `getconf DARWIN_USER_CACHE_DIR`); and the folders
+#      /tmp/yaar-review-<16 hex digits> the user owns (the short socket of a long path).
+#   4. keeps the user's reviews, the data folder's store.db (with -wal and -shm) and states/,
+#      and says where they are and that --purge removes them. With --purge the data folder
+#      goes whole.
+#   It touches nothing of the user's repositories and nothing of pi's or Claude Code's own
+#   settings. If the user let the app add its extension to pi's settings, the line naming it
+#   stays there; the script says which line to remove by hand, without reading the file.
 #
 # The script never asks a question: it prints what it is about to do and does it. (sudo may ask
 # for its password on the terminal; that is sudo, not this script.)
 #
 # Environment:
 #   YAAR_BASE_URL      the site with this script and the apt repository
-#                      (default: https://tsadoq.github.io/yaar)
+#                      (default: the value of packaging/site/base-url, put in by assemble.sh)
 #   YAAR_APT_URL       the apt repository                 (default: $YAAR_BASE_URL/apt)
 #   YAAR_RELEASES_URL  the releases page                  (default: https://github.com/Tsadoq/yaar/releases)
 #   YAAR_DOWNLOAD_URL  folder with SHA256SUMS, the archives and the .zip
@@ -34,6 +75,11 @@
 #   YAAR_INSTALL_DIR   target folder of the macOS app     (default: /Applications, else $HOME/Applications)
 #   YAAR_OS_RELEASE    file read instead of /etc/os-release   (for tests)
 #   YAAR_ARCH          processor name instead of `uname -m`   (for tests)
+#   YAAR_ALLOW_UNNOTARIZED   1: on macOS, skip only the check of Gatekeeper's verdict and of
+#                      the ticket, for the rehearsal's app signed ad hoc   (for tests)
+#
+# Exit codes: 0 done (or nothing to do); 1 refused or failed, with nothing changed that was
+# not put back (a sentence says why); 2 a usage error.
 #
 # The whole body is in functions and the only top-level command is the last line, so a download
 # that stops half way runs nothing.

@@ -90,7 +90,66 @@ pub(crate) fn unreadable(command: &str, what: impl Into<String>) -> GitError {
     }
 }
 
+/// The environment the Keeper's runs of git get, once the Keeper has taken the user's login
+/// shell's (`yaar_link::login`).
+///
+/// A Keeper started by a Window that the Finder, the Dock or a desktop's menu started has the
+/// system's short search path, so the user's git would run the user's hooks, and filters such
+/// as `git-lfs`, without the programs of the user's login path. The Keeper therefore takes the
+/// login shell's environment once, at its start, on a thread of its own that never holds an
+/// answer to a Window, and hands what it got here. Until the take has ended every run of git
+/// gets the process's own environment, as before slice 10.
+///
+/// - A run that reads (`Git::command`) gets the taken environment when the take has ended
+///   with one, and the process's own otherwise; it never waits.
+/// - A run of the user's own git (`Git::plain`: the creation of a worktree, the commit
+///   control), which runs the user's hooks, first waits for the take to have ended, for at
+///   most the deadline [`GitEnvironment::waiting`] was given, and then gets the taken
+///   environment, or the process's own when the take failed or the wait ran out.
+/// - Either way the variables that name another repository stay removed, and the settings a
+///   read carries are set over the environment, as before.
+///
+/// Cheap to clone: every clone is the same environment. A `Git` made by [`Git::find`] or
+/// [`Git::at`] has [`GitEnvironment::own`], which never waits and is always the process's
+/// own, so that every test and every caller of slices 1 to 9 runs git as before.
+#[derive(Debug, Clone)]
+pub struct GitEnvironment {
+    // Filled by the builder: the state of the take (under way, ended with an environment,
+    // ended with none) and what waits on it.
+    _state: (),
+}
+
+impl GitEnvironment {
+    /// The process's own environment, for ever: no take was started.
+    pub fn own() -> GitEnvironment {
+        todo!()
+    }
+
+    /// A take is under way. A run of the user's own git waits for it at most `deadline`
+    /// (the shell's own deadline, `yaar_link::login::SHELL_DEADLINE`, for the Keeper).
+    pub fn waiting(_deadline: std::time::Duration) -> GitEnvironment {
+        todo!()
+    }
+
+    /// The take has ended: with the merged environment it gave, or with none when it failed.
+    /// Wakes every run that waits. A second call changes nothing.
+    pub fn ended(&self, _environment: Option<Vec<(OsString, OsString)>>) {
+        todo!()
+    }
+
+    /// The environment a run gets now, without waiting: the taken one once the take ended
+    /// with one; none (the process's own) before that, or when it failed.
+    pub fn now(&self) -> Option<Vec<(OsString, OsString)>> {
+        todo!()
+    }
+}
+
 impl Git {
+    /// This git, whose runs get `environment` as the doc of [`GitEnvironment`] says.
+    pub fn with_environment(self, _environment: GitEnvironment) -> Git {
+        todo!()
+    }
+
     /// The `git` on the search path of this process.
     pub fn find() -> Result<Git, GitError> {
         let search = std::env::var_os("PATH").ok_or(GitError::NotFound)?;

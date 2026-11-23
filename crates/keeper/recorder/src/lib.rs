@@ -64,7 +64,7 @@ mod states;
 mod worktree;
 
 pub use clock::{Clock, SystemClock};
-pub use git::{Git, GitError};
+pub use git::{Git, GitEnvironment, GitError};
 pub use history::{Entry as HistoryEntry, history};
 pub use states::{
     Deleted, RecordError, RecordedState, Recording, SAME_STATE_FOR, StateId, StateStore,

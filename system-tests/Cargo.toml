@@ -10,6 +10,11 @@ publish.workspace = true
 name = "standin-agent"
 path = "src/bin/standin-agent.rs"
 
+# A scripted Window as one command, for the jobs of the workflow that drive the installed app.
+[[bin]]
+name = "yaar-script"
+path = "src/bin/yaar-script.rs"
+
 [dependencies]
 yaar-link.workspace = true
 libc.workspace = true
