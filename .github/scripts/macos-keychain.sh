@@ -89,7 +89,7 @@ if [ "$MODE" = remove ]; then
     while IFS= read -r line; do
       if [ -n "$line" ]; then old+=("$line"); fi
     done < "$OLD_LIST"
-    if ! security list-keychains -d user -s ${old[@]+"${old[@]}"} > /dev/null 2>&1; then
+    if [ ${#old[@]} -gt 0 ] && ! security list-keychains -d user -s "${old[@]}" > /dev/null 2>&1; then
       echo "$SELF: the keychain search list could not be put back as it was" >&2
       status=1
     fi
