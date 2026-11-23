@@ -278,6 +278,22 @@ pub fn controls() -> Vec<Control> {
             asks: Asks::Text,
         },
         Control {
+            title: "Settings…",
+            action: || Box::new(OpenSettings),
+            keystroke: "secondary-,",
+            place: Place::Anywhere,
+            sends: None,
+            asks: Asks::Nothing,
+        },
+        Control {
+            title: "New Worktree with Agent…",
+            action: || Box::new(NewWorktree),
+            keystroke: "secondary-shift-n",
+            place: Place::Anywhere,
+            sends: Some(Sends::Request(RequestKind::CreateWorktree)),
+            asks: Asks::Text,
+        },
+        Control {
             title: "Toggle Sidebar",
             action: || Box::new(ToggleSidebar),
             keystroke: "secondary-b",
