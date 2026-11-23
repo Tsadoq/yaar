@@ -11,6 +11,11 @@
 # make-apt-repo.sh to site-later/apt. The pool then holds both versions of each processor,
 # and the first version's .deb keeps its bytes (the check: cmp against release/).
 #
+# The later index is signed in a later second than the first: apt keeps its copy of InRelease
+# when the server's copy is not newer to the second, so a machine that updated from the first
+# site would not see the second. The script waits, polling, for the clock to pass the first
+# one's second, and fails if the later InRelease is not newer.
+#
 # Exit codes: 0 written; 1 failed; 2 usage error.
 set -euo pipefail
 umask 022
@@ -55,9 +60,23 @@ while IFS= read -r deb; do
   REPACKED+=("$("$ROOT/packaging/apt/repack-version.sh" "$deb" "$LATER" "$SCRATCH/later")")
 done <<< "$DEBS"
 
+# apt asks for InRelease with If-Modified-Since the time of the copy it holds, to the second,
+# and keeps its copy on a 304. A second site signed in the very second of the first would not
+# replace the index of a machine that updated from the first, so wait, polling, until the
+# clock has passed the second of the first one's InRelease.
+FIRST_SIGNED=$(stat -c %Y "$OUTDIR/site/apt/dists/stable/InRelease") || fail "cannot read the time of $OUTDIR/site/apt/dists/stable/InRelease"
+DEADLINE=$(($(date +%s) + 10))
+while [ "$(date +%s)" -le "$FIRST_SIGNED" ]; do
+  [ "$(date +%s)" -lt "$DEADLINE" ] || fail "the clock stays at the second $(date +%s) of the first InRelease, $FIRST_SIGNED"
+  sleep 0.2
+done
+
 cp -a "$OUTDIR/site" "$OUTDIR/site-later"
 MADE=1
 "$ROOT/packaging/apt/make-apt-repo.sh" "$OUTDIR/site-later/apt" "${REPACKED[@]}"
+
+[ "$(stat -c %Y "$OUTDIR/site-later/apt/dists/stable/InRelease")" -gt "$FIRST_SIGNED" ] \
+  || fail "$OUTDIR/site-later/apt/dists/stable/InRelease is not newer than the first site's, by the second"
 
 # The first version keeps its bytes, and both versions are in the pool.
 while IFS= read -r deb; do
