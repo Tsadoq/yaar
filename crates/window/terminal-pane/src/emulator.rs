@@ -1293,20 +1293,23 @@ mod tests {
     }
 
     #[test]
-    fn a_program_asking_for_colours_is_told_a_dark_background() {
+    fn a_program_asking_for_colours_is_told_the_themes_and_xterms_for_the_cube() {
         let mut emulator = emulator();
+        emulator.set_colours(theme::dark().terminal);
         assert_eq!(
             replies_to(&mut emulator, "\x1b]11;?\x1b\\"),
-            "\x1b]11;rgb:1e1e/1e1e/1e1e\x1b\\"
+            "\x1b]11;rgb:0a0a/0a0a/0a0a\x1b\\"
         );
         assert_eq!(
             replies_to(&mut emulator, "\x1b]10;?\x07"),
-            "\x1b]10;rgb:d4d4/d4d4/d4d4\x07"
+            "\x1b]10;rgb:fafa/fafa/fafa\x07"
         );
+        // Colour 1 is the dark theme's red.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;1;?\x07"),
-            "\x1b]4;1;rgb:cdcd/0000/0000\x07"
+            "\x1b]4;1;rgb:f8f8/7171/7171\x07"
         );
+        // The cube and the greys are xterm's whatever the theme.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;196;?\x07"),
             "\x1b]4;196;rgb:ffff/0000/0000\x07"
@@ -1488,6 +1491,156 @@ mod tests {
         assert_eq!(row[3].fg, Color::Named(NamedColor::BrightRed));
         assert!(row[3].style.dim && row[3].style.hidden);
         assert_eq!(row[4].fg, Color::Named(NamedColor::Foreground));
+    }
+
+    /// An emulator of five lines whose program wrote the numbered lines `1` to `count`
+    /// and left the cursor after the last, so that the first `count - 5` are history.
+    fn written(count: usize) -> Emulator {
+        let mut emulator = emulator();
+        let text: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
+        emulator.advance(text.join("\r\n").as_bytes());
+        emulator
+    }
+
+    #[test]
+    fn clearing_drops_the_history_and_the_lines_above_the_cursor_and_keeps_the_rest() {
+        // Twelve lines: seven in the history, five on the screen, the cursor on the last.
+        let mut emulator = written(12);
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        emulator.scroll_to_bottom();
+
+        emulator.clear_above_the_cursor();
+
+        assert_eq!(emulator.lines(), ["12", "", "", "", ""]);
+        assert_eq!(
+            emulator.screen().cursor.map(|c| (c.line, c.column)),
+            Some((0, 2))
+        );
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 0, "no history is left");
+
+        // What the program writes next follows the cursor.
+        emulator.advance(b"!\r\nnext");
+        assert_eq!(emulator.lines(), ["12!", "next", "", "", ""]);
+    }
+
+    #[test]
+    fn clearing_with_the_cursor_above_other_lines_keeps_them_in_place_under_it() {
+        let mut emulator = emulator();
+        emulator.advance(b"1\r\n2\r\n3\r\n4\r\n5");
+        // The cursor goes to the third line, where a multi-line prompt would have it.
+        emulator.advance(b"\x1b[3;1H");
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), ["3", "4", "5", "", ""]);
+        assert_eq!(
+            emulator.screen().cursor.map(|c| (c.line, c.column)),
+            Some((0, 0))
+        );
+    }
+
+    #[test]
+    fn clearing_with_the_cursor_on_the_first_line_drops_only_the_history() {
+        let mut emulator = written(12);
+        emulator.advance(b"\x1b[H");
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 0);
+    }
+
+    #[test]
+    fn clearing_brings_the_view_back_to_the_newest_line_and_takes_the_selection_away() {
+        let mut emulator = written(12);
+        emulator.scroll_to_top();
+        emulator.select(
+            CellPlace { line: 0, column: 0 },
+            CellPlace { line: 1, column: 0 },
+        );
+        assert!(emulator.selected_text().is_some());
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.scrolled_back(), 0);
+        assert_eq!(emulator.selected_text(), None);
+        assert_eq!(emulator.lines()[0], "12");
+    }
+
+    #[test]
+    fn clearing_on_the_alternate_screen_changes_nothing_and_the_history_is_still_there_after() {
+        let mut emulator = written(12);
+        emulator.advance(b"\x1b[?1049h\x1b[Halt\r\nscreen");
+        let before = emulator.lines();
+        emulator.clear_above_the_cursor();
+        assert_eq!(emulator.lines(), before);
+        emulator.advance(b"\x1b[?1049l");
+        assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+    }
+
+    #[test]
+    fn the_scroll_keys_stop_at_the_ends_of_the_history() {
+        let mut emulator = written(12);
+        emulator.scroll_to_bottom();
+        assert_eq!(emulator.scrolled_back(), 0);
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        assert_eq!(emulator.lines()[0], "1");
+        emulator.scroll_to_top();
+        assert_eq!(emulator.scrolled_back(), 7);
+        emulator.scroll_to_bottom();
+        assert_eq!(emulator.lines()[0], "8");
+    }
+
+    #[test]
+    fn selecting_all_takes_the_history_and_the_screen_down_to_the_cursor() {
+        let mut emulator = written(12);
+        // The view is at the newest line: the mark covers the whole view, which ends at the
+        // cursor's line.
+        let marked = emulator.select_all();
+        assert_eq!(
+            marked,
+            (
+                CellPlace { line: 0, column: 0 },
+                CellPlace {
+                    line: 4,
+                    column: 19
+                }
+            )
+        );
+        let expected: Vec<String> = (1..=12).map(|n| n.to_string()).collect();
+        assert_eq!(emulator.selected_text(), Some(expected.join("\n")));
+    }
+
+    #[test]
+    fn selecting_all_stops_at_the_last_line_with_text_or_the_cursor_and_marks_what_is_in_view() {
+        let mut emulator = emulator();
+        emulator.advance(b"a\r\nb\r\nc");
+        // The cursor above the last text: the text is the end.
+        emulator.advance(b"\x1b[1;1H");
+        let marked = emulator.select_all();
+        assert_eq!(emulator.selected_text().as_deref(), Some("a\nb\nc"));
+        assert_eq!(marked.1.line, 2);
+        // The cursor below the last text: the cursor's line is the end.
+        emulator.advance(b"\x1b[5;1H");
+        let marked = emulator.select_all();
+        assert_eq!(marked.1.line, 4);
+        assert_eq!(emulator.selected_text().as_deref(), Some("a\nb\nc\n\n"));
+    }
+
+    #[test]
+    fn selecting_all_in_a_view_scrolled_into_the_history_marks_the_view_as_far_as_it_goes() {
+        let mut emulator = written(12);
+        emulator.scroll_to_top();
+        let marked = emulator.select_all();
+        // The selection's end lies below what the view shows: every line of it is marked.
+        assert_eq!(marked.1.line, 4);
+        assert_eq!(
+            emulator.selected_text().map(|text| text.lines().count()),
+            Some(12)
+        );
+        emulator.clear_selection();
+        assert_eq!(emulator.selected_text(), None);
     }
 
     #[test]
