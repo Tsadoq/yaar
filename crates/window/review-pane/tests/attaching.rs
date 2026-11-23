@@ -915,7 +915,19 @@ fn next_offered_agent_moves_the_choice_over_the_clis_the_offer_does_not_hold(
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(third.clone()));
-    assert_eq!(chosen(&stage, &mut cx), Some(third));
+    assert_eq!(chosen(&stage, &mut cx), Some(third.clone()));
+    assert_eq!(notice(&stage, &mut cx), None);
+
+    // The Window's choice is `third`, which a new offer of the first two CLIs lacks: the
+    // offer shows `claude`, and `claude` is also the CLI after `third` in the list. A step
+    // must go past it to `pi`, or the key would seem to do nothing.
+    attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
+    assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(third));
+    assert_eq!(chosen(&stage, &mut cx), Some(claude()));
+    cx.simulate_keystrokes("ctrl-n");
+    assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(pi()));
+    assert_eq!(chosen(&stage, &mut cx), Some(pi()));
+    assert!(mark_is_over("pi", &["claude"], &mut cx));
     assert_eq!(notice(&stage, &mut cx), None);
 }
 

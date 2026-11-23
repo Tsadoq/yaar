@@ -1627,7 +1627,7 @@ fn what_a_turn_end_selects_follows_the_setting_the_keeper_tells_with_no_key_pres
 }
 
 #[gpui_kit::test]
-fn a_pane_opened_where_the_setting_is_already_set_keeps_the_selection_from_its_first_frame(
+fn a_pane_opened_where_the_setting_is_already_set_keeps_the_selection_before_any_key_or_fact(
     cx: &mut TestAppContext,
 ) {
     let (models, keeper) = link_up_staged(

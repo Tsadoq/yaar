@@ -827,7 +827,9 @@ struct ShownDiff {
 /// `review-text-<index>-new:<text>`, where the text is what the row hands to the text
 /// system for that line: the line, or of a line of more than 1,024 bytes its start.
 /// The tree of Changes above the rows carries `review-history-<index>` on the entry at
-/// `index` of the history and `review-history-uncommitted` on the last, and the heading of a
+/// `index` of the history and `review-history-uncommitted` on the last; the words an entry
+/// draws are carried by an element inside it as `review-history-<index>:<words>` and
+/// `review-history-uncommitted:<words>`; and the heading of a
 /// file that no agent made, in the uncommitted changes, carries `review-no-agent-<index of its
 /// row>`; the heading of a file that a session other than the review's own is credited with
 /// too carries `review-shared-<index of its row>`.
