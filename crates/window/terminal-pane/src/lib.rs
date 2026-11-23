@@ -13,7 +13,8 @@
 //! - [`TerminalPane`], the view of the pane and the model of what it shows: its
 //!   terminals, which are shown, which has the focus; and [`TerminalView`], one terminal;
 //! - [`Emulator`], the screen of one terminal as its program's output builds it, with
-//!   the answers the terminal owes the program;
+//!   the answers the terminal owes the program, and [`colour_of`], the one function that
+//!   picks the colour a cell is drawn in, from the applied theme's terminal colours;
 //! - [`encode_key`], [`encode_release`], [`encode_paste`], [`encode_focus`] and
 //!   [`encode_mouse`], what input sends to a program in each state of its terminal, with
 //!   [`Modes`], [`KeyboardFlags`], [`IMPLEMENTED_FLAGS`] and [`OptionKey`].
@@ -22,6 +23,12 @@
 //! workspace on screen; it sends the program what is typed and draws what the program
 //! writes. It holds several terminals and shows one, or two side by side in the split
 //! view. The Keeper owns the terminals and their programs: closing the window ends none.
+//!
+//! Option, on macOS, is Meta or types the layout's characters as the user's setting says
+//! (`yaar_frame::SettingList::option_key`), and with none made as the keyboard layout
+//! says; on every other system it is Meta. The chosen agent CLI is the Frame's one
+//! (`yaar_frame::AgentList::chosen_cli`), and the pane makes a worktree with an agent in it
+//! when the Frame wants one (`yaar_frame::Wanted::Worktree`).
 //!
 //! It depends on the Frame and on no other pane.
 
@@ -179,6 +186,12 @@ pub fn pane() -> BuildPane {
 /// of a session's resume. [`InstallAgentExtensions`] (`secondary-alt-e`) and
 /// [`KeepAgentExtensionsOut`] (`secondary-alt-shift-e`) work anywhere and send
 /// [`RequestKind::AnswerConsent`], yes and no to an Adapter's question for leave.
+///
+/// On macOS six more kept keys work inside a terminal and send the program nothing:
+/// [`Clear`] (`cmd-k`), [`SelectAll`] (`cmd-a`), [`ScrollToTop`] (`cmd-home`),
+/// [`ScrollToBottom`] (`cmd-end`), [`ScrollLineUp`] (`cmd-up`) and [`ScrollLineDown`]
+/// (`cmd-down`). On Linux the keys are the program's: only Ctrl-Shift-C and Ctrl-Shift-V
+/// are kept in a terminal there, and the six actions have no key.
 pub fn controls() -> Vec<Control> {
     let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
     let nothing = |title, action: fn() -> Box<dyn Action>, keystroke, place| Control {
@@ -310,38 +323,38 @@ pub fn controls() -> Vec<Control> {
             asks: Asks::Nothing,
         },
     ];
-    // The Mac terminals' keys. On Linux only Ctrl-Shift-C and Ctrl-Shift-V are kept in a
-    // terminal, and every other key reaches the program.
-    #[cfg(target_os = "macos")]
-    table.extend([
-        nothing("Clear", || Box::new(Clear), "cmd-k", in_a_terminal),
-        nothing("Select All", || Box::new(SelectAll), "cmd-a", in_a_terminal),
-        nothing(
-            "Scroll to Top",
-            || Box::new(ScrollToTop),
-            "cmd-home",
-            in_a_terminal,
-        ),
-        nothing(
-            "Scroll to Bottom",
-            || Box::new(ScrollToBottom),
-            "cmd-end",
-            in_a_terminal,
-        ),
-        nothing(
-            "Scroll Line Up",
-            || Box::new(ScrollLineUp),
-            "cmd-up",
-            in_a_terminal,
-        ),
-        nothing(
-            "Scroll Line Down",
-            || Box::new(ScrollLineDown),
-            "cmd-down",
-            in_a_terminal,
-        ),
-    ]);
+    table.extend(mac_controls());
     table
+}
+
+/// The keys the Mac terminals have for the history and the screen, kept keys of a
+/// terminal. On Linux only Ctrl-Shift-C and Ctrl-Shift-V are kept there, and every other
+/// key reaches the program, so these actions have no key.
+#[cfg(target_os = "macos")]
+fn mac_controls() -> Vec<Control> {
+    let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
+    let nothing = |title, action: fn() -> Box<dyn Action>, keystroke| Control {
+        title,
+        action,
+        keystroke,
+        place: in_a_terminal,
+        sends: None,
+        asks: Asks::Nothing,
+    };
+    vec![
+        nothing("Clear", || Box::new(Clear), "cmd-k"),
+        nothing("Select All", || Box::new(SelectAll), "cmd-a"),
+        nothing("Scroll to Top", || Box::new(ScrollToTop), "cmd-home"),
+        nothing("Scroll to Bottom", || Box::new(ScrollToBottom), "cmd-end"),
+        nothing("Scroll Line Up", || Box::new(ScrollLineUp), "cmd-up"),
+        nothing("Scroll Line Down", || Box::new(ScrollLineDown), "cmd-down"),
+    ]
+}
+
+/// See the macOS one: none.
+#[cfg(not(target_os = "macos"))]
+fn mac_controls() -> Vec<Control> {
+    Vec::new()
 }
 
 /// One terminal of the pane, with what the pane keeps beside its view.

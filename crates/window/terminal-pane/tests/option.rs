@@ -83,6 +83,7 @@ impl Typing {
 }
 
 /// What the key under Option types on the layout of the test platform.
+#[cfg(target_os = "macos")]
 const CHARACTER: &[u8] = "ƒ".as_bytes();
 
 /// Escape, then the letter: Option as Meta.

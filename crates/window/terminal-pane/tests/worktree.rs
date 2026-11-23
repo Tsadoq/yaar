@@ -127,10 +127,8 @@ fn a_worktree_wanted_is_asked_for_at_the_panes_size_and_its_agent_shows_in_the_n
                 && panes.focused_terminal(cx).as_ref() == Some(&second)
         },
     );
-    assert_eq!(
-        panes.pane.read_with(&cx, |pane, _| pane.shown()),
-        [second.clone()]
-    );
+    let shown = panes.pane.read_with(&cx, |pane, _| pane.shown());
+    assert_eq!(shown, vec![second.clone()]);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.workspace(&second)),
         Some(workspace_id('2'))

@@ -432,8 +432,8 @@ impl TerminalPane {
                 agent,
                 review,
             } => (workspace, agent, review),
-            // A worktree with an agent: the terminal pane's package of slice 9 sends it, as
-            // `crate::worktree_wanted` says.
+            // A worktree with an agent, which is not a terminal of one workspace: see
+            // `worktree_wanted`.
             Wanted::Worktree { .. } => return self.worktree_wanted(wanted, cx),
         };
         self.notice = None;
