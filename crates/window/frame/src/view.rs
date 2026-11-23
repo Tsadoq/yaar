@@ -21,6 +21,7 @@ use crate::link_model::{KeeperLink, LinkStatus};
 use crate::models::Models;
 use crate::settings_screen::SettingsScreen;
 use crate::sidebar::{Sidebar, workspace_name};
+use crate::theme::Appearance;
 use crate::trace;
 
 /// A pane, as the Frame holds it. The Frame knows nothing else of a pane: it lays the
@@ -1254,6 +1255,15 @@ pub fn open(
 ) -> Result<Opened> {
     let link = cx.new(|_| KeeperLink::new());
     let models = Models::new(link.clone(), cx);
+    // The system's setting is what the application reports for its windows, told to the
+    // model before the window exists, so that the first frame, which the toolkit draws
+    // inside its opening of the window, is in YAAR's definition of the system's mode and
+    // not in the toolkit's own colours of it. Until a theme the user named arrives from the
+    // Keeper, the window follows the system either way.
+    let system = Appearance::from(cx.window_appearance());
+    models
+        .looks
+        .update(cx, |looks, cx| looks.system_is(system, cx));
     let bounds = Bounds::centered(None, size(px(1280.), px(800.)), cx);
     let options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),

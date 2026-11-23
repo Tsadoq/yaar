@@ -109,6 +109,48 @@ fn shows(
 }
 
 #[gpui_kit::test]
+fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_with_nobody_telling_it(
+    cx: &mut TestAppContext,
+) {
+    cx.update(gpui_kit::init);
+    // The kit is in a mode and colours of its own that no definition holds: what the first
+    // frame would be drawn in were nothing applied before the window is opened.
+    cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
+    // The Keeper is not reached from here: no socket answers at this place, and the
+    // program that would be started is looked for beside the test, where there is none.
+    let opened = cx.update(|cx| {
+        yaar_frame::open(
+            std::path::PathBuf::from("/nonexistent/yaar/keeper.sock"),
+            "9.9.9",
+            Vec::new(),
+            cx,
+        )
+        .expect("open the window")
+    });
+
+    // Nobody told the model the system's setting, and it holds the application's: the
+    // test platform's, which is light. The definition applied is the built-in light one, in
+    // the toolkit's colours and in what the terminal reads.
+    let (system, definition) = opened
+        .models
+        .looks
+        .read_with(cx, |looks, _| (looks.system(), looks.applied().clone()));
+    assert_eq!(
+        system,
+        Some(Appearance::Light),
+        "the system the model holds"
+    );
+    assert_eq!(definition, light());
+    let (mode, colors, held) = cx.update(|cx| {
+        let theme = cx.global::<Theme>();
+        (theme.mode, Colors::of(&theme.colors), applied(cx))
+    });
+    assert_eq!(mode, ThemeMode::Light, "the toolkit's mode");
+    assert_eq!(colors, light().colors, "the toolkit's colours");
+    assert_eq!(held, light(), "the definition `applied` gives");
+}
+
+#[gpui_kit::test]
 fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut TestAppContext) {
     // The kit is in a mode the definitions would not leave it in if `Looks` applied one:
     // dark, where the light one is what `applied` holds before anything was applied.

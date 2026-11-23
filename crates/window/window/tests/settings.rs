@@ -435,7 +435,9 @@ fn world_with_two_turns() -> World {
 // application's start, outside any update of the app, where the toolkit has told the window's
 // observers by the time the window is open. The test opens its window inside an update, where
 // that notice comes only when the update ends, so the model is read inside the update, before
-// it can come: what the model holds then is what the Window program told it at the opening.
+// it can come: what the model holds then is what the Frame's `open` told it, before the window
+// existed. The Window program's own tell at the opening (step 1 of `appearance`) only repeats
+// it, and nothing here can tell it from its absence.
 #[gpui_kit::test]
 fn the_model_of_the_theme_holds_the_systems_appearance_the_moment_the_window_program_has_the_window(
     cx: &mut TestAppContext,

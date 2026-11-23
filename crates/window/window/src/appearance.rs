@@ -4,16 +4,22 @@
 //! [`follow_system`] runs as soon as a window is opened:
 //!
 //! 1. it tells `Looks::system_is` the window's appearance at once (`Window::appearance`,
-//!    turned into `yaar_frame::theme::Appearance`), so that the model holds it as soon as
-//!    the Window program has the window. The first frame is drawn inside the toolkit's
-//!    opening of the window, before this runs, in the toolkit's own colours of the
-//!    system's mode. The toolkit tells an observer of the window's appearance when the
-//!    outermost update of the app ends. The program opens its window outside any update,
-//!    so there that notice has come before this runs and step 2's observer does not exist
-//!    yet: this tell is the only one at the opening, and without it the model would know
-//!    nothing of the system until it changed. A window opened inside an update, as the
-//!    component tests open theirs, has the notice come after step 2's observer is in
-//!    place, which tells the model the same value;
+//!    turned into `yaar_frame::theme::Appearance`). This only repeats what `yaar_frame::open`
+//!    did before it opened the window: it told the model the application's appearance
+//!    (`App::window_appearance`), so that the first frame, which the toolkit draws inside
+//!    its opening of the window, is in YAAR's definition of the system's mode. The repeat
+//!    tells the model the value it holds already, which applies nothing and tells nobody,
+//!    and only the window's own value can differ from the application's. No test can tell
+//!    it from its absence: the test platform's window and application both report light.
+//!    What the opening is held to is the Frame's test of `open` and the Window's test that
+//!    the model holds the appearance the moment `open_panes` returns, which `open` makes
+//!    true. The toolkit tells an observer of the window's appearance when the outermost
+//!    update of the app ends. The program opens its window outside any update, so there that
+//!    notice has come before this runs and step 2's observer does not exist yet: the tell
+//!    of `open` is the only one at the opening, and without it the model would know nothing
+//!    of the system until it changed. A window opened inside an update, as the component
+//!    tests open theirs, has the notice come after step 2's observer is in place, which
+//!    tells the model the same value;
 //! 2. it observes the window's appearance (`Window::observe_window_appearance`, the
 //!    subscription detached for the window's life) and tells `Looks::system_is` each change;
 //! 3. it observes `Looks`: when a forced appearance is let go, which is when the user's

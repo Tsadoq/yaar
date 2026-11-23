@@ -40,8 +40,9 @@
 //!
 //! A test plays the system at [`Looks::system_is`]: GPUI's test platform reports a light
 //! system and gives a test no way to change it (its window's `simulate_appearance_change`
-//! is not public), so a component test tells the model what the platform would. That the
-//! Window program tells it at the opening is shown by the composed Window's test: until
+//! is not public), so a component test tells the model what the platform would. [`crate::open`]
+//! tells it the application's appearance before it opens the window, which the Frame's test
+//! of `open` shows; a model made by [`crate::Models::new`] alone is told nothing, and until
 //! told, [`Looks::system`] is none.
 
 use gpui_kit::component::theme::{Theme, ThemeMode};
