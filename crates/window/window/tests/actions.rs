@@ -26,7 +26,7 @@ use yaar_frame::{
     Asks, Beside, CloseWindow, Control, PROGRAM_CONTEXT, Place, SETTINGS_CONTEXT, Sends,
 };
 use yaar_link::{
-    Attachment, CommentId, ConsentAnswer, Fact, FlowForm, Head, Origin, Program, Request,
+    Attachment, CommentId, ConsentAnswer, Fact, FlowForm, Head, Origin, Program, Refusal, Request,
     RequestKind, ReviewId, Setting, TerminalPlace, ThreadId, ThreadState, TurnEndSelects,
     Workspace, WorkspaceId,
 };
@@ -1951,9 +1951,17 @@ impl Composed {
     }
 
     /// Sets the base of the workspace on screen to `base` as a user does, by the control
-    /// that sends that request, and waits until the request has passed the tap. Returns
-    /// its place among the requests the tap lists, or none when the stop-everything frame
-    /// passes the tap first: it ends the Keeper, and the request would never pass.
+    /// that sends that request, and waits until the request has passed the tap and the
+    /// Keeper has refused it, as it does every base the walk sets: none names a branch.
+    /// Returns the request's place among the requests the tap lists, or none when the
+    /// stop-everything frame passes the tap first: it ends the Keeper, and the request
+    /// would never pass.
+    ///
+    /// The Keeper answers a Window's requests one at a time on the connection's thread, and
+    /// a base is read from git before it is refused. A walk that went on once the request
+    /// was on the tap would queue one such request after another in front of every request
+    /// the later steps wait for, and the wait of a step would count the queue of the steps
+    /// before it against its deadline. Each step ends with the Keeper caught up instead.
     fn set_base(&mut self, base: &str, cx: &mut VisualTestContext) -> Option<usize> {
         let control = controls_that_send(RequestKind::SetBase)
             .into_iter()
@@ -1996,6 +2004,21 @@ impl Composed {
             .iter()
             .position(sets_it)
             .expect("the tap lists the request it waited for");
+        let refused = Refusal::UnknownRevision {
+            revision: base.to_owned(),
+        };
+        let models = self.models.workspaces.clone();
+        wait_until_telling(
+            cx,
+            &format!("the Keeper to refuse the base {base}"),
+            |cx| models.read_with(cx, |list, _| list.refusal() == Some(&refused)),
+            |cx| {
+                Some(format!(
+                    "the Frame held the refusal {:?}",
+                    models.read_with(cx, |list, _| list.refusal().cloned())
+                ))
+            },
+        );
         Some(from + found)
     }
 }
@@ -2143,6 +2166,23 @@ fn walk_the_silent_keys(
                 control.title
             );
         };
+        // The Keeper answers a Window's requests one at a time, on the connection's thread.
+        // A step that went on before the answer to its base was here would leave the
+        // requests of the steps after it queued behind the git work of this one, and a
+        // wait of a later step would count that queue against its deadline.
+        let base = format!("after-{}-{step}", control.key());
+        let refusal = window
+            .models
+            .workspaces
+            .read_with(&*cx, |list, _| list.refusal().cloned());
+        assert_eq!(
+            refusal,
+            Some(Refusal::UnknownRevision { revision: base }),
+            "the step of the key {} of {} went on before the Keeper had answered the request \
+             that closes it",
+            control.key(),
+            control.title
+        );
         let passed = window.tap.requests();
         for request in &passed[before..closed] {
             assert_ne!(
