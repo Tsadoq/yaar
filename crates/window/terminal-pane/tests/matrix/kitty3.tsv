@@ -313,12 +313,12 @@ kitty3	up	1b5b41	ghostty m-ghostty-kitty7 plain+up (its :1 press marker and flag
 kitty3	shift-up	1b5b313b3241	ghostty m-ghostty-kitty7 s+up (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	alt-up	1b5b313b3341	ghostty m-ghostty-kitty7 a+up (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty3	cmd-up		ghostty m-ghostty-kitty7 m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	cmd-up		ghostty m-ghostty-kitty7 m+up (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty3	down	1b5b42	ghostty m-ghostty-kitty7 plain+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	shift-down	1b5b313b3242	ghostty m-ghostty-kitty7 s+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	alt-down	1b5b313b3342	ghostty m-ghostty-kitty7 a+down (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty3	cmd-down		ghostty m-ghostty-kitty7 m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	cmd-down		ghostty m-ghostty-kitty7 m+down (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty3	left	1b5b44	ghostty m-ghostty-kitty7 plain+left (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	shift-left	1b5b313b3244	ghostty m-ghostty-kitty7 s+left (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	alt-left	1b62	ghostty m-ghostty-kitty7 a+left
@@ -333,12 +333,12 @@ kitty3	home	1b5b48	ghostty m-ghostty-kitty7 plain+home (its :1 press marker and 
 kitty3	shift-home	1b5b313b3248	ghostty m-ghostty-kitty7 s+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	alt-home	1b5b313b3348	ghostty m-ghostty-kitty7 a+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	ctrl-home	1b5b313b3548	ghostty m-ghostty-kitty7 c+home (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
-kitty3	cmd-home		ghostty m-ghostty-kitty7 m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	cmd-home		ghostty m-ghostty-kitty7 m+home (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty3	end	1b5b46	ghostty m-ghostty-kitty7 plain+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	shift-end	1b5b313b3246	ghostty m-ghostty-kitty7 s+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	alt-end	1b5b313b3346	ghostty m-ghostty-kitty7 a+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
 kitty3	ctrl-end	1b5b313b3546	ghostty m-ghostty-kitty7 c+end (its :1 press marker and flag 4's alternate key left out: the app grants only flags 1 and 2)
-kitty3	cmd-end		ghostty m-ghostty-kitty7 m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty3	cmd-end		ghostty m-ghostty-kitty7 m+end (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty3	pageup	1b5b357e	ghostty m-ghostty-kitty7 plain+pageup
 kitty3	alt-pageup	1b5b353b337e	ghostty m-ghostty-kitty7 a+pageup
 kitty3	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-kitty7 c+pageup

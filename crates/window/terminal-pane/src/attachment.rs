@@ -29,7 +29,9 @@ use gpui_kit::*;
 use yaar_frame::{AskError, Wanted};
 use yaar_link::{Attachment, Fact, Program, Reply, Request, ReviewId, SessionState, TerminalId};
 
-use crate::{AddressEachComment, DetachAttachment, TerminalPane, ViewAttachment};
+use crate::{
+    AddressEachComment, DetachAttachment, TerminalPane, ViewAttachment, WORKTREE_BEING_MADE,
+};
 
 /// The sentence the one control types at the agent's prompt.
 pub const ADDRESS_EACH_COMMENT: &str = "Address each comment.";
@@ -339,6 +341,81 @@ impl TerminalPane {
         )
     }
 
+    /// The Frame wants a worktree made with an agent in it, [`Wanted::Worktree`]: sends
+    /// `Request::CreateWorktree` with the pane's size, and on `Reply::WorktreeCreated` shows
+    /// the agent's terminal and gives it the focus as for a terminal the pane opened, in the
+    /// new workspace, which the Frame puts on screen with the list that holds it
+    /// (`WorkspaceList::want_on_screen`); the output that comes after the reply is that
+    /// terminal's. While the answer is awaited the pane's notice says the worktree of the
+    /// branch is being made ([`WORKTREE_BEING_MADE`] and the branch); a refusal is the
+    /// notice, as for a terminal.
+    pub(crate) fn worktree_wanted(&mut self, wanted: &Wanted, cx: &mut Context<Self>) {
+        let Wanted::Worktree {
+            repository,
+            from,
+            branch,
+            agent,
+        } = wanted
+        else {
+            return;
+        };
+        self.notice = Some(format!("{WORKTREE_BEING_MADE} {branch}"));
+        let request = Request::CreateWorktree {
+            repository: repository.clone(),
+            from: from.clone(),
+            branch: branch.clone(),
+            agent: agent.clone(),
+            size: self.size,
+        };
+        let asked = self
+            .models
+            .link
+            .update(cx, |link, cx| link.ask(request, cx));
+        let program = Program::Agent {
+            agent: agent.clone(),
+        };
+        // Detached, as the question for a shell is: a task that is dropped is cancelled,
+        // and its answer lost. The pane is held weakly, so a pane that is gone takes no
+        // answer.
+        cx.spawn(async move |pane, cx| {
+            let answer = asked.await;
+            pane.update(cx, |pane, cx| pane.worktree_made(program, answer, cx))
+                .ok();
+        })
+        .detach();
+        cx.notify();
+    }
+
+    /// Takes the Keeper's answer to the question for a worktree made with an agent. The
+    /// agent's terminal is added as one the pane opened would be, in the new workspace, and
+    /// the Frame is asked to put that workspace on screen: at once when its list holds it,
+    /// else when the list that does arrives, which the Keeper tells about the time of its
+    /// reply, either side of it. The terminal has the focus when the workspace is on screen.
+    /// A refusal is the notice.
+    fn worktree_made(
+        &mut self,
+        program: Program,
+        answer: Result<Reply, AskError>,
+        cx: &mut Context<Self>,
+    ) {
+        match answer {
+            Ok(Reply::WorktreeCreated {
+                workspace,
+                terminal,
+            }) => {
+                self.notice = None;
+                self.focus_on_arrival = Some(workspace.clone());
+                self.add_opened(workspace.clone(), program, terminal, cx);
+                self.models
+                    .workspaces
+                    .update(cx, |list, cx| list.want_on_screen(workspace, cx));
+            }
+            Ok(_) => self.notice = Some(AskError::Unexpected.to_string()),
+            Err(error) => self.notice = Some(error.to_string()),
+        }
+        cx.notify();
+    }
+
     /// A pane wants a terminal opened: for [`Wanted::AgentFor`], the launcher of that CLI
     /// in that workspace for that review, `yaar_link::Program::AgentFor`, as
     /// [`crate::NewTerminal`] opens a shell. It is shown and takes the focus as that
@@ -349,11 +426,16 @@ impl TerminalPane {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Wanted::AgentFor {
-            workspace,
-            agent,
-            review,
-        } = wanted;
+        let (workspace, agent, review) = match wanted {
+            Wanted::AgentFor {
+                workspace,
+                agent,
+                review,
+            } => (workspace, agent, review),
+            // A worktree with an agent, which is not a terminal of one workspace: see
+            // `worktree_wanted`.
+            Wanted::Worktree { .. } => return self.worktree_wanted(wanted, cx),
+        };
         self.notice = None;
         let program = Program::AgentFor {
             agent: agent.clone(),

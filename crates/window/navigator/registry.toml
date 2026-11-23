@@ -197,10 +197,11 @@ trial = ["--version"]
 args = ["lsp"]
 ready = { kind = "answer" }
 
-# Rust: rust-analyzer, with no copy of the project's own: the program of that name found on
-# the search path, in the path's order (rustup's, which runs the toolchain the project
-# pins, wherever it lies in that order), then the one the app downloaded. It needs the
-# machine's Rust toolchain, which no row can supply.
+# Rust: rust-analyzer. The project's own is rustup's proxy, in the cargo folder (CARGO_HOME,
+# else the home folder's `.cargo`), which runs the rust-analyzer of the toolchain the project
+# pins; it lies outside the repository, so it is tried first and asks no question. Then the
+# program of that name found on the search path, in the path's order, then the one the app
+# downloaded. It needs the machine's Rust toolchain, which no row can supply.
 [rust]
 title = "Rust"
 markers = ["Cargo.toml"]
@@ -210,6 +211,7 @@ rs = "rust"
 
 [[rust.server]]
 name = "rust-analyzer"
+project = ["{env:CARGO_HOME}/bin/rust-analyzer", "{env:HOME}/.cargo/bin/rust-analyzer"]
 machine = ["rust-analyzer"]
 trial = ["--version"]
 ready = { kind = "notification", method = "experimental/serverStatus", match = { quiescent = true } }
@@ -229,10 +231,14 @@ checkOnSave = false
 cargo = { targetDir = "{target}" }
 
 # Cargo, which the server runs to read the project, fetches nothing: no crate index and no
-# crate reaches the user's cargo folder because a review looked at the code.
+# crate reaches the user's cargo folder because a review looked at the code. rustup's proxy
+# installs no toolchain a project names and the machine lacks: it fails at once, and the next
+# copy is tried. RUSTUP_AUTO_INSTALL=0 is honoured from rustup 1.28 on; an older proxy ignores
+# it and may begin a download, which the trial's deadline cuts off.
 [rust.server.environment]
 CARGO_TARGET_DIR = "{target}"
 CARGO_NET_OFFLINE = "true"
+RUSTUP_AUTO_INSTALL = "0"
 
 [[rust.server.download]]
 platform = "darwin-arm64"

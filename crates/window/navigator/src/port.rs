@@ -339,6 +339,12 @@ pub enum Ask {
         /// None when the folder holds the version; else the reason, as a sentence.
         failed: Option<String>,
     },
+    /// The time a workspace stays off screen before its servers stop, as the user set it:
+    /// it takes the place of `NavigatorConfig::stop_after` at once, and the clock is looked
+    /// at against it before the next event is handled, so that a workspace off screen that
+    /// long already has its servers stopped then. The Frame's model tells it at its connect
+    /// when the user set one, and at each change.
+    StopAfter(std::time::Duration),
 }
 
 /// What the Navigator tells the Frame's model.

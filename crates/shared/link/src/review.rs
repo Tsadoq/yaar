@@ -183,10 +183,18 @@ pub struct Thread {
     /// Its state, as the Keeper works it out from the fields above, by the one rule of
     /// [`ThreadState`]: what the review pane lists for it.
     pub state: ThreadState,
-    /// Where it sits in the newest recorded state of the worktree the Keeper carried it
-    /// to, with what that state did to the lines it was written on; none while it sits
-    /// where its anchor says, as before the first state after it, and for a thread the
-    /// Keeper does not carry: one on the old side, or on a file outside the worktree.
+    /// Where it sits in the state the Keeper last carried it to, with what that state did
+    /// to the lines it was written on. The Keeper carries a thread forward only, to each
+    /// recorded state of the worktree it follows, so this is the newest recorded state once
+    /// the Keeper has followed that one, and an older one until then (a state recorded
+    /// outside the Keeper's own recording is never followed). None while it sits where
+    /// its anchor says, as before the first state after it, and for a thread on a file
+    /// outside the worktree, which the Keeper does not carry. On the old side the place
+    /// names a commit: an open thread there whose place names the commit the changes are
+    /// counted from, whatever change it was written on, gets a place naming the new commit
+    /// once that commit moved. A resolved thread keeps the place it had, also when it was
+    /// carried before it was resolved, and one whose place names another commit or a state
+    /// is not moved by it.
     pub now: Option<Placed>,
 }
 
@@ -212,7 +220,8 @@ pub enum ThreadState {
 /// Where a thread sits now, after the code it was written on changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
-    /// The version it sits in now: the full id of the recorded state it was carried to.
+    /// The version it sits in now: the full id of the recorded state it was carried to, or,
+    /// for a thread on the old side, the commit the changes are counted from.
     pub tree: String,
     /// The path of the file in that version: the path a renamed file has now. A file that
     /// was deleted keeps the path it had.

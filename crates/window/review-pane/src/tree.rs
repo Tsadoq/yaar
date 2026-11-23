@@ -15,8 +15,8 @@ use crate::actions::words;
 use crate::draw::ROW_HEIGHT;
 use crate::turns::Offer;
 use crate::{
-    ChangeShown, FocusHistory, FocusRows, HISTORY_CONTEXT, HistoryDown, HistoryUp, MarkChange,
-    ReviewPane, ShowChange,
+    ChangeShown, EXPIRED_TURN, FocusHistory, FocusRows, HISTORY_CONTEXT, HistoryDown, HistoryUp,
+    MarkChange, ReviewPane, ShowChange,
 };
 
 /// How many entries of the tree are in view at the most. A longer history scrolls inside
@@ -144,6 +144,7 @@ fn version_of(entry: &HistoryEntry) -> Option<&str> {
     match entry {
         HistoryEntry::Commit(commit) => Some(&commit.id),
         HistoryEntry::Turn { state, .. } => state.as_deref(),
+        HistoryEntry::ExpiredTurn { .. } => None,
     }
 }
 
@@ -167,7 +168,7 @@ pub(crate) fn checked_out(history: &History) -> Option<String> {
         .rev()
         .find_map(|entry| match entry {
             HistoryEntry::Commit(commit) => Some(commit.id.clone()),
-            HistoryEntry::Turn { .. } => None,
+            HistoryEntry::Turn { .. } | HistoryEntry::ExpiredTurn { .. } => None,
         })
         .or_else(|| history.start.clone())
 }
@@ -757,6 +758,47 @@ impl ReviewPane {
         )
     }
 
+    /// What the row of entry `index` says, and whether the entry can be selected. A turn
+    /// whose state was not kept, and one whose recording expired, can not.
+    fn entry_words(&self, index: usize, cx: &App) -> (String, bool) {
+        let entries = self
+            .tree
+            .history
+            .as_ref()
+            .map_or(&[][..], |history| &history.entries[..]);
+        let who = |session: &yaar_link::SessionId| {
+            self.models
+                .agents
+                .read(cx)
+                .session(session)
+                .map_or("An agent".to_owned(), |session| session.title.clone())
+        };
+        match entries.get(index) {
+            Some(HistoryEntry::Commit(commit)) => (
+                format!(
+                    "{} {}",
+                    commit.id.get(..7).unwrap_or(&commit.id),
+                    commit.summary
+                ),
+                true,
+            ),
+            Some(HistoryEntry::Turn { session, state, .. }) => match state {
+                Some(_) => (format!("{}, a turn", who(session)), true),
+                None => (
+                    format!("{}, a turn (its state was not kept)", who(session)),
+                    false,
+                ),
+            },
+            Some(HistoryEntry::ExpiredTurn { session, .. }) => {
+                (format!("{}, {EXPIRED_TURN}", who(session)), false)
+            }
+            None => {
+                let count = self.tree.uncommitted.as_ref().map_or(0, Vec::len);
+                (format!("Uncommitted changes ({count})"), true)
+            }
+        }
+    }
+
     /// The entry at `index` of the tree as a row.
     fn draw_entry(&self, index: usize, window: &Window, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
@@ -773,31 +815,13 @@ impl ReviewPane {
         };
         let here = self.tree.cursor == Some(index) && self.tree.focus.is_focused(window);
         let marked = self.tree.marked.contains(&index);
-        let (label, selectable) = match entries.get(index) {
-            Some(HistoryEntry::Commit(commit)) => (
-                format!(
-                    "{} {}",
-                    commit.id.get(..7).unwrap_or(&commit.id),
-                    commit.summary
-                ),
-                true,
-            ),
-            Some(HistoryEntry::Turn { session, state, .. }) => {
-                let who = self
-                    .models
-                    .agents
-                    .read(cx)
-                    .session(session)
-                    .map_or("An agent".to_owned(), |session| session.title.clone());
-                match state {
-                    Some(_) => (format!("{who}, a turn"), true),
-                    None => (format!("{who}, a turn (its state was not kept)"), false),
-                }
-            }
-            None => {
-                let count = self.tree.uncommitted.as_ref().map_or(0, Vec::len);
-                (format!("Uncommitted changes ({count})"), true)
-            }
+        let (label, selectable) = self.entry_words(index, cx);
+        // The words the row draws are in the selector of the text, as the other labels'
+        // are: "review-history-<index>:<words>", "review-history-uncommitted:<words>".
+        let words_selector = if uncommitted {
+            format!("review-history-uncommitted:{label}")
+        } else {
+            format!("review-history-{index}:{label}")
         };
         let row = div()
             .h(ROW_HEIGHT)
@@ -828,7 +852,11 @@ impl ReviewPane {
                     .w(px(10.))
                     .child(if marked { "●" } else { "" }),
             )
-            .child(label);
+            .child(
+                div()
+                    .child(label)
+                    .debug_selector(move || words_selector.clone()),
+            );
         if uncommitted {
             row.debug_selector(|| "review-history-uncommitted".to_owned())
         } else {

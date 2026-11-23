@@ -75,7 +75,7 @@ ring = "=0.17.14"
 flate2 = "=1.1.11"
 tar = { version = "=0.4.46", default-features = false }
 # A file's address for a language server, and back.
-url = "=2.5.8"
+url = "=2.5.9"
 # Text match: the two libraries ripgrep is built from, at the versions the measures of the
 # design were taken with.
 ignore = "=0.4.34"

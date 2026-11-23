@@ -21,11 +21,17 @@
 //!   [`ThreadState`] of a thread, where it sits now ([`Placed`]) and the [`Notice`] of
 //!   code that changed under it, and the [`AgentCli`]s offered when a review is attached;
 //!   and the [`Consent`] of an Adapter that asks the user's leave before it writes into
-//!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave;
+//!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave; and
+//!   what slice 9 adds: the settings of the whole app ([`TurnEndSelects`],
+//!   [`ThemeChoice`], [`TerminalPlace`], [`OptionKey`]), and the room the recorded states
+//!   take ([`StateSizes`] with each workspace's [`StateSize`]);
 //! - [`Age`], how the side that sent a hello stands to this one in version;
 //! - [`socket_path`], [`socket_address`], [`data_dir`] and [`cache_dir`], the places both
 //!   programs find by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
-//!   reaches the Keeper makes sure it is the user's own.
+//!   reaches the Keeper makes sure it is the user's own;
+//! - [`user_shell`], the user's login shell, which both programs find by the same rule: the
+//!   Keeper runs it in each terminal, and the Window takes the environment it prints for the
+//!   language servers.
 //!
 //! A message travels as one frame: a length of four bytes, little endian, that counts what
 //! follows; one byte that names the kind; the payload.
@@ -48,6 +54,7 @@ mod agent;
 mod request;
 mod review;
 mod setting;
+mod states;
 mod terminal;
 mod wire;
 mod workspace;
@@ -70,7 +77,8 @@ pub use review::{
     ReviewId, Round, SentBy, SessionId, Side, Thread, ThreadId, ThreadState, TurnId,
     WorkspaceReviews,
 };
-pub use setting::{FlowForm, Setting};
+pub use setting::{FlowForm, OptionKey, Setting, TerminalPlace, ThemeChoice, TurnEndSelects};
+pub use states::{StateSize, StateSizes};
 pub use terminal::{Ending, Program, TerminalId, TerminalSize};
 pub use workspace::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, FileSides, FileStatus,
@@ -95,8 +103,10 @@ use wire::{In, Out};
 /// session. 8: the agent CLIs the Keeper has an Adapter for, what a review shows of a
 /// change with who is credited with each file, and the turn a round was sent in. 9: a
 /// version of a workspace written into a folder of the app's cache as the old side of a
-/// diff, and the user's answer on the language servers inside a repository, a setting.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// diff, and the user's answer on the language servers inside a repository, a setting. 10:
+/// the settings of the whole app, a worktree made with an agent in one step, the room the
+/// recorded states take and their clean-up, and a turn whose state expired.
+pub const PROTOCOL_VERSION: u16 = 10;
 
 /// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
@@ -500,6 +510,68 @@ pub fn cache_dir() -> PathBuf {
     cache_dir_from(|name| std::env::var_os(name).map(PathBuf::from))
 }
 
+/// The user's shell: `SHELL` from this process's environment when it names, by an absolute
+/// path, a file that can be run; else the shell of the user's entry in the system's list
+/// of users; else `/bin/sh`. The Keeper runs it as the login shell of each terminal, and
+/// the Window runs it once to take the environment the language servers run in.
+pub fn user_shell() -> PathBuf {
+    shell_from(std::env::var_os("SHELL"), passwd_shell)
+}
+
+/// The choice of [`user_shell`], with the value of `SHELL` and the look at the system's
+/// list of users handed in.
+fn shell_from(
+    variable: Option<std::ffi::OsString>,
+    passwd: impl FnOnce() -> Option<PathBuf>,
+) -> PathBuf {
+    variable
+        .map(PathBuf::from)
+        .filter(|shell| can_run(shell))
+        .or_else(|| passwd().filter(|shell| can_run(shell)))
+        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
+}
+
+/// An absolute path to a file with an execute bit.
+fn can_run(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.is_absolute()
+        && std::fs::metadata(path)
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+}
+
+/// The shell in the entry of the user this process runs as, in the system's list of
+/// users.
+fn passwd_shell() -> Option<PathBuf> {
+    // SAFETY: `getpwuid_r` fills the entry and the buffer it is given, and the entry's
+    // strings point into that buffer, which outlives their use below.
+    unsafe {
+        let size = libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX);
+        let mut buffer = vec![0 as libc::c_char; if size > 0 { size as usize } else { 1024 }];
+        loop {
+            let mut entry: libc::passwd = std::mem::zeroed();
+            let mut found: *mut libc::passwd = std::ptr::null_mut();
+            let rc = libc::getpwuid_r(
+                libc::geteuid(),
+                &mut entry,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut found,
+            );
+            if rc == libc::ERANGE && buffer.len() < 1 << 20 {
+                buffer.resize(buffer.len() * 2, 0);
+                continue;
+            }
+            if rc != 0 || found.is_null() || entry.pw_shell.is_null() {
+                return None;
+            }
+            let shell = std::ffi::CStr::from_ptr(entry.pw_shell).to_bytes();
+            return (!shell.is_empty()).then(|| {
+                PathBuf::from(std::ffi::OsString::from(std::ffi::OsStr::from_bytes(shell)))
+            });
+        }
+    }
+}
+
 fn cache_dir_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     let set = |name: &str| var(name).filter(|v| !v.as_os_str().is_empty());
     let home = set("HOME").unwrap_or_else(|| PathBuf::from("/"));
@@ -885,6 +957,73 @@ mod tests {
     }
 
     #[test]
+    fn a_setting_of_the_app_is_the_same_thing_as_any_other_of_its_kind_and_no_other() {
+        // Two values of each kind of the app's settings.
+        let pairs = [
+            (
+                Setting::TurnEnd(TurnEndSelects::WhatChanged),
+                Setting::TurnEnd(TurnEndSelects::KeepSelection),
+            ),
+            (
+                Setting::StopAfter { seconds: 60 },
+                Setting::StopAfter { seconds: 600 },
+            ),
+            (
+                Setting::Theme(ThemeChoice::System),
+                Setting::Theme(ThemeChoice::Named("Dark".to_owned())),
+            ),
+            (
+                Setting::TerminalPlace(TerminalPlace::Right),
+                Setting::TerminalPlace(TerminalPlace::Left),
+            ),
+            (
+                Setting::KeepStates { days: 30 },
+                Setting::KeepStates { days: 1 },
+            ),
+            (
+                Setting::OptionKey(OptionKey::ByLayout),
+                Setting::OptionKey(OptionKey::Meta),
+            ),
+        ];
+        let form = Setting::FlowForm {
+            workspace: WorkspaceId::new("1".repeat(32)),
+            form: FlowForm::Timeline,
+        };
+        for (at, (one, other)) in pairs.iter().enumerate() {
+            assert!(one.same_thing_as(other), "{one:?}");
+            assert!(other.same_thing_as(one), "{other:?}");
+            assert!(
+                !one.same_thing_as(&form) && !form.same_thing_as(one),
+                "{one:?}"
+            );
+            for (elsewhere, (third, _)) in pairs.iter().enumerate() {
+                assert_eq!(
+                    one.same_thing_as(third),
+                    at == elsewhere,
+                    "{one:?} {third:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_folder_for_worktrees_is_the_same_thing_as_another_of_its_repository_and_no_other() {
+        let of = |repository: &str, folder: Option<&str>| Setting::WorktreesFolder {
+            repository: RepositoryId::new(repository.repeat(32)),
+            folder: folder.map(PathBuf::from),
+        };
+        assert!(of("3", Some("/a")).same_thing_as(&of("3", None)));
+        assert!(of("3", None).same_thing_as(&of("3", Some("/b"))));
+        assert!(!of("3", Some("/a")).same_thing_as(&of("4", Some("/a"))));
+        let answer = Setting::ServersInRepository {
+            repository: RepositoryId::new("3".repeat(32)),
+            allowed: true,
+        };
+        assert!(!of("3", None).same_thing_as(&answer) && !answer.same_thing_as(&of("3", None)));
+        assert!(!of("3", None).same_thing_as(&Setting::KeepStates { days: 30 }));
+    }
+
+    #[test]
     fn the_cache_folder_is_where_the_environment_says() {
         let env = |pairs: &'static [(&'static str, &'static str)]| {
             move |name: &str| {
@@ -1179,6 +1318,18 @@ mod tests {
                 version: COMMIT.to_owned(),
                 into: PathBuf::from("/home/a/.cache/yaar-review/navigator/7/old/1"),
             },
+            Request::CreateWorktree {
+                repository: RepositoryId::new("0123456789abcdef0123456789abcdef"),
+                from: "origin/main".to_owned(),
+                branch: "feature/é-login".to_owned(),
+                agent: "pi".to_owned(),
+                size: TerminalSize {
+                    columns: 120,
+                    rows: 40,
+                },
+            },
+            Request::GetStateSizes,
+            Request::CleanUpStates,
         ];
         // The two other answers to a question for leave.
         let refused = Request::AnswerConsent {
@@ -1415,6 +1566,29 @@ mod tests {
                     repository: RepositoryId::new("44444444444444444444444444444444"),
                     allowed: false,
                 },
+                Setting::TurnEnd(TurnEndSelects::WhatChanged),
+                Setting::TurnEnd(TurnEndSelects::KeepSelection),
+                Setting::StopAfter { seconds: 1 },
+                Setting::StopAfter { seconds: u32::MAX },
+                Setting::Theme(ThemeChoice::System),
+                Setting::Theme(ThemeChoice::Named("Light".to_owned())),
+                Setting::Theme(ThemeChoice::Named("Sépia".to_owned())),
+                Setting::TerminalPlace(TerminalPlace::Right),
+                Setting::TerminalPlace(TerminalPlace::Below),
+                Setting::TerminalPlace(TerminalPlace::Left),
+                Setting::KeepStates { days: 30 },
+                Setting::KeepStates { days: u32::MAX },
+                Setting::OptionKey(OptionKey::ByLayout),
+                Setting::OptionKey(OptionKey::Meta),
+                Setting::OptionKey(OptionKey::Characters),
+                Setting::WorktreesFolder {
+                    repository: RepositoryId::new("33333333333333333333333333333333"),
+                    folder: Some(PathBuf::from("/src/worktrees de l'été")),
+                },
+                Setting::WorktreesFolder {
+                    repository: RepositoryId::new("44444444444444444444444444444444"),
+                    folder: None,
+                },
             ]),
             Reply::Settings(Vec::new()),
             Reply::Answer {
@@ -1468,6 +1642,27 @@ mod tests {
                 ),
             ]),
             Reply::Consents(Vec::new()),
+            Reply::WorktreeCreated {
+                workspace: workspace.clone(),
+                terminal: terminal(),
+            },
+            Reply::StateSizes(StateSizes {
+                workspaces: vec![
+                    StateSize {
+                        workspace: workspace.clone(),
+                        bytes: 36_864,
+                    },
+                    StateSize {
+                        workspace: WorkspaceId::new("22222222222222222222222222222222"),
+                        bytes: u64::MAX / 2,
+                    },
+                ],
+                total: u64::MAX,
+            }),
+            Reply::StateSizes(StateSizes {
+                workspaces: Vec::new(),
+                total: 0,
+            }),
         ];
         let refusals = [
             Refusal::NoSuchFolder {
@@ -1546,6 +1741,14 @@ mod tests {
             }),
             Fact::ConsentsChanged(vec![consent(ConsentAnswer::Yes, None)]),
             Fact::ConsentsChanged(Vec::new()),
+            Fact::StatesDeleted {
+                workspace: workspace.clone(),
+            },
+            Fact::SettingChanged(Setting::Theme(ThemeChoice::Named("Dark".to_owned()))),
+            Fact::SettingChanged(Setting::WorktreesFolder {
+                repository: RepositoryId::new("33333333333333333333333333333333"),
+                folder: None,
+            }),
             Fact::Step {
                 workspace,
                 session: session_id(),
@@ -1766,6 +1969,10 @@ mod tests {
                     turn: turn_id(),
                     session: session_id(),
                     state: None,
+                },
+                HistoryEntry::ExpiredTurn {
+                    turn: turn_id(),
+                    session: session_id(),
                 },
             ],
         }
@@ -2011,9 +2218,14 @@ mod tests {
                 RequestKind::ReopenThread,
                 RequestKind::ResolveAddressed,
                 RequestKind::AnswerConsent,
+                RequestKind::CreateWorktree,
+                RequestKind::CleanUpStates,
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
+        // The Window reads the sizes of the recorded states to show them, when the
+        // settings screen opens and after a fact says they changed.
+        assert_eq!(RequestKind::GetStateSizes.origin(), Origin::Window);
         // The Window reads the reviews to show them, and keeps what the user types in a
         // comment box by itself: no control stands for either.
         assert_eq!(RequestKind::GetReviews.origin(), Origin::Window);
@@ -2208,5 +2420,58 @@ mod tests {
             Head::Detached("89abcdef0123456789abcdef0123456789abcdef".to_owned()).label(),
             "detached at 89abcde"
         );
+    }
+
+    fn executable(path: &Path, mode: u32) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::write(path, "#!/bin/sh\n").expect("write a file");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+            .expect("set its mode");
+    }
+
+    fn shell_folder(name: &str) -> PathBuf {
+        let folder =
+            std::env::temp_dir().join(format!("yaar-link-unit-{}-{name}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("make a folder");
+        folder
+    }
+
+    #[test]
+    fn shell_names_a_program_by_an_absolute_path_that_can_be_run() {
+        let folder = shell_folder("shell");
+        let runnable = folder.join("runnable");
+        let not_runnable = folder.join("not-runnable");
+        executable(&runnable, 0o755);
+        executable(&not_runnable, 0o644);
+        // What the system's list of users names, which the test chooses.
+        let listed = folder.join("listed");
+        executable(&listed, 0o755);
+        let from_list = || Some(listed.clone());
+
+        // `SHELL` wins when it can be run, and the list is not asked.
+        assert_eq!(
+            shell_from(Some(runnable.clone().into()), || panic!("asked the list")),
+            runnable
+        );
+        // Otherwise the shell of the list of users.
+        for other in [
+            Some(not_runnable.clone().into()),
+            Some(folder.clone().into()),
+            Some(folder.join("missing").into()),
+            Some("sh".into()),
+            Some("".into()),
+            None,
+        ] {
+            assert_eq!(shell_from(other.clone(), from_list), listed, "{other:?}");
+        }
+        // And `/bin/sh` when that cannot be run either.
+        for listed in [None, Some(not_runnable), Some(PathBuf::from("sh"))] {
+            assert_eq!(
+                shell_from(None, || listed.clone()),
+                PathBuf::from("/bin/sh"),
+                "{listed:?}"
+            );
+        }
+        std::fs::remove_dir_all(folder).expect("remove the folder");
     }
 }

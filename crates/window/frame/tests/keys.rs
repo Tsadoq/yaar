@@ -9,9 +9,10 @@ use gpui_kit::{
     Render, Styled, TestAppContext, VisualTestContext, Window, actions, div,
 };
 use yaar_frame::{
-    Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder, Place,
-    Quit, QuitAndStopAgents, SelectNextWorkspace, SelectPreviousWorkspace, SetBase,
-    ShowFinishedTurn, ToggleSidebar, UnpinSidebar, bind, controls,
+    Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, NewWorktree,
+    OpenFolder, OpenSettings, Place, Quit, QuitAndStopAgents, SelectNextWorkspace,
+    SelectPreviousWorkspace, SetBase, ShowFinishedTurn, ToggleSidebar, UnpinSidebar, bind,
+    controls,
 };
 
 actions!(
@@ -75,6 +76,8 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
         bind(&controls(), cx);
         note::<OpenFolder>(&ran, cx);
         note::<SetBase>(&ran, cx);
+        note::<OpenSettings>(&ran, cx);
+        note::<NewWorktree>(&ran, cx);
         note::<ToggleSidebar>(&ran, cx);
         note::<UnpinSidebar>(&ran, cx);
         note::<SelectNextWorkspace>(&ran, cx);
@@ -93,10 +96,12 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
 /// every other test presses what the table has, so a key changed in the table by mistake
 /// would pass them all. Each action has the key of a Mac and the key of every other
 /// system, where the keyboard has no Cmd key.
-fn chosen() -> [(&'static str, &'static str, &'static str); 12] {
+fn chosen() -> [(&'static str, &'static str, &'static str); 14] {
     [
         ("cmd-o", "ctrl-o", OpenFolder.name()),
         ("cmd-shift-b", "ctrl-shift-b", SetBase.name()),
+        ("cmd-,", "ctrl-,", OpenSettings.name()),
+        ("cmd-shift-n", "ctrl-shift-n", NewWorktree.name()),
         ("cmd-b", "ctrl-b", ToggleSidebar.name()),
         ("cmd-alt-b", "ctrl-alt-b", UnpinSidebar.name()),
         ("cmd-alt-down", "ctrl-alt-down", SelectNextWorkspace.name()),

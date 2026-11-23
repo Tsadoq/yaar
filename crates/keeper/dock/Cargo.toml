@@ -9,6 +9,8 @@ publish.workspace = true
 [dependencies]
 # Pseudo-terminals, sessions and signals, called as the system names them.
 libc.workspace = true
+# The rule that finds the user's shell, which the Window uses too.
+yaar-link.workspace = true
 
 [lints]
 workspace = true

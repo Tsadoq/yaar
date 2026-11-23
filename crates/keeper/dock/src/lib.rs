@@ -38,10 +38,8 @@ use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io;
 use std::os::fd::AsRawFd;
-use std::os::unix::ffi::OsStrExt;
-use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
@@ -330,58 +328,8 @@ fn held_value(
 
 /// The user's shell: `SHELL` from the Keeper's environment when it names, by an absolute
 /// path, a file that can be run; else the shell of the user's entry in the system's list
-/// of users; else `/bin/sh`.
-pub fn user_shell() -> PathBuf {
-    shell_from(std::env::var_os("SHELL"), passwd_shell)
-}
-
-/// The choice of [`user_shell`], with the value of `SHELL` and the look at the system's
-/// list of users handed in.
-fn shell_from(variable: Option<OsString>, passwd: impl FnOnce() -> Option<PathBuf>) -> PathBuf {
-    variable
-        .map(PathBuf::from)
-        .filter(|shell| can_run(shell))
-        .or_else(|| passwd().filter(|shell| can_run(shell)))
-        .unwrap_or_else(|| PathBuf::from("/bin/sh"))
-}
-
-/// An absolute path to a file with an execute bit.
-fn can_run(path: &Path) -> bool {
-    path.is_absolute()
-        && std::fs::metadata(path)
-            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-}
-
-/// The shell in the entry of the user the Keeper runs as, in the system's list of users.
-fn passwd_shell() -> Option<PathBuf> {
-    // SAFETY: `getpwuid_r` fills the entry and the buffer it is given, and the entry's
-    // strings point into that buffer, which outlives their use below.
-    unsafe {
-        let size = libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX);
-        let mut buffer = vec![0 as libc::c_char; if size > 0 { size as usize } else { 1024 }];
-        loop {
-            let mut entry: libc::passwd = std::mem::zeroed();
-            let mut found: *mut libc::passwd = std::ptr::null_mut();
-            let rc = libc::getpwuid_r(
-                libc::geteuid(),
-                &mut entry,
-                buffer.as_mut_ptr(),
-                buffer.len(),
-                &mut found,
-            );
-            if rc == libc::ERANGE && buffer.len() < 1 << 20 {
-                buffer.resize(buffer.len() * 2, 0);
-                continue;
-            }
-            if rc != 0 || found.is_null() || entry.pw_shell.is_null() {
-                return None;
-            }
-            let shell = std::ffi::CStr::from_ptr(entry.pw_shell).to_bytes();
-            return (!shell.is_empty())
-                .then(|| PathBuf::from(OsString::from(std::ffi::OsStr::from_bytes(shell))));
-        }
-    }
-}
+/// of users; else `/bin/sh`. The rule is the Link's, which the Window uses too.
+pub use yaar_link::user_shell;
 
 /// Why the Dock did not do what it was asked.
 #[derive(Debug)]
@@ -900,19 +848,6 @@ mod tests {
         assert_eq!(one.to_string(), one.as_str());
     }
 
-    fn executable(path: &Path, mode: u32) {
-        std::fs::write(path, "#!/bin/sh\n").expect("write a file");
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
-            .expect("set its mode");
-    }
-
-    fn folder(name: &str) -> PathBuf {
-        let folder =
-            std::env::temp_dir().join(format!("yaar-dock-unit-{}-{name}", std::process::id()));
-        std::fs::create_dir_all(&folder).expect("make a folder");
-        folder
-    }
-
     /// A session leader that is killed and collected when the test ends, however it ends.
     struct Leader(std::process::Child);
 
@@ -1102,44 +1037,5 @@ mod tests {
         );
         assert_eq!(launcher.folder, PathBuf::from("/work"));
         assert_eq!((launcher.size.columns, launcher.size.rows), (100, 30));
-    }
-
-    #[test]
-    fn shell_names_a_program_by_an_absolute_path_that_can_be_run() {
-        let folder = folder("shell");
-        let runnable = folder.join("runnable");
-        let not_runnable = folder.join("not-runnable");
-        executable(&runnable, 0o755);
-        executable(&not_runnable, 0o644);
-        // What the system's list of users names, which the test chooses.
-        let listed = folder.join("listed");
-        executable(&listed, 0o755);
-        let from_list = || Some(listed.clone());
-
-        // `SHELL` wins when it can be run, and the list is not asked.
-        assert_eq!(
-            shell_from(Some(runnable.clone().into()), || panic!("asked the list")),
-            runnable
-        );
-        // Otherwise the shell of the list of users.
-        for other in [
-            Some(not_runnable.clone().into()),
-            Some(folder.clone().into()),
-            Some(folder.join("missing").into()),
-            Some("sh".into()),
-            Some("".into()),
-            None,
-        ] {
-            assert_eq!(shell_from(other.clone(), from_list), listed, "{other:?}");
-        }
-        // And `/bin/sh` when that cannot be run either.
-        for listed in [None, Some(not_runnable), Some(PathBuf::from("sh"))] {
-            assert_eq!(
-                shell_from(None, || listed.clone()),
-                PathBuf::from("/bin/sh"),
-                "{listed:?}"
-            );
-        }
-        std::fs::remove_dir_all(folder).expect("remove the folder");
     }
 }

@@ -115,6 +115,7 @@ struct Inner {
     asked: Asked,
     agents_held: Held,
     terminals_held: Held,
+    settings_held: Held,
     /// Every frame of input, in the order it was read.
     inputs: Vec<(TerminalId, Vec<u8>)>,
     /// How many stop frames were read.
@@ -224,7 +225,7 @@ impl Standing {
                     Some(held) => *held = setting.clone(),
                     None => inner.settings.push(setting.clone()),
                 }
-                Heard::Answer(Ok(Reply::Done))
+                inner.settings_held.offer(id, Reply::Done)
             }
             _ => Heard::Elsewhere,
         }
@@ -584,6 +585,24 @@ impl KeeperEnd {
     /// asked.
     pub fn release_terminals(&self, count: usize) {
         let released = self.standing.lock().terminals_held.release(count);
+        self.send_replies(released);
+    }
+
+    /// From now on keeps the answer to each `SetSetting` unanswered until
+    /// [`KeeperEnd::release_settings`]: a Keeper that has kept the setting and is slow to say
+    /// so. The setting is kept, and listed in [`KeeperEnd::settings_set`], when it is heard.
+    pub fn hold_settings(&self) {
+        self.standing.lock().settings_held.holding = true;
+    }
+
+    /// How many answers to a `SetSetting` are kept back.
+    pub fn held_settings(&self) -> usize {
+        self.standing.lock().settings_held.held.len()
+    }
+
+    /// Sends the `count` oldest kept answers to a `SetSetting`, in the order they were asked.
+    pub fn release_settings(&self, count: usize) {
+        let released = self.standing.lock().settings_held.release(count);
         self.send_replies(released);
     }
 

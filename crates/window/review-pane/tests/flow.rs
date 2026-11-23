@@ -450,6 +450,67 @@ fn a_pane_opened_where_no_turn_runs_lists_the_newest_turn_of_the_history_and_the
 }
 
 #[gpui_kit::test]
+fn a_turn_whose_recording_expired_is_not_the_turn_flow_lists_when_it_opens(
+    cx: &mut TestAppContext,
+) {
+    let t0 = turn_id('0');
+    let (mut stage, mut cx) = open_staged(
+        vec![workspace('1', "feature")],
+        |keeper| {
+            keeper.set_agents(vec![agents_of(vec![session(
+                'a',
+                "Claude Code 1",
+                SessionState::Idle,
+                None,
+            )])]);
+            keeper.set_history(History {
+                workspace: id('1'),
+                start: Some(COMMIT.to_owned()),
+                entries: vec![
+                    HistoryEntry::Turn {
+                        turn: turn_id('0'),
+                        session: session_id('a'),
+                        state: None,
+                    },
+                    // Newer, and its recording is gone: it has no live diff to show.
+                    HistoryEntry::ExpiredTurn {
+                        turn: turn_id('9'),
+                        session: session_id('a'),
+                    },
+                ],
+            });
+            keeper.set_turn(Turn {
+                ended: Some(TurnEnd::Finished),
+                state: None,
+                ..running_turn(
+                    turn_id('0'),
+                    session_id('a'),
+                    2,
+                    Some(&s0()),
+                    vec![read("old.txt")],
+                )
+            });
+        },
+        cx,
+    );
+    show_changes(&mut stage, &mut cx);
+    focus_by_the_bar(&stage, &mut cx);
+    press("f", &mut cx);
+    wait_for_timeline(
+        &stage,
+        &[
+            heading(&t0, 'a', "Claude Code 1"),
+            step_entry(&t0, 1, read("old.txt")),
+            end(&t0, Some(TurnEnd::Finished)),
+        ],
+        &mut cx,
+    );
+    // The turn before it was read, and the expired one never asked for: the Keeper heard
+    // each question before it answered the one that filled the timeline.
+    assert_eq!(stage.keeper.turns_asked(), std::slice::from_ref(&t0));
+}
+
+#[gpui_kit::test]
 fn a_turn_the_keeper_does_not_hold_keeps_its_heading_and_says_nothing(cx: &mut TestAppContext) {
     let t = turn_id('t');
     // The Keeper holds no turn T: it refuses the question with `UnknownTurn`.

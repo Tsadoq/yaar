@@ -42,13 +42,22 @@
 //!   [`Placed`], [`Place`], [`Notice`] and [`FileStep`], which every state the engine
 //!   records carries the threads to.
 //!
+//! - what slice 9 adds: the clean-up of recorded states nothing refers to, by the set time
+//!   ([`Reviews::expire`]) and at once ([`Reviews::clean_up`]), with what it deleted
+//!   ([`Expired`]), how each turn stands with its state ([`Reviews::turn_marks`],
+//!   [`TurnMark`]), the room the states take ([`Reviews::state_sizes`], [`StoreRoom`]),
+//!   the clock the states' age is read by ([`Reviews::with_clock`]); and the threads on the
+//!   old side carried when the base moves ([`Reviews::base_moved`]).
+//!
 //! It knows nothing of what kind of change a tree is: a recorded state and a commit are
 //! both a tree, named by an id, and only the Recorder tells them apart. It holds no
 //! interface code and opens no database: the Store keeps, the Recorder records.
 
 mod attaching;
+mod base_moves;
 mod credits;
 mod engine;
+mod expiry;
 pub mod follow;
 mod following;
 mod replies;
@@ -62,6 +71,7 @@ mod viewed;
 mod workspace;
 
 pub use credits::CreditedChange;
+pub use expiry::{Expired, KEEP_STATES, Presence, StoreRoom, TurnMark};
 pub use follow::{FileStep, MOVED_BLOCK, Notice, Place, Placed, carry, carry_file};
 pub use replies::ThreadReply;
 pub use review::{Offer, SessionNow, ThreadState};

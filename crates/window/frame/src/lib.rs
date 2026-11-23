@@ -16,9 +16,14 @@
 //!   of that workspace, [`AgentList`], the agent sessions of every workspace,
 //!   [`TerminalList`], the terminals the Keeper holds, [`SettingList`], the settings the
 //!   user set, [`ConsentList`], the questions for leave of the Adapters that write
-//!   into a CLI's own settings only with the user's yes, and [`Navigation`], the Window's
+//!   into a CLI's own settings only with the user's yes, [`Navigation`], the Window's
 //!   one way to the Navigator, the answers of code intelligence and the state of its
-//!   language servers;
+//!   language servers, [`Looks`], the theme the Window draws in, and [`RecordedStates`],
+//!   the room the recorded states take and their clean-up;
+//! - [`theme`], what a theme is: one definition of every colour the Window draws, the two
+//!   the app is built with, and the rules a third one is accepted by;
+//! - [`settings_screen`], the screen of the user's settings, which the Frame draws in the
+//!   place of the panes ([`SettingsScreen`]);
 //! - [`Sidebar`], the list of repositories and worktrees, as the full list or as a rail;
 //! - [`controls`], the table of actions with their keys, and the actions of the Frame.
 //!   A [`Control`] says in which [`Place`] its key works; [`KEY_CONTEXT`] is the key
@@ -41,28 +46,37 @@ mod consents;
 mod controls;
 pub mod keeper;
 mod link_model;
+mod looks;
 mod models;
 mod navigation;
 mod routes;
 mod settings;
+pub mod settings_screen;
 mod sidebar;
+mod states;
+pub mod theme;
 pub mod trace;
 mod view;
 
 pub use agents::{AgentList, TerminalList, Wanted};
 pub use consents::ConsentList;
 pub use controls::{
-    Asks, Control, FocusNextPane, FocusPreviousPane, KEY_CONTEXT, MovePanes, OpenFolder,
-    PROGRAM_CONTEXT, PROGRAM_KEYS, Place, Quit, QuitAndStopAgents, SelectNextWorkspace,
+    Asks, CleanUpStates, CloseSettings, CloseWindow, Control, FocusNextPane, FocusPreviousPane,
+    HideApp, HideOtherApps, KEY_CONTEXT, Minimize, MovePanes, NewWorktree, NextSetting, NextValue,
+    OpenFolder, OpenSetting, OpenSettings, PROGRAM_CONTEXT, PROGRAM_KEYS, Place, PreviousSetting,
+    PreviousValue, Quit, QuitAndStopAgents, SETTINGS_CONTEXT, SelectNextWorkspace,
     SelectPreviousWorkspace, Sends, SetBase, ShowFinishedTurn, ToggleSidebar, UnpinSidebar, bind,
     controls, release_program_keys,
 };
 pub use link_model::{AskError, KeeperLink, LinkStatus, TerminalOutput};
+pub use looks::Looks;
 pub use models::{Models, WorkspaceChanges, WorkspaceList};
 pub use navigation::{Asking, NavError, Navigation};
 pub use routes::Routes;
-pub use settings::SettingList;
+pub use settings::{NOT_KEPT, SettingList};
+pub use settings_screen::SettingsScreen;
 pub use sidebar::{
     FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
 };
+pub use states::RecordedStates;
 pub use view::{Beside, BuildPane, Frame, Opened, Pane, PaneEntry, TurnNotice, open};

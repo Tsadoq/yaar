@@ -45,6 +45,12 @@ impl Agents {
     /// `Request::GetHistory`: the commits since the one the changes are counted from and
     /// the turns that ended on them, read from the state store, the commits and the Store.
     /// No `git status` runs.
+    ///
+    /// The turns are read before the states, as `Reviews::turn_marks` reads them: a state a
+    /// turn names was recorded before the turn was kept, so it is in the states read after
+    /// the turns unless a clean-up took it. Read the other way round, a recording that ends
+    /// between the two reads would show a live turn as expired until the history is read
+    /// again. No surface orders the two reads, so this is stated and no test holds it.
     pub(crate) fn history(&self, kept: &Kept, workspace: &WorkspaceId) -> Result<Reply, Refusal> {
         let id = yaar_workspaces::WorkspaceId::new(workspace.as_str());
         let worktree = worktree_needed(kept, &id, workspace)?;
@@ -52,6 +58,7 @@ impl Agents {
         // commits `counted_from` gives besides it, those not on a remote, come before
         // that commit: they are Changes' to show, and no entry of this history.
         let (counted_from, _) = kept.workspaces.counted_from(&id).map_err(refusal)?;
+        let turns = kept.store.turns_of(&id).map_err(failed)?;
         let states = states_of(kept, &id)?;
         let recorded =
             yaar_recorder::history(&worktree, &states, counted_from.as_ref()).map_err(failed)?;
@@ -61,7 +68,6 @@ impl Agents {
             .into_iter()
             .map(|state| state.id.as_str().to_owned())
             .collect();
-        let turns = kept.store.turns_of(&id).map_err(failed)?;
         Ok(Reply::History(History {
             workspace: workspace.clone(),
             start: counted_from.map(|commit| commit.to_string()),
@@ -253,7 +259,9 @@ enum Place {
 /// state that is a turn's becomes that turn (the turns that ended on one state, in the
 /// order they started), any other state is left out.
 ///
-/// A turn with no state, or whose state is not held, has no place of its own: it goes right
+/// A turn whose state the Store names and `held` does not has expired: it is an
+/// `ExpiredTurn`; one with no state named is a recording that failed and stays a `Turn` with
+/// no state. Either has no place of its own: it goes right
 /// after the turn that started before it, or, when none did, before the turn that started
 /// after it, or, with none known, at the end. When the turn it follows is left out as before
 /// the start, the place is the start of the history: it ended after that turn. When the turn
@@ -319,10 +327,24 @@ fn with_turns(
     let mut at_start = Vec::new();
     let mut at_end = Vec::new();
     for (turn, place) in turns.into_iter().zip(placed) {
-        let entry = HistoryEntry::Turn {
-            turn: TurnId::new(turn.id.as_str()),
-            session: SessionId::new(turn.session.as_str()),
-            state: turn.state.filter(|state| held.contains(state)),
+        let (id, session) = (
+            TurnId::new(turn.id.as_str()),
+            SessionId::new(turn.session.as_str()),
+        );
+        let entry = match turn.state {
+            Some(state) if held.contains(&state) => HistoryEntry::Turn {
+                turn: id,
+                session,
+                state: Some(state),
+            },
+            // A state the Store names and the store no longer holds was deleted by a
+            // clean-up: the turn stays, marked so. No state named is a recording that failed.
+            Some(_) => HistoryEntry::ExpiredTurn { turn: id, session },
+            None => HistoryEntry::Turn {
+                turn: id,
+                session,
+                state: None,
+            },
         };
         match place {
             Place::After(index) => after.entry(index).or_default().push(entry),

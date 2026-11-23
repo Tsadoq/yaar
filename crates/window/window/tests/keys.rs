@@ -80,6 +80,21 @@ fn documented() -> BTreeSet<String> {
             // The answers to a question for leave, of slice 7.
             "cmd-alt-e",
             "cmd-alt-shift-e",
+            // The settings screen and a new worktree, of the Frame, of slice 9.
+            "cmd-,",
+            "cmd-shift-n",
+            // The terminal pane's Clear, Select All and scroll keys, of slice 9.
+            "cmd-k",
+            "cmd-a",
+            "cmd-home",
+            "cmd-end",
+            "cmd-up",
+            "cmd-down",
+            // The Window program's own: Close Window, Hide, Hide Others and Minimize.
+            "cmd-w",
+            "cmd-h",
+            "cmd-alt-h",
+            "cmd-m",
         ]);
     } else {
         keys.extend(["ctrl-shift-c", "ctrl-shift-v"]);
@@ -256,11 +271,19 @@ impl Walk {
         if self.cx.did_prompt_for_paths() {
             self.cx.simulate_path_prompt_response(|_| None);
         }
-        if self.cx.debug_bounds("frame-base-field").is_some() {
-            self.cx.simulate_keystrokes("escape");
-            wait_until(&mut self.cx, "the field for the base to close", |cx| {
-                cx.debug_bounds("frame-base-field").is_none()
-            });
+        // What a key may have opened takes the focus, and Escape closes it: the field for
+        // a base, the field for a new worktree's branch and the settings screen.
+        for (selector, what) in [
+            ("frame-base-field", "the field for the base"),
+            ("frame-worktree-field", "the field for the new branch"),
+            ("settings-screen", "the settings screen"),
+        ] {
+            if self.cx.debug_bounds(selector).is_some() {
+                self.cx.simulate_keystrokes("escape");
+                wait_until(&mut self.cx, &format!("{what} to close"), |cx| {
+                    cx.debug_bounds(selector).is_none()
+                });
+            }
         }
     }
 
@@ -328,6 +351,18 @@ impl Walk {
 fn set_up(cx: &mut TestAppContext) -> Walk {
     let (mut window, mut cx) = open_composed(cx, Vec::new());
     window.open_a_folder(&mut cx);
+    // The test platform can neither hide the app, hide the others nor minimise a window
+    // (its calls are `unimplemented!()`), and closing the window would end the walk. A
+    // handler of the test's own, registered after the app's, takes each of these four
+    // actions first and does nothing, so that each key is shown to run the action of its
+    // row and to reach no program; what the handlers do is the conventions checklist's
+    // (hiding and minimising) and the walk of the actions' (closing a window).
+    cx.update(|_, app| {
+        app.on_action(|_: &yaar_frame::CloseWindow, _| {});
+        app.on_action(|_: &yaar_frame::HideApp, _| {});
+        app.on_action(|_: &yaar_frame::HideOtherApps, _| {});
+        app.on_action(|_: &yaar_frame::Minimize, _| {});
+    });
 
     window.click_into_the_review_pane(&mut cx);
     cx.simulate_keystrokes(&key_of("New Terminal"));

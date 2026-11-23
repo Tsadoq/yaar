@@ -4,7 +4,8 @@
 //! The Keeper tells a Window `Fact::ConsentsChanged` when the Window first asks it something,
 //! before it answers that request, if a question waits for an answer or an Adapter could
 //! not change its CLI's settings, and every Window after each answer. The model asks nothing when the link connects: a Window told nothing has
-//! nothing to ask. The terminal pane draws the questions and sends the user's answers
+//! nothing to ask, but for the settings screen, which asks the whole list when it opens
+//! ([`ConsentList::refresh`]). The terminal pane draws the questions and sends the user's answers
 //! through it; it names no CLI, and shows each question in the Adapter's own words.
 
 use gpui_kit::*;
@@ -52,6 +53,47 @@ impl ConsentList {
             })
             .cloned()
             .collect()
+    }
+
+    /// Asks the Keeper for the whole list, answered or not, and takes what it answers: the
+    /// settings screen asks it at each opening, since the Keeper tells a Window an Adapter
+    /// only while a question waits or something went wrong, so that an answer given long ago
+    /// is in no Window that started since. The task resolves once the list is taken, or to
+    /// the Keeper's refusal or the loss of the connection, and the list stays as it was. The
+    /// task is the caller's to keep: a dropped one stops waiting, though the request stays
+    /// sent.
+    pub fn refresh(&mut self, cx: &mut Context<Self>) -> Task<Result<(), AskError>> {
+        let listed = self
+            .link
+            .update(cx, |link, cx| link.ask(Request::ListConsents, cx));
+        cx.spawn(async move |list, cx| {
+            let Reply::Consents(consents) = listed.await? else {
+                return Err(AskError::Unexpected);
+            };
+            list.update(cx, |list, cx| list.take(consents, cx)).ok();
+            Ok(())
+        })
+    }
+
+    /// Every Adapter the Keeper last told or answered, answered or not, in the order of its
+    /// Adapters: what the settings screen lists, so that an answer given once can be changed.
+    /// Empty until the Keeper tells a list, which it does when a question waits or after an
+    /// answer, or until [`ConsentList::refresh`] asks for it.
+    pub fn all(&self) -> &[Consent] {
+        &self.consents
+    }
+
+    /// Sends `answer` for the Adapter named `agent` alone, whatever it was before, and takes
+    /// the list the Keeper answers with. The task resolves once the list is taken, or to the
+    /// Keeper's refusal or the loss of the connection. The task is the caller's to keep: a
+    /// dropped one stops waiting, though the request stays sent.
+    pub fn answer(
+        &mut self,
+        agent: String,
+        answer: ConsentAnswer,
+        cx: &mut Context<Self>,
+    ) -> Task<Result<(), AskError>> {
+        self.send_answer(agent, answer, cx)
     }
 
     /// Sends `answer` for every Adapter that needs leave: for those [`ConsentList::asked`]

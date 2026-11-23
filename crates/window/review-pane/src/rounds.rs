@@ -72,6 +72,7 @@ fn versions(entries: &[HistoryEntry]) -> Vec<&str> {
         .filter_map(|entry| match entry {
             HistoryEntry::Commit(commit) => Some(commit.id.as_str()),
             HistoryEntry::Turn { state, .. } => state.as_deref(),
+            HistoryEntry::ExpiredTurn { .. } => None,
         })
         .collect()
 }

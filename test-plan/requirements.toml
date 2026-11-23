@@ -2,7 +2,7 @@
 # `cargo xtask coverage` fails when one of them has no test in tests.toml.
 # R1 is the first release; Later is wanted after it; a withdrawn id is never used again.
 
-version = "v1.5"
+version = "v1.6"
 
 [[requirement]]
 id = "FR-001"
@@ -290,7 +290,7 @@ text = "The app shall record the state of the worktree at the end of each agent 
 id = "FR-125"
 release = "R1"
 section = "Choosing what to review"
-text = "The app shall delete the recorded state of a turn that no thread, no round and no reviewed mark refers to once a set time has passed since the turn, 30 days unless the user changes it, and shall keep the turn in the history, marked as expired."
+text = "The app shall delete the recorded state of a turn that no thread, no round and no reviewed mark refers to once a set time has passed since the turn, 30 days unless the user changes it, except the newest recorded state of a worktree that still exists, and shall keep the turn in the history, marked as expired."
 
 [[requirement]]
 id = "FR-047"

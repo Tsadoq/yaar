@@ -17,8 +17,8 @@ use std::time::Duration;
 use rusqlite::Connection;
 use support::Scratch;
 use yaar_store::{
-    FlowForm, RepositoryId, RepositoryRecord, Setting, Store, StoreError, TerminalPlace, Theme,
-    TurnEndSelects, WorkspaceId,
+    FlowForm, OptionKey, RepositoryId, RepositoryRecord, Setting, Store, StoreError, TerminalPlace,
+    Theme, TurnEndSelects, WorkspaceId,
 };
 
 /// The variable that names the database file the setter sets settings in.
@@ -250,7 +250,7 @@ fn every_value_of_every_setting_is_read_back_as_it_was_set() {
     let every = [
         Setting::TurnEnd(TurnEndSelects::WhatChanged),
         Setting::TurnEnd(TurnEndSelects::KeepSelection),
-        Setting::StopAfter { seconds: 0 },
+        Setting::StopAfter { seconds: 1 },
         Setting::StopAfter { seconds: 600 },
         Setting::StopAfter { seconds: u32::MAX },
         Setting::Theme(Theme::System),
@@ -637,4 +637,409 @@ fn the_answer_on_a_repository_is_kept_as_its_name_and_a_word_in_a_table_of_its_o
         .query_row("SELECT COUNT(*) FROM setting", [], |row| row.get(0))
         .expect("count");
     assert_eq!(app_rows, 0, "no row of the whole app's table");
+}
+
+/// The rows of `setting`, by name, as the file holds them.
+fn app_rows(file: &Path) -> Vec<(String, String)> {
+    let connection = Connection::open(file).expect("open the file");
+    connection
+        .prepare("SELECT name, value FROM setting ORDER BY name")
+        .expect("prepare")
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .expect("query")
+        .collect::<rusqlite::Result<_>>()
+        .expect("read")
+}
+
+fn folder(repository: &str, path: Option<&str>) -> Setting {
+    Setting::WorktreesFolder {
+        repository: RepositoryId::new(repository),
+        folder: path.map(PathBuf::from),
+    }
+}
+
+#[test]
+fn the_settings_of_slice_9_are_read_back_as_set_replaced_in_place_and_held_by_a_store_opened_anew()
+{
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    let kinds = [
+        [
+            Setting::KeepStates { days: 1 },
+            Setting::KeepStates { days: 30 },
+            Setting::KeepStates { days: u32::MAX },
+        ]
+        .as_slice(),
+        &[
+            Setting::OptionKey(OptionKey::Meta),
+            Setting::OptionKey(OptionKey::Characters),
+            Setting::OptionKey(OptionKey::ByLayout),
+        ],
+        &[
+            Setting::Theme(Theme::Named("Solarized".to_owned())),
+            Setting::Theme(Theme::Named("Nord".to_owned())),
+            Setting::Theme(Theme::System),
+        ],
+    ];
+    for values in kinds {
+        for setting in values {
+            store.set_setting(setting).expect("set");
+            // One entry for the kind, the value just set.
+            let read = store.settings().expect("settings");
+            let of_kind: Vec<_> = read
+                .iter()
+                .filter(|read| std::mem::discriminant(*read) == std::mem::discriminant(setting))
+                .collect();
+            assert_eq!(of_kind, [setting], "{setting:?} was set");
+        }
+    }
+    let last = [
+        Setting::Theme(Theme::Named("Nord".to_owned())),
+        Setting::KeepStates { days: 7 },
+        Setting::OptionKey(OptionKey::Meta),
+    ];
+    for setting in &last {
+        store.set_setting(setting).expect("set");
+    }
+    drop(store);
+
+    // The kinds are listed in the order of the table, not of the sets.
+    let store = Store::open(&scratch.file()).expect("open again");
+    assert_eq!(
+        store.settings().expect("settings"),
+        [
+            Setting::Theme(Theme::Named("Nord".to_owned())),
+            Setting::KeepStates { days: 7 },
+            Setting::OptionKey(OptionKey::Meta),
+        ]
+    );
+}
+
+#[test]
+fn a_theme_named_with_a_space_and_a_letter_outside_ascii_is_read_back_as_named() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    for name in ["Crème brûlée", "x", &"é".repeat(64), "a:b|c"] {
+        let setting = Setting::Theme(Theme::Named(name.to_owned()));
+        store.set_setting(&setting).expect("set");
+        assert_eq!(store.settings().expect("settings"), [setting], "{name}");
+    }
+    assert_eq!(
+        app_rows(&scratch.file()),
+        [("theme".to_owned(), "named:a:b|c".to_owned())]
+    );
+}
+
+#[test]
+fn light_and_dark_are_kept_as_slice_5_wrote_them_and_the_rows_it_wrote_are_read() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    // A built-in theme asked for by its name is the same row as the theme itself, so that
+    // a Store of slice 5 reads what this one wrote.
+    for (name, written, read) in [
+        ("Light", "light", Theme::Light),
+        ("Dark", "dark", Theme::Dark),
+    ] {
+        store
+            .set_setting(&Setting::Theme(Theme::Named(name.to_owned())))
+            .expect("set");
+        assert_eq!(
+            app_rows(&scratch.file()),
+            [("theme".to_owned(), written.to_owned())]
+        );
+        assert_eq!(store.settings().expect("settings"), [Setting::Theme(read)]);
+    }
+    // Another capitalisation is another theme's name.
+    store
+        .set_setting(&Setting::Theme(Theme::Named("light".to_owned())))
+        .expect("set");
+    assert_eq!(
+        app_rows(&scratch.file()),
+        [("theme".to_owned(), "named:light".to_owned())]
+    );
+
+    // The rows slice 5 wrote.
+    let connection = Connection::open(scratch.file()).expect("open the file");
+    for (value, theme) in [("light", Theme::Light), ("dark", Theme::Dark)] {
+        connection
+            .execute(
+                "UPDATE setting SET value = ?1 WHERE name = 'theme'",
+                [value],
+            )
+            .expect("write the row");
+        assert_eq!(store.settings().expect("settings"), [Setting::Theme(theme)]);
+    }
+}
+
+#[test]
+fn a_row_of_the_new_kinds_that_this_build_does_not_accept_is_left_out_of_the_list() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    store
+        .set_setting(&Setting::TerminalPlace(TerminalPlace::Left))
+        .expect("set");
+    let known = [Setting::TerminalPlace(TerminalPlace::Left)];
+    let connection = Connection::open(scratch.file()).expect("open the file");
+    let too_long = format!("named:{}", "x".repeat(65));
+    for (name, value) in [
+        ("stop_after", "0"),
+        ("stop_after", "000"),
+        ("keep_states", "0"),
+        ("keep_states", " 30"),
+        ("keep_states", "30 "),
+        ("keep_states", "+30"),
+        ("keep_states", "-1"),
+        ("keep_states", ""),
+        ("keep_states", "4294967296"),
+        ("keep_states", "soon"),
+        ("option_key", "alt"),
+        ("option_key", ""),
+        ("theme", "named:"),
+        ("theme", "named:two\nlines"),
+        ("theme", too_long.as_str()),
+        ("theme", "Named:Nord"),
+    ] {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO setting (name, value) VALUES (?1, ?2)",
+                [name, value],
+            )
+            .expect("write the row");
+        assert_eq!(
+            store.settings().expect("settings"),
+            known,
+            "{name} = {value:?} is left out"
+        );
+        connection
+            .execute("DELETE FROM setting WHERE name = ?1", [name])
+            .expect("remove the row");
+    }
+    // The rows that are accepted, at their edges, are listed.
+    for (name, value, setting) in [
+        ("keep_states", "1", Setting::KeepStates { days: 1 }),
+        (
+            "option_key",
+            "characters",
+            Setting::OptionKey(OptionKey::Characters),
+        ),
+    ] {
+        connection
+            .execute(
+                "INSERT INTO setting (name, value) VALUES (?1, ?2)",
+                [name, value],
+            )
+            .expect("write the row");
+        assert_eq!(
+            store.settings().expect("settings"),
+            [known[0].clone(), setting]
+        );
+        connection
+            .execute("DELETE FROM setting WHERE name = ?1", [name])
+            .expect("remove the row");
+    }
+}
+
+#[test]
+fn a_value_the_table_refuses_is_refused_with_the_setting_named_and_keeps_nothing() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    let before = [
+        Setting::StopAfter { seconds: 90 },
+        Setting::Theme(Theme::Named("Nord".to_owned())),
+        Setting::KeepStates { days: 5 },
+    ];
+    for setting in &before {
+        store.set_setting(setting).expect("set");
+    }
+    let rows = app_rows(&scratch.file());
+    for (refused, named) in [
+        (Setting::StopAfter { seconds: 0 }, "stop_after"),
+        (Setting::KeepStates { days: 0 }, "keep_states"),
+        (Setting::Theme(Theme::Named(String::new())), "theme"),
+        (Setting::Theme(Theme::Named("x".repeat(65))), "theme"),
+        (Setting::Theme(Theme::Named("é".repeat(65))), "theme"),
+        (Setting::Theme(Theme::Named("a\tb".to_owned())), "theme"),
+        (Setting::Theme(Theme::Named("a\u{85}b".to_owned())), "theme"),
+    ] {
+        let sentence = refusal_of(store.set_setting(&refused));
+        assert!(sentence.contains(named), "{refused:?}: {sentence}");
+        assert_eq!(
+            app_rows(&scratch.file()),
+            rows,
+            "{refused:?} kept something"
+        );
+        assert_eq!(store.settings().expect("settings"), before);
+    }
+}
+
+#[test]
+fn a_folder_for_worktrees_is_read_back_replaced_by_none_and_listed_after_the_answers_of_its_repository()
+ {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &["w-1"]);
+    keep_repository(&store, "r-2");
+    store
+        .set_setting(&Setting::TurnEnd(TurnEndSelects::KeepSelection))
+        .expect("set");
+
+    store
+        .set_setting(&folder("r-1", Some("/a b/é")))
+        .expect("set");
+    assert_eq!(
+        store.settings().expect("settings")[1..],
+        [folder("r-1", Some("/a b/é"))]
+    );
+    // The second repository's folder, set first among the two, the answer of the first
+    // repository last: the order is the repositories', then the names'.
+    store
+        .set_setting(&folder("r-2", Some("/work/trees")))
+        .expect("set");
+    store.set_setting(&answer("r-1", true)).expect("set");
+    store
+        .set_setting(&Setting::FlowForm {
+            workspace: w1(),
+            form: FlowForm::LiveDiff,
+        })
+        .expect("set");
+    let expected = [
+        Setting::TurnEnd(TurnEndSelects::KeepSelection),
+        Setting::FlowForm {
+            workspace: w1(),
+            form: FlowForm::LiveDiff,
+        },
+        answer("r-1", true),
+        folder("r-1", Some("/a b/é")),
+        folder("r-2", Some("/work/trees")),
+    ];
+    assert_eq!(store.settings().expect("settings"), expected);
+
+    // None takes the place of the folder, as a value, and is held by a Store opened anew.
+    store.set_setting(&folder("r-1", None)).expect("set");
+    drop(store);
+    let store = Store::open(&scratch.file()).expect("open again");
+    let mut expected = expected;
+    expected[3] = folder("r-1", None);
+    assert_eq!(store.settings().expect("settings"), expected);
+    // Set again to a folder, it takes its place.
+    store
+        .set_setting(&folder("r-1", Some("/else")))
+        .expect("set");
+    expected[3] = folder("r-1", Some("/else"));
+    assert_eq!(store.settings().expect("settings"), expected);
+}
+
+#[test]
+fn a_folder_for_worktrees_is_kept_as_its_path_in_the_table_of_the_repository() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    store
+        .set_setting(&folder("r-1", Some("/a b/é")))
+        .expect("set");
+    store.set_setting(&folder("r-1", None)).expect("set");
+    let read = |file: &Path| -> Vec<(String, String, String)> {
+        Connection::open(file)
+            .expect("open the file")
+            .prepare("SELECT repository, name, value FROM repository_setting")
+            .expect("prepare")
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
+            .expect("query")
+            .collect::<rusqlite::Result<_>>()
+            .expect("read")
+    };
+    assert_eq!(
+        read(&scratch.file()),
+        [(
+            "r-1".to_owned(),
+            "worktrees_folder".to_owned(),
+            String::new()
+        )]
+    );
+    store
+        .set_setting(&folder("r-1", Some("/a b/é")))
+        .expect("set");
+    assert_eq!(
+        read(&scratch.file()),
+        [(
+            "r-1".to_owned(),
+            "worktrees_folder".to_owned(),
+            "/a b/é".to_owned()
+        )]
+    );
+}
+
+#[test]
+fn a_folder_that_is_not_absolute_or_not_text_is_refused_and_so_is_one_for_a_repository_not_held() {
+    use std::os::unix::ffi::OsStringExt;
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    store
+        .set_setting(&folder("r-1", Some("/kept")))
+        .expect("set");
+    let kept = [folder("r-1", Some("/kept"))];
+
+    for relative in ["rel/dir", "", ".", "~/trees", "./x"] {
+        let sentence = refusal_of(store.set_setting(&folder("r-1", Some(relative))));
+        assert!(
+            sentence.contains("worktrees_folder"),
+            "{relative:?}: {sentence}"
+        );
+        assert!(sentence.contains("r-1"), "{relative:?}: {sentence}");
+        assert_eq!(store.settings().expect("settings"), kept, "{relative:?}");
+    }
+    // A path with bytes that are not text has no lossy form.
+    let not_text = PathBuf::from(std::ffi::OsString::from_vec(b"/caf\xe9".to_vec()));
+    let sentence = refusal_of(store.set_setting(&Setting::WorktreesFolder {
+        repository: RepositoryId::new("r-1"),
+        folder: Some(not_text),
+    }));
+    assert!(sentence.contains("worktrees_folder"), "{sentence}");
+    assert_eq!(store.settings().expect("settings"), kept);
+
+    // A repository the Store does not hold: refused with its id, and no row is left for a
+    // repository of that id kept later.
+    let sentence = refusal_of(store.set_setting(&folder("r-99", Some("/x"))));
+    assert!(sentence.contains("r-99"), "{sentence}");
+    let sentence = refusal_of(store.set_setting(&folder("r-99", None)));
+    assert!(sentence.contains("r-99"), "{sentence}");
+    keep_repository(&store, "r-99");
+    assert_eq!(store.settings().expect("settings"), kept);
+}
+
+#[test]
+fn a_row_of_a_folder_that_is_not_absolute_or_whose_repository_is_not_held_is_left_out() {
+    let scratch = Scratch::new();
+    let store = Store::open(&scratch.file()).expect("open");
+    keep_workspaces(&store, &[]);
+    let connection = Connection::open(scratch.file()).expect("open the file");
+    for (repository, value) in [
+        ("r-1", "rel"),
+        ("r-1", " /padded"),
+        ("r-1", "~/x"),
+        ("r-gone", "/x"),
+    ] {
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO repository_setting (repository, name, value)
+                 VALUES (?1, 'worktrees_folder', ?2)",
+                [repository, value],
+            )
+            .expect("write the row");
+        assert_eq!(
+            store.settings().expect("settings"),
+            [],
+            "{repository} {value:?} is left out"
+        );
+    }
+    // The empty text is the way back to the rule, and is listed as none.
+    connection
+        .execute(
+            "UPDATE repository_setting SET value = '' WHERE repository = 'r-1'",
+            [],
+        )
+        .expect("write the row");
+    assert_eq!(store.settings().expect("settings"), [folder("r-1", None)]);
 }

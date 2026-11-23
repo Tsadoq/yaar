@@ -13,7 +13,8 @@
 //! - [`TerminalPane`], the view of the pane and the model of what it shows: its
 //!   terminals, which are shown, which has the focus; and [`TerminalView`], one terminal;
 //! - [`Emulator`], the screen of one terminal as its program's output builds it, with
-//!   the answers the terminal owes the program;
+//!   the answers the terminal owes the program, and [`colour_of`], the one function that
+//!   picks the colour a cell is drawn in, from the applied theme's terminal colours;
 //! - [`encode_key`], [`encode_release`], [`encode_paste`], [`encode_focus`] and
 //!   [`encode_mouse`], what input sends to a program in each state of its terminal, with
 //!   [`Modes`], [`KeyboardFlags`], [`IMPLEMENTED_FLAGS`] and [`OptionKey`].
@@ -22,6 +23,12 @@
 //! workspace on screen; it sends the program what is typed and draws what the program
 //! writes. It holds several terminals and shows one, or two side by side in the split
 //! view. The Keeper owns the terminals and their programs: closing the window ends none.
+//!
+//! Option, on macOS, is Meta or types the layout's characters as the user's setting says
+//! (`yaar_frame::SettingList::option_key`), and with none made as the keyboard layout
+//! says; on every other system it is Meta. The chosen agent CLI is the Frame's one
+//! (`yaar_frame::AgentList::chosen_cli`), and the pane makes a worktree with an agent in it
+//! when the Frame wants one (`yaar_frame::Wanted::Worktree`).
 //!
 //! It depends on the Frame and on no other pane.
 
@@ -49,6 +56,7 @@ use yaar_link::{
 
 pub use attachment::ADDRESS_EACH_COMMENT;
 pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
+pub use draw::colour_of;
 pub use emulator::{
     Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
 };
@@ -106,6 +114,19 @@ actions!(
         /// Answers no to that question: nothing is installed, and an entry installed
         /// before is taken out.
         KeepAgentExtensionsOut,
+        /// Empties the history of the terminal with the focus and every line of its screen
+        /// above the cursor's, which becomes the first: nothing is sent to the program.
+        Clear,
+        /// Selects the whole history and screen of the terminal with the focus.
+        SelectAll,
+        /// Scrolls the history of the terminal with the focus to its first line.
+        ScrollToTop,
+        /// Scrolls it back to the newest line.
+        ScrollToBottom,
+        /// Scrolls it one line up.
+        ScrollLineUp,
+        /// Scrolls it one line down.
+        ScrollLineDown,
     ]
 );
 
@@ -120,6 +141,10 @@ pub const FIRST_SIZE: TerminalSize = TerminalSize {
     columns: 80,
     rows: 24,
 };
+
+/// What the pane's notice says while a worktree made with an agent is being made, before the
+/// branch's name.
+pub const WORKTREE_BEING_MADE: &str = "Making the worktree of";
 
 /// How long after a key the pane keeps asking for a frame at every frame: a program's
 /// answer to the key is drawn in the first frame after it arrives, not when something
@@ -161,6 +186,12 @@ pub fn pane() -> BuildPane {
 /// of a session's resume. [`InstallAgentExtensions`] (`secondary-alt-e`) and
 /// [`KeepAgentExtensionsOut`] (`secondary-alt-shift-e`) work anywhere and send
 /// [`RequestKind::AnswerConsent`], yes and no to an Adapter's question for leave.
+///
+/// On macOS six more kept keys work inside a terminal and send the program nothing:
+/// [`Clear`] (`cmd-k`), [`SelectAll`] (`cmd-a`), [`ScrollToTop`] (`cmd-home`),
+/// [`ScrollToBottom`] (`cmd-end`), [`ScrollLineUp`] (`cmd-up`) and [`ScrollLineDown`]
+/// (`cmd-down`). On Linux the keys are the program's: only Ctrl-Shift-C and Ctrl-Shift-V
+/// are kept in a terminal there, and the six actions have no key.
 pub fn controls() -> Vec<Control> {
     let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
     let nothing = |title, action: fn() -> Box<dyn Action>, keystroke, place| Control {
@@ -171,7 +202,7 @@ pub fn controls() -> Vec<Control> {
         sends: None,
         asks: Asks::Nothing,
     };
-    vec![
+    let mut table = vec![
         Control {
             title: "New Terminal",
             action: || Box::new(NewTerminal),
@@ -291,7 +322,39 @@ pub fn controls() -> Vec<Control> {
             sends: Some(Sends::Request(RequestKind::AnswerConsent)),
             asks: Asks::Nothing,
         },
+    ];
+    table.extend(mac_controls());
+    table
+}
+
+/// The keys the Mac terminals have for the history and the screen, kept keys of a
+/// terminal. On Linux only Ctrl-Shift-C and Ctrl-Shift-V are kept there, and every other
+/// key reaches the program, so these actions have no key.
+#[cfg(target_os = "macos")]
+fn mac_controls() -> Vec<Control> {
+    let in_a_terminal = Place::In(yaar_frame::PROGRAM_CONTEXT);
+    let nothing = |title, action: fn() -> Box<dyn Action>, keystroke| Control {
+        title,
+        action,
+        keystroke,
+        place: in_a_terminal,
+        sends: None,
+        asks: Asks::Nothing,
+    };
+    vec![
+        nothing("Clear", || Box::new(Clear), "cmd-k"),
+        nothing("Select All", || Box::new(SelectAll), "cmd-a"),
+        nothing("Scroll to Top", || Box::new(ScrollToTop), "cmd-home"),
+        nothing("Scroll to Bottom", || Box::new(ScrollToBottom), "cmd-end"),
+        nothing("Scroll Line Up", || Box::new(ScrollLineUp), "cmd-up"),
+        nothing("Scroll Line Down", || Box::new(ScrollLineDown), "cmd-down"),
     ]
+}
+
+/// See the macOS one: none.
+#[cfg(not(target_os = "macos"))]
+fn mac_controls() -> Vec<Control> {
+    Vec::new()
 }
 
 /// One terminal of the pane, with what the pane keeps beside its view.
@@ -433,6 +496,9 @@ pub struct TerminalPane {
     /// Until when each frame asks for the next one: the end of the second after the
     /// last key.
     frames_until: Option<Instant>,
+    /// The workspace of a worktree made with an agent, until it comes on screen: its
+    /// terminal takes the focus then, wherever the focus was.
+    focus_on_arrival: Option<WorkspaceId>,
     /// The title the pane last gave the window.
     window_title: Option<String>,
     /// The terminals the pane asked the Keeper to attach and has no answer for.
@@ -507,6 +573,7 @@ impl TerminalPane {
             on_screen,
             layouts: HashMap::new(),
             frames_until: None,
+            focus_on_arrival: None,
             window_title: None,
             attaching: HashMap::new(),
             attachments: attachment::Attachments::default(),
@@ -618,7 +685,13 @@ impl TerminalPane {
         // Read before the frame that leaves the old terminal is drawn.
         let had_the_focus = self.focus.contains_focused(window, cx);
         self.on_screen = now;
-        if had_the_focus {
+        // The worktree a user asked for with an agent: its terminal has the focus, as a
+        // terminal the user opens does, whoever had it.
+        let arrived = self.focus_on_arrival.is_some() && self.focus_on_arrival == self.on_screen;
+        if arrived {
+            self.focus_on_arrival = None;
+        }
+        if had_the_focus || arrived {
             if self.focused().is_some() {
                 self.focus_terminal(window, cx);
             } else {
@@ -690,8 +763,10 @@ impl TerminalPane {
         cx: &mut Context<Self>,
     ) -> Entity<TerminalView> {
         let link = self.models.link.clone();
+        let settings = self.models.settings.clone();
         let output = link.update(cx, |link, _| link.take_output(&id));
-        let view = cx.new(|cx| TerminalView::new(id.clone(), size, link, output, cut, cx));
+        let view =
+            cx.new(|cx| TerminalView::new(id.clone(), size, link, settings, output, cut, cx));
         let of = workspace.clone();
         let events = cx.subscribe(&view, move |pane, _, event: &ViewEvent, _| {
             pane.viewed(&of, event);

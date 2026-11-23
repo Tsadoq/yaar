@@ -14,6 +14,10 @@
 //!   screen, at the connect and whenever it changes;
 //! - [`yaar_navigator::Ask::Consents`], every `Setting::ServersInRepository` of
 //!   `SettingList`, at the connect and whenever the settings change;
+//! - [`yaar_navigator::Ask::StopAfter`], the stop time of `SettingList`, at the connect only
+//!   when the user set one (the Navigator has the default of its own) and at each change of
+//!   it, so that a time set while the Navigator runs is in force at once; a setting that
+//!   tells what the list holds already tells nothing;
 //! - [`yaar_navigator::Ask::FilesChanged`], the paths of the changed files of the
 //!   workspace on screen as `WorkspaceChanges` holds them (the old path of a renamed file
 //!   too), each time it takes an answer of the Keeper (a file may change again with its
@@ -42,6 +46,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use gpui_kit::*;
 use yaar_link::{Changes, FileStatus, Reply, RepositoryId, Request, Setting, WorkspaceId};
@@ -157,6 +162,9 @@ struct Connection {
     told_workspaces: Option<Vec<WorkspaceRoot>>,
     told_on_screen: Option<Option<WorkspaceId>>,
     told_consents: Option<Vec<RepositoryConsent>>,
+    /// The stop time the Navigator runs on because it was told, none while it runs on its
+    /// own default: a time is told only when it is not this.
+    told_stop_after: Option<Duration>,
     /// The paths of the last answer for the changes, by workspace.
     told_changes: HashMap<WorkspaceId, BTreeSet<PathBuf>>,
 }
@@ -190,6 +198,7 @@ impl Navigation {
         .detach();
         cx.observe(&settings, |navigation, _, cx| {
             navigation.tell_consents(cx);
+            navigation.tell_stop_after(cx);
         })
         .detach();
         cx.observe(&changes, |navigation, _, cx| {
@@ -247,12 +256,14 @@ impl Navigation {
             told_workspaces: None,
             told_on_screen: None,
             told_consents: None,
+            told_stop_after: None,
             told_changes,
         });
         // What the last Navigator told is no news of this one.
         self.forget(cx);
         self.tell_workspaces(cx);
         self.tell_consents(cx);
+        self.tell_stop_after(cx);
         // Whether a Navigator is connected changed, as far as an observer can tell.
         cx.notify();
     }
@@ -616,6 +627,25 @@ impl Navigation {
         if connection.told_consents.as_ref() != Some(&consents) {
             let _ = connection.asks.try_send(Ask::Consents(consents.clone()));
             connection.told_consents = Some(consents);
+        }
+    }
+
+    /// Tells the Navigator the stop time the user set, when it is not what it runs on: at
+    /// the connect only a time that is set, since the Navigator has the default of its own;
+    /// afterwards each change. A time that went back to none, as when the Keeper refused it,
+    /// is told as the default the settings give.
+    fn tell_stop_after(&mut self, cx: &mut Context<Self>) {
+        if !self.is_connected() {
+            return;
+        }
+        let settings = self.settings.read(cx);
+        let (set, effective) = (settings.stop_after_set(), settings.stop_after());
+        let Some(connection) = self.connection.as_mut() else {
+            return;
+        };
+        if connection.told_stop_after != set {
+            let _ = connection.asks.try_send(Ask::StopAfter(effective));
+            connection.told_stop_after = set;
         }
     }
 

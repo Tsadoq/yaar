@@ -37,6 +37,8 @@ pub struct AgentList {
     listing: Option<Task<()>>,
     /// Whether the answer to that question is still awaited.
     awaits_list: bool,
+    /// The name of the CLI the user moved the choice to; none until they did.
+    chosen: Option<String>,
 }
 
 impl AgentList {
@@ -72,6 +74,7 @@ impl AgentList {
             listing_clis: None,
             listing: None,
             awaits_list: false,
+            chosen: None,
         };
         if connected {
             list.refresh(cx);
@@ -103,6 +106,36 @@ impl AgentList {
     /// terminal pane offers a launcher of. Empty until the Keeper answers.
     pub fn clis(&self) -> &[AgentCli] {
         &self.clis
+    }
+
+    /// The chosen agent CLI: what a launcher of the terminal pane, the offer of the review
+    /// pane and a worktree made with an agent start. The first of [`AgentList::clis`] until
+    /// [`AgentList::choose_next_cli`] moves it, kept by the CLI's name, so that a list asked
+    /// again keeps the choice while the CLI is in it, and falls back to the first when it is
+    /// not; none while the Keeper names no CLI. The one choice of the Window, for its life.
+    pub fn chosen_cli(&self) -> Option<&AgentCli> {
+        self.chosen
+            .as_ref()
+            .and_then(|name| self.clis.iter().find(|cli| cli.agent == *name))
+            .or_else(|| self.clis.first())
+    }
+
+    /// Makes the next CLI of [`AgentList::clis`] the chosen one, and after the last the
+    /// first; tells the observers. Does nothing while the Keeper names none.
+    pub fn choose_next_cli(&mut self, cx: &mut Context<Self>) {
+        let Some(current) = self.chosen_cli() else {
+            return;
+        };
+        let at = self
+            .clis
+            .iter()
+            .position(|cli| cli == current)
+            .unwrap_or_default();
+        let next = self.clis[(at + 1) % self.clis.len()].agent.clone();
+        if self.chosen.as_ref() != Some(&next) {
+            self.chosen = Some(next);
+            cx.notify();
+        }
     }
 
     /// Asks the Keeper for every workspace's agents, and takes the answer unless a later
@@ -204,6 +237,20 @@ pub enum Wanted {
         agent: String,
         /// The review.
         review: yaar_link::ReviewId,
+    },
+    /// A new worktree made from a branch with an agent CLI started in it: what the Frame's
+    /// [`crate::NewWorktree`] asks for once the user named the branch. Sent as
+    /// `yaar_link::Request::CreateWorktree` by the terminal pane, which shows the agent's
+    /// terminal from the reply on, as it shows one it opened.
+    Worktree {
+        /// The repository.
+        repository: yaar_link::RepositoryId,
+        /// The branch it is made from: the branch checked out in the workspace on screen.
+        from: String,
+        /// The new branch's name, as the user typed it.
+        branch: String,
+        /// The Adapter of the CLI to start: [`AgentList::chosen_cli`]'s.
+        agent: String,
     },
 }
 

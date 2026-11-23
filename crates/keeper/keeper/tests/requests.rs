@@ -667,6 +667,18 @@ fn a_keeper_that_finds_no_git_says_who_it_is_and_refuses_each_request_with_the_r
                 version: "0".repeat(40),
                 into: scratch.0.join("old-side"),
             },
+            RequestKind::CreateWorktree => Request::CreateWorktree {
+                repository: yaar_link::RepositoryId::new("1".repeat(32)),
+                from: "main".to_owned(),
+                branch: "task".to_owned(),
+                agent: "claude".to_owned(),
+                size: TerminalSize {
+                    columns: 80,
+                    rows: 24,
+                },
+            },
+            RequestKind::GetStateSizes => Request::GetStateSizes,
+            RequestKind::CleanUpStates => Request::CleanUpStates,
         };
         assert_eq!(
             window.ask(request),

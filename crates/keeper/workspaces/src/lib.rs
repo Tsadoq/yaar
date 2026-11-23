@@ -12,6 +12,10 @@
 //! - what those return: [`Repository`], [`Workspace`], [`Base`], [`Changes`],
 //!   [`Comparison`] with [`NoComparison`], [`FileSides`], and [`WorkspaceError`] with the
 //!   [`Refusal`] a user can mend;
+//! - a worktree the app creates from a branch for an agent, beside the repository, with
+//!   that branch as its base, in three steps: [`Workspaces::plan_worktree`], which gives what
+//!   it [`Planned`], [`Planned::add`] and [`Workspaces::open_added`], which gives what it
+//!   [`Created`]; and [`Workspaces::remove_created`] (the module `create.rs`);
 //! - the watcher of a worktree, [`Workspaces::watch`], which tells what it [`Seen`]; and who
 //!   is credited with a changed path: [`Workspaces::agent_wrote`],
 //!   [`Workspaces::command_began`] and [`Workspaces::command_ended`] in, and
@@ -37,6 +41,7 @@
 //! This crate starts no git and opens no database: it asks the Recorder and the Store.
 
 mod base;
+mod create;
 mod credit;
 mod identity;
 mod watch;
@@ -51,6 +56,7 @@ use yaar_recorder::{Branch, Commits, Git, GitError, OpenError};
 use yaar_store::{RepositoryRecord, Store, StoreError, WorkspaceRecord};
 
 pub use base::{default_base, on_base_branch};
+pub use create::{Created, Planned};
 pub use credit::{CreditedPath, Ledger, SETTLE};
 pub use watch::Seen;
 pub use yaar_recorder::{Change, ChangedPath, Commit, CommitId, Head, Refs, Worktree};
@@ -210,6 +216,20 @@ pub enum Refusal {
     UnknownRevision(String),
     /// The path leads out of the worktree.
     OutsideWorkspace(PathBuf),
+    /// No repository has this id, or none of its worktrees can be read.
+    UnknownRepository(RepositoryId),
+    /// git does not take this as the name of a branch.
+    NotABranchName(String),
+    /// A branch of this name exists already.
+    BranchExists(String),
+    /// Something is at this folder already.
+    FolderExists(PathBuf),
+    /// A folder named for the worktrees of a repository is not an absolute path, or holds a
+    /// `..`.
+    FolderNotAbsolute(PathBuf),
+    /// A folder named for the worktrees of a repository lies inside one of its worktrees or
+    /// inside its git folder, or is one of them.
+    FolderInsideRepository(PathBuf),
 }
 
 impl fmt::Display for Refusal {
@@ -238,6 +258,22 @@ impl fmt::Display for Refusal {
             Self::OutsideWorkspace(path) => {
                 write!(f, "{} is outside the worktree", path.display())
             }
+            Self::UnknownRepository(id) => write!(f, "there is no repository {id}"),
+            Self::NotABranchName(name) => {
+                write!(f, "{name:?} is not a name git takes for a branch")
+            }
+            Self::BranchExists(name) => write!(f, "a branch named {name} exists already"),
+            Self::FolderExists(path) => write!(f, "{} is there already", path.display()),
+            Self::FolderNotAbsolute(path) => write!(
+                f,
+                "{} is not an absolute folder: name one from / on, with no ..",
+                path.display()
+            ),
+            Self::FolderInsideRepository(path) => write!(
+                f,
+                "{} lies inside a worktree or the git folder of the repository",
+                path.display()
+            ),
         }
     }
 }

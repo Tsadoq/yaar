@@ -65,6 +65,7 @@ impl NavigatorEnd {
                 | Ask::Consents(_)
                 | Ask::FilesChanged { .. }
                 | Ask::OldSide { .. }
+                | Ask::StopAfter(_)
         )
     }
 

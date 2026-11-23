@@ -10,14 +10,25 @@
 //! the Window's own is outside the walk, and only a reader of that table can tell whether
 //! it belongs there.
 
+use std::cell::RefCell;
+use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::process::{Command, Stdio};
+use std::rc::Rc;
+use std::time::{Duration, Instant};
 
-use gpui_kit::{Action, Modifiers, TestAppContext, VisualTestContext};
-use yaar_frame::{Asks, Control, PROGRAM_CONTEXT, Place, Sends};
+use gpui_kit::{
+    Action, AppContext, Context, IntoElement, Modifiers, Render, TestAppContext, VisualTestContext,
+    Window, WindowOptions, div,
+};
+use yaar_frame::settings_screen::SettingRow;
+use yaar_frame::{
+    Asks, Beside, CloseWindow, Control, PROGRAM_CONTEXT, Place, SETTINGS_CONTEXT, Sends,
+};
 use yaar_link::{
-    Attachment, CommentId, ConsentAnswer, FlowForm, Origin, Program, Request, RequestKind,
-    ReviewId, Setting, ThreadId, ThreadState, Workspace, WorkspaceId,
+    Attachment, CommentId, ConsentAnswer, Fact, FlowForm, Head, Origin, Program, Refusal, Request,
+    RequestKind, ReviewId, Setting, TerminalPlace, ThreadId, ThreadState, TurnEndSelects,
+    Workspace, WorkspaceId,
 };
 use yaar_review_pane::{PaneRow, View};
 use yaar_system_tests::standin::{Did, Script};
@@ -25,7 +36,13 @@ use yaar_system_tests::{DEADLINE, Repo, World, descendants_of, is_alive};
 
 mod common;
 
-use common::{Composed, Found, RunningAgent, key_of, wait_until};
+use common::{Composed, Found, RunningAgent, key_of, wait_until, wait_until_telling};
+
+thread_local! {
+    /// The settings the Keeper told the Window of this test, in the order the Window heard
+    /// them (`hear_the_settings`).
+    static ECHOES: Rc<RefCell<Vec<Setting>>> = Rc::default();
+}
 
 /// Which request a step of the walk waits for on the tap.
 type Wanted = Box<dyn Fn(&Request) -> bool>;
@@ -68,12 +85,34 @@ fn open_with_a_navigator(world: World, cx: &mut TestAppContext) -> (Composed, Vi
         Found::InTheProject,
         &common::standin_row(Found::InTheProject, "notes.txt", &["txt"]),
     );
-    check_the_panes(common::open_composed_with_a_navigator(
+    let (window, mut cx) = check_the_panes(common::open_composed_with_a_navigator(
         world,
         cx,
         Vec::new(),
         navigator,
-    ))
+    ));
+    hear_the_settings(&window, &mut cx);
+    (window, cx)
+}
+
+/// Has what the Keeper tells the Window of the settings kept in order, as the Window hears it
+/// (what the Frame's list of settings hears, which is subscribed first, has been taken by the
+/// time this is told). The Keeper tells a setting to every Window once it keeps it, the
+/// Window that set it included, and that echo takes the setting the Window shows to the value
+/// it had when the Keeper kept it: two sets of one setting in quick succession show the first
+/// value again for a moment, until the second echo comes. A step that reads the setting
+/// waits for every echo first ([`Composed::wait_for_the_echoes`]).
+fn hear_the_settings(window: &Composed, cx: &mut VisualTestContext) {
+    let echoes = ECHOES.with(Rc::clone);
+    echoes.borrow_mut().clear();
+    cx.update(|_, app| {
+        app.subscribe(&window.models.link, move |_, fact: &Fact, _| {
+            if let Fact::SettingChanged(setting) = fact {
+                echoes.borrow_mut().push(setting.clone());
+            }
+        })
+        .detach();
+    });
 }
 
 /// [`open_composed`] in a world whose agent CLI is the stand-in, with a script that runs and
@@ -124,6 +163,44 @@ fn check_the_panes(opened: (Composed, VisualTestContext)) -> (Composed, VisualTe
     (window, cx)
 }
 
+/// The setting of the terminal pane's place that names the side of the first pane `beside`.
+fn place_of(beside: Beside) -> TerminalPlace {
+    match beside {
+        Beside::Right => TerminalPlace::Right,
+        Beside::Below => TerminalPlace::Below,
+        Beside::Left => TerminalPlace::Left,
+    }
+}
+
+/// A window with nothing in it.
+struct Spare;
+
+impl Render for Spare {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+    }
+}
+
+/// Opens a window of the test's own and makes it the active one: what a key that acts on the
+/// active window finds.
+fn open_a_spare_window(cx: &mut VisualTestContext) -> gpui_kit::AnyWindowHandle {
+    cx.update(|_, app| {
+        let spare: gpui_kit::AnyWindowHandle = app
+            .open_window(WindowOptions::default(), |_, app| app.new(|_| Spare))
+            .expect("open the spare window")
+            .into();
+        spare
+            .update(app, |_, window, _| window.activate_window())
+            .expect("activate the spare window");
+        assert_eq!(
+            app.active_window(),
+            Some(spare),
+            "the spare window is active"
+        );
+        spare
+    })
+}
+
 /// The controls of the Window that say they send the stop-everything frame.
 fn controls_that_stop() -> Vec<Control> {
     yaar_window::controls()
@@ -138,6 +215,133 @@ fn controls_that_send(kind: RequestKind) -> Vec<Control> {
         .into_iter()
         .filter(|control| control.sends == Some(Sends::Request(kind)))
         .collect()
+}
+
+/// What a read gave, compared byte for byte and shown as text when two differ.
+#[derive(PartialEq, Eq)]
+struct Bytes(Vec<u8>);
+
+impl std::fmt::Debug for Bytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} bytes: {:?}",
+            self.0.len(),
+            String::from_utf8_lossy(&self.0)
+        )
+    }
+}
+
+/// What a clean-up must leave as it was in the user's repository: the seven reads of it and
+/// every file of its objects with its size.
+#[derive(Debug, PartialEq, Eq)]
+struct Reads {
+    git: Vec<Bytes>,
+    objects: Vec<(PathBuf, u64)>,
+}
+
+/// Runs git in `folder` as a reader of a repository does: with no optional lock, so that
+/// reading never rewrites the index, and with nothing of the user's configuration.
+fn read_git(home: &Path, folder: &Path, args: &[&str]) -> Vec<u8> {
+    let mut git = Command::new("git");
+    git.env_clear();
+    if let Some(search) = std::env::var_os("PATH") {
+        git.env("PATH", search);
+    }
+    let output = git
+        .current_dir(folder)
+        .args(args)
+        .env("HOME", home)
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1")
+        .env("GIT_AUTHOR_NAME", "A Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.invalid")
+        .env("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z")
+        .env("GIT_COMMITTER_NAME", "A Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.invalid")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z")
+        .env("LC_ALL", "C")
+        .stdin(Stdio::null())
+        .output()
+        .expect("start git");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output.stdout
+}
+
+/// Every file below `folder` with its size, the path relative to `below`.
+fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
+    for entry in fs::read_dir(folder).expect("read the folder") {
+        let path = entry.expect("an entry").path();
+        let meta = fs::symlink_metadata(&path).expect("the kind");
+        if meta.is_dir() {
+            files_below(&path, below, found);
+        } else {
+            found.push((
+                path.strip_prefix(below).expect("below").to_owned(),
+                meta.len(),
+            ));
+        }
+    }
+}
+
+/// The repository's reads: status with the ignored files, the refs, the worktrees, the
+/// stashes, the unreachable objects, the bytes of the index and of the configuration, and
+/// the sorted list of every file of the objects with its size.
+fn reads(home: &Path, repo: &Repo) -> Reads {
+    let git_folder = repo.path().join(".git");
+    let mut objects = Vec::new();
+    files_below(
+        &git_folder.join("objects"),
+        &git_folder.join("objects"),
+        &mut objects,
+    );
+    objects.sort();
+    let git = [
+        &[
+            "status",
+            "--porcelain=v2",
+            "--ignored",
+            "--untracked-files=all",
+        ][..],
+        &["for-each-ref"],
+        &["worktree", "list", "--porcelain"],
+        &["stash", "list"],
+        &["fsck", "--unreachable", "--no-reflogs"],
+    ]
+    .iter()
+    .map(|args| read_git(home, repo.path(), args))
+    .chain([
+        fs::read(git_folder.join("index")).expect("the index"),
+        fs::read(git_folder.join("config")).expect("the configuration"),
+    ])
+    .map(Bytes)
+    .collect();
+    Reads { git, objects }
+}
+
+/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
+/// Gives their ids, which [`still_there`] finds again.
+fn plant(home: &Path, repo: &Repo) -> Vec<String> {
+    let file = home.join("planted.txt");
+    fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
+    let blob = repo.git(&["hash-object", "-w", file.to_str().expect("a path of text")]);
+    repo.write("README.md", "edited\n");
+    let dangling = repo.git(&["stash", "create"]);
+    repo.git(&["checkout", "--quiet", "--", "README.md"]);
+    assert!(!dangling.is_empty(), "the edit left no commit to plant");
+    vec![blob, dangling]
+}
+
+/// `git cat-file -e` of each planted object succeeds.
+fn still_there(repo: &Repo, planted: &[String]) {
+    for id in planted {
+        repo.git(&["cat-file", "-e", id]);
+    }
 }
 
 impl Composed {
@@ -234,47 +438,78 @@ impl Composed {
             RequestKind::OpenTerminal => {
                 wait_until(cx, "the new terminal to take the focus", |cx| {
                     self.focus_is_in("Program", cx)
-                })
+                });
+                // And to be drawn where the next key's click will look for it: the keys after
+                // this step click into it and out of it.
+                wait_until(cx, "the new terminal on screen", |cx| {
+                    cx.debug_bounds("terminal-slot-0").is_some()
+                });
             }
-            RequestKind::SetSetting => match passed {
-                // The pane shows the form it set as soon as the key is pressed.
-                Request::SetSetting {
-                    setting: Setting::FlowForm { .. },
-                } => wait_until(cx, "the live diff as the form of Flow", |cx| {
-                    self.review
-                        .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
-                }),
-                // The Keeper answers the question for the repository and tells it back; the
-                // model of the Frame shows the answer, and the pane no longer asks.
-                Request::SetSetting {
-                    setting:
-                        Setting::ServersInRepository {
-                            repository,
-                            allowed,
-                        },
-                } => {
-                    wait_until(
+            RequestKind::SetSetting => {
+                let Request::SetSetting { setting } = passed else {
+                    panic!("the step of SetSetting waited for {passed:?}")
+                };
+                self.wait_for_the_echoes(setting, cx);
+                match passed {
+                    // The pane shows the form it set as soon as the key is pressed.
+                    Request::SetSetting {
+                        setting: Setting::FlowForm { .. },
+                    } => wait_until(cx, "the live diff as the form of Flow", |cx| {
+                        self.review
+                            .read_with(cx, |pane, _| pane.flow_form() == FlowForm::LiveDiff)
+                    }),
+                    // The Keeper answers the question for the repository and tells it back; the
+                    // model of the Frame shows the answer, and the pane no longer asks.
+                    Request::SetSetting {
+                        setting:
+                            Setting::ServersInRepository {
+                                repository,
+                                allowed,
+                            },
+                    } => {
+                        wait_until(
+                            cx,
+                            "the answer to the question in the Window's model",
+                            |cx| {
+                                self.models.navigation.read_with(cx, |navigation, cx| {
+                                    navigation.consent(repository, cx) == Some(*allowed)
+                                })
+                            },
+                        );
+                        wait_until(cx, "the question to leave the line of the pane", |cx| {
+                            cx.debug_bounds("review-servers-yes").is_none()
+                        });
+                        // A yes lets the server run, which the Navigator heard of through the
+                        // Frame: the line of the pane shows it ready.
+                        if *allowed {
+                            wait_until(cx, "the server of the repository ready", |cx| {
+                                cx.debug_bounds("review-servers-state:ready").is_some()
+                            });
+                        }
+                    }
+                    // The Frame lays the panes out as the setting says as soon as it is set.
+                    Request::SetSetting {
+                        setting: Setting::TerminalPlace(place),
+                    } => wait_until(cx, "the panes laid out as the setting says", |cx| {
+                        self.frame
+                            .read_with(cx, |frame, _| place_of(frame.beside()) == *place)
+                    }),
+                    // The review pane reads what a turn end selects as soon as it is set.
+                    Request::SetSetting {
+                        setting: Setting::TurnEnd(selects),
+                    } => wait_until(
                         cx,
-                        "the answer to the question in the Window's model",
+                        "the review pane to follow what a turn end selects",
                         |cx| {
-                            self.models.navigation.read_with(cx, |navigation, cx| {
-                                navigation.consent(repository, cx) == Some(*allowed)
+                            self.review.read_with(cx, |pane, _| {
+                                pane.keeps_selection()
+                                    == (*selects == TurnEndSelects::KeepSelection)
                             })
                         },
-                    );
-                    wait_until(cx, "the question to leave the line of the pane", |cx| {
-                        cx.debug_bounds("review-servers-yes").is_none()
-                    });
-                    // A yes lets the server run, which the Navigator heard of through the
-                    // Frame: the line of the pane shows it ready.
-                    if *allowed {
-                        wait_until(cx, "the server of the repository ready", |cx| {
-                            cx.debug_bounds("review-servers-state:ready").is_some()
-                        });
-                    }
+                    ),
+                    other => panic!("the step of SetSetting waited for {other:?}"),
                 }
-                other => panic!("the step of SetSetting waited for {other:?}"),
-            },
+            }
             RequestKind::OpenFolder | RequestKind::SetBase | RequestKind::DeleteDraft => {}
             RequestKind::ListWorkspaces
             | RequestKind::GetChanges
@@ -296,10 +531,53 @@ impl Composed {
             | RequestKind::ListClis
             | RequestKind::CompareForReview
             | RequestKind::ListConsents
-            | RequestKind::ExportVersion => {
+            | RequestKind::ExportVersion
+            | RequestKind::GetStateSizes => {
                 panic!("the Window starts {kind:?} by itself: no user does")
             }
             RequestKind::Report => panic!("a piece of an agent CLI starts {kind:?}: no user does"),
+            // The new worktree comes on screen with the agent's terminal in it, which has the
+            // focus, and the Keeper lists the agent's session there: the step is over when a
+            // user sees that. A key pressed before the focus is in a terminal is typed into it.
+            RequestKind::CreateWorktree => {
+                let Request::CreateWorktree { branch, .. } = passed else {
+                    panic!("the step of CreateWorktree waited for {passed:?}")
+                };
+                let mut made = None;
+                wait_until_telling(
+                    cx,
+                    "the new worktree on screen",
+                    |cx| {
+                        made = self.on_screen(cx).filter(|shown| {
+                            shown
+                                .path
+                                .file_name()
+                                .is_some_and(|name| name == branch.as_str())
+                        });
+                        made.is_some()
+                    },
+                    |cx| Some(self.what_the_frame_and_the_terminals_show(cx)),
+                );
+                let made = made.expect("the worktree is on screen").id;
+                wait_until(
+                    cx,
+                    "the agent's terminal of the new worktree to take the focus",
+                    |cx| self.focus_is_in("Program", cx),
+                );
+                wait_until(cx, "the session of the agent in the new worktree", |cx| {
+                    self.models.agents.read_with(cx, |agents, _| {
+                        agents
+                            .of(&made)
+                            .is_some_and(|listed| !listed.sessions.is_empty())
+                    })
+                });
+            }
+            // The Keeper's answer is the sizes after, which ends the control's "cleaning up".
+            RequestKind::CleanUpStates => wait_until(cx, "the clean-up to end", |cx| {
+                self.models.states.read_with(cx, |states, _| {
+                    !states.cleaning() && states.sizes().is_some()
+                })
+            }),
             // The answer shows in pi's settings: a yes lists the extension of the app, and a
             // no takes it out again.
             RequestKind::AnswerConsent => {
@@ -489,23 +767,37 @@ impl Composed {
     /// on macOS does no harm. New Terminal, Next Terminal and Previous Terminal move the
     /// focus into a terminal, and so does a click into one, so this is looked at before
     /// every key.
+    ///
+    /// A click that moves the focus is followed by a wait for the focus to be where the click
+    /// put it: a key typed before it is typed where the focus still is, and a terminal that
+    /// takes the focus late takes it from a pane the click has just chosen.
     fn focus_where_the_key_works(&mut self, control: &Control, cx: &mut VisualTestContext) {
+        // The screen takes the place of the panes: its keys work from it, and the keys of
+        // everything else work from a pane, which is drawn once it is closed.
+        if control.place == Place::In(SETTINGS_CONTEXT) {
+            return self.open_the_settings(cx);
+        }
+        self.close_the_settings(cx);
         match control.place {
             // A kept key works wherever the focus is.
             Place::Kept => {}
             Place::Anywhere => {
-                if cx.update(|window, _| {
-                    window
-                        .context_stack()
-                        .iter()
-                        .any(|context| context.contains(PROGRAM_CONTEXT))
-                }) {
+                if self.focus_is_in(PROGRAM_CONTEXT, cx) {
                     self.click_into(cx, "review-bar");
+                    wait_until(cx, "the focus out of the terminal", |cx| {
+                        !self.focus_is_in(PROGRAM_CONTEXT, cx)
+                    });
                 }
             }
             // The bar of the review pane, drawn in both views, at its left end: a click
             // there puts the focus in the pane and pauses no follow.
-            Place::In(yaar_review_pane::KEY_CONTEXT) => self.click_into(cx, "review-bar"),
+            Place::In(yaar_review_pane::KEY_CONTEXT) => {
+                self.click_into(cx, "review-bar");
+                wait_until(cx, "the focus in the review pane", |cx| {
+                    self.focus_is_in(yaar_review_pane::KEY_CONTEXT, cx)
+                        && !self.focus_is_in(PROGRAM_CONTEXT, cx)
+                });
+            }
             // The tree of Changes: Tab from the rows moves the focus into it, as a user
             // gets there by keys.
             Place::In(yaar_review_pane::HISTORY_CONTEXT) => {
@@ -525,7 +817,30 @@ impl Composed {
                 }
             }
             // The view of the terminal on screen.
-            Place::In(PROGRAM_CONTEXT) => self.click_into(cx, "terminal-slot-0"),
+            Place::In(PROGRAM_CONTEXT) => {
+                // The view of the terminal's attachment, which an earlier step's key opened,
+                // lies over the terminal and takes the click: a user closes it with the key
+                // that opened it.
+                let open = |window: &Self, cx: &mut VisualTestContext| {
+                    window.terminals.read_with(&*cx, |pane, _| {
+                        pane.shown()
+                            .iter()
+                            .any(|terminal| pane.viewed_attachment(terminal).is_some())
+                    })
+                };
+                if open(self, cx) {
+                    cx.simulate_keystrokes(&key_of("View Attachment"));
+                    wait_until(cx, "the view of the attachment to close", |cx| {
+                        !open(self, cx)
+                    });
+                }
+                self.click_into(cx, "terminal-slot-0");
+                wait_until(
+                    cx,
+                    &format!("the focus in the terminal for {}", control.title),
+                    |cx| self.focus_is_in(PROGRAM_CONTEXT, cx),
+                );
+            }
             // The list of references opens through the Navigator only: `g r` on a name of
             // a line, as a user opens it, and its keys work in it.
             Place::In(yaar_review_pane::REFERENCES_CONTEXT) => self.open_the_list_of_references(cx),
@@ -533,6 +848,114 @@ impl Composed {
                 "{} works in the context {other:?}, and the walk does not know where that is",
                 control.title
             ),
+        }
+    }
+
+    /// Waits, with the app running, until a request `wanted` accepts has passed the tap after
+    /// the place `from` in its list, and gives it. The app has to run while this waits: what
+    /// the Keeper answers to a request goes into the Window on the thread that runs the app,
+    /// and a request that follows that answer is sent only then.
+    fn wait_for_the_request(
+        &mut self,
+        from: usize,
+        wanted: impl Fn(&Request) -> bool,
+        cx: &mut VisualTestContext,
+    ) -> Request {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            cx.run_until_parked();
+            let requests = self.tap.requests();
+            if let Some(found) = requests[from..].iter().find(|request| wanted(request)) {
+                return found.clone();
+            }
+            assert!(
+                Instant::now() < deadline,
+                "the request did not pass within {DEADLINE:?}; those looked at: {:?}",
+                &requests[from..]
+            );
+            std::thread::park_timeout(Duration::from_millis(1));
+        }
+    }
+
+    /// Waits, with the app running, until the Window has heard the Keeper's word on every set
+    /// of the kind of `setting` that has passed the tap: until then the setting it shows may
+    /// be the value of an earlier set, which the Keeper's echo of that set brings back for a
+    /// moment. The step that sent the last of them is the one that caused the echo.
+    fn wait_for_the_echoes(&mut self, setting: &Setting, cx: &mut VisualTestContext) {
+        wait_until(
+            cx,
+            &format!("the Keeper's word on every set of {setting:?}'s kind"),
+            |_| {
+                let sent = self
+                    .tap
+                    .requests()
+                    .iter()
+                    .filter(|request| {
+                        matches!(request, Request::SetSetting { setting: set }
+                            if set.same_thing_as(setting))
+                    })
+                    .count();
+                let heard = ECHOES.with(|echoes| {
+                    echoes
+                        .borrow()
+                        .iter()
+                        .filter(|told| told.same_thing_as(setting))
+                        .count()
+                });
+                heard >= sent
+            },
+        );
+    }
+
+    /// Whether the settings screen is open.
+    fn settings_are_open(&self, cx: &mut VisualTestContext) -> bool {
+        self.frame
+            .read_with(&*cx, |frame, _| frame.settings_screen().is_some())
+    }
+
+    /// Opens the settings screen by its key, as a user does, unless it is open, and waits
+    /// until it has the focus: its keys work from there.
+    fn open_the_settings(&mut self, cx: &mut VisualTestContext) {
+        if !self.settings_are_open(cx) {
+            self.leave_the_terminal_off_macos(cx);
+            cx.simulate_keystrokes(&key_of("Settings…"));
+        }
+        wait_until(cx, "the settings screen to have the focus", |cx| {
+            self.settings_are_open(cx) && self.focus_is_in(SETTINGS_CONTEXT, cx)
+        });
+    }
+
+    /// Closes the settings screen by its key when it is open, and waits until it is gone and
+    /// the panes are drawn in its place: the keys of the panes work from there.
+    fn close_the_settings(&mut self, cx: &mut VisualTestContext) {
+        if self.settings_are_open(cx) {
+            cx.simulate_keystrokes(&key_of("Close Settings"));
+        }
+        wait_until(cx, "the settings screen to close", |cx| {
+            !self.settings_are_open(cx)
+        });
+    }
+
+    /// Puts the cursor of the settings screen, which is open, on `row` by its keys.
+    fn put_the_cursor_on(&mut self, row: &SettingRow, cx: &mut VisualTestContext) {
+        let screen = self
+            .frame
+            .read_with(&*cx, |frame, _| frame.settings_screen().cloned())
+            .expect("the screen is open");
+        let (next, previous) = (key_of("Next Setting"), key_of("Previous Setting"));
+        loop {
+            let (at, cursor) = screen.read_with(&*cx, |screen, cx| {
+                let at = screen
+                    .rows(cx)
+                    .iter()
+                    .position(|shown| shown.row == *row)
+                    .unwrap_or_else(|| panic!("the screen has no row {row:?}"));
+                (at, screen.cursor())
+            });
+            if cursor == at {
+                return;
+            }
+            cx.simulate_keystrokes(if cursor < at { &next } else { &previous });
         }
     }
 
@@ -544,6 +967,10 @@ impl Composed {
             "{} has no key",
             control.title
         );
+        // What the Navigator opened is in the pane, which the screen has taken the place of.
+        if control.place != Place::In(SETTINGS_CONTEXT) {
+            self.close_the_settings(cx);
+        }
         self.leave_what_the_navigator_opened(cx);
         self.focus_where_the_key_works(control, cx);
         self.ran.borrow_mut().clear();
@@ -666,20 +1093,74 @@ impl Composed {
     /// a line of the notes, which the stand-in's row also serves, and the key of Find
     /// References; waits for the answer, which the Navigator finds by text match or from the
     /// server, and for the focus to be in the list.
+    ///
+    /// The key of an earlier step may have set off a comparison that the Keeper answers on a
+    /// thread of its own (`CompareVersions`, then `ReadVersions`: the tree's keys select a
+    /// change, which is read apart), and its answer reaches the pane when it comes: it
+    /// takes the rows and the place of the reviewer away, whatever a click chose before, and
+    /// nothing in the Window says one is on its way. When that happens between the click
+    /// and the key, the pane says "The reviewer is on no line" and asks nothing. A user whose
+    /// click the screen took away clicks again, and so does this: the whole opening is
+    /// repeated until the list is there. A try is begun only before the deadline taken here
+    /// has passed, which bounds how many there are; the wait of a try for the answer to its
+    /// key has a deadline of its own, taken when the try presses the key, so that a try that
+    /// came late is not starved of the time one answer is given. Each try that fails
+    /// says why on the standard error as it fails, and the failure at the deadline names
+    /// every reason and what the pane held.
     fn open_the_list_of_references(&mut self, cx: &mut VisualTestContext) {
+        let deadline = Instant::now() + DEADLINE;
+        let mut tried: Vec<String> = Vec::new();
+        loop {
+            match self.try_to_open_the_list_of_references(cx) {
+                Ok(()) => break,
+                Err(why) => {
+                    // Said at once, so that a run that needed a repetition and passed shows
+                    // how often the answer that comes apart reaches the pane after the click.
+                    eprintln!(
+                        "the opening of the list of references failed on try {}: {why}",
+                        tried.len() + 1
+                    );
+                    tried.push(why);
+                }
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited in vain for the list of references; each try ended as follows: {tried:#?}; \
+                 at the deadline {}",
+                self.what_the_review_pane_holds(cx)
+            );
+        }
+        assert!(
+            self.focus_is_in(yaar_review_pane::REFERENCES_CONTEXT, cx),
+            "the list of references took no focus"
+        );
+    }
+
+    /// One try of [`Composed::open_the_list_of_references`]: Err says why the pane held no
+    /// list after the key, when it did not ask for one. The wait for the answer ends
+    /// [`DEADLINE`] after the key of this try, whatever the tries before it took.
+    fn try_to_open_the_list_of_references(
+        &mut self,
+        cx: &mut VisualTestContext,
+    ) -> Result<(), String> {
         self.show_changes(cx);
         self.click_into_the_review_pane(cx);
         let mut row = None;
-        wait_until(cx, "a line of the notes with a name drawn", |cx| {
-            let rows = self.review.read_with(cx, |pane, _| pane.rows().len());
-            row = (0..rows).find_map(|row| {
-                ["new", "old"].into_iter().find_map(|side| {
-                    cx.debug_bounds(leak(format!("review-text-{row}-{side}:three")))
-                        .map(|_| (row, side))
-                })
-            });
-            row.is_some()
-        });
+        wait_until_telling(
+            cx,
+            "a line of the notes with a name drawn",
+            |cx| {
+                let rows = self.review.read_with(cx, |pane, _| pane.rows().len());
+                row = (0..rows).find_map(|row| {
+                    ["new", "old"].into_iter().find_map(|side| {
+                        cx.debug_bounds(leak(format!("review-text-{row}-{side}:three")))
+                            .map(|_| (row, side))
+                    })
+                });
+                row.is_some()
+            },
+            |cx| Some(self.what_the_review_pane_holds(cx)),
+        );
         let (row, side) = row.expect("a row");
         let selector = leak(format!("review-text-{row}-{side}:three"));
         let bounds = cx.debug_bounds(selector).expect("the text is drawn");
@@ -688,17 +1169,60 @@ impl Composed {
             gpui_kit::point(bounds.left() + gpui_kit::px(2.), bounds.center().y),
             Modifiers::none(),
         );
-        cx.simulate_keystrokes(&key_of("Find References"));
-        wait_until(cx, "the list of references", |cx| {
-            self.review.read_with(cx, |pane, _| {
-                pane.references()
-                    .is_some_and(|references| !references.waiting)
-            })
-        });
-        assert!(
-            self.focus_is_in(yaar_review_pane::REFERENCES_CONTEXT, cx),
-            "the list of references took no focus"
+        // The click chose the name and the focus: the keys go to the pane only once it has it.
+        wait_until(
+            cx,
+            "the focus in the review pane after the click on the name",
+            |cx| {
+                self.focus_is_in(yaar_review_pane::KEY_CONTEXT, cx)
+                    && !self.focus_is_in(PROGRAM_CONTEXT, cx)
+            },
         );
+        // This try's own deadline: the answer is waited for from the key on, and the time the
+        // steps before it took, in this try or in an earlier one, is not taken from it.
+        let deadline = Instant::now() + DEADLINE;
+        cx.simulate_keystrokes(&key_of("Find References"));
+        // The key either asked, so that the pane holds a list that waits or is there, or it
+        // did not and said why in the notice, at once. The pane holds a list or a notice
+        // before the keystrokes return, so no more is waited for to tell the two apart.
+        let held = self.review.read_with(cx, |pane, _| {
+            (
+                pane.references().map(|references| references.waiting),
+                pane.notice(),
+            )
+        });
+        if let (None, Some(notice)) = &held {
+            return Err(format!(
+                "the key of Find References asked nothing and said {notice:?}"
+            ));
+        }
+        loop {
+            cx.run_until_parked();
+            let (list, notice) = self.review.read_with(cx, |pane, _| {
+                (
+                    pane.references().map(|references| references.waiting),
+                    pane.notice(),
+                )
+            });
+            match list {
+                Some(false) => return Ok(()),
+                // The answer left no list, and the notice says why: no references were
+                // found, or the Navigator refused.
+                None if notice.is_some() => {
+                    return Err(format!(
+                        "the answer left no list and the pane said {notice:?}"
+                    ));
+                }
+                _ => {}
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited in vain for the list of references: the pane holds {list:?} (Some(true): \
+                 the Navigator never answered; None: no list was asked and nothing was said); {}",
+                self.what_the_review_pane_holds(cx)
+            );
+            std::thread::park_timeout(Duration::from_millis(1));
+        }
     }
 
     /// Fails when the Window is asking the user for something after the key of `control`,
@@ -718,6 +1242,14 @@ impl Composed {
             control.key(),
             control.title
         );
+        for field in ["frame-worktree-field", "settings-folder-field"] {
+            assert!(
+                cx.debug_bounds(field).is_none(),
+                "the key {} of {} says it asks for nothing and opened the field {field}",
+                control.key(),
+                control.title
+            );
+        }
         assert!(
             cx.debug_bounds("review-commit-field").is_none(),
             "the key {} of {} says it asks for nothing and opened the field for a commit message",
@@ -777,6 +1309,9 @@ impl Composed {
             // and the stand-in a launcher started, which the step has to end.
             let mut back_to: Option<WorkspaceId> = None;
             let mut launched_after: Option<u32> = None;
+            // What a clean-up has to leave as it was: the reads of each repository the walk
+            // opened before the step, with the objects planted in it.
+            let mut untouched: Vec<(Reads, Vec<String>)> = Vec::new();
             // No arm catches the rest: a kind added to the Link stops this from
             // compiling until somebody says here how to walk it.
             let (answer, wanted): (Answer, Wanted) = match kind {
@@ -926,7 +1461,60 @@ impl Composed {
                     };
                     (Answer::Nothing, Box::new(move |passed| *passed == request))
                 }
-                RequestKind::SetSetting => {
+                // The panes move to the next place: the setting the Frame keeps for the
+                // terminal pane's.
+                RequestKind::SetSetting if control.title == "Move Panes" => {
+                    let next = self.frame.read_with(cx, |frame, _| frame.beside()).next();
+                    let request = Request::SetSetting {
+                        setting: Setting::TerminalPlace(place_of(next)),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                // What a turn end selects, set from the screen with the cursor on its row,
+                // which is the first: `l` chooses the second of its two values and `h` the
+                // first. The screen is opened by the step, afresh, so that the cursor is there.
+                RequestKind::SetSetting
+                    if matches!(control.title, "Next Value" | "Previous Value") =>
+                {
+                    self.close_the_settings(cx);
+                    self.open_the_settings(cx);
+                    self.put_the_cursor_on(&SettingRow::TurnEnd, cx);
+                    let now = self
+                        .models
+                        .settings
+                        .read_with(cx, |settings, _| settings.turn_end());
+                    let to = if control.title == "Next Value" {
+                        (TurnEndSelects::WhatChanged, TurnEndSelects::KeepSelection)
+                    } else {
+                        (TurnEndSelects::KeepSelection, TurnEndSelects::WhatChanged)
+                    };
+                    assert_eq!(
+                        now, to.0,
+                        "{} moves what a turn end selects from {:?}; the walk met it as {now:?}",
+                        control.title, to.0
+                    );
+                    let request = Request::SetSetting {
+                        setting: Setting::TurnEnd(to.1),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                // The review pane's own key for the same setting: it flips what the setting
+                // says now.
+                RequestKind::SetSetting if control.title == "Keep Selection" => {
+                    let flipped = match self
+                        .models
+                        .settings
+                        .read_with(cx, |settings, _| settings.turn_end())
+                    {
+                        TurnEndSelects::WhatChanged => TurnEndSelects::KeepSelection,
+                        TurnEndSelects::KeepSelection => TurnEndSelects::WhatChanged,
+                    };
+                    let request = Request::SetSetting {
+                        setting: Setting::TurnEnd(flipped),
+                    };
+                    (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::SetSetting if control.title == "Timeline or Live Diff" => {
                     // The workspace on screen shows Flow as the timeline, which nobody chose:
                     // the key switches it to the live diff and keeps that for the workspace.
                     // The key acts in Flow only, so Flow is shown first, as a user does.
@@ -941,6 +1529,12 @@ impl Composed {
                         },
                     };
                     (Answer::Nothing, Box::new(move |passed| *passed == request))
+                }
+                RequestKind::SetSetting => {
+                    panic!(
+                        "the walk has no step for the control {}, which sends SetSetting",
+                        control.title
+                    )
                 }
                 RequestKind::ListWorkspaces
                 | RequestKind::GetChanges
@@ -962,11 +1556,62 @@ impl Composed {
                 | RequestKind::ListClis
                 | RequestKind::CompareForReview
                 | RequestKind::ListConsents
-                | RequestKind::ExportVersion => {
+                | RequestKind::ExportVersion
+                | RequestKind::GetStateSizes => {
                     panic!("the Window starts {kind:?} by itself: no user does")
                 }
                 RequestKind::Report => {
                     panic!("a piece of an agent CLI starts {kind:?}: no user does")
+                }
+                RequestKind::CreateWorktree => {
+                    // A worktree made from the branch of the workspace on screen, with the
+                    // agent of the chosen CLI: the stand-in it starts is the one this step
+                    // ends, and the workspace on screen is the one the step found.
+                    let on_screen = self
+                        .on_screen(cx)
+                        .expect("a workspace is on screen before the walk makes a worktree");
+                    let Some(Head::Branch(from)) = on_screen.head.clone() else {
+                        panic!("the workspace on screen has no branch checked out: {on_screen:?}")
+                    };
+                    let repository = self.repository_of_the_workspace_on_screen(cx);
+                    let agent = self
+                        .terminals
+                        .read_with(cx, |pane, cx| pane.chosen_cli(cx))
+                        .expect("the Keeper names the CLIs the launchers start")
+                        .agent;
+                    // The world's agent is the stand-in as Claude Code: the request names
+                    // that Adapter, whatever the pane's reader of the choice says.
+                    assert_eq!(agent, "claude", "the CLI the walk chooses");
+                    let branch = format!("made-{}", self.next());
+                    back_to = Some(on_screen.id);
+                    launched_after = Some(self.world.agent_log("default").pid);
+                    (
+                        Answer::Text(branch.clone()),
+                        Box::new(move |passed| {
+                            matches!(passed, Request::CreateWorktree {
+                                repository: of, from: made_from, branch: named, agent: with, ..
+                            } if *of == repository && *made_from == from && *named == branch && *with == agent)
+                        }),
+                    )
+                }
+                RequestKind::CleanUpStates => {
+                    // The screen opened by the key of the walk's step: the states of the
+                    // workspaces are cleaned up from there. The repositories the walk has
+                    // opened are the user's: each gets two objects no ref reaches, and is
+                    // read before the key and after the answer.
+                    let home = self.world.home();
+                    untouched = self
+                        .repositories
+                        .iter()
+                        .map(|repository| {
+                            let planted = plant(&home, repository);
+                            (reads(&home, repository), planted)
+                        })
+                        .collect();
+                    (
+                        Answer::Nothing,
+                        Box::new(|passed| matches!(passed, Request::CleanUpStates)),
+                    )
                 }
                 // The control says which answer it gives, and the Keeper is asked for pi's, the
                 // one CLI of the world that asks.
@@ -1019,12 +1664,25 @@ impl Composed {
             let from = self.tap.requests().len();
             self.press(&control, cx);
             self.give(&control, &answer, cx);
-            // The Window writes a request before the action that asked returns, so it
-            // is on its way by now. The folder and the branch are new with each step,
-            // and a terminal is asked for by this step alone: no request of an earlier
-            // step answers this wait.
-            let passed = self.tap.wait_for_request(DEADLINE, |passed| wanted(passed));
+            // The folder and the branch are new with each step, and a terminal is asked for
+            // by this step alone: no request of an earlier step answers this wait. The wait
+            // runs the app: a key may send its request only once the Window has taken the
+            // Keeper's answer to another it asked first (the answer to the key of a "no" for
+            // an extension, which asks who there is to answer for), and the Window takes an
+            // answer on the thread that runs the app, which a wait on the tap alone would
+            // hold.
+            let passed = self.wait_for_the_request(from, |passed| wanted(passed), cx);
             self.settle(kind, &passed, from, cx);
+            let home = self.world.home();
+            for (repository, (before, planted)) in self.repositories.iter().zip(&untouched) {
+                assert_eq!(
+                    &reads(&home, repository),
+                    before,
+                    "the clean-up wrote into the repository {}",
+                    repository.path().display()
+                );
+                still_there(repository, planted);
+            }
             if let Some(before) = launched_after {
                 self.end_the_stand_in_started_after(before);
             }
@@ -1232,11 +1890,13 @@ impl Composed {
                 control.title
             );
             let world = &mut self.world;
+            let gone = yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none());
             assert!(
-                yaar_system_tests::wait_until(DEADLINE, || world.keeper_pid().is_none()),
-                "the Keeper still runs after the key {} of {}",
+                gone,
+                "the Keeper still runs after the key {} of {}\n{}",
                 control.key(),
-                control.title
+                control.title,
+                self.keeper_that_stays()
             );
         }
         // The stop frame has the Keeper end what it holds, the shell the walk opened with
@@ -1251,6 +1911,38 @@ impl Composed {
         );
     }
 
+    /// What there is to read about a Keeper that does not end when told to, for the message
+    /// of the test that waited for it: what the Keeper wrote on its error output, which names
+    /// the work it left or waited for, and the processes under it, which are removed with the
+    /// world and so cannot be looked at afterwards.
+    fn keeper_that_stays(&mut self) -> String {
+        let errors = fs::read_to_string(self.world.home().with_file_name("keeper.err"))
+            .unwrap_or_else(|error| format!("(unreadable: {error})"));
+        let processes = match self.world.keeper_pid() {
+            None => "the Keeper ended meanwhile".to_owned(),
+            Some(keeper) => {
+                let mut pids = vec![keeper];
+                pids.extend(descendants_of(keeper));
+                let listing = Command::new("ps")
+                    .arg("-o")
+                    .arg("pid,ppid,stat,etime,command")
+                    .arg("-p")
+                    .arg(
+                        pids.iter()
+                            .map(u32::to_string)
+                            .collect::<Vec<_>>()
+                            .join(","),
+                    )
+                    .output();
+                match listing {
+                    Ok(output) => String::from_utf8_lossy(&output.stdout).into_owned(),
+                    Err(error) => format!("ps could not be run: {error}"),
+                }
+            }
+        };
+        format!("the Keeper's error output:\n{errors}\nthe processes under it:\n{processes}")
+    }
+
     fn wait_until_on_screen(&mut self, folder: &Path, cx: &mut VisualTestContext) {
         wait_until(cx, "the opened folder on screen", |cx| {
             self.on_screen(cx)
@@ -1259,9 +1951,17 @@ impl Composed {
     }
 
     /// Sets the base of the workspace on screen to `base` as a user does, by the control
-    /// that sends that request, and waits until the request has passed the tap. Returns
-    /// its place among the requests the tap lists, or none when the stop-everything frame
-    /// passes the tap first: it ends the Keeper, and the request would never pass.
+    /// that sends that request, and waits until the request has passed the tap and the
+    /// Keeper has refused it, as it does every base the walk sets: none names a branch.
+    /// Returns the request's place among the requests the tap lists, or none when the
+    /// stop-everything frame passes the tap first: it ends the Keeper, and the request
+    /// would never pass.
+    ///
+    /// The Keeper answers a Window's requests one at a time on the connection's thread, and
+    /// a base is read from git before it is refused. A walk that went on once the request
+    /// was on the tap would queue one such request after another in front of every request
+    /// the later steps wait for, and the wait of a step would count the queue of the steps
+    /// before it against its deadline. Each step ends with the Keeper caught up instead.
     fn set_base(&mut self, base: &str, cx: &mut VisualTestContext) -> Option<usize> {
         let control = controls_that_send(RequestKind::SetBase)
             .into_iter()
@@ -1276,27 +1976,49 @@ impl Composed {
             Request::SetBase { base: set, .. } => set == base,
             _ => false,
         };
-        let tap = &self.tap;
-        let came = yaar_system_tests::wait_until(DEADLINE, || {
-            tap.requests()[from..].iter().any(sets_it) || tap.wait_for_stop(Duration::ZERO)
-        });
-        // The stop frame is latched, so it is read after the wait whichever event ended
-        // it: a Keeper on its way out may still let the request through the tap, and
-        // only the key of this step can have sent the frame.
-        if self.tap.wait_for_stop(Duration::ZERO) {
+        // The app runs while the request is waited for, as in every step of the walk.
+        let deadline = Instant::now() + DEADLINE;
+        let stopped = loop {
+            cx.run_until_parked();
+            if self.tap.requests()[from..].iter().any(sets_it) {
+                break false;
+            }
+            // The stop frame is latched, so a look at it tells whether it ever passed.
+            if self.tap.wait_for_stop(Duration::ZERO) {
+                break true;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "neither the request that sets the base {base} nor the stop-everything frame \
+                 passed the tap; the requests listed are {:?}",
+                &self.tap.requests()[from..]
+            );
+            std::thread::park_timeout(Duration::from_millis(1));
+        };
+        // A Keeper on its way out may still let the request through the tap, and only the key
+        // of this step can have sent the frame.
+        if stopped || self.tap.wait_for_stop(Duration::ZERO) {
             return None;
         }
-        assert!(
-            came,
-            "neither the request that sets the base {base} nor the stop-everything frame \
-             passed the tap; the requests listed are {:?}",
-            &self.tap.requests()[from..]
-        );
-        self.tap.wait_for_request(DEADLINE, sets_it);
         let found = self.tap.requests()[from..]
             .iter()
             .position(sets_it)
             .expect("the tap lists the request it waited for");
+        let refused = Refusal::UnknownRevision {
+            revision: base.to_owned(),
+        };
+        let models = self.models.workspaces.clone();
+        wait_until_telling(
+            cx,
+            &format!("the Keeper to refuse the base {base}"),
+            |cx| models.read_with(cx, |list, _| list.refusal() == Some(&refused)),
+            |cx| {
+                Some(format!(
+                    "the Frame held the refusal {:?}",
+                    models.read_with(cx, |list, _| list.refusal().cloned())
+                ))
+            },
+        );
         Some(from + found)
     }
 }
@@ -1330,17 +2052,39 @@ fn walk_the_silent_keys(
     cx: &mut VisualTestContext,
     mut ready: impl FnMut(&mut Composed, &mut VisualTestContext),
 ) {
+    // The test platform has no way to hide the app, to hide the others or to minimise a
+    // window: its calls are `unimplemented!()`, and the Window program's handlers of those
+    // three actions (macOS only) end in them. The key is pressed all the same, and what it
+    // runs is the action of its row; a handler of the test's own, registered after the app's,
+    // takes the action first and does nothing (GPUI runs the app's handlers of an action last
+    // registered first, and the one that runs stops it). So the key is shown to send nothing,
+    // and what the handlers do on a real screen is the conventions checklist's.
+    cx.update(|_, app| {
+        app.on_action(|_: &yaar_frame::HideApp, _| {});
+        app.on_action(|_: &yaar_frame::HideOtherApps, _| {});
+        app.on_action(|_: &yaar_frame::Minimize, _| {});
+    });
     let mut silent: Vec<Control> = yaar_window::controls()
         .into_iter()
         .filter(|control| control.sends.is_none())
         .collect();
-    // Quit comes last: in the app nothing comes after it. The test platform does not
-    // end the app, so the window is still there to close the step.
-    let quit = yaar_window::Quit.name();
-    silent.sort_by_key(|control| (control.action)().name() == quit);
-    assert_eq!(
-        silent.last().map(|control| (control.action)().name()),
-        Some(quit)
+    // Quit and Close Window come last: in the app nothing comes after them. The test platform
+    // does not end the app on Quit, so the window is still there to close the step; Close
+    // Window closes the window that is active, which the step makes another (below).
+    let (quit, close) = (yaar_window::Quit.name(), CloseWindow.name());
+    let ends_the_app = |control: &Control| {
+        let name = (control.action)().name();
+        name == quit || name == close
+    };
+    silent.sort_by_key(|control| ends_the_app(control));
+    assert!(
+        silent.iter().rev().take(2).all(ends_the_app)
+            && silent
+                .iter()
+                .filter(|control| ends_the_app(control))
+                .count()
+                == 2,
+        "Quit and Close Window are the last two keys of the walk"
     );
 
     // This shows an absence, and is as strong as its end: each step is closed by a
@@ -1375,7 +2119,24 @@ fn walk_the_silent_keys(
         if in_changes {
             window.show_changes(cx);
         }
+        // Close Window closes the window that is active. The Window under test is the one
+        // window the app has, and closing it would end the app with nothing left to close
+        // the step by: another window, the test's own and empty, is the active one, and it
+        // is the one the key closes. The Window stays, and the step is closed as every other.
+        let spare = (control.action)().name() == CloseWindow.name();
+        let spare = spare.then(|| open_a_spare_window(cx));
         window.press(&control, cx);
+        if let Some(spare) = spare {
+            wait_until(cx, "the key to close the active window", |cx| {
+                cx.update(|_, app| !app.windows().contains(&spare))
+            });
+            assert_eq!(
+                cx.update(|_, app| app.windows().len()),
+                1,
+                "the key closed more than the window that was active"
+            );
+            cx.update(|window, _| window.activate_window());
+        }
         // Checked before the step is closed: the closing types into the field for the
         // base, and would hand a field this key had opened its line all the same.
         window.assert_asks_nothing(&control, cx);
@@ -1393,8 +2154,8 @@ fn walk_the_silent_keys(
                     .read_with(cx, |pane, _| pane.comment_box().is_none())
             });
         }
-        // No such branch exists. The Keeper refuses it, which is all the same here: the
-        // request has passed the tap.
+        // The Keeper refuses the base, as no such branch exists. The step is closed once
+        // the request has passed the tap and the Frame holds that refusal.
         // The stop frame is no request, so the loop below does not see it. A key that
         // sent it would end the Keeper, and the request that closes the step would never
         // pass: the step is closed on that frame as well, and it is told apart here.
@@ -1405,6 +2166,20 @@ fn walk_the_silent_keys(
                 control.title
             );
         };
+        // See the doc of `Composed::set_base`: this fails if the wait is ever taken out of it.
+        let base = format!("after-{}-{step}", control.key());
+        let refusal = window
+            .models
+            .workspaces
+            .read_with(&*cx, |list, _| list.refusal().cloned());
+        assert_eq!(
+            refusal,
+            Some(Refusal::UnknownRevision { revision: base }),
+            "the step of the key {} of {} went on before the Keeper had answered the request \
+             that closes it",
+            control.key(),
+            control.title
+        );
         let passed = window.tap.requests();
         for request in &passed[before..closed] {
             assert_ne!(

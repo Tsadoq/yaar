@@ -18,6 +18,8 @@
 //! No interface code belongs here or in any crate beside this one.
 
 mod agents;
+mod base_moves;
+mod cleaning;
 mod reviewing;
 mod settings;
 mod watching;
@@ -31,13 +33,14 @@ use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, mpsc};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_link::{
-    Fact, Hello, LinkError, MAX_FRAME, Message, Origin, Refusal, Request, RequestId, read_message,
-    write_message,
+    Fact, Hello, LinkError, MAX_FRAME, Message, Origin, Refusal, Request, RequestId, RequestKind,
+    read_message, write_message,
 };
 
 use wiring::{Answered, Answerer, Outcome, Parts};
@@ -136,13 +139,70 @@ struct Shared {
     told: Mutex<Option<Vec<Arc<Window>>>>,
     // Held while a request that waits its turn is answered and its facts are told.
     turn: Mutex<()>,
+    // Whether a reply to a Window has been queued since the start: the sweep of the states
+    // by the set time waits for it, so that its repacks do not slow the first Window's start.
+    answered: AtomicBool,
+    // The works answered apart that are in flight, which `run` waits for before it returns.
+    works: Works,
+}
+
+/// How long [`run`] waits, once the parts are ended, for the works answered apart that are
+/// still in flight: the user's own git and hooks make a worktree or a commit in them, and
+/// the hooks have no bound. Past it the Keeper leaves, says which work it left, and git
+/// finishes what it was doing without it.
+const WORKS_DEADLINE: Duration = Duration::from_secs(30);
+
+/// The works answered apart (`Answered::Later` of a request answered on a thread of its
+/// own) that are in flight, by the kind of request each answers. A work is counted from the
+/// moment the parts give it, before they are let go, until its outcome is queued and told,
+/// so that the stop, which takes the parts after every request being answered has let them
+/// go, finds every work it has to wait for.
+#[derive(Default)]
+struct Works {
+    running: Mutex<Vec<RequestKind>>,
+    ended: Condvar,
+}
+
+/// One work in flight; it ends when this is dropped, also when its thread panics.
+struct InFlight<'a> {
+    works: &'a Works,
+    kind: RequestKind,
+}
+
+impl Works {
+    /// Counts a work of `kind` as in flight, until the value given back is dropped.
+    fn begin(&self, kind: RequestKind) -> InFlight<'_> {
+        lock(&self.running).push(kind);
+        InFlight { works: self, kind }
+    }
+
+    /// Waits until no work is in flight, for at most `deadline`; gives the kinds of the
+    /// works still in flight then.
+    fn wait(&self, deadline: Duration) -> Vec<RequestKind> {
+        let (running, _) = self
+            .ended
+            .wait_timeout_while(lock(&self.running), deadline, |running| !running.is_empty())
+            .unwrap_or_else(PoisonError::into_inner);
+        running.clone()
+    }
+}
+
+impl Drop for InFlight<'_> {
+    fn drop(&mut self) {
+        let mut running = lock(&self.works.running);
+        if let Some(at) = running.iter().position(|kind| *kind == self.kind) {
+            running.remove(at);
+        }
+        drop(running);
+        self.works.ended.notify_all();
+    }
 }
 
 impl Shared {
     /// The shared state, with the parts started on it: the parts tell the Windows what a
     /// program of a terminal does, and so need a way to this state.
-    fn start(options: &Options) -> Arc<Shared> {
-        Arc::new_cyclic(|this| Shared::new(Parts::start(options, this.clone())))
+    fn start(options: &Options, clock: Arc<dyn yaar_recorder::Clock>) -> Arc<Shared> {
+        Arc::new_cyclic(|this| Shared::new(Parts::start(options, clock, this.clone())))
     }
 
     fn new(parts: Parts) -> Shared {
@@ -155,7 +215,14 @@ impl Shared {
             parts: RwLock::new(Some(parts)),
             told: Mutex::new(Some(Vec::new())),
             turn: Mutex::new(()),
+            answered: AtomicBool::new(false),
+            works: Works::default(),
         }
+    }
+
+    /// Whether the Keeper has queued a reply to a Window since it started.
+    fn has_answered(&self) -> bool {
+        self.answered.load(Ordering::Acquire)
     }
 
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -414,7 +481,21 @@ fn frame_of(message: &Message) -> io::Result<Vec<u8>> {
 /// Before it returns for any other reason, every Window still attached is let go and the
 /// parts are ended: the programs of the terminals and what they started, the git
 /// processes the Keeper keeps, and the database.
+///
+/// The works answered apart that are in flight then (the user's own git making a worktree
+/// or a commit, with their hooks) are waited for, for at most [`WORKS_DEADLINE`], before
+/// this returns and the lock is let go: they find the parts gone, and a worktree one of them
+/// made is taken away again, so that nothing half made is left in the user's repository.
+/// Past the deadline this returns and says on the error output which work it left.
 pub fn run(options: Options) -> io::Result<Exit> {
+    run_with_clock(options, Arc::new(yaar_recorder::SystemClock))
+}
+
+/// [`run`], with the time read from `clock`: the time each recorded state is stamped with,
+/// and the time the clean-up of states counts their age to. The program as installed hands
+/// the system's clock, through [`run`]; a test of the clean-up by the set time hands one of
+/// its own that it moved forward, so that the sweep at the start finds its states that old.
+pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) -> io::Result<Exit> {
     let socket = yaar_link::socket_address(&options.socket);
     let socket = socket.as_path();
     make_its_folder(socket, socket != options.socket)?;
@@ -437,7 +518,10 @@ pub fn run(options: Options) -> io::Result<Exit> {
 
     // Only the Keeper that holds the lock opens the database, and it is open before the
     // first Window can ask for anything.
-    let shared = Shared::start(&options);
+    let shared = Shared::start(&options, Arc::clone(&clock));
+    // The clean-up of states by the set time: once the first reply is queued, then every
+    // hour by the clock, until the end.
+    let sweeps = cleaning::Sweeps::start(Arc::downgrade(&shared), clock);
 
     match fs::remove_file(socket) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
@@ -461,6 +545,8 @@ pub fn run(options: Options) -> io::Result<Exit> {
         let _ = acceptor.join();
     }
 
+    // The sweep ends before the parts it reads do.
+    drop(sweeps);
     // Each thread that serves a Window ends when its connection does.
     for window in shared.tell_nobody_any_more() {
         window.let_go();
@@ -474,6 +560,11 @@ pub fn run(options: Options) -> io::Result<Exit> {
         .unwrap_or_else(PoisonError::into_inner)
         .take();
     drop(parts);
+    // What is still in flight finds the parts gone. The lock is held until it ends: the next
+    // Keeper may start as soon as the lock is let go.
+    for kind in shared.works.wait(WORKS_DEADLINE) {
+        eprintln!("yaar-keeper: leaving with the work of a {kind:?} request still running");
+    }
 
     let _ = fs::remove_file(socket);
     drop(lock);
@@ -736,13 +827,23 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
     // Held until the facts are out, so that they reach the Windows in the order in which
     // the requests were answered.
     let _turn = wiring::waits_its_turn(request.kind()).then(|| lock(&shared.turn));
+    let kind = request.kind();
+    let mut in_flight = None;
     let answered = match shared
         .parts
         .read()
         .unwrap_or_else(PoisonError::into_inner)
         .as_ref()
     {
-        Some(parts) => parts.answer(window, request),
+        Some(parts) => {
+            let answered = parts.answer(window, request);
+            // Counted while the parts are held: the stop takes them with a write lock, which
+            // waits for this, and then waits for the work.
+            if matches!(answered, Answered::Later(_)) && wiring::answerer(kind) == Answerer::Apart {
+                in_flight = Some(shared.works.begin(kind));
+            }
+            answered
+        }
         None => Answered::Now(Outcome::failed("the Keeper is leaving")),
     };
     // The parts are let go by now: work left for later, as the user's own git, holds up
@@ -768,6 +869,9 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
             false
         }
     };
+    if answered {
+        shared.answered.store(true, Ordering::Release);
+    }
     // What waited for the reply to be on its way, as the output of a terminal it names,
     // goes after it.
     if let Some(then) = then {
@@ -775,6 +879,7 @@ fn answer(shared: &Shared, window: &Arc<Window>, id: RequestId, request: Request
     }
     // What was done is told, whatever became of the Window that asked for it.
     shared.tell(&facts);
+    drop(in_flight);
     answered
 }
 

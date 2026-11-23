@@ -69,7 +69,7 @@ pub use reviews::{
 pub use sessions::{
     EndedBy, SessionId, SessionRecord, StepRecord, TurnEndRecord, TurnId, TurnRecord,
 };
-pub use settings::{FlowForm, Setting, TerminalPlace, Theme, TurnEndSelects};
+pub use settings::{FlowForm, OptionKey, Setting, TerminalPlace, Theme, TurnEndSelects};
 
 /// The name of the database file in the app's folder.
 pub const FILE_NAME: &str = "store.db";

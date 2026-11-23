@@ -1064,7 +1064,7 @@ fn the_settings_are_listed_by_a_keeper_started_again_on_the_same_data_folder() {
 }
 
 #[test]
-fn a_setting_the_link_has_no_word_for_is_kept_and_left_out_of_what_a_window_reads() {
+fn settings_the_store_holds_that_no_window_set_are_read_in_the_links_words_the_apps_first() {
     let mut settings = Settings::new();
     let chosen = Settings::flow(&settings.first, FlowForm::LiveDiff);
     let done = settings.window.ask(Request::SetSetting {
@@ -1073,7 +1073,8 @@ fn a_setting_the_link_has_no_word_for_is_kept_and_left_out_of_what_a_window_read
     assert!(matches!(done, Ok(Reply::Done)), "{done:?}");
     settings.window.stop(settings.keeper);
 
-    // The settings screen of a later slice sets these; the Store holds them now.
+    // Written to the Store directly, as a Keeper of an earlier slice left them: the Link has a
+    // word for each, and the settings of the whole app come before those of a workspace.
     let store = Store::open(&settings.scratch.data().join(yaar_store::FILE_NAME)).expect("open");
     store
         .set_setting(&yaar_store::Setting::Theme(yaar_store::Theme::Dark))
@@ -1085,6 +1086,13 @@ fn a_setting_the_link_has_no_word_for_is_kept_and_left_out_of_what_a_window_read
 
     let keeper = settings.scratch.keeper();
     let mut window = settings.scratch.window();
-    assert_eq!(window.settings(), [chosen]);
+    assert_eq!(
+        window.settings(),
+        [
+            yaar_link::Setting::StopAfter { seconds: 90 },
+            yaar_link::Setting::Theme(yaar_link::ThemeChoice::Named("Dark".to_owned())),
+            chosen
+        ]
+    );
     window.stop(keeper);
 }

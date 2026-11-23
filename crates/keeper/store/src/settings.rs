@@ -15,10 +15,13 @@
 //! | --- | --- | --- | --- |
 //! | [`Setting::TurnEnd`] | `setting` | `turn_end` | `what_changed`, `keep_selection` |
 //! | [`Setting::StopAfter`] | `setting` | `stop_after` | the seconds, in decimal digits |
-//! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark` |
+//! | [`Setting::Theme`] | `setting` | `theme` | `system`, `light`, `dark`, from slice 9 also `named:` and a theme's name |
 //! | [`Setting::TerminalPlace`] | `setting` | `terminal_place` | `right`, `below`, `left` |
+//! | [`Setting::KeepStates`], from slice 9 | `setting` | `keep_states` | the days, in decimal digits |
+//! | [`Setting::OptionKey`], from slice 9 | `setting` | `option_key` | `by_layout`, `meta`, `characters` |
 //! | [`Setting::FlowForm`] | `workspace_setting` | `flow_form` | `timeline`, `live_diff` |
 //! | [`Setting::ServersInRepository`] | `repository_setting`, from version 7 | `servers_inside` | `yes`, `no` |
+//! | [`Setting::WorktreesFolder`], from slice 9 | `repository_setting` | `worktrees_folder` | the absolute folder as text; the empty text for `folder: None` |
 //!
 //! A setting of a repository the Store does not hold is refused, and a row of one it no longer
 //! holds is not listed. Settings of repositories come last in [`Store::settings`], after
@@ -26,11 +29,34 @@
 //!
 //! A row whose name or value this build does not know, as one a later version wrote into
 //! a file it then left, is not listed: the setting holds its default.
+//!
+//! Slice 9 adds two names and one form of value, and no table: the version of the tables
+//! stays 7. A theme other than the two built in is kept as `named:<name>`, its name as
+//! the user saw it: 1 to 64 characters, none of them a control character; `light` and
+//! `dark` stay as they were written before. The seconds of `stop_after` and the days of
+//! `keep_states` are read only as plain digits and never 0: a row of 0 is not listed, and
+//! [`Store::set_setting`] refuses one, as it refuses an empty or too long theme's name,
+//! with a sentence that names the setting.
+//!
+//! A folder for the worktrees of a repository is kept as the text of its path, which must
+//! be absolute and valid UTF-8 (the Store keeps text): [`Store::set_setting`] refuses any
+//! other, with a sentence that names the setting. `folder: None`, the user's way back to
+//! the rule the app follows when no folder is named, is kept as the empty text and listed
+//! as `folder: None`; a row whose text is neither empty nor an absolute path is not listed.
+//! That the folder lies outside every worktree of the repository and its git folder is the
+//! Workspaces part's to check, which knows the worktrees; the Store knows only text.
+
+use std::path::{Path, PathBuf};
 
 use rusqlite::params;
 
 use crate::reviews::{exists, refused};
-use crate::{RepositoryId, Store, StoreError, WorkspaceId};
+use crate::{Failed, RepositoryId, Store, StoreError, WorkspaceId};
+
+/// The longest theme name the Store keeps, in characters.
+const THEME_NAME_MOST: usize = 64;
+/// What a theme's row starts with when the theme is not one of the two built in.
+const NAMED: &str = "named:";
 
 /// What the app selects in Changes when a turn ends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -42,7 +68,7 @@ pub enum TurnEndSelects {
 }
 
 /// The theme of the app.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Theme {
     /// The light or the dark one, as the system's setting is: the default.
     System,
@@ -50,6 +76,19 @@ pub enum Theme {
     Light,
     /// The dark one.
     Dark,
+    /// Another theme, by its name.
+    Named(String),
+}
+
+/// What the Option key does in a terminal, on macOS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OptionKey {
+    /// Meta on the U.S. layout, characters on every other: the default.
+    ByLayout,
+    /// Meta on every layout.
+    Meta,
+    /// Characters on every layout.
+    Characters,
 }
 
 /// Where the panes after the first lie beside it, the terminal pane among them.
@@ -87,6 +126,13 @@ pub enum Setting {
     Theme(Theme),
     /// Where the terminal pane lies.
     TerminalPlace(TerminalPlace),
+    /// How long a recorded state nothing refers to is kept, in whole days.
+    KeepStates {
+        /// The days; at least 1.
+        days: u32,
+    },
+    /// What the Option key does in a terminal.
+    OptionKey(OptionKey),
     /// The form of Flow chosen last in a workspace.
     FlowForm {
         /// The workspace.
@@ -102,6 +148,28 @@ pub enum Setting {
         /// True for yes.
         allowed: bool,
     },
+    /// The folder the worktrees the app creates for a repository go in.
+    WorktreesFolder {
+        /// The repository.
+        repository: RepositoryId,
+        /// An absolute folder; none for the rule the app follows when the user named none.
+        folder: Option<PathBuf>,
+    },
+}
+
+/// Whether `name` is one the Store keeps for a theme: 1 to 64 characters, none of them a
+/// control character.
+fn is_theme_name(name: &str) -> bool {
+    (1..=THEME_NAME_MOST).contains(&name.chars().count()) && !name.chars().any(char::is_control)
+}
+
+/// The number the text is, when it is only the digits the Store writes (no sign, no space)
+/// and not 0: a time of 0 is no time anyone set.
+fn whole_number(text: &str) -> Option<u32> {
+    if !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok().filter(|number| *number > 0)
 }
 
 /// The name and value a setting of the whole app is kept as, or the workspace, name and
@@ -109,13 +177,13 @@ pub enum Setting {
 enum Row {
     App(&'static str, String),
     Workspace(String, &'static str, &'static str),
-    Repository(String, &'static str, &'static str),
+    Repository(String, &'static str, String),
 }
 
 impl Setting {
-    /// The row that keeps this setting.
-    fn row(&self) -> Row {
-        match self {
+    /// The row that keeps this setting, or the Store's refusal of its value.
+    fn row(&self) -> Result<Row, Failed> {
+        Ok(match self {
             Self::TurnEnd(selects) => Row::App(
                 "turn_end",
                 match selects {
@@ -124,13 +192,47 @@ impl Setting {
                 }
                 .to_owned(),
             ),
-            Self::StopAfter { seconds } => Row::App("stop_after", seconds.to_string()),
+            Self::StopAfter { seconds } => {
+                if *seconds == 0 {
+                    return refused(
+                        "the setting stop_after is at least 1 second, not 0".to_owned(),
+                    );
+                }
+                Row::App("stop_after", seconds.to_string())
+            }
             Self::Theme(theme) => Row::App(
                 "theme",
                 match theme {
-                    Theme::System => "system",
-                    Theme::Light => "light",
-                    Theme::Dark => "dark",
+                    Theme::System => "system".to_owned(),
+                    Theme::Light => "light".to_owned(),
+                    Theme::Dark => "dark".to_owned(),
+                    // The two built-in themes keep the rows slice 5 wrote, however they
+                    // are asked for.
+                    Theme::Named(name) if name == "Light" => "light".to_owned(),
+                    Theme::Named(name) if name == "Dark" => "dark".to_owned(),
+                    Theme::Named(name) => {
+                        if !is_theme_name(name) {
+                            return refused(format!(
+                                "the setting theme needs a name of 1 to {THEME_NAME_MOST} \
+                                 characters with no control character, not {name:?}"
+                            ));
+                        }
+                        format!("{NAMED}{name}")
+                    }
+                },
+            ),
+            Self::KeepStates { days } => {
+                if *days == 0 {
+                    return refused("the setting keep_states is at least 1 day, not 0".to_owned());
+                }
+                Row::App("keep_states", days.to_string())
+            }
+            Self::OptionKey(key) => Row::App(
+                "option_key",
+                match key {
+                    OptionKey::ByLayout => "by_layout",
+                    OptionKey::Meta => "meta",
+                    OptionKey::Characters => "characters",
                 }
                 .to_owned(),
             ),
@@ -157,9 +259,35 @@ impl Setting {
             } => Row::Repository(
                 repository.as_str().to_owned(),
                 "servers_inside",
-                if *allowed { "yes" } else { "no" },
+                if *allowed { "yes" } else { "no" }.to_owned(),
             ),
-        }
+            Self::WorktreesFolder { repository, folder } => {
+                let text = match folder {
+                    None => "",
+                    Some(folder) if folder.is_absolute() => match folder.to_str() {
+                        Some(text) => text,
+                        None => {
+                            return refused(format!(
+                                "the setting worktrees_folder of repository {repository} \
+                                 needs a folder whose path is text"
+                            ));
+                        }
+                    },
+                    Some(folder) => {
+                        return refused(format!(
+                            "the setting worktrees_folder of repository {repository} \
+                             needs an absolute folder, not {}",
+                            folder.display()
+                        ));
+                    }
+                };
+                Row::Repository(
+                    repository.as_str().to_owned(),
+                    "worktrees_folder",
+                    text.to_owned(),
+                )
+            }
+        })
     }
 
     /// The setting a row of `setting` holds; none for a name or a value this build does
@@ -169,16 +297,21 @@ impl Setting {
             ("turn_end", "what_changed") => Self::TurnEnd(TurnEndSelects::WhatChanged),
             ("turn_end", "keep_selection") => Self::TurnEnd(TurnEndSelects::KeepSelection),
             ("stop_after", seconds) => Self::StopAfter {
-                // Only the digits the Store wrote: no sign, no space.
-                seconds: seconds
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit())
-                    .then(|| seconds.parse().ok())
-                    .flatten()?,
+                seconds: whole_number(seconds)?,
             },
+            ("keep_states", days) => Self::KeepStates {
+                days: whole_number(days)?,
+            },
+            ("option_key", "by_layout") => Self::OptionKey(OptionKey::ByLayout),
+            ("option_key", "meta") => Self::OptionKey(OptionKey::Meta),
+            ("option_key", "characters") => Self::OptionKey(OptionKey::Characters),
             ("theme", "system") => Self::Theme(Theme::System),
             ("theme", "light") => Self::Theme(Theme::Light),
             ("theme", "dark") => Self::Theme(Theme::Dark),
+            ("theme", named) if named.starts_with(NAMED) => {
+                let name = &named[NAMED.len()..];
+                is_theme_name(name).then(|| Self::Theme(Theme::Named(name.to_owned())))?
+            }
             ("terminal_place", "right") => Self::TerminalPlace(TerminalPlace::Right),
             ("terminal_place", "below") => Self::TerminalPlace(TerminalPlace::Below),
             ("terminal_place", "left") => Self::TerminalPlace(TerminalPlace::Left),
@@ -203,14 +336,27 @@ impl Setting {
     /// The setting a row of `repository_setting` holds; none for a name or a value this
     /// build does not know.
     fn of_repository_row(repository: String, name: &str, value: &str) -> Option<Self> {
-        let allowed = match (name, value) {
-            ("servers_inside", "yes") => true,
-            ("servers_inside", "no") => false,
+        let repository = RepositoryId::new(repository);
+        Some(match (name, value) {
+            ("servers_inside", "yes") => Self::ServersInRepository {
+                repository,
+                allowed: true,
+            },
+            ("servers_inside", "no") => Self::ServersInRepository {
+                repository,
+                allowed: false,
+            },
+            ("worktrees_folder", "") => Self::WorktreesFolder {
+                repository,
+                folder: None,
+            },
+            ("worktrees_folder", folder) if Path::new(folder).is_absolute() => {
+                Self::WorktreesFolder {
+                    repository,
+                    folder: Some(PathBuf::from(folder)),
+                }
+            }
             _ => return None,
-        };
-        Some(Self::ServersInRepository {
-            repository: RepositoryId::new(repository),
-            allowed,
         })
     }
 
@@ -222,8 +368,11 @@ impl Setting {
             Self::StopAfter { .. } => 1,
             Self::Theme(_) => 2,
             Self::TerminalPlace(_) => 3,
-            Self::FlowForm { .. } => 4,
-            Self::ServersInRepository { .. } => 5,
+            Self::KeepStates { .. } => 4,
+            Self::OptionKey(_) => 5,
+            Self::FlowForm { .. } => 6,
+            Self::ServersInRepository { .. } => 7,
+            Self::WorktreesFolder { .. } => 8,
         }
     }
 }
@@ -291,9 +440,10 @@ impl Store {
     /// Keeps `setting`, in the place of the value the same setting had: one transaction
     /// that returns when the change is on the drive, so that a Keeper killed after the
     /// call finds it. A setting of a workspace or of a repository the Store does not hold
-    /// is refused with a sentence that names it.
+    /// is refused with a sentence that names it, and so is a value the module doc's table
+    /// refuses.
     pub fn set_setting(&self, setting: &Setting) -> Result<(), StoreError> {
-        let row = setting.row();
+        let row = setting.row()?;
         self.try_ask(move |connection| {
             let keeping = connection.transaction()?;
             match row {

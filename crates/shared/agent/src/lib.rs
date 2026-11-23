@@ -475,6 +475,28 @@ pub trait Adapter: Send {
     /// session, as the session's reports last named it ([`Reported::cli_record`]); none
     /// where they named none. A CLI whose command needs only the id leaves it unread.
     fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String;
+
+    /// Removes the files this Adapter wrote under its own `folder` for agent sessions that
+    /// no longer run, as the files of reviews too long to ride inline with a message: the
+    /// clean-up the user asks for in the settings (`written_before` none), and the one the
+    /// set time makes (`written_before` the time now less the set time). `runs` tells, by
+    /// the CLI's own id of a session ([`CliSession`]'s text), whether the session still
+    /// runs: nothing of a session that runs is removed, since its agent may read the file
+    /// still. With `written_before`, a session's files go only when every one of them was
+    /// last modified before it, so that a session ended a moment ago and resumed later
+    /// finds them. Removes nothing outside `folder`, and follows no link out of it. Gives the
+    /// bytes it removed, as the blocks they used on disk.
+    ///
+    /// An Adapter that writes no such files removes nothing: the default.
+    fn remove_files_of_ended(
+        &self,
+        folder: &Path,
+        runs: &dyn Fn(&str) -> bool,
+        written_before: Option<std::time::SystemTime>,
+    ) -> io::Result<u64> {
+        let _ = (folder, runs, written_before);
+        Ok(0)
+    }
 }
 
 #[cfg(test)]

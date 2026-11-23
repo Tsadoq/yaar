@@ -27,7 +27,10 @@ use std::io::Write as _;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::clock::{Clock, SystemClock};
 
 use crate::contents::{Contents, Read, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
@@ -40,6 +43,10 @@ use crate::worktree::{
 // history's package's, beside the recording's.
 mod export;
 mod versions;
+// Deleting what nothing refers to, and the room a store takes.
+mod cleaning;
+
+pub use cleaning::{Deleted, StoreSizes, sizes};
 
 /// The old value that `git update-ref` takes for "no such ref".
 const NO_REF: &str = "0000000000000000000000000000000000000000";
@@ -50,6 +57,17 @@ const STATES: &str = "refs/yaar/states/";
 const KEPT: &str = "refs/yaar/kept/";
 /// The file of the store that holds the commit the store last copied whole.
 const COMPLETE_HEAD: &str = "yaar-complete-head";
+/// The file of the store that holds the commit the changes of the worktree were last
+/// counted from, as the Keeper noted it ([`StateStore::note_counted_from`]).
+const COUNTED_FROM: &str = "yaar-counted-from";
+
+/// How long a recording of files that are those of the newest state gives that state back
+/// rather than a new one, by the store's clock: one hour. Past it, the same files are
+/// recorded as a new state dated now, so that a turn that changed nothing has a state as
+/// young as the turn, and the clean-up by the set time, which counts from the time a state
+/// was recorded, never takes it earlier than the set time after the turn. The clean-up by
+/// the set time adds this hour to the set time for that reason.
+pub const SAME_STATE_FOR: Duration = Duration::from_secs(60 * 60);
 
 /// Names one recorded state: the full id of its commit in the state store.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -148,6 +166,14 @@ pub struct StateStore {
     // The running process that hands out file contents, once one was asked for. It has a
     // lock of its own, so that a read never waits for a recording.
     contents: Mutex<Option<Contents>>,
+    // Where the time a state is recorded at is read.
+    clock: Arc<dyn Clock>,
+    // The guard of the clean-up: taken shared by every call that makes the store hold a
+    // version and then runs git on it, for the whole call, and exclusively by
+    // `StateStore::pack`, which removes objects. Taken once per call, never twice on one
+    // thread: a call that calls another public call of the store calls its inner part.
+    // `cleaning.rs`'s module doc says which calls take it.
+    cleaning: RwLock<()>,
 }
 
 impl Drop for StateStore {
@@ -158,8 +184,21 @@ impl Drop for StateStore {
 
 impl StateStore {
     /// The store in `folder`, a bare repository made there when the folder holds none.
-    /// The folder lies in the app's folder, never in a worktree or a repository.
+    /// The folder lies in the app's folder, never in a worktree or a repository. The time a
+    /// state is recorded at is the machine's: [`StateStore::open_with`] and
+    /// [`SystemClock`].
     pub fn open(git: &Git, folder: &Path) -> Result<StateStore, RecordError> {
+        StateStore::open_with(git, folder, Arc::new(SystemClock))
+    }
+
+    /// [`StateStore::open`], with the time a state is recorded at read from `clock`: each
+    /// state commit made from now on carries `clock`'s time as its committer date, to the
+    /// second, which [`StateStore::recorded_times`] gives back.
+    pub fn open_with(
+        git: &Git,
+        folder: &Path,
+        clock: Arc<dyn Clock>,
+    ) -> Result<StateStore, RecordError> {
         if !folder.join("HEAD").exists() {
             fs::create_dir_all(folder).map_err(|e| RecordError::Store {
                 folder: folder.to_owned(),
@@ -175,7 +214,84 @@ impl StateStore {
             hooks_off: hooks_off(git, Place::GitDir(folder))?,
             writing: Mutex::new(()),
             contents: Mutex::new(None),
+            clock,
+            cleaning: RwLock::new(()),
         })
+    }
+
+    /// Every state of the store with the time it was recorded at, the oldest first, as
+    /// [`StateStore::states`] lists them: the committer date of its commit, to the second.
+    /// A state recorded before slice 9 carries the machine's time of then.
+    ///
+    /// For the time to be the clock's, a recording sets `GIT_COMMITTER_DATE` and
+    /// `GIT_AUTHOR_DATE` to `@<seconds since the epoch> +0000` of [`Clock::now`] on the
+    /// `commit-tree` it runs; this reads `%(committerdate:unix)` with `git for-each-ref`.
+    pub fn recorded_times(&self) -> Result<Vec<(StateId, SystemTime)>, GitError> {
+        self.numbered_with_times()?
+            .into_iter()
+            .map(|(_, state, seconds)| {
+                let seconds = seconds.ok_or_else(|| {
+                    unreadable(
+                        "a read of the state store",
+                        format!("the state {} has no readable time", state.id),
+                    )
+                })?;
+                Ok((state.id, UNIX_EPOCH + Duration::from_secs(seconds)))
+            })
+            .collect()
+    }
+
+    /// The full ids of the commits the store keeps by [`StateStore::keep_commit`] (each named
+    /// by a ref `refs/yaar/kept/<id>`), ordered by id: one `git for-each-ref` of that folder
+    /// of refs. What the clean-up at once may let go besides states.
+    pub fn kept_commits(&self) -> Result<Vec<String>, GitError> {
+        let answer = self.run(None, ["for-each-ref", "--format=%(refname)", KEPT])?;
+        let command = answer.command().to_owned();
+        let printed = answer.printed()?;
+        let mut kept = Vec::new();
+        for name in printed.split(|byte| *byte == b'\n') {
+            if name.is_empty() {
+                continue;
+            }
+            let id = std::str::from_utf8(name)
+                .ok()
+                .and_then(|name| name.strip_prefix(KEPT))
+                .filter(|id| is_full_id(id))
+                .ok_or_else(|| {
+                    unreadable(
+                        &command,
+                        format!("the ref {:?}", String::from_utf8_lossy(name)),
+                    )
+                })?;
+            kept.push(id.to_owned());
+        }
+        kept.sort();
+        Ok(kept)
+    }
+
+    /// The commit the changes of the worktree were last counted from, as
+    /// [`StateStore::note_counted_from`] noted it; none before the first note, or when the
+    /// file holds no full id. A file of the store, `yaar-counted-from`, not a ref: the
+    /// commit is noted, not copied, and nothing of the clean-up reads or removes it.
+    pub fn counted_from(&self) -> std::io::Result<Option<CommitId>> {
+        match fs::read_to_string(self.folder.join(COUNTED_FROM)) {
+            Ok(text) => {
+                let id = text.trim();
+                Ok(is_full_id(id).then(|| CommitId::new(id)))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Notes `commit` as the one the changes of the worktree are counted from now, read back
+    /// by [`StateStore::counted_from`], also by a store opened anew after the Keeper started
+    /// again. Written whole or not at all: into a file beside it, then renamed over it.
+    pub fn note_counted_from(&self, commit: &CommitId) -> std::io::Result<()> {
+        let file = self.folder.join(COUNTED_FROM);
+        let beside = self.folder.join(format!("{COUNTED_FROM}.new"));
+        fs::write(&beside, format!("{commit}\n"))?;
+        fs::rename(&beside, &file)
     }
 
     /// The folder of the store.
@@ -184,9 +300,13 @@ impl StateStore {
     }
 
     /// Records the state of `worktree` as its files are now, and returns it. When the
-    /// tree is that of the newest state, that state is returned and no new state is made,
-    /// though objects of the files may have been written into the store: a state is the
-    /// files, and the same files are the same state.
+    /// tree is that of the newest state and that state was recorded less than
+    /// [`SAME_STATE_FOR`] ago by the store's clock, that state is returned and no new state
+    /// is made, though objects of the files may have been written into the store: a state
+    /// is the files, and the same files a moment later are the same state. Past
+    /// [`SAME_STATE_FOR`], or with a newest state whose time cannot be read, the same tree
+    /// is recorded as a new state dated now (its message names its own number, so its id
+    /// differs from the older one's).
     ///
     /// A new state is named by the ref `refs/yaar/states/<n>`, `n` the highest number of
     /// the store's states plus 1, written with 10 digits. The ref is written only if no
@@ -209,6 +329,16 @@ impl StateStore {
     /// cleans the store up takes it away while it is named. A commit the store holds
     /// already costs nothing.
     pub fn keep_commit(&self, worktree: &Worktree, commit: &CommitId) -> Result<(), RecordError> {
+        let _guard = self.reading();
+        self.keep_commit_held(worktree, commit)
+    }
+
+    /// [`StateStore::keep_commit`] for a caller that holds the guard of the clean-up.
+    pub(crate) fn keep_commit_held(
+        &self,
+        worktree: &Worktree,
+        commit: &CommitId,
+    ) -> Result<(), RecordError> {
         if !is_full_id(commit.as_str()) {
             return Err(not_a_commit(commit.as_str()).into());
         }
@@ -241,6 +371,7 @@ impl StateStore {
         if !is_full_id(commit) {
             return Err(not_a_commit(commit));
         }
+        let _guard = self.reading();
         let printed = self
             .run(
                 None,
@@ -290,6 +421,7 @@ impl StateStore {
                 return Err(not_a_commit(commit));
             }
         }
+        let _guard = self.reading();
         let answer = self.run(
             None,
             ["diff-tree", "-r", "-z", "-M", "--name-status", from, to],
@@ -319,16 +451,17 @@ impl StateStore {
         let real_objects = worktree.common_dir().join("objects");
         let (tree, left_out) = self.tree_on_disk(worktree)?;
 
-        let numbered = self.numbered()?;
-        if let Some((_, newest)) = numbered.last()
+        let numbered = self.numbered_with_times()?;
+        if let Some((_, newest, recorded)) = numbered.last()
             && newest.tree == tree
+            && self.is_recent(*recorded)
         {
             return Ok(Recording {
                 state: newest.clone(),
                 left_out,
             });
         }
-        let number = numbered.last().map_or(1, |(n, _)| n + 1);
+        let number = numbered.last().map_or(1, |(n, _, _)| n + 1);
         let message = format!("YAAR state {number}");
         let mut args = vec!["commit-tree", &tree];
         if let Some(head) = &head {
@@ -337,11 +470,14 @@ impl StateStore {
         args.extend(["-m", &message]);
         let mut command = self.command(Some(&real_objects));
         command.args(args);
-        // The app's own identity, so that `user.useConfigOnly` cannot stop it.
+        // The app's own identity, so that `user.useConfigOnly` cannot stop it, and the
+        // time of the store's clock, which the clean-up counts a state's age from.
+        let date = format!("@{} +0000", seconds_of(self.clock.now()));
         for who in ["AUTHOR", "COMMITTER"] {
             command
                 .env(format!("GIT_{who}_NAME"), "YAAR")
-                .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid");
+                .env(format!("GIT_{who}_EMAIL"), "yaar@localhost.invalid")
+                .env(format!("GIT_{who}_DATE"), &date);
         }
         let commit = line(finish(command)?.printed()?);
 
@@ -528,11 +664,22 @@ impl StateStore {
 
     /// Every state with its number, in the order of the numbers.
     fn numbered(&self) -> Result<Vec<(u64, RecordedState)>, GitError> {
+        Ok(self
+            .numbered_with_times()?
+            .into_iter()
+            .map(|(number, state, _)| (number, state))
+            .collect())
+    }
+
+    /// Every state with its number and the seconds since the epoch of its committer date,
+    /// in the order of the numbers, from one run of git. The date is none where git gave
+    /// nothing readable.
+    fn numbered_with_times(&self) -> Result<Vec<(u64, RecordedState, Option<u64>)>, GitError> {
         let answer = self.run(
             None,
             [
                 "for-each-ref",
-                "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)",
+                "--format=%(refname)%00%(objectname)%00%(tree)%00%(parent)%00%(committerdate:unix)",
                 STATES,
             ],
         )?;
@@ -544,7 +691,7 @@ impl StateStore {
             .filter(|record| !record.is_empty())
         {
             let fields: Vec<&[u8]> = record.split(|byte| *byte == 0).collect();
-            let [name, id, tree, parent] = fields[..] else {
+            let [name, id, tree, parent, time] = fields[..] else {
                 return Err(unreadable(
                     &command,
                     format!("the line {:?}", String::from_utf8_lossy(record)),
@@ -568,10 +715,27 @@ impl StateStore {
                     tree: text(tree),
                     on: (!parent.is_empty()).then(|| CommitId::new(text(parent))),
                 },
+                text(time).parse::<u64>().ok(),
             ));
         }
-        all.sort_by_key(|(number, _)| *number);
+        all.sort_by_key(|(number, _, _)| *number);
         Ok(all)
+    }
+
+    /// Whether a state recorded at `recorded` (seconds since the epoch, none where it is
+    /// not known) is younger than [`SAME_STATE_FOR`] by the store's clock. A time ahead of
+    /// the clock is as young as can be.
+    fn is_recent(&self, recorded: Option<u64>) -> bool {
+        recorded.is_some_and(|recorded| {
+            seconds_of(self.clock.now()).saturating_sub(recorded) < SAME_STATE_FOR.as_secs()
+        })
+    }
+
+    /// The guard of the clean-up taken for reading, for the whole call of the one that
+    /// holds it. A thread that failed while holding it leaves it as sound as it was: the
+    /// guard protects no data.
+    pub(crate) fn reading(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.cleaning.read().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The id of the tree of a commit that the real repository or the store holds.
@@ -857,6 +1021,12 @@ fn changed_under_us(root: &Path, path: &[u8]) -> bool {
         ),
         Ok(found) => found.is_dir() && !place.join(".git").exists(),
     }
+}
+
+/// The whole seconds `time` lies after the epoch; none before it.
+fn seconds_of(time: SystemTime) -> u64 {
+    time.duration_since(UNIX_EPOCH)
+        .map_or(0, |after| after.as_secs())
 }
 
 /// The first line git printed, without its line end.

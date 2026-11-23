@@ -390,6 +390,14 @@ fn turn_entry(
     }
 }
 
+/// A turn whose state the Store names and the state store no longer holds.
+fn expired_entry(id: &yaar_store::TurnId, session: &SessionRecord) -> HistoryEntry {
+    HistoryEntry::ExpiredTurn {
+        turn: link_turn(id),
+        session: SessionId::new(session.id.as_str()),
+    }
+}
+
 fn commit_entry(id: &str, summary: &str) -> HistoryEntry {
     HistoryEntry::Commit(Commit {
         id: id.to_owned(),
@@ -487,7 +495,8 @@ fn the_history_lists_commits_and_the_turns_that_ended_on_them_in_the_order_they_
 }
 
 #[test]
-fn a_turn_whose_state_is_none_or_no_longer_kept_is_listed_with_no_state_after_the_turn_before_it() {
+fn a_turn_with_no_state_is_listed_with_none_and_one_whose_state_was_lost_as_expired_after_the_turn_before_it()
+ {
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
     git(&repo, &["switch", "--quiet", "-c", "feature"]);
@@ -518,7 +527,7 @@ fn a_turn_whose_state_is_none_or_no_longer_kept_is_listed_with_no_state_after_th
         [
             turn_entry(&t1, &a, Some(&s1)),
             turn_entry(&t2, &a, None),
-            turn_entry(&t3, &a, None),
+            expired_entry(&t3, &a),
             commit_entry(&c1, "first of the branch"),
             turn_entry(&t4, &a, Some(&s4)),
         ]
@@ -558,7 +567,7 @@ fn turns_with_no_state_and_no_turn_with_one_are_listed_after_the_last_commit_in_
             commit_entry(&c1, "first of the branch"),
             commit_entry(&c2, "second of the branch"),
             turn_entry(&t1, &a, None),
-            turn_entry(&t2, &a, None),
+            expired_entry(&t2, &a),
             turn_entry(&t3, &a, None),
         ],
         "after the last commit, not before the first"
