@@ -388,6 +388,66 @@ fn a_shell_that_outlasts_its_deadline_is_killed_with_everything_it_started() {
     wait_until_gone(job_pid, "the shell's background job");
 }
 
+/// A shell that does not end by itself, as the kernel's part alone: the Window that started it
+/// is killed, so nothing of the Navigator's own cleanup runs, and the shell still ends, so
+/// the kernel sent it a signal when its Window died. The shell lies in a session of its own,
+/// so the Window's death reaches it by no group either.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_shell_ends_when_the_window_that_started_it_is_killed() {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+
+    let this_test = "a_shell_ends_when_the_window_that_started_it_is_killed";
+    if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
+        // The Window: it runs the shell, says which process it is and where its scratch is,
+        // and waits to be killed; the end of its input, which a failed test leaves, ends it.
+        let scratch = Scratch::new();
+        let base = scratch.environment();
+        let pid_pipe = scratch.root.join("shell.pid");
+        make_pipe(&pid_pipe);
+        // Its own deadline lies past the parent's wait, so that only the kernel can be what
+        // ends it within the wait.
+        let shell = shell_of(
+            &scratch,
+            "never-ending-shell",
+            &format!("echo $$ > {}\nexec sleep 600\n", quoted(&pid_pipe)),
+            4 * DEADLINE,
+        );
+        std::thread::spawn(move || {
+            let _ = take(&shell, &base);
+        });
+        let pid = read_pipe(&pid_pipe, "the shell to say its process");
+        println!("SHELL {} {}", pid.trim(), scratch.root.display());
+        let _ = std::io::stdin().read_line(&mut String::new());
+        return;
+    }
+
+    let mut window = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", this_test, "--nocapture", "--test-threads=1"])
+        .env("YAAR_WINDOW_CHILD", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("start the test again as a Window of its own");
+    let output = window.stdout.take().expect("the output was piped");
+    let said = BufReader::new(output)
+        .lines()
+        .map_while(Result::ok)
+        // The test harness has started a line of its own, so the sentence is not first.
+        .find_map(|line| line.split_once("SHELL ").map(|(_, said)| said.to_owned()))
+        .expect("the Window said which shell it started");
+    let (pid, scratch) = said.split_once(' ').expect("a process and a folder");
+    let pid: u32 = pid.parse().expect("a process number");
+    assert!(is_alive(pid), "the shell runs while its Window does");
+
+    window.kill().expect("kill the Window");
+    window.wait().expect("reap the Window");
+    wait_until_gone(pid, "the shell that the killed Window started");
+    // The Window was killed, so its scratch was not removed.
+    let _ = std::fs::remove_dir_all(scratch);
+}
+
 // ---------------------------------------------------------------------------------------
 // NAV-16
 // ---------------------------------------------------------------------------------------
