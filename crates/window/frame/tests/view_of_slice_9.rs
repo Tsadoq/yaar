@@ -14,8 +14,8 @@ use gpui_kit::{
     Styled, TestAppContext, VisualTestContext, Window, div, px,
 };
 use yaar_frame::{
-    Beside, BuildPane, CloseSettings, FocusNextPane, MovePanes, NewWorktree, OpenSettings, Pane,
-    Wanted,
+    Beside, BuildPane, CloseSettings, FocusNextPane, FocusPreviousPane, MovePanes, NewWorktree,
+    OpenSettings, Pane, SetBase, Wanted,
 };
 use yaar_link::{
     AgentCli, Fact, Head, Hello, PROTOCOL_VERSION, Repository, RepositoryId, Request, Setting,
@@ -261,6 +261,60 @@ fn closing_the_settings_with_none_open_does_nothing_and_each_opening_makes_a_scr
     assert_ne!(second.entity_id(), first_id, "a new screen at each opening");
 }
 
+#[gpui_kit::test]
+fn the_keys_that_move_the_focus_between_the_panes_leave_it_in_the_screen_while_it_is_open(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let (shown, mut cx) = open_frame(WINDOW, two_panes(&handles), cx);
+    cx.simulate_keystrokes(&pressed::<OpenSettings>());
+    let screen_focus = shown.frame.read_with(&cx, |frame, cx| {
+        frame
+            .settings_screen()
+            .expect("the screen")
+            .read(cx)
+            .focus()
+            .clone()
+    });
+
+    // No pane is drawn, so none is given keys nobody can see.
+    cx.simulate_keystrokes(&pressed::<FocusNextPane>());
+    cx.simulate_keystrokes(&pressed::<FocusPreviousPane>());
+
+    assert!(has_focus(&screen_focus, &mut cx));
+    assert!(!has_focus(&handles.borrow()[0], &mut cx));
+    assert!(!has_focus(&handles.borrow()[1], &mut cx));
+}
+
+#[gpui_kit::test]
+fn the_field_for_the_base_opened_over_the_screen_gives_the_focus_back_to_the_screen(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let (shown, mut cx) = showing(&one_repository(), two_panes(&handles), Vec::new(), cx);
+    cx.simulate_keystrokes(&pressed::<OpenSettings>());
+    let screen_focus = shown.frame.read_with(&cx, |frame, cx| {
+        frame
+            .settings_screen()
+            .expect("the screen")
+            .read(cx)
+            .focus()
+            .clone()
+    });
+
+    // The field is drawn above the screen, which stays open; Escape closes the field, and
+    // the focus is where it was: in the screen, not in a pane that is not drawn.
+    cx.simulate_keystrokes(&pressed::<SetBase>());
+    assert!(is_drawn("frame-base-field", &mut cx));
+    assert!(is_drawn("settings-screen", &mut cx));
+    assert!(!has_focus(&screen_focus, &mut cx));
+    cx.simulate_keystrokes("escape");
+
+    assert!(!is_drawn("frame-base-field", &mut cx));
+    assert!(screen_is_open(&shown, &mut cx));
+    assert!(has_focus(&screen_focus, &mut cx));
+}
+
 // The field for a new worktree's branch.
 
 /// What the Frame wanted of the terminals so far, and the marker that `barrier` puts after.
@@ -482,6 +536,43 @@ fn with_a_detached_workspace_on_screen_the_notice_says_so_and_no_worktree_is_wan
         ]
     );
     assert_eq!(notice(&shown, &mut cx), None);
+}
+
+#[gpui_kit::test]
+fn a_workspace_that_comes_on_screen_with_no_branch_while_the_field_is_open_has_the_notice_say_so_at_enter(
+    cx: &mut TestAppContext,
+) {
+    let handles = Handles::default();
+    let detached = Workspace {
+        head: Some(Head::Detached("b".repeat(40))),
+        ..workspace('3', "unused")
+    };
+    let mut listed = one_repository();
+    listed[0].workspaces.push(detached);
+    let (shown, mut cx) = showing(
+        &listed,
+        two_panes(&handles),
+        vec![cli("claude", "Claude Code")],
+        cx,
+    );
+    wait_for_clis(&shown, &mut cx, 1);
+    let wanted = wanted_log(&shown, &mut cx);
+
+    // The field opens on the branch `main`; what is on screen at Enter is what counts.
+    cx.simulate_keystrokes(&pressed::<NewWorktree>());
+    assert!(field_is_open(&mut cx));
+    cx.simulate_input("task");
+    shown
+        .models
+        .workspaces
+        .update(&mut cx, |list, cx| list.select(&id('3'), cx));
+    cx.simulate_keystrokes("enter");
+
+    let said = notice(&shown, &mut cx).expect("the notice says why");
+    assert!(said.contains("no branch"), "{said}");
+    assert!(!field_is_open(&mut cx), "the field is closed");
+    let marker = barrier(&shown, &mut cx);
+    assert_eq!(*wanted.borrow(), [marker], "nothing was wanted");
 }
 
 #[gpui_kit::test]

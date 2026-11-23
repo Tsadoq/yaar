@@ -703,10 +703,12 @@ impl Frame {
                 ));
             }
         };
-        let cli =
-            composed.models.agents.read(cx).chosen_cli().ok_or(
-                "No agent CLI is installed, so no agent can be started in a new worktree.",
-            )?;
+        let Some(cli) = composed.models.agents.read(cx).chosen_cli() else {
+            return Err(
+                "No agent CLI is installed, so no agent can be started in a new worktree."
+                    .to_owned(),
+            );
+        };
         Ok(Wanted::Worktree {
             repository: repository.id.clone(),
             from,

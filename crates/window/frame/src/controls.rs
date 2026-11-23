@@ -53,8 +53,9 @@ actions!(
         /// Moves the focus to the previous pane, and from the first to the last.
         FocusPreviousPane,
         /// Moves the panes after the first to the next place beside the first: from the
-        /// right to below it, from below to its left, from its left to the right. See
-        /// [`crate::Beside`].
+        /// right to below it, from below to its left, from its left to the right. The
+        /// place is a setting of the app: the action sets the next one, which the Keeper
+        /// keeps. See [`crate::Beside`].
         MovePanes,
         /// Quits the Window, the plain way: the Keeper, the agents and every program of
         /// the terminals go on, and a Window opened again shows them as they are. The
@@ -67,10 +68,12 @@ actions!(
         /// Puts on screen the workspace of the notice of a turn that ended where the
         /// Window did not show it, and takes the notice away.
         ShowFinishedTurn,
-        /// Opens the settings screen in the place of the panes; closes it when it is open.
-        /// See `crate::settings_screen`.
+        /// Opens the settings screen in the place of the panes and gives it the focus;
+        /// closes it, and gives the focus back, when it is open. The Frame handles it. See
+        /// `crate::settings_screen`.
         OpenSettings,
-        /// Closes the settings screen and gives the focus back.
+        /// Closes the settings screen and gives the focus back to where it was when the
+        /// screen opened. The Frame handles it, and the screen's own table binds its key.
         CloseSettings,
         /// Moves the cursor of the settings screen to the next row.
         NextSetting,
@@ -84,8 +87,11 @@ actions!(
         OpenSetting,
         /// Deletes at once the recorded states nothing refers to, with what only they held.
         CleanUpStates,
-        /// Asks the user for the name of a new branch, and makes a worktree on it, from the
-        /// branch of the workspace on screen, with the chosen agent CLI started in it.
+        /// Asks the user for the name of a new branch in a one-line field, and makes a
+        /// worktree on it, from the branch of the workspace on screen, with the chosen agent
+        /// CLI started in it. The Frame handles it: Enter in the field wants the worktree
+        /// ([`crate::Wanted::Worktree`]), which the terminal pane sends as
+        /// `CreateWorktree`.
         NewWorktree,
         /// Closes the window: on macOS the app's window; the app quits the plain way when its
         /// last window is closed.
@@ -346,7 +352,8 @@ pub fn controls() -> Vec<Control> {
             action: || Box::new(MovePanes),
             keystroke: "secondary-alt-p",
             place: Place::Anywhere,
-            sends: None,
+            // The place of the panes is a setting the Keeper keeps.
+            sends: Some(Sends::Request(RequestKind::SetSetting)),
             asks: Asks::Nothing,
         },
         Control {
