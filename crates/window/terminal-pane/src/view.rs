@@ -30,14 +30,16 @@ use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, TerminalOutput};
+use yaar_frame::theme::{self, TerminalColors};
+use yaar_frame::{KeeperLink, PROGRAM_CONTEXT, SettingList, TerminalOutput};
 use yaar_link::{Ending, Request, TerminalId, TerminalSize};
 
 use crate::MouseButton as ReportedButton;
-use crate::draw::{self, Grid, Palette};
+use crate::draw::{self, Grid};
 use crate::{
-    CellPlace, Copy, Emulator, MouseAction, MouseMode, OptionKey, Paste, ScrollPageDown,
-    ScrollPageUp, encode_focus, encode_key, encode_mouse, encode_paste, encode_release,
+    CellPlace, Clear, Copy, Emulator, MouseAction, MouseMode, OptionKey, Paste, ScrollLineDown,
+    ScrollLineUp, ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, SelectAll,
+    encode_focus, encode_key, encode_mouse, encode_paste, encode_release,
 };
 
 /// How many lines of history a step of the wheel scrolls while the program takes no
@@ -79,7 +81,12 @@ struct Geometry {
 pub struct TerminalView {
     id: TerminalId,
     link: Entity<KeeperLink>,
+    /// The user's settings, which say what Option does.
+    settings: Entity<SettingList>,
     emulator: Emulator,
+    /// The terminal colours of the theme the emulator answers a program's questions from:
+    /// the ones last handed to it.
+    colours: TerminalColors,
     focus: FocusHandle,
     /// The size the Keeper was last told.
     size: TerminalSize,
@@ -117,6 +124,7 @@ impl TerminalView {
         id: TerminalId,
         size: TerminalSize,
         link: Entity<KeeperLink>,
+        settings: Entity<SettingList>,
         output: Option<TerminalOutput>,
         cut: bool,
         cx: &mut Context<Self>,
@@ -139,13 +147,18 @@ impl TerminalView {
             })
         });
         let mut emulator = Emulator::new(size);
+        // A program may ask for its colours before the first frame is drawn.
+        let colours = theme::applied(cx).terminal;
+        emulator.set_colours(colours);
         if cut {
             emulator.advance(CUT_NOTICE.as_bytes());
         }
         Self {
             id,
             link,
+            settings,
             emulator,
+            colours,
             focus: cx.focus_handle(),
             size,
             marked: None,
@@ -197,6 +210,12 @@ impl TerminalView {
     /// underlined at the cursor and has not sent; none while nothing is composed.
     pub fn marked_text(&self) -> Option<String> {
         self.marked.clone()
+    }
+
+    /// How many lines the view is scrolled back into the history: 0 while it shows the
+    /// newest.
+    pub fn scrolled_back(&self) -> usize {
+        self.emulator.scrolled_back()
     }
 
     /// The title the program gave the terminal; none before it gave one.
@@ -259,14 +278,20 @@ impl TerminalView {
         self.forget_selection();
     }
 
-    /// The Option setting for the keyboard layout in use.
-    fn option_key(cx: &App) -> OptionKey {
-        OptionKey::for_layout(cx.keyboard_layout().id(), cfg!(target_os = "macos"))
+    /// What Option does now: the user's setting, and where it says nothing the keyboard
+    /// layout in use. Read at every key, so that a change of the setting is in force at
+    /// once.
+    fn option_key(&self, cx: &App) -> OptionKey {
+        OptionKey::of_setting(
+            self.settings.read(cx).option_key(),
+            cx.keyboard_layout().id(),
+            cfg!(target_os = "macos"),
+        )
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
         let modes = self.emulator.modes();
-        let option = Self::option_key(cx);
+        let option = self.option_key(cx);
         let keystroke = &event.keystroke;
         let modifiers = &keystroke.modifiers;
         // A key that types text has no bytes here: it is left alone, and the platform
@@ -288,7 +313,7 @@ impl TerminalView {
 
     fn key_up(&mut self, event: &KeyUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         let modes = self.emulator.modes();
-        let option = Self::option_key(cx);
+        let option = self.option_key(cx);
         if let Some(bytes) = encode_release(&event.keystroke, &modes, option) {
             self.send(bytes, cx);
             cx.stop_propagation();
@@ -487,6 +512,39 @@ impl TerminalView {
         cx.notify();
     }
 
+    /// Moves the view with `scroll`, which takes the selection's mark away as every other
+    /// scroll of the history does. Nothing is sent to the program.
+    fn scroll_with(&mut self, scroll: fn(&mut Emulator), cx: &mut Context<Self>) {
+        self.forget_selection();
+        scroll(&mut self.emulator);
+        cx.notify();
+    }
+
+    /// Scrolls the view `lines` into the history, or back towards the newest line when
+    /// negative.
+    fn scroll_by(&mut self, lines: i32, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.emulator.scroll_lines(lines);
+        cx.notify();
+    }
+
+    /// [`Clear`]: the history and the screen above the cursor's line go, and the view
+    /// shows the newest line. Nothing is sent to the program: a shell that wants its
+    /// prompt drawn again is asked by the user, as in every terminal.
+    fn clear(&mut self, _: &Clear, _: &mut Window, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.emulator.clear_above_the_cursor();
+        cx.notify();
+    }
+
+    /// [`SelectAll`]: the whole history and screen, marked as far as the view shows it.
+    fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        self.forget_selection();
+        self.selection = Some(self.emulator.select_all());
+        self.selected_text = self.emulator.selected_text();
+        cx.notify();
+    }
+
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
         if let Some(text) = self.emulator.selected_text() {
             cx.write_to_clipboard(ClipboardItem::new_string(text));
@@ -561,7 +619,14 @@ impl Render for TerminalView {
             theme.muted_foreground,
             theme.border,
         );
-        let palette = Palette::of(theme);
+        // The colours are the applied definition's. A program asks for them with a question
+        // the emulator answers at once, so a change of theme is handed on here, at the
+        // frame that draws with the new definition.
+        let colours = theme::applied(cx).terminal;
+        if colours != self.colours {
+            self.colours = colours;
+            self.emulator.set_colours(colours);
+        }
         let screen = self.emulator.screen();
         let at = screen
             .cursor
@@ -610,6 +675,9 @@ impl Render for TerminalView {
             .size_full()
             .relative()
             .overflow_hidden()
+            // The ground a cell with the default background shows is the one a program is
+            // told by its question about colours, not the window's behind the view.
+            .bg(colours.background)
             .key_context(PROGRAM_CONTEXT)
             .track_focus(&self.focus)
             .cursor(CursorStyle::IBeam)
@@ -619,6 +687,16 @@ impl Render for TerminalView {
             .on_action(cx.listener(Self::paste))
             .on_action(cx.listener(|view, _: &ScrollPageUp, _, cx| view.scroll_page(true, cx)))
             .on_action(cx.listener(|view, _: &ScrollPageDown, _, cx| view.scroll_page(false, cx)))
+            .on_action(cx.listener(Self::clear))
+            .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(|view, _: &ScrollToTop, _, cx| {
+                view.scroll_with(Emulator::scroll_to_top, cx)
+            }))
+            .on_action(cx.listener(|view, _: &ScrollToBottom, _, cx| {
+                view.scroll_with(Emulator::scroll_to_bottom, cx)
+            }))
+            .on_action(cx.listener(|view, _: &ScrollLineUp, _, cx| view.scroll_by(1, cx)))
+            .on_action(cx.listener(|view, _: &ScrollLineDown, _, cx| view.scroll_by(-1, cx)))
             .on_mouse_down(gpui_kit::MouseButton::Left, cx.listener(Self::mouse_down))
             .on_mouse_down(gpui_kit::MouseButton::Middle, cx.listener(Self::mouse_down))
             .on_mouse_down(gpui_kit::MouseButton::Right, cx.listener(Self::mouse_down))
@@ -661,7 +739,7 @@ impl Render for TerminalView {
                             cell,
                             font,
                             font_size,
-                            palette: &palette,
+                            colours: &colours,
                             focused,
                             selection,
                         };

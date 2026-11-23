@@ -78,6 +78,10 @@ impl ReviewPane {
             }
             // The history grows when a commit is made or a branch is switched.
             Fact::Workspaces(_) => self.read_history(cx),
+            // Turns of the history may be expired now.
+            Fact::StatesDeleted { workspace } if self.tree.of.as_ref() == Some(workspace) => {
+                self.read_history(cx);
+            }
             // What is uncommitted changes with the files, and with the turn that ended.
             Fact::ChangesChanged { workspace } if self.tree.of.as_ref() == Some(workspace) => {
                 self.read_uncommitted(cx);

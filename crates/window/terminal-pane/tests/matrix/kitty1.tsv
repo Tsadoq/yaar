@@ -313,12 +313,12 @@ kitty1	up	1b5b41	ghostty m-ghostty-kitty5 plain+up
 kitty1	shift-up	1b5b313b3241	ghostty m-ghostty-kitty5 s+up
 kitty1	alt-up	1b5b313b3341	ghostty o-ghostty-us-kitty5 a+up
 kitty1	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty1	cmd-up		ghostty m-ghostty-kitty5 m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty1	cmd-up		ghostty m-ghostty-kitty5 m+up (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	down	1b5b42	ghostty m-ghostty-kitty5 plain+down
 kitty1	shift-down	1b5b313b3242	ghostty m-ghostty-kitty5 s+down
 kitty1	alt-down	1b5b313b3342	ghostty o-ghostty-us-kitty5 a+down
 kitty1	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-kitty1	cmd-down		ghostty m-ghostty-kitty5 m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty1	cmd-down		ghostty m-ghostty-kitty5 m+down (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	left	1b5b44	ghostty m-ghostty-kitty5 plain+left
 kitty1	shift-left	1b5b313b3244	ghostty m-ghostty-kitty5 s+left
 kitty1	alt-left	1b62	ghostty o-ghostty-us-kitty5 a+left
@@ -333,12 +333,12 @@ kitty1	home	1b5b48	ghostty m-ghostty-kitty5 plain+home
 kitty1	shift-home	1b5b313b3248	ghostty m-ghostty-kitty5 s+home
 kitty1	alt-home	1b5b313b3348	ghostty o-ghostty-us-kitty5 a+home
 kitty1	ctrl-home	1b5b313b3548	ghostty m-ghostty-kitty5 c+home
-kitty1	cmd-home		ghostty m-ghostty-kitty5 m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty1	cmd-home		ghostty m-ghostty-kitty5 m+home (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	end	1b5b46	ghostty m-ghostty-kitty5 plain+end
 kitty1	shift-end	1b5b313b3246	ghostty m-ghostty-kitty5 s+end
 kitty1	alt-end	1b5b313b3346	ghostty o-ghostty-us-kitty5 a+end
 kitty1	ctrl-end	1b5b313b3546	ghostty m-ghostty-kitty5 c+end
-kitty1	cmd-end		ghostty m-ghostty-kitty5 m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+kitty1	cmd-end		ghostty m-ghostty-kitty5 m+end (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 kitty1	pageup	1b5b357e	ghostty m-ghostty-kitty5 plain+pageup
 kitty1	alt-pageup	1b5b353b337e	ghostty o-ghostty-us-kitty5 a+pageup
 kitty1	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-kitty5 c+pageup

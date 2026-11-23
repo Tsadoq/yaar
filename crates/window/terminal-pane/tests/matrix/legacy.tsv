@@ -313,12 +313,12 @@ legacy	up	1b5b41	ghostty m-ghostty-legacy plain+up
 legacy	shift-up	1b5b313b3241	ghostty m-ghostty-legacy s+up
 legacy	alt-up	1b5b313b3341	ghostty o-ghostty-us-legacy a+up
 legacy	ctrl-up	1b5b313b3541	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-legacy	cmd-up		ghostty m-ghostty-legacy m+up (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+legacy	cmd-up		ghostty m-ghostty-legacy m+up (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 legacy	down	1b5b42	ghostty m-ghostty-legacy plain+down
 legacy	shift-down	1b5b313b3242	ghostty m-ghostty-legacy s+down
 legacy	alt-down	1b5b313b3342	ghostty o-ghostty-us-legacy a+down
 legacy	ctrl-down	1b5b313b3542	not compared: macOS took Ctrl with the arrows (Mission Control and Spaces): Ghostty never saw them
-legacy	cmd-down		ghostty m-ghostty-legacy m+down (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+legacy	cmd-down		ghostty m-ghostty-legacy m+down (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 legacy	left	1b5b44	ghostty m-ghostty-legacy plain+left
 legacy	shift-left	1b5b313b3244	ghostty m-ghostty-legacy s+left
 legacy	alt-left	1b62	ghostty o-ghostty-us-legacy a+left
@@ -333,12 +333,12 @@ legacy	home	1b5b48	ghostty m-ghostty-legacy plain+home
 legacy	shift-home	1b5b313b3248	ghostty m-ghostty-legacy s+home
 legacy	alt-home	1b5b313b3348	ghostty o-ghostty-us-legacy a+home
 legacy	ctrl-home	1b5b313b3548	ghostty m-ghostty-legacy c+home
-legacy	cmd-home		ghostty m-ghostty-legacy m+home (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+legacy	cmd-home		ghostty m-ghostty-legacy m+home (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 legacy	end	1b5b46	ghostty m-ghostty-legacy plain+end
 legacy	shift-end	1b5b313b3246	ghostty m-ghostty-legacy s+end
 legacy	alt-end	1b5b313b3346	ghostty o-ghostty-us-legacy a+end
 legacy	ctrl-end	1b5b313b3546	ghostty m-ghostty-legacy c+end
-legacy	cmd-end		ghostty m-ghostty-legacy m+end (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
+legacy	cmd-end		ghostty m-ghostty-legacy m+end (every Cmd key is the app's and this one scrolls the terminal's history and sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
 legacy	pageup	1b5b357e	ghostty m-ghostty-legacy plain+pageup
 legacy	alt-pageup	1b5b353b337e	ghostty o-ghostty-us-legacy a+pageup
 legacy	ctrl-pageup	1b5b353b357e	ghostty m-ghostty-legacy c+pageup
