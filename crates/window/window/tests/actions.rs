@@ -1096,14 +1096,23 @@ impl Composed {
     /// and the key, the pane says "The reviewer is on no line" and asks nothing. A user whose
     /// click the screen took away clicks again, and so does this: the whole opening is
     /// repeated until the list is there, which the deadline bounds. Each try that fails
-    /// says why, and the failure at the deadline names every reason.
+    /// says why on the standard error as it fails, and the failure at the deadline names
+    /// every reason.
     fn open_the_list_of_references(&mut self, cx: &mut VisualTestContext) {
         let deadline = Instant::now() + DEADLINE;
         let mut tried: Vec<String> = Vec::new();
         loop {
             match self.try_to_open_the_list_of_references(deadline, cx) {
                 Ok(()) => break,
-                Err(why) => tried.push(why),
+                Err(why) => {
+                    // Said at once, so that a run that needed a repetition and passed shows
+                    // how often the answer that comes apart reaches the pane after the click.
+                    eprintln!(
+                        "the opening of the list of references failed on try {}: {why}",
+                        tried.len() + 1
+                    );
+                    tried.push(why);
+                }
             }
             assert!(
                 Instant::now() < deadline,
