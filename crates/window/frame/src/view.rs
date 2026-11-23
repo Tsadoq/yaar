@@ -750,6 +750,12 @@ impl Frame {
             Ok(wanted) => {
                 composed.worktree_notice = None;
                 composed.no_dialog = None;
+                // The worktree is asked of the terminals, not of the list of workspaces,
+                // which would have forgotten its older refusal had it been asked.
+                composed
+                    .models
+                    .workspaces
+                    .update(cx, |list, cx| list.forget_refusal(cx));
                 composed
                     .models
                     .terminals

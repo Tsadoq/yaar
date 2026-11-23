@@ -297,6 +297,15 @@ impl WorkspaceList {
         self.refusal.as_ref()
     }
 
+    /// Forgets the refusal of the last thing the user asked of the Keeper here, as asking the
+    /// next thing does: for a Frame that makes the next ask of the user through another list
+    /// (a new worktree goes through the terminals') and so clears nothing here itself.
+    pub fn forget_refusal(&mut self, cx: &mut Context<Self>) {
+        if self.refusal.take().is_some() {
+            cx.notify();
+        }
+    }
+
     /// Takes a list of the Keeper, asked for or told, and settles which workspace is on
     /// screen with it.
     fn take(&mut self, repositories: Vec<Repository>, cx: &mut Context<Self>) {

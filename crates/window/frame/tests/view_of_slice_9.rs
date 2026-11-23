@@ -748,6 +748,51 @@ fn a_notice_of_a_new_worktree_is_taken_away_when_the_user_asks_the_keeper_for_th
         &mut cx,
     );
     assert_eq!(notice(&shown, &mut cx), None);
+
+    // A refused base again, and then a new worktree that is wanted: the user asking for the
+    // next thing takes the older refusal away, though the worktree goes through another
+    // list than the base does.
+    cx.simulate_keystrokes(&pressed::<SetBase>());
+    assert!(field_is_open_for_base(&mut cx));
+    cx.simulate_input("origin/none");
+    cx.simulate_keystrokes("enter");
+    let asked = shown.keeper.expect(
+        Request::SetBase {
+            workspace: id('1'),
+            base: "origin/none".to_owned(),
+        },
+        &mut cx,
+    );
+    shown.keeper.reply(asked, Err(refusal.clone()));
+    wait_until(&mut cx, "the Keeper's reason again", |cx| {
+        shown.frame.read_with(cx, |frame, cx| frame.notice(cx)) == Some(refusal.to_string())
+    });
+    shown
+        .models
+        .workspaces
+        .update(&mut cx, |list, cx| list.select(&id('2'), cx));
+    let wanted = wanted_log(&shown, &mut cx);
+    cx.simulate_keystrokes(&pressed::<NewWorktree>());
+    assert!(
+        field_is_open(&mut cx),
+        "a workspace with a branch is on screen"
+    );
+    cx.simulate_input("task/next");
+    cx.simulate_keystrokes("enter");
+    let marker = barrier(&shown, &mut cx);
+    assert_eq!(
+        *wanted.borrow(),
+        [
+            worktree(&listed[0].id, "feature/login", "task/next", "claude"),
+            marker
+        ],
+        "the worktree is wanted"
+    );
+    assert_eq!(
+        notice(&shown, &mut cx),
+        None,
+        "the refusal of the base is gone with the worktree wanted"
+    );
 }
 
 // The place of the panes.
