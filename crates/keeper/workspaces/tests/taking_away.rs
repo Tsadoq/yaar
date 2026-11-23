@@ -232,11 +232,29 @@ fn a_worktree_that_cannot_be_taken_away_stays_watched_and_listed_until_it_is_tak
         .watch(&created.workspace, heard.told())
         .expect("watch");
 
+    // The worktree the Workspaces keep for the workspace, with the git process that goes
+    // with it.
+    let kept = world
+        .workspaces
+        .worktree(&created.workspace)
+        .expect("read the worktree")
+        .expect("a worktree that is there");
+
     // The user's own lock stops git: the worktree is there, so it is not forgotten.
     let refused = world.workspaces.remove_created(&created);
     assert!(
         matches!(refused, Err(WorkspaceError::Git(_))),
         "git was to refuse to remove a locked worktree: {refused:?}"
+    );
+    let still_kept = world
+        .workspaces
+        .worktree(&created.workspace)
+        .expect("read the worktree")
+        .expect("a worktree that is there");
+    assert!(
+        std::sync::Arc::ptr_eq(&kept, &still_kept),
+        "the workspace was forgotten before the worktree was taken away: the next read opened \
+         the worktree anew"
     );
     assert_eq!(
         world.workspaces.watched(),

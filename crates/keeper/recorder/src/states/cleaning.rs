@@ -38,7 +38,9 @@
 //!    comparison with the files on disk wrote among them, are removed, and so are the
 //!    entries of the `shallow` file that name a commit no longer there.
 //! 5. The reader of contents ends when step 3 removed a pack or step 4 pruned an object (the
-//!    next section), so that the room the removed packs took is given back at once.
+//!    next section), so that the room the removed packs took is given back at once. It ends
+//!    when step 3 removed a pack though step 4 then failed, and the failure of step 4 is
+//!    given after that; steps 5 and 6 do not run for it.
 //! 6. The file `yaar-complete-head`, which names the commit the store last copied whole, is
 //!    removed when that commit is no longer held (`git cat-file -e <commit>^{tree}` fails), so
 //!    that the next recording copies the commit it is taken on whole again.
@@ -193,7 +195,9 @@ impl StateStore {
 
     /// Removes from disk every object of the store no ref reaches, packing the rest, as the
     /// module doc says: after [`StateStore::delete`] deleted something, or when the user
-    /// cleans up at once. Waits for every call that holds the guard of the clean-up.
+    /// cleans up at once. Waits for every call that holds the guard of the clean-up. A prune
+    /// that fails after a pack was removed ends the reader all the same, and its error is
+    /// given after that.
     pub fn pack(&self) -> Result<(), RecordError> {
         // The guard first, then the lock of writing: a call that holds the guard and then
         // takes the lock of writing (`keep_commit`) must not meet this one in the other
@@ -209,16 +213,22 @@ impl StateStore {
             ["repack", "-a", "-d", "-q", "--no-write-bitmap-index"],
         )?
         .printed()?;
-        let pruned = self.run(None, ["prune", "--expire=now", "-v"])?.printed()?;
+        // A failed prune is given after the reader ended, for the repack has removed its
+        // packs by now whatever the prune does.
+        let pruned = match self.run(None, ["prune", "--expire=now", "-v"]) {
+            Ok(answer) => answer.printed(),
+            Err(error) => Err(error),
+        };
         // The reader maps the packs it opened: while it lives, a pack that was removed
         // keeps its blocks, and what the sizes report is not what the disk gives back.
         let removed_a_pack = match (packs, self.packs()) {
             (Some(before), Some(after)) => !before.is_subset(&after),
             _ => true,
         };
-        if removed_a_pack || !pruned.is_empty() {
+        if removed_a_pack || pruned.as_ref().is_ok_and(|printed| !printed.is_empty()) {
             self.end_reader();
         }
+        pruned?;
         let marker = self.folder.join(COMPLETE_HEAD);
         if let Ok(noted) = fs::read_to_string(&marker) {
             let head = noted.trim();

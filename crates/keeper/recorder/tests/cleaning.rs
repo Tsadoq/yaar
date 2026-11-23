@@ -27,7 +27,7 @@ use yaar_recorder::{
 const BASE: u64 = 1_767_225_600;
 
 /// How long a test waits for work that must end, which a deadlock never does.
-const DEADLINE: Duration = Duration::from_secs(300);
+const DEADLINE: Duration = Duration::from_secs(120);
 
 /// How long a loop of calls may go on with none of its steps ending, which a deadlock never
 /// does. How long the whole loop takes is the machine's to say, so only a stop is bounded.
@@ -1697,6 +1697,76 @@ fn the_reader_of_contents_ends_at_the_end_of_a_pack_that_only_pruned_loose_objec
     );
     assert_eq!(
         store.content(state.id.as_str(), path).expect("read"),
+        Some(before),
+        "the same bytes from the next reader"
+    );
+    assert_eq!(reader_starts(&list).len(), 2, "the next read started one");
+    watched.assert_unchanged();
+}
+
+#[test]
+fn the_reader_of_contents_ends_with_a_pack_that_removed_a_pack_though_its_prune_then_failed() {
+    let scratch = Scratch::new();
+    let repo = repository(&scratch, "repo");
+    let watched = watch(&scratch, &repo);
+    let worktree = open(&repo);
+    let clock = TestClock::new();
+    // This git writes down every start of itself and, once armed, fails the next `prune`
+    // after `repack` ran: the stand-in for a disk that fails then.
+    let list = scratch.join("starts-of-git");
+    let armed = scratch.join("fail-the-prune");
+    let failing = scratch.join("bin/git-listed-and-failing");
+    program(
+        &failing,
+        &format!(
+            "printf '%s\\n' \"$$ $*\" >> '{list}'\n\
+             case \" $* \" in\n\
+             *\" prune \"*)\n  if [ -e '{armed}' ]; then\n    rm '{armed}'\n    \
+             echo 'the prune failed' >&2\n    exit 1\n  fi;;\nesac\n\
+             exec git \"$@\"",
+            list = list.display(),
+            armed = armed.display(),
+        ),
+    );
+    let store = open_store_through(&failing, &scratch.join("states/one.git"), &clock);
+    let mut noise = Noise(47);
+    let first = record_with_noise(&store, &repo, &worktree, &mut noise);
+    let second = record_with_noise(&store, &repo, &worktree, &mut noise);
+    store.pack().expect("pack what the recordings wrote loose");
+    let path = Path::new("turn.bin");
+    let before = store
+        .content(second.id.as_str(), path)
+        .expect("read")
+        .expect("a file");
+    let started = reader_starts(&list);
+    assert_eq!(started.len(), 1, "one reader: {started:?}");
+    let packs = packs_of(store.folder());
+
+    // A pack that removes the old pack, and whose prune then fails.
+    record_with_noise(&store, &repo, &worktree, &mut noise);
+    store
+        .delete(&[first.id.to_string()].into())
+        .expect("delete");
+    std::fs::write(&armed, "").expect("arm the failing prune");
+    let failed = store.pack();
+    assert!(failed.is_err(), "the prune's failure is given: {failed:?}");
+    assert!(
+        !packs_of(store.folder()).is_superset(&packs),
+        "the pack removed the old pack before the prune failed"
+    );
+    assert!(
+        !is_alive(&started[0]),
+        "the reader that had the removed pack mapped ended, and was waited for"
+    );
+    assert_eq!(
+        readers_running(),
+        Vec::<u32>::new(),
+        "none starts before a read asks"
+    );
+
+    // The next read starts a new one and gives the bytes the old one gave.
+    assert_eq!(
+        store.content(second.id.as_str(), path).expect("read"),
         Some(before),
         "the same bytes from the next reader"
     );
