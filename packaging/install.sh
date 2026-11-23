@@ -135,7 +135,20 @@
 # not put back (a sentence says why); 2 a usage error.
 #
 # The whole body is in functions and the only top-level command is the last line, so a download
-# that stops half way runs nothing.
+# that stops half way runs nothing. That line ends with a word the script then requires as its
+# last argument, because a download cut inside the line itself, just after "main", would be a
+# whole command that runs an install whatever the user asked for.
+#
+# Where the text above leaves a choice:
+#   - --purge and --stop-agents belong to --uninstall; without it they are a usage error (2).
+#   - With YAAR_METHOD unset or auto, the uninstall on a Debian-like system removes the package
+#     (when apt holds one) and the files of the archive route, both; it uses sudo only when apt
+#     holds something to remove. An explicit YAAR_METHOD limits it to that route.
+#   - The reviews that stay include store.db-journal, which belongs with its database.
+#   - The "http://127.0.0.1:" and "http://localhost:" of YAAR_ALLOW_UNNOTARIZED must be followed
+#     by a port and then "/" or the end: "http://127.0.0.1:80@host" is another host's address.
+#   - Where the developer tools are not installed, `stapler validate` cannot run: the script
+#     says so and relies on Gatekeeper's verdict, which it has just taken.
 set -euo pipefail
 
 DEFAULT_BASE_URL="@BASE_URL@"
