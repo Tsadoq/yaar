@@ -45,6 +45,20 @@ impl OptionKey {
     }
 }
 
+impl OptionKey {
+    /// What Option does given the user's setting: on macOS the setting's own choice, and
+    /// with none made (`ByLayout`) what [`OptionKey::for_layout`] says of `layout_id`; on
+    /// every other system (`mac` false) Alt is Meta whatever the setting says.
+    pub fn of_setting(setting: yaar_link::OptionKey, layout_id: &str, mac: bool) -> OptionKey {
+        match setting {
+            _ if !mac => OptionKey::Meta,
+            yaar_link::OptionKey::Meta => OptionKey::Meta,
+            yaar_link::OptionKey::Characters => OptionKey::Characters,
+            yaar_link::OptionKey::ByLayout => OptionKey::for_layout(layout_id, mac),
+        }
+    }
+}
+
 const ESC: u8 = 0x1b;
 
 /// The kind of press an escape code reports under flag 2.
@@ -509,6 +523,46 @@ mod tests {
                 OptionKey::Meta,
                 "{layout}"
             );
+        }
+    }
+
+    #[test]
+    fn the_setting_decides_option_on_macos_and_with_none_made_the_layout_does() {
+        use yaar_link::OptionKey as Setting;
+        let (us, other) = ("com.apple.keylayout.US", "com.apple.keylayout.German");
+        for layout in [us, other] {
+            assert_eq!(
+                OptionKey::of_setting(Setting::Meta, layout, true),
+                OptionKey::Meta,
+                "{layout}"
+            );
+            assert_eq!(
+                OptionKey::of_setting(Setting::Characters, layout, true),
+                OptionKey::Characters,
+                "{layout}"
+            );
+        }
+        assert_eq!(
+            OptionKey::of_setting(Setting::ByLayout, us, true),
+            OptionKey::Meta
+        );
+        assert_eq!(
+            OptionKey::of_setting(Setting::ByLayout, other, true),
+            OptionKey::Characters
+        );
+    }
+
+    #[test]
+    fn option_is_meta_off_macos_whatever_the_setting_and_the_layout() {
+        use yaar_link::OptionKey as Setting;
+        for setting in [Setting::ByLayout, Setting::Meta, Setting::Characters] {
+            for layout in ["com.apple.keylayout.US", "com.apple.keylayout.German", ""] {
+                assert_eq!(
+                    OptionKey::of_setting(setting, layout, false),
+                    OptionKey::Meta,
+                    "{setting:?} {layout}"
+                );
+            }
         }
     }
 

@@ -229,6 +229,41 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
 }
 
 #[gpui_kit::test]
+fn the_chosen_launcher_is_the_choice_of_the_frames_model_which_another_part_may_move(
+    cx: &mut TestAppContext,
+) {
+    let (mut panes, mut cx) = open_naming(cx, vec![claude(), pi()]);
+    wait_for_launchers(&panes, 2, &mut cx);
+    let model_choice = |panes: &Panes, cx: &mut VisualTestContext| {
+        panes
+            .models
+            .agents
+            .read_with(cx, |agents, _| agents.chosen_cli().cloned())
+    };
+    assert_eq!(chosen(&panes, &mut cx), Some(claude()));
+    wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
+
+    // The review pane, or the worktree with an agent, moves the choice in the model: the
+    // pane draws it, and New Agent Terminal opens it.
+    panes
+        .models
+        .agents
+        .update(&mut cx, |agents, cx| agents.choose_next_cli(cx));
+    wait_for_chosen_mark(&["claude", "pi"], "pi", &mut cx);
+    assert_eq!(chosen(&panes, &mut cx), Some(pi()));
+    panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
+    panes.answer_open(&terminal('a'), agent("pi"), &mut cx);
+
+    // The pane's own key moves the model's choice, the one the other panes read.
+    panes.press_in_the_app::<NextAgentCli>(&mut cx);
+    assert_eq!(model_choice(&panes, &mut cx), Some(claude()));
+    assert_eq!(chosen(&panes, &mut cx), Some(claude()));
+    wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
+    panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
+    panes.answer_open(&terminal('b'), agent("claude"), &mut cx);
+}
+
+#[gpui_kit::test]
 fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut TestAppContext) {
     let (mut panes, mut cx) = open_naming_in(cx, two_workspaces(), Vec::new());
     wait_drawn(&mut cx, "the shell's launcher", |cx| {
