@@ -2,14 +2,16 @@
 //! user's own git runs in it. A worktree is made through the Link in a repository whose
 //! `post-checkout` hook runs a program that only the login shell's search path holds.
 //!
-//! The Keeper is the built program, started with an environment the test gives it and
-//! nothing else: its search path is the test's own, which has no `login-only` folder, so
-//! that the folder can come only from the login shell. The shell is a script of the test's
-//! own, named by `SHELL` as the program takes the user's (the user's own is never run, and
-//! no start-up file of anyone is read). It acts only when it is told to print the
-//! environment (`-l -i -c` and a command that starts with `printf`) and is the plain `/bin/sh`
-//! for the terminal of the agent the request starts. Its standard error is a file the test
-//! reads, which a Keeper of the test's own process could not give.
+//! The Keeper is the built program, a copy of it that the helper of the system tests stages
+//! (a run of Cargo puts its file in place again, and a test that starts it at that moment
+//! would find none). It is started with an environment the test gives it and nothing else:
+//! its search path is the test's own, which has no `login-only` folder, so that the folder
+//! can come only from the login shell. The shell is a script of the test's own, named by
+//! `SHELL` as the program takes the user's (the user's own is never run, and no start-up
+//! file of anyone is read). It acts only when it is told to print the environment (`-l -i
+//! -c` and a command that starts with `printf`) and is the plain `/bin/sh` for the terminal
+//! of the agent the request starts. The Keeper's standard error is a file the test reads,
+//! which a Keeper of the test's own process could not give.
 //!
 //! The environment goes to each `Command`: nothing in this file changes that of the test.
 
@@ -288,7 +290,7 @@ impl Scratch {
             !std::env::split_paths(&path).any(|folder| folder == self.root.join("login-only")),
             "the folder only the login shell knows is on the search path of the Keeper"
         );
-        let child = Command::new(env!("CARGO_BIN_EXE_yaar-keeper"))
+        let child = Command::new(yaar_system_tests::program("yaar-keeper"))
             .arg("--socket")
             .arg(self.socket())
             .env_clear()
