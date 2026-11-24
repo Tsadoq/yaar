@@ -327,7 +327,10 @@ jobs:
           for p in MacOS/yaar-review Helpers/yaar-keeper Helpers/yaar-claude-hook \
                    Helpers/yaar-claude-tools Helpers/yaar-pi-report; do
             echo "$p: $(lipo -archs "dist/YAAR.app/Contents/$p")"
-            lipo "dist/YAAR.app/Contents/$p" -verify_arch arm64 x86_64
+            # One call for each processor: with both names in one call lipo reads the second
+            # as another input file and refuses ("requires exactly one input file").
+            lipo "dist/YAAR.app/Contents/$p" -verify_arch arm64
+            lipo "dist/YAAR.app/Contents/$p" -verify_arch x86_64
             codesign --verify --strict --verbose=1 "dist/YAAR.app/Contents/$p"
           done
 
