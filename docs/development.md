@@ -77,20 +77,53 @@ On Linux CI also checks the app's own licence (`.github/scripts/own-licence.sh`)
 plants a refused dependency for each kind of refusal, to see `cargo deny` fail on it
 (`.github/scripts/plant.sh`).
 
+## Commit messages
+
+Every commit of a pull request, a merge commit apart, has a subject of the form
+`<type>[(<scope>)][!]: <description>`. The type is one of `feat`, `fix`, `perf`, `refactor`,
+`docs`, `test`, `build`, `ci`, `chore` and `revert`; the scope is lower-case letters, digits and
+hyphens; the description follows a colon and one space. A `!` before the colon, or a footer
+`BREAKING CHANGE:` or `BREAKING-CHANGE:`, marks a breaking change.
+
+The subjects decide the next version and make the notes of a release, so each says what the
+change does for a reader of the notes. A `feat` raises the minor number, a `fix`, `perf` or
+`revert` the patch number, a breaking change the minor number while the major number is 0 and
+the major number after; the other types release nothing. [releasing.md](releasing.md) has the
+rest.
+
+To try it on your branch:
+
+```sh
+.github/scripts/commit-lint.sh origin/main HEAD
+```
+
 ## What CI does
 
-The job `version` reads the one version number and decides whether the run publishes.
-`checks-linux` runs the checks above on x86-64 and on arm64, and `macos` runs the lints,
-the tests and the layout rules, then builds the release for both Mac processors and signs
-the app ad hoc. `package-linux` builds on Ubuntu 22.04 and makes the `.deb` and the
-archive. `assemble` makes the release files, the site and an apt repository signed with a
-key it makes and throws away. Then the rehearsal: `install-linux` serves that site on
-127.0.0.1 and installs the app with the install line on Ubuntu 22.04, 24.04 and 26.04 and
-Debian 12 and 13, on both processors, and `install-macos` does the same on macOS; each
+The job `version` reads the one version number and decides whether the run publishes. On a
+pull request, the job `commits` holds the commit messages to the form above. `checks-linux`
+runs the checks above on x86-64 and on arm64, then the checks of the scripts that decide and
+make a release, each on scratch repositories:
+
+| Script | Shows |
+| --- | --- |
+| `.github/scripts/commit-lint-check.sh` | The commit check passes the right forms and names each wrong subject |
+| `packaging/release/next-version-check.sh` | The next version and the notes of a tag, for every rule |
+| `packaging/release/bump-check.sh` | A bump changes `Cargo.toml` and `Cargo.lock` alone and `cargo metadata --locked` still holds; it needs `cargo` and the fetched crates |
+| `packaging/release/release-check.sh` | The job `release` pushes once, starts the run, and refuses a moved `main` or an existing tag |
+| `.github/scripts/publish-notes-check.sh` | The notes of a release are the changes of its tag, then the fixed text |
+| `.github/scripts/publish-latest-check.sh` | A release is the latest, and the site is deployed, only when no published release has a greater version |
+
+`macos` runs the lints, the tests and the layout rules, then builds the release for both Mac
+processors and signs the app ad hoc. `package-linux` builds on Ubuntu 22.04 and makes the
+`.deb` and the archive. `assemble` makes the release files, the site and an apt repository
+signed with a key it makes and throws away. Then the rehearsal: `install-linux` serves that
+site on 127.0.0.1 and installs the app with the install line on Ubuntu 22.04, 24.04 and 26.04
+and Debian 12 and 13, on both processors, and `install-macos` does the same on macOS; each
 starts the app, makes a worktree with an agent, and uninstalls it. A rehearsal publishes
-nothing and keeps what it built as the artifact `rehearsal`. Only a run started by hand on
-a version tag with `publish` on signs with the real keys and publishes; see
-[releasing.md](releasing.md).
+nothing and keeps what it built as the artifact `rehearsal`. Only a run on a version tag with
+`publish` on signs with the real keys and publishes. After a push to `main` whose every job
+passed, the job `release` starts such a run when the commits since the last release call for
+one; see [releasing.md](releasing.md).
 
 ## Packages by hand
 
@@ -157,6 +190,7 @@ the script install it from a loopback address only.
 
 - Comments are minimal. A comment says only what the code does not say.
 - A test is named by what it shows, as a sentence.
+- A commit subject has the form of [Commit messages](#commit-messages).
 - No test touches the user's files, the real pi or the real claude. Tests run in scratch
   folders of their own, with a stand-in agent.
 - Exact versions for the dependencies whose behaviour the app relies on, pinned in the

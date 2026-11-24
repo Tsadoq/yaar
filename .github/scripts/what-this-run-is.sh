@@ -2,6 +2,8 @@
 # PUBLISH=<true|false> REF_TYPE=<branch|tag> REF_NAME=<name> what-this-run-is.sh
 # Writes version, later (<version>+rehearsal, sorts after it for apt) and publish to GITHUB_OUTPUT.
 # Exit 1: publishing from a non-tag or off main, or a tag other than v<version>.
+# A run publishes when it is started on a tag with the input publish on: the job release does
+# that after a green run on main, and the same call by hand does it too.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 VERSION=$("$HERE/../../packaging/version.sh")
