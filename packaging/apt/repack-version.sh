@@ -14,7 +14,8 @@
 # for the one field: the same list of files (`dpkg-deb -c`: names, modes, owners, sizes and
 # times), the same bytes in each file, the same control members with the same modes and bytes,
 # and a control file that differs only in its Version line, which is the new version. The
-# sentence names the path or the field that differs.
+# sentence names the path or the field that differs. The output is removed too when any
+# command after it is written fails (the script then ends with 1 and the line that failed).
 #
 # Exit codes: 0 written; 1 refused or failed; 2 usage error.
 #
@@ -57,7 +58,14 @@ TARGET=$OUT/${PKG}_${NEW}_${ARCH}.deb
 [ ! -e "$TARGET" ] || fail "$TARGET exists already"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/yaar-repack.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT
+# Whatever ends the script before the path is printed, a refusal or a failed command, takes the
+# output with it: a caller never finds a repack that was not checked.
+DONE=0
+cleanup() {
+  rm -rf "$TMP"
+  if [ "$DONE" -ne 1 ]; then rm -f "$TARGET"; fi
+}
+trap cleanup EXIT
 dpkg-deb -R "$IN" "$TMP/tree"
 CONTROL=$TMP/tree/DEBIAN/control
 [ "$(grep -c '^Version:' "$CONTROL")" -eq 1 ] || fail "$IN has not exactly one Version line in its control file"
@@ -107,4 +115,5 @@ for side in in out; do
   rm "$TMP/$side-ctl/control"
 done
 same "$TMP/in-ctl" "$TMP/out-ctl" "the control members (the Version line of control left out)"
+DONE=1
 printf '%s\n' "$TARGET"
