@@ -448,14 +448,21 @@ for gone in site/index.html site/apt site/.nojekyll release/SHA256SUMS.asc; do
   rm -rf "$S/release-gone"
 done
 
-# Each of the six packages must be listed, and a line must be in the format assemble.sh
-# writes.
-for gone in yaar-review_0.1.0_arm64.deb yaar-review-0.1.0-macos-universal.dmg; do
+# Each of the six packages must be listed, each by its own name: a SHA256SUMS that lacks one
+# of them, whichever it is, is refused and says which kind is missing. (The other five lines
+# stay, so that a pattern that is wider than its package, one that another package satisfies,
+# lets the run through and is seen.)
+for gone in yaar-review_0.1.0_amd64.deb yaar-review_0.1.0_arm64.deb \
+  yaar-review-0.1.0-linux-x86_64.tar.gz yaar-review-0.1.0-linux-aarch64.tar.gz \
+  yaar-review-0.1.0-macos-universal.zip yaar-review-0.1.0-macos-universal.dmg; do
   cp -R "$F" "$S/release-five"
   grep -v " $gone\$" "$F/release/SHA256SUMS" > "$S/release-five/release/SHA256SUMS"
+  [ "$(wc -l < "$S/release-five/release/SHA256SUMS")" -eq "$(($(wc -l < "$F/release/SHA256SUMS") - 1))" ] \
+    || fail "the test could not drop the line of $gone from its SHA256SUMS"
   refuse "a SHA256SUMS that does not list $gone" "$S/serve-five.out" "$S/serve-five.err" "$S/release-five"
   [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a SHA256SUMS without $gone gave exit $REFUSAL_STATUS, not 1"
-  grep -q '^serve-release.sh: .*six packages' "$S/serve-five.err" || fail "the refusal of a SHA256SUMS that lists five packages does not say so (it said: $(cat "$S/serve-five.err"))"
+  grep -q '^serve-release.sh: .*six packages' "$S/serve-five.err" || fail "the refusal of a SHA256SUMS that lists five packages ($gone is missing) does not say so (it said: $(cat "$S/serve-five.err"))"
+  grep -qF -- "${gone#*0.1.0}" "$S/serve-five.err" || fail "the refusal of a SHA256SUMS without $gone does not name the kind of package that is missing, ${gone#*0.1.0} (it said: $(cat "$S/serve-five.err"))"
   rm -rf "$S/release-five"
 done
 cp -R "$F" "$S/release-star"
