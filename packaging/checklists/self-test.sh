@@ -580,9 +580,11 @@ pass "screen-walk.sh, real-clis.sh and linux-hardware.sh print their 5, 15 and 8
 mkdir -p "$S/lspci-bin"
 graphics_with() {
   # graphics_with <what lspci prints> <its status>: the line and the status of ck_graphics_line.
+  # shellcheck disable=SC2016
   printf '#!/bin/sh\nprintf "%%s\\n" "$LSPCI_SAYS"\nexit "$LSPCI_STATUS"\n' > "$S/lspci-bin/lspci"
   chmod 755 "$S/lspci-bin/lspci"
   GRAPHICS_STATUS=0
+  # shellcheck disable=SC2016
   GRAPHICS_LINE=$(env PATH="$S/lspci-bin:$PATH" LSPCI_SAYS="$1" LSPCI_STATUS="$2" bash -c '
     CK_NAME=graphics-test
     . "$1"
@@ -614,7 +616,7 @@ if [ "$(uname -s)" = Linux ]; then
   { echo ""; lines 8 yes; echo yes; } > "$S/answers-lh.txt"
   rm -f "$S/calls"
   run_walker "linux-hardware.sh" "$S/out-lh.txt" "$S/out-lh.txt.err" "$S/answers-lh.txt" \
-    env PATH="$S/lh/bin:$PATH" "$S/lh/linux-hardware.sh"
+    env PATH="$S/lh/bin:$PATH" YAAR_REVIEW="$S/bin/yaar-review" "$S/lh/linux-hardware.sh"
   [ "$WALK_STATUS" -eq 0 ] || fail "linux-hardware.sh, with an lspci that lists no display controller, exited $WALK_STATUS (it said: $(cat "$S/out-lh.txt.err"))"
   grep -q 'lspci shows no display controller' "$RESULTS/linux-hardware.md" || fail "linux-hardware.md does not say that lspci shows no display controller"
   pass "linux-hardware.sh without --dry-run writes its file when lspci lists no display controller"
