@@ -28,6 +28,9 @@
 #     /usr/share/icons/hicolor/256x256/apps/io.github.tsadoq.yaar.png (the bytes of
 #     packaging/linux/ in the repository), and usr/share/doc/yaar-review/{copyright,NOTICE,
 #     THIRD-PARTY-NOTICES.txt.gz}, the last one gunzipping to the bytes of <notices>;
+#   - its control archive holds `control` and nothing else: no maintainer script (postinst,
+#     preinst, postrm, prerm), conffiles, triggers or other member, since such a file runs as
+#     root at the install or changes the installed system in ways its file list never shows;
 #   - the archive holds the same programs under yaar-review/bin and yaar-review/libexec/
 #     yaar-review, the same desktop entry and icon under yaar-review/share, LICENSE, NOTICE
 #     and THIRD-PARTY-NOTICES.txt (the bytes of <notices>) under yaar-review/share/doc/
@@ -127,6 +130,14 @@ modes_ok() {
 mkdir "$W/deb"
 dpkg-deb -x "$DEB" "$W/deb" || fail "$DEB: dpkg-deb cannot unpack it"
 dpkg-deb -c "$DEB" > "$W/deb.list" || fail "$DEB: dpkg-deb cannot list it"
+# The control archive: dpkg-deb --build writes `control` here and nothing else, so any other
+# member (a postinst at mode 755 that runs as root at the install, say) is named.
+dpkg-deb --ctrl-tarfile "$DEB" > "$W/control.tar" || fail "$DEB: dpkg-deb cannot read its control archive"
+tar -tf "$W/control.tar" > "$W/control.list" || fail "$DEB: tar cannot list its control archive"
+sed 's|^\./||; /^$/d' "$W/control.list" > "$W/control.unsorted" || fail "$DEB: cannot read the members of its control archive"
+sort "$W/control.unsorted" > "$W/control.members" || fail "$DEB: cannot sort the members of its control archive"
+[ "$(cat "$W/control.members")" = "control" ] \
+  || fail "$DEB: its control archive holds '$(tr '\n' ' ' < "$W/control.list")', not only ./ and ./control: a maintainer script or another member is not allowed"
 cat > "$W/programs" <<LIST
 usr/bin/yaar-review
 usr/libexec/yaar-review/yaar-claude-hook
