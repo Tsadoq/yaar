@@ -48,7 +48,7 @@
 # PREVIOUS, which must be named <Package>_<Version>_<Architecture>.deb by what it holds), or
 # when a file of PREVIOUS holds the version being released; each sentence names the file and
 # what it holds. Refuses, after writing, when site/ holds more than 900 MB
-# (`du -sk`): a Pages site may hold 1 GB, and the pool grows by two .deb files
+# (`du -sk --apparent-size`): a Pages site may hold 1 GB, and the pool grows by two .deb files
 # a release; the sentence names the versions in the pool, oldest first, and says that the
 # oldest must leave the pool (a later decision of the owner's: they stay on the releases
 # page).
