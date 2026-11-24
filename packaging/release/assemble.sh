@@ -43,16 +43,21 @@
 #   key.asc    the public key of YAAR_APT_KEY, beside the two folders (for the tests)
 #
 # The base address is read from packaging/site/base-url and nowhere else. Refuses, changing
-# nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, or
-# when a .deb's Version or Architecture does not match its name. Refuses, after writing, when
-# site/ holds more than 900 MB (`du -sk`): a Pages site may hold 1 GB, and the pool grows by
-# two .deb files a release; the sentence names the versions in the pool, oldest first, and
-# says that the oldest must leave the pool (a later decision of the owner's: they stay on the
-# releases page).
+# nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, when
+# a .deb's Version or Architecture does not match its name (the new ones and every file of
+# PREVIOUS, which must be named <Package>_<Version>_<Architecture>.deb by what it holds), when
+# a file of PREVIOUS is a package other than yaar-review, when a file of PREVIOUS holds the
+# version being released (equal by `dpkg --compare-versions`, so 0.1.00 is 0.1.0), or when two
+# files of PREVIOUS hold one version for one processor (equal by `dpkg --compare-versions`, so
+# 0.0.9 and 0.0.09); each sentence names the file and what it holds, the last one both files.
+# Refuses, after writing, when site/ holds more than 900 MB (`du -sk --apparent-size`): a
+# Pages site may hold 1 GB, and the pool grows by two .deb files a release; the sentence names
+# the versions in the pool, oldest first, and says that the oldest must leave the pool (a
+# later decision of the owner's: they stay on the releases page).
 #
 # Exit codes: 0 written; 1 refused or failed (a sentence says why); 2 usage error.
 #
-# Needs: apt-ftparchive (package apt-utils), dpkg-deb (dpkg), gpg (gnupg), gzip, sha256sum,
+# Needs: apt-ftparchive (package apt-utils), dpkg-deb and dpkg (dpkg), gpg (gnupg), gzip, sha256sum,
 # du with --apparent-size (GNU coreutils: the size of a file is its length, not the blocks it
 # holds, which a sparse file of a test has none of).
 #
@@ -99,7 +104,7 @@ export GNUPGHOME
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/../.." && pwd)
-for tool in apt-ftparchive dpkg-deb gpg gzip sha256sum du awk; do
+for tool in apt-ftparchive dpkg-deb dpkg gpg gzip sha256sum du awk; do
   command -v "$tool" > /dev/null 2>&1 || fail "$tool is not installed"
 done
 
@@ -174,6 +179,10 @@ done
 # script: a folder of PREVIOUS that cannot be read must not drop a published version from the
 # repository without a word.
 PREVIOUS_DEBS=()
+# What each file accepted so far holds, side by side (three arrays: bash 3.2 has no maps).
+SEEN_ARCH=()
+SEEN_VERSION=()
+SEEN_PATH=()
 PREVIOUS_LIST=
 if [ -n "${PREVIOUS:-}" ]; then
   [ -d "$PREVIOUS" ] || fail "PREVIOUS names $PREVIOUS, which is not a folder"
@@ -185,6 +194,31 @@ if [ -n "${PREVIOUS:-}" ]; then
     case $old_name in
       "$DEB_AMD64" | "$DEB_ARM64") fail "$old has the name of a new package: version $VERSION is published already" ;;
     esac
+    # An earlier release's file is what its name says, by its contents: a file that holds
+    # the version being released under another name, or a version other than its name's,
+    # would put two stanzas for one version into the index, or drop an earlier version from it.
+    old_pkg=$(dpkg-deb -f "$old" Package 2> /dev/null) || fail "$old is not a .deb that dpkg-deb can read"
+    old_version=$(dpkg-deb -f "$old" Version) || fail "$old has no Version that dpkg-deb can read"
+    old_arch=$(dpkg-deb -f "$old" Architecture) || fail "$old has no Architecture that dpkg-deb can read"
+    [ "$old_pkg" = yaar-review ] \
+      || fail "$old is the package $old_pkg, not yaar-review: PREVIOUS holds only earlier releases of yaar-review"
+    [ "$old_name" = "${old_pkg}_${old_version}_${old_arch}.deb" ] \
+      || fail "$old is named $old_name but holds $old_pkg version $old_version for $old_arch, so its name should be ${old_pkg}_${old_version}_${old_arch}.deb"
+    # apt compares versions, not strings: 0.1.00 is 0.1.0 to it.
+    if dpkg --compare-versions "$old_version" eq "$VERSION"; then
+      fail "$old holds version $old_version, which apt takes for $VERSION, the version being released, under the name $old_name: version $VERSION is published already"
+    fi
+    # Two files of PREVIOUS for one processor must not hold one version either, in two
+    # spellings such as 0.0.9 and 0.0.09: apt takes them for one version, the index would
+    # offer both stanzas, and apt would pick which file a user gets.
+    for ((j = 0; j < ${#SEEN_PATH[@]}; j++)); do
+      if [ "${SEEN_ARCH[j]}" = "$old_arch" ] && dpkg --compare-versions "$old_version" eq "${SEEN_VERSION[j]}"; then
+        fail "$old holds version $old_version for $old_arch, which apt takes for version ${SEEN_VERSION[j]} of ${SEEN_PATH[j]}, also in PREVIOUS: two files for one version"
+      fi
+    done
+    SEEN_ARCH+=("$old_arch")
+    SEEN_VERSION+=("$old_version")
+    SEEN_PATH+=("$old")
     PREVIOUS_DEBS+=("$old")
   done <<< "$PREVIOUS_LIST"
 fi
