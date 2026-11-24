@@ -663,6 +663,9 @@ fn serve_window(stream: UnixStream, shared: &Arc<Shared>, version: &str) -> Resu
         state.windows += 1;
         shared.settle(&mut state);
     }
+    // The Window is told the facts from its admission on, which the Keeper does a moment
+    // after the hello. A fact told between the two is missed, as one told before the Window
+    // came: what it shows it asks for, and the first reply it gets comes after its admission.
     let result = if speaks && !shared.admit(&window) {
         // The Keeper is leaving.
         Ok(())

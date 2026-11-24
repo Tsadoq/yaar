@@ -46,9 +46,9 @@
 //! [`RequestKind::ALL`]: a test that walks the requests a user starts cannot miss it.
 //!
 //! Two kinds of program connect to the Keeper's socket: a Window, which stays and is told
-//! every fact, and a piece of the app inside an agent CLI, which says hello, sends one
-//! request whose origin is [`Origin::Agent`], takes its reply and leaves. Both say the
-//! same hello.
+//! every fact from its first reply on (what changed before that, it asks for), and a piece
+//! of the app inside an agent CLI, which says hello, sends one request whose origin is
+//! [`Origin::Agent`], takes its reply and leaves. Both say the same hello.
 
 mod agent;
 mod request;
