@@ -197,8 +197,10 @@ D="$(mktemp -d)"; echo "$D"; open "$D"
 
    Switched on before steps 3 to 5 are done, it makes the first tag and starts its publishing
    run, which fails before anything is signed or published. Each later run on `main` with
-   something to release makes another tag whose run fails the same way. When the secrets
-   and the two public files are there, start the publishing run of the newest tag by hand.
+   something to release makes another tag whose run fails the same way. A tag made before the
+   two public files were on `main` cannot be published: its commit lacks them. Delete each such
+   tag (`git push --delete origin v<x.y.z>`). The next green run on `main` then tags the
+   version of `Cargo.toml` on a commit that holds them.
 
 ## Starting a publishing run by hand
 
@@ -277,10 +279,11 @@ A version that apt users have installed stays installed: a fix on `main`, which 
    `V`'s packages are not, and leaves its own release as it is. After 30 days there is no
    step 2: `V+1` is the only way to take `V` out of the apt repository.
 
-A tag that was pushed but never published is deleted with `git push --delete origin v<V>`;
-nothing else exists for it. The commit `chore(release): v<V>` stays on `main`, and the next run
-of the job `release` makes the same version again, from the same commits. Delete a tag only to
-have that version released again.
+A tag that was pushed but never published is deleted with `git push --delete origin v<V>`. A
+publishing run that failed after it made its draft release leaves that draft, which the next
+publishing run of the same tag takes up again. The commit `chore(release): v<V>` stays on
+`main`, and the next run of the job `release` makes the same version again, from the same
+commits. Delete a tag only to have that version released again.
 
 ## The README's install section
 
