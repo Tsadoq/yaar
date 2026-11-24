@@ -215,6 +215,7 @@ impl Scratch {
             data_dir: self.data(),
             companions: Some(self.companions()),
             home: self.0.join("home"),
+            login_shell: None,
         };
         let clock = Arc::clone(clock);
         std::thread::spawn(move || run_with_clock(options, clock))

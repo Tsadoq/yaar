@@ -20,6 +20,7 @@
 mod agents;
 mod base_moves;
 mod cleaning;
+mod environment;
 mod reviewing;
 mod settings;
 mod watching;
@@ -90,12 +91,21 @@ pub struct Options {
     /// [`adapters`] hands the Adapters. The program as installed takes `HOME`; a test names
     /// a folder of its own, so that nothing it runs can reach the user's real settings.
     pub home: PathBuf,
+    /// The user's login shell, run once at the start on a thread of its own for the
+    /// environment of a terminal of the app: the Keeper's runs of the user's git, and the
+    /// hooks that git runs, get it (`yaar_link::login`, `yaar_recorder::GitEnvironment`). A
+    /// read never waits for it; the user's own git (a worktree made, a commit) does, for at
+    /// most the shell's deadline. None for the Keeper's own environment, as before slice 10:
+    /// [`Options::new`] has none, the program as installed hands its user's shell, and a test
+    /// hands a script of its own, never the user's.
+    pub login_shell: Option<yaar_link::login::LoginShell>,
 }
 
 impl Options {
     /// The options of the program as installed: the socket of [`yaar_link::socket_path`],
     /// a linger of five seconds, the folder of [`yaar_link::data_dir`] and the home `HOME`
-    /// names (`/` where it names none, under which no CLI keeps settings).
+    /// names (`/` where it names none, under which no CLI keeps settings), and no login
+    /// shell: the program as installed sets one.
     pub fn new(app_version: &str) -> Self {
         Self {
             socket: yaar_link::socket_path(),
@@ -106,6 +116,7 @@ impl Options {
             home: std::env::var_os("HOME")
                 .filter(|home| !home.is_empty())
                 .map_or_else(|| PathBuf::from("/"), PathBuf::from),
+            login_shell: None,
         }
     }
 }
@@ -201,8 +212,12 @@ impl Drop for InFlight<'_> {
 impl Shared {
     /// The shared state, with the parts started on it: the parts tell the Windows what a
     /// program of a terminal does, and so need a way to this state.
-    fn start(options: &Options, clock: Arc<dyn yaar_recorder::Clock>) -> Arc<Shared> {
-        Arc::new_cyclic(|this| Shared::new(Parts::start(options, clock, this.clone())))
+    fn start(
+        options: &Options,
+        clock: Arc<dyn yaar_recorder::Clock>,
+        environment: yaar_recorder::GitEnvironment,
+    ) -> Arc<Shared> {
+        Arc::new_cyclic(|this| Shared::new(Parts::start(options, clock, environment, this.clone())))
     }
 
     fn new(parts: Parts) -> Shared {
@@ -477,6 +492,10 @@ fn frame_of(message: &Message) -> io::Result<Vec<u8>> {
 /// [`yaar_link::check_private_folder`], or the Keeper does not start: anyone can make
 /// that folder first. The lock file lies beside the socket really bound.
 ///
+/// With [`Options::login_shell`] some, the user's login shell runs once on a thread of its
+/// own after the socket is bound; see [`Options::login_shell`]. A shell that gives no
+/// environment is said in one line on the standard error and the Keeper goes on in its own.
+///
 /// Returns at once with [`Exit::AlreadyRunning`] when another Keeper holds the socket.
 /// Before it returns for any other reason, every Window still attached is let go and the
 /// parts are ended: the programs of the terminals and what they started, the git
@@ -518,7 +537,8 @@ pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) ->
 
     // Only the Keeper that holds the lock opens the database, and it is open before the
     // first Window can ask for anything.
-    let shared = Shared::start(&options, Arc::clone(&clock));
+    let environment = environment::waiting_for(&options);
+    let shared = Shared::start(&options, Arc::clone(&clock), environment.clone());
     // The clean-up of states by the set time: once the first reply is queued, then every
     // hour by the clock, until the end.
     let sweeps = cleaning::Sweeps::start(Arc::downgrade(&shared), clock);
@@ -530,6 +550,10 @@ pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) ->
     let listener = UnixListener::bind(socket)?;
     fs::set_permissions(socket, fs::Permissions::from_mode(0o600))?;
 
+    // The login shell is taken once the Keeper listens: a Window's first read is not held up
+    // by it, and the user's own git waits for it.
+    let take = environment::start(&options, environment);
+
     let acceptor = {
         let shared = Arc::clone(&shared);
         let options = options.clone();
@@ -537,6 +561,9 @@ pub fn run_with_clock(options: Options, clock: Arc<dyn yaar_recorder::Clock>) ->
     };
 
     let exit = wait_for_the_end(&shared, options.linger);
+    // A shell still running is ended, so that a work that waits for it goes on with the
+    // Keeper's own environment, and none is left behind.
+    take.end();
 
     // Wake the acceptor, which sits in `accept`, so that it sees the end and lets go of
     // the listener before the socket file is removed. Where the file is gone already,
