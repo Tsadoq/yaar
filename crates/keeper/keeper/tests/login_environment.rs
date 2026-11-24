@@ -32,14 +32,20 @@ use yaar_link::{
     WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
-const DEADLINE: Duration = Duration::from_secs(20);
+/// How long a test waits for the Keeper before it fails: long, since a worktree is made by
+/// git and its hook and a machine at background priority is slow at it.
+const DEADLINE: Duration = Duration::from_secs(60);
 
-/// How long a Keeper that ought to answer at once is given: more than any answer of a
-/// machine at background priority takes, and less than the ten seconds the program lets
-/// its shell take (`yaar_link::login::SHELL_DEADLINE`), so that a run that waited for a shell
-/// that is held, or that never ended its take, can be told from one that did not.
+/// How long a read that ought to answer at once is given: more than any answer of a read takes
+/// on a machine at background priority, and less than the ten seconds the program lets its
+/// shell take (`yaar_link::login::SHELL_DEADLINE`), so that a run that waited for a shell that
+/// is held can be told from one that did not.
 const AT_ONCE: Duration = Duration::from_secs(8);
+
+/// How long after the shell ended the hook of the creation may run: the creation went on at
+/// once, and a take that never ended would have held it for the shell's whole deadline, ten
+/// seconds. Counted in whole seconds, as `date +%s` gives them.
+const GAP: u64 = 8;
 
 /// How long a worktree is watched for before the shell it waits for is let go: the one wait
 /// of these tests that is not on a fact. Git has nothing else to wait for, so a run that
@@ -194,7 +200,10 @@ impl Scratch {
             Shell::Failing => String::new(),
         };
         let end = match shell {
-            Shell::Failing => "printf '%s' 'yaar-environment-follows'\nenv -0\nexit 3\n",
+            Shell::Failing => &format!(
+                "printf '%s' 'yaar-environment-follows'\nenv -0\ndate +%s > '{}'\nexit 3\n",
+                self.root.join("shell-ended").display()
+            ),
             Shell::Held => "exec /bin/sh -c \"$4\"\n",
         };
         self.program(
@@ -232,8 +241,9 @@ impl Scratch {
         self.program(
             &repo.join(".git/hooks/post-checkout"),
             &format!(
-                "echo ran >> '{log}'\nwitness || echo 'no witness' >> '{log}'\nexit 0",
-                log = self.hook_log().display()
+                "date +%s > '{at}'\necho ran >> '{log}'\nwitness || echo 'no witness' >> '{log}'\nexit 0",
+                log = self.hook_log().display(),
+                at = self.root.join("hook-ran-at").display()
             ),
         );
     }
@@ -514,9 +524,7 @@ fn a_shell_that_fails_still_lets_the_creation_answer_runs_no_witness_and_is_said
 
     let id = window.create(&repository);
 
-    // Answered well before the shell's own deadline, which a take that never ended would
-    // have made it wait for.
-    let reply = window.reply_within(id, AT_ONCE).expect("a reply in time");
+    let reply = window.reply_within(id, DEADLINE).expect("a reply");
     assert!(
         matches!(reply, Ok(Reply::WorktreeCreated { .. })),
         "no worktree: {reply:?}"
@@ -524,6 +532,20 @@ fn a_shell_that_fails_still_lets_the_creation_answer_runs_no_witness_and_is_said
     // The hook ran, and so had its chance to run the witness, which it did not find.
     let hook = scratch.wait_for_text(&scratch.hook_log(), "no witness");
     assert_eq!(lines(&hook), ["ran", "no witness"]);
+    // The creation went on as the shell ended, and did not wait for the shell's deadline,
+    // which a take that never ended would have made it wait for.
+    let seconds = |name: &str| -> u64 {
+        std::fs::read_to_string(scratch.root.join(name))
+            .unwrap_or_else(|e| panic!("no {name}: {e}"))
+            .trim()
+            .parse()
+            .expect("a time in seconds")
+    };
+    let waited = seconds("hook-ran-at").saturating_sub(seconds("shell-ended"));
+    assert!(
+        waited < GAP,
+        "the hook ran {waited} s after the shell ended: the take was waited for to its deadline"
+    );
     assert!(
         !scratch.witness_log().exists(),
         "the witness ran with the environment of a shell that failed"
