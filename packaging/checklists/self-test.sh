@@ -26,15 +26,19 @@
 #                    files at /download/, byte for byte; the server listens on 127.0.0.1
 #                    only; a second server on the same port, a folder that is not laid out
 #                    as release-final and a file that disagrees with SHA256SUMS are
-#                    refused with a sentence, as are a listed file that is missing and a
-#                    SHA256SUMS that lists nothing; stopped by the pid it printed, the
+#                    refused with a sentence, as are a listed file that is missing, a
+#                    SHA256SUMS that lists nothing and one that lacks any one of the six
+#                    packages (each dropped in turn, and the sentence names its kind);
+#                    stopped by the pid it printed, the
 #                    script and its server are gone, the port refuses, and no scratch is
 #                    left.
 #   the walkers      screen-walk.sh, real-clis.sh and linux-hardware.sh print their items
 #                    once each in a dry run and call no program of the system.
 #   the measures     typing.sh, scroll.sh and start-time.sh read made-up logs: key to
-#                    screen times (early, 13 ms, 399 ms, 401 ms, the median of an even and
-#                    of an odd count, the 95th percentile below the largest), frames a
+#                    screen times (early, 13 ms, 399 ms, 401 ms, the 20 ms after the next
+#                    key: a frame 19 ms after it is the key's, one exactly 20 ms after is
+#                    not, the median of an even and of an odd count, the 95th percentile
+#                    below the largest), frames a
 #                    second and long gaps, the marks of a start; none leaves anything in
 #                    TMPDIR; start-time.sh --linux gives 1 for any status but 0 and 1 of
 #                    the machine's run (a stand-in for the machine's script, on the Mac).
