@@ -605,6 +605,10 @@ jobs:
       - name: apt refuses the repository when its index or a package was changed after signing
         run: .github/scripts/linux-tampered.sh rehearsal
 
+      # The archive route is the one of the install line that reads SHA256SUMS on Linux.
+      - name: The install line refuses a download that does not match SHA256SUMS
+        run: .github/scripts/install-wrong-sum.sh rehearsal tester
+
       - name: The install line, as a user
         run: |
           sudo -u tester env YAAR_BASE_URL=http://127.0.0.1:8000 \
@@ -710,6 +714,9 @@ jobs:
         run: |
           .github/scripts/serve-site.sh start rehearsal/site rehearsal/release 8000
           .github/scripts/user-files.sh snapshot "$(id -un)" "$RUNNER_TEMP/user-files-before"
+
+      - name: The install line refuses a download that does not match SHA256SUMS
+        run: .github/scripts/install-wrong-sum.sh rehearsal
 
       - name: The install line installs the app on macOS
         run: .github/scripts/macos-install.sh install
