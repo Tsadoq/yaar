@@ -701,10 +701,13 @@ grep -qx 'missed=1 early=1' "$S/edges.err" || fail "typing.sh --analyse did not 
 tmp_clean "typing.sh --analyse"
 pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 399 ms as its own and 401 ms as missed, and takes the mean of the two in the middle for an even count"
 
-# The grace after the next key: a key whose first changed frame comes 10 ms after the next
-# key's post is still matched (110 ms, inside the 20 ms), and the next key meets that same
-# frame 10 ms after its own post (early); a first frame 25 ms after the next key's post is
-# past the grace, so that key is missed, and the next key matches it (25 ms).
+# The grace after the next key is 20 ms and "before" it: a key whose first changed frame
+# comes 19 ms after the next key's post is still matched (119 ms, inside the grace), and the
+# next key meets that same frame 19 ms after its own post, which is no longer early; a first
+# frame exactly 20 ms after the next key's post is not before it, so that key is missed, and
+# the next key matches it (20 ms). The times are 19, 20 and 119 ms: the median is the 20, the
+# 95th percentile (rank 2 of 0 to 2) is the 119, and one key is missed and none is early. A
+# grace of 15 ms or of 24 ms, or a frame at exactly the limit taken as matched, changes n.
 {
   echo "post $((BASE_NS)) 0 a"
   echo "post $((BASE_NS + 100000000)) 1 a"
@@ -713,15 +716,15 @@ pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 
 } > "$S/grace.input"
 {
   echo "start"
-  echo "cap $((BASE_NS + 110000000)) $((BASE_NS + 110000000)) rows=0-9"
-  echo "cap $((BASE_NS + 1125000000)) $((BASE_NS + 1125000000)) rows=0-9"
+  echo "cap $((BASE_NS + 119000000)) $((BASE_NS + 119000000)) rows=0-9"
+  echo "cap $((BASE_NS + 1120000000)) $((BASE_NS + 1120000000)) rows=0-9"
   echo "end"
 } > "$S/grace.cap"
 got=$("$HERE/typing.sh" --analyse "$S/grace.input" "$S/grace.cap" 2> "$S/grace.err")
-[ "$got" = "n=2 median=67.50 p95=110.00" ] || fail "typing.sh --analyse gave '$got', not 'n=2 median=67.50 p95=110.00' for the times 110 and 25 ms (stderr: $(cat "$S/grace.err"))"
-grep -qx 'missed=1 early=1' "$S/grace.err" || fail "typing.sh --analyse did not count 1 missed (first frame 25 ms after the next key) and 1 early key (stderr: $(cat "$S/grace.err"))"
+[ "$got" = "n=3 median=20.00 p95=119.00" ] || fail "typing.sh --analyse gave '$got', not 'n=3 median=20.00 p95=119.00' for the times 119, 19 and 20 ms (stderr: $(cat "$S/grace.err"))"
+grep -qx 'missed=1 early=0' "$S/grace.err" || fail "typing.sh --analyse did not count 1 missed (first frame exactly 20 ms after the next key) and no early key (stderr: $(cat "$S/grace.err"))"
 tmp_clean "typing.sh --analyse"
-pass "typing.sh gives a key the 20 ms after the next key's post (a frame 10 ms after it is the key's own, one 25 ms after is not)"
+pass "typing.sh gives a key the 20 ms after the next key's post, before it (a frame 19 ms after it is the key's own, one exactly 20 ms after is not)"
 
 T1=2000000000000
 {
