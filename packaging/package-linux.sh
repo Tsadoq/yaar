@@ -13,9 +13,11 @@
 #   yaar-review_<version>_<arm64|amd64>.deb
 #   yaar-review-<version>-linux-<aarch64|x86_64>.tar.gz
 # No checksum file: the release's one checksum file is packaging/release/assemble.sh's.
-# Both are built in a scratch folder and moved into <out-dir> at the very end, so a script
-# that fails leaves <out-dir> as it was: no partial package, and a folder that did not exist
-# is not made.
+# Both are built in a scratch folder and moved into <out-dir> at the very end, so a refusal
+# or a failed packing step leaves <out-dir> as it was: no partial package, and a folder that
+# did not exist is not made. Only when the second move fails, after the first package is in,
+# is the package this run moved in taken out again, and an older package of the same name that
+# it overwrote is gone.
 #
 # Needs: dpkg-deb and dpkg-shlibdeps (packages dpkg, dpkg-dev), tar, gzip.
 #
@@ -45,7 +47,7 @@
 # not one, the processor is not supported, or a step of the packing failed (one sentence says
 # which command, or <out-dir> is a file, or one of the two package paths in it is a folder);
 # 2 usage error (arguments, NOTICES, programs folder). Every refusal comes before anything is
-# built, and a failed step after that leaves <out-dir> untouched.
+# built, and a failed packing step after that leaves <out-dir> untouched.
 set -euo pipefail
 umask 022
 [ $# -eq 3 ] || { echo "usage: NOTICES=<file> package-linux.sh <programs-dir> <version> <out-dir>" >&2; exit 2; }
