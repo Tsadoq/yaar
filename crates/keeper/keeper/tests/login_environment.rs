@@ -53,6 +53,17 @@ const LEAVES_BEFORE: Duration = Duration::from_secs(SHELL_DEADLINE.as_secs() - 1
 /// seconds. Counted in whole seconds, as `date +%s` gives them.
 const GAP: u64 = 8;
 
+/// How much earlier than the shell's deadline the creation that waits for a held shell may be
+/// answered, counted from the moment the shell was seen to wait: the time the shell took to
+/// start and the test to see it.
+const EARLY: Duration = Duration::from_secs(1);
+
+/// How much later than the shell's deadline the creation that waited for a held shell is
+/// answered at the latest: the shell's end, git and the hook, on a machine at background
+/// priority. A deadline that is not the program's own, or a wait that does not end with it,
+/// is more than this late.
+const LATE: Duration = Duration::from_secs(3);
+
 /// How long a worktree is watched for before the shell it waits for is let go: the one wait
 /// of these tests that is not on a fact. Git has nothing else to wait for, so a run that
 /// does not wait makes its worktree within it on any machine the tests run on; one that does
@@ -709,5 +720,66 @@ fn a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it() {
     assert!(
         !errors.contains("gave no environment"),
         "a shell ended for the Keeper's leave was said to have failed: {errors}"
+    );
+}
+
+#[test]
+fn a_shell_held_past_the_deadline_the_program_hands_is_given_up_and_the_creation_answers_then() {
+    let mut scratch = Scratch::new(Shell::Held);
+    scratch.repository();
+    let mut window = scratch.start_keeper();
+    // The shell is under way and is held for good: only the Keeper's own deadline ends it.
+    let (shell, held_at) = scratch.wait_for_held();
+    let (repository, _) = window.open(&scratch.repo());
+
+    let id = window.create(&repository);
+
+    // The creation waits for the take, and the take ends at the deadline the Keeper program
+    // hands (`SHELL_DEADLINE`, ten seconds from the shell's start): neither before it, nor
+    // long after it, as a program that handed a longer deadline would be.
+    let reply = window
+        .reply_within(id, (SHELL_DEADLINE + LATE).saturating_sub(held_at.elapsed()),
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "no reply {:?} after the shell began to wait: the deadline the program hands is longer than {SHELL_DEADLINE:?}",
+                held_at.elapsed()
+            )
+        });
+    let answered = held_at.elapsed();
+    assert!(
+        answered >= SHELL_DEADLINE - EARLY,
+        "the creation was answered {answered:?} after the shell began to wait, before its deadline of {SHELL_DEADLINE:?}"
+    );
+    assert!(
+        matches!(reply, Ok(Reply::WorktreeCreated { .. })),
+        "no worktree: {reply:?}"
+    );
+    // The shell was given up, not let go: it was killed, and the hook ran without it.
+    assert!(
+        !scratch.released_note().exists(),
+        "the shell was let go and not ended"
+    );
+    scratch.wait_until_gone(shell);
+    let hook = scratch.wait_for_text(&scratch.hook_log(), "no witness");
+    assert_eq!(lines(&hook), ["ran", "no witness"]);
+    assert!(
+        !scratch.witness_log().exists(),
+        "the witness ran with the environment of a shell that never gave one"
+    );
+    // One line on the Keeper's standard error, naming the shell and the deadline it passed,
+    // counted once the Keeper has ended.
+    let expected = format!(
+        "yaar-keeper: the login shell {} gave no environment: it took longer than {} s",
+        scratch.shell().display(),
+        SHELL_DEADLINE.as_secs()
+    );
+    scratch.wait_for_text(&scratch.errors(), &expected);
+    scratch.stop(window);
+    let errors = std::fs::read_to_string(scratch.errors()).expect("the Keeper's errors");
+    assert_eq!(
+        errors.lines().filter(|line| *line == expected).count(),
+        1,
+        "{errors}"
     );
 }
