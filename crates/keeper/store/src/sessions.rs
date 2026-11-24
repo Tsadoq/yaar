@@ -1,9 +1,5 @@
-//! What the Store keeps of agents: their sessions, the turns of each with the state
-//! recorded at its end, and the steps of each turn, so that a Window that attaches later,
-//! and a Keeper started again, find them.
-//!
-//! Every call that changes something is one transaction that waits for the drive, as the
-//! calls of slice 1 do: a step is a few bytes, and an agent takes a few steps a second.
+//! Every changing call is one transaction that waits for the drive: a step is a few bytes,
+//! and an agent takes only a few steps a second.
 
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -13,17 +9,15 @@ use rusqlite::{OptionalExtension, Row, params};
 use crate::reviews::{exists, refusal, refused};
 use crate::{ReviewId, Store, StoreError, WorkspaceId, bytes, path};
 
-/// Names one agent session: 32 lowercase hexadecimal digits the Keeper drew.
+/// 32 lowercase hexadecimal digits the Keeper drew.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SessionId(pub(crate) String);
 
 impl SessionId {
-    /// The id with this text.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// The text of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -35,17 +29,14 @@ impl std::fmt::Display for SessionId {
     }
 }
 
-/// Names one turn: 32 lowercase hexadecimal digits the Keeper drew.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TurnId(pub(crate) String);
 
 impl TurnId {
-    /// The id with this text.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// The text of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -57,88 +48,59 @@ impl std::fmt::Display for TurnId {
     }
 }
 
-/// One agent session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionRecord {
-    /// Its id.
     pub id: SessionId,
-    /// The workspace it works in.
     pub workspace: WorkspaceId,
-    /// The name of the Adapter of its CLI: `claude`.
+    /// The name of the Adapter of its CLI, such as `claude`.
     pub agent: String,
-    /// The CLI's own name for the session.
     pub cli_session: String,
-    /// The terminal it runs or last ran in, by the id the app gave it.
     pub terminal: Option<String>,
-    /// Its number among the sessions of its CLI in the workspace, from 1.
     pub number: u32,
-    /// Whether it runs.
     pub running: bool,
-    /// When it last stopped running, as the order of ends: a session that ended later has
-    /// a larger number. None while it runs, and for one that never ended.
+    /// The order of ends: a later end has a larger number. None while it runs and for one that
+    /// never ended.
     pub ended: Option<u64>,
-    /// How it last stopped running; none while it runs, and for one that never ended.
     pub ended_by: Option<EndedBy>,
 }
 
-/// How a session stopped running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EndedBy {
-    /// Its CLI reported its end: the user quit it, or cleared it for a new session.
     Cli,
-    /// Its process went with no end reported, or its terminal ended.
     ProcessGone,
-    /// The Keeper stopped while it ran, as when the machine restarted: the session was cut
-    /// off, not ended, and is one the app may offer to resume.
+    /// The Keeper stopped while it ran, as when the machine restarted: cut off, not ended; the app
+    /// may offer to resume it.
     KeeperStopped,
 }
 
-/// How a turn ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnEndRecord {
-    /// The agent finished its answer.
     Finished,
-    /// The user interrupted it.
     Interrupted,
 }
 
-/// One turn of a session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TurnRecord {
-    /// Its id.
     pub id: TurnId,
-    /// Its session.
     pub session: SessionId,
-    /// Its number in the session, from 1.
     pub number: u32,
-    /// How it ended; none while it runs.
     pub ended: Option<TurnEndRecord>,
-    /// The full id of the state the turn's change counts from: the newest state of the
-    /// worktree recorded before the turn started, or, for a turn that started while the
-    /// state of the turn before was still being recorded, that state, kept with
-    /// [`Store::set_turn_start`] once it is recorded. None where there was none, and until
-    /// then.
+    /// Full id of the state the turn's change counts from: the newest state recorded before it
+    /// started, or, when the previous turn's state was still being recorded then, that state,
+    /// kept later by [`Store::set_turn_start`].
     pub start: Option<String>,
-    /// The full id of the state recorded at its end.
     pub state: Option<String>,
 }
 
-/// One step of a turn.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepRecord {
-    /// A file read. Kept as its bytes.
     Read(PathBuf),
-    /// A file changed with the edit tool, with the lines it changed when the CLI said.
     Edit(PathBuf, Option<Vec<RangeInclusive<u32>>>),
-    /// A file written whole.
     Write(PathBuf),
-    /// A shell command.
     Command(String),
 }
 
 impl Store {
-    /// Keeps a new session; refused when the id is taken, and when its CLI's name for it is
-    /// taken under the same Adapter.
     pub fn put_session(&self, session: &SessionRecord) -> Result<(), StoreError> {
         // SQLite's integers are signed.
         let ended = session
@@ -185,10 +147,6 @@ impl Store {
         })
     }
 
-    /// Keeps the CLI's own record of `session`, a file, as its reports last named it
-    /// (`yaar_agent::Reported::cli_record`), in place of what was kept before; none takes
-    /// it away. Refused for a session the Store does not hold. Returns when it is on the
-    /// drive.
     pub fn set_session_cli_record(
         &self,
         session: &SessionId,
@@ -207,8 +165,6 @@ impl Store {
         })
     }
 
-    /// The CLI's own record of `session`, as [`Store::set_session_cli_record`] last kept
-    /// it; none where nothing was kept, and for a session the Store does not hold.
     pub fn session_cli_record(&self, session: &SessionId) -> Result<Option<PathBuf>, StoreError> {
         let session = session.0.clone();
         self.ask(move |connection| {
@@ -223,7 +179,6 @@ impl Store {
         })
     }
 
-    /// The session by its id.
     pub fn session(&self, session: &SessionId) -> Result<Option<SessionRecord>, StoreError> {
         let session = session.0.clone();
         self.ask(move |connection| {
@@ -237,8 +192,6 @@ impl Store {
         })
     }
 
-    /// The session of the Adapter `agent` that its CLI names `cli_session`, in any
-    /// workspace: the one a CLI that resumes it comes back to.
     pub fn session_of_cli(
         &self,
         agent: &str,
@@ -256,7 +209,6 @@ impl Store {
         })
     }
 
-    /// Every session of a workspace, in the order they were first kept.
     pub fn sessions_of(&self, workspace: &WorkspaceId) -> Result<Vec<SessionRecord>, StoreError> {
         let workspace = workspace.0.clone();
         self.ask(move |connection| {
@@ -267,8 +219,7 @@ impl Store {
         })
     }
 
-    /// Every session the Store holds that runs, in every workspace: those a Keeper started
-    /// again finds still marked running, which it marks ended by
+    /// In every workspace: a Keeper started again marks those still running as ended by
     /// [`EndedBy::KeeperStopped`].
     pub fn running_sessions(&self) -> Result<Vec<SessionRecord>, StoreError> {
         self.ask(|connection| {
@@ -279,8 +230,6 @@ impl Store {
         })
     }
 
-    /// Marks a session running in `terminal`, as when its CLI resumed it; how it last
-    /// ended is cleared.
     pub fn set_running(
         &self,
         session: &SessionId,
@@ -301,12 +250,11 @@ impl Store {
         })
     }
 
-    /// Marks a session ended, and how; the end gets the next number of the order of ends.
     pub fn set_ended(&self, session: &SessionId, how: EndedBy) -> Result<(), StoreError> {
         let session = session.0.clone();
         self.try_ask(move |connection| {
-            // The largest number and the update are one transaction: no end can take the
-            // number between them.
+            // The largest number and the update are one transaction: no end can take the number
+            // between them.
             let ending = connection.transaction()?;
             let changed = ending.execute(
                 "UPDATE session
@@ -322,9 +270,6 @@ impl Store {
         })
     }
 
-    /// Gives a review to a session, or to no agent: the takeover of a review. Refused for a
-    /// review or a session the Store does not hold, and for giving a review back to no
-    /// agent while the workspace has a review of no agent already.
     pub fn set_review_agent(
         &self,
         review: &ReviewId,
@@ -371,8 +316,6 @@ impl Store {
         })
     }
 
-    /// Keeps a turn that started; refused when the id is taken, when the session is not
-    /// kept, and when the session has a turn of that number already.
     pub fn put_turn(&self, turn: &TurnRecord) -> Result<(), StoreError> {
         let turn = turn.clone();
         self.try_ask(move |connection| {
@@ -412,9 +355,6 @@ impl Store {
         })
     }
 
-    /// Keeps the state a kept turn's change counts from, in the place of the one it had:
-    /// for a turn that started while the state of the turn before was still being recorded.
-    /// Refused for a turn that is not kept.
     pub fn set_turn_start(&self, turn: &TurnId, start: &str) -> Result<(), StoreError> {
         let (turn, start) = (turn.0.clone(), start.to_owned());
         self.try_ask(move |connection| {
@@ -429,7 +369,6 @@ impl Store {
         })
     }
 
-    /// Keeps how a turn ended and the state recorded then.
     pub fn end_turn(
         &self,
         turn: &TurnId,
@@ -449,9 +388,6 @@ impl Store {
         })
     }
 
-    /// Keeps step `number` of a turn; the numbers of a turn go up by one from 1. Refused
-    /// for a turn that is not kept, a number below 1 and a number the turn has a step of
-    /// already.
     pub fn put_step(
         &self,
         turn: &TurnId,
@@ -489,7 +425,6 @@ impl Store {
         })
     }
 
-    /// A turn with its steps, in their order.
     pub fn turn(&self, turn: &TurnId) -> Result<Option<(TurnRecord, Vec<StepRecord>)>, StoreError> {
         let turn = turn.0.clone();
         self.ask(move |connection| {
@@ -507,7 +442,6 @@ impl Store {
         })
     }
 
-    /// Every turn of the sessions of a workspace, in the order they started.
     pub fn turns_of(&self, workspace: &WorkspaceId) -> Result<Vec<TurnRecord>, StoreError> {
         let workspace = workspace.0.clone();
         self.ask(move |connection| {
@@ -522,11 +456,9 @@ impl Store {
     }
 }
 
-/// The columns of a session, in the order [`session_of_row`] reads them.
 const SESSION: &str = "SELECT id, workspace, agent, cli_session, terminal, number, running,
                               ended, ended_by FROM session";
 
-/// The columns of a turn, in the order [`turn_of_row`] reads them.
 const TURN: &str =
     "SELECT turn.id, turn.session, turn.number, turn.ended, turn.start, turn.state FROM turn";
 
@@ -568,7 +500,6 @@ fn step_of_row(row: &Row<'_>) -> rusqlite::Result<StepRecord> {
     })
 }
 
-/// The lines of an edit as kept: `3-3,10-12`, empty for none.
 fn lines_text(lines: &[RangeInclusive<u32>]) -> String {
     lines
         .iter()
@@ -577,8 +508,7 @@ fn lines_text(lines: &[RangeInclusive<u32>]) -> String {
         .join(",")
 }
 
-/// The lines of an edit from the text [`lines_text`] made. A part that is not `a-b` is
-/// left out: the column holds nothing else but what the Store wrote.
+/// A part that is not `a-b` is left out: the column holds nothing else but what the Store wrote.
 fn lines_of(text: &str) -> Vec<RangeInclusive<u32>> {
     text.split(',')
         .filter_map(|part| {

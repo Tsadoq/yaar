@@ -1,6 +1,3 @@
-//! How the pane is drawn: one list of rows of one height, of which only those in view
-//! are built.
-
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::ops::Range;
@@ -18,29 +15,21 @@ use crate::navigate::Spot;
 use crate::{ChangeShown, KEY_CONTEXT, Layout, PaneRow, ReviewPane, ShownDiff, Unshown, View};
 use yaar_link::{CommentId, ThreadId};
 
-/// The height of every row. The list lays its rows out by the height of one of them, so
-/// they all have this one.
 pub(crate) const ROW_HEIGHT: Pixels = px(20.);
 
-/// The width of a column of line numbers: six digits.
 pub(crate) const NUMBER_WIDTH: Pixels = px(56.);
 
-/// The width of the column that holds the sign of a line in the unified view.
 const SIGN_WIDTH: Pixels = px(20.);
 
-/// How much of a line is handed to the text system, in bytes. A line is never wrapped
-/// and what does not fit beside the numbers is cut off, so the rest of a line of a
-/// megabyte would be shaped for nothing, in every frame.
+/// A line is never wrapped and the overflow is cut off, so the rest of a megabyte line would be
+/// shaped for nothing in every frame.
 const DRAWN_BYTES: usize = 1024;
 
 impl ShownDiff {
-    /// The text of one line, as the pane shows it and as [`ReviewPane::text`] gives it.
     pub(crate) fn text(&self, side: Side, line: u32) -> Cow<'_, str> {
         String::from_utf8_lossy(self.diff.line(side, line))
     }
 
-    /// The ranges of bytes to mark in one line: the words that changed, when the line is
-    /// part of a change that both removes and adds.
     fn marks(&self, side: Side, line: u32) -> Vec<Range<usize>> {
         let lines = |hunk: &Hunk| match side {
             Side::Old => hunk.old.clone(),
@@ -52,9 +41,7 @@ impl ShownDiff {
         if !hunks.get(index).is_some_and(in_a_change) {
             return Vec::new();
         }
-        // The words of a change are compared when it first comes into view, on the
-        // thread that draws. The diff bounds what one change costs there: it compares
-        // no words where there are too many.
+        // Words of a change are compared when it first comes into view, on the drawing thread.
         let emphasis = self
             .emphasis
             .borrow_mut()
@@ -65,8 +52,6 @@ impl ShownDiff {
     }
 }
 
-/// Tells the pane which rows the list laid out. The list hands that range to what
-/// decorates it, once for each frame, and to nothing else.
 struct InView(Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
@@ -87,22 +72,15 @@ impl UniformListDecoration for InView {
 
 impl Render for ReviewPane {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // A move of the reviewer that the actions of the lines made is seen here: what was
-        // shown for the name they left goes before it is drawn.
         self.follow_cursor();
-        // Above the files, and in the pane's column outside the element that holds the
-        // pane's key context: the keys of the tree are not the keys of the rows.
+        // Outside the element that holds the pane's key context: the keys of the tree are not the
+        // keys of the rows.
         let tree = self.tree_view(window, cx);
         let sessions = self.session_bar(cx);
         let offer = self.offer_bar(cx);
-        // What attaching offers to start, and the rounds of the review shown.
         let start = self.render_offer_to_start(cx);
         let rounds = self.render_rounds(cx);
-        // The bar names both views and is drawn in both; Flow, when it is on screen, takes
-        // the place of everything of Changes below it.
         let bar = self.render_bar(window, cx);
-        // The line of the language server of the code on screen: under the bar, in every
-        // view, the file view included.
         let servers = self.render_servers(cx);
         let hover = self.render_hover(cx);
         let references = self.render_references(cx);
@@ -117,12 +95,8 @@ impl Render for ReviewPane {
             .text_color(theme.foreground)
             .font_family(theme.mono_font_family.clone())
             .text_size(theme.mono_font_size);
-        // Everything below the bar: what the reviewer reads and works in. A mouse button
-        // or the wheel there, or a key that no action of the pane takes while the focus is
-        // there (text typed in the comment box), is the reviewer at work, which pauses
-        // follow; a mouse button is heard before anything inside acts on it. A key that an
-        // action takes reaches the pane only as the action, which pauses follow through
-        // `acted`. The bar is left out: its controls choose what Flow shows.
+        // A mouse button or the wheel here, or a key no action takes, pauses follow. The bar is
+        // left out: its controls choose what Flow shows.
         let body = div()
             .flex_1()
             .min_h_0()
@@ -136,8 +110,8 @@ impl Render for ReviewPane {
                 pane.scrolled();
                 pane.touched(cx);
             }));
-        // Under the rows and outside the element that sets the pane's key context, so
-        // that the letters typed in the box are text and not keys of the pane.
+        // The notice and the comment box go below the rows, outside the element that sets the key
+        // context, so that letters typed in the box are text, not keys of the pane.
         let notice = self.notice.as_ref().map(|notice| {
             div()
                 .debug_selector(|| "review-notice".to_owned())
@@ -171,12 +145,9 @@ impl Render for ReviewPane {
                 .p_2()
                 .border_t_1()
                 .border_color(theme.border)
-                // The input lets Escape pass once it has nothing of its own to close.
                 .on_action(cx.listener(Self::escape_commit))
                 .child(Input::new(&field.input))
         });
-        // A file reached through a definition or a reference takes the place of the rows
-        // and of Flow until the reviewer goes back.
         if let Some(file_view) = file_view {
             return pane.children(bar).children(servers).child(
                 body.child(self.with_file_keys(div().flex_1().min_h_0().child(file_view), cx))
@@ -216,10 +187,6 @@ impl Render for ReviewPane {
                     .children(commit_field),
             );
         }
-        // The first frame whose rows hold a line of a diff is the first diff on screen, which
-        // the owner's start timing reads as the mark `first_diff`. It is taken once this
-        // frame is drawn, as the Frame does for `first_frame`, and asked for once. Flow and
-        // the file view return above, so they never ask for it.
         if !self.first_diff_marked
             && self
                 .rows
@@ -229,8 +196,8 @@ impl Render for ReviewPane {
             self.first_diff_marked = true;
             window.on_next_frame(|_, _| yaar_frame::trace::mark_once("first_diff"));
         }
-        // The rows stay while the Keeper refuses to read the changes again, and may
-        // then be out of date: the reviewer is told.
+        // The rows stay while the Keeper refuses to read the changes again, and may be out of date:
+        // the reviewer is told.
         let refused = self.models.changes.read(cx).refusal().map(|refusal| {
             div()
                 .debug_selector(|| "review-refused".to_owned())
@@ -273,8 +240,6 @@ impl Render for ReviewPane {
 }
 
 impl ReviewPane {
-    /// Gives an element the pane's key context, its focus and its actions: the one that
-    /// holds the rows, and not the box or the field beside it.
     fn with_keys(&self, element: Div, cx: &Context<Self>) -> Div {
         element
             .key_context(KEY_CONTEXT)
@@ -322,11 +287,6 @@ impl ReviewPane {
             .on_action(cx.listener(Self::refuse_servers))
     }
 
-    /// Gives the file view the pane's key context, its focus and the actions that work on
-    /// what it shows: the lines, the names, the comments and the line of the language
-    /// server. The actions that work on the line of the diff the reviewer left, whose rows
-    /// are not drawn, are not here: a key for one of them does nothing while the file view
-    /// is open, and does not act where nobody can see it.
     fn with_file_keys(&self, element: Div, cx: &Context<Self>) -> Div {
         element
             .key_context(KEY_CONTEXT)
@@ -346,11 +306,6 @@ impl ReviewPane {
             .on_action(cx.listener(Self::refuse_servers))
     }
 
-    /// What [`crate::ToggleFlowForm`] does, by its key `shift-l` or as an action: switches
-    /// the form while Flow is on screen, and in Changes does nothing at all. It switches
-    /// no form out of the reviewer's sight and sends no `SetSetting`; and since the action
-    /// takes the key, the key does not reach the listeners below the bar, so it does not
-    /// pause follow either.
     fn toggle_flow_form_in_flow(
         &mut self,
         action: &crate::ToggleFlowForm,
@@ -362,10 +317,6 @@ impl ReviewPane {
         }
     }
 
-    /// What [`crate::ResumeFollow`] does, by its key `shift-g` or as an action: resumes
-    /// follow while Flow is on screen, and in Changes does nothing at all, notice
-    /// included: no follow is resumed out of the reviewer's sight, and, as for `shift-l`,
-    /// the key pauses nothing.
     fn resume_follow_in_flow(
         &mut self,
         action: &crate::ResumeFollow,
@@ -377,7 +328,6 @@ impl ReviewPane {
         }
     }
 
-    /// What the pane says while it has no row to show.
     fn idle_line(&self, cx: &App) -> String {
         let changes = self.models.changes.read(cx);
         match (changes.refusal(), changes.workspace()) {
@@ -389,7 +339,6 @@ impl ReviewPane {
         }
     }
 
-    /// Builds the row at `index` of the rows of the pane.
     fn draw_row(&self, index: usize, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let row = div()
@@ -405,8 +354,8 @@ impl ReviewPane {
                 comparison,
                 offers_base,
             } => {
-                // The sentence gives way where the row is too narrow for both, so the
-                // offer is never pushed out of the row.
+                // The sentence gives way where the row is too narrow, so the offer is never pushed
+                // out.
                 let row = row.px_2().gap_3().bg(theme.muted).child(
                     div()
                         .min_w_0()
@@ -427,8 +376,6 @@ impl ReviewPane {
                 if !offers_base {
                     return row;
                 }
-                // The offer runs the action of the Frame that asks for a base; the
-                // Frame, which holds the pane, handles it.
                 row.child(
                     div()
                         .id("review-offer-base")
@@ -457,10 +404,8 @@ impl ReviewPane {
                 let viewed = self
                     .reviews()
                     .is_some_and(|reviews| reviews.viewed.contains(path));
-                // A change no agent made is marked where the uncommitted changes are shown.
                 let no_agent =
                     self.tree.shown == ChangeShown::Uncommitted && self.made_by_no_agent(path);
-                // A file another session changed too (`shared.rs`).
                 let shared = self.shared_mark(index, path, cx);
                 row.px_2()
                     .gap_3()
@@ -505,8 +450,6 @@ impl ReviewPane {
                         .debug_selector(|| "review-threads-elsewhere".to_owned())
                         .child("Threads elsewhere: their lines are in no row shown"),
                 ),
-            // Only the live diff of Flow lists the files a turn read, and draws them itself.
-            // Changes builds no such row; were one here, it would read as its path.
             PaneRow::Read { path } => row
                 .px_2()
                 .text_color(theme.muted_foreground)
@@ -514,7 +457,6 @@ impl ReviewPane {
         }
     }
 
-    /// The row of a thread: where it sits, and whether it was resolved.
     pub(crate) fn draw_thread(&self, row: Div, thread: &ThreadId, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let Some(thread) = self
@@ -533,7 +475,6 @@ impl ReviewPane {
             false => format!("{}-{}", anchor.lines.first, anchor.lines.last),
         };
         let id = thread.id.clone();
-        // Its state, and the notice of code that changed under it, beside its place.
         let state = self.thread_state_mark(&thread.id, cx);
         let moved = self.thread_moved_marks(&thread.id, cx);
         row.pl_6()
@@ -552,7 +493,6 @@ impl ReviewPane {
             .children(moved)
     }
 
-    /// The row of a comment of a thread: who wrote it and the first line of its text.
     pub(crate) fn draw_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
         let Some(comment) = self
             .review()
@@ -581,7 +521,6 @@ impl ReviewPane {
         )
     }
 
-    /// Fills the row at `index` with a row of the diff of the file at `path`.
     fn draw_diff(
         &self,
         row: Div,
@@ -591,11 +530,9 @@ impl ReviewPane {
         cx: &Context<Self>,
     ) -> Div {
         let theme = cx.theme();
-        // A row of a diff is among the rows only while the pane holds the diff.
         let Some(diff) = self.diff_of(path) else {
             return row;
         };
-        // The side the reviewer is on, when this is the row of their line.
         let on = self
             .position
             .as_ref()
@@ -618,10 +555,8 @@ impl ReviewPane {
                 .flex()
                 .justify_end()
                 .text_color(theme.muted_foreground)
-                // Lines are counted from 0 and shown from 1.
                 .child(line.map(|line| (line + 1).to_string()).unwrap_or_default())
         };
-        // The name the reviewer is on, marked on the line it is in.
         let name = on.and_then(|_| self.name_range());
         let text = |side: Side, line: u32, name: Option<Range<usize>>| {
             let mark = match side {
@@ -630,8 +565,6 @@ impl ReviewPane {
             };
             line_text(diff, index, side, line, mark, name, theme.primary)
         };
-        // A click on the text of the line, and the mouse resting on it, find the name under
-        // the pointer by the layout the text was drawn with.
         let go = |side: Side, layout: TextLayout| {
             cx.listener(move |pane, event: &MouseDownEvent, window, cx| {
                 pane.clicked_row(index, side, &layout, event, window, cx);
@@ -653,8 +586,7 @@ impl ReviewPane {
                     })
             }
             (Layout::Unified, _) => {
-                // In this layout a row shows one line. Its sign says what its colour
-                // says, for a reader who cannot tell the two colours apart.
+                // The sign repeats the colour, for a reader who cannot tell the two colours apart.
                 let (side, sign, tint) = match shown {
                     Row::Removed { .. } => (Side::Old, "-", Some(removed)),
                     Row::Added { .. } => (Side::New, "+", Some(added)),
@@ -679,8 +611,8 @@ impl ReviewPane {
                 }
             }
             (Layout::Split, _) => {
-                // An unchanged line is on both sides and the reviewer is on it as a
-                // whole; a changed row holds two lines, each to be on by itself.
+                // An unchanged line is on both sides and the reviewer is on it as a whole; a
+                // changed row holds two lines.
                 let unchanged = matches!(shown, Row::Context { .. });
                 let half = |side: Side, tint: Hsla| {
                     let half = div()
@@ -692,7 +624,6 @@ impl ReviewPane {
                         .overflow_hidden()
                         .border_l_2();
                     let Some(line) = shown.line(side) else {
-                        // The other side of the change is longer.
                         return half
                             .border_color(transparent_black())
                             .bg(theme.muted.opacity(0.5));
@@ -702,7 +633,6 @@ impl ReviewPane {
                     } else {
                         (side, on == Some(side))
                     };
-                    // An unchanged line is drawn on both halves; the name is marked on one.
                     let name = name
                         .clone()
                         .filter(|_| on == Some(stop) && (!unchanged || side == Side::New));
@@ -722,7 +652,6 @@ impl ReviewPane {
     }
 }
 
-/// The name of a side in the selectors of the pane.
 fn side_name(side: Side) -> &'static str {
     match side {
         Side::Old => "old",
@@ -730,13 +659,7 @@ fn side_name(side: Side) -> &'static str {
     }
 }
 
-/// One line of the diff shown by the row at `index`, as the element that draws it: its
-/// text, with its changed words marked, and the layout the text was drawn with, which finds
-/// the name under a pointer.
-///
-/// The selector of the element carries the text itself, as it is handed to the text
-/// system here and nowhere else: a test cannot read what is drawn, and reads there
-/// which text the row was given.
+/// The selector carries the text as handed to the text system: a test cannot read what is drawn.
 fn line_text(
     diff: &ShownDiff,
     index: usize,
@@ -747,8 +670,8 @@ fn line_text(
     name_mark: Hsla,
 ) -> (Div, TextLayout) {
     let text = diff.text(side, line);
-    // The marks count the bytes of the line as it is in the file. Where bytes that are
-    // no text were replaced, the shown text has other bytes, and nothing is marked.
+    // Marks count the bytes of the line as in the file. Where non-text bytes were replaced, the
+    // shown text differs and nothing is marked.
     let marks = match text {
         Cow::Borrowed(_) => diff.marks(side, line),
         Cow::Owned(_) => Vec::new(),
@@ -766,7 +689,6 @@ fn line_text(
         })
         .collect::<Vec<_>>();
     let drawn = text[..end].to_owned();
-    // The name is marked on the part of the line that is drawn.
     let name = name.filter(|name| name.end <= end);
     code_text(
         format!("review-text-{index}-{}:{drawn}", side_name(side)),
@@ -777,12 +699,8 @@ fn line_text(
     )
 }
 
-/// A line of code as the element that draws it, with the layout of its text: the text
-/// element is as wide as the text, which a test reads the width of, and it carries the
-/// selector. The name the reviewer is on is marked under `review-name`, by an invisible copy
-/// of the line laid over it, whose piece for the name is underlined: the mark is where the
-/// name is, in any font. Each line of the pane's code, in the diff and in the file view, is
-/// drawn by this.
+/// The text element is as wide as the text, which a test reads. The name the reviewer is on is
+/// marked by an invisible copy of the line laid over it, whose piece for the name is underlined.
 pub(crate) fn code_text(
     selector: String,
     text: &str,
@@ -830,14 +748,12 @@ pub(crate) fn code_text(
     )
 }
 
-/// The first seven digits of the id of a commit, as git shortens it.
 fn short(commit: &str) -> &str {
     commit.get(..7).unwrap_or(commit)
 }
 
-/// A base as a reader names it: its branch, or its commit shortened, and who chose it.
 fn base_words(base: &Base) -> String {
-    // A base that is not a branch is kept as the full id of a commit.
+    // A base that is not a branch is the full id of a commit.
     let is_commit = matches!(base.name.len(), 40 | 64)
         && base.name.bytes().all(|byte| byte.is_ascii_hexdigit());
     let name = if is_commit {
@@ -851,7 +767,6 @@ fn base_words(base: &Base) -> String {
     }
 }
 
-/// What the first row says: what the changes are compared with, or why with nothing.
 fn comparison_sentence(comparison: &Comparison) -> String {
     const ONLY_UNCOMMITTED: &str =
         "nothing to compare with, so only the uncommitted changes are shown";
@@ -887,7 +802,6 @@ fn comparison_sentence(comparison: &Comparison) -> String {
     }
 }
 
-/// What happened to a file, beside its path.
 fn status_words(status: &FileStatus) -> String {
     match status {
         FileStatus::Added => "new".to_owned(),
@@ -897,7 +811,6 @@ fn status_words(status: &FileStatus) -> String {
     }
 }
 
-/// What stands in the place of the lines of a file that has none to show.
 fn unshown_sentence(why: Unshown) -> &'static str {
     match why {
         Unshown::Loading => "Reading the file",

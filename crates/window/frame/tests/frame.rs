@@ -1,5 +1,4 @@
 //! Component test: the Frame on GPUI's test platform, with no window on any screen.
-//! The Frame is read through the model it shows, as a pane would read it.
 
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
@@ -12,8 +11,7 @@ use yaar_frame::keeper::Attached;
 use yaar_frame::{Frame, KeeperLink, LinkStatus};
 use yaar_link::{Hello, PROTOCOL_VERSION};
 
-/// A Keeper of this protocol, and the end of the connection it holds: the connection
-/// lasts as long as that end does.
+/// The connection lasts as long as the returned end does.
 fn keeper(protocol: u16) -> (Attached, UnixStream) {
     let (stream, other_end) = UnixStream::pair().expect("socket pair");
     let attached = Attached {
@@ -76,7 +74,6 @@ fn the_empty_window_says_how_it_stands_with_the_keeper(cx: &mut TestAppContext) 
         "Keeper 9.9.9 is running"
     );
 
-    // The Keeper goes away: the window says so, and says why.
     drop(other_end);
     let deadline = Instant::now() + Duration::from_secs(10);
     while !matches!(

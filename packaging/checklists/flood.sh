@@ -1,37 +1,14 @@
 #!/bin/bash
-# PERF-06: the terminal pane takes a flood of 200,000 lines in at most 1.5 times the time the
-# program that writes them needs alone.
+# Checks that the terminal pane takes a flood of 200,000 lines in at most 1.5 times the time the
+# writing program needs alone.
 #
-#   packaging/checklists/flood.sh
+# packaging/checklists/flood.sh
 #
-# NOT RUN BY ANY AGENT. It types a command into the terminal pane of the real window, which
-# is posted input, so it runs only on the owner's word: it asks for the word "go" first, and
-# types only while the app is the frontmost application.
-#
-# What it does: writes a small generator (perl) into its results folder: it prints 200,000
-# coloured lines of about 60 characters, one write a line, and at the end prints
-# `FLOOD_DONE <seconds>` and appends the seconds it took, from before its first line to after
-# its last write, to a file it is given. The generator's time is the time the terminal
-# takes to accept the output, since a terminal that is slow to read makes the writer wait.
-# Then:
-#   1. alone, three times: the generator piped to `tail`, outside the app;
-#   2. in the app, three times: it asks the system to type
-#      `perl '<generator>' '<results file>'` and Return into the terminal pane in front
-#      (System Events keystrokes, to the frontmost application, which it checks is the app),
-#      after Ctrl-L to clear the screen, and waits for the generator to append its time.
-# The figure is the median of the three in-app times over the median of the three alone,
-# against 1.5.
-#
-# What it needs of the owner: his "go"; mains power, an unlocked screen, nobody at the
-# keyboard; Accessibility for the terminal that runs this (System Events keystrokes);
-# the packaged app running with a terminal pane in front at a shell prompt, with the pane
-# focused; perl (the system's). It leaves what the generator printed on the pane's screen.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/flood-<HHMMSS>/ with the generator,
-# alone.txt and in-app.txt (one time a line), and results.txt.
-#
-# Exit codes: 0 the ratio is at most 1.5; 1 it is over, or the run could not be done (a
-# sentence says which); 2 usage error.
+# RUN BY HAND ONLY: it types into the real window; it asks for "go" and types only while the app
+# is frontmost. Needs Accessibility for the running terminal, an unlocked screen, the app at a
+# shell prompt with the pane focused, perl, and the fakeinput program that YAAR_FAKEINPUT names (or
+# YAAR_KIT, a folder that holds it as tools/fakeinput). Exit: 0 ratio <= 1.5, 1 over or not done,
+# 2 usage.
 set -euo pipefail
 
 CK_NAME=flood.sh

@@ -1,6 +1,5 @@
 //! Following threads through the states the engine records and between any two trees,
-//! through the engine with the real Store and the real Recorder beneath, on repositories
-//! the test makes.
+//! through the engine with the real Store and Recorder on repositories the test makes.
 
 mod support;
 
@@ -17,7 +16,6 @@ use yaar_review_engine::{
 };
 use yaar_store::Store;
 
-/// A file of `n` lines, `line 1` to `line n`.
 fn numbered(n: u32) -> Vec<String> {
     (1..=n).map(|i| format!("line {i}")).collect()
 }
@@ -29,23 +27,19 @@ fn text(lines: &[String]) -> String {
 /// The line that moves in the cases below: more than twenty letters and digits.
 const LONG: &str = "let total_value = compute(first, second);";
 
-/// One case of the thread tests of the follower (THREAD-01 to THREAD-05 and THREAD-07), with
-/// the contents, the lines and the answer those tests give, as a table: what the engine
-/// must give whatever kind of tree the two versions are.
+/// One case of the follower's thread tests, as a table: the contents, the lines and the
+/// answer, which the engine must give whatever kind of tree the two versions are.
 struct Case {
     name: &'static str,
     before: &'static str,
     after: &'static str,
     old: String,
     new: String,
-    /// The lines the thread sits on in the old version.
     lines: (u32, u32),
-    /// Where it sits in the new one, and its notice.
     expected: (u32, u32, Option<Notice>),
-    /// A version between the two, the path it has and its content, when the change can be
-    /// cut in two parts that each give a place of their own and the two together the
-    /// expected one: the range of commits is cut there. None for a change in one piece (a
-    /// rewrite, a move of a block), which no cut leaves whole.
+    /// A version between the two, when the change can be cut in two parts that each give a place
+    /// of their own and together the expected one: the range of commits is cut there. None for a
+    /// change in one piece (a rewrite, a move of a block).
     between: Option<(&'static str, String)>,
 }
 
@@ -62,14 +56,12 @@ fn cases() -> Vec<Case> {
     };
     let mut cases = Vec::new();
 
-    // THREAD-01: unchanged lines below an insertion.
     let mut new = vec![
         "new 1".to_string(),
         "new 2".to_string(),
         "new 3".to_string(),
     ];
     new.extend(numbered(10));
-    // Cut: one line first, the other two after.
     let mut one = vec!["new 1".to_string()];
     one.extend(numbered(10));
     cases.push(Case {
@@ -83,7 +75,6 @@ fn cases() -> Vec<Case> {
         )
     });
 
-    // THREAD-02: a block of twenty letters and digits moved within the file.
     let mut old = numbered(20);
     old[2] = LONG.to_string();
     let mut new = numbered(20);
@@ -97,8 +88,8 @@ fn cases() -> Vec<Case> {
         (15, 15, None),
     ));
 
-    // THREAD-02, the floor: a moved line of fewer than twenty letters and digits is not
-    // followed, and its thread stays where it was with a notice.
+    // The floor: a moved line of fewer than twenty letters and digits is not followed, and its
+    // thread stays where it was with a notice.
     let mut old = numbered(20);
     old[2] = "});".to_string();
     let mut new = numbered(20);
@@ -112,7 +103,6 @@ fn cases() -> Vec<Case> {
         (3, 3, Some(Notice::Deleted)),
     ));
 
-    // THREAD-03: a rewritten line.
     let mut new = numbered(10);
     new.splice(
         4..5,
@@ -126,11 +116,9 @@ fn cases() -> Vec<Case> {
         (5, 6, Some(Notice::Changed)),
     ));
 
-    // THREAD-04: a deleted line.
     let mut new = numbered(8);
     new.drain(3..5);
-    // Cut: line 4 first, which leaves the thread on what is left of its range, and then
-    // the old line 5, which takes the rest.
+    // Cut: line 4 first, which leaves the thread on what is left of its range, then line 5.
     let mut one = numbered(8);
     one.remove(3);
     cases.push(Case {
@@ -144,8 +132,6 @@ fn cases() -> Vec<Case> {
         )
     });
 
-    // THREAD-04, the end of the file: the thread goes to the last line the file has.
-    // Cut: the last line first, then the one before it.
     cases.push(Case {
         between: Some(("a.rs", text(&numbered(4)))),
         ..case(
@@ -157,7 +143,6 @@ fn cases() -> Vec<Case> {
         )
     });
 
-    // THREAD-05: a line inserted inside a commented range.
     let mut new = numbered(8);
     new.insert(4, "inserted".to_string());
     cases.push(case(
@@ -168,11 +153,9 @@ fn cases() -> Vec<Case> {
         (3, 7, Some(Notice::Changed)),
     ));
 
-    // THREAD-07: a file renamed with small edits.
     let mut new = numbered(12);
     new[10] = "edited far below".to_string();
     new.insert(2, "inserted above".to_string());
-    // Cut: the rename with the insertion above first, the edit far below after.
     let mut renamed = numbered(12);
     renamed.insert(2, "inserted above".to_string());
     cases.push(Case {
@@ -190,7 +173,6 @@ fn cases() -> Vec<Case> {
     cases
 }
 
-/// The thread of a case, as it sits in the old version.
 fn placed_in_the_old_version(case: &Case) -> Placed {
     Placed {
         at: Place {
@@ -203,7 +185,6 @@ fn placed_in_the_old_version(case: &Case) -> Placed {
     }
 }
 
-/// The thread of a case, as it must sit in the new version.
 fn placed_in_the_new_version(case: &Case) -> Placed {
     let (first, last, notice) = case.expected;
     Placed {
@@ -248,8 +229,6 @@ fn the_table_of_cases_is_what_the_follower_gives_on_the_bytes() {
     }
 }
 
-/// The repository of one run of a case, with its worktree, and the engine's way to its
-/// state store.
 struct Run<'a> {
     reviews: &'a Reviews,
     workspace: WorkspaceId,
@@ -258,7 +237,6 @@ struct Run<'a> {
 }
 
 impl<'a> Run<'a> {
-    /// A repository of its own in the scratch folder, as workspace number `n`.
     fn new(scratch: &Scratch, reviews: &'a Reviews, n: u128) -> Run<'a> {
         let repo = scratch.join(&format!("repo{n}"));
         init(&repo);
@@ -270,8 +248,6 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Makes the files of the worktree what `files` say: each path with its content; no
-    /// other file stays.
     fn set(&self, files: &[(&str, &str)]) {
         for entry in std::fs::read_dir(&self.repo).expect("read the folder") {
             let path = entry.expect("an entry").path();
@@ -289,7 +265,6 @@ impl<'a> Run<'a> {
         }
     }
 
-    /// Commits what the worktree holds, and has the state store keep the commit.
     fn commit(&self, message: &str) -> String {
         let commit = commit_all(&self.repo, message);
         self.reviews
@@ -300,7 +275,6 @@ impl<'a> Run<'a> {
         commit
     }
 
-    /// Records the state of what the worktree holds.
     fn record(&self) -> String {
         self.reviews
             .states_of(&self.workspace)
@@ -312,7 +286,6 @@ impl<'a> Run<'a> {
             .to_owned()
     }
 
-    /// Where a thread placed as `placed` in tree `from` sits in tree `to`.
     fn carry(&self, placed: &Placed, from: &str, to: &str) -> Placed {
         self.reviews
             .carry_between(&self.workspace, placed, from, to)
@@ -320,8 +293,6 @@ impl<'a> Run<'a> {
     }
 }
 
-/// Runs every case with `way`, which puts the two versions of the case in trees of one
-/// kind or another in the repository and gives where the thread sits in the second.
 fn every_case_gives_its_placement(way: impl Fn(&Run<'_>, &Case) -> Placed) {
     let scratch = Scratch::new();
     let reviews = engine(&scratch, store(&scratch));
@@ -336,7 +307,6 @@ fn every_case_gives_its_placement(way: impl Fn(&Run<'_>, &Case) -> Placed) {
     }
 }
 
-// REV-23
 #[test]
 fn the_thread_cases_give_the_same_placement_between_two_commits() {
     every_case_gives_its_placement(|run, case| {
@@ -348,7 +318,6 @@ fn the_thread_cases_give_the_same_placement_between_two_commits() {
     });
 }
 
-// REV-23
 #[test]
 fn the_thread_cases_give_the_same_placement_between_two_recorded_states() {
     every_case_gives_its_placement(|run, case| {
@@ -361,7 +330,6 @@ fn the_thread_cases_give_the_same_placement_between_two_recorded_states() {
     });
 }
 
-// REV-23
 #[test]
 fn the_thread_cases_give_the_same_placement_from_a_commit_to_a_recorded_state() {
     every_case_gives_its_placement(|run, case| {
@@ -373,14 +341,11 @@ fn the_thread_cases_give_the_same_placement_from_a_commit_to_a_recorded_state() 
     });
 }
 
-// REV-23
 #[test]
 fn the_thread_cases_give_the_same_placement_over_a_range_of_commits_cut_in_two_either_way() {
-    // The first version is the commit `A`, the last `C`, `B` between. A case that can be
-    // cut has a version between: its change is cut there, in two parts. One that cannot
-    // (a rewrite, a move of a block) is cut from a line added at the end of the file,
-    // which no thread of the cases sits near: the change comes first or last, and the
-    // other half is the added line.
+    // The first version is the commit `A`, the last `C`, `B` between. A change that cannot be
+    // cut is cut from a line added at the end of the file, which no thread sits near: the change
+    // comes first or last, the added line the other half.
     for change_first in [false, true] {
         every_case_gives_its_placement(|run, case| {
             run.set(&[(case.before, &case.old)]);
@@ -418,7 +383,6 @@ fn the_thread_cases_give_the_same_placement_over_a_range_of_commits_cut_in_two_e
     }
 }
 
-/// Reads one thread of a review as a second engine over the Store reads it.
 fn thread_of(reviews: &Reviews, review: &ReviewId, thread: u128) -> Thread {
     reviews
         .review(review)
@@ -428,8 +392,6 @@ fn thread_of(reviews: &Reviews, review: &ReviewId, thread: u128) -> Thread {
         .clone()
 }
 
-/// What the tests of the engine share: a repository whose file `a.txt` holds the lines
-/// `line 1` to `line n`, the review of the workspace, and the engine.
 struct World {
     scratch: Scratch,
     store: Store,
@@ -465,7 +427,6 @@ impl World {
         }
     }
 
-    /// Starts thread `n` on a line of `a.txt` as it is on disk now.
     fn thread_on(&self, n: u128, line: u32) {
         let save = new_thread(n, "a.txt", line, &format!("line {line}"), "a comment");
         self.reviews
@@ -473,12 +434,10 @@ impl World {
             .expect("save the draft");
     }
 
-    /// Puts the file `a.txt` as `lines` say.
     fn rewrite(&self, lines: &[String]) {
         write(&self.repo, "a.txt", &text(lines));
     }
 
-    /// Records the state of the files as they are, with no following.
     fn record(&self) -> yaar_recorder::StateId {
         self.reviews
             .states_of(&workspace())
@@ -488,13 +447,11 @@ impl World {
             .id
     }
 
-    /// A second engine over the same Store, which knows nothing the first one holds.
     fn second_engine(&self) -> Reviews {
         engine(&self.scratch, self.store.clone())
     }
 }
 
-/// `line 1` to `line n` with `inserted` put before line `at` (counted from 1).
 fn with_a_line_before(n: u32, at: usize, inserted: &str) -> Vec<String> {
     let mut lines = numbered(n);
     lines.insert(at - 1, inserted.to_string());
@@ -512,7 +469,6 @@ fn place(tree: &yaar_recorder::StateId, path: &str, first: u32, last: u32) -> Th
     }
 }
 
-// THREAD-03, the half the follower's own test cannot show: what the engine keeps.
 #[test]
 fn a_thread_on_a_rewritten_line_is_kept_with_its_notice_and_the_line_it_was_written_on() {
     let world = World::new(10);
@@ -540,7 +496,6 @@ fn a_thread_on_a_rewritten_line_is_kept_with_its_notice_and_the_line_it_was_writ
         .expect("follow");
     assert_eq!(changed, vec![ThreadId::new(id(1))]);
 
-    // A second engine over the Store reads it back.
     let thread = thread_of(&world.second_engine(), &world.review, 1);
     assert_eq!(
         thread.now,
@@ -567,8 +522,8 @@ fn a_thread_on_a_rewritten_line_is_kept_with_its_notice_and_the_line_it_was_writ
 fn a_state_followed_after_a_newer_one_leaves_the_threads_in_the_newer() {
     let world = World::new(10);
     world.thread_on(1, 5);
-    // The two states are recorded in this order and followed in the other: the calls of
-    // two recordings that ran at once.
+    // The two states are recorded in this order and followed in the other: two recordings that
+    // ran at once.
     world.rewrite(&with_a_line_before(10, 1, "one above"));
     let older = world.record();
     let mut lines = with_a_line_before(10, 1, "one above");
@@ -595,8 +550,8 @@ fn a_state_followed_after_a_newer_one_leaves_the_threads_in_the_newer() {
 fn a_thread_that_sits_where_its_anchor_says_is_not_carried_to_a_state_older_than_the_newest() {
     let world = World::new(10);
     world.thread_on(1, 5);
-    // The line is rewritten in the older state and put back in the newer, which follows
-    // first: it leaves the thread where its anchor says, and writes no place to record it.
+    // The line is rewritten in the older state and put back in the newer, which follows first:
+    // it leaves the thread where its anchor says, and writes no place to record.
     let mut lines = numbered(10);
     lines[4] = "rewritten for a while".to_string();
     world.rewrite(&lines);
@@ -673,13 +628,9 @@ fn a_hundred_threads_on_one_file_are_all_placed_by_one_follow() {
 
 #[test]
 fn threads_followed_to_one_state_by_calls_at_once_are_given_by_one_call_each() {
-    // Two recordings that ran at once may both follow the state their own recording took,
-    // or the same one: whichever call reads a thread's place before the other keeps it, the
-    // other must find the place changed when it takes its turn and leave the thread out,
-    // so that a thread is given as changed by one call only. No timing decides the
-    // outcome: any order of the calls gives the same sum, and a call that kept what it read
-    // before the turn would count a thread twice whenever two of them read before either
-    // one kept.
+    // Two recordings that ran at once may follow the same state: whichever call reads a
+    // thread's place first, the other must find it changed when it takes its turn and leave the
+    // thread out. A thread is given as changed by one call only, in any order.
     const THREADS: u32 = 40;
     const CALLERS: usize = 4;
     const ROUNDS: u32 = 6;
@@ -735,13 +686,9 @@ fn threads_followed_to_one_state_by_calls_at_once_are_given_by_one_call_each() {
 #[test]
 fn a_thread_resolved_while_a_state_is_followed_is_not_carried_and_keeps_the_place_it_had_when_it_was_resolved()
  {
-    // A follow reads the threads, diffs without the engine's turn and then takes the turn
-    // to read them again: a thread the reviewer resolved in between must be left out. No
-    // timing decides the outcome. Whenever a resolve lands, the thread's place read right
-    // after it returned is the place it has when every call has ended; a call that kept the
-    // place it computed for a thread resolved meanwhile writes it after that read, in the
-    // rounds where a resolve lands between the call's reading and its turn, which the long
-    // file and the many resolves make the most of them.
+    // A follow reads the threads, diffs without the engine's turn, then takes the turn and
+    // reads them again: a thread the reviewer resolved in between must be left out. The long
+    // file and many resolves make a resolve land between the reading and the turn in most rounds.
     const LINES: u32 = 3000;
     const THREADS: u128 = 30;
     const CALLERS: usize = 4;
@@ -749,8 +696,8 @@ fn a_thread_resolved_while_a_state_is_followed_is_not_carried_and_keeps_the_plac
     let world = World::new(LINES);
     world.record();
     for round in 1..=ROUNDS {
-        // The file is as the newest state has it: the threads sit on it, and no state is
-        // recorded for them.
+        // The file is as the newest state has it: the threads sit on it, and no state is recorded
+        // for them.
         for n in 1..=THREADS {
             world.thread_on(round * 100 + n, (n * 90) as u32);
         }
@@ -817,7 +764,6 @@ fn a_resolved_thread_and_a_thread_on_the_old_side_stay_and_a_reopened_one_catche
     let first = world.record();
     world.thread_on(1, 5);
     world.thread_on(2, 6);
-    // A thread on the old side of the diff: the engine does not move it.
     let old_side = Thread {
         id: ThreadId::new(id(3)),
         anchor: Anchor {
@@ -860,8 +806,6 @@ fn a_resolved_thread_and_a_thread_on_the_old_side_stay_and_a_reopened_one_catche
         Some(place(&second, "a.txt", 7, 7))
     );
 
-    // Reopened after two more states, the thread is carried from where it sat across
-    // both at once.
     world
         .store
         .set_resolved(&ThreadId::new(id(1)), false)
@@ -906,7 +850,6 @@ fn a_state_the_engine_records_carries_the_threads_to_it_and_leaves_alone_a_threa
 fn a_thread_that_cannot_be_followed_does_not_fail_the_recording_nor_stop_the_others() {
     let world = World::new(10);
     world.thread_on(1, 8);
-    // A thread on a commit the state store never held: nothing can be carried from it.
     let unheld = "1".repeat(40);
     let save = DraftSave {
         thread: ThreadId::new(id(2)),
@@ -939,7 +882,6 @@ fn a_thread_that_cannot_be_followed_does_not_fail_the_recording_nor_stop_the_oth
         "the thread that could be followed was"
     );
     assert_eq!(thread_of(&reviews, &world.review, 2).now, None);
-    // Asked directly, the failure is given.
     assert!(matches!(
         world.reviews.follow(&workspace(), &state),
         Err(EngineError::Git(_))
@@ -991,7 +933,6 @@ fn a_thread_follows_its_file_to_a_new_name_and_says_when_the_file_is_gone() {
         .save_draft(Some(&world.worktree), &world.review, &save)
         .expect("save the draft");
 
-    // `a.txt` is renamed with a small edit, `b.txt` is deleted.
     std::fs::remove_file(world.repo.join("a.txt")).expect("remove");
     std::fs::remove_file(world.repo.join("b.txt")).expect("remove");
     let mut renamed = numbered(10);
@@ -1032,7 +973,6 @@ fn a_state_the_store_does_not_hold_carries_nothing_and_a_thread_on_the_old_side_
     );
     assert_eq!(thread_of(&world.reviews, &world.review, 1).now, None);
 
-    // Trees that do not exist tell a thread on the old side nothing: it stays.
     let on_the_old_side = Placed {
         at: Place {
             path: PathBuf::from("a.txt"),

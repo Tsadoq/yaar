@@ -1,15 +1,3 @@
-//! Component test: the settings screen on GPUI's test platform, with no window on any
-//! screen. Keys, clicks and the wheel go in; the screen is read back through the model it
-//! shows (`SettingsScreen::rows`, the models of the Frame) and through what it draws, found
-//! by selector.
-//!
-//! The test plays the Keeper on a socket pair and the Navigator at the model's port, with
-//! data: the Keeper answers `GetSettings` and `SetSetting` itself and keeps what was set,
-//! every other request is the test's to answer, and the asks the model makes of the
-//! Navigator are read from the port. A negative clause ("nothing is sent") is read after a
-//! barrier: the next request the test causes through the same path, whose arrival at the
-//! Keeper shows that everything sent before it arrived first.
-
 mod common;
 
 use std::path::PathBuf;
@@ -50,7 +38,6 @@ const WINDOW: Size<Pixels> = Size {
     height: px(800.),
 };
 
-/// The full id of a commit, as the Link carries it.
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn hello() -> Hello {
@@ -88,7 +75,6 @@ fn consent(agent: &str, answer: ConsentAnswer) -> Consent {
     }
 }
 
-/// One repository with its main worktree and a feature worktree, the main one on screen.
 fn one_repository() -> Vec<Repository> {
     vec![repository(
         'a',
@@ -96,7 +82,6 @@ fn one_repository() -> Vec<Repository> {
     )]
 }
 
-/// Two repositories, `R` and `S`, each with a worktree.
 fn two_repositories() -> Vec<Repository> {
     vec![
         repository('a', vec![workspace('1', "main")]),
@@ -132,7 +117,6 @@ fn sizes(listed: &[(char, u64)], total: u64) -> StateSizes {
     }
 }
 
-/// A pane that draws nothing but its room.
 struct Plain {
     focus: FocusHandle,
 }
@@ -157,9 +141,6 @@ fn plain() -> BuildPane {
     })
 }
 
-/// The Navigator, played by the test at the other end of the model's port: the asks the
-/// model makes are moved by a thread of this end's own onto a channel the test waits on
-/// while the app runs.
 struct Navigator {
     asks: Receiver<Ask>,
     // Dropping the way back would tell the model the Navigator ended.
@@ -167,7 +148,6 @@ struct Navigator {
 }
 
 impl Navigator {
-    /// Connects a new port to the model and keeps the Navigator's end.
     fn connect(models: &yaar_frame::Models, cx: &mut VisualTestContext) -> Navigator {
         let (port, end) = port();
         let (moved, asks) = channel();
@@ -189,8 +169,6 @@ impl Navigator {
         }
     }
 
-    /// The asks of the model up to the first that `wanted` accepts, which is the last of
-    /// them; each is waited for with the app running.
     fn until(
         &mut self,
         cx: &mut VisualTestContext,
@@ -220,17 +198,12 @@ impl Navigator {
     }
 }
 
-/// A window the test plays the Keeper and the Navigator of, with the settings screen not
-/// yet open.
 struct Window9 {
     shown: Shown,
     cx: VisualTestContext,
     navigator: Navigator,
 }
 
-/// The window of `size`, whose Keeper holds `settings` and has listed `listed`: the first
-/// workspace is on screen, its changes are counted from `main`, the system is light, and
-/// the Navigator has been told what a connect tells.
 fn opened(
     size: Size<Pixels>,
     settings: Vec<Setting>,
@@ -285,9 +258,6 @@ fn opened(
 }
 
 impl Window9 {
-    /// Opens the screen with its key and answers its two questions, the sizes of the states
-    /// and then the list of the extensions: the Keeper of the test holds what it has told the
-    /// Window, so that is the list it answers with.
     fn open_screen(&mut self, answer: StateSizes) -> Entity<SettingsScreen> {
         self.cx.simulate_keystrokes(&pressed::<OpenSettings>());
         let asked = self
@@ -317,8 +287,6 @@ impl Window9 {
         self.screen()
     }
 
-    /// Opens the screen again, which asks for the sizes and the extensions again; the answer
-    /// to the first is that of none, and to the second what the Keeper has told.
     fn open_screen_again(&mut self) {
         self.cx.simulate_keystrokes(&pressed::<OpenSettings>());
         let asked = self
@@ -372,7 +340,6 @@ impl Window9 {
             .unwrap_or_else(|| panic!("the screen has no row {row:?}"))
     }
 
-    /// The row of this kind as the screen shows it.
     fn row(&mut self, row: &SettingRow) -> RowShown {
         let at = self.index_of(row);
         self.rows().swap_remove(at)
@@ -395,7 +362,6 @@ impl Window9 {
         screen.read_with(&self.cx, |screen, _| screen.focus().clone())
     }
 
-    /// Clicks the middle of what is drawn under `selector`.
     fn click(&mut self, selector: &str) {
         let at = self.bounds(selector).center();
         self.cx.simulate_click(at, Modifiers::none());
@@ -405,10 +371,9 @@ impl Window9 {
         self.cx.simulate_keystrokes(keys);
     }
 
-    /// Moves the cursor to row `to` with `j` and `k`.
     fn cursor_to(&mut self, to: usize) {
-        // Exactly as many presses as rows lie between: a cursor that does not move as
-        // told fails here, and does not leave the test pressing for ever.
+        // Exactly as many presses as rows between: a cursor that does not move fails instead of
+        // looping.
         let from = self.cursor();
         for _ in from..to {
             self.press(&key::<NextSetting>());
@@ -419,17 +384,13 @@ impl Window9 {
         assert_eq!(self.cursor(), to, "the cursor moved from row {from}");
     }
 
-    /// The selector of the control of this value of row `row`.
     fn value(row: usize, value: usize, label: &str) -> String {
         format!("settings-value-{row}-{value}:{label}")
     }
 
-    /// The control each row draws as its chosen value is the model's: the element marked
-    /// `settings-chosen-<row>` is the control of the value the row's model has chosen (the
-    /// same bounds) and lies inside no other control of the row, and a row with no value
-    /// chosen draws none marked. What was painted agrees: the quad at the chosen control's
-    /// bounds has the applied theme's `primary` for its ground, and the quad at each other
-    /// value's control has its `secondary`.
+    /// The row's `settings-chosen-<row>` mark is the chosen value's control (no mark when nothing
+    /// is chosen), and that control is painted in the theme's `primary`, every other in
+    /// `secondary`.
     fn assert_chosen_drawn(&mut self, row: &SettingRow) {
         let at = self.index_of(row);
         let shown = self.row(row);
@@ -441,8 +402,6 @@ impl Window9 {
             );
             return;
         };
-        // The mark is on the control itself, the element that has the colours of a chosen
-        // value, and not on the words inside it: its bounds are the value's.
         assert_eq!(
             self.bounds(&mark),
             self.bounds(&Window9::value(at, chosen, &shown.values[chosen])),
@@ -458,8 +417,6 @@ impl Window9 {
                  {chosen} chosen"
             );
         }
-        // The mark says which control is chosen; the grounds that were painted say how it
-        // looks. The roles are the applied theme's, read where the kit holds it.
         let (primary, secondary) = self.cx.update(|_, app| {
             let theme = app.theme();
             (theme.primary, theme.secondary)
@@ -479,10 +436,8 @@ impl Window9 {
         }
     }
 
-    /// The ground of the quad that was painted at the bounds of the element drawn under
-    /// `selector`, read from the last frame's scene. The scene counts in device pixels, so
-    /// the element's bounds are scaled by the window's factor first. Fails when no quad, or
-    /// more than one, was painted there, or when its ground is not one solid colour.
+    /// The solid ground of the one quad painted at the element's bounds in the last frame.
+    /// The scene counts in device pixels, so the bounds are scaled by the window's factor first.
     fn painted_ground(&mut self, selector: &str) -> gpui_kit::Hsla {
         let bounds = self.bounds(selector);
         let (scale, quads) = self
@@ -508,7 +463,6 @@ impl Window9 {
             .unwrap_or_else(|| panic!("{selector}: the ground painted is not one solid colour"))
     }
 
-    /// Every row of the screen draws its chosen value as the model has it.
     fn assert_every_chosen_drawn(&mut self) {
         for row in self.rows() {
             self.assert_chosen_drawn(&row.row);
@@ -519,14 +473,12 @@ impl Window9 {
         self.shown.keeper.settings_set()
     }
 
-    /// Waits until the Keeper has heard `wanted` as its last `SetSetting`.
     fn heard_set(&mut self, wanted: Setting) {
         self.wait("the Keeper to hear the setting", |shown, _| {
             shown.keeper.settings_set().last() == Some(&wanted)
         });
     }
 
-    /// Keeps the app running until `holds` says yes. Fails at the deadline, naming `what`.
     fn wait(&mut self, what: &str, mut holds: impl FnMut(&Shown, &mut VisualTestContext) -> bool) {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -544,8 +496,8 @@ impl Window9 {
         assert_eq!(self.cx.windows().len(), 1, "no second window");
     }
 
-    /// A barrier for what the test-Keeper answers itself: the first request after it is the
-    /// Keeper hearing this set, which a set the screen made before it would have come before.
+    /// Sets a marker value and waits for the test-Keeper to hear it: a set the screen made earlier
+    /// arrives before the marker, so the returned list holds every set made so far.
     fn barrier(&mut self) -> Vec<Setting> {
         let marker = Setting::TurnEnd(TurnEndSelects::KeepSelection);
         let turn_end = self.index_of(&SettingRow::TurnEnd);
@@ -555,9 +507,8 @@ impl Window9 {
         self.settings_set()
     }
 
-    /// A barrier for the requests the test-Keeper hands to the test (a clean-up, an answer
-    /// for leave, a base): a request the screen sent before it comes first, and fails the
-    /// expect. Used after `barrier`, which covers the sets the test-Keeper answers itself.
+    /// Barrier for the requests the test-Keeper hands to the test: a request the screen sent
+    /// earlier comes before `ListWorkspaces` and fails the expect. `barrier` covers the sets.
     fn handed_barrier(&mut self) {
         self.shown
             .models
@@ -569,7 +520,6 @@ impl Window9 {
     }
 }
 
-/// The rows of the screen that is open, as it shows them now.
 fn rows_now(shown: &Shown, cx: &VisualTestContext) -> Vec<RowShown> {
     let screen = shown
         .frame
@@ -578,7 +528,6 @@ fn rows_now(shown: &Shown, cx: &VisualTestContext) -> Vec<RowShown> {
     screen.read_with(cx, |screen, cx| screen.rows(cx))
 }
 
-/// The key the screen's table gives an action, as a user presses it.
 fn key<A: Action + Default>() -> String {
     let name = A::default().name();
     controls()
@@ -587,8 +536,6 @@ fn key<A: Action + Default>() -> String {
         .expect("the action has a row in the screen's table")
         .key()
 }
-
-// The keys.
 
 #[test]
 fn the_screens_table_binds_each_key_of_the_screen_in_its_own_context_and_sends_what_the_plan_says()
@@ -625,7 +572,6 @@ fn the_screens_table_binds_each_key_of_the_screen_in_its_own_context_and_sends_w
             ),
         ]
     );
-    // The actions are the ones the Frame declares.
     let names: Vec<&str> = controls()
         .into_iter()
         .map(|control| (control.action)().name())
@@ -643,8 +589,6 @@ fn the_screens_table_binds_each_key_of_the_screen_in_its_own_context_and_sends_w
         ]
     );
 }
-
-// FRAME-11.
 
 #[gpui_kit::test]
 fn the_screen_opens_with_the_rows_of_the_app_the_folder_of_the_repository_and_the_states(
@@ -669,7 +613,6 @@ fn the_screen_opens_with_the_rows_of_the_app_the_folder_of_the_repository_and_th
             &SettingRow::States,
         ]
     );
-    // Each row, with its title, its values and the chosen one, from the defaults.
     let minutes: Vec<String> = STOP_AFTER_MINUTES
         .iter()
         .map(|minutes| stop_after_label(*minutes))
@@ -714,9 +657,7 @@ fn the_screen_opens_with_the_rows_of_the_app_the_folder_of_the_repository_and_th
         assert_eq!(shown.values, values, "{title}");
         assert_eq!(shown.chosen, chosen, "{title}");
     }
-    // Each row draws the value its model has chosen as the chosen one.
     window.assert_every_chosen_drawn();
-    // The cursor is on the first row, which is the one drawn under it.
     assert_eq!(window.cursor(), 0);
     let row = window.bounds("settings-row-0");
     let cursor = window.bounds("settings-cursor");
@@ -734,7 +675,6 @@ fn l_on_the_turn_end_row_chooses_keep_selection_at_once_and_the_keeper_keeps_it(
 
     window.press(&key::<NextValue>());
 
-    // Read right after the key: nothing was waited for but the frame.
     window
         .shown
         .models
@@ -744,7 +684,6 @@ fn l_on_the_turn_end_row_chooses_keep_selection_at_once_and_the_keeper_keeps_it(
         });
     assert_eq!(window.row(&SettingRow::TurnEnd).chosen, Some(1));
     window.heard_set(Setting::TurnEnd(TurnEndSelects::KeepSelection));
-    // The value drawn as chosen is the one now.
     let turn_end = window.index_of(&SettingRow::TurnEnd);
     assert!(window.is_drawn(&format!("settings-chosen-{turn_end}")));
     assert!(window.is_drawn(&Window9::value(turn_end, 1, KEEP_SELECTION)));
@@ -774,7 +713,6 @@ fn j_and_k_move_the_cursor_and_stop_at_the_first_and_the_last_row_and_l_and_h_st
     window.press(&key::<NextSetting>());
     assert_eq!(window.cursor(), last, "no row after the last");
 
-    // On the turn-end row: the last value, again `l`, and `h` back to the first.
     let turn_end = window.index_of(&SettingRow::TurnEnd);
     window.cursor_to(turn_end);
     window.press(&key::<NextValue>());
@@ -859,7 +797,6 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     let mode = |window: &mut Window9| window.cx.update(|_, app| app.theme().mode);
     assert_eq!(mode(&mut window), ThemeMode::Light);
 
-    // `l` until Dark is chosen: Light first, then Dark.
     window.press(&key::<NextValue>());
     window.heard_set(Setting::Theme(ThemeChoice::Named(LIGHT.to_owned())));
     window.press(&key::<NextValue>());
@@ -875,7 +812,6 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     assert_eq!(background, theme::dark().colors.background);
     window.assert_chosen_drawn(&SettingRow::Theme);
 
-    // Light by a click.
     window.click(&Window9::value(row, 1, LIGHT));
     window.heard_set(Setting::Theme(ThemeChoice::Named(LIGHT.to_owned())));
     window.cx.run_until_parked();
@@ -884,7 +820,6 @@ fn the_theme_row_applies_dark_at_once_and_a_click_on_light_brings_light_back(
     assert_eq!(background, theme::light().colors.background);
     window.assert_chosen_drawn(&SettingRow::Theme);
 
-    // And the system's again, which is the first value.
     window.click(&Window9::value(row, 0, SYSTEM));
     window.heard_set(Setting::Theme(ThemeChoice::System));
     window.no_dialog();
@@ -903,7 +838,6 @@ fn the_base_row_opens_the_frames_field_and_what_the_keeper_answers_shows_in_the_
 
     window.press(&key::<OpenSetting>());
     assert!(window.is_drawn("frame-base-field"));
-    // The letters go to the field, not to the screen's keys.
     window.cx.simulate_input("develop");
     window.press("enter");
 
@@ -943,7 +877,6 @@ fn the_base_row_opens_the_frames_field_and_what_the_keeper_answers_shows_in_the_
             })
     });
     assert_eq!(window.row(&SettingRow::Base).values, ["develop"]);
-    // The focus is back in the screen: its keys work.
     window.press(&key::<NextSetting>());
     assert_eq!(window.cursor(), base + 1);
     window.no_dialog();
@@ -977,12 +910,10 @@ fn with_no_workspace_on_screen_the_base_row_says_so_and_nothing_opens(cx: &mut T
     window.click(&Window9::value(base, 0, NO_WORKSPACE));
 
     assert!(!window.is_drawn("frame-base-field"), "no field opens");
-    // Nothing was set for it: the first request after the barrier is its own.
     assert_eq!(
         window.barrier(),
         [Setting::TurnEnd(TurnEndSelects::KeepSelection)]
     );
-    // And no base was asked for: that request is the test's, so the barrier for it is next.
     window.handed_barrier();
 }
 
@@ -1003,7 +934,6 @@ fn the_wheel_scrolls_the_screen_until_the_row_of_the_states_is_drawn(cx: &mut Te
         "the row of the states is below what the room shows"
     );
 
-    // One long turn of the wheel down: the screen stops at its end.
     window.cx.simulate_event(ScrollEvent {
         position: screen.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(-10_000.))),
@@ -1017,7 +947,6 @@ fn the_wheel_scrolls_the_screen_until_the_row_of_the_states_is_drawn(cx: &mut Te
         after.top() >= screen.top() && after.bottom() <= screen.bottom(),
         "the row of the states is in the room now: {after:?} in {screen:?}"
     );
-    // And the wheel up brings the first row back.
     window.cx.simulate_event(ScrollEvent {
         position: screen.center(),
         delta: ScrollDelta::Pixels(point(px(0.), px(10_000.))),
@@ -1054,7 +983,6 @@ fn a_cursor_that_moves_past_the_room_scrolls_its_row_into_it(cx: &mut TestAppCon
 fn a_stop_time_that_is_none_of_the_values_shows_none_chosen_and_l_and_h_move_from_it(
     cx: &mut TestAppContext,
 ) {
-    // Another Window set 7 minutes.
     let mut window = opened(
         WINDOW,
         vec![Setting::StopAfter { seconds: 420 }],
@@ -1078,7 +1006,6 @@ fn a_stop_time_that_is_none_of_the_values_shows_none_chosen_and_l_and_h_move_fro
     window.heard_set(Setting::StopAfter { seconds: 600 });
     assert_eq!(window.row(&SettingRow::StopAfter).chosen, Some(3), "10 min");
 
-    // The same from below: told 7 minutes again, `h` chooses 5.
     window
         .shown
         .keeper
@@ -1123,8 +1050,6 @@ fn the_rows_of_the_other_settings_choose_each_of_their_values(cx: &mut TestAppCo
     window.no_dialog();
 }
 
-// FRAME-12.
-
 #[gpui_kit::test]
 fn the_screen_shows_the_size_of_each_workspace_the_states_of_none_and_the_total(
     cx: &mut TestAppContext,
@@ -1136,12 +1061,10 @@ fn the_screen_shows_the_size_of_each_workspace_the_states_of_none_and_the_total(
     assert!(window.is_drawn(&format!("settings-size-{}:main: 2.5 MB", id('1'))));
     assert!(window.is_drawn(&format!("settings-size-{}", id('2'))));
     assert!(window.is_drawn(&format!("settings-size-{}:feature: 4 KB", id('2'))));
-    // 8,192 bytes belong to no workspace the Window lists.
     assert!(window.is_drawn("settings-size-other"));
     assert!(window.is_drawn(&format!("settings-size-other:{OTHER_STATES}: 8 KB")));
     assert!(window.is_drawn("settings-size-total"));
     assert!(window.is_drawn(&format!("settings-size-total:{TOTAL_STATES}: 2.5 MB")));
-    // The control of the clean-up is the one value of the row of the states.
     let states = window.index_of(&SettingRow::States);
     assert!(window.is_drawn(&Window9::value(states, 0, CLEAN_UP)));
     window.no_dialog();
@@ -1152,8 +1075,8 @@ fn a_workspace_the_window_does_not_list_is_in_the_other_states_and_no_line_of_it
     cx: &mut TestAppContext,
 ) {
     let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
-    // Workspace `9` is no workspace of the list; its 4 KB and the 2 KB of a store with no
-    // workspace at all are what the total holds beyond the two listed.
+    // Workspace `9` is not in the list; its 4 KB and the 2 KB of a store with no workspace make up
+    // the rest of the total.
     window.open_screen(sizes(&[('1', 1_024), ('9', 4_096)], 1_024 + 4_096 + 2_048));
 
     assert!(window.is_drawn(&format!("settings-size-{}:main: 1 KB", id('1'))));
@@ -1184,7 +1107,6 @@ fn shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_clic
     assert!(window.is_drawn(&control));
     assert!(!window.is_drawn(&cleaning));
 
-    // With no question: the key itself cleans up.
     window.press(&key::<CleanUpStates>());
     let asked = window
         .shown
@@ -1196,8 +1118,6 @@ fn shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_clic
     );
     assert!(!window.is_drawn(&control));
     assert_eq!(window.row(&SettingRow::States).values, [CLEANING]);
-    // A second `shift-c` while it runs asks nothing more: the next request is the one the
-    // test causes after it.
     window.press(&key::<CleanUpStates>());
 
     window
@@ -1216,7 +1136,6 @@ fn shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_clic
     assert!(!window.is_drawn("settings-size-other"));
     assert!(!window.is_drawn(&format!("settings-size-{}", id('2'))));
 
-    // The control, clicked: again.
     window.click(&control);
     let asked = window
         .shown
@@ -1232,8 +1151,6 @@ fn shift_c_cleans_up_at_once_the_control_says_so_until_the_sizes_come_and_a_clic
             .states
             .read_with(cx, |states, _| !states.cleaning())
     });
-    // Nothing was asked of the Keeper that the clean-up and the open did not ask: the next
-    // request is the barrier's own.
     window
         .shown
         .models
@@ -1310,8 +1227,6 @@ fn a_refused_question_for_the_sizes_shows_its_reason_and_the_control_stays(
     assert!(!window.is_drawn("settings-size-total"));
 }
 
-// FRAME-15.
-
 #[gpui_kit::test]
 fn the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_navigator_is_told(
     cx: &mut TestAppContext,
@@ -1337,7 +1252,6 @@ fn the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_naviga
     assert_eq!(extension.title, format!("{}: pi", TITLES[7]));
     assert_eq!(extension.values, [INSTALL, DONT_INSTALL]);
     assert_eq!(extension.chosen, None, "not asked yet");
-    // The rows of the extension come first, then those of the servers, then the folders.
     let order: Vec<SettingRow> = window.rows().into_iter().map(|shown| shown.row).collect();
     let first = window.index_of(&SettingRow::Extension("pi".to_owned()));
     assert_eq!(
@@ -1370,9 +1284,6 @@ fn the_answer_on_a_repositorys_servers_is_listed_and_h_changes_it_and_the_naviga
 fn an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_for_no_other(
     cx: &mut TestAppContext,
 ) {
-    // `R` keeps its servers out and `S` runs them: an answer sent for the first repository
-    // listed, or for the last, is told apart from one sent for the row's own on one of the
-    // two rows.
     let mut window = opened(
         WINDOW,
         vec![servers('a', false), servers('b', true)],
@@ -1386,7 +1297,6 @@ fn an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_
     assert_eq!(window.rows()[r].chosen, Some(1), "R: keep them out");
     assert_eq!(window.rows()[s].chosen, Some(0), "S: run them");
 
-    // `l` on `S`'s row keeps its servers out, and `R`'s row stays as it was.
     window.cursor_to(s);
     window.press(&key::<NextValue>());
     window.heard_set(servers('b', false));
@@ -1396,7 +1306,6 @@ fn an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_
     window.assert_chosen_drawn(&SettingRow::Servers(repo('b')));
     window.assert_chosen_drawn(&SettingRow::Servers(repo('a')));
 
-    // A click on `R`'s value runs its servers, and `S`'s row stays as it was.
     window.click(&Window9::value(r, 0, RUN_SERVERS));
     window.heard_set(servers('a', true));
     assert_eq!(
@@ -1406,7 +1315,6 @@ fn an_answer_on_servers_goes_for_the_repository_of_the_row_it_was_chosen_on_and_
     assert_eq!(window.rows()[r].chosen, Some(0));
     assert_eq!(window.rows()[s].chosen, Some(1), "S was not touched");
 
-    // The Navigator is told each repository's own answer.
     let asks = window
         .navigator
         .until(&mut window.cx, "the answers on both repositories", |ask| {
@@ -1436,7 +1344,6 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
     });
     window.open_screen(sizes(&[], 0));
     let at = window.index_of(&SettingRow::Extension("pi".to_owned()));
-    // The Adapter's own words are drawn under the row.
     assert!(window.is_drawn(&format!(
         "settings-question-{at}:May the app add its extension to the settings of pi?"
     )));
@@ -1462,7 +1369,6 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
     );
     window.assert_chosen_drawn(&SettingRow::Extension("pi".to_owned()));
 
-    // The answer given once is changed: the question is gone from the pane, the row stays.
     window.click(&Window9::value(at, 1, DONT_INSTALL));
     let asked = window.shown.keeper.expect(
         Request::AnswerConsent {
@@ -1486,8 +1392,7 @@ fn the_extension_of_an_agent_is_installed_by_a_click_and_the_answer_can_be_chang
 fn an_extension_answered_before_the_window_started_is_asked_for_at_the_opening_and_listed_with_its_answer(
     cx: &mut TestAppContext,
 ) {
-    // The Keeper told this Window nothing: it tells a Window of an Adapter only while a
-    // question waits or something went wrong, and pi was answered yes long ago.
+    // The Keeper tells a Window of an Adapter only while a question waits or something went wrong.
     let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
     window
         .shown
@@ -1496,7 +1401,6 @@ fn an_extension_answered_before_the_window_started_is_asked_for_at_the_opening_a
         .read_with(&window.cx, |consents, _| assert!(consents.all().is_empty()));
 
     window.cx.simulate_keystrokes(&pressed::<OpenSettings>());
-    // The sizes first, then the extensions.
     let sizes_asked = window
         .shown
         .keeper
@@ -1526,7 +1430,6 @@ fn an_extension_answered_before_the_window_started_is_asked_for_at_the_opening_a
     assert!(window.is_drawn(&Window9::value(at, 0, INSTALL)));
     window.assert_chosen_drawn(&pi);
 
-    // The answer is changed from here.
     window.click(&Window9::value(at, 1, DONT_INSTALL));
     let asked = window.shown.keeper.expect(
         Request::AnswerConsent {
@@ -1550,8 +1453,6 @@ fn an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other(
     cx: &mut TestAppContext,
 ) {
     let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
-    // Two Adapters, `claude` first: an answer sent for the first Adapter of the list, or for
-    // the last, is told apart from one sent for the row's own on one of the two rows.
     let listed = |claude, pi| vec![consent("claude", claude), consent("pi", pi)];
     window.shown.keeper.tell(Fact::ConsentsChanged(listed(
         ConsentAnswer::NotAsked,
@@ -1568,7 +1469,6 @@ fn an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other(
     let pi = window.index_of(&SettingRow::Extension("pi".to_owned()));
     assert_ne!(claude, pi);
 
-    // The second Adapter's row: its answer is `pi`'s.
     window.click(&Window9::value(pi, 0, INSTALL));
     let asked = window.shown.keeper.expect(
         Request::AnswerConsent {
@@ -1589,7 +1489,6 @@ fn an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other(
     });
     assert_eq!(window.rows()[claude].chosen, None, "claude was not asked");
 
-    // The first Adapter's row: its answer is `claude`'s, and `pi`'s row stays as it was.
     window.click(&Window9::value(claude, 1, DONT_INSTALL));
     let asked = window.shown.keeper.expect(
         Request::AnswerConsent {
@@ -1610,8 +1509,6 @@ fn an_answer_goes_for_the_adapter_of_the_row_it_was_chosen_on_and_for_no_other(
     });
     assert_eq!(window.rows()[pi].chosen, Some(0));
 
-    // An answer given is changed by a key on its own row too: `l` on `pi`'s row, whose
-    // chosen value is the first, chooses the second.
     window.cursor_to(pi);
     window.press(&key::<NextValue>());
     window.shown.keeper.expect(
@@ -1646,10 +1543,6 @@ fn what_went_wrong_with_an_extension_is_drawn_under_its_row(cx: &mut TestAppCont
     assert!(window.is_drawn(&format!("settings-problem-{at}:settings.json is not JSON")));
 }
 
-// The folder for a repository's worktrees.
-
-/// Two repositories listed and the folder `F` set for the first: the screen open, the
-/// cursor on that repository's row.
 fn with_folders(cx: &mut TestAppContext, settings: Vec<Setting>) -> (Window9, usize, usize) {
     let mut window = opened(WINDOW, settings, &two_repositories(), cx);
     window.open_screen(sizes(&[], 0));
@@ -1715,16 +1608,13 @@ fn enter_on_a_folder_row_opens_its_field_holding_the_folder_focused_and_enter_se
 
     assert!(window.is_drawn("settings-folder-field"));
     assert!(!window.has_focus(&screen_focus), "the field has the focus");
-    // The folder is in the field, at its end, and the keys of the screen type letters.
     window.cx.simulate_input("/hjkl");
     window.press("enter");
-    // `hjkl` was typed as text: the cursor and the choices did not move.
     assert_eq!(window.cursor(), r);
     window.heard_set(Setting::WorktreesFolder {
         repository: repo('a'),
         folder: Some(PathBuf::from("/gits/elsewhere/hjkl")),
     });
-    // The test-Keeper answered Done: the field is gone and the focus is the screen's.
     window.wait("the field to close", |_, cx| {
         drawn("settings-folder-field", cx).is_none()
     });
@@ -1743,16 +1633,12 @@ fn the_text_of_the_field_replaced_by_a_new_folder_is_what_enter_sends(cx: &mut T
     let (mut window, r, _) = with_folders(cx, vec![folder_of('a', Some(FOLDER))]);
     window.cursor_to(r);
     window.press(&key::<OpenSetting>());
-    // The Keeper keeps what it hears and says so only when the test lets it.
     window.shown.keeper.hold_settings();
 
-    // The folder is as long as the backspaces that empty the field.
     window.press(&vec!["backspace"; FOLDER.len()].join(" "));
     window.cx.simulate_input("/x/places");
     window.press("enter");
 
-    // Read right after the key and the frame, while the Keeper's answer is held: the row
-    // shows the folder at once, and not only once the Keeper has answered.
     assert_eq!(window.rows()[r].values, ["/x/places"]);
     window.heard_set(folder_of('a', Some("/x/places")));
     window.wait("the answer to be held", |shown, _| {
@@ -1802,7 +1688,6 @@ fn a_refused_folder_keeps_the_field_open_with_the_reason_and_the_row_reads_what_
     });
     assert!(window.is_drawn("settings-folder-refused"));
     assert!(window.is_drawn("settings-folder-field"), "the field stays");
-    // The list was asked again, and the Keeper kept nothing: the row is as it was.
     window.wait("the list to be asked again", |shown, _| {
         shown.keeper.settings_asked() > asked_before
     });
@@ -1811,8 +1696,6 @@ fn a_refused_folder_keeps_the_field_open_with_the_reason_and_the_row_reads_what_
     });
     assert_eq!(window.rows()[r].chosen, Some(0));
 
-    // The text is kept: a correction is typed after it, and an answer of Done closes the
-    // field and takes the reason away.
     window.shown.keeper.refuse_settings(None);
     window.cx.simulate_input("x");
     window.press("enter");
@@ -1862,13 +1745,11 @@ fn escape_in_the_field_closes_it_with_nothing_sent_and_the_screen_stays_open(
     assert!(window.screen_is_open(), "the screen stays");
     assert!(window.has_focus(&screen_focus), "the focus is the screen's");
     assert_eq!(window.rows()[r].values, [FOLDER], "the row is as it was");
-    // Nothing was sent: the first request after it is the barrier's, `l` on the first row.
     assert_eq!(
         window.barrier(),
         [Setting::TurnEnd(TurnEndSelects::KeepSelection)]
     );
 
-    // Opened again, the field holds what is set, not the text that was given up.
     window.cursor_to(r);
     window.press(&key::<OpenSetting>());
     window.press("enter");
@@ -1908,8 +1789,6 @@ fn a_click_on_the_value_of_a_row_opens_the_field_of_that_row_and_one_field_is_op
         drawn("settings-folder-field", cx).is_none()
     });
 
-    // A field open for the first repository, and a click on the second's value: the field
-    // is the second's, and what was typed in the first is not sent.
     window.click(&Window9::value(r, 0, DEFAULT_FOLDER));
     window.cx.simulate_input("/given/up");
     window.click(&Window9::value(s, 0, "/for/b"));
@@ -1945,9 +1824,6 @@ fn a_click_on_another_rows_value_while_a_field_is_open_closes_the_field_and_choo
 
 #[gpui_kit::test]
 fn enter_on_a_row_that_does_not_act_sends_nothing(cx: &mut TestAppContext) {
-    // Every kind of row there is that enter does nothing on: the choice rows of the app, the
-    // repository's servers and an Adapter's extension, whose requests the test-Keeper hands
-    // to the test and does not answer itself.
     let mut window = opened(WINDOW, vec![servers('a', false)], &one_repository(), cx);
     window.shown.keeper.tell(Fact::ConsentsChanged(vec![consent(
         "pi",
@@ -1985,13 +1861,11 @@ fn enter_on_a_row_that_does_not_act_sends_nothing(cx: &mut TestAppContext) {
     window.press(&key::<OpenSetting>());
     assert!(!window.is_drawn("settings-folder-field"));
     assert!(!window.is_drawn("frame-base-field"));
-    // The first barrier is for the sets the test-Keeper answers itself.
     assert_eq!(
         window.barrier(),
         [Setting::TurnEnd(TurnEndSelects::KeepSelection)],
         "nothing was set before the barrier"
     );
-    // The second is for the requests it hands to the test.
     window.handed_barrier();
     window.no_dialog();
 }
@@ -2001,8 +1875,6 @@ fn a_repository_that_leaves_the_list_takes_its_row_and_an_open_screen_follows_th
     cx: &mut TestAppContext,
 ) {
     let (mut window, _, _) = with_folders(cx, Vec::new());
-    // The app's own rows are the ones before the first folder row; here two folders and
-    // the states follow.
     let app = window.index_of(&SettingRow::WorktreesFolder(repo('a')));
     assert_eq!(window.rows().len(), app + 2 + 1);
 
@@ -2116,8 +1988,6 @@ fn a_workspace_on_screen_whose_changes_name_no_base_says_so_and_the_row_still_op
     assert!(window.is_drawn("frame-base-field"));
 }
 
-/// A window whose Keeper has told one question for leave, `pi`'s, not answered yet, and
-/// whose screen is open on its row.
 fn with_a_question(cx: &mut TestAppContext) -> (Window9, usize) {
     let mut window = opened(WINDOW, Vec::new(), &one_repository(), cx);
     window.shown.keeper.tell(Fact::ConsentsChanged(vec![consent(
@@ -2149,7 +2019,6 @@ fn l_and_h_on_an_unanswered_extension_choose_the_first_and_the_last_value(cx: &m
         &mut window.cx,
     );
     window.press(&key::<PreviousValue>());
-    // Nothing answered the first: the row is still unanswered, and `h` chooses the last.
     window.shown.keeper.expect(
         Request::AnswerConsent {
             agent: "pi".to_owned(),
@@ -2188,7 +2057,6 @@ fn a_refused_answer_to_a_question_for_leave_is_drawn_above_the_rows_until_the_ne
         None
     );
 
-    // The next answer takes the sentence away, whatever the Keeper says of it.
     window.click(&Window9::value(at, 1, DONT_INSTALL));
     window.shown.keeper.expect(
         Request::AnswerConsent {

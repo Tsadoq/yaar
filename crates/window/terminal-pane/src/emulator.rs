@@ -1,19 +1,6 @@
-//! The screen of one terminal, as its program's output builds it.
-//!
-//! The emulator core is `alacritty_terminal`. In front of it sits a scanner of the app's
-//! own that reads the same bytes first, and does four things the core does not:
-//! - it answers the query for the kitty keyboard flags itself, from the flags in force
-//!   cut to [`crate::IMPLEMENTED_FLAGS`], so that the answer names exactly what the
-//!   encoder implements whatever a program pushed or set (the core's own answer is the
-//!   top of the stack of pushes and says nothing of a set);
-//! - it answers the questions the core leaves unanswered: the terminal's name and
-//!   version (`CSI > q`) and the size of a cell in pixels (`CSI 16 t`);
-//! - it makes a push of keyboard flags safe to repeat without end (see [`safe_push`]);
-//! - it passes everything else on unchanged, also a sequence cut between two calls of
-//!   [`Emulator::advance`].
-//!
-//! What the terminal answers a program, the core's answers and the scanner's together,
-//! waits in [`Emulator::take_replies`] in the order the questions came.
+//! `alacritty_terminal` is the core; a scanner of the app's own reads the bytes first: it answers
+//! the kitty flags query, `CSI > q` and `CSI 16 t`, makes a flags push safe to repeat
+//! ([`safe_push`]) and passes the rest on.
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
@@ -33,39 +20,25 @@ use crate::draw::{Colour, colour_of};
 
 use crate::modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
 
-/// A colour as the program asked for it: one of the names, a number of the palette, or a
-/// value of red, green and blue. The painter turns it into the theme's colour
-/// ([`crate::colour_of`]).
 pub use alacritty_terminal::vte::ansi::Color;
 
-/// How many lines a terminal keeps above its screen.
 pub const HISTORY_LINES: usize = 10_000;
 
-/// The fewest columns a screen has: a wide character takes two.
 const MIN_COLUMNS: u16 = 2;
 
-/// One terminal's screen and history, and what the terminal owes its program.
 pub struct Emulator {
-    // The core, with the listener that collects its answers and its title.
     core: Term<Told>,
-    // The same listener the core holds: what it kept is read here.
     told: Told,
-    // The parser that drives the core, which also holds a synchronized update back.
     parser: Processor<StdSyncHandler>,
     scanner: Scanner,
-    // Reads the progress sequence, which the core drops.
     progress: ProgressScan,
 }
 
-/// What the core tells while it reads: its answers to the program, the title. Kept
-/// until the emulator hands them on.
 #[derive(Clone, Default)]
 struct Told {
     kept: Arc<Mutex<Kept>>,
 }
 
-/// What a [`Told`] keeps, and what it needs to answer from: the size of the screen and
-/// of a cell, which the core does not hold in pixels, and the colours of the theme.
 struct Kept {
     replies: Vec<u8>,
     colours: TerminalColors,
@@ -117,20 +90,13 @@ impl EventListener for Told {
                 let text = answer_with(requested(index, &kept.colours), &*format);
                 kept.replies.extend_from_slice(text.as_bytes());
             }
-            // Nothing else is the emulator's to act on: no bell, no clipboard, no
-            // cursor shape, and the pane draws when output arrives.
             _ => {}
         }
     }
 }
 
-/// The colour a program that asks for one is told: the theme's own for the default text,
-/// the background, the cursor and the sixteen first numbers, xterm's for the cube and the
-/// greys above them. A program that asks wants to know, above all, whether the background
-/// is dark, which is the theme's to say.
-///
-/// `index` is the core's: 0 to 255 the numbered colours, then the named ones, among them
-/// the foreground (256), the background (257) and the cursor (258).
+/// `index` is the core's: 0 to 255 the numbered colours, then foreground 256, background 257,
+/// cursor 258.
 fn requested(index: usize, colours: &TerminalColors) -> Colour {
     let colour = match u8::try_from(index) {
         Ok(number) => Color::Indexed(number),
@@ -141,13 +107,11 @@ fn requested(index: usize, colours: &TerminalColors) -> Colour {
     colour_of(colour, colours)
 }
 
-/// The answer to a question for a colour: what the core writes, given the colour as red,
-/// green and blue of 8 bits.
 fn answer_with(colour: Colour, format: &dyn Fn(Rgb) -> String) -> String {
     let rgba = gpui_kit::Rgba::from(colour);
     let byte = |channel: f32| (channel.clamp(0., 1.) * 255.).round() as u8;
-    // The core's value is made from its text form: a value written field by field is what
-    // the colour test of the app takes for a colour written in code.
+    // The core's value is made from its text form: a value written field by field is what the app's
+    // colour test takes for a colour written in code.
     let value = format!(
         "#{:02x}{:02x}{:02x}",
         byte(rgba.r),
@@ -159,47 +123,25 @@ fn answer_with(colour: Colour, format: &dyn Fn(Rgb) -> String) -> String {
     format(value)
 }
 
-/// What the scanner makes of the bytes it was given: bytes for the core, in order with
-/// the answers the scanner gives itself.
 enum Piece {
-    /// Bytes for the core.
     Pass(Vec<u8>),
-    /// Bytes the terminal owes the program, to follow what came before in the replies.
     Answer(Vec<u8>),
-    /// The query for the keyboard flags, which the emulator answers once the core has
-    /// read what came before it.
     FlagsQuery,
 }
 
-/// The scanner that reads the program's bytes before the core does. It looks at escape
-/// sequences that begin with `CSI` and acts on four; the rest it passes on as it got
-/// them. A sequence cut at the end of one call waits in `held` for the next.
 #[derive(Default)]
 struct Scanner {
-    // From the ESC that began a sequence, up to what has arrived of it.
     held: Vec<u8>,
 }
 
-/// The longest sequence the scanner waits for: the ones it acts on are far shorter, and
-/// a longer one is passed on to the core at once, whole. A sequence that starts `CSI >`
-/// is held to this length too and its parameters past it are dropped: the core reads no
-/// more of a push than its first parameter, and the push must be seen whole to be made
-/// safe. A first parameter that does not fit is read as far as it goes. Nothing else is
-/// ever cut: a mode reset that runs past this length must reach the core with every
-/// mode in it.
+/// The longest sequence held: a longer one goes to the core whole. A `CSI >` sequence is cut to
+/// this length, since the core reads only a push's first parameter. Nothing else is cut: a long
+/// mode reset must reach the core with every mode in it.
 const MAX_HELD: usize = 64;
 
-/// What a push of keyboard flags goes to the core as: the push cut to the flags the
-/// encoder implements, with a title pushed before it and popped after it. Once a stack
-/// of flags holds 4096 entries the core drops its oldest by removing the bottom of the
-/// stack of titles instead, which fails when that is empty, and so does the thread of
-/// whoever fed it a file of pushes. With a title pushed first the stack is never empty
-/// there, and popping it afterwards leaves the titles a program pushed as they were
-/// (past 4096 pushes, as the core itself would have it, the oldest title goes).
-///
-/// `push` is a whole `CSI > ... u`. The core reads the number before its first `;` or `:`
-/// and keeps what fits in a byte; a push in a form with anything but digits and those two
-/// characters is one the core does not read as a push, and goes on as it is.
+/// Once a stack of flags holds 4096 entries the core drops its oldest by removing the bottom of the
+/// stack of titles, which panics when that is empty and kills the feeding thread. A title pushed
+/// first and popped after keeps it non-empty.
 fn safe_push(push: &[u8]) -> Vec<u8> {
     let params = &push[3..push.len() - 1];
     let mut bytes = b"\x1b[22t".to_vec();
@@ -211,7 +153,6 @@ fn safe_push(push: &[u8]) -> Vec<u8> {
             .split(|b| matches!(b, b';' | b':'))
             .next()
             .unwrap_or(&[]);
-        // As the parser of the core reads it: 16 bits, saturating.
         let flags = first.iter().fold(0u16, |n, digit| {
             n.saturating_mul(10).saturating_add(u16::from(digit - b'0'))
         });
@@ -225,17 +166,9 @@ fn safe_push(push: &[u8]) -> Vec<u8> {
     bytes
 }
 
-/// What a set of keyboard flags, `CSI = flags ; way u`, goes to the core as: the flags cut
-/// to those the encoder implements and the way as it was.
-///
-/// Nothing a test can reach shows this. The core answers the query for the flags from its
-/// stack of pushes, which a set does not touch, and the emulator reports the flags in force
-/// cut to the implemented ones whatever the core holds. It is here so that the core never
-/// stores a flag the encoder does not have, whatever else comes to read it.
-///
-/// `set` is a whole `CSI = ... u`. The core reads the first two numbers, each before its
-/// first `:` and 16 bits wide, and keeps the low byte of the first; a form with anything
-/// but digits, `;` and `:`, or with more parameters than the core reads, goes on as it is.
+/// Cuts a set of keyboard flags to those the encoder implements, so the core never stores
+/// another; no test observes it, as the flags query is answered from the flags in force.
+/// The core reads two numbers, each before its first `:`, and keeps the low byte of the first.
 fn safe_set(set: &[u8]) -> Vec<u8> {
     // The most parameters the core's parser keeps; it ignores a sequence with more.
     const MOST_PARAMS: usize = 32;
@@ -247,8 +180,6 @@ fn safe_set(set: &[u8]) -> Vec<u8> {
     {
         return set.to_vec();
     }
-    // The number of a parameter, as the parser of the core reads it: its first part,
-    // 16 bits, saturating. A parameter that is not there is none.
     let number = |field: &[u8]| {
         let first = field.split(|&b| b == b':').next().unwrap_or(&[]);
         first.iter().fold(0u16, |n, digit| {
@@ -278,9 +209,6 @@ impl Scanner {
         pieces
     }
 
-    // The scanner follows the parser of the core through an escape sequence, because a
-    // sequence is only safe when it is seen from its ESC to its end: what the parser does
-    // with a byte inside one decides where the sequence ends.
     fn step(&mut self, byte: u8, cell: (u16, u16), pass: &mut Vec<u8>, pieces: &mut Vec<Piece>) {
         if self.held.is_empty() {
             if byte == 0x1b {
@@ -291,25 +219,21 @@ impl Scanner {
             return;
         }
         match byte {
-            // The parser ends the sequence at CAN and SUB, doing what they say.
+            // The parser ends the sequence at CAN and SUB, and begins another at ESC.
             0x18 | 0x1a => {
                 pass.append(&mut self.held);
                 pass.push(byte);
             }
-            // And begins another at ESC.
             0x1b => {
                 pass.append(&mut self.held);
                 self.held.push(byte);
             }
-            // Any other control byte it runs at once, and goes on with the sequence.
             0x00..=0x17 | 0x19 | 0x1c..=0x1f => pass.push(byte),
-            // It ignores a DEL and what is above ASCII there.
             0x7f..=0xff => {}
             _ if self.held.len() == 1 => {
                 if byte == b'[' {
                     self.held.push(byte);
                 } else {
-                    // Not a CSI: what was held goes on, and this byte starts afresh.
                     pass.append(&mut self.held);
                     self.step(byte, cell, pass, pieces);
                 }
@@ -317,7 +241,6 @@ impl Scanner {
             0x20..=0x3f => {
                 let cut = self.held[2..].first() == Some(&b'>');
                 if cut && self.held.len() >= MAX_HELD {
-                    // More of the parameters than the core would read.
                 } else {
                     self.held.push(byte);
                     if self.held.len() > MAX_HELD {
@@ -354,8 +277,6 @@ enum Act {
     FlagsQuery,
 }
 
-/// What the scanner does with one whole `CSI` sequence, given with its introducer and its
-/// final byte.
 fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
     let unchanged = || Act::Pass(sequence.to_vec());
     let last = sequence[sequence.len() - 1];
@@ -364,16 +285,12 @@ fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
         Some(&m @ (b'<' | b'=' | b'>' | b'?')) => (Some(m), &body[1..]),
         _ => (None, body),
     };
-    // Every push, in whatever form the core reads as one.
     if marker == Some(b'>') && last == b'u' {
         return Act::Pass(safe_push(sequence));
     }
-    // Every set, cut to the flags the encoder implements before the core stores them.
     if marker == Some(b'=') && last == b'u' {
         return Act::Pass(safe_set(sequence));
     }
-    // Every query for the flags in force, in whatever form the core reads as one: it
-    // reads the question whatever follows the question mark.
     if marker == Some(b'?')
         && last == b'u'
         && params
@@ -386,11 +303,9 @@ fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
         return unchanged();
     };
     match (marker, last, params.as_slice()) {
-        // The terminal's name and version.
         (Some(b'>'), b'q', [] | [None | Some(0)]) => {
             Act::Answer(format!("\x1bP>|yaar {}\x1b\\", env!("CARGO_PKG_VERSION")).into_bytes())
         }
-        // The size of a cell in pixels.
         (None, b't', [Some(16)]) => {
             let (width, height) = cell;
             Act::Answer(format!("\x1b[6;{height};{width}t").into_bytes())
@@ -399,8 +314,6 @@ fn act_on(sequence: &[u8], cell: (u16, u16)) -> Act {
     }
 }
 
-/// The numbers of a parameter string: an empty one is none. Anything but digits and
-/// semicolons makes the whole sequence not the scanner's.
 fn parse_params(params: &[u8]) -> Option<Vec<Option<u32>>> {
     if params.is_empty() {
         return Some(Vec::new());
@@ -423,41 +336,31 @@ fn parse_params(params: &[u8]) -> Option<Vec<Option<u32>>> {
         .collect()
 }
 
-/// What a program reports of its progress with the progress sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Progress {
     /// It is this far, in percent from 0 to 100: state 1.
     Normal(u8),
     /// It failed, this far: state 2.
     Error(u8),
-    /// It works, with no measure of how far: state 3, as Claude Code writes when a turn
-    /// starts.
+    /// It works, with no measure of how far: state 3, as Claude Code writes when a turn starts.
     Indeterminate,
     /// It paused, this far: state 4.
     Paused(u8),
 }
 
-/// Where the progress scanner is in the bytes it reads.
 #[derive(Default, Clone, Copy, PartialEq, Eq)]
 enum At {
-    /// Outside any escape sequence it follows.
     #[default]
     Ground,
-    /// After an ESC.
     Escape,
-    /// Inside an operating system command, whose text is being kept.
     Command,
-    /// Inside one too long to be a progress: its text is dropped.
     TooLong,
 }
 
-/// The longest operating system command kept whole: `9;4;1;100` is nine bytes.
 const MAX_PROGRESS: usize = 32;
 
-/// Reads the progress sequence, `OSC 9 ; 4 ; <state> ; <value>`, from the bytes the program
-/// wrote, beside the scanner and the core, which it leaves the bytes to. It ends a command
-/// where the core's parser does: at the bell, at an ESC (which is the first byte of the
-/// string terminator), and not at all after CAN or SUB, which cancel it.
+/// Reads `OSC 9 ; 4 ; <state> ; <value>` beside the core, ending a command where the core's
+/// parser does: at the bell or an ESC. CAN or SUB cancel the command.
 #[derive(Default)]
 struct ProgressScan {
     at: At,
@@ -490,7 +393,6 @@ impl ProgressScan {
         }
     }
 
-    /// A command ended: when it is a progress, it is what the program reports now.
     fn end(&mut self) {
         if self.at == At::Command {
             let command = std::mem::take(&mut self.command);
@@ -514,7 +416,6 @@ impl ProgressScan {
         let Some(Some(state)) = fields.next().map(number) else {
             return;
         };
-        // The value is how far, in percent; a program may leave it out.
         let value = fields.next().and_then(number).unwrap_or(0).min(100) as u8;
         self.reported = match state {
             0 => None,
@@ -527,77 +428,49 @@ impl ProgressScan {
     }
 }
 
-/// How a cell's text is drawn, besides its colours.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
-    /// Bold.
     pub bold: bool,
-    /// Faint.
     pub dim: bool,
-    /// Italic.
     pub italic: bool,
-    /// Underlined, curly or straight.
     pub underline: bool,
-    /// Struck through.
     pub strike: bool,
-    /// Text and background swapped.
     pub inverse: bool,
-    /// Not drawn.
     pub hidden: bool,
 }
 
-/// One cell of the screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
-    /// Its character with the marks combined with it; empty in the second cell of a wide
-    /// character, which the first one covers.
+    /// Empty in the second cell of a wide character, which the first one covers.
     pub text: String,
-    /// The colour of the text, as the program asked for it.
     pub fg: Color,
-    /// The colour of the cell, as the program asked for it.
     pub bg: Color,
-    /// How the text is drawn.
     pub style: Style,
-    /// Whether its character takes this cell and the next.
     pub wide: bool,
 }
 
-/// Where the cursor is drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Cursor {
-    /// Its line on the screen, counted from 0 at the top.
     pub line: usize,
-    /// Its column, counted from 0.
     pub column: usize,
 }
 
-/// What the screen shows now: the lines in view, scrolled back into the history as far as
-/// the view is, and the cursor where the program put it, when it shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Screen {
-    /// The lines in view, top to bottom, each as wide as the terminal.
     pub lines: Vec<Vec<Cell>>,
     /// The cursor; none while the program hides it or the view is scrolled away from it.
     pub cursor: Option<Cursor>,
 }
 
-/// One cell of the screen, by its place: the line on the screen as shown now, counted
-/// from 0 at the top, and the column, counted from 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CellPlace {
-    /// The line.
     pub line: usize,
-    /// The column.
     pub column: usize,
 }
 
 impl Emulator {
-    /// An empty screen of `size`, with [`HISTORY_LINES`] of history, the kitty keyboard
-    /// protocol on, and the cell taken as 8 by 16 pixels until [`Emulator::set_cell_size`]
-    /// says otherwise.
-    ///
-    /// A screen holds at least two columns and one line: the Keeper takes a 0 as 1, and
-    /// the core cannot hold a wide character in one column.
+    /// A screen holds at least two columns and one line: the Keeper takes a 0 as 1, and the core
+    /// cannot hold a wide character in one column.
     pub fn new(size: TerminalSize) -> Emulator {
         let told = Told::default();
         let (columns, rows) = (size.columns.max(MIN_COLUMNS), size.rows.max(1));
@@ -622,12 +495,8 @@ impl Emulator {
         }
     }
 
-    /// Reads what the program wrote: through the scanner, then the core.
-    ///
-    /// A program that began a synchronized update (`CSI ? 2026 h`) and went silent has
-    /// the screen held back until its time is out; the first call after that ends the
-    /// update, with no bytes too, which is how a pane without output makes the screen
-    /// catch up.
+    /// A program that began a synchronized update (`CSI ? 2026 h`) and went silent has the screen
+    /// held back until its time is out; the first call after that ends it, with no bytes too.
     pub fn advance(&mut self, bytes: &[u8]) {
         self.end_timed_out_update();
         let cell = {
@@ -638,14 +507,15 @@ impl Emulator {
         for piece in self.scanner.scan(bytes, cell) {
             match piece {
                 Piece::Pass(bytes) => self.parser.advance(&mut self.core, &bytes),
+                // A program that asks inside a synchronized update waits for an answer that must
+                // follow the bytes before the question, so the update is ended and those bytes are
+                // read first.
                 Piece::Answer(answer) => {
                     self.end_update();
                     self.told.kept().replies.extend_from_slice(&answer);
                 }
                 Piece::FlagsQuery => {
                     self.end_update();
-                    // The core answers from the stack of pushes alone, and says nothing
-                    // of a set. The flags in force are what its mode holds.
                     let flags = self.modes().keyboard.0;
                     let answer = format!("\x1b[?{flags}u");
                     self.told
@@ -665,22 +535,16 @@ impl Emulator {
         }
     }
 
-    // A program that asks a question inside a synchronized update is waiting for the
-    // answer, and the answer says what the bytes before the question did, so the bytes
-    // held back are read now: a terminal answers a question when it is asked.
     fn end_update(&mut self) {
         if self.parser.sync_timeout().sync_timeout().is_some() {
             self.parser.stop_sync(&mut self.core);
         }
     }
 
-    /// The bytes the terminal owes the program, in order, since the last call: its
-    /// answers to the program's questions.
     pub fn take_replies(&mut self) -> Vec<u8> {
         std::mem::take(&mut self.told.kept().replies)
     }
 
-    /// The size of the screen.
     pub fn size(&self) -> TerminalSize {
         TerminalSize {
             columns: self.core.columns() as u16,
@@ -688,8 +552,6 @@ impl Emulator {
         }
     }
 
-    /// Gives the screen a new size. The program learns it from the Keeper, which the pane
-    /// tells separately.
     pub fn resize(&mut self, size: TerminalSize) {
         let (columns, rows) = (size.columns.max(MIN_COLUMNS), size.rows.max(1));
         {
@@ -700,23 +562,18 @@ impl Emulator {
         self.core.resize(dimensions(columns, rows));
     }
 
-    /// The colours the terminal tells a program that asks for them (`OSC 4` for the numbers
-    /// 0 to 15, `OSC 10`, `11` and `12` for the text, the background and the cursor): the
-    /// applied theme's. The numbers 16 to 255 are xterm's whatever the theme. Until this is
-    /// called they are the light theme's.
+    /// The colours told to `OSC 4` (0 to 15) and `OSC 10`, `11`, `12`: the applied theme's. 16 to
+    /// 255 are xterm's whatever the theme.
     pub fn set_colours(&mut self, colours: TerminalColors) {
         self.told.kept().colours = colours;
     }
 
-    /// The size of one cell in pixels, as the painter lays the grid out: what the
-    /// terminal answers a program that asks.
     pub fn set_cell_size(&mut self, width: u16, height: u16) {
         let mut kept = self.told.kept();
         kept.cell_width = width;
         kept.cell_height = height;
     }
 
-    /// The modes the program set that decide what a key, a click or a paste sends.
     pub fn modes(&self) -> Modes {
         let mode = self.core.mode();
         let mut keyboard = 0;
@@ -747,7 +604,6 @@ impl Emulator {
         }
     }
 
-    /// What the screen shows now, for the painter.
     pub fn screen(&self) -> Screen {
         let grid = self.core.grid();
         let offset = grid.display_offset();
@@ -770,8 +626,6 @@ impl Emulator {
         Screen { lines, cursor }
     }
 
-    /// The text of the lines in view, top to bottom, each without the blanks at its end:
-    /// what [`Emulator::screen`] holds, as text.
     pub fn lines(&self) -> Vec<String> {
         self.screen()
             .lines
@@ -783,41 +637,28 @@ impl Emulator {
             .collect()
     }
 
-    /// The progress the program reports with the progress sequence, `OSC 9 ; 4 ; <state> ;
-    /// <value>`, which the core drops: none before the first, and after one whose state is
-    /// 0, no progress, as Claude Code writes when a turn stops. The scanner reads it before
-    /// the core.
+    /// State 0 gives none, as Claude Code writes when a turn stops.
     pub fn progress(&self) -> Option<Progress> {
         self.progress.reported
     }
 
-    /// The title the program gave the terminal last; none before it gave one, and after
-    /// it reset it.
     pub fn title(&self) -> Option<String> {
         self.told.kept().title.clone()
     }
 
-    /// Scrolls the view one screen into the history, or back towards the newest line.
-    /// The view never goes past either end.
     pub fn scroll_page(&mut self, up: bool) {
         self.core
             .scroll_display(if up { Scroll::PageUp } else { Scroll::PageDown });
     }
 
-    /// Scrolls the view by `lines` into the history when positive, back towards the
-    /// newest line when negative, as one step of the wheel does. The view never goes past
-    /// either end.
     pub fn scroll_lines(&mut self, lines: i32) {
         self.core.scroll_display(Scroll::Delta(lines));
     }
 
-    /// How many lines the view is scrolled back into the history: 0 shows the newest.
     pub fn scrolled_back(&self) -> usize {
         self.core.grid().display_offset()
     }
 
-    /// Selects the text from one cell to another, both included, in the order read;
-    /// a new selection takes the place of the one before.
     pub fn select(&mut self, from: CellPlace, to: CellPlace) {
         let (first, last) = if from <= to { (from, to) } else { (to, from) };
         let offset = self.core.grid().display_offset();
@@ -829,20 +670,16 @@ impl Emulator {
         self.core.selection = Some(selection);
     }
 
-    /// The selected text, lines joined by line feeds; none with nothing selected.
     pub fn selected_text(&self) -> Option<String> {
         self.core.selection_to_string()
     }
 
-    /// Selects nothing.
     pub fn clear_selection(&mut self) {
         self.core.selection = None;
     }
 
-    /// Selects the whole history and the screen, down to the last line that holds text or
-    /// the cursor, whichever is lower: what is blank below it is not worth copying. Gives
-    /// the cells that mark as the view shows them now, from the view's first cell to the
-    /// selection's last or the view's own.
+    /// Selects the history and the screen down to the last line that holds text or the cursor,
+    /// whichever is lower. Gives the marked cells as the view shows them now.
     pub fn select_all(&mut self) -> (CellPlace, CellPlace) {
         let (bottom, offset, last_line, last_column) = {
             let grid = self.core.grid();
@@ -867,8 +704,6 @@ impl Emulator {
         );
         selection.update(Point::new(Line(bottom), Column(last_column)), Side::Right);
         self.core.selection = Some(selection);
-        // The mark covers the view from its top line to the selection's end, or to the
-        // view's last line when that is below it.
         (
             CellPlace { line: 0, column: 0 },
             CellPlace {
@@ -878,11 +713,6 @@ impl Emulator {
         )
     }
 
-    /// Empties the history and every line of the screen above the cursor's, which becomes
-    /// the first: the lines are scrolled off the top of the screen and the history that
-    /// holds them is dropped. The view goes back to the newest line and nothing stays
-    /// selected. On the alternate screen, which has no history and which a program
-    /// redraws as it likes, nothing changes.
     pub fn clear_above_the_cursor(&mut self) {
         if self.core.mode().contains(TermMode::ALT_SCREEN) {
             return;
@@ -898,18 +728,15 @@ impl Emulator {
         grid.clear_history();
     }
 
-    /// Scrolls the view to the oldest line of the history.
     pub fn scroll_to_top(&mut self) {
         self.core.scroll_display(Scroll::Top);
     }
 
-    /// Scrolls the view to the newest line.
     pub fn scroll_to_bottom(&mut self) {
         self.core.scroll_display(Scroll::Bottom);
     }
 }
 
-/// The size of a screen as the core asks for it: no more lines than the screen has.
 struct Size {
     columns: usize,
     rows: usize,
@@ -981,7 +808,6 @@ mod tests {
         String::from_utf8(emulator.take_replies()).expect("replies are text")
     }
 
-    /// The flags the emulator reports for a program that sends `text` first.
     fn flags_after(text: &str) -> String {
         let mut emulator = emulator();
         emulator.advance(text.as_bytes());
@@ -999,13 +825,10 @@ mod tests {
         }
     }
 
-    // TERM-02
     #[test]
     fn the_query_for_keyboard_flags_answers_a_push_cut_to_the_implemented_flags() {
         assert_eq!(IMPLEMENTED_FLAGS, KeyboardFlags(3));
         for n in 0..=31u32 {
-            // A program that sets a flag the terminal does not have must hear that it
-            // has not got it: a push of 5 is granted 1, a push of 4 or 8 nothing.
             assert_eq!(
                 flags_after(&format!("{ESC}[>{n}u")),
                 format!("{ESC}[?{}u", n & 3),
@@ -1014,7 +837,6 @@ mod tests {
         }
     }
 
-    // TERM-02
     #[test]
     fn the_query_for_keyboard_flags_is_answered_alike_in_every_form_the_core_reads_as_one() {
         let long_zeros = format!("{ESC}[?{}u", "0".repeat(70));
@@ -1042,13 +864,11 @@ mod tests {
                 );
             }
         }
-        // The same after a set, and a query cut between two calls.
         let mut emulator = emulator();
         emulator.advance(format!("{ESC}[=5;1u{ESC}[?").as_bytes());
         assert_eq!(replies_to(&mut emulator, "0u"), format!("{ESC}[?1u"));
     }
 
-    // TERM-02
     #[test]
     fn the_query_for_keyboard_flags_answers_a_set_cut_to_the_implemented_flags() {
         for n in 0..=31u32 {
@@ -1057,14 +877,12 @@ mod tests {
                 format!("{ESC}[?{}u", n & 3),
                 "after a set of {n}"
             );
-            // Without the second parameter a set replaces, as it does for the core.
             assert_eq!(
                 flags_after(&format!("{ESC}[={n}u")),
                 format!("{ESC}[?{}u", n & 3),
                 "after a set of {n} with no way given"
             );
         }
-        // Adding and removing flags apply to the granted ones only.
         assert_eq!(
             flags_after(&format!("{ESC}[=1;1u{ESC}[=6;2u")),
             format!("{ESC}[?3u")
@@ -1075,7 +893,6 @@ mod tests {
         );
     }
 
-    // TERM-02
     #[test]
     fn a_pop_brings_back_the_flags_pushed_before() {
         assert_eq!(
@@ -1094,8 +911,6 @@ mod tests {
             flags_after(&format!("{ESC}[>5u{ESC}[<u")),
             format!("{ESC}[?0u")
         );
-        // Whatever was pushed first comes back, cut to the granted flags, however the
-        // flags pushed on top of it are cut.
         for n in 0..=31u32 {
             for above in [(n + 1) % 32, (n + 2) % 32, (n + 7) % 32] {
                 assert_eq!(
@@ -1109,7 +924,6 @@ mod tests {
                 format!("{ESC}[?{}u", n & 3),
                 "after a push of {n}, two more and a pop of two"
             );
-            // A pop past the bottom leaves none.
             assert_eq!(
                 flags_after(&format!("{ESC}[>{n}u{ESC}[<9u")),
                 format!("{ESC}[?0u"),
@@ -1118,7 +932,6 @@ mod tests {
         }
     }
 
-    // TERM-02
     #[test]
     fn the_modes_hold_the_granted_flags_and_no_others() {
         for n in 0..=31u8 {
@@ -1132,24 +945,21 @@ mod tests {
         }
     }
 
-    // TERM-02
     #[test]
     fn the_encoder_implements_the_flags_the_terminal_grants() {
         let ctrl_a = key("ctrl-a");
         let encode = |flags: u8| encode_key(&ctrl_a, &modes_with(flags), OptionKey::Meta, false);
-        // Flag 1: every key with Ctrl is an escape code of the protocol; flag 0: the
-        // control byte.
+        // Flag 1 sends Ctrl keys as protocol escape codes, flag 0 the control byte; flag 2 adds
+        // releases, event type 3.
         assert_eq!(encode(1), Some(b"\x1b[97;5u".to_vec()));
         assert_eq!(encode(0), Some(vec![0x01]));
 
         let release = |flags: u8| encode_release(&ctrl_a, &modes_with(flags), OptionKey::Meta);
-        // Flag 2: the release of a key is sent, with the event type 3.
         assert_eq!(release(3), Some(b"\x1b[97;5:3u".to_vec()));
         assert_eq!(release(1), None);
         assert_eq!(release(0), None);
     }
 
-    // TERM-02
     #[test]
     fn flags_the_encoder_does_not_have_change_nothing_it_sends() {
         let keys: Vec<Keystroke> = vec![
@@ -1186,14 +996,12 @@ mod tests {
                 assert_eq!(release(with_flags_1_and_2), release(3), "{keystroke:?}");
             }
         }
-        // The keys differ between 0 and 1, so the comparison above shows something.
         assert_ne!(
             encode_key(&keys[0], &modes_with(1), OptionKey::Meta, false),
             encode_key(&keys[0], &modes_with(0), OptionKey::Meta, false)
         );
     }
 
-    // TERM-02
     #[test]
     fn flags_a_program_pushed_reach_the_encoder_only_as_granted() {
         let ctrl_a = key("ctrl-a");
@@ -1224,8 +1032,8 @@ mod tests {
             "\x1b[?3u"
         );
 
-        // A cut that ends in something that is no sequence of the scanner's goes on to
-        // the core, which makes red text of it.
+        // A cut that ends in something that is no sequence of the scanner's goes on to the core,
+        // which makes red text of it.
         emulator.advance(b"\x1b");
         emulator.advance(b"[31mred");
         let screen = emulator.screen();
@@ -1238,7 +1046,8 @@ mod tests {
         let mut emulator = emulator();
         emulator.advance(b"a\x1b");
         emulator.advance(b"7b\x1b[4Dc");
-        // ESC 7 saves the cursor, and ESC [ 4 D moves left four: the core read both.
+        // ESC 7 saves the cursor after `a` and `ESC [ 4 D` moves left: the core read both, so `c`
+        // overwrites `a`.
         assert_eq!(emulator.lines()[0], "cb");
     }
 
@@ -1249,7 +1058,6 @@ mod tests {
         for query in ["\x1b[>q", "\x1b[>0q"] {
             assert_eq!(replies_to(&mut emulator(), query), expected, "{query:?}");
         }
-        // A query of another kind with the same final byte is not this one.
         assert_eq!(replies_to(&mut emulator(), "\x1b[>1q"), "");
     }
 
@@ -1259,7 +1067,6 @@ mod tests {
         assert_eq!(replies_to(&mut emulator, "\x1b[16t"), "\x1b[6;16;8t");
         emulator.set_cell_size(9, 19);
         assert_eq!(replies_to(&mut emulator, "\x1b[16t"), "\x1b[6;19;9t");
-        // The size of the screen in pixels is the core's answer, from the same cell.
         assert_eq!(replies_to(&mut emulator, "\x1b[14t"), "\x1b[4;95;180t");
     }
 
@@ -1283,8 +1090,6 @@ mod tests {
     #[test]
     fn the_terminal_answers_what_the_core_knows() {
         let mut emulator = emulator();
-        // Device attributes, the status of a mode (synchronized output is known), the
-        // cursor.
         assert_eq!(replies_to(&mut emulator, "\x1b[c"), "\x1b[?6c");
         assert_eq!(replies_to(&mut emulator, "\x1b[?2026$p"), "\x1b[?2026;2$y");
         assert_eq!(replies_to(&mut emulator, "\x1b[?1004$p"), "\x1b[?1004;2$y");
@@ -1304,12 +1109,10 @@ mod tests {
             replies_to(&mut emulator, "\x1b]10;?\x07"),
             "\x1b]10;rgb:fafa/fafa/fafa\x07"
         );
-        // Colour 1 is the dark theme's red.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;1;?\x07"),
             "\x1b]4;1;rgb:f8f8/7171/7171\x07"
         );
-        // The cube and the greys are xterm's whatever the theme.
         assert_eq!(
             replies_to(&mut emulator, "\x1b]4;196;?\x07"),
             "\x1b]4;196;rgb:ffff/0000/0000\x07"
@@ -1335,7 +1138,6 @@ mod tests {
         assert_eq!(emulator.title().as_deref(), Some("first"));
         emulator.advance(b"\x1b]2;second\x1b\\");
         assert_eq!(emulator.title().as_deref(), Some("second"));
-        // A title pushed and popped is the one before it: here, none.
         emulator.advance(b"\x1b[23t");
         emulator.advance(b"\x1b]0;third\x07\x1b[22t\x1b]0;fourth\x07");
         assert_eq!(emulator.title().as_deref(), Some("fourth"));
@@ -1343,8 +1145,6 @@ mod tests {
         assert_eq!(emulator.title().as_deref(), Some("third"));
     }
 
-    /// Every parameter of a mode sequence as a sequence of its own: what a program that
-    /// sent its modes one by one would have sent.
     fn one_by_one(params: &str, last: char) -> String {
         params
             .split(';')
@@ -1355,8 +1155,6 @@ mod tests {
     #[test]
     fn a_mode_sequence_longer_than_the_scanner_holds_does_what_the_same_modes_sent_one_by_one_do() {
         let beginning = "\x1b[?1000h\x1b[?1006h\x1b[?2004h";
-        // Modes that change nothing the pane reads, so that the sequence is long and the
-        // ones that matter come last.
         let padding = "25;12;7;1004;1015;1005;1001;9;1007;1048;45;66;67;69;80";
         for (last, tail) in [('l', "1003;1002;1006;1000"), ('h', "1000;1003")] {
             let params = format!("{padding};{tail}");
@@ -1373,7 +1171,6 @@ mod tests {
             parts.advance(beginning.as_bytes());
             parts.advance(one_by_one(&params, last).as_bytes());
             assert_eq!(whole.modes(), parts.modes(), "a long `{last}`");
-            // The same with the sequence cut in two calls.
             let mut cut = emulator();
             cut.advance(beginning.as_bytes());
             let (first, second) = long.split_at(MAX_HELD - 7);
@@ -1392,8 +1189,6 @@ mod tests {
     #[test]
     fn the_modes_follow_what_the_program_sets() {
         let mut emulator = emulator();
-        // As in xterm, the wheel is the arrow keys on the alternate screen until the
-        // program says otherwise.
         assert_eq!(
             emulator.modes(),
             Modes {
@@ -1482,7 +1277,6 @@ mod tests {
             (Color::Indexed(200), Color::Named(NamedColor::Background))
         );
         assert_eq!(row[1].style, Style::default());
-        // A colour by its value is kept as its three channels.
         let Color::Spec(by_value) = row[2].fg else {
             panic!("the text of the third cell is a value, not {:?}", row[2].fg);
         };
@@ -1493,8 +1287,6 @@ mod tests {
         assert_eq!(row[4].fg, Color::Named(NamedColor::Foreground));
     }
 
-    /// An emulator of five lines whose program wrote the numbered lines `1` to `count`
-    /// and left the cursor after the last, so that the first `count - 5` are history.
     fn written(count: usize) -> Emulator {
         let mut emulator = emulator();
         let text: Vec<String> = (1..=count).map(|n| n.to_string()).collect();
@@ -1504,7 +1296,6 @@ mod tests {
 
     #[test]
     fn clearing_drops_the_history_and_the_lines_above_the_cursor_and_keeps_the_rest() {
-        // Twelve lines: seven in the history, five on the screen, the cursor on the last.
         let mut emulator = written(12);
         assert_eq!(emulator.lines(), ["8", "9", "10", "11", "12"]);
         emulator.scroll_to_top();
@@ -1521,7 +1312,6 @@ mod tests {
         emulator.scroll_to_top();
         assert_eq!(emulator.scrolled_back(), 0, "no history is left");
 
-        // What the program writes next follows the cursor.
         emulator.advance(b"!\r\nnext");
         assert_eq!(emulator.lines(), ["12!", "next", "", "", ""]);
     }
@@ -1530,7 +1320,6 @@ mod tests {
     fn clearing_with_the_cursor_above_other_lines_keeps_them_in_place_under_it() {
         let mut emulator = emulator();
         emulator.advance(b"1\r\n2\r\n3\r\n4\r\n5");
-        // The cursor goes to the third line, where a multi-line prompt would have it.
         emulator.advance(b"\x1b[3;1H");
         emulator.clear_above_the_cursor();
         assert_eq!(emulator.lines(), ["3", "4", "5", "", ""]);
@@ -1595,8 +1384,6 @@ mod tests {
     #[test]
     fn selecting_all_takes_the_history_and_the_screen_down_to_the_cursor() {
         let mut emulator = written(12);
-        // The view is at the newest line: the mark covers the whole view, which ends at the
-        // cursor's line.
         let marked = emulator.select_all();
         assert_eq!(
             marked,
@@ -1616,12 +1403,10 @@ mod tests {
     fn selecting_all_stops_at_the_last_line_with_text_or_the_cursor_and_marks_what_is_in_view() {
         let mut emulator = emulator();
         emulator.advance(b"a\r\nb\r\nc");
-        // The cursor above the last text: the text is the end.
         emulator.advance(b"\x1b[1;1H");
         let marked = emulator.select_all();
         assert_eq!(emulator.selected_text().as_deref(), Some("a\nb\nc"));
         assert_eq!(marked.1.line, 2);
-        // The cursor below the last text: the cursor's line is the end.
         emulator.advance(b"\x1b[5;1H");
         let marked = emulator.select_all();
         assert_eq!(marked.1.line, 4);
@@ -1633,7 +1418,6 @@ mod tests {
         let mut emulator = written(12);
         emulator.scroll_to_top();
         let marked = emulator.select_all();
-        // The selection's end lies below what the view shows: every line of it is marked.
         assert_eq!(marked.1.line, 4);
         assert_eq!(
             emulator.selected_text().map(|text| text.lines().count()),
@@ -1669,8 +1453,6 @@ mod tests {
     #[test]
     fn the_view_scrolls_into_the_history_and_never_past_either_end() {
         let mut emulator = emulator();
-        // 5 lines on screen, 20 written: the screen shows 17 to 20 and an empty line,
-        // 16 lines are history.
         numbered(&mut emulator, 20);
         assert_eq!(
             emulator.lines(),
@@ -1729,14 +1511,12 @@ mod tests {
             Some("world\nsecond line\nthi")
         );
 
-        // The order the two cells are given in makes no difference.
         emulator.select(place(2, 2), place(0, 6));
         assert_eq!(
             emulator.selected_text().as_deref(),
             Some("world\nsecond line\nthi")
         );
 
-        // A new selection replaces the one before.
         emulator.select(place(1, 0), place(1, 5));
         assert_eq!(emulator.selected_text().as_deref(), Some("second"));
 
@@ -1748,7 +1528,6 @@ mod tests {
     fn a_selection_follows_its_text_into_the_history() {
         let mut emulator = emulator();
         numbered(&mut emulator, 8);
-        // Screen: lines 5 to 8; select the first of them, then let it scroll away.
         emulator.select(
             CellPlace { line: 0, column: 0 },
             CellPlace { line: 0, column: 5 },
@@ -1808,11 +1587,8 @@ mod tests {
         );
         assert_eq!(emulator.screen().lines.len(), 8);
         assert_eq!(emulator.screen().lines[0].len(), 30);
-        // The size the program is told by its own query is the new one.
         assert_eq!(replies_to(&mut emulator, "\x1b[18t"), "\x1b[8;8;30t");
 
-        // The Keeper takes a 0 as 1; a wide character must not bring the emulator down
-        // in a screen that narrow.
         let least = TerminalSize {
             columns: 2,
             rows: 1,
@@ -1839,20 +1615,17 @@ mod tests {
 
     #[test]
     fn a_program_that_pushes_flags_without_end_cannot_stop_the_terminal() {
-        // The core holds 4096 pushes a screen, and past that it drops the oldest one, by
-        // a path that fails when no title was pushed. Output must never do that.
+        // The core holds 4096 pushes a screen, and past that it drops the oldest by a path that
+        // panics when no title was pushed.
         let mut emulator = emulator();
         let pushes = format!("{ESC}[>1u").repeat(5000);
         emulator.advance(pushes.as_bytes());
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
-        // The same on the alternate screen, with the pushes cut anywhere.
         emulator.advance(b"\x1b[?1049h");
         for chunk in format!("{ESC}[>3u").repeat(5000).as_bytes().chunks(7) {
             emulator.advance(chunk);
         }
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?3u");
-        // A push in a form the scanner does not read, and one too long to be held, are
-        // pushes too (a number of a hundred digits is a number).
         let long = format!("{ESC}[>{}1u", "0".repeat(100));
         for _ in 0..5000 {
             emulator.advance(b"\x1b[>1:2u");
@@ -1863,16 +1636,14 @@ mod tests {
             answer.starts_with("\x1b[?") && answer.ends_with('u'),
             "answered {answer:?}"
         );
-        // The oldest are dropped and the newest kept: pops bring back flags pushed last.
         emulator.advance(b"\x1b[?1049l\x1b[>2u\x1b[>3u\x1b[<u");
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?2u");
     }
 
     #[test]
     fn a_push_the_core_reads_through_other_bytes_cannot_stop_the_terminal_either() {
-        // The core runs a control byte inside an escape sequence at once and carries on
-        // with the sequence, and it ignores a DEL and a byte of 0x80 and above there. So
-        // each of these is a push, however many times it is sent.
+        // The core runs a control byte inside an escape sequence at once and carries on with the
+        // sequence, and it ignores a DEL and a byte of 0x80 and above there.
         let between: [&[u8]; 8] = [
             b"\x07",
             b"\r",
@@ -1896,7 +1667,6 @@ mod tests {
                 );
             }
         }
-        // The same with the bytes cut anywhere.
         let mut emulator = emulator();
         let all = b"\x1b[>1\x07u\x1b[>1\x7fu\x1b\x07[>1u\x1b[>1\xffu".repeat(2000);
         for chunk in all.chunks(5) {
@@ -1907,20 +1677,17 @@ mod tests {
 
     #[test]
     fn a_control_byte_inside_an_escape_sequence_acts_and_cancel_and_escape_end_the_sequence() {
-        // A backspace inside the sequence moves the cursor; the sequence still ends.
         let mut emulator = emulator();
         emulator.advance(b"ab\x1b[>1\x08u");
         emulator.advance(b"X");
         assert_eq!(emulator.lines()[0], "aX");
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
-        // CAN and SUB end a sequence: what follows is text, and nothing was pushed.
         for end in ["\x18", "\x1a"] {
             let mut emulator = self::emulator();
             emulator.advance(format!("{ESC}[>1{end}u").as_bytes());
             assert_eq!(emulator.lines()[0], "u");
             assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?0u");
         }
-        // A new ESC begins afresh, and the push after it is read.
         let mut emulator = self::emulator();
         emulator.advance(b"\x1b[>3\x1b[>1u");
         assert_eq!(replies_to(&mut emulator, "\x1b[?u"), "\x1b[?1u");
@@ -1953,7 +1720,6 @@ mod tests {
             replies_to(&mut emulator, "\x1b[?2026h\x1b[>1u\x1b[?u"),
             "\x1b[?1u"
         );
-        // The core's own answers and the scanner's come in the order of the questions.
         let version = env!("CARGO_PKG_VERSION");
         let mut emulator = self::emulator();
         emulator.advance(b"ab");
@@ -1971,8 +1737,6 @@ mod tests {
         emulator.advance(b" more\x1b[?2026l");
         assert_eq!(emulator.lines()[..2], ["before", "during more"]);
 
-        // An update that never ends is shown once its time is out, and the call that
-        // makes it so needs no bytes.
         emulator.advance(b"\x1b[?2026h\r\nhung");
         assert_eq!(emulator.lines()[2], "");
         let deadline = Instant::now() + std::time::Duration::from_secs(5);
@@ -1998,8 +1762,6 @@ mod tests {
             ("\x1b]9;4;2;7\x07", Progress::Error(7)),
             ("\x1b]9;4;3;\x07", Progress::Indeterminate),
             ("\x1b]9;4;4;99\x07", Progress::Paused(99)),
-            // The string terminator ends it as the bell does, and the value may be left
-            // out: it is then 0.
             ("\x1b]9;4;1\x1b\\", Progress::Normal(0)),
         ];
         for (text, progress) in cases {
@@ -2055,8 +1817,6 @@ mod tests {
         let mut emulator = emulator();
         emulator.advance(b"\x1b]9;4;3;\x07");
         for other in [
-            // A title, a notification, a state the sequence does not have, a value that
-            // is no number, another OSC that starts alike, and one cancelled.
             "\x1b]0;a title\x07",
             "\x1b]9;a notification\x07",
             "\x1b]9;4;9;10\x07",
@@ -2071,8 +1831,6 @@ mod tests {
                 "{other:?}"
             );
         }
-        // A string far too long to be a progress is dropped with no harm: the next
-        // sequence is read as ever.
         let mut long = b"\x1b]9;4;1;".to_vec();
         long.extend(std::iter::repeat_n(b'1', 100_000));
         emulator.advance(&long);

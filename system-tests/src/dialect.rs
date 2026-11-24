@@ -1,31 +1,22 @@
-//! The CLI a stand-in speaks as: what one test of the driver `agent` names to run for Claude
-//! Code and for pi, through the same script and the same assertions.
-//!
-//! The stand-in writes down every piece of the app it ran and what it answered as
-//! `standin::Did::Hook`, under the name of the moment in its CLI's own words: Claude Code's
-//! hook (`UserPromptSubmit`), pi's event (`input`). A test that waits for "the user's
-//! message was taken" asks the dialect for that name, and reads the review the answer
-//! carried through [`Dialect::review_in`]: the same test then holds for both.
+//! The two agent CLIs the app supports, with the name each gives to the same moment, so one test
+//! holds for both.
 
 use serde_json::Value;
 
-/// One of the two CLIs the app supports, as the stand-in speaks it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Dialect {
-    /// Claude Code: the stand-in runs the hooks of the app's plugin.
     ClaudeCode,
-    /// pi: the stand-in, started by its name, finds the app's extension in pi's own
-    /// settings in its home, as pi does once the user said yes, and runs the reporting
-    /// program a shell of the app names, as pi's extension does.
+    /// pi: the stand-in finds the app's extension in pi's settings in its home and runs the
+    /// reporting program a shell names.
     Pi,
 }
 
 impl Dialect {
-    /// Both, in the order the Keeper lists its Adapters.
+    /// In the order the Keeper lists its Adapters.
     pub const BOTH: [Dialect; 2] = [Dialect::ClaudeCode, Dialect::Pi];
 
-    /// The name of the CLI: what is typed in a shell, the name of its launcher's Adapter
-    /// (`yaar_link::Program::Agent`), and the stand-in's name on a world's search path.
+    /// The name typed in a shell, of the launcher's Adapter (`yaar_link::Program::Agent`) and of
+    /// the stand-in on a world's search path.
     pub fn name(self) -> &'static str {
         match self {
             Dialect::ClaudeCode => "claude",
@@ -33,7 +24,6 @@ impl Dialect {
         }
     }
 
-    /// The other CLI.
     pub fn other(self) -> Dialect {
         match self {
             Dialect::ClaudeCode => Dialect::Pi,
@@ -41,8 +31,7 @@ impl Dialect {
         }
     }
 
-    /// The moment the user's message is taken, whose answer carries an attached review:
-    /// Claude Code's `UserPromptSubmit`, pi's `input`.
+    /// The moment the user's message is taken; its answer carries an attached review.
     pub fn message_event(self) -> &'static str {
         match self {
             Dialect::ClaudeCode => "UserPromptSubmit",
@@ -50,7 +39,6 @@ impl Dialect {
         }
     }
 
-    /// The moment a turn ends: Claude Code's `Stop`, pi's `agent_settled`.
     pub fn turn_end_event(self) -> &'static str {
         match self {
             Dialect::ClaudeCode => "Stop",
@@ -58,8 +46,6 @@ impl Dialect {
         }
     }
 
-    /// The moment a tool of the agent has run, a write among them: Claude Code's
-    /// `PostToolUse`, pi's `tool_result`.
     pub fn tool_done_event(self) -> &'static str {
         match self {
             Dialect::ClaudeCode => "PostToolUse",
@@ -67,7 +53,6 @@ impl Dialect {
         }
     }
 
-    /// The moment the session ends: Claude Code's `SessionEnd`, pi's `session_shutdown`.
     pub fn session_end_event(self) -> &'static str {
         match self {
             Dialect::ClaudeCode => "SessionEnd",
@@ -75,16 +60,13 @@ impl Dialect {
         }
     }
 
-    /// Whether the CLI asks the user's permission at a prompt of its own: Claude Code does,
-    /// pi never does.
+    /// Whether the CLI asks permission at a prompt of its own.
     pub fn asks_permission(self) -> bool {
         matches!(self, Dialect::ClaudeCode)
     }
 
-    /// The review an answer to [`Dialect::message_event`] carried, as the CLI hands it to
-    /// the model: for Claude Code the hook's `hookSpecificOutput.additionalContext`, for pi
-    /// the `review` of the extension's answer. None for an empty answer, or one that carries
-    /// none.
+    /// The review an answer to [`Dialect::message_event`] carried; None for an empty answer or one
+    /// without.
     pub fn review_in(self, answer: &[u8]) -> Option<String> {
         let value: Value = serde_json::from_slice(answer).ok()?;
         let review = match self {

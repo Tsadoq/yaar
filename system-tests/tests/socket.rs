@@ -1,5 +1,4 @@
-//! System tests of the place where the two programs meet when the socket path they are
-//! given is longer than the system can bind.
+//! System tests of a socket path longer than the system can bind.
 
 use std::os::unix::fs::{DirBuilderExt, FileTypeExt};
 use std::os::unix::net::{UnixListener, UnixStream};
@@ -10,12 +9,8 @@ use std::time::Duration;
 use yaar_link::{Hello, Message, SOCKET_PATH_MAX, handshake, socket_address, write_message};
 use yaar_system_tests::{Client, World, attach, is_alive, program, wait_until};
 
-/// A socket path of a world, of a length chosen to the byte, with the place where the
-/// two programs meet when they are given it.
-///
-/// The path lies in the world, so no other test and no other run computes the same short
-/// place. When the test ends, whatever it caused is removed: the folder of the short
-/// place, and a Keeper that the Window program started and the test did not come to stop.
+/// A socket path of exact length, with the short place both programs bind for it.
+/// Drop removes the short folder and any Keeper the Window program started.
 struct Wanted {
     path: PathBuf,
     bound: PathBuf,
@@ -36,14 +31,11 @@ impl Wanted {
         }
     }
 
-    /// The folder of the short place. Only for a path that leads to one.
     fn short_folder(&self) -> &Path {
         assert_ne!(self.bound, self.path, "this path is bound where it is");
         self.bound.parent().expect("the short path has a folder")
     }
 
-    /// Runs the Window program as the world's user, told to find or start the Keeper at
-    /// this path and to say who answered.
     fn keeper_status(&self, world: &World) -> Output {
         world
             .command(&program("yaar-review"))
@@ -54,8 +46,6 @@ impl Wanted {
             .expect("run the Window program")
     }
 
-    /// Goes straight to where the Keeper listens, makes sure that the one there is the
-    /// one the Window program named, and stops it.
     fn stop_keeper(&mut self) {
         let pid = self.keeper.expect("the Window program named a Keeper");
         let (mut window, who) = attach(&self.bound);
@@ -65,7 +55,7 @@ impl Wanted {
             wait_until(Duration::from_secs(5), || !is_alive(pid)),
             "the Keeper did not stop"
         );
-        // It is gone, and its number may be another process's from now on.
+        // Its pid may belong to another process from now on.
         self.keeper = None;
     }
 }
@@ -78,10 +68,8 @@ impl Drop for Wanted {
                 unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
             }
             Some(_) => {}
-            // The test stopped its Keeper, and then nothing answers. Or the Window
-            // program started one and failed before it said which: whatever answers
-            // where that Keeper would listen is asked to stop, so that none stays
-            // behind for as long as it lingers.
+            // Either the test stopped its Keeper, or the Window program started one and failed
+            // before naming it: whatever answers where that Keeper would listen is asked to stop.
             None => {
                 if let Ok(mut stream) = UnixStream::connect(&self.bound)
                     && stream
@@ -99,7 +87,6 @@ impl Drop for Wanted {
     }
 }
 
-/// The value of one `name=value` word of what `--keeper-status` printed.
 fn field(said: &str, name: &str) -> String {
     said.split_whitespace()
         .find_map(|word| word.strip_prefix(&format!("{name}=")))
@@ -117,13 +104,10 @@ fn said(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
-// KEEP-01, the half of the built programs.
 #[test]
 fn the_window_program_and_a_scripted_client_meet_the_keeper_of_a_socket_path_too_long_to_bind() {
     let world = World::new();
 
-    // What the system allows, to the byte: given a path of that length, the Window
-    // program starts a Keeper that listens at the path itself.
     let mut fits = Wanted::of_length(&world, SOCKET_PATH_MAX);
     assert_eq!(fits.bound, fits.path);
     let status = said(&fits.keeper_status(&world));
@@ -134,36 +118,29 @@ fn the_window_program_and_a_scripted_client_meet_the_keeper_of_a_socket_path_too
     assert!(bound.file_type().is_socket());
     fits.stop_keeper();
 
-    // One byte more, in the same folder, and the system refuses the path.
     let mut long = Wanted::of_length(&world, SOCKET_PATH_MAX + 1);
     UnixListener::bind(&long.path).expect_err("the system binds no path of this length");
     assert_ne!(long.bound, long.path);
     assert!(long.bound.as_os_str().len() <= SOCKET_PATH_MAX);
 
-    // The Window program finds no Keeper for the long path and starts one.
     let first = said(&long.keeper_status(&world));
     let pid: u32 = field(&first, "pid").parse().expect("a process id");
     long.keeper = Some(pid);
     assert_eq!(field(&first, "started"), "true");
     assert!(is_alive(pid), "the Keeper ended with the Window program");
 
-    // Nothing is at the long path, which cannot be bound. The Keeper listens at the
-    // short one, which both programs computed from the long one alone.
     assert!(!long.path.exists());
     let bound = std::fs::symlink_metadata(&long.bound).expect("the short path");
     assert!(bound.file_type().is_socket());
 
-    // A second Window program finds that Keeper again by the long path, and starts none.
     let second = said(&long.keeper_status(&world));
     assert_eq!(field(&second, "started"), "false");
     assert_eq!(field(&second, "pid"), pid.to_string());
 
-    // A scripted client reaches the same process by the same long path.
     let client = Client::attach(&long.path);
     assert_eq!(client.keeper().pid, pid);
     drop(client);
 
-    // Whoever goes straight to the short path meets it too, and stops it.
     long.stop_keeper();
 }
 
@@ -171,8 +148,7 @@ fn the_window_program_and_a_scripted_client_meet_the_keeper_of_a_socket_path_too
 fn the_window_program_starts_no_keeper_at_a_short_place_that_is_not_the_users_own() {
     let world = World::new();
     let long = Wanted::of_length(&world, SOCKET_PATH_MAX + 1);
-    // Somebody was first at the name anyone can compute, and left the folder open to
-    // others.
+    // Somebody was first at the name anyone can compute, and left the folder open to others.
     std::fs::DirBuilder::new()
         .mode(0o755)
         .create(long.short_folder())
@@ -185,8 +161,6 @@ fn the_window_program_starts_no_keeper_at_a_short_place_that_is_not_the_users_ow
 
     let refused = long.keeper_status(&world);
     assert!(!refused.status.success(), "the Window program went on");
-    // The reason is that the place is not the user's, and not that a Keeper was started
-    // and did not answer: none was started.
     let reason = String::from_utf8_lossy(&refused.stderr).into_owned();
     assert!(
         reason.contains("does not belong to this user")

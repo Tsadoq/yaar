@@ -1,5 +1,3 @@
-//! The reading of one hook's input, and what the Adapter remembers between hooks.
-
 use std::collections::HashMap;
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
@@ -9,24 +7,17 @@ use yaar_agent::{
     CliSession, Event, Phase, Report, ReportError, Reported, Start, TurnEnd, WriteTool,
 };
 
-/// What the Adapter knows of one session between two hooks.
 #[derive(Debug, Default)]
 struct Open {
-    /// The terminal it last reported from.
     terminal: Option<String>,
-    /// Its process, as the last report named it.
     pid: u32,
-    /// Where it works, as the last report named it.
     folder: Option<PathBuf>,
     /// Whether a turn is open: begun by a prompt, not ended by a `Stop` or a mark.
     turn: bool,
-    /// Whether the app was told that the session waits for a permission, and not that it
-    /// stopped.
+    /// Whether the app was told the session waits for a permission, and not that it stopped.
     waiting: bool,
 }
 
-/// Every session the Adapter has heard of, and the session that last reported from each
-/// terminal.
 #[derive(Debug, Default)]
 pub(crate) struct Remembered {
     sessions: HashMap<CliSession, Open>,
@@ -34,12 +25,11 @@ pub(crate) struct Remembered {
 }
 
 impl Remembered {
-    /// The events of one hook's input.
     pub(crate) fn report(&mut self, report: &Report<'_>) -> Result<Vec<Reported>, ReportError> {
         let input: Value = serde_json::from_slice(report.payload)
             .map_err(|why| ReportError::Unreadable(why.to_string()))?;
-        // A call of the reply tool is no hook: it tells the app nothing of the session
-        // but what `asked` reads, so it gives no event and no error.
+        // A call of the reply tool is no hook: `asked` reads it, so it gives no event and no
+        // error.
         if input.get("tool_server").is_some() {
             return Ok(Vec::new());
         }
@@ -114,8 +104,6 @@ impl Remembered {
             .collect())
     }
 
-    /// Notes where the session reports from: its process, its folder and its terminal, which
-    /// from now on is the terminal's session.
     fn bind(&mut self, session: &CliSession, report: &Report<'_>, input: &Value) {
         let open = self.sessions.entry(session.clone()).or_default();
         open.pid = report.pid;
@@ -135,8 +123,8 @@ impl Remembered {
         }
     }
 
-    /// What the mark that Claude Code writes when a turn stops by Esc, or by a dialog
-    /// denied, means for the session that last reported from `terminal`.
+    /// Claude Code runs no hook for a turn stopped by Esc or a denied dialog; its mark then ends
+    /// the open turn of the session that last reported from `terminal`.
     pub(crate) fn interrupted(&mut self, terminal: &str) -> Vec<Reported> {
         let Some(session) = self.terminals.get(terminal) else {
             return Vec::new();
@@ -167,7 +155,6 @@ impl Remembered {
             .collect()
     }
 
-    /// Drops a session that ended, and the terminal's memory of it.
     fn forget(&mut self, session: &CliSession) {
         if let Some(open) = self.sessions.remove(session)
             && let Some(terminal) = open.terminal
@@ -178,8 +165,6 @@ impl Remembered {
     }
 }
 
-/// The event a tool's hook gives of its own, apart from the permission it may end: none
-/// for a hook that is no tool's, or a tool the app does not follow.
 fn tool_event(hook: &str, input: &Value) -> Result<Option<Event>, ReportError> {
     if !matches!(hook, "PreToolUse" | "PostToolUse" | "PostToolUseFailure") {
         return Ok(None);
@@ -217,7 +202,6 @@ fn tool_event(hook: &str, input: &Value) -> Result<Option<Event>, ReportError> {
     })
 }
 
-/// The file a tool names, as the CLI wrote it.
 fn path_of(tool: &str, tool_input: &Value) -> Result<PathBuf, ReportError> {
     text(tool_input, "file_path")
         .or_else(|| text(tool_input, "notebook_path"))
@@ -225,10 +209,9 @@ fn path_of(tool: &str, tool_input: &Value) -> Result<PathBuf, ReportError> {
         .ok_or_else(|| unreadable(&format!("the input of {tool} names no file")))
 }
 
-/// The lines of the file that an edit changed, from the hunks of its `structuredPatch`:
-/// each from `newStart` for `newLines`, or the one line at `newStart` where it left none.
-/// None where there is no patch, no hunk, or a hunk that cannot be read: a part of the
-/// lines would say less than was changed.
+/// The lines an edit changed, from the hunks of `structuredPatch`. None where there is no
+/// patch, no hunk or an unreadable hunk: a part of the lines would say less than was
+/// changed.
 fn patch_lines(response: &Value) -> Option<Vec<RangeInclusive<u32>>> {
     let hunks = response.get("structuredPatch")?.as_array()?;
     if hunks.is_empty() {
@@ -245,7 +228,6 @@ fn patch_lines(response: &Value) -> Option<Vec<RangeInclusive<u32>>> {
         .collect()
 }
 
-/// The string `key` holds, if it holds one.
 fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
     object.get(key)?.as_str()
 }
@@ -262,7 +244,6 @@ mod tests {
     use super::*;
     use crate::ClaudeCode;
 
-    /// One hook's input for session `s`, working in `/w`, with `more` set into it.
     fn hook(name: &str, more: Value) -> Value {
         let mut input = json!({"hook_event_name": name, "session_id": "s", "cwd": "/w"});
         for (key, value) in more.as_object().expect("an object") {
@@ -271,7 +252,6 @@ mod tests {
         input
     }
 
-    /// The events of `input` reported from `terminal` by process 7.
     fn said(
         adapter: &mut ClaudeCode,
         terminal: Option<&str>,
@@ -640,7 +620,6 @@ mod tests {
 
         assert_eq!(reported.len(), 1);
         assert_eq!(reported[0].session, CliSession("other".to_owned()));
-        // The turn of the session in "a" is open still.
         assert_eq!(adapter.marked("a", 0).len(), 1);
     }
 

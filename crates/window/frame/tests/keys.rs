@@ -1,6 +1,3 @@
-//! Component test: the keys of a table of controls, bound the way the Window program
-//! binds them and pressed on GPUI's test platform.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -15,15 +12,8 @@ use yaar_frame::{
     controls,
 };
 
-actions!(
-    keys_test,
-    [
-        /// An action of the test's own, bound in a context.
-        Mark
-    ]
-);
+actions!(keys_test, [Mark]);
 
-/// A window with two places the focus can be, one of them inside a key context.
 struct Probe {
     context: &'static str,
     inside: FocusHandle,
@@ -44,7 +34,6 @@ impl Render for Probe {
     }
 }
 
-/// Opens the window, with the focus inside `context`.
 fn open_probe<'a>(
     context: &'static str,
     cx: &'a mut TestAppContext,
@@ -58,18 +47,13 @@ fn open_probe<'a>(
     (probe, cx)
 }
 
-/// The names of the actions that ran since the list was last taken.
 type Ran = Rc<RefCell<Vec<&'static str>>>;
 
-/// Notes the name of every action of type `A` that nothing in the window handled.
 fn note<A: Action>(ran: &Ran, cx: &mut App) {
     let ran = ran.clone();
     cx.on_action(move |action: &A, _| ran.borrow_mut().push(action.name()));
 }
 
-/// Binds the keys of the Frame's table the way the Window program binds them, and notes
-/// every action of the table that runs. An action of the table that is not noted here
-/// shows as a key that ran nothing.
 fn bind_the_table(cx: &mut TestAppContext) -> Ran {
     let ran = Ran::default();
     cx.update(|cx| {
@@ -92,10 +76,8 @@ fn bind_the_table(cx: &mut TestAppContext) -> Ran {
     ran
 }
 
-/// The keys a user presses, written out here and nowhere else in the tests of the Frame:
-/// every other test presses what the table has, so a key changed in the table by mistake
-/// would pass them all. Each action has the key of a Mac and the key of every other
-/// system, where the keyboard has no Cmd key.
+/// The keys a user presses, written out here only: other tests press what the table has, so a key
+/// changed by mistake would pass them all.
 fn chosen() -> [(&'static str, &'static str, &'static str); 14] {
     [
         ("cmd-o", "ctrl-o", OpenFolder.name()),
@@ -106,7 +88,6 @@ fn chosen() -> [(&'static str, &'static str, &'static str); 14] {
         ("cmd-alt-b", "ctrl-alt-b", UnpinSidebar.name()),
         ("cmd-alt-down", "ctrl-alt-down", SelectNextWorkspace.name()),
         ("cmd-alt-up", "ctrl-alt-up", SelectPreviousWorkspace.name()),
-        // The two keys that move the focus between the panes are Ctrl keys on both.
         ("ctrl-tab", "ctrl-tab", FocusNextPane.name()),
         ("ctrl-shift-tab", "ctrl-shift-tab", FocusPreviousPane.name()),
         ("cmd-alt-p", "ctrl-alt-p", MovePanes.name()),
@@ -137,10 +118,6 @@ fn every_key_of_the_table_runs_its_action_and_no_other(cx: &mut TestAppContext) 
 fn each_action_of_the_frame_runs_on_the_key_chosen_for_it_on_the_system_the_app_is_built_for(
     cx: &mut TestAppContext,
 ) {
-    // The app writes `secondary` out for the system it is built for, so a Mac build binds
-    // the Cmd keys and any other the Ctrl keys, and the keys of the other system run
-    // nothing. The focus is inside the context of the Frame, where the keys of the table
-    // work on every system.
     let ran = bind_the_table(cx);
     let (_probe, cx) = open_probe(KEY_CONTEXT, cx);
 
@@ -157,18 +134,13 @@ fn each_action_of_the_frame_runs_on_the_key_chosen_for_it_on_the_system_the_app_
             assert_eq!(ran.take(), Vec::<&str>::new(), "the key {of_the_other}");
         }
     }
-    // A control added to the table has to get its keys written above.
     assert_eq!(controls().len(), chosen().len());
 }
 
 #[test]
 fn every_key_of_the_frame_works_anywhere_but_the_two_that_move_the_focus_between_panes() {
-    // Where a key works is written in its row, and the context it is bound with follows
-    // from that by system. A key of the Frame placed in the Frame's own context would
-    // work as now on every system but macOS, where it would be a Cmd key that does
-    // nothing while the focus is where the context is not. Off macOS no pressed key can
-    // tell the two rows apart, so the rows are read here. The two keys of the focus are
-    // kept: they never reach a program.
+    // Off macOS a key placed `Anywhere` and a kept key are both Ctrl keys bound in the Frame's
+    // context, so no pressed key tells them apart: the place written in each row is read instead.
     let kept = [FocusNextPane.name(), FocusPreviousPane.name()];
     for control in controls() {
         let expected = if kept.contains(&(control.action)().name()) {
@@ -188,12 +160,8 @@ fn outside_the_context_of_the_frame_the_keys_of_the_table_work_on_macos_and_on_n
     let (probe, cx) = open_probe(KEY_CONTEXT, cx);
     probe.update_in(cx, |probe, window, cx| probe.outside.focus(window, cx));
 
-    // On macOS the keys of `Anywhere` are Cmd keys and work wherever the focus is. On
-    // every other system they are Ctrl keys, which a program in a terminal waits for, so
-    // they do nothing where the context of the Frame is not. A kept key is a Ctrl key on
-    // both and is bound in the context of the Frame, so it works there only. What is
-    // expected is written here by system and not asked of the table, which would then be
-    // held to its own answer.
+    // On macOS the `Anywhere` keys are Cmd keys and work wherever the focus is; elsewhere they are
+    // Ctrl keys, which a terminal program waits for, so they work only in the Frame's context.
     let work_here = cfg!(target_os = "macos");
     for control in controls() {
         cx.simulate_keystrokes(&control.key());

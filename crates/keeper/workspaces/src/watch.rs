@@ -1,6 +1,3 @@
-//! The watcher of the worktrees: the system's notices of changed files, one watcher for
-//! each workspace watched, through the `notify` crate.
-
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -13,44 +10,32 @@ use yaar_store::WorkspaceId;
 
 use crate::credit::Ledger;
 
-/// What the watcher of a worktree saw change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Seen {
-    /// Files of the worktree: what is uncommitted may have changed.
     Files,
-    /// What is checked out, the list of files or a ref: the name of the workspace, its
-    /// commits and what is uncommitted may have changed.
     Head,
 }
 
-/// Where a worktree keeps its files and its git folders, as the watcher reads a path.
 #[derive(Debug, Clone)]
 pub(crate) struct Places {
-    /// The folder of the worktree.
     pub(crate) root: PathBuf,
-    /// The git folder of this worktree alone.
     pub(crate) git_dir: PathBuf,
-    /// The git folder all worktrees of the repository share.
     pub(crate) common_dir: PathBuf,
 }
 
-/// What one path of a system notice is, to the worktree it came from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Item {
-    /// A file of the worktree, by its path relative to the folder of the worktree.
     File(PathBuf),
-    /// What is checked out, the list of files or a ref.
     Head,
 }
 
 impl Places {
-    /// What a changed `path` is: the files of the worktree are files; in the git folder,
-    /// `HEAD`, the list of files (`index`), the refs and `packed-refs` are [`Item::Head`];
-    /// anything else git keeps there, and the git folder of a repository inside the
-    /// worktree, is nothing the app cares about.
+    /// / Worktree files are `Item::File`. In the git folder, `HEAD`, `index`, the refs and
+    /// / `packed-refs` are `Item::Head`; the rest of it, and a nested repository's git folder, is
+    /// ignored.
     pub(crate) fn classify(&self, path: &Path) -> Option<Item> {
-        // This worktree's own git folder first: it lies inside the shared one for a
-        // linked worktree, and is the shared one for the main worktree.
+        // This worktree's own git folder first: it lies inside the shared one for a linked
+        // worktree.
         if let Ok(inside) = path.strip_prefix(&self.git_dir) {
             let own = ["HEAD", "index"]
                 .iter()
@@ -61,7 +46,6 @@ impl Places {
             return is_ref(inside).then_some(Item::Head);
         }
         let inside = path.strip_prefix(&self.root).ok()?;
-        // A folder `.git` anywhere in the worktree is git's, a nested repository's too.
         if inside.as_os_str().is_empty()
             || inside.components().any(|part| part.as_os_str() == ".git")
         {
@@ -71,24 +55,16 @@ impl Places {
     }
 }
 
-/// What one notice of the system came to, to the worktree it came from.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Notice {
-    /// The files that changed, by their paths relative to the folder of the worktree.
     pub(crate) files: Vec<PathBuf>,
-    /// The folders that appeared, made there or moved in, by the same kind of path.
     pub(crate) folders: Vec<PathBuf>,
-    /// What is checked out, the list of files or a ref changed.
     pub(crate) head: bool,
-    /// The system lost notices, or says it could not give them: anything may have changed.
-    /// What was lost cannot be credited to a session, and is a change no agent made.
+    /// The system lost notices: anything may have changed, and no session is credited.
     pub(crate) lost: bool,
 }
 
 impl Notice {
-    /// What `result` of the system is, to the worktree at `places`. `is_folder` says
-    /// whether a path that came into being, or was renamed, is a folder: a notice does not
-    /// always say.
     pub(crate) fn of(
         places: &Places,
         result: &notify::Result<notify::Event>,
@@ -107,7 +83,6 @@ impl Notice {
             lost: event.need_rescan(),
             ..Notice::default()
         };
-        // Reads are not changes.
         if matches!(event.kind, EventKind::Access(_)) {
             return notice;
         }
@@ -135,42 +110,32 @@ impl Notice {
         notice
     }
 
-    /// Whether what is uncommitted may have changed.
     pub(crate) fn tells_files(&self) -> bool {
         self.lost || !self.files.is_empty() || !self.folders.is_empty()
     }
 
-    /// Whether what is checked out may have changed.
     pub(crate) fn tells_head(&self) -> bool {
         self.lost || self.head
     }
 }
 
-/// Whether a path inside a git folder is a ref: under `refs/`, or `packed-refs`.
 fn is_ref(inside: &Path) -> bool {
     inside == Path::new("packed-refs")
         || (inside.starts_with("refs") && inside != Path::new("refs"))
 }
 
-/// The watcher and the ledger of one workspace.
 #[derive(Debug, Default)]
 struct Entry {
-    // Shared with the thread of the watcher, which notes each path it sees.
     ledger: Arc<Mutex<Ledger>>,
-    // None while the workspace is not watched; the ledger is kept all the same.
     watcher: Option<RecommendedWatcher>,
 }
 
-/// The watchers of the workspaces watched and the ledger of each workspace.
 #[derive(Debug, Default)]
 pub(crate) struct Watching {
     entries: Mutex<BTreeMap<WorkspaceId, Entry>>,
 }
 
 impl Watching {
-    /// Starts a watcher on the worktree at `places`, replacing the one of `workspace`
-    /// when it has one. `told` hears what each notice was, after the ledger has noted
-    /// every file of it.
     pub(crate) fn watch(
         &self,
         workspace: &WorkspaceId,
@@ -196,7 +161,6 @@ impl Watching {
                 });
                 {
                     let mut ledger = lock(&ledger);
-                    // One moment for every path of the notice: it is when it arrived.
                     let now = Instant::now();
                     for file in &notice.files {
                         ledger.seen(file, now);
@@ -205,8 +169,8 @@ impl Watching {
                         ledger.appeared(folder, now);
                     }
                 }
-                // The ledger is let go of before anyone is told, and has noted the paths
-                // first: whoever hears of a file can ask who made the change.
+                // The ledger has noted the paths, and is unlocked, before anyone is told: whoever
+                // hears of a file can ask who made it.
                 if notice.tells_files() {
                     told(Seen::Files);
                 }
@@ -217,8 +181,7 @@ impl Watching {
         };
         let mut watcher = made.map_err(|e| (places.root.clone(), io::Error::other(e)))?;
 
-        // The files, and the git folder where it lies beside them or elsewhere: for a
-        // linked worktree, its own git folder and the refs of the repository.
+        // The files, and for a linked worktree its own git folder and the refs of the repository.
         let mut folders = vec![(places.root.as_path(), RecursiveMode::Recursive)];
         if !places.git_dir.starts_with(&places.root) {
             folders.push((places.git_dir.as_path(), RecursiveMode::Recursive));
@@ -236,9 +199,8 @@ impl Watching {
                 .map_err(|e| (folder.to_owned(), io::Error::other(e)))?;
         }
 
-        // The new watcher is running before the old one goes: nothing falls between. The
-        // old one is dropped with no lock held, since its thread may be telling `told`,
-        // which may ask this for a ledger.
+        // The new watcher runs before the old one goes, so nothing falls between. The old one is
+        // dropped with no lock held: its thread may be telling `told`, which may ask for a ledger.
         let old = lock(&self.entries)
             .entry(workspace.clone())
             .or_default()
@@ -248,11 +210,7 @@ impl Watching {
         Ok(())
     }
 
-    /// Stops the watcher of `workspace`; its ledger is kept, but for the folders that
-    /// appeared: a file written below one from now on is not seen, and is not theirs.
     pub(crate) fn unwatch(&self, workspace: &WorkspaceId) {
-        // Dropped after the lock is let go of: the watcher's own thread may be waiting
-        // for the ledger, never for this.
         let (stopped, ledger) = {
             let mut entries = lock(&self.entries);
             let Some(entry) = entries.get_mut(workspace) else {
@@ -267,7 +225,6 @@ impl Watching {
         }
     }
 
-    /// The workspaces that have a watcher.
     pub(crate) fn watched(&self) -> Vec<WorkspaceId> {
         lock(&self.entries)
             .iter()
@@ -276,7 +233,6 @@ impl Watching {
             .collect()
     }
 
-    /// Runs `f` on the ledger of `workspace`, made empty when there is none yet.
     pub(crate) fn with_ledger<T>(
         &self,
         workspace: &WorkspaceId,
@@ -292,8 +248,8 @@ impl Watching {
     }
 }
 
-/// Takes a lock, also after a thread that held it panicked: the ledger and the list are
-/// only ever added to or taken from, whole.
+/// Takes a lock also after a panic of its holder: the ledger and the list are only added to or
+/// taken from, whole.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -330,7 +286,6 @@ mod tests {
             places.classify(Path::new("/w/repo/src/deep/b.rs")),
             file("src/deep/b.rs")
         );
-        // A name that only starts with `.git` is a file like any other.
         assert_eq!(
             places.classify(Path::new("/w/repo/.gitignore")),
             file(".gitignore")
@@ -395,12 +350,10 @@ mod tests {
             assert_eq!(places.classify(Path::new(told)), Some(Item::Head), "{told}");
         }
         for not_told in [
-            // The main worktree's own head and list are its own.
             "/w/repo/.git/HEAD",
             "/w/repo/.git/index",
             "/w/repo/.git/worktrees/linked/index.lock",
             "/w/repo/.git/objects/ab/cdef",
-            // The link to the git folder, a file of the linked worktree.
             "/w/linked/.git",
         ] {
             assert_eq!(places.classify(Path::new(not_told)), None, "{not_told}");
@@ -417,7 +370,6 @@ mod tests {
     }
 
     fn notice(result: &notify::Result<notify::Event>) -> Notice {
-        // Nothing is a folder unless the notice says so.
         Notice::of(&main_worktree(), result, |_| false)
     }
 
@@ -463,7 +415,6 @@ mod tests {
         ));
         assert_eq!(made_a_file.files, [PathBuf::from("out/f")]);
 
-        // A notice that says only that something appeared, or was renamed, is asked about.
         for kind in [
             EventKind::Create(CreateKind::Any),
             EventKind::Modify(ModifyKind::Name(notify::event::RenameMode::To)),
@@ -476,7 +427,6 @@ mod tests {
             assert_eq!(moved.files, [PathBuf::from("file")], "{kind:?}");
         }
 
-        // A change of what a folder holds is no folder appearing.
         let result = event(EventKind::Modify(ModifyKind::Any), &["/w/repo/out"]);
         let changed = Notice::of(&main_worktree(), &result, |_| true);
         assert_eq!(changed.files, [PathBuf::from("out")]);
@@ -485,8 +435,6 @@ mod tests {
 
     #[test]
     fn notices_the_system_lost_tell_the_files_and_the_head_with_no_path_to_note() {
-        // The system's queue overflowed, or it says it could not watch: after a burst of
-        // writes, nothing says what changed, and whoever shows the changes must look.
         let overflow =
             Ok(notify::Event::new(EventKind::Other).set_flag(notify::event::Flag::Rescan));
         let lost = notice(&overflow);

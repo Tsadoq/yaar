@@ -164,43 +164,43 @@ appcursor	ctrl-!	21	departure: GPUI folds Shift into the key, so this is Ctrl wi
 appcursor	alt-!->⁄	e28184	ghostty m-ghostty-legacy as+1	macos
 appcursor	2	32	ghostty m-ghostty-appcursor plain+2
 appcursor	@	40	ghostty m-ghostty-appcursor s+2
-appcursor	ctrl-2	32	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 00, m-ghostty-appcursor c+2)
+appcursor	ctrl-2	32	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 00, m-ghostty-appcursor c+2)
 appcursor	alt-2->™	e284a2	ghostty m-ghostty-legacy a+2	macos
 appcursor	ctrl-@	00	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b36343b3575, m-ghostty-appcursor cs+2)
 appcursor	alt-@->€	e282ac	ghostty m-ghostty-legacy as+2	macos
 appcursor	3	33	ghostty m-ghostty-appcursor plain+3
 appcursor	#	23	ghostty m-ghostty-appcursor s+3
-appcursor	ctrl-3	33	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b, m-ghostty-appcursor c+3)
+appcursor	ctrl-3	33	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b, m-ghostty-appcursor c+3)
 appcursor	alt-3->£	c2a3	ghostty m-ghostty-legacy a+3	macos
 appcursor	ctrl-#	23	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b, m-ghostty-appcursor cs+3)
 appcursor	alt-#->‹	e280b9	ghostty m-ghostty-legacy as+3	macos
 appcursor	4	34	ghostty m-ghostty-appcursor plain+4
 appcursor	$	24	ghostty m-ghostty-appcursor s+4
-appcursor	ctrl-4	34	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1c, m-ghostty-appcursor c+4)
+appcursor	ctrl-4	34	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1c, m-ghostty-appcursor c+4)
 appcursor	alt-4->¢	c2a2	ghostty m-ghostty-legacy a+4	macos
 appcursor	ctrl-$	24	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1c, m-ghostty-appcursor cs+4)
 appcursor	alt-$->›	e280ba	ghostty m-ghostty-legacy as+4	macos
 appcursor	5	35	ghostty m-ghostty-appcursor plain+5
 appcursor	%	25	ghostty m-ghostty-appcursor s+5
-appcursor	ctrl-5	35	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1d, m-ghostty-appcursor c+5)
+appcursor	ctrl-5	35	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1d, m-ghostty-appcursor c+5)
 appcursor	alt-5->∞	e2889e	ghostty m-ghostty-legacy a+5	macos
 appcursor	ctrl-%	25	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1d, m-ghostty-appcursor cs+5)
 appcursor	alt-%->ﬁ	efac81	ghostty m-ghostty-legacy as+5	macos
 appcursor	6	36	ghostty m-ghostty-appcursor plain+6
 appcursor	^	5e	ghostty m-ghostty-appcursor s+6
-appcursor	ctrl-6	36	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1e, m-ghostty-appcursor c+6)
+appcursor	ctrl-6	36	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1e, m-ghostty-appcursor c+6)
 appcursor	alt-6->§	c2a7	ghostty m-ghostty-legacy a+6	macos
 appcursor	ctrl-^	1e	ghostty m-ghostty-appcursor cs+6
 appcursor	alt-^->ﬂ	efac82	ghostty m-ghostty-legacy as+6	macos
 appcursor	7	37	ghostty m-ghostty-appcursor plain+7
 appcursor	&	26	ghostty m-ghostty-appcursor s+7
-appcursor	ctrl-7	37	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-appcursor c+7)
+appcursor	ctrl-7	37	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-appcursor c+7)
 appcursor	alt-7->¶	c2b6	ghostty m-ghostty-legacy a+7	macos
 appcursor	ctrl-&	26	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1f, m-ghostty-appcursor cs+7)
 appcursor	alt-&->‡	e280a1	ghostty m-ghostty-legacy as+7	macos
 appcursor	8	38	ghostty m-ghostty-appcursor plain+8
 appcursor	*	2a	ghostty m-ghostty-appcursor s+8
-appcursor	ctrl-8	38	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 7f, m-ghostty-appcursor c+8)
+appcursor	ctrl-8	38	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 7f, m-ghostty-appcursor c+8)
 appcursor	alt-8->•	e280a2	ghostty m-ghostty-legacy a+8	macos
 appcursor	ctrl-*	2a	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 7f, m-ghostty-appcursor cs+8)
 appcursor	alt-*->°	c2b0	ghostty m-ghostty-legacy as+8	macos
@@ -212,24 +212,24 @@ appcursor	ctrl-(	28	departure: GPUI folds Shift into the key, so this is Ctrl wi
 appcursor	alt-(->·	c2b7	ghostty m-ghostty-legacy as+9	macos
 appcursor	`	60	ghostty m-ghostty-appcursor plain+grave
 appcursor	~	7e	ghostty m-ghostty-appcursor s+grave
-appcursor	ctrl-`	60	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39363b3575, m-ghostty-appcursor c+grave)
+appcursor	ctrl-`	60	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39363b3575, m-ghostty-appcursor c+grave)
 appcursor	ctrl-~	7e	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b39363b3675, m-ghostty-appcursor cs+grave)
 appcursor	alt-~->`	60	ghostty m-ghostty-legacy as+grave	macos
 appcursor	-	2d	ghostty m-ghostty-appcursor plain+minus
 appcursor	_	5f	ghostty m-ghostty-appcursor s+minus
-appcursor	ctrl--	2d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34353b3575, m-ghostty-appcursor c+minus)
+appcursor	ctrl--	2d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34353b3575, m-ghostty-appcursor c+minus)
 appcursor	ctrl-_	1f	ghostty m-ghostty-appcursor cs+minus
 appcursor	alt-_->—	e28094	ghostty m-ghostty-legacy as+minus	macos
 appcursor	alt-minus->–	e28093	ghostty m-ghostty-legacy a+minus, cleaned of the accent the dead key before it left (Ghostty: 60e28093)	macos
 appcursor	=	3d	ghostty m-ghostty-appcursor plain+equal
 appcursor	+	2b	ghostty m-ghostty-appcursor s+equal
-appcursor	ctrl-=	3d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b36313b3575, m-ghostty-appcursor c+equal)
+appcursor	ctrl-=	3d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b36313b3575, m-ghostty-appcursor c+equal)
 appcursor	alt-=->≠	e289a0	ghostty m-ghostty-legacy a+equal	macos
 appcursor	ctrl-+	2b	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b36313b3675, m-ghostty-appcursor cs+equal)
 appcursor	alt-+->±	c2b1	ghostty m-ghostty-legacy as+equal	macos
 appcursor	[	5b	ghostty m-ghostty-appcursor plain+lbracket
 appcursor	{	7b	ghostty m-ghostty-appcursor s+lbracket
-appcursor	ctrl-[	1b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39313b3575, m-ghostty-appcursor c+lbracket)
+appcursor	ctrl-[	1b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39313b3575, m-ghostty-appcursor c+lbracket)
 appcursor	alt-[->“	e2809c	ghostty m-ghostty-legacy a+lbracket	macos
 appcursor	ctrl-{	7b	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b3132333b3575, m-ghostty-appcursor cs+lbracket)
 appcursor	alt-{->”	e2809d	ghostty m-ghostty-legacy as+lbracket	macos
@@ -247,31 +247,31 @@ appcursor	ctrl-|	7c	departure: GPUI folds Shift into the key, so this is Ctrl wi
 appcursor	alt-|->»	c2bb	ghostty m-ghostty-legacy as+backslash	macos
 appcursor	;	3b	ghostty m-ghostty-appcursor plain+semicolon
 appcursor	:	3a	ghostty m-ghostty-appcursor s+semicolon
-appcursor	ctrl-;	3b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b35393b3575, m-ghostty-appcursor c+semicolon)
+appcursor	ctrl-;	3b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b35393b3575, m-ghostty-appcursor c+semicolon)
 appcursor	alt-;->…	e280a6	ghostty m-ghostty-legacy a+semicolon	macos
 appcursor	ctrl-:	3a	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b35393b3675, m-ghostty-appcursor cs+semicolon)
 appcursor	alt-:->Ú	c39a	ghostty m-ghostty-legacy as+semicolon	macos
 appcursor	'	27	ghostty m-ghostty-appcursor plain+quote
 appcursor	"	22	ghostty m-ghostty-appcursor s+quote
-appcursor	ctrl-'	27	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b33393b3575, m-ghostty-appcursor c+quote)
+appcursor	ctrl-'	27	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b33393b3575, m-ghostty-appcursor c+quote)
 appcursor	alt-'->æ	c3a6	ghostty m-ghostty-legacy a+quote	macos
 appcursor	ctrl-"	22	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b33393b3675, m-ghostty-appcursor cs+quote)
 appcursor	alt-"->Æ	c386	ghostty m-ghostty-legacy as+quote	macos
 appcursor	,	2c	ghostty m-ghostty-appcursor plain+comma
 appcursor	<	3c	ghostty m-ghostty-appcursor s+comma
-appcursor	ctrl-,	2c	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34343b3575, m-ghostty-appcursor c+comma)
+appcursor	ctrl-,	2c	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34343b3575, m-ghostty-appcursor c+comma)
 appcursor	alt-,->≤	e289a4	ghostty m-ghostty-legacy a+comma	macos
 appcursor	ctrl-<	3c	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b34343b3675, m-ghostty-appcursor cs+comma)
 appcursor	alt-<->¯	c2af	ghostty m-ghostty-legacy as+comma	macos
 appcursor	.	2e	ghostty m-ghostty-appcursor plain+period
 appcursor	>	3e	ghostty m-ghostty-appcursor s+period
-appcursor	ctrl-.	2e	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34363b3575, m-ghostty-appcursor c+period)
+appcursor	ctrl-.	2e	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34363b3575, m-ghostty-appcursor c+period)
 appcursor	alt-.->≥	e289a5	ghostty m-ghostty-legacy a+period	macos
 appcursor	ctrl->	3e	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b34363b3675, m-ghostty-appcursor cs+period)
 appcursor	alt->->˘	cb98	ghostty m-ghostty-legacy as+period	macos
 appcursor	/	2f	ghostty m-ghostty-appcursor plain+slash
 appcursor	?	3f	ghostty m-ghostty-appcursor s+slash
-appcursor	ctrl-/	2f	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-appcursor c+slash)
+appcursor	ctrl-/	2f	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-appcursor c+slash)
 appcursor	alt-/->÷	c3b7	ghostty m-ghostty-legacy a+slash	macos
 appcursor	ctrl-?	3f	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1f, m-ghostty-appcursor cs+slash)
 appcursor	alt-?->¿	c2bf	ghostty m-ghostty-legacy as+slash	macos
@@ -347,7 +347,7 @@ appcursor	pagedown	1b5b367e	ghostty m-ghostty-appcursor plain+pagedown
 appcursor	alt-pagedown	1b5b363b337e	ghostty m-ghostty-appcursor a+pagedown
 appcursor	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-appcursor c+pagedown
 appcursor	cmd-pagedown		ghostty m-ghostty-appcursor m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
-appcursor	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+appcursor	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit	macos
 appcursor	f1	1b4f50	ghostty m-ghostty-appcursor plain+f1
 appcursor	f2	1b4f51	ghostty m-ghostty-appcursor plain+f2
 appcursor	f3	1b4f52	ghostty m-ghostty-appcursor plain+f3

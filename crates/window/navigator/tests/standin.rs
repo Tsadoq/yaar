@@ -1,8 +1,5 @@
-//! The stand-in language server, as the tests of the Navigator, the review pane and the
-//! Window start it: what it answers, what it logs, and how it ends. And the support every
-//! component test of the Navigator stands on (`tests/support/mod.rs`): each helper shown to
-//! do what its doc says. The stand-in is driven here by `lsp::write_frame` and
-//! `lsp::read_frame` over its pipes, as the Navigator's driver speaks to a server.
+//! The stand-in language server: what it answers, what it logs, how it ends. Also tests the
+//! helpers of `tests/support/mod.rs`.
 
 mod support;
 
@@ -17,24 +14,17 @@ use support::*;
 use yaar_navigator::lsp::{file_uri, read_frame, write_frame};
 use yaar_navigator::{Answered, Ask, AskId, Location, ServerState, State, Told, Tree};
 
-// ---------------------------------------------------------------------------------------
-// The stand-in, started and driven by the test.
-// ---------------------------------------------------------------------------------------
-
-/// A running stand-in and the test's end of its pipes. A reading thread hands each frame the
-/// stand-in writes to a channel, so that every wait is for a frame, with a deadline, and
-/// never a sleep between looks.
+/// A reading thread hands each frame the stand-in writes to a channel, so every wait is for a frame
+/// with a deadline, never a sleep.
 struct Standin {
     child: Child,
     stdin: Option<ChildStdin>,
     frames: Receiver<Value>,
     next_id: u64,
-    /// Everything read and passed over while a wait looked for another message.
     passed_over: Vec<Value>,
 }
 
 impl Standin {
-    /// Starts the stand-in with `args`, in the folder `cwd`, with `environment` added.
     fn start_in(cwd: &Path, args: &[&str], environment: &[(&str, &str)]) -> Standin {
         let mut child = Command::new(standin())
             .args(args)
@@ -77,7 +67,6 @@ impl Standin {
         self.send(json!({"jsonrpc": "2.0", "method": method, "params": params}));
     }
 
-    /// Sends a request and gives the whole answer, `result` or `error`.
     fn ask(&mut self, method: &str, params: Value) -> Value {
         let id = self.next_id;
         self.next_id += 1;
@@ -87,7 +76,6 @@ impl Standin {
         })
     }
 
-    /// The result of a request that succeeds.
     fn result_of(&mut self, method: &str, params: Value) -> Value {
         let answer = self.ask(method, params);
         answer
@@ -96,7 +84,6 @@ impl Standin {
             .clone()
     }
 
-    /// The next frame the stand-in wrote.
     fn next(&mut self, what: &str) -> Value {
         match self.frames.recv_timeout(DEADLINE) {
             Ok(frame) => frame,
@@ -111,7 +98,6 @@ impl Standin {
         }
     }
 
-    /// The next frame that satisfies `wanted`; the others are kept in `passed_over`.
     fn message_where(&mut self, what: &str, wanted: impl Fn(&Value) -> bool) -> Value {
         loop {
             let frame = self.next(what);
@@ -122,7 +108,6 @@ impl Standin {
         }
     }
 
-    /// `initialize` with `root` as the root, then `initialized`.
     fn start_session(&mut self, root: &Path, options: Value) -> Value {
         let result = self.result_of(
             "initialize",
@@ -145,13 +130,12 @@ impl Standin {
         self.result_of(method, at(file, line, character))
     }
 
-    /// Closes its input, as a client that is gone does.
     fn close_input(&mut self) {
         self.stdin = None;
     }
 
-    /// The code it ended with, waiting up to the deadline: the end of a process is a fact
-    /// that stays true, looked at again with a short pause.
+    /// Polled with a short pause: the end of a process is a fact that stays true and no channel
+    /// signals it.
     fn exit_code(&mut self) -> i32 {
         let until = Instant::now() + DEADLINE;
         loop {
@@ -171,7 +155,6 @@ impl Drop for Standin {
     }
 }
 
-/// The params of a text document request at a position.
 fn at(file: &Path, line: u32, character: u32) -> Value {
     json!({
         "textDocument": {"uri": file_uri(file)},
@@ -179,7 +162,6 @@ fn at(file: &Path, line: u32, character: u32) -> Value {
     })
 }
 
-/// A `Location`, as the stand-in answers a definition or a reference.
 fn location(file: &Path, line: u32, from: u32, to: u32) -> Value {
     json!({
         "uri": file_uri(file),
@@ -190,12 +172,10 @@ fn location(file: &Path, line: u32, from: u32, to: u32) -> Value {
     })
 }
 
-/// What a hover of the stand-in answers for `name`.
 fn hovering(name: &str) -> Value {
     json!({"contents": {"kind": "plaintext", "value": format!("standin: {name}")}})
 }
 
-/// The lines of a log, each a JSON object.
 fn log_of(file: &Path) -> Vec<Value> {
     std::fs::read_to_string(file)
         .unwrap_or_else(|error| panic!("read the log {}: {error}", file.display()))
@@ -210,10 +190,8 @@ fn events(log: &[Value]) -> Vec<&str> {
         .collect()
 }
 
-/// The stand-in's `.sil` files for the tests of definition and references.
-///
-/// `main.sil` line 0 has a surrogate pair and an accented letter before `total`: its column
-/// is 9 in UTF-16 units and 12 in bytes.
+/// `main.sil` line 0 has a surrogate pair and an accented letter before `total`: its column is 9 in
+/// UTF-16 units and 12 in bytes.
 fn write_project(scratch: &Scratch) -> PathBuf {
     let root = scratch.root.join("repos").join("project");
     for (path, text) in [
@@ -343,8 +321,8 @@ fn initialize_is_answered_with_its_capabilities_and_logged_with_what_it_received
     assert_eq!(start["pid"], json!(standin.child.id()));
     assert_eq!(start["cwd"], json!(scratch.root.display().to_string()));
     assert_eq!(start["args"], json!(["--log", log_arg, "--fail-trial"]));
-    // Exactly the names its doc lists, with their values: a later row reads a server's
-    // temporary and cache folders from here, and no other variable is copied.
+    // Exactly these names: a later row reads a server's temporary and cache folders from here, and
+    // no other variable is copied.
     assert_eq!(
         start["env"],
         json!({
@@ -481,16 +459,15 @@ fn the_ready_line_is_in_the_log_before_the_first_answer_that_needs_it_is_given()
         ],
     );
     standin.start_session(&project, json!(null));
-    // Its answer comes after `initialized` was handled and `go` is not there: null, and no
-    // `ready` line.
+    // The answer comes after `initialized` was handled and `go` is absent: null, and no `ready`
+    // line.
     assert_eq!(standin.hover(&main, 0, 9), json!(null));
     assert!(!events(&log_of(&log)).contains(&"ready"));
 
     std::fs::write(&go, "").unwrap();
-    // The stand-in's look for `go` is its own. That it is ready is a fact that stays true
-    // once it is, so the hover is asked again, with no pause between asks (each waits for
-    // its answer on the channel), up to the deadline: the first answer that names the name
-    // is the first that needed readiness, and the log is read at once.
+    // Readiness stays true once reached, so the hover is asked again with no pause (each waits on
+    // the channel) until the first answer that names the name, which is the first that needed
+    // readiness.
     let until = Instant::now() + DEADLINE;
     loop {
         if standin.hover(&main, 0, 9) != json!(null) {
@@ -511,7 +488,7 @@ fn hover_is_null_where_no_name_is() {
     let main = project.join("main.sil");
     let mut standin = Standin::start(&scratch, &[]);
     standin.start_session(&project, json!(null));
-    // The surrogate pair at units 4 and 5, a space at 6, the accented letter at 7.
+    // The surrogate pair is at units 4 and 5, a space at 6, the accented letter at 7.
     assert_eq!(standin.hover(&main, 0, 4), json!(null));
     assert_eq!(standin.hover(&main, 0, 5), json!(null));
     assert_eq!(standin.hover(&main, 0, 6), json!(null));
@@ -552,7 +529,6 @@ fn definition_and_references_count_positions_in_utf16_units() {
         "by path, then line, then column; `totals` is another name, and neither the folder \
          that starts with a dot nor the file that is not .sil is read"
     );
-    // The same from inside the name, and from a reference on another line.
     assert_eq!(
         standin.locations("textDocument/definition", &main, 1, 19),
         json!([location(&lib, 0, 4, 9)])
@@ -571,7 +547,6 @@ fn a_name_with_no_definition_or_no_name_at_the_place_has_no_location() {
     let main = project.join("main.sil");
     let mut standin = Standin::start(&scratch, &[]);
     standin.start_session(&project, json!(null));
-    // `use` defines nothing; the space after it is no name.
     assert_eq!(
         standin.locations("textDocument/definition", &main, 0, 1),
         json!([])
@@ -606,13 +581,9 @@ fn a_definition_is_a_line_whose_first_word_after_any_white_space_is_def_and_then
     let mut definition =
         |name: &str| standin.locations("textDocument/definition", &uses, 0, column(name));
 
-    // The three that are definitions: after white space of either kind, and with more after
-    // the name.
     assert_eq!(definition("indented"), json!([location(&defs, 0, 6, 14)]));
     assert_eq!(definition("total_more"), json!([location(&defs, 3, 4, 14)]));
     assert_eq!(definition("tabbed"), json!([location(&defs, 4, 5, 11)]));
-    // The ones that are not: `deftotal` is one word, `define total` is the word `define`,
-    // and a line `def` with no name defines nothing.
     assert_eq!(
         definition("total "),
         json!([]),
@@ -667,7 +638,6 @@ fn what_the_client_opened_or_changed_is_read_before_the_file_on_disk() {
         }),
     );
     assert_eq!(standin.hover(&lib, 0, 4), hovering("beta"));
-    // A definition is where the files on disk define the name: `beta` has none there.
     assert_eq!(
         standin.locations("textDocument/definition", &lib, 0, 4),
         json!([])
@@ -849,7 +819,6 @@ fn exit_after_ready_ends_with_2_once_it_is_ready() {
         ],
     );
     standin.start_session(&scratch.root, json!(null));
-    // Alive and answering until the file is there.
     assert_eq!(
         standin.hover(&scratch.root.join("none.sil"), 0, 0),
         json!(null)
@@ -939,13 +908,8 @@ fn any_other_request_is_a_method_not_found_and_an_unknown_notification_is_ignore
     assert_eq!(answer["error"]["code"], json!(-32601));
     assert!(answer.get("result").is_none());
     assert!(standin.passed_over.is_empty());
-    // Still alive and answering.
     assert_eq!(standin.result_of("shutdown", json!(null)), json!(null));
 }
-
-// ---------------------------------------------------------------------------------------
-// The support.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn a_scratch_is_a_folder_of_its_own_with_its_links_resolved_and_goes_when_dropped() {
@@ -993,8 +957,7 @@ fn a_scratch_removes_the_variables_that_name_a_repository_or_hand_git_settings()
         "GIT_CONFIG",
     ];
     if std::env::var_os("YAAR_SUPPORT_CHILD").is_some() {
-        // The child process, started with every one of them set, as a git hook starts a
-        // test.
+        // The child process is started with every one of them set, as a git hook starts a test.
         let _scratch = Scratch::new();
         for name in names {
             assert!(
@@ -1040,7 +1003,6 @@ fn the_recorder_npm_appends_its_arguments_to_its_log_and_fails() {
     assert_eq!(scratch.npm_ran(), ["install left pad", "view x"]);
 }
 
-/// What `git status --porcelain --ignored --untracked-files=all` says, as lines.
 fn status_lines(repo: &Repo) -> Vec<String> {
     repo.git(&[
         "status",
@@ -1086,7 +1048,6 @@ fn the_rust_fixture_is_its_base_committed_and_its_change_not() {
         "target/",
         "dot-gitignore is the project's .gitignore"
     );
-    // The change: three files rewritten, `strings.rs` gone, `text.rs` new.
     assert_eq!(
         status_lines(&repo),
         [
@@ -1137,7 +1098,7 @@ fn the_typescript_fixture_has_its_dependencies_ignored_and_its_change_not_commit
         status
             .iter()
             .any(|line| line.starts_with("!! node_modules/")),
-        "ignored, as the README says: {status:?}"
+        "ignored files are listed: {status:?}"
     );
     assert!(!repo.root.join("src/strings.ts").exists());
 }
@@ -1306,8 +1267,6 @@ fn the_environment_of_a_server_is_the_scratchs_and_nothing_of_this_process() {
     assert_eq!(environment["LANG"], "C.UTF-8");
     assert!(!environment.contains_key("NO_PROXY") && !environment.contains_key("no_proxy"));
 
-    // The search path: the recorder first, then the folder of this test's cargo, then the
-    // system's two.
     let search: Vec<PathBuf> = std::env::split_paths(&environment["PATH"]).collect();
     let cargo = std::env::var_os("CARGO")
         .or_else(|| option_env!("CARGO").map(Into::into))
@@ -1324,7 +1283,6 @@ fn the_environment_of_a_server_is_the_scratchs_and_nothing_of_this_process() {
     );
     assert!(cargo_folder.join("cargo").is_file() && cargo_folder.join("rustc").is_file());
 
-    // The six proxy variables name one address.
     let proxy = &environment["HTTP_PROXY"];
     assert!(proxy.starts_with("http://127.0.0.1:"), "{proxy}");
     for name in [
@@ -1338,8 +1296,6 @@ fn the_environment_of_a_server_is_the_scratchs_and_nothing_of_this_process() {
         assert_eq!(&environment[name], proxy, "{name}");
     }
 
-    // Nothing else: the names are exactly these (the rustup variables when this process has
-    // them).
     let mut expected: Vec<&str> = vec![
         "ALL_PROXY",
         "CARGO_HOME",
@@ -1441,7 +1397,6 @@ fn left_outside_names_what_a_server_left_beside_the_apps_folders_but_not_cargos_
     ] {
         write(path);
     }
-    // Cargo's own, and the app's.
     for path in [
         "cargo/.package-cache",
         "cargo/.package-cache-mutate",
@@ -1482,7 +1437,6 @@ fn real_servers_with_its_variable_unset_fails_with_the_sentence() {
     let _scratch = Scratch::new();
     let this_test = "real_servers_with_its_variable_unset_fails_with_the_sentence";
     if std::env::var_os("YAAR_SUPPORT_CHILD").is_some() {
-        // The child process: the one call that must fail.
         let _ = real_servers();
         return;
     }
@@ -1522,8 +1476,6 @@ fn real_servers_names_what_it_found_when_the_variable_is_empty_or_no_folder() {
     );
 }
 
-/// Waits for the registry (P6) and the downloader (P8): an empty folder holds no pinned
-/// version, and the sentence names every server of the table.
 #[test]
 fn real_servers_in_a_folder_that_lacks_a_pinned_version_names_the_servers() {
     let scratch = Scratch::new();
@@ -1603,7 +1555,6 @@ fn a_readiness_that_is_none_of_the_three_is_refused() {
     assert!(refused.is_err());
 }
 
-/// Waits for the registry (P6): the row passes through its reading with no error.
 #[test]
 fn the_registry_reads_a_row_of_the_stand_in_without_complaint() {
     let text = standin_row("standin", &["--ready", "notification"], "notification", "");
@@ -1639,7 +1590,6 @@ fn put_standin_makes_an_executable_copy_that_runs_as_the_stand_in() {
     );
     let output = run(&program, &["--version"]);
     assert_eq!(String::from_utf8_lossy(&output.stdout), "standin-lsp 1\n");
-    // A second copy under another name, in a folder that is there.
     let again = scratch.put_standin(&folder, "mine");
     assert!(again.is_file());
 }
@@ -1647,7 +1597,7 @@ fn put_standin_makes_an_executable_copy_that_runs_as_the_stand_in() {
 #[test]
 fn a_failing_script_records_every_run_and_ends_with_its_code() {
     let scratch = Scratch::new();
-    // A folder with a space and an apostrophe: the script quotes its paths.
+    // A space and an apostrophe: the script quotes its paths.
     let folder = scratch.root.join("repos").join("it's here");
     let program = scratch.put_failing(&folder, "standin-broken", 3);
     assert!(runs(&program).is_empty(), "never run, no line");
@@ -1685,12 +1635,10 @@ fn a_recording_script_leaves_a_line_and_runs_the_stand_in_with_the_same_argument
     assert_eq!(output.status.code(), Some(0));
     assert_eq!(runs(&program), ["--version"]);
 
-    // Its exit is the stand-in's: `--fail-trial --version` ends with 3.
     let broken = run(&program, &["--fail-trial", "--version"]);
     assert_eq!(broken.status.code(), Some(3));
     assert_eq!(runs(&program), ["--version", "--fail-trial --version"]);
 
-    // And it serves, through `exec`: what answers on its pipes is the stand-in.
     let mut through_it = Command::new(&program)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -1776,7 +1724,6 @@ fn a_place_in_a_version_is_read_from_git_and_in_a_past_version_from_its_text() {
     );
     assert_eq!(old.column, 4);
     assert_eq!(old.tree, Tree::Version(repo.base.clone()));
-    // On disk line 1 is `use gamma`: it holds no `alpha`.
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| place(
             &repo,
@@ -1797,7 +1744,6 @@ fn a_place_in_a_version_is_read_from_git_and_in_a_past_version_from_its_text() {
     let there = place(&repo, &ws, past.clone(), "main.sil", 2, "beta", 0);
     assert_eq!((there.line, there.column, there.tree), (2, 4, past));
 
-    // A file outside the worktree is named by its absolute path.
     let outside = scratch.root.join("outside.sil");
     std::fs::write(&outside, "x = outside\n").unwrap();
     let far = place(
@@ -1812,12 +1758,7 @@ fn a_place_in_a_version_is_read_from_git_and_in_a_past_version_from_its_text() {
     assert_eq!((far.column, far.path), (4, outside));
 }
 
-// ---------------------------------------------------------------------------------------
-// Running: a test's end of the port.
-// ---------------------------------------------------------------------------------------
-
-/// The Frame's end `Running` holds, and the Navigator's end of the same port, played by the
-/// test.
+/// The Frame's end `Running` holds, and the Navigator's end of the same port, played by the test.
 fn played() -> (Running, yaar_navigator::PortEnd) {
     let (port, end) = yaar_navigator::port();
     (Running::over(port), end)
@@ -2260,7 +2201,6 @@ fn an_export_of_a_version_git_does_not_know_is_answered_as_a_failure_with_its_re
     assert!(!asked.into.exists(), "nothing was written");
 }
 
-/// The Keeper's answer to the export of `version` into `into`, as the played Keeper gives it.
 fn exported(repo: &Repo, version: &str, into: &Path) -> Option<String> {
     let (mut running, end) = played();
     let asked = yaar_navigator::ExportAsk {
@@ -2317,7 +2257,7 @@ fn the_keepers_export_refuses_a_version_that_is_not_a_full_commit_id() {
     let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);
     let full = repo.git(&["rev-parse", "HEAD"]);
     assert_eq!(full.len(), 40, "the control: a full id is 40 characters");
-    // Each of these names the commit for git, and none is what the Keeper is asked with.
+    // Each names the commit for git, and none is what the Keeper is asked with.
     let not_full = [
         ("an abbreviated id", full[..12].to_owned()),
         ("a name of the commit", "HEAD".to_owned()),
@@ -2344,7 +2284,6 @@ fn the_keepers_export_refuses_a_version_that_is_not_a_full_commit_id() {
         );
         assert!(!into.exists(), "{what}: nothing was written");
     }
-    // The control: the full id is exported into a folder of its own, by the same helper.
     let into = scratch.root.join("navigator").join("old").join("full");
     assert_eq!(exported(&repo, &full, &into), None);
     assert!(into.join("main.sil").is_file());
@@ -2354,9 +2293,8 @@ fn the_keepers_export_refuses_a_version_that_is_not_a_full_commit_id() {
 fn the_keepers_export_whose_write_fails_leaves_no_folder_behind() {
     let scratch = Scratch::new();
     let repo = scratch.repository("plain", &[("main.sil", "use alpha\n")]);
-    // A tree git holds in its index and no file system can: one name of 300 bytes, which
-    // no system writes as a file, after a file that can be written first. The archive is
-    // made by git, and the unpack of it fails part of the way.
+    // A tree git holds in its index and no file system can: one name of 300 bytes, after a file
+    // that can be written. The archive is made by git and its unpack fails part of the way.
     let blob = repo.git(&["rev-parse", "HEAD:main.sil"]);
     let long = format!("{}.sil", "n".repeat(300));
     repo.git(&[
@@ -2392,8 +2330,8 @@ fn a_process_is_alive_while_it_runs_and_not_once_it_ended_whether_or_not_it_was_
     let pid = child.id();
     assert!(is_alive(pid));
     drop(child.stdin.take());
-    // Its output closes as it ends. What is not yet the end of the process is looked at
-    // again, with a short pause: a zombie stays one until it is waited for.
+    // The output closes before the process has surely ended, so it is looked at again with a short
+    // pause. It then stays a zombie until waited for, which `is_alive` counts as gone.
     let mut rest = Vec::new();
     child.stdout.take().unwrap().read_to_end(&mut rest).unwrap();
     let until = Instant::now() + DEADLINE;
@@ -2467,7 +2405,6 @@ fn end_reads_the_pids_of_what_was_told_and_not_yet_read() {
     child.wait().unwrap();
 }
 
-/// A process that ran and ended, and its id.
 fn ended_process() -> u32 {
     let mut child = Command::new("true").spawn().expect("start true");
     let pid = child.id();
@@ -2517,8 +2454,8 @@ fn end_reads_what_the_navigator_told_while_it_ended() {
         .expect("start cat");
     let pid = child.id();
     let (port, end) = yaar_navigator::port();
-    // A server that started as the asks ended, and was told only while the Navigator wound
-    // up: no wait and no drain before the wait could have read it.
+    // A server told only while the Navigator winds up: no wait or drain before `end`'s own wait
+    // could have read it.
     let running = Running::over_ending(port, move |_| {
         end.told
             .send_blocking(Told::Servers(vec![state('1', "standin", None, Some(pid))]))
@@ -2532,8 +2469,6 @@ fn end_reads_what_the_navigator_told_while_it_ended() {
     child.wait().unwrap();
 }
 
-/// Waits for the lifecycle (P9) and the registry (P6): a Navigator started on the stand-in's
-/// row tells its languages, and its end proves every server gone.
 #[test]
 fn a_started_navigator_tells_its_languages_and_its_end_is_clean() {
     let scratch = Scratch::new();
@@ -2546,9 +2481,8 @@ fn a_started_navigator_tells_its_languages_and_its_end_is_clean() {
     running.end();
 }
 
-/// A Navigator on the stand-in's row with its worktree on screen, and the process of the
-/// stand-in it started, read from the stand-in's own log once the log says it is ready.
-/// What the Navigator told is read by no wait.
+/// The stand-in's process is read from its own log once the log says it is ready; what the
+/// Navigator told is read by no wait.
 fn running_with_a_server(scratch: &Scratch) -> (Running, u32) {
     let log = scratch.root.join("run.log");
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
@@ -2561,8 +2495,8 @@ fn running_with_a_server(scratch: &Scratch) -> (Running, u32) {
     );
     let running = Running::start(scratch.config(&row));
     running.show(&repo, &workspace_id('1'), &repository_id('1'));
-    // The server's start is a fact that stays true once it is: looked at again, with a
-    // short pause, up to the deadline.
+    // The ready line stays in the log once written, so the log is read again with a short pause,
+    // up to the deadline.
     let until = Instant::now() + DEADLINE;
     loop {
         let lines: Vec<Value> = std::fs::read_to_string(&log)
@@ -2579,8 +2513,6 @@ fn running_with_a_server(scratch: &Scratch) -> (Running, u32) {
     }
 }
 
-/// Waits for the lifecycle (P9) and the registry (P6): the Navigator told of its server,
-/// which no wait of the test read, and `end` still proves that server's process gone.
 #[test]
 fn end_proves_gone_the_server_of_a_navigator_whose_list_no_wait_read() {
     let scratch = Scratch::new();
@@ -2590,8 +2522,6 @@ fn end_proves_gone_the_server_of_a_navigator_whose_list_no_wait_read() {
     assert!(!is_alive(pid), "end passed with the server's process alive");
 }
 
-/// Waits for the lifecycle (P9) and the registry (P6): a test that failed before its end
-/// still ends its Navigator when its `Running` is dropped by the panic.
 #[test]
 fn a_running_dropped_by_a_panic_ends_its_navigator_and_its_servers() {
     let scratch = Scratch::new();
@@ -2611,11 +2541,6 @@ fn a_running_dropped_by_a_panic_ends_its_navigator_and_its_servers() {
     );
 }
 
-// ---------------------------------------------------------------------------------------
-// Loopback and the packing of downloads.
-// ---------------------------------------------------------------------------------------
-
-/// The `host:port` a loopback listens on.
 fn address_of(loopback: &Loopback) -> String {
     loopback
         .url("")
@@ -2625,8 +2550,6 @@ fn address_of(loopback: &Loopback) -> String {
         .to_owned()
 }
 
-/// One request on a fresh connection, written as given, and everything the listener
-/// answered until it closed.
 fn exchange(loopback: &Loopback, request: &str) -> Vec<u8> {
     let mut connection = std::net::TcpStream::connect(address_of(loopback))
         .expect("connect to the loopback listener");
@@ -2636,7 +2559,6 @@ fn exchange(loopback: &Loopback, request: &str) -> Vec<u8> {
     answer
 }
 
-/// The status line, headers (names lowercased) and body of an answer.
 fn split_answer(answer: &[u8]) -> (String, Vec<(String, String)>, Vec<u8>) {
     let at = answer
         .windows(4)
@@ -2673,8 +2595,6 @@ fn a_loopback_serves_a_file_and_keeps_the_request_line_and_the_headers_in_order(
     assert!(headers.contains(&("content-length".to_owned(), "4".to_owned())));
     assert_eq!(body, [0, 1, 2, 255]);
 
-    // The client has the answer and `heard` holds the request. That it was kept before the
-    // answer was written is shown by the next test.
     assert_eq!(
         loopback.heard(),
         [Heard {
@@ -2699,9 +2619,9 @@ fn a_loopback_serves_a_file_and_keeps_the_request_line_and_the_headers_in_order(
 
 #[test]
 fn a_loopback_keeps_the_request_before_it_writes_the_answer() {
-    // An answer far larger than the buffers of both ends of the connection: the listener's
-    // write cannot finish until the client reads, so a listener that kept the request after
-    // its write has not kept it when the client holds the first byte of the answer.
+    // An answer far larger than both ends' buffers: the listener's write cannot finish until the
+    // client reads, so a listener that kept the request after its write has not kept it when the
+    // client holds the first byte.
     let loopback = Loopback::serve(vec![("big".to_owned(), vec![7; 32 << 20])]);
     let mut connection = std::net::TcpStream::connect(address_of(&loopback))
         .expect("connect to the loopback listener");
@@ -2818,7 +2738,6 @@ fn two_loopbacks_are_two_ports_and_each_hears_its_own() {
     assert!(two.heard().is_empty());
 }
 
-/// The entries of a `.tar.gz`: raw path, bytes, mode.
 fn unpacked(bytes: &[u8]) -> Vec<(String, Vec<u8>, u32)> {
     let mut archive = tar::Archive::new(flate2::read::GzDecoder::new(bytes));
     archive

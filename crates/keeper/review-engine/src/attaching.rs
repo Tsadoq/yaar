@@ -1,18 +1,11 @@
-//! Attaching a review to the user's next message, detaching it, and the session a CLI
-//! started for a review takes it. Built by the engine's package "attaching and sending" of
-//! slice 6.
-
 use yaar_store::{AttachedRecord, ReviewId, ReviewRecord, SessionRecord};
 
 use crate::engine::{EngineError, Reviews};
 use crate::review::{Attachment, Offer, SessionNow};
 
 impl Reviews {
-    /// Attaches `review`, or one of its threads alone, by [`crate::Review::attach_with`],
-    /// and keeps what is attached in the Store under the engine's turn; gives what to
-    /// offer. `sessions` are the sessions of the review's workspace as the Keeper knows
-    /// them now. Refused as `attach_with` refuses, and with [`EngineError::UnknownReview`];
-    /// nothing is kept then.
+    /// Attaches `review`, or one thread of it, and keeps that in the Store. `sessions` are the
+    /// workspace's sessions as the Keeper knows them now. Nothing is kept when refused.
     pub fn attach(
         &self,
         review: &ReviewId,
@@ -30,43 +23,37 @@ impl Reviews {
         Ok(offer)
     }
 
-    /// Takes the attachment of `review` away, and keeps that; every comment it would have
-    /// carried stays an unsent draft. Nothing attached is no error.
+    /// Every comment the attachment would have carried stays an unsent draft. Nothing attached is
+    /// no error.
     pub fn detach(&self, review: &ReviewId) -> Result<(), EngineError> {
         let _turn = self.turn();
-        // A review that is not kept is refused, not detached.
+        // Refuses a review the Store does not hold instead of detaching nothing.
         self.review(review)?;
         self.store.set_attached(review, None)?;
         Ok(())
     }
 
-    /// `session` starts in a terminal the app opened for `review`, the launcher of a CLI
-    /// offered when the review was attached: the session takes that review, as the first
-    /// rule of a session that starts, before those of [`crate::takeover`], as long as the
-    /// review belongs to no agent or to a session of the same CLI that does not run; else
-    /// it is as [`Reviews::session_started`]. Kept under the engine's turn before this
-    /// returns; gives the session's review, whose attachment stays as it was.
+    /// A session started in a terminal the app opened for `review` takes it, before the rules of
+    /// [`crate::takeover`], if the review has no agent or one of the same CLI that does not run;
+    /// else as [`Reviews::session_started`]. The attachment is left as it was.
     pub fn session_started_for(
         &self,
         session: &SessionRecord,
         review: &ReviewId,
     ) -> Result<ReviewId, EngineError> {
-        // The turn is let go before the general rule takes it: it is not reentrant.
+        // The turn is released before the general rule takes it: it is not reentrant.
         if self.takes_for(session, review)? {
             return Ok(review.clone());
         }
         self.session_started(session)
     }
 
-    // Whether `session` takes `review`, the review its terminal was opened for, and has
-    // taken it: kept, under the turn, before this returns.
     fn takes_for(&self, session: &SessionRecord, review: &ReviewId) -> Result<bool, EngineError> {
         let _turn = self.turn();
         let Some(bound) = self.store.review(review)? else {
             return Ok(false);
         };
         let reviews = self.store.reviews_of(&session.workspace)?;
-        // A session holds one review: the one it has already is the one it keeps.
         let holds_one = reviews
             .iter()
             .any(|held| held.agent.as_deref() == Some(session.id.as_str()));
@@ -82,10 +69,8 @@ impl Reviews {
     }
 }
 
-// Whether `review` may be taken by a session of the CLI `taker` runs: it belongs to no
-// agent, or to a session of that CLI that does not run. A session the Store does not list
-// does not run, and its CLI is not known to differ: the offer made for such a review was
-// that of every CLI, and taking it is what accepting the offer means.
+// A session the Store does not list does not run. Its CLI is not known to differ: the offer
+// made for such a review was that of every CLI.
 fn free_to_take(review: &ReviewRecord, sessions: &[SessionRecord], taker: &SessionRecord) -> bool {
     let Some(holder) = review.agent.as_deref() else {
         return true;

@@ -1,6 +1,3 @@
-//! Component tests: the base of a workspace and the changes counted from it, through the
-//! calls the Keeper makes, in real repositories the tests make and with a real database.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -46,7 +43,6 @@ fn changed(path: &str, change: Change) -> ChangedPath {
     }
 }
 
-/// The ids git itself lists for these arguments of `rev-list`, newest first.
 fn rev_list(repo: &Path, args: &[&str]) -> Vec<String> {
     git(repo, &[&["rev-list"], args].concat())
         .lines()
@@ -65,7 +61,6 @@ fn refused(result: Result<impl std::fmt::Debug, WorkspaceError>) -> Refusal {
     }
 }
 
-// WS-02.
 #[test]
 fn with_nothing_set_the_base_is_the_default_branch_and_the_changes_count_from_where_the_branch_left_it()
  {
@@ -131,8 +126,8 @@ fn with_nothing_set_the_base_is_the_default_branch_and_the_changes_count_from_wh
 fn in_a_clone_the_default_base_is_the_branch_the_remote_recorded_and_not_the_local_copy_of_it() {
     let scratch = Scratch::new();
     let clone = a_clone(&scratch);
-    // The remote moves on and is fetched; the local `main` stays where it was, and the
-    // branch is made from the remote's.
+    // The remote moves on and is fetched; local `main` stays, and the branch is made from the
+    // remote's.
     let pusher = scratch.join("pusher");
     let remote = scratch.join("remote.git");
     git(
@@ -172,9 +167,8 @@ fn in_a_clone_the_default_base_is_the_branch_the_remote_recorded_and_not_the_loc
     );
 }
 
-/// The Workspaces of a Keeper that started again on the database of the one before, after
-/// what a Window does first with it: it asks for the list, which has to hold the
-/// workspace still, and opens the folder again, which has to give the same workspace.
+/// A Keeper started again on the database of the one before, after what a Window does first:
+/// list, then open the folder again; both must give the same workspace.
 fn restarted(scratch: &Scratch, folder: &Path, workspace: &WorkspaceId) -> Workspaces {
     let keeper = workspaces(scratch);
     let listed: Vec<WorkspaceId> = keeper
@@ -189,7 +183,6 @@ fn restarted(scratch: &Scratch, folder: &Path, workspace: &WorkspaceId) -> Works
     keeper
 }
 
-// WS-04.
 #[test]
 fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives_the_keeper() {
     let scratch = Scratch::new();
@@ -224,8 +217,6 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     };
     assert_eq!(keeper.changes(&workspace).expect("changes"), since_main);
 
-    // To a branch: it replaces the default, in the base and in what the changes count
-    // from.
     let since_release = Changes {
         comparison: Comparison::SinceBase {
             base: set_by_the_user("release"),
@@ -252,10 +243,6 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     );
     assert_eq!(keeper.changes(&workspace).expect("changes"), since_release);
 
-    // The Keeper restarts: every Workspaces and every Store is dropped, and new ones
-    // are opened on the same database file. A Window that comes back asks for the list
-    // first, and its user may open the folder again: both keep the workspace anew, and
-    // neither may lose its base.
     drop(keeper);
     let keeper = restarted(&scratch, &repo, &workspace);
     assert_eq!(
@@ -264,8 +251,6 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     );
     assert_eq!(keeper.changes(&workspace).expect("changes"), since_release);
 
-    // To a commit, written the way a user writes one: it is kept as the commit it names
-    // now.
     let since_third = Changes {
         comparison: Comparison::SinceBase {
             base: set_by_the_user(&third),
@@ -301,7 +286,6 @@ fn a_base_the_user_set_to_a_branch_or_a_commit_replaces_the_default_and_outlives
     assert_eq!(ids(&changes.commits), [fifth, fourth]);
 }
 
-// WS-06.
 #[test]
 fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_upstream_and_what_is_uncommitted()
  {
@@ -309,9 +293,7 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
     let clone = a_clone(&scratch);
     write(&clone, "a.txt", "three\n");
     let third = commit_all(&clone, "third, pushed to another branch");
-    // The third commit reaches the remote under another branch. It is still not on the
-    // upstream, which is what the row asks about: "on no branch of any remote" would
-    // list one commit here, and "not on the upstream" lists two.
+    // The third commit reaches the remote under another branch: it is still not on the upstream.
     let to_another_branch = format!("{third}:refs/heads/topic");
     git(&clone, &["push", "--quiet", "origin", &to_another_branch]);
     write(&clone, "b.txt", "new, and committed\n");
@@ -331,14 +313,12 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
             commit(&fourth, "fourth, not pushed"),
             commit(&third, "third, pushed to another branch"),
         ],
-        // What is not committed, and nothing of the two commits: `b.txt` is theirs.
         files: vec![
             changed("a.txt", Change::Modified),
             changed("untracked.txt", Change::Added),
         ],
     };
 
-    // The base is the branch the remote recorded, and `main` is its local twin.
     assert_eq!(
         workspaces.base(&workspace).expect("base"),
         Some(default_base("origin/main"))
@@ -355,23 +335,18 @@ fn on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_
         "{third} is on origin/topic"
     );
 
-    // With no default recorded by the remote the base is `main` itself, and the
-    // workspace is on it all the same.
     git(&clone, &["remote", "set-head", "origin", "-d"]);
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
         not_on_the_upstream(default_base("main"))
     );
 
-    // Pushed, the commits are on the upstream; what is not committed stays.
     git(&clone, &["push", "--quiet", "origin", "main"]);
     let changes = workspaces.changes(&workspace).expect("changes");
     assert_eq!(changes.commits, vec![]);
     assert_eq!(changes.files.len(), 2);
 }
 
-// WS-06, where the upstream is a local branch: a base branch may follow a branch of its
-// own repository, and that needs no remote at all.
 #[test]
 fn a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branch_and_what_is_uncommitted()
  {
@@ -401,8 +376,6 @@ fn a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branc
 
     let workspaces = workspaces(&scratch);
     let workspace = open(&workspaces, &repo);
-    // `develop` is the nearest of the usual names, so it is the base, and the workspace
-    // is on it.
     assert_eq!(
         workspaces.base(&workspace).expect("base"),
         Some(default_base("develop"))
@@ -420,28 +393,25 @@ fn a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branc
                 commit(&fourth, "fourth, on develop"),
                 commit(&third, "third, on develop"),
             ],
-            // What is not committed, and nothing of the two commits: `b.txt` is theirs.
             files: vec![
                 changed("a.txt", Change::Modified),
                 changed("untracked.txt", Change::Added),
             ],
         }
     );
-    // Exactly the commits that are not on the branch `main`, as git lists them.
     assert_eq!(
         ids(&changes.commits),
         rev_list(&repo, &["HEAD", "--not", "refs/heads/main"])
     );
 }
 
-// BASE-01.
 #[test]
 fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remote_branch_are_listed()
  {
     let scratch = Scratch::new();
     let clone = a_clone(&scratch);
-    // One commit that reaches the remote under another branch, one that reaches only a
-    // second remote, then two that reach no remote at all. `main` follows nothing.
+    // One commit reaches the remote under another branch, one only a second remote, two no remote.
+    // `main` follows nothing.
     write(&clone, "a.txt", "three\n");
     let on_a_remote_branch = commit_all(&clone, "third, pushed to another branch");
     git(&clone, &["push", "--quiet", "origin", "main:topic"]);
@@ -480,8 +450,7 @@ fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remo
 
     let changes = workspaces.changes(&workspace).expect("changes");
     assert_eq!(changes, on_no_remote_branch(default_base("origin/main")));
-    // Exactly those: git's own list of what is on no branch of any remote. The third
-    // commit is not on `origin/main` and is left out, because `origin/topic` has it.
+    // git's own list of what is on no branch of any remote.
     assert_eq!(
         ids(&changes.commits),
         rev_list(&clone, &["HEAD", "--not", "--remotes"])
@@ -500,7 +469,6 @@ fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remo
         "{on_a_second_remote} is on a branch of the second remote"
     );
 
-    // The same with no default recorded by the remote: the base is `main` itself.
     git(&clone, &["remote", "set-head", "origin", "-d"]);
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
@@ -508,9 +476,6 @@ fn on_a_base_branch_with_no_upstream_and_a_remote_exactly_the_commits_on_no_remo
     );
 }
 
-// BASE-02. The offer to set a base is, as far as Workspaces makes it, the comparison
-// that says there is nothing to compare with and why; the line that offers is the
-// pane's.
 #[test]
 fn with_no_remote_the_uncommitted_changes_are_listed_with_nothing_to_compare_and_a_base_can_be_set()
 {
@@ -534,7 +499,6 @@ fn with_no_remote_the_uncommitted_changes_are_listed_with_nothing_to_compare_and
                 why: NoComparison::NoRemote,
             },
             counted_from: Some(CommitId::new(&second)),
-            // Not the whole history of a repository that has nowhere to push to.
             commits: vec![],
             files: vec![
                 changed("a.txt", Change::Modified),
@@ -543,7 +507,6 @@ fn with_no_remote_the_uncommitted_changes_are_listed_with_nothing_to_compare_and
         }
     );
 
-    // The offer, taken: with a base set there is something to compare with.
     workspaces.set_base(&workspace, &first).expect("set base");
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
@@ -581,20 +544,17 @@ fn a_set_base_is_kept_by_the_name_of_its_branch_or_as_the_full_id_of_its_commit(
             .name
     };
 
-    // A branch, local or of a remote, however it is written: followed by its name.
     assert_eq!(kept("release"), "release");
     assert_eq!(kept("origin/main"), "origin/main");
     assert_eq!(kept("refs/heads/release"), "release");
     assert_eq!(kept("heads/release"), "release");
     assert_eq!(kept("refs/remotes/origin/main"), "origin/main");
     assert_eq!(kept("remotes/origin/main"), "origin/main");
-    // Anything else: the commit it names now, by its full id.
     assert_eq!(kept("v1"), first);
     assert_eq!(kept(&second[..10]), second);
     assert_eq!(kept("HEAD"), second);
     assert_eq!(kept("release~0"), first);
 
-    // What names nothing is refused, and leaves the base that was set.
     for text in ["no-such-branch", "", "--all", "release..feat"] {
         assert_eq!(
             refused(workspaces.set_base(&workspace, text)),
@@ -650,8 +610,8 @@ fn a_set_base_that_git_no_longer_knows_is_still_the_base_and_leaves_nothing_to_c
     );
 }
 
-// git reads a short name as a tag before it reads it as a branch. A base and an upstream
-// are branches: a tag that happens to have their name must never be counted from.
+// git reads a short name as a tag before a branch; a tag named like the base or upstream must never
+// be counted from.
 #[test]
 fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
     let scratch = Scratch::new();
@@ -665,7 +625,6 @@ fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
     git(&repo, &["switch", "--quiet", "-c", "feat"]);
     write(&repo, "b.txt", "new\n");
     let third = commit_all(&repo, "third, on the branch");
-    // Each tag points somewhere else than the branch of its name.
     git(&repo, &["tag", "main", &first]);
     git(&repo, &["tag", "release", &second]);
     assert_eq!(git(&repo, &["rev-parse", "main^{commit}"]), first);
@@ -681,7 +640,6 @@ fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
             files,
         };
 
-    // The default base: the branch `main`, which is at the second commit.
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
         since(
@@ -692,8 +650,6 @@ fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
         )
     );
 
-    // A base the user set by the name of a branch: the branch `release`, which is at
-    // the first commit.
     assert_eq!(
         workspaces
             .set_base(&workspace, "release")
@@ -716,7 +672,6 @@ fn a_tag_with_the_name_of_the_base_branch_is_not_taken_for_the_base() {
         )
     );
 
-    // The branch goes and the tag stays: the base is gone, not moved to the tag.
     git(&repo, &["branch", "--quiet", "-D", "release"]);
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
@@ -750,7 +705,6 @@ fn a_tag_with_the_name_of_the_upstream_is_not_taken_for_the_upstream() {
 
     let workspaces = workspaces(&scratch);
     let workspace = open(&workspaces, &clone);
-    // On the base branch: the second commit is on the upstream, whatever the tag says.
     assert_eq!(
         workspaces.changes(&workspace).expect("changes"),
         Changes {
@@ -764,7 +718,6 @@ fn a_tag_with_the_name_of_the_upstream_is_not_taken_for_the_upstream() {
         }
     );
 
-    // On a branch off it: counted from where it left the branch of the remote.
     git(&clone, &["switch", "--quiet", "--no-track", "-c", "feat"]);
     write(&clone, "b.txt", "new\n");
     let fourth = commit_all(&clone, "fourth, on the branch");
@@ -816,8 +769,8 @@ fn with_nothing_committed_every_file_is_new_and_there_is_nothing_to_compare_with
         nothing_committed
     );
 
-    // Another branch has commits, and this one, made apart from it, still has none: the
-    // base is found, and shares no commit with a branch that has no commit.
+    // Another branch has commits and this one, made apart from it, has none: the base is found and
+    // shares no commit.
     commit_all(&repo, "first");
     git(&repo, &["switch", "--quiet", "--orphan", "apart"]);
     write(&repo, "a.txt", "never committed here\n");

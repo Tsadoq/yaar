@@ -1,55 +1,7 @@
 #!/bin/bash
-# The step "What the Mac bundle holds" of the jobs macos and release-sign-macos: the app as
-# it ships, read from the bundle, and the two files users download, read from the files.
-#
-#   .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices> [<packages-dir>]
-#
-# Fails with a sentence naming what is wrong when any of these does not hold:
-#   - Contents/Info.plist: CFBundleIdentifier io.github.tsadoq.yaar, CFBundleExecutable
-#     yaar-review, CFBundlePackageType APPL, CFBundleShortVersionString and CFBundleVersion
-#     both <version>, LSMinimumSystemVersion 12.0, and neither LSUIElement nor
-#     LSBackgroundOnly set (the bundle is an application with a Dock icon: PKG-08);
-#   - Contents/MacOS holds yaar-review only; Contents/Helpers holds exactly yaar-keeper,
-#     yaar-claude-hook, yaar-claude-tools and yaar-pi-report; each of the five is executable
-#     and `lipo -archs` gives the processors YAAR_EXPECT_ARCHS names (default "x86_64 arm64";
-#     a builder on a Mac with one target sets "arm64");
-#   - each of the five is signed under the hardened runtime (`codesign -dv` shows
-#     flags=0x10000(runtime)) with no entitlement (`codesign -d --entitlements -` prints
-#     none), and with its identifier, in every processor's slice (`codesign -a <processor>`:
-#     without it codesign reports the slice of the processor it runs on only):
-#     io.github.tsadoq.yaar (the bundle),
-#     io.github.tsadoq.yaar.keeper, io.github.tsadoq.yaar.claude-hook,
-#     io.github.tsadoq.yaar.claude-tools, io.github.tsadoq.yaar.pi-report;
-#   - no file named standin-lsp, standin-agent or yaar-script anywhere in the bundle;
-#   - Contents/Resources/THIRD-PARTY-NOTICES.txt has the bytes of <notices>, and
-#     Contents/Resources/LICENSE is the LICENSE of the repository.
-# With <packages-dir>, which holds yaar-review-<version>-macos-universal.zip and .dmg made
-# from that app, also:
-#   - the .zip unpacked with `ditto -x -k` into a temporary folder holds YAAR.app and nothing
-#     else, and that app is <YAAR.app> file for file and byte for byte (`diff -r`, which also
-#     names a file one side lacks);
-#   - the .dmg mounted read-only (`hdiutil attach -nobrowse -readonly -mountpoint <temp>`,
-#     detached at the end whatever happens) holds YAAR.app and a link Applications to
-#     /Applications, and that app is <YAAR.app> in the same way; so the notices and the
-#     Info.plist users get by either file are those checked above.
-# "The same way" also covers the modes: `diff -r` compares names and bytes and not modes, so
-# each of the five is executable in the app of the .zip and of the .dmg, and every file of
-# either copy has the mode it has in <YAAR.app>.
-#
-# Exit codes: 0 all hold; 1 one does not; 2 usage error.
-#
-# Four readings of the list above:
-#   - An app signed ad hoc shows flags=0x10002(adhoc,runtime), so the runtime is taken from
-#     the word in the brackets, not from the number.
-#   - The Window is read from the bundle, whose signature seals it: `codesign -dv` of the
-#     bundle names the identifier and the flags.
-#   - A build on one processor (YAAR_EXPECT_ARCHS names one) is packaged by package-macos.sh
-#     as yaar-review-<version>-macos-<that processor>.zip and .dmg, and those are read.
-#   - "Holds YAAR.app and a link Applications" lets through, at the root of the mounted
-#     volume, only the system's own bookkeeping by exact name: .fseventsd, .Trashes and
-#     .Spotlight-V100. Every other entry, a hidden one too, fails the check.
-#   - The image is detached at the end whatever happens; a detach that fails even when forced
-#     says so, and ends a check that had passed with exit 1.
+# The app as it ships and the .zip and .dmg users download: Info.plist, programs, signatures.
+# .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices> [<packages-dir>]
+# YAAR_EXPECT_ARCHS (default "x86_64 arm64") is what `lipo -archs` must give.
 set -euo pipefail
 
 SELF=$(basename "$0")
@@ -61,7 +13,6 @@ usage() { echo "usage: $SELF <YAAR.app> <version> <notices> [<packages-dir>]" >&
 APP=$1; VER=$2; NOTICES=$3; PKGS=${4:-}
 
 fail() { echo "$SELF: $*" >&2; exit 1; }
-# A command that fails with no sentence of its own still ends the run with one.
 trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
 
 [ -d "$APP" ] || fail "$APP is not a folder: no app to check"
@@ -81,7 +32,6 @@ cleanup() {
       if [ "$SECONDS" -ge "$deadline" ]; then
         if ! forced=$(hdiutil detach -quiet -force "$MNT" 2>&1); then
           echo "$SELF: could not detach $MNT: hdiutil last said \"$last\", and when forced \"$forced\"" >&2
-          # A volume still mounted ends a check that passed with 1; a check that failed keeps its own status.
           if [ "$status" -eq 0 ]; then status=1; fi
         fi
         break
@@ -114,7 +64,6 @@ for key in LSUIElement LSBackgroundOnly; do
   fi
 done
 
-# What a folder holds, by name, sorted, hidden files included.
 names_in() { (cd "$1" && find . -mindepth 1 -maxdepth 1 -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'); }
 [ -d "$APP/Contents/MacOS" ] || fail "$APP/Contents/MacOS is missing"
 [ -d "$APP/Contents/Helpers" ] || fail "$APP/Contents/Helpers is missing"
@@ -124,7 +73,6 @@ got=$(names_in "$APP/Contents/Helpers")
 want="yaar-claude-hook yaar-claude-tools yaar-keeper yaar-pi-report"
 [ "$got" = "$want" ] || fail "Contents/Helpers holds \"$got\", not \"$want\""
 
-# Processors, as a sorted set, so that the order lipo prints them in does not matter.
 sorted_words() { printf '%s\n' "$1" | tr -s ' ' '\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
 EXPECT_ARCHS=${YAAR_EXPECT_ARCHS:-x86_64 arm64}
 WANT_ARCHS=$(sorted_words "$EXPECT_ARCHS")
@@ -147,8 +95,7 @@ for entry in "${PROGRAMS[@]}"; do
   got=$(sorted_words "$archs")
   [ "$got" = "$WANT_ARCHS" ] || fail "$rel holds the processors \"$archs\", not \"$EXPECT_ARCHS\""
 
-  # codesign reports the slice of the processor it runs on unless it is told which: ask for
-  # each processor the program holds.
+  # codesign reports the slice of the processor it runs on unless told which.
   for arch in "${ARCH_LIST[@]}"; do
     info=$(codesign -dv -a "$arch" "$signed" 2>&1) || fail "$rel is not signed in its $arch slice: codesign says: $info"
     got=$(printf '%s\n' "$info" | sed -n 's/^Identifier=//p')
@@ -178,11 +125,9 @@ if [ -z "$PKGS" ]; then
   exit 0
 fi
 
-# "<mode> <path>" of every file of a tree, sorted: diff -r does not read modes.
 modes_in() { (cd "$1" && find . -type f -exec stat -f '%Lp %N' {} + | LC_ALL=C sort); }
 APP_MODES=$(modes_in "$APP") || fail "the modes of the files of $APP could not be read"
 
-# A file users download holds this very app, byte for byte, with the modes the app has.
 same_app() { # <the file's name> <the app in it>
   local diffs rel got entry only_app only_copy
   if ! diffs=$(diff -r "$APP" "$2" 2>&1); then
@@ -192,7 +137,7 @@ same_app() { # <the file's name> <the app in it>
     rel=${entry%%|*}
     [ -x "$2/Contents/$rel" ] || fail "$rel is not executable in the app of $1 (mode $(stat -f %Lp "$2/Contents/$rel")): the app would not start"
   done
-  # The ERR trap above is not inherited by a function, so each failing read says so itself.
+  # The ERR trap is not inherited by a function, so each failing read says so itself.
   got=$(modes_in "$2") || fail "the modes of the files of the app in $1 could not be read"
   if [ "$got" != "$APP_MODES" ]; then
     only_app=$(comm -23 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';') ||
@@ -220,8 +165,6 @@ mkdir "$WORK/mnt"
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$WORK/mnt" "$DMG" > /dev/null ||
   fail "$(basename "$DMG") cannot be mounted"
 MNT="$WORK/mnt"
-# The volume may carry the system's own bookkeeping, named exactly below; any other entry,
-# hidden or not, shows and fails.
 shown=$(cd "$MNT" && find . -mindepth 1 -maxdepth 1 ! -name .fseventsd ! -name .Trashes ! -name .Spotlight-V100 -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
 [ "$shown" = "Applications YAAR.app" ] || fail "$(basename "$DMG") holds \"$shown\", not YAAR.app and Applications"
 [ -L "$MNT/Applications" ] || fail "Applications in $(basename "$DMG") is not a link"

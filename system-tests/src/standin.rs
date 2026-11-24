@@ -1,104 +1,6 @@
-//! The stand-in agent CLI of the system tests: the program `standin-agent`, and the script
-//! a test hands it.
-//!
-//! It stands in for the agent CLI itself, and for nothing of the app. A test puts it on
-//! the search path of its world under the names `claude`, `pi` and `otheragent`, and starts
-//! it as a user starts a CLI: from a launcher of the app, or by its name typed in a shell
-//! of the app. It runs in the app's terminal, reads the keys typed there, and writes there
-//! what such a CLI writes.
-//!
-//! Started as `claude` it behaves as Claude Code does towards the app's pieces: it reads
-//! the plugin folders `CLAUDE_CODE_PLUGIN_DIRS` names, and for each event of its script
-//! runs every command `hooks/hooks.json` of those folders gives for that event, through
-//! `/bin/sh -c` in the folder it was started in, with the event's input on its standard
-//! input, as the shapes recorded from the real Claude Code have it, and waits for it. The
-//! file is Claude Code's plugin format, as the crate `yaar-adapter-claude` shows it:
-//! `{"hooks": {"<event>": [{"matcher": "<tools parted by |>", "hooks": [{"type":
-//! "command", "command": "<command>"}]}]}}`, a group with no `matcher` being for every
-//! tool. The hook's environment is the stand-in's own, with `CLAUDE_PID` (its process
-//! id), `CLAUDECODE=1` and `CLAUDE_PROJECT_DIR` (the folder it was started in) added, as
-//! the recordings show Claude Code's hooks get. A hook that has not ended within 10 s is
-//! killed and written down so. That command is the app's own hook
-//! program, which reports to the Keeper over its socket: the stand-in knows neither the
-//! Keeper, nor the Link, nor the socket. As `otheragent` it runs no hook at all: a CLI the
-//! app does not support, that only edits files. With [`IGNORE_PIECES`] set it runs no hook
-//! either, as a CLI started around the app's pieces.
-//!
-//! Started as `pi` it behaves as pi does with the app's extension loaded: the pi dialect.
-//! It is found by its name on the search path, as pi is, whether typed in a shell or run by a
-//! launcher, and finds its extensions as pi does: each path of the top-level array
-//! `extensions` of `<HOME>/.pi/agent/settings.json` that names a file, and each path given
-//! with `-e`. A path that names no file is passed over, and settings that are not a JSON
-//! object give none, as pi does; it reads nothing else of pi's and writes nothing there. It
-//! writes its arguments and the extensions it found down as they came ([`StandinLog::args`],
-//! [`StandinLog::extensions`]), and runs as pi only when it found one: a pi whose user said
-//! no, or was not asked, loads no extension and reports nothing. It cannot run the
-//! extension, which is TypeScript: it does what the extension does instead, and only that.
-//! For each moment of its script it runs the reporting program the shell of the app names
-//! in `YAAR_PI_REPORT`, with no shell between, so that the program's parent is the
-//! stand-in, as it is pi for the extension; it writes the
-//! report's payload on the program's standard input, in the shape the crate doc of
-//! `yaar-adapter-pi` gives (the `event`, `sessionId`, `sessionFile`, `cwd` and the keys of
-//! the event), and waits for it to end, at most 10 s, and writes down
-//! `Did::Hook { event: <pi's event>, answer: <what the program printed> }`. With no
-//! `YAAR_PI_REPORT`, or with [`IGNORE_PIECES`], it reports nothing. Its session's id is one
-//! it makes, or the one `--session <id>` names, as `pi --session` resumes it; its session
-//! file is `<id>.jsonl` in the folder `--session-dir` names, else in
-//! `<HOME>/.pi/agent/sessions/standin`, written nowhere. The moments, by step:
-//! its start `session_start` (`reason` `startup`); [`Step::Turn`], at the line's Enter,
-//! `input` (`source` `interactive`, `streamingBehavior` null), the review of its answer kept
-//! as the last review received, then `agent_start`; [`Step::SelfTurn`] `input` with `source`
-//! `extension`, then `agent_start`; [`Step::Read`], [`Step::Edit`], [`Step::Write`] and
-//! [`Step::Shell`] `tool_call` and `tool_result` of `read`, `edit` (with `details.patch`, the
-//! one hunk of the line it added and no line of context: pi's own patch carries up to four
-//! lines of context on each side, so pi names a wider range of lines for the same edit, as
-//! the recordings show), `write` and `bash`, the file or the command really read, changed,
-//! written or run between; [`Step::End`] `agent_settled` with `aborted` false, and
-//! an Esc during a turn `agent_settled` with `aborted` true and nothing printed, the
-//! script going on after the next `end`; [`Step::Exit`] `session_shutdown` (`reason`
-//! `quit`); [`Step::Reply`] the call of the reply tool, `reply_to_thread` with `--tool`,
-//! written down as `Did::Tool` with what the program printed. A line typed during a
-//! [`Step::Hold`] inside a turn is a message pi takes while it works, as Enter during a tool
-//! does in pi: `input` with `streamingBehavior` `steer` at its Enter, its review kept, and
-//! the message goes with the run that is open. [`Step::Ask`] is no step of pi's, which asks
-//! no permission: a script that holds one is refused at its line, as a script line it cannot
-//! read. It prints no progress sequence and no interrupt mark: pi reports both itself. A
-//! report whose program cannot be started, or does not end in 10 s, is
-//! written down with what it printed, which is nothing then, and the script goes on, as pi
-//! goes on when the extension's report fails.
-//!
-//! The report of its start, as Claude Code's `SessionStart` or as pi's `session_start`, is the
-//! first thing it does after it reads its arguments; a [`Step::HoldAtStart`] at the head of
-//! its script holds it before that, which is how a test sees the app with a CLI that is
-//! started and has not reported.
-//!
-//! Its script is a file, named by [`SCRIPT_VARIABLE`], of [`Step`]s, one to a line. It
-//! decides nothing: it follows the script and the keys. What reached it, every byte read
-//! from its terminal, every hook's answer and its own arguments, it writes down in the
-//! file [`LOG_VARIABLE`] names: the agent's side of a test, read with [`StandinLog`].
-//!
-//! Its terminal. It turns echo, line editing, the signals of keys, flow control and the
-//! change of a carriage return into a line feed off, so that Esc and Ctrl-C reach it as
-//! bytes. Output processing stays on but for the change of a line feed into a carriage
-//! return and a line feed: the stand-in ends each line with `\r\n` itself, so that each
-//! line starts at the left and the bytes it writes, [`INTERRUPT_MARK`] among them, are the
-//! bytes the terminal passes on. Every step writes a line of its own in the terminal, after the
-//! hooks before it and before the hooks after it: `● Read <path>`, `● Edit <path>`,
-//! `● Write <path>`, `● Bash <command>`, `● Hold <path>`, `● Reply <thread id>`, and
-//! `● Done` at the end of a turn. A test that reads the screen looks for those lines and
-//! for [`PROMPT`].
-//!
-//! A message typed while a turn runs goes the way Claude Code takes it. During a
-//! [`Step::Hold`], which stands for a tool that runs, the line is queued: its
-//! `UserPromptSubmit` runs when Enter is read, the hook's review among it, and the message
-//! goes with the turn that runs. A line read at any other moment is held for the next
-//! [`Step::Turn`].
-//!
-//! It stands in for the reply tool too. The first [`Step::Reply`] starts the tool server
-//! the plugins' `.mcp.json` names, `yaar`, as a child with its standard input and output
-//! piped, and keeps it for the session; each reply is a `tools/call` to it, between the
-//! `PreToolUse` and `PostToolUse` of the tool as Claude Code lists it. The thread a reply
-//! names is counted in the last review a `UserPromptSubmit` hook answered with.
+//! The stand-in agent CLI, run as `claude`, `pi` or `otheragent`: it follows the script file
+//! [`SCRIPT_VARIABLE`] names and logs what reached it to the file [`LOG_VARIABLE`] names.
+//! Tests read its screen for each step's line (`● Read <path>` ... `● Done`) and for [`PROMPT`].
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -115,124 +17,59 @@ use serde_json::{Value, json};
 
 use crate::dialect::Dialect;
 
-/// The variable that names the stand-in's script.
 pub const SCRIPT_VARIABLE: &str = "STANDIN_SCRIPT";
 
-/// The variable that names the file the stand-in writes down what reached it in.
 pub const LOG_VARIABLE: &str = "STANDIN_LOG";
 
-/// The variable that, set to `1`, makes the stand-in run none of the app's pieces.
 pub const IGNORE_PIECES: &str = "STANDIN_IGNORE_PIECES";
 
-/// What the stand-in prints when it is ready for the user's next message, at the start
-/// of a line: a test that types a message waits for it first, and looks for the stand-in's
-/// own words, never for a shell's prompt.
 pub const PROMPT: &str = "standin> ";
 
-/// One step of a stand-in's script.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// Prints [`PROMPT`] and waits for a line typed at it, ended by Enter: the user's
-    /// message. Its submission starts a turn: `UserPromptSubmit`, and then the progress
-    /// sequence of a turn that works, `ESC ] 9 ; 4 ; 3 ; BEL`, as Claude Code writes it. A
-    /// line typed between the steps of a turn is held until the turn ends, and then starts
-    /// the next without a prompt printed. A line typed during a [`Step::Hold`], which
-    /// stands for a tool that runs, is a message Claude Code queues: `UserPromptSubmit`
-    /// runs for it at once, when Enter is read, and the message goes with the turn that
-    /// runs; it starts no turn of its own and is not held for the next `turn`. An Esc read
-    /// after the line's Enter and before the turn starts is that turn's: it interrupts it.
+    /// Prints [`PROMPT`] and waits for a line ended by Enter, the user's message, which starts a
+    /// turn. A line typed earlier, outside a [`Step::Hold`], is taken without a prompt; an Esc read
+    /// after its Enter interrupts the turn.
     Turn,
-    /// Starts a turn by itself, as Claude Code does when a background task ends: prints
-    /// nothing at the prompt, reads nothing, and runs `UserPromptSubmit` with a prompt
-    /// that opens with `<task-notification>`, then the progress sequence of a turn that
-    /// works.
     SelfTurn,
-    /// Reads a file of the worktree with its read tool: `PreToolUse` and `PostToolUse` of
-    /// `Read`, the file really read in between.
     Read(PathBuf),
-    /// Adds a line to a file with its edit tool: `PreToolUse` and `PostToolUse` of
-    /// `Edit`, the file really changed in between.
     Edit(PathBuf, String),
-    /// Writes a file whole with its write tool, a new file among them: `PreToolUse` and
-    /// `PostToolUse` of `Write`.
     Write(PathBuf, String),
-    /// Runs a shell command in the worktree, through `/bin/sh -c`: `PreToolUse` of
-    /// `Bash`, the command, `PostToolUse` of `Bash`.
     Shell(String),
-    /// Asks for permission to write a file whole: `PreToolUse` and `PermissionRequest` of
-    /// `Write`, then the line `Do you want to create <path>? (y/n)` printed in the
-    /// terminal, and a wait for one key. `y` writes the file and gives `PostToolUse`; `n`
-    /// or Esc denies it, prints the mark Claude Code prints, [`INTERRUPT_MARK`], gives no
-    /// event, and ends the turn as interrupted. Any other byte is written down and
-    /// ignored, and the wait goes on.
+    /// Asks permission to write a file with one key: `y` writes it, `n` or Esc denies and ends the
+    /// turn as interrupted.
     Ask(PathBuf, String),
-    /// Holds the turn open until the file exists: a test that wants to act while the
-    /// agent works makes the file when it is done. It runs outside a turn too, as a gate
-    /// before the steps after it. Keys typed during it with no Enter stay pending, as at
-    /// any step: no `turn` follows to take them, and an `ask` after it sets them aside
-    /// and answers only keys typed once its question is up. A line ended by Enter during
-    /// a hold inside a turn is a queued message (see [`Step::Turn`]).
+    /// Holds the turn open until the file exists; outside a turn it is a gate. In a turn, Esc
+    /// interrupts and a line ended by Enter is queued.
     Hold(PathBuf),
-    /// Holds the stand-in before it reports its start, until the file exists: the session
-    /// is not known to the app until then. It is a step at the head of a script, and
-    /// several there are held one after the other; one anywhere else is a fault of the
-    /// script that stops the program at it. A test that wants to look at what the app shows
-    /// of a CLI that is started and has not reported yet makes the file when it has looked.
     HoldAtStart(PathBuf),
-    /// Writes this many numbered lines into its terminal as fast as it can, and writes
-    /// down in its log the longest a single write waited.
     Flood(u32),
-    /// Ends the turn: prints `● Done`, runs the `Stop` hooks and waits for them to return,
-    /// and only then prints the progress sequence that says no progress,
-    /// `ESC ] 9 ; 4 ; 0 ; BEL`, as Claude Code does. Esc pressed during a turn, before
-    /// this step, prints [`INTERRUPT_MARK`], gives no event, and ends the turn as
-    /// interrupted: the script goes on after the next `end`.
+    /// Ends the turn with `● Done`. An Esc earlier in the turn interrupts it instead, and the
+    /// script goes on after the next `end`.
     End,
-    /// Prints the progress sequence that says no progress, `ESC ] 9 ; 4 ; 0 ; BEL`, alone,
-    /// and runs no hook: what any program may print, as a test's `otheragent` does to show
-    /// that such a sequence in a terminal with no session ends no turn.
+    /// Prints the no-progress sequence alone and runs no hook, as any program may: such a sequence
+    /// without a session ends no turn.
     Mark,
-    /// Ends the session, `SessionEnd` with `reason` `prompt_input_exit`, puts the
-    /// terminal back as it found it, and ends the program with 0.
     Exit,
-    /// Replies to thread `thread`, counted from 1 in the order the last review it received
-    /// names its threads (the headings `## Thread <id>` of the text a `UserPromptSubmit`
-    /// hook answered with, and of a file that text names by its absolute path), with
-    /// `body`, addressed or not, through the reply tool of the plugin it loaded, as Claude
-    /// Code calls it: `PreToolUse` of `mcp__plugin_yaar-review_yaar__reply_to_thread`, the
-    /// call `tools/call` to the tool server of the plugin's `.mcp.json`, which the stand-in
-    /// starts at its first reply and keeps for the session, then `PostToolUse`. The server
-    /// gets `CLAUDE_CODE_SESSION_ID`, the stand-in's own session, as Claude Code gives it.
     Reply {
-        /// The thread, counted from 1.
+        /// Counted from 1, in the order the last review received names its threads.
         thread: u32,
-        /// Whether the reply marks it addressed.
         addressed: bool,
-        /// The reply, byte for byte.
         body: String,
     },
 }
 
-/// The mark Claude Code prints when a turn stops: the progress sequence that says no
-/// progress, as the recordings hold it, then the words it prints on an interrupt. Claude
-/// Code wraps those words in moves of the cursor and colours, in a write of their own;
-/// the stand-in leaves those out, since the Keeper reads the sequence alone.
 pub const INTERRUPT_MARK: &[u8] =
     b"\x1b]9;4;0;\x07Interrupted \xc2\xb7 What should Claude do instead?\r\n";
 
-/// A stand-in's script.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Script(pub Vec<Step>);
 
 impl Script {
-    /// The script as the file the stand-in reads: one step to a line, a keyword and its
-    /// words, a text to the end of the line with `\n` for a line end inside it.
     pub fn text(&self) -> String {
         self.0.iter().map(|step| step.line() + "\n").collect()
     }
 
-    /// Reads a script from the text [`Script::text`] writes. Panics, naming the line, on
-    /// one it cannot read.
     pub fn parse(text: &str) -> Script {
         let steps = text
             .lines()
@@ -248,7 +85,6 @@ impl Script {
 }
 
 impl Step {
-    /// The step as a line of a script file.
     fn line(&self) -> String {
         let word = |path: &Path| {
             let word = path.to_str().expect("a path of a script is text");
@@ -289,7 +125,6 @@ impl Step {
         }
     }
 
-    /// The step a line of a script file stands for, or why it stands for none.
     fn from_line(line: &str) -> Result<Step, String> {
         let (keyword, rest) = line.split_once(' ').unwrap_or((line, ""));
         let alone = |step: Step| {
@@ -354,15 +189,12 @@ impl Step {
     }
 }
 
-/// A text as one line of a script: `\` for a backslash, `\n` for a line end and `\r` for
-/// a carriage return, which reading a file by lines would otherwise take for a line end.
 fn escape(text: &str) -> String {
     text.replace('\\', "\\\\")
         .replace('\n', "\\n")
         .replace('\r', "\\r")
 }
 
-/// The text a line of a script holds, undoing [`escape`].
 fn unescape(line: &str) -> Result<String, String> {
     let mut text = String::new();
     let mut chars = line.chars();
@@ -381,96 +213,59 @@ fn unescape(line: &str) -> Result<String, String> {
     Ok(text)
 }
 
-/// One thing a stand-in did, in the order it did it, with how many bytes it had read
-/// from its terminal by then: a test asserts on positions in this list, and reads what
-/// reached the stand-in between two of them from `StandinLog::received`.
+/// `received` counts the bytes the stand-in had read by then, so a test reads what arrived between
+/// two things from `StandinLog::received`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Did {
-    /// Step `step` of the script, by its index, began.
     Began {
-        /// The step's index in the script.
         step: usize,
-        /// The bytes read so far.
         received: usize,
     },
-    /// Step `step` is done.
     Done {
-        /// The step's index in the script.
         step: usize,
-        /// The bytes read so far.
         received: usize,
     },
-    /// A hook ran, and what it printed.
     Hook {
-        /// The hook's event, as `PermissionRequest`.
         event: String,
-        /// What it printed on its standard output.
         answer: Vec<u8>,
-        /// Whether it was killed for not ending within 10 s.
         killed: bool,
-        /// The bytes read so far.
         received: usize,
     },
-    /// The turn was interrupted by Esc, or a dialog denied, during step `step`.
     Interrupted {
-        /// The step's index in the script.
         step: usize,
-        /// The bytes read so far.
         received: usize,
     },
-    /// A [`Step::Flood`] ended: the longest a single write of it waited.
     Flooded {
-        /// The step's index in the script.
         step: usize,
-        /// The longest write, in microseconds.
         longest_us: u64,
     },
-    /// The script ran out with no `exit`: the stand-in reads its terminal on until it
-    /// closes.
     ScriptDone {
-        /// The bytes read so far.
         received: usize,
     },
-    /// The program ends, with this status.
     Exited {
-        /// Its exit status.
         status: i32,
     },
-    /// The reply tool was called through the plugin's tool server, and what the server
-    /// answered: the `result` of the call, or its `error`; when it answered nothing within
-    /// the stand-in's patience or ended, `{"message": <why>}`.
+    /// The reply tool's answer: the `result` of the call, or its `error`; `{"message": <why>}` when
+    /// the server answered nothing in time or ended.
     Tool {
-        /// The tool's arguments, as the stand-in sent them.
         arguments: Value,
-        /// What the server answered.
         answer: Value,
-        /// The bytes read so far.
         received: usize,
     },
 }
 
-/// What reached a stand-in, as it wrote it down.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct StandinLog {
-    /// Its process id.
     pub pid: u32,
-    /// Its arguments, without its own name.
     pub args: Vec<String>,
-    /// The extensions it found as pi: each file the settings of pi in its home list and each
-    /// file `-e` names, in that order. Empty for a stand-in that is not pi, and for a pi that
-    /// found none.
     pub extensions: Vec<PathBuf>,
-    /// The CLI's own session id it gave itself, or the one it was told to resume.
     pub session: String,
-    /// Every byte it read from its terminal, in order.
     pub received: Vec<u8>,
-    /// What it did, in order.
     pub did: Vec<Did>,
 }
 
 impl StandinLog {
-    /// Reads the log the stand-in wrote at `path`; an empty log when the file is not
-    /// there yet. A last line the stand-in has not finished writing is left out.
+    /// An empty log when the file is not there yet; a last line not yet finished is left out.
     pub fn read(path: &Path) -> StandinLog {
         let mut log = StandinLog::default();
         let Ok(bytes) = std::fs::read(path) else {
@@ -487,7 +282,6 @@ impl StandinLog {
         log
     }
 
-    /// Adds what one line of the log says.
     fn take(&mut self, entry: &Value) {
         let number = |key: &str| entry[key].as_u64().unwrap_or(0);
         let received = number("received") as usize;
@@ -549,57 +343,36 @@ fn unhex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-/// The longest a hook may take before the stand-in kills it.
 const HOOK_LIMIT: Duration = Duration::from_secs(10);
 
-/// How long a wait for a key looks at the file it also waits for, in milliseconds.
 const KEY_POLL_MS: i32 = 20;
 
-/// The progress sequence of a turn that works, and the one that says no progress.
 const WORKING: &[u8] = b"\x1b]9;4;3;\x07";
 const NO_PROGRESS: &[u8] = b"\x1b]9;4;0;\x07";
 
-/// The reply tool as Claude Code lists it to the agent, and as the tool server names it.
 const LISTED_REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
 const REPLY_TOOL: &str = "reply_to_thread";
 
-/// The name the plugin's `.mcp.json` gives its tool server, and the name Claude Code gives
-/// that server in a hook's input.
 const TOOL_SERVER_NAME: &str = "yaar";
 const TOOL_SERVER_LISTED: &str = "plugin:yaar-review:yaar";
 
-/// How long the stand-in waits for one answer of the tool server. Claude Code waits for a
-/// tool as long as it takes; the app's own server answers within ten seconds, so a server
-/// that has said nothing by then is stuck, and the stand-in writes that down.
+/// Claude Code waits for a tool as long as it takes; the app's own server answers within ten
+/// seconds, so one silent by then is stuck.
 const TOOL_WAIT: Duration = Duration::from_secs(15);
 
-/// The variable the shells of the app set, naming the program pi's extension runs for each
-/// report.
 const REPORT_VARIABLE: &str = "YAAR_PI_REPORT";
 
-/// pi's settings under the home: nothing is ever written in it.
 const PI_SETTINGS: &str = ".pi/agent/settings.json";
 
-/// Where, under the home, the stand-in as pi keeps the files of its sessions when it is told
-/// no folder of its own: the folder pi's resume command names for them.
 pub const PI_SESSIONS: &str = ".pi/agent/sessions/standin";
 
-/// The prompt of a turn Claude Code starts itself when a background task ends.
 const TASK_NOTIFICATION: &str = "<task-notification>\n<task-id>standin-task</task-id>\n\
 <status>completed</status>\n<summary>The background task has ended.</summary>\n\
 </task-notification>";
 
-/// The stand-in's program: what `standin-agent` runs, given its name as it was started,
-/// its arguments, and its environment through the process. Gives its exit status.
-///
-/// When its script runs out with no [`Step::Exit`], it runs no hook and ends no session:
-/// it reads its terminal on, writing down every byte, until the terminal closes, and then
-/// ends with 0. Only `exit` ends the session; a stand-in whose terminal ends, or that is
-/// killed, reports no end, as Claude Code does not.
-///
-/// A name other than `pi` and `otheragent` acts as `claude`: the stand-in is run under that
-/// name where a test does not say. As `pi` it refuses, with status 2, a script that holds
-/// a step pi has no such thing as (`ask`), and says at which line.
+/// When the script runs out with no [`Step::Exit`], the stand-in ends no session: it reads its
+/// terminal until that closes, then gives 0. As `pi` a script holding `ask`, which pi has no
+/// counterpart of, is refused with status 2; any name but `pi` and `otheragent` acts as `claude`.
 pub fn run(name: &str, args: &[String]) -> i32 {
     // In a shell of the app the terminal is the stand-in's controlling terminal, and its
     // closing sends a hangup: that is a close to read and end on, not a death.
@@ -632,27 +405,21 @@ pub fn run(name: &str, args: &[String]) -> i32 {
     status
 }
 
-/// One key read from the terminal. Esc is a read of the single byte `0x1b`: a longer
-/// read that holds it is a sequence of keys, and its bytes are bytes.
+/// Esc is a read of the single byte `0x1b`: a longer read that holds it is a sequence of keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Key {
     Byte(u8),
     Esc,
 }
 
-/// What the stand-in reads from its terminal, and what it has read and not yet used.
 #[derive(Default)]
 struct Input {
-    /// How many bytes have been read in all.
     received: usize,
     pending: VecDeque<Key>,
-    /// Whether the terminal has closed.
     closed: bool,
 }
 
 impl Input {
-    /// Reads what the terminal has, waiting at most `wait_ms` (`-1` for as long as it
-    /// takes), and writes it to the log. Whether bytes came.
     fn fill(&mut self, log: &Log, wait_ms: i32) -> bool {
         if self.closed {
             return false;
@@ -697,7 +464,6 @@ impl Input {
         true
     }
 
-    /// Takes the first Esc read and not used, if any.
     fn take_esc(&mut self) -> bool {
         match self.pending.iter().position(|key| *key == Key::Esc) {
             Some(at) => {
@@ -708,14 +474,10 @@ impl Input {
         }
     }
 
-    /// Forgets the Esc keys read and not used. An Esc typed while no turn runs interrupts
-    /// nothing, and must not interrupt the turn that starts after it.
     fn forget_esc(&mut self) {
         self.pending.retain(|key| *key != Key::Esc);
     }
 
-    /// Takes the keys up to and with the first Enter as a line, without the Esc among
-    /// them, when a whole line has been read.
     fn take_line(&mut self) -> Option<String> {
         let end = self
             .pending
@@ -733,8 +495,6 @@ impl Input {
     }
 }
 
-/// The file the stand-in writes down what it did in, a JSON value to a line, each line
-/// written whole at once.
 struct Log(Option<File>);
 
 impl Log {
@@ -753,59 +513,38 @@ impl Log {
     }
 }
 
-/// How a step ended.
 enum Ended {
     Done,
-    /// Esc, or a dialog denied: the turn is over, interrupted.
     Interrupted,
-    /// The terminal closed.
     Closed,
-    /// The session was ended by the script.
     Exit,
 }
 
-/// What the user answered to a dialog.
 enum Answer {
     Yes,
     No,
-    /// The terminal closed with no answer.
     Closed,
 }
 
-/// A stand-in agent in the middle of its script.
 struct Standin {
     log: Log,
     input: Input,
-    /// The terminal's settings as they were, kept to put them back.
     saved: Option<libc::termios>,
-    /// The `hooks` object of each plugin folder's `hooks/hooks.json`, in folder order.
     plugins: Vec<Value>,
     session: String,
     resumed: bool,
     cwd: PathBuf,
     transcript: PathBuf,
-    /// Whether a turn is open: a message was taken and `end` has not come.
     in_turn: bool,
-    /// The plugin folders `CLAUDE_CODE_PLUGIN_DIRS` names, in order; none when the app's
-    /// pieces are left out.
     plugin_dirs: Vec<PathBuf>,
-    /// What the last `UserPromptSubmit` hook that answered with a review gave: the text of
-    /// the answer, then the contents of each file the text names by an absolute path.
     review: Option<String>,
-    /// The plugin's tool server, once a [`Step::Reply`] started it.
     server: Option<ToolServer>,
-    /// What the stand-in is as pi; none when it is not pi.
     pi: Option<PiSide>,
 }
 
-/// What the stand-in is, and keeps, as pi.
 struct PiSide {
-    /// The program pi's extension runs for each report; none when no extension was found,
-    /// the app's pieces are left out or no shell of the app named one: nothing is reported.
     program: Option<PathBuf>,
-    /// The session's file, which is named in each report and never written.
     session_file: PathBuf,
-    /// How many tools were called, for the ids pi gives them.
     calls: Cell<u32>,
 }
 
@@ -873,10 +612,8 @@ impl Standin {
         }
     }
 
-    /// Runs the script, and what follows it. Gives the exit status.
     fn go(&mut self, script: &Script) -> i32 {
         let steps = &script.0;
-        // The holds at the head of the script come before the start is reported.
         let mut at = 0;
         while let Some(Step::HoldAtStart(path)) = steps.get(at) {
             self.log.did(
@@ -891,14 +628,13 @@ impl Standin {
             at += 1;
         }
         if self.pi.is_some() {
-            // `pi --session` starts as any other pi does: the Keeper holds the session id it
-            // expects for the resume.
+            // pi reports `startup` even when resuming with `--session`: the Keeper already holds
+            // the session id it expects.
             self.pi_report("session_start", json!({"reason": "startup"}));
         } else {
             let source = if self.resumed { "resume" } else { "startup" };
             self.hook("SessionStart", None, json!({"source": source}));
         }
-        // After an interruption the steps up to and with the next `end` are skipped.
         let mut skipping = false;
         while at < steps.len() {
             if self.input.closed {
@@ -906,7 +642,6 @@ impl Standin {
             }
             let step = &steps[at];
             self.input.fill(&self.log, 0);
-            // A hangup read here counts at once: no tool runs after the terminal closed.
             if self.input.closed {
                 return self.closed();
             }
@@ -946,7 +681,6 @@ impl Standin {
         self.closed()
     }
 
-    /// The program's end when its terminal closed.
     fn closed(&self) -> i32 {
         self.log.did("exited", json!({"status": 0}));
         0
@@ -954,7 +688,6 @@ impl Standin {
 
     fn interrupt(&mut self, step: usize) {
         if self.pi.is_some() {
-            // pi reports an interrupt itself and prints no mark of the app's kind.
             self.pi_report("agent_settled", json!({"aborted": true}));
         } else {
             out(INTERRUPT_MARK);
@@ -1040,7 +773,6 @@ impl Standin {
         }
     }
 
-    /// Asks for a message when none was typed ahead, and starts the turn with it.
     fn turn(&mut self) -> Ended {
         let line = match self.input.take_line() {
             Some(line) => line,
@@ -1058,8 +790,8 @@ impl Standin {
             }
         };
         out(b"\r\n");
-        // An Esc read after this line's Enter is left pending: Claude Code starts the turn
-        // at the Enter, and the Esc interrupts it. An Esc before the Enter went with the line.
+        // An Esc read after this line's Enter stays pending: Claude Code starts the turn at the
+        // Enter, and the Esc interrupts it.
         self.in_turn = true;
         if self.pi.is_some() {
             self.pi_message("interactive", None);
@@ -1071,8 +803,6 @@ impl Standin {
         Ended::Done
     }
 
-    /// Starts a turn as Claude Code does when a background task ends: no prompt, no key
-    /// read, and a message that is the task's notice.
     fn self_turn(&mut self) {
         self.input.forget_esc();
         self.in_turn = true;
@@ -1085,8 +815,6 @@ impl Standin {
         }
     }
 
-    /// Takes a message typed while a tool runs: Claude Code queues it and runs
-    /// `UserPromptSubmit` at once, pi reports `input` with `streamingBehavior` `steer`.
     fn queue(&mut self, line: &str) {
         if self.pi.is_some() {
             self.pi_message("interactive", Some("steer"));
@@ -1095,8 +823,6 @@ impl Standin {
         }
     }
 
-    /// Runs `UserPromptSubmit` for a message, and keeps the review its answer carries, as
-    /// Claude Code adds the hook's `additionalContext` to the message.
     fn submit(&mut self, message: &str) {
         for answer in self.hook("UserPromptSubmit", None, json!({"prompt": message})) {
             if let Some(review) = review_in(&answer) {
@@ -1105,11 +831,6 @@ impl Standin {
         }
     }
 
-    /// Replies to a thread of the last review received through the plugin's tool server, as
-    /// Claude Code calls a tool: `PreToolUse`, its line, the call, what the server
-    /// answered written down as [`Did::Tool`], and `PostToolUse` of the answer, or
-    /// `PostToolUseFailure` when the server refused or said nothing. The server is started
-    /// at the first reply and kept.
     fn reply(&mut self, thread: u32, addressed: bool, body: &str) {
         let ids = self.review.as_deref().map(thread_ids).unwrap_or_default();
         let Some(id) = thread
@@ -1163,8 +884,6 @@ impl Standin {
         self.hook(event, Some(LISTED_REPLY_TOOL), fields);
     }
 
-    /// A tool of the agent: `PreToolUse`, its line, the action, and `PostToolUse` of what
-    /// it gave, or `PostToolUseFailure` when it names an error.
     fn tool(
         &self,
         name: &str,
@@ -1190,7 +909,6 @@ impl Standin {
         self.hook(event, Some(name), fields);
     }
 
-    /// Adds a line to the file, the last line of it the text the edit replaces.
     fn edit(&self, path: &Path, text: &str) {
         let file = self.absolute(path);
         let before = std::fs::read_to_string(&file)
@@ -1236,7 +954,6 @@ impl Standin {
         );
     }
 
-    /// Asks for permission to write a file whole, and waits for the user's key.
     fn ask(&mut self, at: usize, path: &Path, text: &str) -> Ended {
         let file = self.absolute(path);
         let input = json!({"file_path": file, "content": text});
@@ -1244,9 +961,6 @@ impl Standin {
         self.hook("PreToolUse", Some("Write"), fields.clone());
         self.hook("PermissionRequest", Some("Write"), fields);
         out(format!("Do you want to create {}? (y/n)\r\n", path.display()).as_bytes());
-        // Only keys read after the dialog is up answer it. What was typed before is not an
-        // answer to a question not yet asked: a line typed during the turn is the next
-        // turn's message, and it stays for it.
         let earlier = std::mem::take(&mut self.input.pending);
         let answer = self.answer();
         let later = std::mem::replace(&mut self.input.pending, earlier);
@@ -1268,7 +982,6 @@ impl Standin {
         Ended::Done
     }
 
-    /// Reads keys until `y`, `n` or Esc; any other byte is ignored.
     fn answer(&mut self) -> Answer {
         loop {
             match self.input.pending.pop_front() {
@@ -1283,12 +996,6 @@ impl Standin {
         }
     }
 
-    /// Holds until the file is there. Inside a turn it stands for a tool that runs: Esc
-    /// interrupts, and a line typed during it, ended by Enter, is a message Claude Code
-    /// queues, so `UserPromptSubmit` runs for it at once and it goes with the turn that
-    /// runs. What was typed before the hold began is for the next `turn` and stays, as
-    /// does what is typed during it with no Enter. Outside a turn it is only a gate:
-    /// nothing is taken from the keys, and Esc interrupts nothing.
     fn hold(&mut self, at: usize, path: &Path) -> Ended {
         out(format!("● Hold {}\r\n", path.display()).as_bytes());
         let file = self.absolute(path);
@@ -1324,7 +1031,6 @@ impl Standin {
         ended
     }
 
-    /// Writes numbered lines as fast as the terminal takes them.
     fn flood(&self, at: usize, lines: u32) {
         let mut longest = Duration::ZERO;
         for k in 1..=lines {
@@ -1338,9 +1044,6 @@ impl Standin {
         );
     }
 
-    /// One step of the script as pi takes it, with the app's extension loaded or not: the
-    /// reports of the moments, when there is a program to report to, and the same lines in
-    /// the terminal as for Claude Code, but no progress sequence.
     fn pi_step(&mut self, at: usize, step: &Step) -> Ended {
         match step {
             Step::Turn => return self.turn(),
@@ -1405,9 +1108,6 @@ impl Standin {
         Ended::Done
     }
 
-    /// The report of a message the user typed or an extension sent, `input`, and the review
-    /// its answer carries, kept as the last one received: the extension puts it into the
-    /// message.
     fn pi_message(&mut self, source: &str, streaming: Option<&str>) {
         let fields = json!({"source": source, "streamingBehavior": streaming});
         if let Some(answer) = self.pi_report("input", fields)
@@ -1417,8 +1117,6 @@ impl Standin {
         }
     }
 
-    /// A tool of the agent as pi runs it: `tool_call`, its line, the action, and
-    /// `tool_result`, which tells whether the action failed and what more it gave.
     fn pi_tool(&self, name: &str, input: Value, banner: &str, act: impl FnOnce() -> (Value, bool)) {
         let call = self.pi_call_id();
         let shared = json!({"toolName": name, "toolCallId": call, "input": input});
@@ -1433,8 +1131,8 @@ impl Standin {
         self.pi_report("tool_result", done);
     }
 
-    /// Adds a line to a file as pi's edit tool does, and reports the patch as one hunk of
-    /// that line and no line of context.
+    /// Adds a line as pi's edit tool does and reports it as one hunk with no context; pi's own
+    /// patch carries up to four lines of context, so pi names a wider range.
     fn pi_edit(&self, path: &Path, text: &str) {
         let file = self.absolute(path);
         let before = std::fs::read_to_string(&file)
@@ -1455,13 +1153,9 @@ impl Standin {
         });
     }
 
-    /// A call of the reply tool as pi makes it: the program run with `--tool`, and what it
-    /// printed written down as [`Did::Tool`].
     fn pi_reply(&self, thread: &str, arguments: &Value) {
         out(format!("\u{25cf} Reply {thread}\r\n").as_bytes());
         let payload = json!({"toolCallId": self.pi_call_id(), "arguments": arguments});
-        // A thread is only known from a review the extension's answer carried, so the
-        // program is there.
         let (printed, killed) = self
             .pi_run("reply_to_thread", payload, true)
             .expect("a review was received, so a program was run");
@@ -1479,7 +1173,6 @@ impl Standin {
         );
     }
 
-    /// The id pi gives its next tool call.
     fn pi_call_id(&self) -> String {
         let n = self.pi.as_ref().map_or(0, |pi| pi.calls.get()) + 1;
         if let Some(pi) = &self.pi {
@@ -1488,9 +1181,6 @@ impl Standin {
         format!("call_{n:04}")
     }
 
-    /// Reports an event to the program the shell names, and writes down what it printed as
-    /// a hook of the event. Gives what it printed; none, and nothing written down, when pi
-    /// reports nothing: no extension found, the app's pieces left out, no program named.
     fn pi_report(&self, event: &str, fields: Value) -> Option<Vec<u8>> {
         let (answer, killed) = self.pi_run(event, fields, false)?;
         self.log.did(
@@ -1505,10 +1195,8 @@ impl Standin {
         Some(answer)
     }
 
-    /// Runs the reporting program for one event, as the extension does: with no shell
-    /// between, `--tool` for a call of the reply tool, the payload on its standard input,
-    /// to its end. Gives what it printed and whether it was killed for not ending in time;
-    /// a program that cannot be started prints nothing.
+    /// No shell between, so that the program's parent is the stand-in, as it is pi for the
+    /// extension.
     fn pi_run(&self, event: &str, fields: Value, tool: bool) -> Option<(Vec<u8>, bool)> {
         let pi = self.pi.as_ref()?;
         let program = pi.program.as_ref()?;
@@ -1534,9 +1222,6 @@ impl Standin {
         self.cwd.join(path)
     }
 
-    /// Runs every command the plugins give for the event, each to its end, and writes
-    /// down what each printed. `tool` is the tool's name for an event that has one.
-    /// Gives what each command printed, in order.
     fn hook(&self, event: &str, tool: Option<&str>, fields: Value) -> Vec<Vec<u8>> {
         let commands = self.commands(event, tool);
         let mut answers = Vec::new();
@@ -1569,9 +1254,6 @@ impl Standin {
         answers
     }
 
-    /// The commands the plugins give for an event, in the order of the folders. A group
-    /// with a `matcher` is for the tools it names, parted by `|`; an event that has no
-    /// tool has no name to match, and every group runs.
     fn commands(&self, event: &str, tool: Option<&str>) -> Vec<String> {
         let mut commands = Vec::new();
         for plugin in &self.plugins {
@@ -1601,7 +1283,6 @@ impl Standin {
     }
 }
 
-/// Adds `text` as a last line of the file, whose content `before` is.
 fn add_line(file: &Path, before: &str, text: &str) {
     let mut after = before.to_owned();
     if !after.is_empty() && !after.ends_with('\n') {
@@ -1612,16 +1293,11 @@ fn add_line(file: &Path, before: &str, text: &str) {
     std::fs::write(file, after).unwrap_or_else(|why| panic!("edit {}: {why}", file.display()));
 }
 
-/// The value after the first of `flags` among the arguments, if there is one.
 fn value_of<'a>(args: &'a [String], flags: &[&str]) -> Option<&'a String> {
     let at = args.iter().position(|arg| flags.contains(&arg.as_str()))?;
     args.get(at + 1)
 }
 
-/// The extensions pi loads, as pi finds them: each string of the top-level `extensions` of
-/// its settings in the home that names a file, then each file `-e` names. A string that names
-/// no file is passed over, and settings that are no JSON object (pi reads them after a
-/// byte-order mark) give none.
 fn extensions_found(home: &Path, args: &[String]) -> Vec<PathBuf> {
     let mut found = Vec::new();
     if let Ok(text) = std::fs::read_to_string(home.join(PI_SETTINGS))
@@ -1642,15 +1318,12 @@ fn extensions_found(home: &Path, args: &[String]) -> Vec<PathBuf> {
     found
 }
 
-/// Writes bytes to the terminal as they are, and lets the terminal have them at once. A
-/// terminal that is gone is not a fault of the stand-in: what it could not write is lost.
 fn out(bytes: &[u8]) {
     let mut stdout = std::io::stdout().lock();
     let _ = stdout.write_all(bytes);
     let _ = stdout.flush();
 }
 
-/// Writes a file whole, its folders made, and gives the tool response of it.
 fn write_whole(file: &Path, text: &str) -> Value {
     let existed = file.exists();
     if let Some(folder) = file.parent() {
@@ -1665,12 +1338,8 @@ fn write_whole(file: &Path, text: &str) -> Value {
     })
 }
 
-/// Sets the terminal as the stand-in wants it: no echo, no line editing, no signals from
-/// keys, no flow control and no change of Enter into a line feed, so that Esc, Ctrl-C and
-/// the rest reach it as the bytes they are. Output processing stays on; only the change of
-/// `\n` into `\r\n` goes, and the stand-in writes `\r\n` itself, so that what it writes
-/// reaches the terminal byte for byte. Gives the settings as they were, or none when its
-/// standard input is no terminal.
+/// No echo, line editing, key signals or flow control, so that Esc and Ctrl-C reach it as bytes.
+/// Output processing stays on but for `\n` to `\r\n`: the stand-in writes `\r\n` itself.
 fn raw_terminal() -> Option<libc::termios> {
     let mut settings = MaybeUninit::<libc::termios>::uninit();
     // SAFETY: a place for the settings, and descriptor 0, whatever it is.
@@ -1690,7 +1359,6 @@ fn raw_terminal() -> Option<libc::termios> {
     Some(saved)
 }
 
-/// A session id as Claude Code makes one: 16 random bytes as a version 4 UUID.
 fn new_session_id() -> String {
     use std::io::Read;
     let mut bytes = [0u8; 16];
@@ -1710,7 +1378,6 @@ fn new_session_id() -> String {
     )
 }
 
-/// The folders `CLAUDE_CODE_PLUGIN_DIRS` names, in order.
 fn plugin_dirs() -> Vec<PathBuf> {
     let Some(dirs) = std::env::var_os("CLAUDE_CODE_PLUGIN_DIRS") else {
         return Vec::new();
@@ -1722,8 +1389,6 @@ fn plugin_dirs() -> Vec<PathBuf> {
         .collect()
 }
 
-/// The `hooks` object of `hooks/hooks.json` of each plugin folder, in order. A folder with
-/// no such file has no hooks.
 fn read_plugins(dirs: &[PathBuf]) -> Vec<Value> {
     let mut plugins = Vec::new();
     for dir in dirs {
@@ -1738,11 +1403,6 @@ fn read_plugins(dirs: &[PathBuf]) -> Vec<Value> {
     plugins
 }
 
-/// The review a `UserPromptSubmit` hook's answer adds to the message, as Claude Code reads
-/// it: the answer's `hookSpecificOutput.additionalContext`, then the contents of each file
-/// that text names, a file being a word of it, white space apart, that is an absolute path
-/// to a file that exists (the delivery of a long review). What a hook prints that is no
-/// such JSON adds nothing.
 fn review_in(answer: &[u8]) -> Option<String> {
     let answer: Value = serde_json::from_slice(answer).ok()?;
     let output = &answer["hookSpecificOutput"];
@@ -1752,7 +1412,6 @@ fn review_in(answer: &[u8]) -> Option<String> {
     let mut text = output["additionalContext"].as_str()?.to_owned();
     let delivered = text.clone();
     for word in delivered.split_whitespace() {
-        // A sentence may end on the path, or put it in quotes.
         let bare = word.trim_matches(|c: char| ".,;:!?)(\"'`".contains(c));
         for candidate in [word, bare] {
             if Path::new(candidate).is_absolute()
@@ -1767,12 +1426,10 @@ fn review_in(answer: &[u8]) -> Option<String> {
     Some(text)
 }
 
-/// The ids of the threads a review names, in order: the word after `## Thread ` at the
-/// start of a line that is not inside a fenced block, where the review puts the code it
-/// is about and may hold a line that looks like a heading.
+/// The ids of the threads a review names, in order: the word after `## Thread ` at the start of a
+/// line outside a fenced block, where the review puts code that may look like a heading.
 fn thread_ids(review: &str) -> Vec<String> {
     let mut ids = Vec::new();
-    // The length of the run of backticks that opened the fence we are in, if any.
     let mut fence: Option<usize> = None;
     for line in review.lines() {
         let ticks = line.len() - line.trim_start_matches('`').len();
@@ -1782,7 +1439,7 @@ fn thread_ids(review: &str) -> Vec<String> {
                     fence = Some(ticks);
                     continue;
                 }
-                // Only a run as long as the opening one, with nothing after it, closes.
+                // Only a run at least as long as the opening one, with nothing after it, closes.
                 Some(open) if ticks >= open && line.trim_end().len() == ticks => {
                     fence = None;
                     continue;
@@ -1803,23 +1460,15 @@ fn thread_ids(review: &str) -> Vec<String> {
     ids
 }
 
-/// The tool server a plugin's `.mcp.json` names, as Claude Code starts it: a child of the
-/// stand-in with its standard input and output piped, speaking MCP one JSON-RPC message to
-/// a line. It lasts as long as the stand-in does.
 struct ToolServer {
     child: Child,
     input: ChildStdin,
-    /// What the server wrote, a message to a value, read on a thread of its own so that a
-    /// wait for an answer is a wait on this channel and has a deadline.
+    /// Filled by a reader thread, so a wait for an answer is a channel wait with a deadline.
     messages: mpsc::Receiver<Value>,
     next_id: u64,
 }
 
 impl ToolServer {
-    /// Starts the server `.mcp.json` of the first plugin folder that names one gives, in
-    /// `cwd`, with `session` as its `CLAUDE_CODE_SESSION_ID`, and goes through what Claude
-    /// Code says to a server before it calls a tool: `initialize`, `initialized`, and
-    /// `tools/list`. Panics when no plugin names the server or it does not answer.
     fn start(dirs: &[PathBuf], cwd: &Path, session: &str) -> ToolServer {
         let (dir, command, args) = dirs
             .iter()
@@ -1838,7 +1487,6 @@ impl ToolServer {
             .unwrap_or_else(|| {
                 panic!("no plugin folder of {dirs:?} has a .mcp.json naming a server `{TOOL_SERVER_NAME}`")
             });
-        // Claude Code puts a plugin's own folder where `${CLAUDE_PLUGIN_ROOT}` stands.
         let root = dir.to_string_lossy();
         let expand = |text: &str| text.replace("${CLAUDE_PLUGIN_ROOT}", &root);
         let mut server = Command::new(expand(&command));
@@ -1911,8 +1559,6 @@ impl ToolServer {
         let _ = self.send(&json!({"jsonrpc": "2.0", "method": method}));
     }
 
-    /// Sends a request and waits, at most [`TOOL_WAIT`], for the message that answers it,
-    /// whole; or says why none came.
     fn request(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let id = self.next_id;
         self.next_id += 1;
@@ -1940,9 +1586,6 @@ impl Drop for ToolServer {
     }
 }
 
-/// A command run through `/bin/sh -c`, with the hangup signal back at its default in the
-/// child: an ignored signal stays ignored across `exec`, and Claude Code's hooks and
-/// commands do not ignore it.
 fn sh(command: &str) -> Command {
     let mut sh = Command::new("/bin/sh");
     sh.arg("-c").arg(command);
@@ -1950,8 +1593,6 @@ fn sh(command: &str) -> Command {
     sh
 }
 
-/// Puts the hangup signal back at its default in the child, which would otherwise keep
-/// the stand-in's choice to ignore it across `exec`.
 fn default_hangup(command: &mut Command) {
     // SAFETY: `signal` is async-signal-safe, and this runs between `fork` and `exec`.
     unsafe {
@@ -1962,10 +1603,6 @@ fn default_hangup(command: &mut Command) {
     };
 }
 
-/// Runs one hook command as Claude Code does: through `/bin/sh -c` in `cwd`, with the
-/// input on its standard input, its standard output kept. A hook still running after
-/// [`HOOK_LIMIT`] is killed with everything it started. Gives what it printed and whether
-/// it was killed.
 fn run_hook(command: &str, input: &[u8], cwd: &Path) -> (Vec<u8>, bool) {
     let mut hook = sh(command);
     hook.current_dir(cwd)
@@ -1975,8 +1612,6 @@ fn run_hook(command: &str, input: &[u8], cwd: &Path) -> (Vec<u8>, bool) {
     run_process(hook, input).unwrap_or_else(|why| panic!("run the hook {command:?}: {why}"))
 }
 
-/// Runs a prepared command with `input` on its standard input and its standard output kept,
-/// as [`run_hook`] says; fails only when the command cannot be started.
 fn run_process(mut command: Command, input: &[u8]) -> std::io::Result<(Vec<u8>, bool)> {
     use std::io::Read;
     let mut child = command
@@ -1990,8 +1625,8 @@ fn run_process(mut command: Command, input: &[u8]) -> std::io::Result<(Vec<u8>, 
     let mut stdin = child.stdin.take().expect("a piped standard input");
     let mut stdout = child.stdout.take().expect("a piped standard output");
     let input = input.to_vec();
-    // A hook that reads none of its input must not hold the stand-in up: the input goes
-    // in from a thread of its own, and a closed pipe is no fault.
+    // A hook that reads none of its input must not hold the stand-in up: the input goes in from a
+    // thread of its own.
     let writer = std::thread::spawn(move || {
         let _ = stdin.write_all(&input);
     });

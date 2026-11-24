@@ -1,24 +1,6 @@
-//! A thread that moved with the code: where the Keeper says it sits now, the notice that
-//! the code changed or was deleted, and the line it was written on, shown on request.
-//!
-//! Where a thread's rows go depends on the version the pane shows on the new side
-//! (`threads.rs`). `yaar_link::Thread::now` names a version, `now.tree`, and lines in it:
-//! the thread is placed on those lines when the new side shown is `now.tree`, or the files
-//! on disk, which the Keeper carries every thread toward at each state it records. With no
-//! `now`, it is placed on its anchor, as before slice 6. With a `now`, it is placed on its
-//! anchor only when the new side shown is the anchor's own version (`anchor.tree`). In any
-//! other version, an older turn or a commit chosen in the tree of Changes, it is listed
-//! under `ThreadsElsewhere`, as a thread on a file not shown is: it is never drawn on lines
-//! of a version it was not carried to.
-//!
-//! A thread with a notice draws it on its row under
-//! `review-thread-notice-<thread id>:changed` or `:deleted`, with a control
-//! `review-thread-original-<thread id>` that, as [`crate::ShowOriginal`] does on its line,
-//! shows the anchor's text after them on the row, under
-//! `review-thread-original-text-<thread id>`, or hides it. A row holds one line, so the
-//! lines of an anchor of several are joined on it, and what does not fit the width of the
-//! pane is cut off. The notice and the control are drawn only on the lines the thread was
-//! carried to: where it sits on its anchor, the code is as it was written.
+//! A thread the Keeper carried with the code: the notice that the code changed or was
+//! deleted, and the line it was written on, shown on request. A row holds one line, so the
+//! lines of an anchor of several are joined on it.
 
 use std::collections::BTreeSet;
 
@@ -29,24 +11,18 @@ use yaar_link::{Notice, Thread, ThreadId};
 use crate::threads::{Place, place_of};
 use crate::{PaneRow, ReviewPane, ShowOriginal, View};
 
-/// What stands between two lines of an anchor's text on the one row that shows it.
 const LINE_BREAK: &str = " | ";
 
-/// What the pane keeps of the threads that moved: those whose original line is shown.
 #[derive(Default)]
 pub(crate) struct Moved {
     shown: BTreeSet<ThreadId>,
 }
 
 impl ReviewPane {
-    /// Whether the line `thread` was written on is shown below its row.
     pub fn shows_original(&self, thread: &ThreadId) -> bool {
         self.original_text(thread).is_some()
     }
 
-    /// The text of the line `thread` was written on, exactly as its row draws it; none
-    /// while it is not shown. It is the anchor's text, which the Keeper keeps with a thread
-    /// that moved, with its lines joined by [`LINE_BREAK`] since a row holds one line.
     pub fn original_text(&self, thread: &ThreadId) -> Option<String> {
         let held = self.thread(thread)?;
         (self.moved.shown.contains(thread) && self.notice_of(held).is_some()).then(|| {
@@ -58,7 +34,6 @@ impl ReviewPane {
         })
     }
 
-    /// The thread of the review shown with this id.
     fn thread(&self, thread: &ThreadId) -> Option<&Thread> {
         self.review()?
             .threads
@@ -66,8 +41,8 @@ impl ReviewPane {
             .find(|held| held.id == *thread)
     }
 
-    /// What became of the code `thread` was written on, when it is drawn on the lines the
-    /// Keeper carried it to.
+    /// The notice of `thread`, only where it sits on the lines the Keeper carried it to: on its
+    /// anchor the code is as it was written.
     fn notice_of(&self, thread: &Thread) -> Option<Notice> {
         match place_of(thread, self.new_side_shown().as_deref())? {
             Place::Now(now) => now.notice,
@@ -75,8 +50,6 @@ impl ReviewPane {
         }
     }
 
-    /// The notice of a thread that moved, with its control, and the line it was written on
-    /// while it is shown, for its row.
     pub(crate) fn thread_moved_marks(
         &self,
         thread: &ThreadId,
@@ -131,8 +104,6 @@ impl ReviewPane {
                 .into_any_element(),
         ];
         if let Some(text) = shown {
-            // The text of the line is drawn as the getter gives it, with nothing added to
-            // it; its label is an element of its own.
             marks.push(
                 div()
                     .flex_none()
@@ -155,7 +126,6 @@ impl ReviewPane {
         marks
     }
 
-    /// Shows or hides the line `thread` was written on.
     fn toggle_original(&mut self, thread: &ThreadId, cx: &mut Context<Self>) {
         if !self.moved.shown.remove(thread) {
             self.moved.shown.insert(thread.clone());
@@ -163,8 +133,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// The threads on the line the reviewer is on that sit on lines the Keeper carried
-    /// them to and carry a notice: the thread rows that follow the row of the line.
     fn moved_threads_on_the_line(&self) -> Vec<ThreadId> {
         let Some(row) = self.position_row() else {
             return Vec::new();
@@ -185,7 +153,6 @@ impl ReviewPane {
             .collect()
     }
 
-    /// [`ShowOriginal`].
     pub(crate) fn show_original(
         &mut self,
         _: &ShowOriginal,
@@ -193,7 +160,6 @@ impl ReviewPane {
         cx: &mut Context<Self>,
     ) {
         self.acted(cx);
-        // The live diff of Flow draws no notice and no original line.
         if self.view == View::Flow {
             return self.say("Changes shows the line a thread was written on", cx);
         }
@@ -204,8 +170,6 @@ impl ReviewPane {
                 cx,
             );
         }
-        // One line holding several threads: all of them are shown, or, when they all are,
-        // all are hidden.
         let all_shown = on_the_line
             .iter()
             .all(|thread| self.moved.shown.contains(thread));

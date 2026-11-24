@@ -1,12 +1,5 @@
-//! The colours of the terminal pane: the one function that picks the colour of a cell
-//! (`colour_of`), what a terminal answers a program that asks for its colours, and that
-//! the answer follows the theme the Frame applies.
-//!
-//! The first tests need no window: the colours handed in are a set in which every colour
-//! has a value of its own, so that a colour taken from the wrong place is a different
-//! value. The last two run the pane on GPUI's test platform, tell the Frame's model what
-//! the system's setting is as the Window program does (the platform gives a test no way to
-//! change it), and read what the program receives from its terminal.
+//! The last two tests run on GPUI's test platform and set the system appearance through the
+//! Frame's model, as the platform cannot.
 
 mod common;
 
@@ -18,7 +11,6 @@ use yaar_terminal_pane::{Color, Emulator, colour_of};
 
 use common::{open_panes, terminal, wait_until};
 
-/// A terminal palette in which no two colours are the same.
 fn own() -> TerminalColors {
     TerminalColors {
         foreground: hex(0x010101),
@@ -29,7 +21,6 @@ fn own() -> TerminalColors {
     }
 }
 
-/// The eight names of the first colours, in the order of the numbers 0 to 7.
 const NAMES: [NamedColor; 8] = [
     NamedColor::Black,
     NamedColor::Red,
@@ -131,8 +122,6 @@ fn the_numbers_above_fifteen_are_xterms_whatever_the_theme() {
             "number {number}"
         );
     }
-    // A few by their value, from xterm's cube and greys, so that the function the Frame
-    // holds is not the only witness.
     assert_eq!(colour_of(Color::Indexed(16), &terminal), hex(0x000000));
     assert_eq!(colour_of(Color::Indexed(196), &terminal), hex(0xff0000));
     assert_eq!(colour_of(Color::Indexed(231), &terminal), hex(0xffffff));
@@ -148,13 +137,12 @@ fn a_colour_by_its_value_is_that_value_whatever_the_theme() {
     assert_eq!(colour_of(Color::Spec(by_value), &terminal), hex(0x010203));
 }
 
-/// The bytes a terminal writes back, read as the program reads them.
 fn answers(emulator: &mut Emulator, question: &[u8]) -> String {
     emulator.advance(question);
     String::from_utf8(emulator.take_replies()).expect("an answer is text")
 }
 
-/// The answer for a colour of 8 bits a channel: 16 bits a channel, each byte twice.
+/// The answer for an 8-bit channel: 16 bits a channel, each byte twice.
 fn rgb(red: u8, green: u8, blue: u8) -> String {
     format!("rgb:{red:02x}{red:02x}/{green:02x}{green:02x}/{blue:02x}{blue:02x}")
 }
@@ -170,7 +158,6 @@ fn emulator() -> Emulator {
 fn a_program_that_asks_for_its_colours_is_told_the_themes() {
     let mut emulator = emulator();
     emulator.set_colours(own());
-    // The text, the background and the cursor, ended as the question was ended.
     assert_eq!(
         answers(&mut emulator, b"\x1b]10;?\x07"),
         format!("\x1b]10;{}\x07", rgb(1, 1, 1))
@@ -183,7 +170,6 @@ fn a_program_that_asks_for_its_colours_is_told_the_themes() {
         answers(&mut emulator, b"\x1b]12;?\x07"),
         format!("\x1b]12;{}\x07", rgb(3, 3, 3))
     );
-    // The sixteen are the theme's, by number.
     for n in 0..16u8 {
         assert_eq!(
             answers(&mut emulator, format!("\x1b]4;{n};?\x07").as_bytes()),
@@ -191,7 +177,6 @@ fn a_program_that_asks_for_its_colours_is_told_the_themes() {
             "colour {n}"
         );
     }
-    // The cube and the greys are xterm's: colour 196 is pure red, colour 244 a grey.
     assert_eq!(
         answers(&mut emulator, b"\x1b]4;196;?\x07"),
         format!("\x1b]4;196;{}\x07", rgb(255, 0, 0))
@@ -205,7 +190,6 @@ fn a_program_that_asks_for_its_colours_is_told_the_themes() {
 #[test]
 fn the_answers_follow_the_colours_handed_last() {
     let mut emulator = emulator();
-    // Before it is handed any, a terminal answers as the light theme does.
     let light = theme::light().terminal;
     let light_background = answers(&mut emulator, b"\x1b]11;?\x07");
     emulator.set_colours(own());
@@ -222,8 +206,8 @@ fn the_answers_follow_the_colours_handed_last() {
 
 #[test]
 fn every_channel_value_a_theme_holds_is_told_as_it_was_written() {
-    // A colour goes through hue, saturation and lightness on its way into a definition: the
-    // answer must give back the 8 bits it was written with, for every value of a channel.
+    // A colour passes through hue, saturation and lightness into a definition: the answer must give
+    // back all 8 bits.
     for value in 0..=255u8 {
         let n = u32::from(value);
         for (colour, (red, green, blue)) in [
@@ -253,13 +237,11 @@ fn the_terminal_answers_a_question_about_its_colours_from_the_theme_applied(
     let id = terminal('1');
     panes.open_terminal(&id, &mut cx);
 
-    // The light theme is applied until the system is told otherwise.
     assert_eq!(
         ask(&mut panes, &id, &mut cx),
         format!("\x1b]11;{}\x07", rgb(0xff, 0xff, 0xff))
     );
 
-    // The same terminal, once the Frame applies the dark theme.
     panes
         .models
         .looks
@@ -267,13 +249,11 @@ fn the_terminal_answers_a_question_about_its_colours_from_the_theme_applied(
     wait_until(&mut cx, "the dark theme applied", |cx| {
         cx.update(|app| theme::applied(app).name == theme::DARK)
     });
-    // The pane hands the colours over at the frame that draws with them.
     assert_eq!(
         ask(&mut panes, &id, &mut cx),
         format!("\x1b]11;{}\x07", rgb(0x0a, 0x0a, 0x0a))
     );
 
-    // And back.
     panes
         .models
         .looks
@@ -308,7 +288,6 @@ fn a_terminal_opened_under_the_dark_theme_answers_with_it_at_once(cx: &mut TestA
     );
 }
 
-/// The program asks for its background and the answer the pane sent it.
 fn ask(
     panes: &mut common::Panes,
     id: &yaar_link::TerminalId,

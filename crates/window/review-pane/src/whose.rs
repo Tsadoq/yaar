@@ -1,7 +1,3 @@
-//! Whose review the pane shows: the sessions of the workspace on screen that a review
-//! belongs to and the review of no agent, the choice among them that the reviewer or a
-//! turn end makes, and the line above the review that names them.
-
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
@@ -10,9 +6,8 @@ use yaar_link::{Review, ReviewId, Session, SessionState, WorkspaceReviews};
 use crate::draw::ROW_HEIGHT;
 use crate::{NextReview, ReviewPane};
 
-/// The review to show among `reviews`: the one chosen when it is there; else the review of
-/// no agent while there is one; else that of the first of `sessions` that runs; else the
-/// first review. `sessions` are in the order they started.
+/// The chosen review when it is there; else the review of no agent; else that of the first
+/// of `sessions` (in start order) that runs; else the first review.
 pub(crate) fn shown<'a>(
     reviews: Option<&'a WorkspaceReviews>,
     chosen: Option<&ReviewId>,
@@ -33,9 +28,6 @@ pub(crate) fn shown<'a>(
 }
 
 impl ReviewPane {
-    /// Takes up what the agents model holds of the workspace on screen: the sessions that
-    /// a review belongs to. When that moves the review shown, the rows and the uncommitted
-    /// changes are those of the new one.
     pub(crate) fn sessions_changed(&mut self, cx: &mut Context<Self>) {
         let now: Vec<Session> = self
             .models
@@ -64,19 +56,14 @@ impl ReviewPane {
         }
     }
 
-    /// The review shown is another: its threads are drawn and its uncommitted changes are
-    /// asked for. Its threads may add or take rows above what the reviewer reads, so the
-    /// rows are made again as reviews read anew are (`rebuild_steady`).
     pub(crate) fn review_moved(&mut self, cx: &mut Context<Self>) {
         self.rebuild_steady(cx);
         self.review_shown(cx);
     }
 
-    /// Makes `review` the one shown, and draws the threads of it; true when that moved
-    /// the review shown. The uncommitted changes of the new review are for the caller to
-    /// ask for. A comment box that is open belongs to the review that was shown, so a
-    /// reviewer who moves to another review leaves it, with the draft as it was saved; a
-    /// turn end, which has no window to give, leaves the box as it is.
+    /// True when the review shown moved; the caller then asks for its uncommitted changes. An
+    /// open comment box is closed when a window is given, as on a reviewer's move, and kept on a
+    /// turn end, which has none.
     pub(crate) fn choose_review(
         &mut self,
         review: ReviewId,
@@ -89,15 +76,12 @@ impl ReviewPane {
         }
         self.chosen = Some(review);
         if moves {
-            // An offer to start an agent was made for the review that was shown.
             self.attaching.forget();
             self.rebuild(cx);
         }
         moves
     }
 
-    /// Shows the review `review` at the reviewer's request, and asks for its uncommitted
-    /// changes.
     pub(crate) fn show_review(
         &mut self,
         review: ReviewId,
@@ -109,9 +93,6 @@ impl ReviewPane {
         }
     }
 
-    /// The reviews the reviewer can go through, in the order the session bar names them:
-    /// those of the sessions, then the review of no agent while there is one. Each with
-    /// the session it belongs to, none for the review of no agent.
     fn cycle(&self) -> Vec<(ReviewId, Option<&Session>)> {
         let mut cycle: Vec<(ReviewId, Option<&Session>)> = self
             .sessions
@@ -128,8 +109,6 @@ impl ReviewPane {
         cycle
     }
 
-    /// What a click on the entry at `index` of the session bar does: shows its review, and
-    /// puts the focus on the rows, where the keys of the pane work.
     fn click_session(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.acted(cx);
         self.focus.focus(window, cx);
@@ -138,8 +117,6 @@ impl ReviewPane {
         }
     }
 
-    /// What [`NextReview`] does: shows the review after the one shown, the review of no
-    /// agent among them, and from the last the first.
     pub(crate) fn next_review(
         &mut self,
         _: &NextReview,
@@ -159,11 +136,6 @@ impl ReviewPane {
         }
     }
 
-    /// The line that names the reviews the reviewer can show, above the tree: the sessions
-    /// whose reviews there are, and the review of no agent, named "No agent", while there
-    /// is one; none while there is no session. With one entry it is named under
-    /// `review-session`; with several, each under `review-session-<index>`, and a click on
-    /// one shows its review.
     pub(crate) fn session_bar(&self, cx: &mut Context<Self>) -> Option<Div> {
         if self.sessions.is_empty() {
             return None;
@@ -185,8 +157,6 @@ impl ReviewPane {
             .border_b_1()
             .border_color(theme.border);
         for (index, (review, session)) in cycle.iter().enumerate() {
-            // The title is drawn in a child that carries the text in its selector, so a
-            // test reads what is on screen and not a copy of it.
             let title =
                 session.map_or_else(|| "No agent".to_owned(), |session| session.title.clone());
             let name = div()

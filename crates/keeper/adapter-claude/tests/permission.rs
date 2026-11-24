@@ -1,7 +1,3 @@
-//! A permission dialog in Claude Code turns waiting for permission on, and its answer turns
-//! it off: the recorded hooks and the recorded mark go in through the Adapter's calls, and
-//! the events come out.
-
 mod support;
 
 use yaar_adapter_claude::{ClaudeCode, INTERRUPT_MARKS};
@@ -14,12 +10,8 @@ use support::{command_of, feed, in_project, told};
 /// 11 and 12.
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// The recording of the mark Claude Code writes when a dialog is denied or a turn
-/// interrupted.
 const MARK: &str = "claude/interrupt-mark.jsonl";
 
-/// The Adapter after the lines `0..=last` of the dialogs' recording, the events of the
-/// last one, and the record of it.
 fn replay_to(last: usize) -> (ClaudeCode, Vec<Reported>, HookRecord) {
     let records = recorded::hook_events(DIALOGS);
     let mut adapter = ClaudeCode::new();

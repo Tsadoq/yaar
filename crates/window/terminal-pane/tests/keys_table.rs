@@ -1,25 +1,15 @@
-//! Component test (TERM-08): the six keys the terminal pane keeps on macOS for its history
-//! and its screen are the ones the row names, each with the title a user reads and the
-//! place where it works, and no other system has them.
-//!
-//! The behaviour of each key is held by `history.rs`, which presses whatever key the table
-//! holds. This file holds the table itself: a key moved to another chord keeps every
-//! behaviour and fails here. It reads what the Window reads, the pane's `controls()`.
-
 use gpui_kit::Action;
 use yaar_frame::Control;
 use yaar_terminal_pane::{
     Clear, ScrollLineDown, ScrollLineUp, ScrollToBottom, ScrollToTop, SelectAll, controls,
 };
 
-/// The row of the table that runs the action called `name`, none when there is no such.
 fn row_of(name: &str) -> Option<Control> {
     controls()
         .into_iter()
         .find(|control| (control.action)().name() == name)
 }
 
-/// The names of the six actions.
 fn the_six() -> [(&'static str, &'static str); 6] {
     [
         (Clear.name(), "Clear"),

@@ -1,20 +1,6 @@
-//! Component test (TERM-07): what the Option key does in a terminal, from the user's
-//! setting, the keyboard layout and the system.
-//!
-//! The pane runs on GPUI's test platform with the app prepared as the Window program
-//! prepares it. The test plays the Keeper: it tells the setting as the Keeper tells it
-//! (`Fact::SettingChanged`) and reads the bytes the program of the terminal receives
-//! (`TestKeeper::input_until`). Every key is followed by a sentinel, text whose bytes are
-//! known, and what comes before the sentinel is what the key sent: a key that sends
-//! nothing shows as the sentinel arriving first.
-//!
-//! The test platform has one keyboard layout, `zed.keyboard.example`, which is not
-//! `com.apple.keylayout.US`: with no setting Option types characters on macOS. That the U.S.
-//! layout makes it Meta is shown on the rule itself, by the unit tests of `keys.rs`, since
-//! the platform cannot change its layout.
-//!
-//! The macOS tests and the test of the other systems differ only in the attributes on the
-//! test functions: the bodies are shared and compile everywhere.
+//! What Option sends in a terminal, by setting, layout and system. Each key is followed by a
+//! sentinel: a key that sends nothing shows as the sentinel arriving first. The test platform's
+//! layout is not U.S., so on macOS with no setting Option types characters.
 
 mod common;
 
@@ -23,7 +9,6 @@ use yaar_link::{Fact, OptionKey, Setting, TerminalId};
 
 use common::{Panes, open_panes, terminal, wait_drawn, wait_until};
 
-/// A pane with one terminal that has the focus, and the sentinels typed so far.
 struct Typing {
     panes: Panes,
     cx: VisualTestContext,
@@ -47,7 +32,6 @@ impl Typing {
         }
     }
 
-    /// Tells the Window the Keeper's setting and waits until the model holds it.
     fn set(&mut self, key: OptionKey) {
         self.panes
             .keeper
@@ -60,8 +44,6 @@ impl Typing {
         });
     }
 
-    /// Presses Option with F as the platform delivers it, with the character the layout
-    /// gives that key under Option as its text, and gives what the program received.
     fn alt_f(&mut self) -> Vec<u8> {
         self.cx.update(|window, cx| {
             let keystroke = Keystroke::parse_with_os("alt-f->ƒ", cx.platform_info().os)
@@ -71,7 +53,6 @@ impl Typing {
         self.sentinel()
     }
 
-    /// Types the next sentinel and reads what the program received before it.
     fn sentinel(&mut self) -> Vec<u8> {
         self.sentinels += 1;
         let sentinel = format!("<s{}>", self.sentinels);
@@ -82,18 +63,15 @@ impl Typing {
     }
 }
 
-/// What the key under Option types on the layout of the test platform.
 #[cfg(target_os = "macos")]
 const CHARACTER: &[u8] = "ƒ".as_bytes();
 
-/// Escape, then the letter: Option as Meta.
 const META: &[u8] = b"\x1bf";
 
 #[cfg(target_os = "macos")]
 #[gpui_kit::test]
 fn with_no_setting_option_types_the_characters_the_layout_gives_on_macos(cx: &mut TestAppContext) {
     let mut typing = Typing::new(cx);
-    // The layout of the test platform is not the U.S. one.
     assert_eq!(typing.alt_f(), CHARACTER);
 }
 

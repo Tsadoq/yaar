@@ -1,5 +1,4 @@
-//! The one process a worktree or a state store keeps to hand out the contents of files in
-//! commits.
+//! The `git cat-file` process a worktree or state store keeps to read file contents.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, BufRead, BufReader, Read as _, Write};
@@ -10,20 +9,15 @@ use std::sync::{Mutex, PoisonError};
 
 use crate::git::{Answer, Git, GitError, Place, could_not_start, shown};
 
-/// What the process answered for one name.
 pub(crate) enum Read {
-    /// The content of the file by that name.
     Blob(Vec<u8>),
-    /// There is no file by that name: nothing at all, or a folder, or a repository of
-    /// its own.
+    /// No file by that name: absent, a folder, or a nested repository.
     NoBlob,
 }
 
-/// What to ask a process that hands out contents for the file `name` (a commit, a colon and
-/// a path), for a git that has the newer forms or has not. A git without `-Z` ends a name
-/// at a line feed and drops a carriage return before it, so a name that holds either is
-/// asked by the id of the object it names: `run` is given the arguments of the run of git
-/// that finds it. None means there is no such object, hence no content.
+/// The arguments to ask for the file `name` (a commit, a colon, a path). A git without `-Z` ends a
+/// name at a line feed and drops a carriage return before it: such a name is asked by object id,
+/// found with `run`. None: no such object.
 pub(crate) fn asked(
     has_newer_forms: bool,
     name: Vec<u8>,
@@ -47,12 +41,8 @@ pub(crate) fn asked(
     }
 }
 
-/// Asks the process in `kept` for the object `name`, starting it with `start` when none is
-/// running. A process that has died, or whose answer makes no sense any more, is ended and
-/// a new one asked, once: a second failure is the answer.
-///
-/// The lock on `kept` is held for the whole question, so one process answers one question
-/// at a time; it guards nothing else.
+/// A dead or incoherent process is replaced and the question asked once more; a second failure is
+/// the answer.
 pub(crate) fn read_kept(
     kept: &Mutex<Option<Contents>>,
     start: impl Fn() -> Result<Contents, GitError>,
@@ -80,7 +70,6 @@ pub(crate) fn read_kept(
     }
 }
 
-/// Ends the process in `kept`, if one runs, and waits for it.
 pub(crate) fn stop_kept(kept: &mut Mutex<Option<Contents>>) {
     let kept = kept.get_mut().unwrap_or_else(PoisonError::into_inner);
     if let Some(contents) = kept.take() {
@@ -88,20 +77,16 @@ pub(crate) fn stop_kept(kept: &mut Mutex<Option<Contents>>) {
     }
 }
 
-/// A running `git cat-file` that is asked name by name.
 #[derive(Debug)]
 pub(crate) struct Contents {
     child: Child,
     asks: ChildStdin,
     answers: BufReader<ChildStdout>,
-    // The command, as one would type it, for when its answer is not understood.
     command: String,
-    // What ends a name asked and every answer: a zero byte with `-Z`, a line feed without.
     end: u8,
 }
 
 impl Contents {
-    /// Starts the process in the worktree at `root`.
     pub(crate) fn start(
         git: &Git,
         root: &Path,
@@ -113,16 +98,12 @@ impl Contents {
         )
     }
 
-    /// Starts the process from a run of git that is prepared and not yet started, of a git
-    /// that has the newer forms or has not.
     pub(crate) fn start_in(
         mut command: Command,
         has_newer_forms: bool,
     ) -> Result<Contents, GitError> {
-        // `-Z` ends every name and every answer with a zero byte, so a path may hold a
-        // line feed; git has it from the newer forms on. Without it each ends at a line
-        // feed, and `asked` keeps the names that hold one away. What git complains of
-        // meanwhile has no reader.
+        // `-Z` ends every name and answer with a zero byte so a path may hold a line feed; older
+        // git lacks it, and `asked` keeps such names away.
         command.args(["cat-file", "--batch"]);
         if has_newer_forms {
             command.arg("-Z");
@@ -149,8 +130,7 @@ impl Contents {
         }
     }
 
-    /// Asks for the object `name`, which is a commit, a colon and a path. An error
-    /// means the process is of no use any more.
+    /// An error means the process is of no use any more.
     pub(crate) fn read(&mut self, name: &[u8]) -> Result<Read, GitError> {
         let mut ask = name.to_vec();
         ask.push(self.end);
@@ -162,11 +142,9 @@ impl Contents {
         if header.pop() != Some(self.end) {
             return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "git ended").into());
         }
-        // What git does not find it names back, word for word.
         if header.strip_suffix(b" missing") == Some(name) {
             return Ok(Read::NoBlob);
         }
-        // What it finds: the id of the object, its kind and its size, then the object.
         let mut fields = header.rsplitn(3, |byte| *byte == b' ');
         let size = fields
             .next()
@@ -187,16 +165,13 @@ impl Contents {
                 Read::NoBlob
             });
         }
-        // A repository inside the repository is a name with nothing to read behind it.
         if header.ends_with(b" submodule") || header.ends_with(b" ambiguous") {
             return Ok(Read::NoBlob);
         }
         Err(self.unreadable(format!("the answer {:?}", String::from_utf8_lossy(&header))))
     }
 
-    /// Ends the process and waits for it.
     pub(crate) fn stop(mut self) {
-        // Closing its input lets git end by itself; killing it makes sure it does.
         drop(self.asks);
         let _ = self.child.kill();
         let _ = self.child.wait();

@@ -1,15 +1,6 @@
-//! `cargo xtask language-servers <folder>`: fills `<folder>` with the real language servers
-//! the Navigator's built-in table pins for this machine, through the app's own downloader
-//! (`yaar_navigator::download::fill`), so that the tests that need a real server find them
-//! where `YAAR_LANGUAGE_SERVERS` names (`crates/window/navigator/tests/support/mod.rs`).
-//!
-//! Run once on a machine, by hand on a Mac or in the Linux machine, and by a step of the
-//! workflow on GitHub's, whose cache keeps the folder between runs, keyed on the table. A
-//! row whose pinned version and digest the folder holds already is left as it is, and
-//! nothing is fetched for it: a second run fetches nothing. It prints one line a row, and
-//! ends with failure, saying why, when a download fails or the machine is none the table
-//! downloads for. It fetches from the publishers' own addresses, as the app does, and
-//! from nothing else.
+//! `cargo xtask language-servers <folder>`: fills `<folder>` with the language servers the
+//! Navigator's table pins for this machine, through the app's own downloader. A row already held at
+//! its pinned version and digest is not fetched again.
 
 use std::io::Write;
 use std::path::Path;
@@ -18,7 +9,6 @@ use std::process::ExitCode;
 use yaar_navigator::download::{self, DownloadError};
 use yaar_navigator::{BUILTIN, Platform, Registry};
 
-/// Fills `folder`, as the module doc says.
 pub fn fill(folder: &Path) -> ExitCode {
     let Some(platform) = Platform::current() else {
         eprintln!(
@@ -45,7 +35,6 @@ pub fn fill(folder: &Path) -> ExitCode {
     }
 }
 
-/// Fills `folder` from `registry` for `platform`, one line of `out` for each server.
 fn run(
     registry: &Registry,
     platform: Platform,
@@ -73,11 +62,8 @@ mod tests {
         0x45, 0xc3, 0x11, 0x0, 0x0, 0x0,
     ];
 
-    /// The SHA-256 digest of [`SERVED`].
     const DIGEST: &str = "79990711ecb64d8f14884c347c625155596f887366f92ebf45a37c89b346fcc6";
 
-    /// A listener on the loopback address that answers each request with [`SERVED`] and
-    /// keeps the request lines it heard. Runs until the test process ends.
     fn serve() -> (u16, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("listen");
         let port = listener.local_addr().expect("its address").port();
@@ -150,7 +136,6 @@ mod tests {
         assert!(folder.join("demo/3/demo").is_file());
         assert!(folder.join("demo/installed.toml").is_file());
 
-        // The second run finds the folder whole: the one line says so, and no request is added.
         let mut again = Vec::new();
         run(&registry, Platform::LinuxX64, &folder, &mut again).expect("a filled folder is whole");
         assert_eq!(

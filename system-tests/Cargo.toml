@@ -10,7 +10,6 @@ publish.workspace = true
 name = "standin-agent"
 path = "src/bin/standin-agent.rs"
 
-# A scripted Window as one command, for the jobs of the workflow that drive the installed app.
 [[bin]]
 name = "yaar-script"
 path = "src/bin/yaar-script.rs"
@@ -18,10 +17,7 @@ path = "src/bin/yaar-script.rs"
 [dependencies]
 yaar-link.workspace = true
 libc.workspace = true
-# The recorded events of the agent CLIs, and the hook inputs the stand-in writes and the
-# plugin's hooks it reads.
 serde_json.workspace = true
-# The terminal core the client reads a terminal's screen through, as lines.
 alacritty_terminal.workspace = true
 
 [lints]

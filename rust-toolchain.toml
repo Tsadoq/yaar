@@ -1,4 +1,4 @@
-# One compiler for every machine. Raised on purpose, never by itself.
+# One compiler for every machine; raised only on purpose.
 [toolchain]
 channel = "1.100.0"
 profile = "minimal"

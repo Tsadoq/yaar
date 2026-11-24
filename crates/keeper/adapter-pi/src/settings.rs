@@ -1,14 +1,5 @@
-//! The one entry the Adapter writes into pi's own settings after the user's yes, and the
-//! answer it keeps: what the crate's doc says under "How pi reaches the app".
-//!
-//! Every function takes the user's home, under which pi keeps its settings
-//! (`home/.pi/agent/settings.json`), and the Adapter's own folder of the app, where the
-//! extension lies and the answer is kept. Nothing here reads the environment: a test hands
-//! a home of its own, and so no test can reach the user's real settings of pi.
-//!
-//! The settings are the user's own file, so the entry is put into its text and never
-//! written by serialising parsed settings: `serde_json` only checks that pi can read the
-//! file, and a small scanner finds the places in the text that a yes and a no change.
+//! The one entry written into pi's settings after the user's yes, and the kept answer.
+//! The entry goes into the file's text, never by serialising parsed settings.
 
 use std::ffi::OsString;
 use std::fs;
@@ -23,17 +14,13 @@ use yaar_agent::{Consent, ConsentAnswer};
 
 use crate::{AGENT_FOLDER, CONSENT_FILE, EXTENSION, EXTENSION_FILE, SETTINGS_FILE, SETTINGS_KEY};
 
-/// How many times the Adapter tries to take pi's lock, as pi does, and how long it waits
-/// between two tries.
+/// Retries for pi's lock, as pi takes it: 10 tries, 20 ms apart.
 const LOCK_TRIES: u32 = 10;
 const LOCK_WAIT: Duration = Duration::from_millis(20);
 
-/// How the user's leave stands for the pi installed under `home`, as
-/// [`yaar_agent::Adapter::consent`] says: none while `home/.pi/agent` is not a folder. Its
-/// `answer` is the kept one, but a kept yes whose entry is not in pi's settings is
-/// [`ConsentAnswer::NotAsked`]; `problem` says why the settings cannot be read, where they
-/// cannot, and, for a kept no, says that the entry is still listed where it is (a no whose
-/// take-out failed), and is otherwise none. Writes nothing.
+/// None while `home/.pi/agent` is not a folder. A kept yes whose entry is gone from pi's
+/// settings stands as `NotAsked`. `problem` says why the settings cannot be read, or that a
+/// kept no is still listed.
 pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
     let agent = home.join(AGENT_FOLDER);
     if !agent.is_dir() {
@@ -44,10 +31,8 @@ pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
     let kept = kept(folder);
 
     let (answer, problem) = match kept {
-        // A no stands. Where the entry is still in pi's settings, because the app could not
-        // take it out when the user said no (pi held its lock), the user is told, at every
-        // start until it is gone. A file the app cannot read says nothing: the app writes
-        // nothing after a no, and pi reads no file the app cannot.
+        // A no stands. A still-listed entry (the take-out failed while pi held its lock) is told
+        // at every start; an unreadable file says nothing.
         ConsentAnswer::No => match is_listed(&settings, &extension) {
             Ok(true) => (
                 ConsentAnswer::No,
@@ -61,8 +46,6 @@ pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
         },
         kept => match is_listed(&settings, &extension) {
             Ok(true) => (kept, None),
-            // The entry is gone, or the file is: the question comes back, and nothing is
-            // written back by itself.
             Ok(false) => (ConsentAnswer::NotAsked, None),
             Err(problem) => (ConsentAnswer::NotAsked, Some(problem)),
         },
@@ -74,14 +57,8 @@ pub(crate) fn consent(home: &Path, folder: &Path) -> Option<Consent> {
     })
 }
 
-/// Takes the user's answer, as [`yaar_agent::Adapter::answer_consent`] says: a yes adds
-/// the entry, the absolute path of `folder/extension/yaar.ts`, to the top-level
-/// `extensions` of pi's settings and keeps `yes`; a no keeps `no` and takes the entry out;
-/// [`ConsentAnswer::NotAsked`] takes the entry out and removes the kept answer. The rest of
-/// the file stays byte for byte; the file is changed through a temporary file renamed over
-/// it, under pi's lock. A settings file that cannot be read as pi writes it is left as it
-/// was, and the answer is not kept (a yes) or is kept (a no, ask again) with `problem`
-/// saying so. None while `home/.pi/agent` is not a folder: nothing is kept.
+/// A yes adds the entry, a no takes it out, `NotAsked` takes it out and removes the kept answer.
+/// A file that cannot be read as pi writes it is left as it was, with `problem` saying so.
 pub(crate) fn answer(home: &Path, folder: &Path, answer: ConsentAnswer) -> Option<Consent> {
     let agent = home.join(AGENT_FOLDER);
     if !agent.is_dir() {
@@ -109,8 +86,7 @@ pub(crate) fn answer(home: &Path, folder: &Path, answer: ConsentAnswer) -> Optio
     Some(now)
 }
 
-/// The extension's absolute path: `folder/extension/yaar.ts`, with `folder` made absolute
-/// but no link resolved, as the path the app writes into the settings.
+/// The path written into the settings: `folder` made absolute, no link resolved.
 fn extension_of(folder: &Path) -> PathBuf {
     std::path::absolute(folder)
         .unwrap_or_else(|_| folder.to_owned())
@@ -118,7 +94,6 @@ fn extension_of(folder: &Path) -> PathBuf {
         .join(EXTENSION_FILE)
 }
 
-/// What the Window asks: the Adapter's own words, naming what is written and where.
 fn question(extension: &Path, settings: &Path) -> String {
     format!(
         "pi can report what it does to the app and take your reviews if the app adds its \
@@ -130,7 +105,6 @@ fn question(extension: &Path, settings: &Path) -> String {
     )
 }
 
-/// The answer kept in `folder`: `yes` or `no`; anything else, or no file, is not asked yet.
 fn kept(folder: &Path) -> ConsentAnswer {
     match fs::read_to_string(folder.join(CONSENT_FILE)) {
         Ok(text) => match text.trim() {
@@ -142,8 +116,6 @@ fn kept(folder: &Path) -> ConsentAnswer {
     }
 }
 
-/// Keeps `answer` in `folder`, which is made when it is not there: `yes` or `no` and a line
-/// feed, or, for a question not yet answered, nothing.
 fn keep(folder: &Path, answer: ConsentAnswer) -> Result<(), String> {
     let file = folder.join(CONSENT_FILE);
     let text = match answer {
@@ -169,20 +141,12 @@ fn keep(folder: &Path, answer: ConsentAnswer) -> Result<(), String> {
         })
 }
 
-// What a settings file is, and what is changed in it.
-
-/// The settings as one read found them.
 struct Loaded {
-    /// The text, or none where the file does not exist.
     text: Option<String>,
-    /// The file the text was read from: the settings, or where a link points.
     real: PathBuf,
-    /// The permissions of that file, to be kept.
     permissions: Option<fs::Permissions>,
 }
 
-/// Reads the settings, following a symbolic link. A file the app cannot make text of is a
-/// problem that names it.
 fn load(settings: &Path) -> Result<Loaded, String> {
     let cannot = |what: &str, error: io::Error| {
         format!("{}: the app could not {what} ({error})", settings.display())
@@ -211,7 +175,6 @@ fn load(settings: &Path) -> Result<Loaded, String> {
     })
 }
 
-/// The problem for a settings file pi would not read as it writes it.
 fn unreadable(settings: &Path, why: &str) -> String {
     format!(
         "{}: the app cannot read it as pi writes it ({why}), so it leaves it as it is",
@@ -219,7 +182,6 @@ fn unreadable(settings: &Path, why: &str) -> String {
     )
 }
 
-/// Whether the settings list `extension`, a file that is not there listing nothing.
 fn is_listed(settings: &Path, extension: &Path) -> Result<bool, String> {
     let Some(text) = load(settings)?.text else {
         return Ok(false);
@@ -231,7 +193,6 @@ fn is_listed(settings: &Path, extension: &Path) -> Result<bool, String> {
         .is_some_and(|entry| !layout.matches(body, entry).is_empty()))
 }
 
-/// A yes: puts `extension` into the settings, if it is not there.
 fn put_in(settings: &Path, extension: &Path) -> Result<(), String> {
     let Some(entry) = extension.to_str() else {
         return Err(format!(
@@ -245,7 +206,6 @@ fn put_in(settings: &Path, extension: &Path) -> Result<(), String> {
     })
 }
 
-/// A no, or ask again: takes `extension` out of the settings, if it is there.
 fn take_out(settings: &Path, extension: &Path) -> Result<(), String> {
     let Some(entry) = extension.to_str() else {
         // A path that is not text cannot have been written, so there is nothing to take out.
@@ -257,14 +217,12 @@ fn take_out(settings: &Path, extension: &Path) -> Result<(), String> {
     })
 }
 
-/// What a change of the settings does to their text, if there is any: the new text, none
-/// where nothing changes, or why pi cannot read the text. Given none where there is no file.
+/// Takes the text, none where there is no file; gives the new text, none where nothing
+/// changes, or why pi cannot read the text.
 type Edit<'a> = dyn Fn(Option<&str>) -> Result<Option<String>, String> + 'a;
 
-/// Reads the settings, asks `edit` what the text becomes (none: nothing changes, and
-/// nothing is made), and writes the result under pi's lock. `edit` is given none where there
-/// is no file. A look without the lock comes first, so that a change that is not one takes
-/// no lock and makes nothing.
+/// The settings are read once without the lock first, so a change that is none takes no lock
+/// and writes nothing.
 fn change(settings: &Path, edit: &Edit<'_>) -> Result<(), String> {
     let edit =
         |loaded: &Loaded| edit(loaded.text.as_deref()).map_err(|why| unreadable(settings, &why));
@@ -287,8 +245,7 @@ fn change(settings: &Path, edit: &Edit<'_>) -> Result<(), String> {
     )
 }
 
-/// pi's own lock beside its settings: the folder `<settings>.lock`, made with `mkdir`, which
-/// fails where it exists. It is removed when this goes.
+/// pi's own lock: the folder `<settings>.lock`, made with `mkdir`, which fails where it exists.
 struct Lock(PathBuf);
 
 impl Lock {
@@ -322,9 +279,7 @@ impl Drop for Lock {
     }
 }
 
-/// Writes `bytes` to a temporary file beside `file`, flushes it, gives it the permissions
-/// of the file it replaces and renames it over `file`: a reader sees the old file or the new
-/// one, and a failure leaves the old one and no temporary file.
+/// A reader sees the old file or the new one; a failure leaves the old one and no temporary file.
 fn write_through_a_temporary_file(
     file: &Path,
     bytes: &[u8],
@@ -358,9 +313,6 @@ fn write_through_a_temporary_file(
     written
 }
 
-// The text of a settings file.
-
-/// The byte-order mark pi's file may begin with, kept as it is, and the text after it.
 fn split_mark(text: &str) -> (&str, &str) {
     match text.strip_prefix('\u{feff}') {
         Some(body) => ("\u{feff}", body),
@@ -368,7 +320,6 @@ fn split_mark(text: &str) -> (&str, &str) {
     }
 }
 
-/// What the file is when the app made it: pi's own form, two spaces.
 fn made_as_pi_would(entry: &str) -> String {
     format!(
         "{{\n  {}: [\n    {}\n  ]\n}}\n",
@@ -381,8 +332,6 @@ fn json_string(text: &str) -> String {
     serde_json::to_string(text).expect("a string is JSON")
 }
 
-/// `text` with `entry` added at the end of the top-level list, or none where it is there.
-/// An `Err` says why pi could not read `text` as it writes it.
 fn with_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
     let (mark, body) = split_mark(text);
     let layout = read_layout(body)?;
@@ -393,13 +342,10 @@ fn with_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
     let key = json_string(SETTINGS_KEY);
 
     let (at, insert) = match (&layout.list, layout.members.last()) {
-        // At the end of the list, after its last element or, in an empty list, right after
-        // the bracket.
         (Some(list), _) => match list.elements.last() {
             Some(last) => (last.end, format!(", {quoted}")),
             None => (list.open + 1, quoted),
         },
-        // No member at all: the object takes pi's own form between its braces.
         (None, None) => {
             let tail = if layout.close == layout.open + 1 {
                 "\n"
@@ -411,8 +357,6 @@ fn with_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
                 format!("\n  {key}: [\n    {quoted}\n  ]{tail}"),
             )
         }
-        // As the object's last member, laid out as the member before it: the blanks that
-        // lead its key, and those around its colon.
         (None, Some(last)) => {
             let lead = &body[last.lead..last.key_start];
             let colon = &body[last.key_end..last.value_start];
@@ -426,8 +370,6 @@ fn with_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
     )))
 }
 
-/// `text` with every string spelling `entry` taken out of the top-level list, each with the
-/// comma and the blanks that parted it from its neighbour, or none where it is not there.
 fn without_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
     let (mark, body) = split_mark(text);
     let mut body = body.to_owned();
@@ -445,18 +387,14 @@ fn without_entry(text: &str, entry: &str) -> Result<Option<String>, String> {
     Ok(changed.then(|| format!("{mark}{body}")))
 }
 
-/// Where the parts of a settings object lie in its text, as byte offsets.
 struct Layout {
-    /// The `{` and the `}` of the object.
     open: usize,
     close: usize,
     members: Vec<Member>,
-    /// The top-level list `extensions`, where there is one.
     list: Option<List>,
 }
 
 struct Member {
-    /// Where the blanks before the key begin, and the key.
     lead: usize,
     key_start: usize,
     key_end: usize,
@@ -477,8 +415,7 @@ struct Span {
 }
 
 impl Layout {
-    /// The indexes of the elements of the list that are the string `entry`, however it is
-    /// spelled in the file.
+    /// Matched by decoded string, however it is spelled in the file.
     fn matches(&self, body: &str, entry: &str) -> Vec<usize> {
         let Some(list) = &self.list else {
             return Vec::new();
@@ -496,14 +433,11 @@ impl Layout {
 }
 
 impl List {
-    /// What taking out the element `index` removes: the element and the comma and blanks
-    /// that parted it from a neighbour.
     fn span_of(&self, index: usize) -> (usize, usize) {
         let this = self.elements[index];
         if self.elements.len() == 1 {
-            // Alone: the element only, which leaves the blanks of an empty list as they
-            // were; but where it stood apart from the bracket, on a line of its own, the
-            // blanks around it go too, and the list is `[]`.
+            // Alone and right after `[`, only the element goes and any blanks before `]` stay; set
+            // apart from `[`, the blanks go too and the list is `[]`.
             return if self.open + 1 == this.start {
                 (this.start, this.end)
             } else {
@@ -517,15 +451,12 @@ impl List {
     }
 }
 
-/// Checks that pi can read `body` as it writes its settings, and finds where the parts of
-/// the top-level object lie. An `Err` says why not.
 fn read_layout(body: &str) -> Result<Layout, String> {
     let value: Value =
         serde_json::from_str(body).map_err(|error| format!("it is not JSON: {error}"))?;
     if !value.is_object() {
         return Err("it is not a JSON object".to_owned());
     }
-    // serde_json has parsed the text, so what follows only has to find places in it.
     let scan = Scan {
         bytes: body.as_bytes(),
         text: body,
@@ -563,8 +494,6 @@ fn read_layout(body: &str) -> Result<Layout, String> {
     })
 }
 
-/// A scanner over JSON text that `serde_json` has already accepted: it skips strings with
-/// their escapes and nested values, and records where things lie.
 struct Scan<'a> {
     bytes: &'a [u8],
     text: &'a str,
@@ -575,7 +504,6 @@ impl Scan<'_> {
         Err("it is laid out in a way the app does not follow".to_owned())
     }
 
-    /// The first offset at or after `at` that is not a blank.
     fn blanks(&self, mut at: usize) -> usize {
         while matches!(self.bytes.get(at), Some(b' ' | b'\t' | b'\n' | b'\r')) {
             at += 1;
@@ -583,13 +511,11 @@ impl Scan<'_> {
         at
     }
 
-    /// The decoded string between two offsets, quotes included.
     fn string(&self, start: usize, end: usize) -> Result<String, String> {
         serde_json::from_str(&self.text[start..end])
             .map_err(|_| "it holds a string pi cannot read".to_owned())
     }
 
-    /// The offset after the string that starts at `at`.
     fn string_end(&self, mut at: usize) -> Result<usize, String> {
         at += 1;
         loop {
@@ -602,7 +528,6 @@ impl Scan<'_> {
         }
     }
 
-    /// The offset after the value that starts at `at`.
     fn value_end(&self, mut at: usize) -> Result<usize, String> {
         match self.bytes.get(at) {
             Some(b'"') => self.string_end(at),
@@ -640,7 +565,6 @@ impl Scan<'_> {
         }
     }
 
-    /// The members of the object that opens at `open`, and the offset of its `}`.
     fn object(&self, open: usize) -> Result<(Vec<Member>, usize), String> {
         let mut members = Vec::new();
         let mut at = open + 1;
@@ -676,7 +600,6 @@ impl Scan<'_> {
         }
     }
 
-    /// The elements of the list that opens at `open`, and its `]`.
     fn list(&self, open: usize) -> Result<List, String> {
         let mut elements = Vec::new();
         let mut at = open + 1;
@@ -745,7 +668,6 @@ mod tests {
             None
         );
         assert_eq!(without_entry(r#"{"a": 1}"#, ENTRY).unwrap(), None);
-        // The entry in another list, or as another key's value, is not the user's list.
         assert_eq!(
             without_entry(
                 r#"{"x": {"extensions": ["/data/pi/extension/yaar.ts"]}}"#,

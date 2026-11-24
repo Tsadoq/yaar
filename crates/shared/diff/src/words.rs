@@ -1,41 +1,25 @@
-//! Cutting changed lines into words, finding the lines that were edited, and marking the
-//! words that changed in them.
-
 use std::ops::Range;
 
-/// One word of some lines, or the line feed that ends one of them.
 pub(crate) struct Word<'a> {
-    /// Which of the lines it is in, counted from the first of them.
     line: usize,
-    /// Where it is in that line.
     range: Range<usize>,
-    /// Its bytes, which are what makes two words the same word.
     pub(crate) bytes: &'a [u8],
 }
 
 impl Word<'_> {
-    /// Whether it is white space, the line feed among it.
     fn is_space(&self) -> bool {
         std::str::from_utf8(self.bytes).is_ok_and(|text| text.chars().all(char::is_whitespace))
     }
 }
 
-/// The words of some lines.
 pub(crate) struct Words<'a> {
-    /// All of them, in the order of the lines.
     pub(crate) all: Vec<Word<'a>>,
-    /// Which of them are the words of each line.
     pub(crate) of_line: Vec<Range<usize>>,
 }
 
-/// The words of `lines`, each line given with the line feed that ends it, if it has one;
-/// or none when they are more than `most` words. The cutting stops at the line that goes
-/// over, so lines without end cost no more than the first of them. That line is cut
-/// whole, however long it is: whoever calls keeps the lines short enough.
-///
-/// The line feed is a word of its own. It can never be marked, since it is not part of
-/// the line as it is shown, but it lets the end of a line on one side meet the end of a
-/// line on the other.
+/// None when there are more than `most` words. The line that goes over is still cut whole, so
+/// the caller bounds line length. A line feed is a word of its own: never marked, but it lets
+/// line ends meet.
 pub(crate) fn of_lines<'a>(
     lines: impl Iterator<Item = &'a [u8]>,
     most: usize,
@@ -63,29 +47,17 @@ pub(crate) fn of_lines<'a>(
     Some(words)
 }
 
-/// The lines that were edited: for each, its place among the `old` lines and the place
-/// among the `new` lines of the line it became, in the order of the lines.
-///
-/// `removed` and `added` are the outcome of comparing all the old words with all the new
-/// ones: which old words, by their place in `old.all`, stand for no new word, and which
-/// new ones for no old word. The others stand for each other in order. What two lines
-/// share is the bytes of the words of one that stand for words of the other. White space
-/// is left out of the count: any two lines share some, so it tells nothing of which line
-/// became which.
-///
-/// A line became the line it shares the most with, if that line shares the most with it
-/// too; where a line shares as much with two, the first of them counts. A line that
-/// shares nothing, and a line whose nearest line is nearer to another, became no line: it
-/// was removed, or added, as a whole.
+/// The (old line, new line) pairs where a line became another. `removed` and `added` say which
+/// words, by index in `all`, have no counterpart; the rest match in order. A line became the
+/// line it shares most non-space bytes with, if that line shares most with it too (ties: first).
 pub(crate) fn edited(
     old: &Words<'_>,
     new: &Words<'_>,
     removed: impl Fn(u32) -> bool,
     added: impl Fn(u32) -> bool,
 ) -> Vec<(usize, usize)> {
-    // What each two lines share, as an old line, a new line and a count of bytes. Words
-    // that stand for each other come in the same order on both sides, so all that two
-    // lines share comes in one run, and the runs come in the order of the lines.
+    // Shared bytes per (old line, new line). Matched words come in the same order on both sides, so
+    // each pair's words form one run.
     let mut shared: Vec<(usize, usize, usize)> = Vec::new();
     let mut kept = new
         .all
@@ -113,7 +85,6 @@ pub(crate) fn edited(
         }
     }
 
-    // For each line the most it shares with a line of the other side, and with which.
     let mut most_of_old: Vec<(usize, Option<usize>)> = vec![(0, None); old.of_line.len()];
     let mut most_of_new: Vec<(usize, Option<usize>)> = vec![(0, None); new.of_line.len()];
     for &(old_line, new_line, bytes) in &shared {
@@ -133,8 +104,6 @@ pub(crate) fn edited(
         .collect()
 }
 
-/// The ranges to mark in one line: those of its `words` that `changed` says changed, by
-/// their place among them. Words that follow one another are marked as one range.
 pub(crate) fn marks(words: &[Word<'_>], changed: impl Fn(u32) -> bool) -> Vec<Range<usize>> {
     let mut marks: Vec<Range<usize>> = Vec::new();
     for (index, word) in words.iter().enumerate() {
@@ -149,22 +118,15 @@ pub(crate) fn marks(words: &[Word<'_>], changed: impl Fn(u32) -> bool) -> Vec<Ra
     marks
 }
 
-/// What a character is, for the cutting of a line into words.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
-    /// A letter, a digit or an underscore: part of a name or a number.
     Name,
-    /// White space.
     Space,
-    /// Anything else: a word by itself.
     Other,
 }
 
-/// Cuts one line into words: a run of letters, digits and underscores, a run of white
-/// space, or one other character.
-///
-/// Where the line is UTF-8 a word never ends inside a character, so the text of the line
-/// can be sliced by the ranges. Bytes that are no UTF-8 are words by themselves.
+/// A word is a run of letters, digits and underscores, a run of white space, or one other
+/// character. Words never end inside a UTF-8 character; bytes that are not UTF-8 are words alone.
 fn cut(line: &[u8]) -> Vec<Range<usize>> {
     let mut words: Vec<Range<usize>> = Vec::new();
     let mut last = Kind::Other;
@@ -224,9 +186,6 @@ mod tests {
         assert_eq!(bytes, [&b"a"[..], b" ", b"b", b"\n", b"c", b" ", b"d"]);
         assert_eq!(words.of_line, [0..4, 4..7]);
 
-        // Every word but the space is called changed, the line feed among them: the
-        // last mark of the first line still ends where the shown line ends, and the
-        // marks of the second line count from its own start.
         let all_but_the_space = |word| word != 1;
         assert_eq!(marks(&words.all[0..4], all_but_the_space), [0..1, 2..3]);
         assert_eq!(marks(&words.all[4..7], all_but_the_space), [0..1, 2..3]);
@@ -234,16 +193,12 @@ mod tests {
 
     #[test]
     fn lines_of_more_words_than_allowed_are_not_cut() {
-        // Four words and three, the line feed among them.
         let lines = [&b"a b\n"[..], &b"c d"[..]];
         assert!(of_lines(lines.into_iter(), 7).is_some());
         assert!(of_lines(lines.into_iter(), 6).is_none());
-        // The first line alone is within the limit, and the two together are not.
         assert!(of_lines(lines.into_iter(), 4).is_none());
     }
 
-    /// The lines that were edited, when the words at `removed` of the old lines and at
-    /// `added` of the new ones stand for no word of the other side.
     fn edited_lines(
         old: &[&[u8]],
         removed: &[u32],
@@ -260,9 +215,6 @@ mod tests {
 
     #[test]
     fn a_line_became_the_line_it_shares_the_most_with_if_that_line_shares_the_most_with_it() {
-        // `return compute(` stands in the first new line, `);` and the line feed in the
-        // second. Each new line shares the most with the one old line, which can have
-        // become only one of them: the one it shares the most with.
         assert_eq!(
             edited_lines(
                 &[b"return compute(x);\n"],
@@ -273,9 +225,7 @@ mod tests {
             [(0, 0)]
         );
 
-        // What is shared is counted in bytes, not in words: the new line holds three
-        // words of the first old line, of one byte each, and one word of the second, of
-        // ten bytes.
+        // Counted in bytes, not words: three one-byte words against one ten-byte word.
         assert_eq!(
             edited_lines(
                 &[b"a.b.c\n", b"identifier\n"],
@@ -289,7 +239,6 @@ mod tests {
 
     #[test]
     fn of_two_lines_that_share_as_much_with_a_line_it_became_the_first() {
-        // The line feed that stands is the one of the second new line.
         assert_eq!(
             edited_lines(&[b"ab cd\n"], &[1], &[b"ab\n", b"cd\n"], &[1]),
             [(0, 0)]
@@ -302,8 +251,6 @@ mod tests {
 
     #[test]
     fn white_space_is_nothing_shared() {
-        // The indentation and the line feed stand on both sides, and the lines are still
-        // two lines with no word in common.
         assert_eq!(edited_lines(&[b"    x\n"], &[1], &[b"    y\n"], &[1]), []);
     }
 }

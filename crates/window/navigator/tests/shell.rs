@@ -1,16 +1,5 @@
-//! The environment of the language servers, taken from the user's login shell (NAV-16), and
-//! the function that takes it, shown with shells the tests write themselves: a script that
-//! plays the shell, records its arguments, prints what the test wants and then runs the
-//! command it was given. No test runs the user's own shell or reads their start-up files.
-//!
-//! Every wait is for a fact, with a deadline: a state the Navigator tells, the end of a call
-//! on a thread of its own, the line a script writes into a pipe. A clause that says nothing
-//! happened is read after a barrier: the Navigator handles one event at a time and tells one
-//! list of its servers for each `Workspaces` and each `OnScreen`, so a list told for a later
-//! ask comes after what the earlier ones made it do. The one clause no barrier orders is
-//! "never before a server is needed": the shell runs on a thread of its own, so the script
-//! notes whether a server was needed when it started, and [`SETTLE`] gives a shell started
-//! early the time to start.
+//! The servers' environment taken from the user's login shell, shown with scripts that play
+//! the shell. No test runs the user's own shell or reads their start-up files.
 
 mod support;
 
@@ -26,12 +15,10 @@ use support::*;
 use yaar_navigator::shell::{COMMAND, LoginShell, MARKER, ShellError, take};
 use yaar_navigator::{Ask, State, Told, WorkspaceRoot};
 
-/// `path` quoted for a `/bin/sh` script.
 fn quoted(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }
 
-/// Writes the executable `/bin/sh` script `path` with `body`, its folder made first.
 fn write_script(path: &Path, body: &str) {
     std::fs::create_dir_all(path.parent().expect("a folder above")).expect("make the folder");
     std::fs::write(path, format!("#!/bin/sh\n{body}")).expect("write the script");
@@ -39,21 +26,18 @@ fn write_script(path: &Path, body: &str) {
         .expect("make the script executable");
 }
 
-/// A shell of the test's: the script `<scratch>/<name>`.
 fn shell_of(scratch: &Scratch, name: &str, body: &str, deadline: Duration) -> LoginShell {
     let program = scratch.root.join(name);
     write_script(&program, body);
     LoginShell { program, deadline }
 }
 
-/// The variables as `take` gives them, for a comparison.
 fn pairs(list: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
     list.iter()
         .map(|(name, value)| ((*name).into(), (*value).into()))
         .collect()
 }
 
-/// The value of a variable in what `take` gave.
 fn value_of<'a>(environment: &'a [(OsString, OsString)], name: &str) -> Option<&'a OsString> {
     environment
         .iter()
@@ -61,21 +45,15 @@ fn value_of<'a>(environment: &'a [(OsString, OsString)], name: &str) -> Option<&
         .map(|(_, value)| value)
 }
 
-/// How long a negative clause is given to show itself: the one wait of this file that is not
-/// on a fact. A shell started early notes its start within milliseconds, so this is long
-/// enough on a machine at background priority too. A passing run cannot fail on it (the
-/// server is needed only after it); a shell started early on a machine slower than this
-/// could be missed.
+/// The one wait on no fact: long enough for an early shell to note its start, even at background
+/// priority.
 const SETTLE: Duration = Duration::from_secs(3);
 
-/// Waits [`SETTLE`], on a channel nobody sends on, so that the wait is a timeout and not a
-/// sleep.
 fn settle() {
     let (_kept, never) = mpsc::channel::<()>();
     let _ = never.recv_timeout(SETTLE);
 }
 
-/// A named pipe at `path`: a script that writes into it blocks until the test reads.
 fn make_pipe(path: &Path) {
     let name = std::ffi::CString::new(path.as_os_str().as_bytes()).expect("a path with no NUL");
     // SAFETY: `name` is a NUL-terminated path that lives through the call.
@@ -88,8 +66,6 @@ fn make_pipe(path: &Path) {
     );
 }
 
-/// What a script writes into the named pipe `pipe`, read on a thread of its own so that the
-/// wait has a deadline: the pipe's reader blocks until a writer opens it.
 fn read_pipe(pipe: &Path, what: &str) -> String {
     let (sent, received) = mpsc::channel();
     let pipe = pipe.to_path_buf();
@@ -102,10 +78,7 @@ fn read_pipe(pipe: &Path, what: &str) -> String {
         .expect("read the pipe")
 }
 
-/// Waits until no process `pid` runs. A process that lost its parent is reaped by the
-/// system's first process, in its own time, and has no event to wait for, so this looks
-/// again at the one fact until it holds, up to [`DEADLINE`]. A process still there is killed
-/// before the test fails, so that a failure leaves nothing running.
+/// An orphan is reaped by the system's first process in its own time, with no event to wait for.
 fn wait_until_gone(pid: u32, what: &str) {
     let until = Instant::now() + DEADLINE;
     while is_alive(pid) {
@@ -118,7 +91,6 @@ fn wait_until_gone(pid: u32, what: &str) {
     }
 }
 
-/// Kills the processes it holds when a test fails, so that a failure leaves nothing running.
 struct KillOnFailure(Vec<u32>);
 
 impl Drop for KillOnFailure {
@@ -132,8 +104,6 @@ impl Drop for KillOnFailure {
     }
 }
 
-/// Kills the background job whose process number the file holds, when a test fails, so that
-/// a failure of `take` before the test read the number leaves nothing running.
 struct KillJobOnFailure(PathBuf);
 
 impl Drop for KillJobOnFailure {
@@ -150,10 +120,6 @@ impl Drop for KillJobOnFailure {
         }
     }
 }
-
-// ---------------------------------------------------------------------------------------
-// `take`
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn what_the_shell_prints_before_the_marker_is_noise_and_what_follows_is_the_environment() {
@@ -219,13 +185,11 @@ fn the_shell_runs_in_the_windows_environment_and_no_other_and_in_the_folder_home
             .any(|line| line == format!("HOME={}", scratch.root.join("home").display())),
         "the Window's HOME: {env}"
     );
-    // `Scratch::new` set these in this process; the shell must not have them.
     assert!(
         !env.contains("GIT_AUTHOR_NAME"),
         "the shell ran in the test's own environment and not in the Window's: {env}"
     );
 
-    // With no HOME, the root.
     let base: Vec<_> = base
         .into_iter()
         .filter(|(name, _)| name != "HOME")
@@ -306,8 +270,6 @@ fn a_job_a_start_up_file_left_in_the_background_does_not_hold_the_output_open() 
     let scratch = Scratch::new();
     let base = scratch.environment();
     let job = scratch.root.join("job.pid");
-    // The job keeps the shell's standard output, as a start-up file's `ssh-agent` or `sleep &`
-    // does; the shell itself ends at once.
     let shell = shell_of(
         &scratch,
         "shell",
@@ -320,11 +282,8 @@ fn a_job_a_start_up_file_left_in_the_background_does_not_hold_the_output_open() 
         ),
         DEADLINE,
     );
-    // A failure leaves no job running: the guard reads the job's process from its file, if
-    // the shell got so far, and kills it.
     let _guard = KillJobOnFailure(job.clone());
 
-    // A read that waited for the job would run out the deadline and fail.
     let taken = take(&shell, &base).expect("an environment, not the deadline");
     assert_eq!(value_of(&taken, "TAKEN"), Some(&OsString::from("yes")));
 
@@ -342,8 +301,6 @@ fn a_shell_that_outlasts_its_deadline_is_killed_with_everything_it_started() {
     let base = scratch.environment();
     let pids = scratch.root.join("pids");
     make_pipe(&pids);
-    // The script says its own process and its job's through the pipe, which it blocks on
-    // until the test reads: the numbers are in hand before the deadline is of any matter.
     let shell = shell_of(
         &scratch,
         "shell",
@@ -383,15 +340,10 @@ fn a_shell_that_outlasts_its_deadline_is_killed_with_everything_it_started() {
         took >= DEADLINE,
         "the call ended after {took:?}, before its deadline of {DEADLINE:?}"
     );
-    // The shell is reaped before the call returns; its job is the group's other member.
     assert!(!is_alive(shell_pid), "the shell is still there");
     wait_until_gone(job_pid, "the shell's background job");
 }
 
-/// A shell that does not end by itself, as the kernel's part alone: the Window that started it
-/// is killed, so nothing of the Navigator's own cleanup runs, and the shell still ends, so
-/// the kernel sent it a signal when its Window died. The shell lies in a session of its own,
-/// so the Window's death reaches it by no group either.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_shell_ends_when_the_window_that_started_it_is_killed() {
@@ -400,14 +352,10 @@ fn a_shell_ends_when_the_window_that_started_it_is_killed() {
 
     let this_test = "a_shell_ends_when_the_window_that_started_it_is_killed";
     if std::env::var_os("YAAR_WINDOW_CHILD").is_some() {
-        // The Window: it runs the shell, says which process it is and where its scratch is,
-        // and waits to be killed; the end of its input, which a failed test leaves, ends it.
         let scratch = Scratch::new();
         let base = scratch.environment();
         let pid_pipe = scratch.root.join("shell.pid");
         make_pipe(&pid_pipe);
-        // Its own deadline lies past the parent's wait, so that only the kernel can be what
-        // ends it within the wait.
         let shell = shell_of(
             &scratch,
             "never-ending-shell",
@@ -444,37 +392,22 @@ fn a_shell_ends_when_the_window_that_started_it_is_killed() {
     window.kill().expect("kill the Window");
     window.wait().expect("reap the Window");
     wait_until_gone(pid, "the shell that the killed Window started");
-    // The Window was killed, so its scratch was not removed.
     let _ = std::fs::remove_dir_all(scratch);
 }
 
-// ---------------------------------------------------------------------------------------
-// NAV-16
-// ---------------------------------------------------------------------------------------
-
-/// The entries of the `PATH` in `environment`: what the product's configuration holds as its
-/// search path.
 fn search_path_of(environment: &[(OsString, OsString)]) -> Vec<PathBuf> {
     value_of(environment, "PATH")
         .map(|path| std::env::split_paths(path).collect())
         .unwrap_or_default()
 }
 
-/// What a scratch of the NAV-16 tests holds: the shell-bin folder where the shell puts the
-/// stand-in on the path, the files the scripts write, and the registry row.
 struct Rig {
     scratch: Scratch,
     shell_bin: PathBuf,
-    /// One line for each run of the shell: its arguments.
     runs: PathBuf,
-    /// The file the test makes when a server is needed, and that the script looks for.
     needed: PathBuf,
-    /// One line for each run of the shell, written as its first act: `there` when the file
-    /// `needed` existed at that moment, `not there` when it did not.
     saw: PathBuf,
-    /// The whole environment the last run of the server's program had.
     env_seen: PathBuf,
-    /// The stand-in's log.
     log: PathBuf,
     row: String,
 }
@@ -487,9 +420,6 @@ impl Rig {
             scratch.root.join("server.env"),
             scratch.root.join("standin.log"),
         );
-        // The stand-in logs a few variables only: this script, which stands in its place on
-        // the path, writes the whole environment it was run in and then becomes the
-        // stand-in.
         write_script(
             &shell_bin.join("standin-lsp"),
             &format!(
@@ -516,10 +446,6 @@ impl Rig {
         }
     }
 
-    /// The configuration of the Window's own: the scratch's environment (its search path
-    /// has no stand-in) with a variable the shell will also set, and `shell` as the login
-    /// shell. The configuration's search path is the `PATH` of that environment split, as
-    /// the product sets it, so that an order made against either one is seen.
     fn config(&self, shell: LoginShell) -> yaar_navigator::NavigatorConfig {
         let mut config = self.scratch.config(&self.row);
         config
@@ -530,8 +456,6 @@ impl Rig {
         config
     }
 
-    /// A script of the shell that records its arguments, prints noise, sets variables and
-    /// the path, and then runs the command it was given, as a login shell does.
     fn shell(&self, deadline: Duration) -> LoginShell {
         shell_of(
             &self.scratch,
@@ -555,13 +479,11 @@ impl Rig {
         )
     }
 
-    /// A repository with a `main.sil`, so that the stand-in's row has a server to run.
     fn project(&self, name: &str) -> Repo {
         self.scratch
             .repository(name, &[("main.sil", "def alpha\n")])
     }
 
-    /// The lines the shell recorded: one for each run.
     fn shell_runs(&self) -> Vec<String> {
         std::fs::read_to_string(&self.runs)
             .map(|text| text.lines().map(str::to_owned).collect())
@@ -569,8 +491,6 @@ impl Rig {
     }
 }
 
-/// Tells the Navigator the workspaces and then the one on screen, and reads the list each
-/// ask makes it tell, so that what follows is read after both were handled.
 fn show_all(running: &mut Running, roots: Vec<WorkspaceRoot>, on_screen: &yaar_link::WorkspaceId) {
     running.ask(Ask::Workspaces(roots));
     running.wait_told("the list for the workspaces", DEADLINE, |told| {
@@ -582,7 +502,6 @@ fn show_all(running: &mut Running, roots: Vec<WorkspaceRoot>, on_screen: &yaar_l
     });
 }
 
-/// What a workspace of the repository named by `repository` is, for the Navigator.
 fn root_of(id: &yaar_link::WorkspaceId, repository: char, repo: &Repo) -> WorkspaceRoot {
     WorkspaceRoot {
         id: id.clone(),
@@ -591,8 +510,6 @@ fn root_of(id: &yaar_link::WorkspaceId, repository: char, repo: &Repo) -> Worksp
     }
 }
 
-/// Waits, up to [`DEADLINE`], until the stand-in's log holds a line of `event`, looking
-/// again at the one file until it does; gives that line.
 fn wait_logged(path: &Path, event: &str) -> Value {
     let until = Instant::now() + DEADLINE;
     loop {
@@ -608,7 +525,6 @@ fn wait_logged(path: &Path, event: &str) -> Value {
     }
 }
 
-/// Every line of the stand-in's log, as the JSON it is; none when it is not there.
 fn log_of(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -635,15 +551,12 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         .clone();
     let mut running = Running::start(config);
 
-    // Never before a server is needed: a workspace with no file of any row on screen. No
-    // surface tells when a shell starts on a thread of its own, so the script tells: its
-    // first act is to note whether the file `needed` exists. The file is made one settle time
-    // after the Navigator told its servers, and a shell started before that notes "not there".
     show_all(&mut running, roots.clone(), &w_plain);
     settle();
+    // The script notes whether `needed` exists as it starts: a shell started before this write
+    // notes "not there".
     std::fs::write(&rig.needed, "").expect("say that a server is needed");
 
-    // The first server needed.
     running.ask(Ask::OnScreen(Some(w_one.clone())));
     let ready = running.wait_state(&w_one, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -667,7 +580,6 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         "the shell was started before a server was needed"
     );
 
-    // The stand-in's `start` line, waited for: it is written by a process of its own.
     let started = wait_logged(&rig.log, "start");
     assert_eq!(started["env"]["STANDIN_FROM_SHELL"], "yes");
     assert_eq!(
@@ -701,7 +613,6 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
         "the Window's search path, then the shell's entries it lacks"
     );
 
-    // Once: a second server, started after the shell reported.
     running.ask(Ask::OnScreen(Some(w_two.clone())));
     running.wait_state(&w_two, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -710,10 +621,6 @@ fn the_servers_run_in_the_windows_environment_with_what_the_shell_prints_added_t
     running.end();
 }
 
-/// A Navigator with the shell `shell`, a workspace with a file of the stand-in's row on
-/// screen, and the state it comes to rest in: the stand-in lies only in the shell's folder,
-/// so a shell whose environment is not taken leaves it missing. Gives the state, and the
-/// Navigator ended.
 fn rest_with(rig: &Rig, shell: LoginShell, deadline: Duration) -> State {
     let repo = rig.project("project");
     let ws = workspace_id('1');
@@ -758,7 +665,6 @@ fn a_shell_that_fails_leaves_the_windows_own_environment_and_is_not_run_again() 
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Missing { offer: None }
     });
-    // A second server after the failure: the shell is not tried again.
     running.ask(Ask::OnScreen(Some(other.clone())));
     running.wait_state(&other, "standin", None, DEADLINE, |state| {
         state.state == State::Missing { offer: None }
@@ -816,13 +722,11 @@ fn a_shell_that_outlasts_its_deadline_leaves_the_windows_own_and_is_gone() {
         .trim()
         .parse()
         .expect("a process number");
-    // The shell is killed at its deadline, which counts from its start: past it, the
-    // Navigator moves on with its own environment.
+    // The shell is killed at its deadline, which counts from its start.
     let state = running.wait_state(&ws, "standin", None, 2 * DEADLINE, |state| {
         !matches!(state.state, State::Starting)
     });
     assert_eq!(state.state, State::Missing { offer: None });
-    // The call reaped the shell before it reported, and the report came before this state.
     assert!(!is_alive(pid), "the shell outlived its deadline");
     running.end();
 }
@@ -830,8 +734,6 @@ fn a_shell_that_outlasts_its_deadline_leaves_the_windows_own_and_is_gone() {
 #[test]
 fn the_programs_are_looked_for_on_the_windows_search_path_before_the_shells_entries() {
     let rig = Rig::new();
-    // Both folders hold the stand-in: the Window's own is named on its path, the shell's is
-    // put on the path by the shell. The one found says which comes first.
     let window_bin = rig.scratch.root.join("window-bin");
     rig.scratch.put_standin(&window_bin, "standin-lsp");
     let repo = rig.project("project");
@@ -868,8 +770,6 @@ fn a_shell_still_running_when_the_navigator_ends_is_killed_with_it() {
     let rig = Rig::new();
     let pipe = rig.scratch.root.join("shell.pid");
     make_pipe(&pipe);
-    // Its own deadline lies past the wait below, so that only the end of the Navigator can
-    // be what ends it within the wait.
     let shell = shell_of(
         &rig.scratch,
         "slow-shell",

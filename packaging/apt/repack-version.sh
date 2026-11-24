@@ -1,29 +1,10 @@
 #!/bin/bash
-# The same .deb at another version: unpacks <in.deb>, changes only the Version field of its
-# control file, packs it again.
+# Repacks a .deb at another version: only the Version field of its control file changes.
+# The output is verified against the input and removed on any difference; its path is printed.
 #
-#   packaging/apt/repack-version.sh <in.deb> <new-version> <out-dir>
-#
-# Writes <out-dir>/<Package>_<new-version>_<Architecture>.deb and prints its path. Packs as
-# packaging/package-linux.sh does (`dpkg-deb --root-owner-group -Zxz --build`), with
-# SOURCE_DATE_EPOCH kept. Refuses a version with a '-' (apt would order it wrongly) or one
-# that does not sort after the old one (`dpkg --compare-versions <new> gt <old>`).
-#
-# What it writes is checked against its input before the path is printed, and the file is
-# removed and the script ends with 1 unless the output holds exactly what the input holds but
-# for the one field: the same list of files (`dpkg-deb -c`: names, modes, owners, sizes and
-# times), the same bytes in each file, the same control members with the same modes and bytes,
-# and a control file that differs only in its Version line, which is the new version. The
-# sentence names the path or the field that differs. The output is removed too when any
-# command after it is written fails (the script then ends with 1 and the line that failed).
-#
-# Exit codes: 0 written; 1 refused or failed; 2 usage error.
-#
-# Needs: dpkg-deb and dpkg (package dpkg), diff and find (GNU).
+# packaging/apt/repack-version.sh <in.deb> <new-version> <out-dir>
 set -euo pipefail
 umask 022
-# Whatever fails without a sentence of its own ends the script with 1, never with the failing
-# tool's own code (gpg's 2 would read as a usage error).
 set -E
 trap 'echo "$NAME: line $LINENO: a command failed" >&2; exit 1' ERR
 NAME=repack-version.sh
@@ -58,8 +39,6 @@ TARGET=$OUT/${PKG}_${NEW}_${ARCH}.deb
 [ ! -e "$TARGET" ] || fail "$TARGET exists already"
 
 TMP=$(mktemp -d "${TMPDIR:-/tmp}/yaar-repack.XXXXXX")
-# Whatever ends the script before the path is printed, a refusal or a failed command, takes the
-# output with it: a caller never finds a repack that was not checked.
 DONE=0
 cleanup() {
   rm -rf "$TMP"
@@ -70,9 +49,8 @@ dpkg-deb -R "$IN" "$TMP/tree"
 CONTROL=$TMP/tree/DEBIAN/control
 [ "$(grep -c '^Version:' "$CONTROL")" -eq 1 ] || fail "$IN has not exactly one Version line in its control file"
 awk -v new="$NEW" '/^Version:/ { print "Version: " new; next } { print }' "$CONTROL" > "$TMP/control"
-# The time the package was built at is kept: SOURCE_DATE_EPOCH from the environment when it is
-# set, else the time of the input's control file (package-linux.sh gave it SOURCE_DATE_EPOCH),
-# so that two repacks of one .deb are the same bytes.
+# Keeps the build time (SOURCE_DATE_EPOCH, else the control file's mtime) so repacks are
+# byte-identical.
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
   SOURCE_DATE_EPOCH=$(stat -c %Y "$CONTROL") || fail "cannot read the time of the control file of $IN"
 fi
@@ -81,9 +59,8 @@ cat "$TMP/control" > "$CONTROL"
 touch -d "@$SOURCE_DATE_EPOCH" "$CONTROL"
 dpkg-deb --root-owner-group -Zxz --build "$TMP/tree" "$TARGET" >&2
 
-# The repack is the input with its Version changed and nothing else: a repack that lost the
-# program, a dependency or a maintainer script would still be a package apt-get upgrade installs.
-# same <file> <file> <what is compared>: ends the script, the output removed, when they differ.
+# same <a> <b> <what>: ends the script, the output removed, when they differ.
+# A repack that lost a program or maintainer script would still install as an upgrade.
 same() {
   rc=0
   diff -r "$1" "$2" > "$TMP/diff.out" 2>&1 || rc=$?

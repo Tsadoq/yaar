@@ -1,5 +1,5 @@
 # The Team ID of the Developer ID that signs the Mac app: ten characters, on the one line
-# below the comments, written by the owner once (packaging/README.md, "Before the first
-# release"). It is public: every signed copy of the app carries it. The job release-sign-macos
+# below the comments, written by the owner once (docs/releasing.md, "Before the first
+# release, once"). It is public: every signed copy of the app carries it. The job release-sign-macos
 # refuses a certificate of another team, and the install script on the site refuses an app
 # that a certificate of another team signed, even one Apple notarised.

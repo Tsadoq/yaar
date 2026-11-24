@@ -1,12 +1,7 @@
-//! How the fields of a frame are laid out.
-//!
-//! Every number is little endian. A text or a run of bytes is a length of four bytes and
-//! then its bytes; a text is UTF-8. A path travels as the bytes the system knows it by. A
-//! list is a count of four bytes and then its items. A value that may be missing is one
-//! byte, 0 or 1, and then the value if the byte is 1.
-//!
-//! A frame other than the hello holds exactly the fields of its kind: bytes left over mean
-//! that the two sides do not speak the same protocol, and the frame is refused.
+//! A path travels as the bytes the system knows it by (not necessarily UTF-8).
+//! Field layout of a frame, little endian. Text and byte runs: u32 length, then bytes (text is
+//! UTF-8). List: u32 count, then items. Optional: one byte 0 or 1, then the value if 1.
+//! A frame other than the hello holds exactly its fields; leftover bytes are refused.
 
 use std::ffi::OsString;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -14,7 +9,6 @@ use std::path::{Path, PathBuf};
 
 use crate::LinkError;
 
-/// The body of a frame while it is written.
 #[derive(Default)]
 pub(crate) struct Out(pub(crate) Vec<u8>);
 
@@ -36,8 +30,8 @@ impl Out {
     }
 
     pub(crate) fn bytes(&mut self, value: &[u8]) {
-        // A run longer than four bytes can count is longer than any frame may be; the
-        // length check on the whole frame refuses it.
+        // A run longer than a u32 can count is longer than any frame; the whole-frame length check
+        // refuses it.
         self.u32(u32::try_from(value.len()).unwrap_or(u32::MAX));
         self.0.extend_from_slice(value);
     }
@@ -72,7 +66,6 @@ impl Out {
     }
 }
 
-/// The body of a frame while it is read.
 pub(crate) struct In<'a> {
     rest: &'a [u8],
 }
@@ -130,8 +123,8 @@ impl<'a> In<'a> {
         mut each: impl FnMut(&mut In<'a>) -> Result<T, LinkError>,
     ) -> Result<Vec<T>, LinkError> {
         let count = self.u32()? as usize;
-        // Every item takes at least one byte, so a count beyond what is left is a lie; it
-        // must not be believed before the items are read.
+        // Every item takes at least one byte, so a count beyond the bytes left is false; refuse it
+        // before allocating for the items.
         if count > self.rest.len() {
             return Err(LinkError::Malformed("a list is longer than its frame"));
         }
@@ -153,7 +146,6 @@ impl<'a> In<'a> {
         }
     }
 
-    /// Ends the reading: a frame that holds more than its fields is refused.
     pub(crate) fn end(self) -> Result<(), LinkError> {
         if self.rest.is_empty() {
             Ok(())

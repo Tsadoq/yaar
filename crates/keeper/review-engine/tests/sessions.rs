@@ -1,6 +1,3 @@
-//! The engine's calls for a session that starts, through the engine with the real Store
-//! beneath: which review it has afterwards, as the Store keeps it.
-
 mod support;
 
 use std::sync::Arc;
@@ -35,7 +32,6 @@ fn the_first_session_of_a_workspace_takes_over_its_review_of_no_agent() {
     let given = reviews.session_started(&first).expect("start");
 
     assert_eq!(given, none);
-    // Kept, not only given: the Store says whose review it is now, and there is still one.
     assert_eq!(agent_of(&store, &given), Some(first.id.as_str().to_owned()));
     assert_eq!(store.reviews_of(&workspace()).expect("reviews").len(), 1);
 }
@@ -63,7 +59,6 @@ fn two_sessions_that_run_at_once_have_a_review_each_and_a_third_gets_a_third() {
     for (session, review) in &given {
         assert_eq!(agent_of(&store, review), Some(session.as_str().to_owned()));
     }
-    // The review of no agent went to the first; no other review of no agent was made.
     let kept = store.reviews_of(&workspace()).expect("reviews");
     assert_eq!(kept.len(), 3);
     assert!(kept.iter().all(|review| review.agent.is_some()));
@@ -79,7 +74,6 @@ fn a_session_that_starts_in_a_workspace_with_no_review_gets_one_of_its_own() {
     let given = reviews.session_started(&first).expect("start");
 
     assert_eq!(agent_of(&store, &given), Some(first.id.as_str().to_owned()));
-    // The workspace has a review of an agent session, so it needs none of no agent.
     let view = reviews.of_workspace(&workspace(), None).expect("read");
     assert_eq!(view.reviews.len(), 1);
     assert_eq!(view.reviews[0].id(), &given);
@@ -108,7 +102,6 @@ fn the_review_of_a_session_that_ended_stays_open_with_its_threads_for_the_next_s
         .expect("a comment");
     store.set_ended(&first.id, EndedBy::Cli).expect("end");
 
-    // The ended session's review is still its own while nobody takes it.
     assert_eq!(
         agent_of(&store, &review),
         Some(first.id.as_str().to_owned())

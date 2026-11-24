@@ -164,43 +164,43 @@ legacy	ctrl-!	21	departure: GPUI folds Shift into the key, so this is Ctrl with 
 legacy	alt-!->⁄	e28184	ghostty m-ghostty-legacy as+1	macos
 legacy	2	32	ghostty m-ghostty-legacy plain+2
 legacy	@	40	ghostty m-ghostty-legacy s+2
-legacy	ctrl-2	32	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 00, m-ghostty-legacy c+2)
+legacy	ctrl-2	32	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 00, m-ghostty-legacy c+2)
 legacy	alt-2->™	e284a2	ghostty m-ghostty-legacy a+2	macos
 legacy	ctrl-@	00	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b36343b3575, m-ghostty-legacy cs+2)
 legacy	alt-@->€	e282ac	ghostty m-ghostty-legacy as+2	macos
 legacy	3	33	ghostty m-ghostty-legacy plain+3
 legacy	#	23	ghostty m-ghostty-legacy s+3
-legacy	ctrl-3	33	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b, m-ghostty-legacy c+3)
+legacy	ctrl-3	33	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b, m-ghostty-legacy c+3)
 legacy	alt-3->£	c2a3	ghostty m-ghostty-legacy a+3	macos
 legacy	ctrl-#	23	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b, m-ghostty-legacy cs+3)
 legacy	alt-#->‹	e280b9	ghostty m-ghostty-legacy as+3	macos
 legacy	4	34	ghostty m-ghostty-legacy plain+4
 legacy	$	24	ghostty m-ghostty-legacy s+4
-legacy	ctrl-4	34	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1c, m-ghostty-legacy c+4)
+legacy	ctrl-4	34	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1c, m-ghostty-legacy c+4)
 legacy	alt-4->¢	c2a2	ghostty m-ghostty-legacy a+4	macos
 legacy	ctrl-$	24	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1c, m-ghostty-legacy cs+4)
 legacy	alt-$->›	e280ba	ghostty m-ghostty-legacy as+4	macos
 legacy	5	35	ghostty m-ghostty-legacy plain+5
 legacy	%	25	ghostty m-ghostty-legacy s+5
-legacy	ctrl-5	35	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1d, m-ghostty-legacy c+5)
+legacy	ctrl-5	35	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1d, m-ghostty-legacy c+5)
 legacy	alt-5->∞	e2889e	ghostty m-ghostty-legacy a+5	macos
 legacy	ctrl-%	25	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1d, m-ghostty-legacy cs+5)
 legacy	alt-%->ﬁ	efac81	ghostty m-ghostty-legacy as+5	macos
 legacy	6	36	ghostty m-ghostty-legacy plain+6
 legacy	^	5e	ghostty m-ghostty-legacy s+6
-legacy	ctrl-6	36	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1e, m-ghostty-legacy c+6)
+legacy	ctrl-6	36	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1e, m-ghostty-legacy c+6)
 legacy	alt-6->§	c2a7	ghostty m-ghostty-legacy a+6	macos
 legacy	ctrl-^	1e	ghostty m-ghostty-legacy cs+6
 legacy	alt-^->ﬂ	efac82	ghostty m-ghostty-legacy as+6	macos
 legacy	7	37	ghostty m-ghostty-legacy plain+7
 legacy	&	26	ghostty m-ghostty-legacy s+7
-legacy	ctrl-7	37	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-legacy c+7)
+legacy	ctrl-7	37	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-legacy c+7)
 legacy	alt-7->¶	c2b6	ghostty m-ghostty-legacy a+7	macos
 legacy	ctrl-&	26	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1f, m-ghostty-legacy cs+7)
 legacy	alt-&->‡	e280a1	ghostty m-ghostty-legacy as+7	macos
 legacy	8	38	ghostty m-ghostty-legacy plain+8
 legacy	*	2a	ghostty m-ghostty-legacy s+8
-legacy	ctrl-8	38	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 7f, m-ghostty-legacy c+8)
+legacy	ctrl-8	38	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 7f, m-ghostty-legacy c+8)
 legacy	alt-8->•	e280a2	ghostty m-ghostty-legacy a+8	macos
 legacy	ctrl-*	2a	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 7f, m-ghostty-legacy cs+8)
 legacy	alt-*->°	c2b0	ghostty m-ghostty-legacy as+8	macos
@@ -212,24 +212,24 @@ legacy	ctrl-(	28	departure: GPUI folds Shift into the key, so this is Ctrl with 
 legacy	alt-(->·	c2b7	ghostty m-ghostty-legacy as+9	macos
 legacy	`	60	ghostty m-ghostty-legacy plain+grave
 legacy	~	7e	ghostty m-ghostty-legacy s+grave
-legacy	ctrl-`	60	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39363b3575, m-ghostty-legacy c+grave)
+legacy	ctrl-`	60	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39363b3575, m-ghostty-legacy c+grave)
 legacy	ctrl-~	7e	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b39363b3675, m-ghostty-legacy cs+grave)
 legacy	alt-~->`	60	ghostty m-ghostty-legacy as+grave	macos
 legacy	-	2d	ghostty m-ghostty-legacy plain+minus
 legacy	_	5f	ghostty m-ghostty-legacy s+minus
-legacy	ctrl--	2d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34353b3575, m-ghostty-legacy c+minus)
+legacy	ctrl--	2d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34353b3575, m-ghostty-legacy c+minus)
 legacy	ctrl-_	1f	ghostty m-ghostty-legacy cs+minus
 legacy	alt-_->—	e28094	ghostty m-ghostty-legacy as+minus	macos
 legacy	alt-minus->–	e28093	ghostty m-ghostty-legacy a+minus, cleaned of the accent the dead key before it left (Ghostty: 60e28093)	macos
 legacy	=	3d	ghostty m-ghostty-legacy plain+equal
 legacy	+	2b	ghostty m-ghostty-legacy s+equal
-legacy	ctrl-=	3d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b36313b3575, m-ghostty-legacy c+equal)
+legacy	ctrl-=	3d	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b36313b3575, m-ghostty-legacy c+equal)
 legacy	alt-=->≠	e289a0	ghostty m-ghostty-legacy a+equal	macos
 legacy	ctrl-+	2b	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b36313b3675, m-ghostty-legacy cs+equal)
 legacy	alt-+->±	c2b1	ghostty m-ghostty-legacy as+equal	macos
 legacy	[	5b	ghostty m-ghostty-legacy plain+lbracket
 legacy	{	7b	ghostty m-ghostty-legacy s+lbracket
-legacy	ctrl-[	1b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39313b3575, m-ghostty-legacy c+lbracket)
+legacy	ctrl-[	1b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b39313b3575, m-ghostty-legacy c+lbracket)
 legacy	alt-[->“	e2809c	ghostty m-ghostty-legacy a+lbracket	macos
 legacy	ctrl-{	7b	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b3132333b3575, m-ghostty-legacy cs+lbracket)
 legacy	alt-{->”	e2809d	ghostty m-ghostty-legacy as+lbracket	macos
@@ -247,31 +247,31 @@ legacy	ctrl-|	7c	departure: GPUI folds Shift into the key, so this is Ctrl with 
 legacy	alt-|->»	c2bb	ghostty m-ghostty-legacy as+backslash	macos
 legacy	;	3b	ghostty m-ghostty-legacy plain+semicolon
 legacy	:	3a	ghostty m-ghostty-legacy s+semicolon
-legacy	ctrl-;	3b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b35393b3575, m-ghostty-legacy c+semicolon)
+legacy	ctrl-;	3b	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b35393b3575, m-ghostty-legacy c+semicolon)
 legacy	alt-;->…	e280a6	ghostty m-ghostty-legacy a+semicolon	macos
 legacy	ctrl-:	3a	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b35393b3675, m-ghostty-legacy cs+semicolon)
 legacy	alt-:->Ú	c39a	ghostty m-ghostty-legacy as+semicolon	macos
 legacy	'	27	ghostty m-ghostty-legacy plain+quote
 legacy	"	22	ghostty m-ghostty-legacy s+quote
-legacy	ctrl-'	27	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b33393b3575, m-ghostty-legacy c+quote)
+legacy	ctrl-'	27	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b33393b3575, m-ghostty-legacy c+quote)
 legacy	alt-'->æ	c3a6	ghostty m-ghostty-legacy a+quote	macos
 legacy	ctrl-"	22	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b33393b3675, m-ghostty-legacy cs+quote)
 legacy	alt-"->Æ	c386	ghostty m-ghostty-legacy as+quote	macos
 legacy	,	2c	ghostty m-ghostty-legacy plain+comma
 legacy	<	3c	ghostty m-ghostty-legacy s+comma
-legacy	ctrl-,	2c	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34343b3575, m-ghostty-legacy c+comma)
+legacy	ctrl-,	2c	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34343b3575, m-ghostty-legacy c+comma)
 legacy	alt-,->≤	e289a4	ghostty m-ghostty-legacy a+comma	macos
 legacy	ctrl-<	3c	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b34343b3675, m-ghostty-legacy cs+comma)
 legacy	alt-<->¯	c2af	ghostty m-ghostty-legacy as+comma	macos
 legacy	.	2e	ghostty m-ghostty-legacy plain+period
 legacy	>	3e	ghostty m-ghostty-legacy s+period
-legacy	ctrl-.	2e	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34363b3575, m-ghostty-legacy c+period)
+legacy	ctrl-.	2e	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1b5b34363b3575, m-ghostty-legacy c+period)
 legacy	alt-.->≥	e289a5	ghostty m-ghostty-legacy a+period	macos
 legacy	ctrl->	3e	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1b5b34363b3675, m-ghostty-legacy cs+period)
 legacy	alt->->˘	cb98	ghostty m-ghostty-legacy as+period	macos
 legacy	/	2f	ghostty m-ghostty-legacy plain+slash
 legacy	?	3f	ghostty m-ghostty-legacy s+slash
-legacy	ctrl-/	2f	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _ (ADR-018 1.1): Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-legacy c+slash)
+legacy	ctrl-/	2f	departure: Ctrl with a digit or punctuation sends the character itself, or the C0 byte of @ [ \ ] ^ _: Ghostty sends other C0 bytes or CSI u (Ghostty: 1f, m-ghostty-legacy c+slash)
 legacy	alt-/->÷	c3b7	ghostty m-ghostty-legacy a+slash	macos
 legacy	ctrl-?	3f	departure: GPUI folds Shift into the key, so this is Ctrl with the symbol: xterm sends its control byte (@ ^ _) or the character itself (Ghostty: 1f, m-ghostty-legacy cs+slash)
 legacy	alt-?->¿	c2bf	ghostty m-ghostty-legacy as+slash	macos
@@ -347,7 +347,7 @@ legacy	pagedown	1b5b367e	ghostty m-ghostty-legacy plain+pagedown
 legacy	alt-pagedown	1b5b363b337e	ghostty o-ghostty-us-legacy a+pagedown
 legacy	ctrl-pagedown	1b5b363b357e	ghostty m-ghostty-legacy c+pagedown
 legacy	cmd-pagedown		ghostty m-ghostty-legacy m+pagedown (every Cmd key is the app's and this one has no action yet: it sends nothing (Ghostty has its own action for it, which sends nothing either))	macos
-legacy	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit, from ADR-018's table	macos
+legacy	cmd-backspace	15	not compared: not in Ghostty's matrix: the app's own line edit	macos
 legacy	f1	1b4f50	ghostty m-ghostty-legacy plain+f1
 legacy	f2	1b4f51	ghostty m-ghostty-legacy plain+f2
 legacy	f3	1b4f52	ghostty m-ghostty-legacy plain+f3

@@ -1,9 +1,3 @@
-//! What a recorded pi run gives the app: the events of the agent's steps, in order, each
-//! with its session, and the two reads the Adapter cannot see.
-//!
-//! The recorded reports go in through the Adapter's call, as the Keeper hands them over, and
-//! the events come out.
-
 mod support;
 
 use std::ops::RangeInclusive;
@@ -18,17 +12,14 @@ use yaar_system_tests::recorded::{self, PiRecord};
 
 use support::{Scratch, feed, in_project, told};
 
-/// The recording of pi's four tools, one prompt each, in five runs, and then a new session, a
-/// reload, a resume and a quit.
+/// pi's four tools, one prompt each, in five runs, then a new session, a reload, a resume and a
+/// quit.
 const TURNS: &str = "pi/turn-tools.jsonl";
 
-/// A prompt answered with no tool run, as one naming a file with `@` would be.
 const AT_MENTION: &str = "pi-at-mention.jsonl";
 
-/// A run that reads a file through a shell command, typed by hand: no recording holds it.
 const SHELL_READ: &str = "pi-shell-read.jsonl";
 
-/// The five recordings of pi.
 const RECORDINGS: [&str; 5] = [
     "pi/turn-tools.jsonl",
     "pi/queued-message.jsonl",
@@ -37,8 +28,6 @@ const RECORDINGS: [&str; 5] = [
     "pi/review-before-agent-start.jsonl",
 ];
 
-/// The events of `records`, each fed in order to one Adapter, with the number of the line
-/// that gave it.
 fn replay(records: &[PiRecord]) -> Vec<(usize, Reported)> {
     let mut adapter = Pi::new();
     let mut heard = Vec::new();
@@ -50,7 +39,6 @@ fn replay(records: &[PiRecord]) -> Vec<(usize, Reported)> {
     heard
 }
 
-/// What `heard` should be: the events, each told as its line's record gives it.
 fn expected(records: &[PiRecord], events: Vec<(usize, Event)>) -> Vec<(usize, Reported)> {
     events
         .into_iter()
@@ -78,7 +66,6 @@ fn finished() -> Event {
     }
 }
 
-/// The name of the kind of an event, with the two phases of a command one kind.
 fn kind(event: &Event) -> &'static str {
     match event {
         Event::SessionStarted { .. } => "session started",
@@ -113,9 +100,8 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         .map(|record| record.in_project(&project))
         .collect();
 
-    // The premises of the row: the four tools of five runs, one prompt each. Line 87's
-    // command writes `bash_made.txt`; line 39 is the edit tool's, with the patch the lines
-    // come from.
+    // Four tools in five runs, one prompt each. Line 87's command writes `bash_made.txt`; line
+    // 40 is the edit tool's result, with the patch the lines come from.
     for (line, tool) in [(16, "read"), (40, "edit"), (64, "write"), (88, "bash")] {
         assert_eq!(records[line].event, "tool_result", "line {line}");
         assert_eq!(records[line].payload["toolName"], tool, "line {line}");
@@ -134,8 +120,6 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
 
     let heard = replay(&records);
 
-    // Every line gives what the recording shows it did, and the others give nothing: the
-    // events are exactly these, in this order.
     let events = vec![
         (1, Event::SessionStarted { how: Start::New }),
         (3, Event::TurnStarted),
@@ -174,13 +158,12 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         (111, began("sed -i '' 's/notes/NOTES/' notes.txt")),
         (112, ended("sed -i '' 's/notes/NOTES/' notes.txt")),
         (124, finished()),
-        // `/new`: the session ends, and the next one has another id.
         (127, Event::SessionEnded),
         (129, Event::SessionStarted { how: Start::New }),
         (131, Event::TurnStarted),
         (145, finished()),
-        // The reload at 146 and 148 gives nothing; the resume ends the session at 151 and
-        // brings it back at 153.
+        // The reload at 146 and 148 gives nothing; the resume ends the session at 151 and brings it
+        // back at 153.
         (151, Event::SessionEnded),
         (
             153,
@@ -192,10 +175,6 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
     ];
     assert_eq!(heard, expected(&records, events));
 
-    // The seven kinds of LISTEN-01 for Claude Code, all of them. pi's recording holds its
-    // four tools in five runs, one prompt each, not in one turn, so the order of the row is
-    // the order across the runs: each opens with a turn started and ends with a turn ended,
-    // and the step in between is the read, the edit, the new file and the two shell commands.
     let mut kinds = kinds_in_order_of_first_appearance(&heard);
     kinds.sort_unstable();
     assert_eq!(
@@ -234,7 +213,6 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
             run("shell command", 2),
         ]
     );
-    // Each file write is a write with its path, and nothing but the two tools gives one.
     let writes: Vec<&Path> = heard
         .iter()
         .filter_map(|(_, reported)| match &reported.event {
@@ -286,8 +264,6 @@ fn every_event_of_the_runs_names_its_session_terminal_process_folder_and_session
             "line {line}"
         );
     }
-    // The recording holds a terminal, a session file and two sessions, so that the names
-    // compared above are real ones.
     assert!(records[1].terminal().is_some());
     assert!(records[1].session_file().is_some());
     assert_ne!(records[1].session(), records[129].session());
@@ -310,7 +286,6 @@ fn no_line_of_any_recording_of_pi_gives_a_permission_event() {
 #[test]
 fn a_prompt_naming_a_file_with_an_at_mention_gives_no_read() {
     let records = recorded::hand_made_pi_events(AT_MENTION);
-    // The premise: the run has no tool in it.
     assert!(
         records
             .iter()
@@ -337,7 +312,6 @@ fn a_prompt_naming_a_file_with_an_at_mention_gives_no_read() {
 #[test]
 fn a_file_read_through_a_shell_command_gives_the_command_and_no_read() {
     let records = recorded::hand_made_pi_events(SHELL_READ);
-    // The premise: the shell command only reads a file.
     assert_eq!(records[3].event, "tool_call");
     assert_eq!(records[3].payload["toolName"], "bash");
     assert_eq!(records[3].payload["input"]["command"], "cat notes.txt");
@@ -360,8 +334,6 @@ fn a_file_read_through_a_shell_command_gives_the_command_and_no_read() {
     );
 }
 
-/// The Adapter's events for one payload written as the extension would write it: session
-/// `s1` in folder `/work`, terminal `t1`, process 7, with `fields` added.
 fn say(adapter: &mut Pi, event: &str, fields: Value) -> Vec<Event> {
     try_say(adapter, event, fields)
         .expect("the payload is a report")
@@ -392,7 +364,6 @@ fn merge(into: &mut Value, fields: Value) {
     into.extend(fields);
 }
 
-/// What a tool's result reports, for `tool` with `input`.
 fn result(adapter: &mut Pi, tool: &str, input: Value, more: Value) -> Vec<Event> {
     let mut fields = json!({"toolName": tool, "input": input, "isError": false});
     merge(&mut fields, more);
@@ -442,7 +413,6 @@ fn a_tool_that_failed_gives_no_file_event_but_a_command_that_failed_still_ended(
         json!({"isError": true}),
     );
     assert_eq!(heard, [ended("false")]);
-    // A tool the app does not follow gives nothing, at its call or its result.
     assert_eq!(result(&mut adapter, "grep", json!({}), json!({})), []);
     assert_eq!(
         say(
@@ -452,7 +422,6 @@ fn a_tool_that_failed_gives_no_file_event_but_a_command_that_failed_still_ended(
         ),
         []
     );
-    // Neither do the calls of the file tools: the write is told once it is done.
     assert_eq!(
         say(
             &mut adapter,
@@ -483,8 +452,8 @@ fn an_edit_gives_the_lines_of_every_hunk_of_its_patch_and_none_without_one() {
         ] => lines.clone(),
         other => panic!("one edit, not {other:?}"),
     };
-    // `+12` has no count: one line. `+22,0` took lines out and left none: the one line
-    // where they were.
+    // `+12` has no count: one line. `+22,0` took lines out and left none: the one line where they
+    // were.
     let patch = "--- a.txt\n+++ a.txt\n@@ -1,2 +1,3 @@\n a\n+b\n c\n@@ -10 +12 @@\n-x\n+y\n@@ -20,2 +22,0 @@\n-p\n-q\n";
     assert_eq!(
         lines(
@@ -517,27 +486,22 @@ fn a_run_is_open_for_each_session_apart_and_ends_at_its_own_settling() {
     };
     let input = json!({"source": "interactive", "streamingBehavior": null});
 
-    // A message starts a run; the agent's start that follows it, and a second message while
-    // it works, start no other.
     assert_eq!(
         for_session(&mut adapter, "a", "input", input.clone()),
         [Event::TurnStarted]
     );
     assert_eq!(for_session(&mut adapter, "a", "agent_start", json!({})), []);
     assert_eq!(for_session(&mut adapter, "a", "input", input.clone()), []);
-    // The other session of the same process has a run of its own.
     assert_eq!(
         for_session(&mut adapter, "b", "agent_start", json!({})),
         [Event::TurnStarted]
     );
-    // An interrupted run ends interrupted, and only its own session's.
     assert_eq!(
         for_session(&mut adapter, "a", "agent_settled", json!({"aborted": true})),
         [Event::TurnEnded {
             how: TurnEnd::Interrupted
         }]
     );
-    // `a` is idle again: its next message starts a run, while `b` is still in its own.
     assert_eq!(
         for_session(&mut adapter, "a", "input", input.clone()),
         [Event::TurnStarted]
@@ -563,7 +527,6 @@ fn a_session_that_ends_forgets_its_open_run_and_a_reload_keeps_it() {
         [Event::TurnStarted]
     );
 
-    // A reload gives nothing and the run goes on through it.
     assert_eq!(
         say(
             &mut adapter,
@@ -578,8 +541,8 @@ fn a_session_that_ends_forgets_its_open_run_and_a_reload_keeps_it() {
     );
     assert_eq!(say(&mut adapter, "input", input.clone()), []);
 
-    // A quit with the run still open (pi killed in its work) leaves no run behind for the
-    // session id a later resume brings back.
+    // A quit with the run still open (pi killed) leaves no run for the session id a later resume
+    // brings back.
     assert_eq!(
         say(&mut adapter, "session_shutdown", json!({"reason": "quit"})),
         [Event::SessionEnded]
@@ -592,8 +555,6 @@ fn a_session_that_ends_forgets_its_open_run_and_a_reload_keeps_it() {
     );
     assert_eq!(say(&mut adapter, "input", input), [Event::TurnStarted]);
 
-    // Every reason but `resume` and `reload` starts a new session; every one but `reload`
-    // ends one.
     for reason in ["startup", "new", "fork"] {
         assert_eq!(
             say(&mut adapter, "session_start", json!({ "reason": reason })),
@@ -647,12 +608,9 @@ fn a_payload_that_is_no_report_is_unreadable_and_one_of_an_event_it_does_not_fol
         b"\"text\"",
         b"{}",
         br#"{"event": 3}"#,
-        // An event the table names, with no session to put it to.
         br#"{"event": "input", "source": "interactive"}"#,
         br#"{"event": "session_start", "reason": "startup", "sessionId": 4}"#,
-        // A shell command that names no command.
         br#"{"event": "tool_call", "sessionId": "s", "toolName": "bash", "input": {}}"#,
-        // A read that names no path.
         br#"{"event": "tool_result", "sessionId": "s", "toolName": "read", "input": {}, "isError": false}"#,
     ] {
         assert!(
@@ -661,8 +619,6 @@ fn a_payload_that_is_no_report_is_unreadable_and_one_of_an_event_it_does_not_fol
             String::from_utf8_lossy(payload)
         );
     }
-    // The experiment's own lines and the events pi gives that the app does not follow give
-    // nothing, and are no fault, whatever else they hold.
     for payload in [
         &br#"{"event": "factory", "pid": 1}"#[..],
         br#"{"event": "inject:push", "route": "push"}"#,

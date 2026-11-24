@@ -1,10 +1,6 @@
-//! Component tests: a process that types into the Store is killed, and the file it leaves
-//! is opened through the Store's calls.
-//!
-//! The typist is this test binary started again: [`the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_without_it`]
-//! does nothing unless the variable `YAAR_STORE_TYPIST` names a database file, and types
-//! into that file for ever when it does. A kill test starts it, takes what it reports on
-//! its standard output, and kills it with `SIGKILL`.
+//! A process that types into the Store is killed with SIGKILL and the file it leaves is read
+//! through the Store's calls. The typist is this test binary started again with
+//! `YAAR_STORE_TYPIST` naming a database file.
 
 mod support;
 
@@ -21,23 +17,15 @@ use yaar_store::{
     ThreadId, WorkspaceId,
 };
 
-/// The variable that names the database file the typist types into.
 const TYPIST_VARIABLE: &str = "YAAR_STORE_TYPIST";
-/// The variable that makes the typist stop typing at `<thread> <length>` and wait for its
-/// standard input to end.
+/// Makes the typist stop typing at `<thread> <length>` and wait for its standard input to end.
 const HOLD_VARIABLE: &str = "YAAR_STORE_TYPIST_HOLD";
-/// The variable that gives the seed of the kill tests.
 const SEED_VARIABLE: &str = "YAAR_STORE_SEED";
-/// The name of the test function the typist is: how the test binary is told to run it.
 const TYPIST_TEST: &str =
     "the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_without_it";
-/// How many characters a comment has when it is sent.
 const COMMENT_LEN: usize = 40;
-/// How long the parent waits for the typist to report its first saved key: a process
-/// starting, a database opening and a first draft saved, on a loaded machine.
 const FIRST_SAVE_WITHIN: Duration = Duration::from_secs(60);
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -50,30 +38,24 @@ fn workspace() -> WorkspaceId {
     WorkspaceId::new("2".repeat(32))
 }
 
-/// The id of thread `n`, from 1.
 fn thread_id(n: u128) -> ThreadId {
     ThreadId::new(id(n))
 }
 
-/// The id of the one comment of thread `n`: never an id a thread has.
 fn comment_id(n: u128) -> CommentId {
     CommentId::new(id((1u128 << 64) + n))
 }
 
-/// The number of the thread an id names.
 fn number_of(thread: &ThreadId) -> u128 {
     u128::from_str_radix(thread.as_str(), 16).expect("a thread id is hexadecimal")
 }
 
-/// What thread `n` is typed from: its number, a space, then letters. Longer than a
-/// comment, of which only the first `COMMENT_LEN` characters are typed.
 fn text_of(n: u128) -> String {
     let mut text = format!("{n} ");
     text.extend((0..64u128).map(|i| char::from(b'a' + ((n * 7 + i) % 26) as u8)));
     text
 }
 
-/// What the comment of thread `n` holds when it is whole.
 fn whole_text_of(n: u128) -> String {
     text_of(n).chars().take(COMMENT_LEN).collect()
 }
@@ -87,10 +69,8 @@ fn round_of(number: u128) -> Round {
     }
 }
 
-/// What the typist does: types thread after thread into the file, one character at a
-/// time, and sends each thread's comment when it has its 40 characters. It reports on its
-/// standard output, one line at a time: `typing <n> <len>` before each key, `saved <n>
-/// <len>` after it, `sent <n>` after a send, and `held` when told to wait.
+/// Reports on standard output, one line each: `typing <n> <len>` before each key,
+/// `saved <n> <len>` after it, `sent <n>` after a send, `held` when told to wait.
 #[test]
 fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_without_it() {
     let Some(file) = std::env::var_os(TYPIST_VARIABLE) else {
@@ -124,7 +104,6 @@ fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_withou
     }
     let review = review.expect("the review is kept");
 
-    // Where the file says to start: the thread, and the length it holds.
     let (mut n, mut from) = match review.threads.last() {
         None => (1, 1),
         Some(last) => {
@@ -134,7 +113,6 @@ fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_withou
             if comment.round.is_some() {
                 (n + 1, 1)
             } else if len >= COMMENT_LEN {
-                // A kill fell in the send.
                 store
                     .put_round(
                         &review_id(),
@@ -202,13 +180,9 @@ fn the_typist_types_into_the_store_named_by_its_variable_and_does_nothing_withou
     }
 }
 
-/// A small generator of the kill instants and the cuts: xorshift, so that a seed gives
-/// the same draws on every machine.
 struct Draws(u64);
 
 impl Draws {
-    /// The seed of this run, read from `YAAR_STORE_SEED` when it is set, else from the
-    /// clock; printed either way, so that a failure is run again with it.
     fn from_environment() -> Self {
         let seed = std::env::var(SEED_VARIABLE).ok().map_or_else(
             || {
@@ -230,19 +204,15 @@ impl Draws {
         self.0
     }
 
-    /// A number in `0..bound`.
     fn below(&mut self, bound: u64) -> u64 {
         self.next() % bound
     }
 }
 
-/// The typist, started again from this binary. Dropping it kills the process and waits
-/// for it, so that a failing test leaves none.
 struct Typist {
     child: Child,
     lines: Receiver<String>,
     reader: Option<JoinHandle<()>>,
-    /// Held open, so that the typist's wait on it lasts until it is killed.
     _stdin: Option<ChildStdin>,
 }
 
@@ -283,10 +253,7 @@ impl Typist {
         }
     }
 
-    /// Kills the typist, waits until it is gone, and gives every line it printed that was
-    /// not taken yet.
     fn kill(&mut self) -> Vec<String> {
-        // Killing a process that ended already is not a fault.
         let _ = self.child.kill();
         self.child.wait().expect("wait for the typist");
         if let Some(reader) = self.reader.take() {
@@ -306,16 +273,11 @@ impl Drop for Typist {
     }
 }
 
-/// What the typist reported in one run.
 #[derive(Default)]
 struct Run {
-    /// The last `typing <n> <len>`.
     typing: Option<(u128, usize)>,
-    /// The last `saved <n> <len>`.
     saved: Option<(u128, usize)>,
-    /// Every `sent <n>`.
     sent: Vec<u128>,
-    /// Whether the last line was a `typing` with no `saved` after it.
     mid_key: bool,
     held: bool,
 }
@@ -335,14 +297,11 @@ impl Run {
             }
             ("sent", Some(n), None) => self.sent.push(n),
             ("held", None, None) => self.held = true,
-            // The harness's own lines.
             _ => {}
         }
     }
 }
 
-/// The one review of the file, read through a store opened on it. Fails when the file
-/// does not open or does not hold exactly one review.
 fn the_review(file: &Path) -> ReviewRecord {
     let store = Store::open(file).expect("the file opens after the kill");
     let mut reviews = store.reviews_of(&workspace()).expect("the reviews read");
@@ -350,10 +309,6 @@ fn the_review(file: &Path) -> ReviewRecord {
     reviews.pop().expect("one review")
 }
 
-/// What every file the typist left must satisfy: the threads are 1, 2, 3 and so on with no
-/// gap; each comment is a prefix of its text; a thread with a round has the round of its
-/// number and a whole comment; only the last thread may be a draft; the rounds are
-/// exactly those. Gives the number of threads that were sent.
 fn check_shape(review: &ReviewRecord) -> usize {
     let mut sent = 0;
     for (i, thread) in review.threads.iter().enumerate() {
@@ -387,8 +342,6 @@ fn check_shape(review: &ReviewRecord) -> usize {
     sent
 }
 
-/// Three hundred kills while a draft is typed: no review is unreadable, no save that
-/// returned is missing, at most one character is lost.
 #[test]
 fn three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_character() {
     const KILLS: usize = 300;
@@ -402,8 +355,6 @@ fn three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_chara
     for kill in 1..=KILLS {
         let mut typist = Typist::start(&file, None, false);
         let mut run = Run::default();
-        // The typist is killed while it types: after its first saved key, and a delay
-        // drawn in 0 to 30 ms later.
         while run.saved.is_none() {
             match typist.lines.recv_timeout(FIRST_SAVE_WITHIN) {
                 Ok(line) => run.take(&line),
@@ -431,13 +382,9 @@ fn three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_chara
         sent_most = run.sent.iter().copied().fold(sent_most, u128::max);
         mid_key += usize::from(run.mid_key);
 
-        // No review is unreadable.
         let review = the_review(&file);
-        // Every comment of every thread is a prefix of its text; only the last may be a
-        // draft.
         let sent = check_shape(&review);
 
-        // No save that returned is missing.
         let (n, len) = run.saved.expect("a saved key was reported");
         let thread = review
             .threads
@@ -449,14 +396,13 @@ fn three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_chara
             "kill {kill}: saved {n} {len}, the file holds {:?}",
             thread.comments[0].text
         );
-        // A send the typist reported is in the file. One it was killed in is there or
-        // not, and the next run finds it either way.
+        // Every send the typist reported is in the file; one it was killed in may be there too, and
+        // the next run finds it either way.
         assert!(
             sent as u128 >= sent_most,
             "kill {kill}: {sent_most} was reported sent, and {sent} are"
         );
 
-        // At most one character is lost.
         if let Some((n, len)) = run.typing {
             match review.threads.iter().find(|t| number_of(&t.id) == n) {
                 Some(thread) => assert!(
@@ -475,9 +421,6 @@ fn three_hundred_kills_while_a_draft_is_typed_lose_no_save_and_at_most_one_chara
     );
 }
 
-/// Starts the typist with a hold at thread 3, three characters, and kills it there: two
-/// comments are sent, and the write-ahead file holds what was done after the second send.
-/// Gives the folder and the lines the typist printed.
 fn held_and_killed(attempt: usize) -> (Scratch, Run) {
     let scratch = Scratch::new();
     let mut typist = Typist::start(&scratch.file(), Some("3 3"), true);
@@ -509,9 +452,8 @@ fn cut(wal: &Path, offset: u64) {
         .expect("cut the write-ahead file");
 }
 
-/// After a kill at the hold: a folder whose write-ahead file is not empty, started
-/// again, at most 3 times. The only way to an empty one is the writer's flush after a
-/// pause of a second, which a stalled runner allows.
+/// The only way to an empty write-ahead file is the writer's flush after a pause of a second,
+/// which a stalled runner allows; so try again, at most 3 times.
 fn held_with_a_log() -> (Scratch, u64) {
     for attempt in 1..=3 {
         let (scratch, _) = held_and_killed(attempt);
@@ -523,9 +465,6 @@ fn held_with_a_log() -> (Scratch, u64) {
     panic!("the write-ahead file was empty at the hold three times: the machine is stalled");
 }
 
-/// What must hold of a file whose write-ahead file was cut: it opens, and the two sent
-/// comments are there whole, in rounds 1 and 2, and no more rounds; the third, when it is
-/// there, is a draft that is a prefix of its text. Gives the length of the third.
 fn check_cut(file: &Path, context: &str) -> Option<usize> {
     let review = the_review(file);
     assert!(
@@ -540,8 +479,6 @@ fn check_cut(file: &Path, context: &str) -> Option<usize> {
         .map(|thread| thread.comments[0].text.chars().count())
 }
 
-/// With the write-ahead file cut at a random place, the database opens and the sent
-/// comments are intact.
 #[test]
 fn with_the_write_ahead_file_cut_at_a_random_place_the_database_opens_and_the_sent_comments_are_intact()
  {
@@ -552,22 +489,16 @@ fn with_the_write_ahead_file_cut_at_a_random_place_the_database_opens_and_the_se
         let (scratch, length) = held_with_a_log();
         let offset = draws.below(length);
         cut(&wal_of(&scratch), offset);
-        // The shared-memory file stays as the kill left it.
         let third = check_cut(&scratch.file(), &format!("trial {trial}, cut at {offset}"));
         third_kept += usize::from(third.is_some());
     }
     println!("{TRIALS} trials; the third thread survived the cut in {third_kept}");
 }
 
-/// The cuts that are not left to chance: nothing of the file kept, only its header, and
-/// all but its last byte. Before any cut, the log holds the draft that was being typed,
-/// so that the cut is what takes it away, and what a send moved into the database file is
-/// not taken with it.
 #[test]
 fn a_write_ahead_file_cut_to_nothing_to_its_header_or_by_a_byte_costs_only_the_draft() {
     let (scratch, length) = held_with_a_log();
 
-    // The uncut file, opened on a copy: the log holds the third thread, three characters.
     let copy = Scratch::new();
     for name in ["store.db", "store.db-wal", "store.db-shm"] {
         let from = scratch.0.join(name);
@@ -587,8 +518,7 @@ fn a_write_ahead_file_cut_to_nothing_to_its_header_or_by_a_byte_costs_only_the_d
         }
         cut(&wal_of(&trial), offset);
         let third = check_cut(&trial.file(), &format!("cut at {offset} of {length}"));
-        // Only the header, or a log with a frame missing at its end, is a log with no
-        // third thread whole: the thread and its two saves each wrote frames.
+        // Only the header, or a log with a frame missing at its end, has no third thread whole.
         if offset <= 32 {
             assert_eq!(third, None, "cut at {offset}: nothing of the log is left");
         } else if let Some(len) = third {

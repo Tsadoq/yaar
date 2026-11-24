@@ -1,16 +1,7 @@
-# The built-in table of language servers. The user's own file,
-# <the app's data folder>/language-servers.toml, has the same form, and a row there with
-# the name of a row here takes its place. The form is written down in src/registry.rs.
-#
-# A language is added by one row here, and by no change of code (NFR-002). The servers of a
-# row are tried in the order of FR-060: the one the user registered, the project's own, one
-# installed on the machine, one the app downloaded; within each kind in the order written
-# here. Only the native servers that need no Node are downloaded, each pinned to a version
-# and to the SHA-256 digest of the bytes the publisher serves, and fetched from the
-# publisher's own address only when the user accepts the offer.
+# Built-in table; a row of the same name in <data folder>/language-servers.toml replaces it.
+# Only native servers that need no Node are downloaded; Node ones are found, never downloaded.
+# Tried per kind: project, machine, downloaded; downloads are pinned by SHA-256.
 
-# TypeScript and JavaScript: TypeScript 7's own server, one native program, first; then the
-# servers that run on the machine's Node, found only, never downloaded (ADR-015 point 5).
 [typescript]
 title = "TypeScript and JavaScript"
 markers = ["tsconfig.json", "jsconfig.json", "package.json"]
@@ -25,22 +16,20 @@ jsx = "javascriptreact"
 mjs = "javascript"
 cjs = "javascript"
 
-# The old code reads the types of the worktree's dependencies.
 [typescript.old_side]
 link = ["node_modules"]
 
 [[typescript.server]]
 name = "tsgo"
-# The platform package a project that depends on typescript 7 holds.
+# The platform package that a project depending on TypeScript 7 holds.
 project = ["node_modules/@typescript/typescript-{platform}/lib/tsc"]
 machine = ["tsgo"]
 trial = ["--version"]
 args = ["--lsp", "--stdio"]
 ready = { kind = "answer" }
 
-# Off: the automatic acquisition of types, by which the server runs npm and installs type
-# packages into the user's cache folder for a file outside every project. The server asks
-# for these three sections; each holds the switch.
+# Off: the server would run npm and install type packages for a file outside every project. The
+# server asks for these three sections; each holds the switch.
 [typescript.server.settings."js/ts".tsserver.automaticTypeAcquisition]
 enabled = false
 
@@ -107,9 +96,6 @@ trial = ["--version"]
 args = ["--stdio"]
 ready = { kind = "progress" }
 
-# Python: basedpyright and pyright on the machine's Node, ty and pyrefly native, in the
-# project's virtual environment first, then on the machine (ADR-015 point 5). Only ty is
-# downloaded.
 [python]
 title = "Python"
 markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
@@ -118,7 +104,6 @@ markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
 py = "python"
 pyi = "python"
 
-# The old code reads the packages of the worktree's virtual environment.
 [python.old_side]
 link = [".venv"]
 
@@ -197,11 +182,6 @@ trial = ["--version"]
 args = ["lsp"]
 ready = { kind = "answer" }
 
-# Rust: rust-analyzer. The project's own is rustup's proxy, in the cargo folder (CARGO_HOME,
-# else the home folder's `.cargo`), which runs the rust-analyzer of the toolchain the project
-# pins; it lies outside the repository, so it is tried first and asks no question. Then the
-# program of that name found on the search path, in the path's order, then the one the app
-# downloaded. It needs the machine's Rust toolchain, which no row can supply.
 [rust]
 title = "Rust"
 markers = ["Cargo.toml"]
@@ -211,6 +191,8 @@ rs = "rust"
 
 [[rust.server]]
 name = "rust-analyzer"
+# The project's own server is rustup's proxy, which runs the toolchain the project pins;
+# it lies outside the repository, so it asks no question.
 project = ["{env:CARGO_HOME}/bin/rust-analyzer", "{env:HOME}/.cargo/bin/rust-analyzer"]
 machine = ["rust-analyzer"]
 trial = ["--version"]
@@ -220,8 +202,8 @@ ready = { kind = "notification", method = "experimental/serverStatus", match = {
 [rust.server.capabilities.experimental]
 serverStatusNotification = true
 
-# No `cargo check` after each load, and every build output in a folder of the app's own,
-# never in the project's `target`.
+# No `cargo check` after each load; build output goes in a folder of the app's own, never the
+# project's `target`.
 [rust.server.initialization_options]
 checkOnSave = false
 cargo = { targetDir = "{target}" }
@@ -230,11 +212,8 @@ cargo = { targetDir = "{target}" }
 checkOnSave = false
 cargo = { targetDir = "{target}" }
 
-# Cargo, which the server runs to read the project, fetches nothing: no crate index and no
-# crate reaches the user's cargo folder because a review looked at the code. rustup's proxy
-# installs no toolchain a project names and the machine lacks: it fails at once, and the next
-# copy is tried. RUSTUP_AUTO_INSTALL=0 is honoured from rustup 1.28 on; an older proxy ignores
-# it and may begin a download, which the trial's deadline cuts off.
+# Cargo fetches nothing. RUSTUP_AUTO_INSTALL=0 is honoured from rustup 1.28 on; an older proxy may
+# begin a download, which the trial's deadline cuts off.
 [rust.server.environment]
 CARGO_TARGET_DIR = "{target}"
 CARGO_NET_OFFLINE = "true"

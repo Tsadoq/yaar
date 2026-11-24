@@ -1,6 +1,3 @@
-//! Component tests: the calls of the Store that keep a round, its state and its edit
-//! mark, and the attachment a send takes away, on a real database file.
-
 mod support;
 
 use std::path::PathBuf;
@@ -11,7 +8,6 @@ use yaar_store::{
     Side, Store, StoreError, Thread, ThreadId, WorkspaceId,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -51,7 +47,6 @@ fn thread(n: u128, first_comment: u128, text: &str) -> Thread {
     }
 }
 
-/// A round delivered with a message, with no state yet.
 fn round(number: u32) -> Round {
     Round {
         number,
@@ -61,9 +56,8 @@ fn round(number: u32) -> Round {
     }
 }
 
-/// A review `1` with three threads, `10`, `11` and `12`, each holding one draft (`100`,
-/// `110`, `120`), and a first round that sent the draft of `10`, answered by the agent
-/// with the addressed mark; `11` is addressed too, though nothing of it was sent.
+/// Review 1 with threads 10, 11, 12, each holding one draft (100, 110, 120); round 1 sent the
+/// drafts of 10 and 11, and the agent answered both with the addressed mark.
 fn review_with_marks(store: &Store) {
     store
         .put_review(&ReviewRecord {
@@ -122,7 +116,6 @@ fn refusal_of<T: std::fmt::Debug>(result: Result<T, StoreError>) -> String {
     }
 }
 
-/// How many bytes the write-ahead file holds; none when it is not there.
 fn wal_len(scratch: &Scratch) -> u64 {
     std::fs::metadata(scratch.0.join("store.db-wal")).map_or(0, |m| m.len())
 }
@@ -134,8 +127,6 @@ fn a_round_takes_the_addressed_mark_of_the_threads_it_sends_and_of_no_other_and_
     let store = Store::open(&scratch.file()).expect("open");
     review_with_marks(&store);
     assert_eq!(addressed(&store), [true, true, false]);
-    // A thread 12 the agent marked too, with a comment of the reviewer's that was not
-    // sent: send a follow-up on 10 and 12, and 11 keeps its mark.
     store
         .put_comment(
             &tid(10),
@@ -164,7 +155,6 @@ fn a_round_takes_the_addressed_mark_of_the_threads_it_sends_and_of_no_other_and_
         .set_attached(&rid(1), Some(&AttachedRecord::Review))
         .expect("attach");
 
-    // A round that is refused takes no mark.
     refusal_of(store.put_round(&rid(1), &round(3), &[cid(101)]));
     refusal_of(store.put_round(&rid(1), &round(2), &[cid(101), cid(10_000)]));
     assert_eq!(addressed(&store), [true, true, true]);
@@ -173,7 +163,6 @@ fn a_round_takes_the_addressed_mark_of_the_threads_it_sends_and_of_no_other_and_
         .put_round(&rid(1), &round(2), &[cid(101), cid(120)])
         .expect("put round 2");
     assert_eq!(addressed(&store), [false, true, false]);
-    // The agent's replies of the thread stay, and so does the attachment.
     let kept = review_of(&store);
     assert_eq!(kept.threads[0].comments.len(), 3);
     assert_eq!(kept.attached, Some(AttachedRecord::Review));
@@ -204,13 +193,10 @@ fn a_send_that_detaches_keeps_the_round_and_takes_the_attachment_away_in_one_tra
         .expect("attach");
     let before = review_of(&store);
 
-    // A comment that is no draft, after a good one: neither the round nor the
-    // detachment is kept, nor the mark taken.
     for bad in [cid(100), cid(10_000), cid(999)] {
         refusal_of(store.put_round_detached(&rid(1), &round(2), &[cid(101), bad]));
         assert_eq!(review_of(&store), before);
     }
-    // A round that is not the next, and a review that is not kept.
     refusal_of(store.put_round_detached(&rid(1), &round(3), &[cid(101)]));
     refusal_of(store.put_round_detached(&rid(9), &round(1), &[cid(101)]));
     assert_eq!(review_of(&store), before);
@@ -234,9 +220,8 @@ fn a_send_that_detaches_keeps_the_round_and_takes_the_attachment_away_in_one_tra
     assert_eq!(kept.threads[0].comments[2].round, Some(2));
     assert_eq!(kept.threads[3].comments[0].round, Some(2));
 
-    // The whole of it is in the database file alone before the call returned: a copy of
-    // that file without its write-ahead file shows the round and no attachment, and a
-    // Store opened anew on the original reads the same.
+    // The whole of it is in the database file alone: a copy without its write-ahead file shows the
+    // round and no attachment.
     assert_eq!(wal_len(&scratch), 0);
     let elsewhere = Scratch::new();
     std::fs::copy(scratch.file(), elsewhere.file()).expect("copy the file");
@@ -281,7 +266,6 @@ fn the_state_of_one_round_is_set_while_another_round_still_has_none() {
     {
         let store = Store::open(&scratch.file()).expect("open");
         review_with_marks(&store);
-        // Round 1 never got its state, as when the Keeper stopped before it was recorded.
         store
             .put_round(&rid(1), &round(2), &[])
             .expect("put round 2");
@@ -308,7 +292,6 @@ fn the_state_of_a_round_is_set_once_and_the_edit_mark_only_for_a_round_that_is_k
     assert!(sentence.contains("state already"), "{sentence}");
     refusal_of(store.set_round_state(&rid(1), 2, &"c".repeat(40)));
     refusal_of(store.set_round_state(&rid(9), 1, &"c".repeat(40)));
-    // A round kept with a state has it already.
     store
         .put_round(
             &rid(1),
@@ -324,7 +307,6 @@ fn the_state_of_a_round_is_set_once_and_the_edit_mark_only_for_a_round_that_is_k
     store
         .set_round_edited(&rid(1), 2)
         .expect("set the edit mark");
-    // Setting it again is no fault: the agent edits more than once.
     store.set_round_edited(&rid(1), 2).expect("set it again");
     refusal_of(store.set_round_edited(&rid(1), 3));
     refusal_of(store.set_round_edited(&rid(9), 1));
@@ -383,7 +365,6 @@ fn the_edit_mark_of_one_round_is_set_while_a_later_round_is_kept_and_marks_that_
     );
 }
 
-/// A review `n` with rounds 1 to `rounds`, none with a state.
 fn review_with_rounds(store: &Store, n: u128, rounds: u32) {
     store
         .put_review(&ReviewRecord {
@@ -411,7 +392,6 @@ fn the_turns_rounds_were_sent_in_come_back_by_the_number_of_the_round_and_only_f
         let store = Store::open(&scratch.file()).expect("open");
         review_with_rounds(&store, 1, 3);
         review_with_rounds(&store, 2, 1);
-        // A round sent before any turn was kept has none.
         assert_eq!(store.round_turns(&rid(1)).expect("read"), []);
 
         // Round 3 is kept before round 1 and round 2 never is: the order is the rounds'.
@@ -425,8 +405,6 @@ fn the_turns_rounds_were_sent_in_come_back_by_the_number_of_the_round_and_only_f
             [(1, "turn-a".to_owned()), (3, "turn-c".to_owned())]
         );
 
-        // The turn a later send names is the one kept; the other marks of the round, and
-        // a state set after, leave it where it was.
         store
             .set_round_turn(&rid(1), 1, "turn-b")
             .expect("set again");
@@ -447,7 +425,6 @@ fn the_turns_rounds_were_sent_in_come_back_by_the_number_of_the_round_and_only_f
         store.round_turns(&rid(2)).expect("read"),
         [(1, "turn-z".to_owned())]
     );
-    // The rounds themselves are as they were, the turn being no part of a Round.
     assert_eq!(
         review_of_n(&store, 1).rounds,
         vec![
@@ -481,9 +458,7 @@ fn a_turn_for_a_round_or_a_review_the_store_does_not_hold_is_refused_and_keeps_n
     assert!(sentence.contains("no round 2"), "{sentence}");
     refusal_of(store.set_round_turn(&rid(9), 1, "turn-a"));
     assert_eq!(store.round_turns(&rid(1)).expect("read"), []);
-    // A review the Store does not hold has no turns to give, and no fault.
     assert_eq!(store.round_turns(&rid(9)).expect("read"), []);
-    // Nothing was made for the round either: sent later, it starts with none.
     store
         .put_round(&rid(1), &round(2), &[])
         .expect("put round 2");

@@ -1,9 +1,5 @@
-//! System tests of what the Keeper holds for a Window that comes and goes: the screen of
-//! a terminal through many clients killed in the middle of a flood, and the quit that
-//! stops everything.
-//!
-//! The client is the test's own. "Killed" is what the Keeper sees of a killed Window: the
-//! connection is dropped with no goodbye and nothing more is read from it.
+//! System tests of what the Keeper holds for a Window that comes and goes. A killed client
+//! drops its connection with no goodbye and reads nothing more.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -17,46 +13,23 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// How many parts of the flood, and so how many clients are killed.
 const PARTS: u32 = 50;
 
-/// How many lines one part writes.
 const LINES: u32 = 4_000;
 
-/// What the Keeper keeps of a terminal's output for a client that attaches later: the
-/// ring of the Dock, `RING_BYTES` in its crate, which the system tests do not depend on.
+/// The output the Keeper keeps for a client that attaches later: a copy of the Dock's
+/// `RING_BYTES`, as the system tests do not depend on the Dock's crate.
 const RING: usize = 1 << 20;
 
-/// How far under the ring what the last client heard may fall: the bytes after the end of
-/// the flood that are cut away from it.
 const SLACK: usize = 4096;
 
-/// The most bytes one part writes: `LINES` lines of `part 50 line 4000` and a carriage
-/// return and a line feed, 19 bytes each at the widest.
 const PART_BYTES: usize = LINES as usize * 19;
 
-/// How long the control client waits for the whole flood to be over: 200,000 lines through
-/// a shell's loop and a terminal, twice at once, on a machine that builds other things. A
-/// bound on that one wait, which spans the fifty rounds of the test, and not a measure:
-/// the flood is over as soon as the shell has written it.
 const FLOOD_DEADLINE: Duration = Duration::from_secs(180);
 
-/// The program of the flood, a script for a POSIX shell: for each part, wait for its gate,
-/// then write its lines; after the last part, say so and wait where it is, so that the
-/// shell does not print its prompt, which comes at its own time, onto the screen that is
-/// compared. A folder of gates is its one argument.
-///
-/// It names `/bin/sh`. Without that line the terminal's interactive shell runs the script
-/// in a fork of itself, and that fork writes a carriage return of its own when it is told
-/// the window changed, which every attach does: a byte in the run of one terminal that the
-/// other's does not hold. With it the script is a new shell that writes nothing of its own.
-///
-/// It turns the terminal's change of a line feed into a carriage return and a line feed
-/// off and writes both itself. A terminal that makes the change has been seen to write the
-/// carriage return twice for a line, on macOS, when whoever reads the terminal falls
-/// behind: a byte in the run of one terminal that the other's does not hold, which no
-/// Keeper put there. Written as they are, the bytes of the two runs are the same whatever
-/// the pace of the readers.
+/// Names `/bin/sh`: else the interactive shell runs it in a fork that writes a CR of its own on
+/// every attach's window change. Writes CRLF itself: on macOS the LF-to-CRLF change doubles the CR
+/// when the reader falls behind.
 fn flood() -> String {
     format!(
         "\
@@ -79,10 +52,9 @@ read line
     )
 }
 
-/// Ends what a test leaves running when it fails: whatever descends from the Keeper, and
-/// the processes the test was told of, which are not its descendants once the Keeper is
-/// gone. A child that ignores the hang-up and the stop would otherwise run on for good.
-/// Dropped before the world, so that the Keeper is still there to ask.
+/// Kills what a failed test leaves running: the Keeper's descendants and the `known` processes,
+/// which a child that ignores the hang-up and the stop would keep alive for good.
+/// Dropped before the world, so the Keeper is still there to ask.
 struct Leftovers {
     keeper: Option<u32>,
     known: Vec<u32>,
@@ -96,8 +68,8 @@ impl Leftovers {
         }
     }
 
-    /// Called once the test has seen every process gone: a process id may be given to an
-    /// unrelated process from then on, and the drop must not look for one.
+    /// Called once every process is seen gone: from then on a process id may belong to an
+    /// unrelated process, which the drop must not kill.
     fn disarm(&mut self) {
         self.keeper = None;
         self.known.clear();
@@ -115,7 +87,6 @@ impl Drop for Leftovers {
     }
 }
 
-/// A script of the world's own folder, runnable.
 fn script(world: &World, name: &str, text: &str) -> std::path::PathBuf {
     let path = world.home().join(name);
     std::fs::write(&path, text).expect("write the script");
@@ -124,17 +95,12 @@ fn script(world: &World, name: &str, text: &str) -> std::path::PathBuf {
     path
 }
 
-/// Whether the newest output of a terminal holds `text`. Looks at the end of what came
-/// only: a wait for something that is written last would otherwise read all of a
-/// megabytes-long run again at every frame.
+/// Looks at the end only: else a megabytes-long run is read again at every frame.
 fn newest_holds(bytes: &[u8], text: &str) -> bool {
     let tail = &bytes[bytes.len().saturating_sub(64 * 1024)..];
     String::from_utf8_lossy(tail).contains(text)
 }
 
-/// The (part, line) of each line of `output` that is one of the flood's, in order. The first
-/// and the last piece of the run may be cut by where it started and stopped, and are left
-/// out; what the shell printed before the flood is not a line of it.
 fn flood_lines(output: &[u8]) -> Vec<(u32, u32)> {
     let text = String::from_utf8_lossy(output);
     let mut pieces: Vec<&str> = text.split('\n').collect();
@@ -143,8 +109,6 @@ fn flood_lines(output: &[u8]) -> Vec<(u32, u32)> {
     for piece in pieces.into_iter().skip(1) {
         let piece = piece.trim_end_matches('\r');
         let Some(rest) = piece.strip_prefix("part ") else {
-            // Before the flood and after it the shell says its own things; in the middle of
-            // it, nothing but the flood is written.
             assert!(
                 lines.is_empty() || lines.last() == Some(&(PARTS, LINES)),
                 "{piece:?} came in the middle of the flood, after {:?}",
@@ -163,7 +127,6 @@ fn flood_lines(output: &[u8]) -> Vec<(u32, u32)> {
     lines
 }
 
-/// The line that must follow `(part, line)` in an unbroken run of the flood.
 fn after(part: u32, line: u32) -> (u32, u32) {
     if line == LINES {
         (part + 1, 1)
@@ -172,8 +135,6 @@ fn after(part: u32, line: u32) -> (u32, u32) {
     }
 }
 
-/// Opens a terminal of `workspace` for `client` and starts the flood in it, with its own
-/// folder of gates, which is made and returned.
 fn start_flood(
     world: &World,
     client: &mut Client,
@@ -208,8 +169,8 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
     let (uninterrupted, uninterrupted_gates) =
         start_flood(&world, &mut control, &workspace, &program, "gates-b");
 
-    // The control client stays attached the whole time. It reads on a thread of its own,
-    // as a Window does: one that did not read for five seconds would be let go.
+    // Reads on a thread of its own, as a Window does: a client that did not read for five seconds
+    // is let go.
     let control = {
         let uninterrupted = uninterrupted.clone();
         std::thread::spawn(move || {
@@ -232,21 +193,15 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
         let wanted = format!("part {part} line ");
         let heard = killed.wait_for_output(&shown, DEADLINE, |bytes| newest_holds(bytes, &wanted));
 
-        // No goodbye, nothing more read. The client goes at once, before anything is
-        // checked: what it heard is a copy, and the checks below take longer than a part
-        // takes to be written, so that after them the part could be over.
+        // The client goes before anything is checked: the checks take longer than a part takes to
+        // write.
         killed.vanish();
 
-        // The part has only begun: the client had heard a frame that holds its first
-        // lines, which is less than a part, so that the kill fell in the middle of the
-        // flood and of a part, with output on its way.
         assert!(
             !newest_holds(&heard, &format!("part {part} line {LINES}")),
             "part {part} was written whole when client {part} heard its first lines"
         );
 
-        // What reached it, the kept output and what came live after it, is one unbroken
-        // run: nothing lost and nothing twice where the two meet.
         let lines = flood_lines(&heard);
         assert!(
             !lines.is_empty(),
@@ -261,7 +216,6 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
         }
     }
 
-    // A last client attaches when the flood is over.
     let mut last = world.client();
     let cut = last
         .attach_terminal(&shown, SIZE)
@@ -280,18 +234,10 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
             .any(|line| line.contains("flood-done")),
         "the screen holds no end of the flood: {uninterrupted_screen:?}"
     );
-    // The bytes the last client heard are the newest of the run that nobody interrupted,
-    // to the byte, up to the end of the flood: what the Keeper kept lost and doubled
-    // nothing where its memory ends and the live output begins.
     let (heard, run) = (up_to_the_end(&heard), up_to_the_end(&uninterrupted_run));
-    // The flood is several times what the Keeper keeps, so its kept output was cut, and
-    // is as long as the ring the Dock keeps for each terminal: `RING_BYTES`, 1 MiB. A
-    // Keeper that kept less would not give the last client a whole ring.
     assert!(cut, "the Keeper did not say its kept output was cut");
-    // The last client attaches just after the last part began, and nothing says the shell
-    // is done writing it: it may hear the ring and, live after it, the rest of that part.
-    // So above the ring there is room for one part and no more: a ring of 2 MiB still
-    // fails, and so does one of 600 KiB below.
+    // Room for one part above the ring: the last client may hear the rest of the part it attached
+    // in.
     assert!(
         (RING - SLACK..=RING + PART_BYTES).contains(&heard.len()),
         "the last client heard {} bytes, and the ring holds {RING}, with a part of at most \
@@ -303,7 +249,6 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
         "what the last client heard is not the end of what the other heard"
     );
 
-    // The scripts wait for a line the test never types: the programs are the test's to end.
     let started = descendants_of(keeper);
     last.stop_everything();
     assert!(
@@ -317,7 +262,6 @@ fn the_screen_after_fifty_clients_killed_during_a_flood_is_that_of_a_run_nobody_
     leftovers.disarm();
 }
 
-/// What `bytes` holds up to the end of the line that says the flood is done.
 fn up_to_the_end(bytes: &[u8]) -> &[u8] {
     let end = b"flood-done\r\n";
     let at = bytes
@@ -327,8 +271,6 @@ fn up_to_the_end(bytes: &[u8]) -> &[u8] {
     &bytes[..at + end.len()]
 }
 
-/// The id a shell printed after `label`, as in `child 123`. The prompt of the shell may
-/// stand in front of the label on its line, and the typed line holds no digits after it.
 fn printed_id(output: &[u8], label: &str) -> Option<u32> {
     String::from_utf8_lossy(output).lines().find_map(|line| {
         let (_, digits) = line.trim().rsplit_once(label)?;
@@ -349,10 +291,8 @@ fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_
         .expect("open a terminal");
     client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
 
-    // A child, in a subshell so that the shell itself does not ignore what it ignores,
-    // and the shell's own id. What is typed holds `$!` and `$$`, the answer their numbers;
-    // a `!` followed by anything but the end of the line is history expansion in some
-    // shells.
+    // The child runs in a subshell, so the shell itself does not ignore what it ignores. `$!` ends
+    // the line: `!` followed by anything else is history expansion in some shells.
     client.type_line(
         &terminal,
         "(trap '' HUP TERM; while :; do sleep 1; done) & echo child $!",
@@ -366,7 +306,6 @@ fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_
     leftovers.known = vec![shell, child];
     assert!(is_alive(child), "the child that ignores the hang-up runs");
 
-    // Every process the Keeper started, the shell, the child and what they run.
     let everyone = descendants_of(keeper);
     assert!(
         everyone.contains(&shell) && everyone.contains(&child),
@@ -376,9 +315,6 @@ fn the_quit_that_stops_everything_leaves_no_process_though_one_ignores_the_hang_
     let stopped = Instant::now();
     client.stop_everything();
 
-    // The hang-up reaches the shell, which ends, and the child ignores it: it is still
-    // there when the shell is gone, and falls only to the kill that comes after the
-    // terminate signal, which it ignores too.
     assert!(
         wait_until(DEADLINE, || !is_alive(shell)),
         "the shell did not end at the hang-up"

@@ -1,16 +1,6 @@
-//! Component test: the read-only file view of the review pane, on GPUI's test platform. Keys,
-//! clicks and the wheel go in; the pane is read back through the model it shows. The test
-//! plays the Keeper on the other end of a socket pair and the Navigator at the pane's port:
-//! it reads the asks the pane really makes and tells answers in the shapes `port.rs`
-//! defines, and computes nothing the Navigator computes.
-//!
-//! A name's place on screen is read as `tests/navigate.rs` reads it: the text of a line is
-//! drawn by an element whose selector is `review-text-<row>-<side>:<text>`, the font is of
-//! fixed width, and the middle of the character at offset `k` is `left + (k + 0.5) * cell`.
-//!
-//! A negative clause ("is not opened", "asks nothing") is read after a barrier: an ask the
-//! test causes after it, which the pane makes through the same port, so that it arrives
-//! after everything the pane asked before it.
+//! Component test: the read-only file view, with the Keeper and the Navigator played by the test.
+//! A line is drawn by `review-text-<row>-<side>:<text>` in a fixed-width font: the middle of the
+//! character at offset `k` is `left + (k + 0.5) * cell`.
 
 mod common;
 
@@ -41,8 +31,6 @@ fn workspace_id() -> yaar_link::WorkspaceId {
     id('1')
 }
 
-/// The text of the file the diff is of: 120 lines `let v<n> = <n>;`, each tenth from the
-/// fifth on rewritten in the new version, so that the diff is long and has many changes.
 fn old_text() -> String {
     (1..=120)
         .map(|n| format!("    let v{n} = {n};\n"))
@@ -58,7 +46,6 @@ fn new_text() -> String {
         .collect()
 }
 
-/// A file of this many lines, `line 1` to `line <lines>`, as the Navigator opens it.
 fn opened_of(kind: FileKind, path: &str, lines: usize) -> OpenedFile {
     OpenedFile {
         path: PathBuf::from(path),
@@ -91,13 +78,10 @@ fn rust() -> Language {
     }
 }
 
-/// Opens the pane on the long change of `src/lib.rs`, connects the Navigator, waits for
-/// the reviews, and scrolls down so that the first row is out of view.
 fn open_long(cx: &mut TestAppContext) -> (Stage, NavigatorEnd, VisualTestContext) {
     open_long_in(vec![workspace('1', "feature")], cx)
 }
 
-/// [`open_long`] in a repository of these workspaces, of which the first is on screen.
 fn open_long_in(
     workspaces: Vec<yaar_link::Workspace>,
     cx: &mut TestAppContext,
@@ -123,7 +107,6 @@ fn open_long_in(
     (stage, navigator, cx)
 }
 
-/// Clicks the name `compute` on the first added line in view.
 fn click_compute(stage: &Stage, cx: &mut VisualTestContext) -> (usize, String) {
     let (row, text) = stage.pane.read_with(cx, |pane, _| {
         let in_view = pane.rows_in_view();
@@ -160,8 +143,6 @@ fn click_compute(stage: &Stage, cx: &mut VisualTestContext) -> (usize, String) {
     (row, text)
 }
 
-/// Where the first byte of `name` in `text` is drawn, in the element of the text of the
-/// row, by the rule in the header.
 fn name_point(
     row: usize,
     side: &str,
@@ -195,8 +176,6 @@ fn name(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) -> Option<String>
     pane.read_with(cx, |pane, _| pane.name_at())
 }
 
-/// Presses `g d`, which asks the definition; the Navigator tells these locations; when the
-/// reviewer is sent to one, the pane asks for its file, which the Navigator tells.
 fn go_to_definition(
     locations: Vec<Location>,
     file: Option<OpenedFile>,
@@ -227,13 +206,11 @@ fn go_to_definition(
     place
 }
 
-/// Whether any row of the diff is drawn.
 fn a_row_is_drawn(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) -> bool {
     let rows = pane.read_with(cx, |pane, _| pane.rows().len());
     (0..rows).any(|index| drawn(&format!("review-row-{index}"), cx).is_some())
 }
 
-// RP-22
 #[gpui_kit::test]
 fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_reviewer_back(
     cx: &mut TestAppContext,
@@ -257,7 +234,6 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
         30,
     );
     for back in ["escape", "the control"] {
-        // `g d` asks the definition of the name; the one place told is opened.
         let asked = go_to_definition(
             vec![target.clone()],
             Some(opened.clone()),
@@ -267,7 +243,6 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
         assert_eq!(asked.tree, Tree::Worktree);
         assert_eq!(asked.name, "compute");
 
-        // The target is in a file view, in the place of the rows, at its line.
         assert_eq!(
             file_view(pane, &mut cx),
             Some(FileShown {
@@ -291,7 +266,6 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
             .is_some()
         );
 
-        // The return control brings the reviewer back to where they were, as they were.
         match back {
             "escape" => cx.simulate_keystrokes("escape"),
             _ => {
@@ -310,8 +284,7 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
         cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     }
 
-    // A definition followed from inside the file view opens the next, and back is to the
-    // diff, not to the first file view.
+    // A definition followed from inside the file view opens the next; back goes to the diff.
     go_to_definition(vec![target.clone()], Some(opened), &mut navigator, &mut cx);
     cx.simulate_keystrokes("j");
     assert_eq!(file_view(pane, &mut cx).map(|shown| shown.line), Some(13));
@@ -329,7 +302,6 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
         &mut navigator,
         &mut cx,
     );
-    // The name asked is the one of the line of the file view, in that file.
     assert_eq!(asked.path, PathBuf::from("src/lib.rs"));
     assert_eq!(asked.line, 12);
     assert_eq!(asked.name, "line");
@@ -343,14 +315,11 @@ fn going_to_a_definition_opens_the_file_and_the_return_control_brings_the_review
     cx.simulate_keystrokes("escape");
     assert_eq!(file_view(pane, &mut cx), None);
     assert_eq!(position(pane, &mut cx), before.0);
-    // The name is the one the reviewer left in the diff, not the one the first file view
-    // had: the place left is kept by the first file view and by no other.
     assert_eq!(name(pane, &mut cx), before.1);
     assert_eq!(pane.read_with(&cx, |pane, _| pane.rows_in_view()), before.3);
     assert_eq!(common::bounds_of_row(row, &mut cx), before.2);
 }
 
-// RP-22, Escape in the file view takes a hover away first
 #[gpui_kit::test]
 fn escape_in_the_file_view_takes_a_shown_hover_away_and_only_then_goes_back(
     cx: &mut TestAppContext,
@@ -375,7 +344,6 @@ fn escape_in_the_file_view_takes_a_shown_hover_away_and_only_then_goes_back(
     };
     assert_eq!(file_view(pane, &mut cx), Some(shown.clone()));
 
-    // A hover is asked of the name of the line of the file view, and told.
     cx.simulate_keystrokes("shift-k");
     let Ask::Hover { id, .. } = navigator.ask(&mut cx) else {
         panic!("the hover was not asked")
@@ -400,7 +368,6 @@ fn escape_in_the_file_view_takes_a_shown_hover_away_and_only_then_goes_back(
     assert_eq!(file_view(pane, &mut cx), None);
 }
 
-// RP-22, the way back when the rows changed while the reviewer was away
 #[gpui_kit::test]
 fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_it_meanwhile(
     cx: &mut TestAppContext,
@@ -424,8 +391,6 @@ fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_
     );
     assert!(file_view(&stage.pane, &mut cx).is_some());
 
-    // While the file view is open the Keeper tells a thread on a line far above what the
-    // reviewer left in view: its rows come into the diff above it.
     let mut above = thread('4', anchor(None, "src/lib.rs", LinkSide::New, 2));
     above.anchor.text = "    let v2 = 2;".to_owned();
     let rows_before = stage.pane.read_with(&cx, |pane, _| pane.rows().len());
@@ -442,7 +407,6 @@ fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_
             .pane
             .read_with(cx, |pane, _| pane.rows().len() > rows_before)
     });
-    // The file view is still what is shown.
     assert!(file_view(&stage.pane, &mut cx).is_some());
 
     cx.simulate_keystrokes("escape");
@@ -451,12 +415,10 @@ fn back_leaves_the_reviewers_row_where_it_was_on_screen_when_threads_came_above_
     });
     let now = now.expect("the row the reviewer left is still among the rows");
     assert!(now > row, "the thread's rows came above it");
-    // The reviewer's row is drawn where it was: the view went down by the rows that came.
     assert_eq!(common::bounds_of_row(now, &mut cx), before);
     assert_eq!(name(&stage.pane, &mut cx).as_deref(), Some("compute"));
 }
 
-// RP-22, several definitions
 #[gpui_kit::test]
 fn several_definitions_are_listed_and_not_opened(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_long(cx);
@@ -472,14 +434,12 @@ fn several_definitions_are_listed_and_not_opened(cx: &mut TestAppContext) {
     assert!(listed.definitions && !listed.guessed && !listed.waiting);
     assert!(drawn("review-references-title:Definitions of compute", &mut cx).is_some());
     assert_eq!(file_view(pane, &mut cx), None);
-    // Nothing was asked to open: the list is closed, and the next ask the pane makes, the
-    // barrier, is a hover.
+    // The barrier: nothing was asked to open, so the next ask is a hover.
     cx.simulate_keystrokes("escape");
     assert_eq!(references(pane, &mut cx), None);
     cx.simulate_keystrokes("shift-k");
     assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 
-    // `enter` on a listed definition opens it.
     go_to_definition(two.clone(), None, &mut navigator, &mut cx);
     cx.simulate_keystrokes("j enter");
     let Ask::Open { location, .. } = navigator.ask(&mut cx) else {
@@ -488,7 +448,6 @@ fn several_definitions_are_listed_and_not_opened(cx: &mut TestAppContext) {
     assert_eq!(location, two[1]);
 }
 
-// A definition found by text match, as of its own: FR-068 asks every such answer marked
 #[gpui_kit::test]
 fn a_definition_found_by_text_match_is_listed_with_its_mark_even_when_there_is_one(
     cx: &mut TestAppContext,
@@ -511,8 +470,6 @@ fn a_definition_found_by_text_match_is_listed_with_its_mark_even_when_there_is_o
         },
         &mut cx,
     );
-    // Listed as references are, with the mark and its words, and no file view hides that
-    // it may be wrong.
     let listed = references(pane, &mut cx).expect("the definition is listed");
     assert_eq!(listed.locations, only);
     assert!(listed.guessed && listed.definitions);
@@ -530,7 +487,6 @@ fn a_definition_found_by_text_match_is_listed_with_its_mark_even_when_there_is_o
     assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 }
 
-// RP-22, a file that cannot be read, and a definition with none
 #[gpui_kit::test]
 fn a_file_that_cannot_be_opened_and_a_definition_that_is_not_found_are_said_in_the_notice(
     cx: &mut TestAppContext,
@@ -588,7 +544,6 @@ fn a_file_that_cannot_be_opened_and_a_definition_that_is_not_found_are_said_in_t
     assert_eq!(file_view(pane, &mut cx), None);
 }
 
-/// The anchor a comment on `line` of `text` would have.
 fn anchor(tree: Option<&str>, path: &str, side: LinkSide, line: u32) -> Anchor {
     Anchor {
         tree: tree.map(str::to_owned),
@@ -602,8 +557,6 @@ fn anchor(tree: Option<&str>, path: &str, side: LinkSide, line: u32) -> Anchor {
     }
 }
 
-/// Presses `c` on the file view's line, types `why`, and holds the draft the Keeper is
-/// asked to save to what the row says.
 fn comment_and_save(
     wanted: Anchor,
     stage: &mut Stage,
@@ -615,8 +568,7 @@ fn comment_and_save(
         .read_with(cx, |pane, _| pane.comment_box())
         .expect("the comment box opened");
     assert_eq!(opened.anchor.as_ref(), Some(&wanted));
-    // Typed a key at a time, as the reviewer does, each key saved at once with the whole
-    // text so far.
+    // Typed a key at a time; each key is saved at once with the whole text so far.
     for typed in ["w", "h", "y"] {
         cx.simulate_input(typed);
     }
@@ -638,7 +590,6 @@ fn comment_and_save(
     opened
 }
 
-// RP-31
 #[gpui_kit::test]
 fn a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_reference(
     cx: &mut TestAppContext,
@@ -646,7 +597,6 @@ fn a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_re
     let (mut stage, mut navigator, mut cx) = open_long(cx);
     click_compute(&stage, &mut cx);
 
-    // A file of the worktree, at a line no row of the diff shows.
     let shown_lines: Vec<u32> = stage.pane.read_with(&cx, |pane, _| {
         pane.rows()
             .iter()
@@ -670,10 +620,8 @@ fn a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_re
     );
     let wanted = anchor(None, "src/lib.rs", LinkSide::New, 20);
     let opened = comment_and_save(wanted.clone(), &mut stage, &mut cx);
-    // The draft is a thread on its line of the file view.
     assert!(drawn(&format!("review-thread-{}", opened.thread), &mut cx).is_some());
     assert!(drawn(&format!("review-comment-{}:draft", opened.comment), &mut cx).is_some());
-    // Escape closes the box only: the file view is as it was.
     cx.simulate_keystrokes("escape");
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.comment_box()),
@@ -686,7 +634,6 @@ fn a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_re
     cx.simulate_keystrokes("escape");
     assert_eq!(file_view(&stage.pane, &mut cx), None);
 
-    // A line that is in the diff as well: the same anchor.
     let in_diff = opened_of(
         in_the_worktree("src/lib.rs"),
         "/gits/feature/src/lib.rs",
@@ -707,7 +654,6 @@ fn a_comment_is_written_on_a_line_of_a_file_reached_through_a_definition_or_a_re
     cx.simulate_keystrokes("escape escape");
     assert_eq!(file_view(&stage.pane, &mut cx), None);
 
-    // A file reached from the list of references: outside the worktree, and a version.
     let version = "7".repeat(40);
     let cases = [
         (
@@ -778,15 +724,12 @@ fn thread(digit: char, anchor: Anchor) -> Thread {
     }
 }
 
-// RP-31, the threads the Keeper tells
 #[gpui_kit::test]
 fn a_thread_of_the_review_is_drawn_on_its_line_of_the_file_view_while_the_line_holds_its_text(
     cx: &mut TestAppContext,
 ) {
     let (mut stage, mut navigator, mut cx) = open_long(cx);
     click_compute(&stage, &mut cx);
-    // A thread on line 20 of `src/lib.rs`, one on line 21 whose text is not the line's any
-    // more, and one on a file outside the worktree.
     let state = "9".repeat(40);
     let on_line = thread('1', anchor(Some(&state), "src/lib.rs", LinkSide::New, 20));
     let mut changed = anchor(Some(&state), "src/lib.rs", LinkSide::New, 21);
@@ -825,7 +768,6 @@ fn a_thread_of_the_review_is_drawn_on_its_line_of_the_file_view_while_the_line_h
     assert!(drawn(&format!("review-thread-{}", outside.id), &mut cx).is_none());
     cx.simulate_keystrokes("escape");
 
-    // The thread of the file outside is drawn in the file view of that file.
     cx.simulate_keystrokes("g r");
     let Ask::References { id, .. } = navigator.ask(&mut cx) else {
         panic!("the references were not asked")
@@ -855,7 +797,6 @@ fn a_thread_of_the_review_is_drawn_on_its_line_of_the_file_view_while_the_line_h
     assert!(drawn(&format!("review-thread-{}", on_line.id), &mut cx).is_none());
 }
 
-// A file view takes no edit
 #[gpui_kit::test]
 fn the_file_view_holds_no_input_and_no_key_changes_what_it_shows(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_long(cx);
@@ -899,7 +840,6 @@ fn the_file_view_holds_no_input_and_no_key_changes_what_it_shows(cx: &mut TestAp
     );
 }
 
-// The keys of the diff's own lines
 #[gpui_kit::test]
 fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hides_them(
     cx: &mut TestAppContext,
@@ -918,8 +858,7 @@ fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hi
         &mut navigator,
         &mut cx,
     );
-    // Each of these would act on the line of the diff the reviewer left, which nobody can
-    // see: move to a thread, mark the file viewed, resolve, attach, delete a draft.
+    // Each would act on the diff line the reviewer left, which nobody can see.
     for key in [
         "m", "shift-m", "r", "x", "u", "t", "d d", "i", "o", "w", "s", "tab", "f",
     ] {
@@ -930,8 +869,7 @@ fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hi
         None,
         "a key of the diff said something"
     );
-    // The barrier: back in the diff, `y` sends `CopyReview`, which has to be the first
-    // request any of the keys made.
+    // The barrier: back in the diff, `y` sends `CopyReview`, which has to be the first request.
     cx.simulate_keystrokes("escape");
     assert_eq!(position(&stage.pane, &mut cx), left);
     cx.simulate_keystrokes("y");
@@ -951,8 +889,6 @@ fn the_keys_that_work_on_the_lines_of_the_diff_do_nothing_while_the_file_view_hi
     );
 }
 
-/// The state of a server, as the Navigator tells it, for the files on disk of workspace `1`
-/// or for its old side in `old_side`.
 fn server(language: &str, title: &str, old_side: Option<&str>, state: State) -> ServerState {
     ServerState {
         workspace: workspace_id(),
@@ -968,7 +904,6 @@ fn server(language: &str, title: &str, old_side: Option<&str>, state: State) -> 
     }
 }
 
-/// [`server`] as told for the workspace `digit` names.
 fn server_of(
     digit: char,
     language: &str,
@@ -982,14 +917,12 @@ fn server_of(
     }
 }
 
-/// The state the line of the language server draws, if it draws one, with its words.
 fn the_line(cx: &mut VisualTestContext) -> Option<&'static str> {
     ["ready", "starting", "missing", "asking", "downloading"]
         .into_iter()
         .find(|state| drawn(&format!("review-servers-state:{state}"), cx).is_some())
 }
 
-// The line of the language server over a file view (FR-057, FR-059)
 #[gpui_kit::test]
 fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file(
     cx: &mut TestAppContext,
@@ -1006,10 +939,8 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
         extensions: vec!["py".to_owned()],
     };
     navigator.tell(Told::Languages(vec![rust(), python]), &mut cx);
-    // Each state is told for one place only, so that a line read from the wrong place
-    // reads another state or none. Workspace 2 is told other states than workspace 1 for
-    // the same languages and the same version, so that a file read in the wrong workspace
-    // reads the wrong state.
+    // Each state is told for one place only, so a line read from the wrong place reads another
+    // state or none.
     navigator.tell(
         Told::Servers(vec![
             server("rust", "Rust", None, State::Ready),
@@ -1066,8 +997,6 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
                 State::Missing { offer: None },
             )),
         ),
-        // A workspace of the repository other than the one on screen: the file is read in
-        // the workspace its kind names.
         (
             "a file of another workspace's worktree",
             in_other_workspace("app/main.py"),
@@ -1093,7 +1022,6 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
             "starting",
             Some(("python", None, State::Starting)),
         ),
-        // A file of no known language has no line, not the line of the diff it hides.
         (
             "a file of no known language",
             in_the_worktree("notes.txt"),
@@ -1122,7 +1050,6 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
                 assert!(drawn("review-servers", &mut cx).is_none(), "{what}");
             }
         }
-        // Back in the diff, the line is the diff's again.
         cx.simulate_keystrokes("escape");
         assert_eq!(file_view(pane, &mut cx), None);
         assert_eq!(the_line(&mut cx), Some("ready"), "{what}: back in the diff");
@@ -1132,7 +1059,6 @@ fn while_a_file_view_is_open_the_line_of_the_language_server_is_that_of_its_file
         );
     }
 
-    // The line follows what the Navigator tells while the file view stays open.
     go_to_definition(
         vec![target],
         Some(opened_of(

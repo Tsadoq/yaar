@@ -1,13 +1,4 @@
-//! What the two programs say about reviews: the reviews of a workspace with their threads,
-//! comments and rounds, where a comment sits, and the files marked viewed.
-//!
-//! A review is the Keeper's: it keeps every review in its database, and a Window reads
-//! them with [`crate::Request::GetReviews`] and changes them through the requests that
-//! name a review. A draft is saved as it is typed, with [`crate::Request::SaveDraft`],
-//! which carries the whole text each time.
-//!
-//! Lines are counted from 1, as git and editors count them, and a range of lines holds
-//! both its ends.
+//! Lines count from 1, as git and editors count them, and a range holds both its ends.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -16,7 +7,6 @@ use crate::LinkError;
 use crate::wire::{In, Out};
 use crate::workspace::WorkspaceId;
 
-/// Declares an opaque id of the Link: a text the other side treats as a name.
 macro_rules! opaque_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
@@ -24,12 +14,10 @@ macro_rules! opaque_id {
         pub struct $name(String);
 
         impl $name {
-            /// The id with this text.
             pub fn new(id: impl Into<String>) -> Self {
                 Self(id.into())
             }
 
-            /// The text of the id.
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -44,280 +32,190 @@ macro_rules! opaque_id {
 }
 
 opaque_id! {
-    /// Names one review, on the Link and across restarts of both programs: 32 lowercase
-    /// hexadecimal digits the Keeper drew when it made the review.
     ReviewId
 }
 
 opaque_id! {
-    /// Names one thread of a review: 32 lowercase hexadecimal digits. The Window draws the
-    /// id of a thread it starts, before the first save of its first comment, so that every
-    /// save of that comment names the same thread; an agent's reply names it too.
+    /// The Window draws the id of a thread it starts, so every save of its first comment names the
+    /// same thread.
     ThreadId
 }
 
 opaque_id! {
-    /// Names one comment of a thread: 32 lowercase hexadecimal digits. The Window draws
-    /// the id of a draft it starts, so that every save of the draft, from the first
-    /// keystroke on, names the same comment; the Keeper draws those of an agent's replies.
+    /// The Window draws the id of a draft it starts, so every save of the draft names the same
+    /// comment.
     CommentId
 }
 
 opaque_id! {
-    /// Names one session of an agent CLI, as the Keeper knows it: 32 lowercase hexadecimal
-    /// digits the Keeper drew when the session first reported in. It is the app's name for
-    /// the session, not the CLI's own: a session the CLI resumes keeps it. A review belongs
-    /// to one session, or to no agent.
+    /// The app's name for the session, not the CLI's own: a session the CLI resumes keeps it.
     SessionId
 }
 
 opaque_id! {
-    /// Names one turn of an agent session: 32 lowercase hexadecimal digits the Keeper drew
-    /// when the turn started. A turn runs from the user's message to the agent's last word
-    /// in answer to it.
+    /// A turn runs from the user's message to the agent's last word in answer to it.
     TurnId
 }
 
-/// The side of a diff a line is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
-    /// The version the change is compared with: a removed line is on this side.
     Old,
-    /// The version the change made: an added line, and an unchanged line, are on this
-    /// side.
+    /// Added lines and unchanged lines are on this side.
     New,
 }
 
-/// A range of lines of one version of a file, counted from 1, both ends included.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Lines {
-    /// The first line.
     pub first: u32,
-    /// The last line; at least `first`.
+    /// At least `first`.
     pub last: u32,
 }
 
-/// Where a thread sits: lines of one version of one file, and their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
-    /// The version the lines are read in: the full id of a commit, a recorded state of the
-    /// worktree or a commit of the repository, never the id of a git tree object. In a
-    /// [`crate::Request::SaveDraft`] that starts a thread it is none for lines of the files
-    /// on disk: the Keeper records the state of the worktree then and puts the thread on
-    /// it. In what the Keeper sends it is some, but for a thread on a file outside the
-    /// worktree, whose path is absolute: that thread has no version.
+    /// Full id of the commit or recorded state the lines are read in, never a git tree object. None
+    /// for a draft that starts a thread on files on disk (the Keeper records the state then), and
+    /// for a file outside the worktree.
     pub tree: Option<String>,
-    /// The path of the file in that version, relative to the folder of the worktree. On
-    /// the old side of a renamed file it is the old path, where the file lies in the
-    /// version the lines are read in; on the new side it is the path now.
-    ///
-    /// An absolute path names a file outside the worktree, or one inside it that git
-    /// ignores, which the reviewer reached through go to definition or a reference: a
-    /// library's source, a dependency's types. Such a thread has no version (`tree` is
-    /// none, in a save and in what the Keeper sends), sits on the new side, and keeps its
-    /// path, lines and text: no state is recorded for it, it is never carried through a
-    /// diff, and the Window shows it on its lines while their text is still the text kept.
+    /// Relative to the worktree folder; on the old side of a renamed file, the old path. An
+    /// absolute path names a file outside the worktree or one git ignores: such a thread has no
+    /// version, sits on the new side and is never carried through a diff.
     pub path: PathBuf,
-    /// The side of the diff the lines were on where the comment was written.
     pub side: Side,
-    /// The lines.
     pub lines: Lines,
-    /// The text of those lines as the reviewer saw them, joined by line feeds, with no
-    /// line end after the last.
+    /// Joined by line feeds, no line end after the last.
     pub text: String,
 }
 
-/// What the draft of a [`crate::Request::SaveDraft`] belongs to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DraftOn {
-    /// The draft is the first comment of a new thread, which sits here. Every save of the
-    /// draft says so again, with the same anchor; the Keeper makes the thread at the
-    /// first.
+    /// The draft is the first comment of a new thread at `anchor`. Every save repeats the same
+    /// anchor; the Keeper makes the thread at the first.
     NewThread {
-        /// Where the thread sits.
         anchor: Anchor,
     },
-    /// The draft is a comment of a thread that exists: an edit of a draft, or a reply.
     Thread,
 }
 
-/// Who wrote a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Author {
-    /// The reviewer, in the app.
     Reviewer,
-    /// The agent the review belongs to, through the reply tool.
     Agent,
 }
 
-/// One comment of a thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
-    /// Its id.
     pub id: CommentId,
-    /// Who wrote it.
     pub author: Author,
-    /// Its text, as written.
     pub text: String,
-    /// The number of the round it was sent in; none while it is a draft. A comment of the
-    /// agent is never a draft.
+    /// None while it is a draft. A comment of the agent is never a draft.
     pub round: Option<u32>,
 }
 
-/// One thread of a review: comments on one anchor, oldest first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
-    /// Its id.
     pub id: ThreadId,
-    /// Where its first comment was written, in the version it was written in. It is kept
-    /// as written when the code changes later.
+    /// Kept as written when the code changes later.
     pub anchor: Anchor,
-    /// Whether the reviewer resolved it. A resolved thread is sent no more, an unsent
-    /// comment on it included.
+    /// A resolved thread is sent no more, an unsent comment on it included.
     pub resolved: bool,
-    /// Whether the agent said it addressed it, in its last reply. Only the reviewer
-    /// resolves.
+    /// Whether the agent's last reply marked the thread addressed. Only the reviewer resolves.
     pub addressed: bool,
-    /// Its comments, oldest first; at least one.
+    /// Oldest first; never empty.
     pub comments: Vec<Comment>,
-    /// Its state, as the Keeper works it out from the fields above, by the one rule of
-    /// [`ThreadState`]: what the review pane lists for it.
+    /// Worked out from the fields above by the one rule of [`ThreadState`].
     pub state: ThreadState,
-    /// Where it sits in the state the Keeper last carried it to, with what that state did
-    /// to the lines it was written on. The Keeper carries a thread forward only, to each
-    /// recorded state of the worktree it follows, so this is the newest recorded state once
-    /// the Keeper has followed that one, and an older one until then (a state recorded
-    /// outside the Keeper's own recording is never followed). None while it sits where
-    /// its anchor says, as before the first state after it, and for a thread on a file
-    /// outside the worktree, which the Keeper does not carry. On the old side the place
-    /// names a commit: an open thread there whose place names the commit the changes are
-    /// counted from, whatever change it was written on, gets a place naming the new commit
-    /// once that commit moved. A resolved thread keeps the place it had, also when it was
-    /// carried before it was resolved, and one whose place names another commit or a state
-    /// is not moved by it.
+    /// None while it sits where its anchor says, and for a file outside the worktree. On the old
+    /// side it names a commit: an open thread placed at the commit the changes count from is placed
+    /// at the new commit once that moved.
     pub now: Option<Placed>,
 }
 
-/// The state of a thread, as the review pane lists it. Worked out in this order, the first
-/// that holds:
+/// Worked out in this order, the first that holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ThreadState {
-    /// The reviewer resolved it. It is sent no more.
     Resolved,
-    /// It holds a comment of the reviewer that was not sent: a new thread, or a follow-up
-    /// written after the last send.
+    /// Holds a reviewer comment not yet sent: a new thread, or a follow-up after the last send.
     Draft,
-    /// The agent's last reply marked it addressed. It waits for the reviewer to resolve it,
-    /// or to answer.
+    /// The agent's last reply marked it addressed; it waits for the reviewer to resolve or answer.
     Addressed,
-    /// The agent replied last, without the addressed mark: it waits for the reviewer's
-    /// answer.
+    /// The agent replied last, without the addressed mark.
     WaitsForReviewer,
-    /// Its comments were sent, and the agent has not replied since.
+    /// Its comments were sent and the agent has not replied since.
     Sent,
 }
 
-/// Where a thread sits now, after the code it was written on changed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
-    /// The version it sits in now: the full id of the recorded state it was carried to, or,
-    /// for a thread on the old side, the commit the changes are counted from.
+    /// Full id of the recorded state it was carried to, or on the old side the commit the changes
+    /// count from.
     pub tree: String,
-    /// The path of the file in that version: the path a renamed file has now. A file that
-    /// was deleted keeps the path it had.
+    /// The file's path in that version: a renamed file's path now. A deleted file keeps its path.
     pub path: PathBuf,
-    /// The side, as the anchor's.
     pub side: Side,
-    /// The lines it sits on in that version: the lines that replaced the ones it was
-    /// written on, or, where they were deleted, the one line at the point of deletion.
+    /// The lines that replaced those it was written on; where those were deleted, the one line at
+    /// the point of deletion.
     pub lines: Lines,
-    /// What the code it was written on became; none when it only moved, or did not
-    /// change at all. Once said, it stays said in later states.
+    /// None when it only moved or did not change. Once said, it stays said in later states.
     pub notice: Option<Notice>,
 }
 
-/// What became of the lines a thread was written on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Notice {
-    /// They were rewritten, or a line was put inside them: the thread sits on the lines
-    /// that replaced them. The lines it was written on are the anchor's text.
+    /// The lines it was written on were rewritten, or a line was put inside them: the thread sits
+    /// on the lines that replaced them.
     Changed,
-    /// They were deleted, or their file was: the thread sits at the point of deletion.
     Deleted,
 }
 
-/// How the comments of a round left the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SentBy {
-    /// The reviewer copied the review as text, to paste it by hand.
     Copied,
-    /// The review went with a message of the user to the agent.
     Delivered,
 }
 
-/// One round of a review: one send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Round {
-    /// Its number: 1 for the first send of the review, one more for each later one.
+    /// 1 for the first send of the review, one more for each later one.
     pub number: u32,
-    /// The state of the worktree recorded at the send, by its full id; none until it is
-    /// recorded. A delivered review is handed to the agent at once and its state is
-    /// recorded after, off the agent's way; a copy records it first.
+    /// Full id of the state recorded at the send; None until recorded. A delivered review is handed
+    /// out first and its state recorded after; a copy records it first.
     pub state: Option<String>,
-    /// How the comments left.
     pub sent_by: SentBy,
-    /// Whether the agent the review belongs to reported an edit, with its edit or write
-    /// tool, since the comments were sent: set on the newest round only, at the first such
-    /// edit. Until then the review pane shows the round as sent.
+    /// Set on the newest round only, at the agent's first edit or write after the send.
     pub edited: bool,
-    /// The turn of the review's session the round was sent in: for a review delivered with
-    /// a message, the turn that message started or, for a message the CLI queued, the turn
-    /// that ran. None for a copy, and for a round kept before the Keeper kept the turn of
-    /// each round (a Store of version 5 or older). While that turn runs, the newest state
-    /// of the history is older than the round's own, and what changed since the round
-    /// cannot be counted to it.
+    /// The turn the round's message started or, for a message the CLI queued, the turn that ran.
+    /// None for a copy and for rounds kept by Store version 5 or older. While that turn runs, what
+    /// changed since the round cannot be counted.
     pub turn: Option<TurnId>,
 }
 
-/// What of a review goes with the user's next message to its agent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attachment {
-    /// Every unsent comment on an unresolved thread, those written after the attaching
-    /// included.
+    /// Every unsent comment on an unresolved thread, those written after attaching included.
     Review,
-    /// The unsent comments of this one thread alone.
     Thread(ThreadId),
 }
 
-/// One review: threads written for one agent session in one worktree, or for no agent.
-/// A review has no votes and no labels.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Review {
-    /// Its id.
     pub id: ReviewId,
-    /// The agent session it belongs to; none for the review of no agent.
     pub agent: Option<SessionId>,
-    /// The state of the worktree the reviewer last marked reviewed, by its full id;
-    /// none before the first mark. What changed since the last review counts from it.
+    /// Full id of the state last marked reviewed; None before the first mark. What changed since
+    /// the last review counts from it.
     pub reviewed: Option<String>,
-    /// What is attached to the user's next message; none while nothing is.
     pub attached: Option<Attachment>,
-    /// Its threads, in the order they were started.
     pub threads: Vec<Thread>,
-    /// Its rounds, the first first.
     pub rounds: Vec<Round>,
 }
 
-/// The reviews of one workspace, and its files marked viewed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceReviews {
-    /// The workspace.
     pub workspace: WorkspaceId,
-    /// Its reviews: at least one, the review of no agent when no agent session has one.
+    /// At least one: the review of no agent when no agent session has one.
     pub reviews: Vec<Review>,
-    /// The paths of the files marked viewed whose content has not changed since, relative
-    /// to the folder of the worktree, ordered by their bytes. Empty while the worktree is
-    /// gone.
+    /// Files marked viewed whose content has not changed since, relative to the worktree folder,
+    /// ordered by bytes. Empty while the worktree is gone.
     pub viewed: Vec<PathBuf>,
 }
 

@@ -1,10 +1,5 @@
-//! The one entry the pi Adapter writes into pi's own settings after the user's yes, and the
-//! answer it keeps: CONSENT-01 to CONSENT-04, through `Pi::in_home` and the Adapter's
-//! `consent` and `answer_consent`, as the Keeper calls them.
-//!
-//! Every test makes its own home and its own folder of the Adapter, and hands both: nothing
-//! here reads `HOME`, so no test can reach the real settings of pi. The settings files are
-//! typed as bytes in layouts pi would never write, so that "no other byte" is seen.
+//! The pi Adapter's entry in pi's settings after the user's yes, and the answer it keeps. Each
+//! test has its own home, so none reaches pi's real settings; files are typed as bytes.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -19,7 +14,6 @@ use yaar_adapter_pi::{
 };
 use yaar_agent::{Adapter, Consent, ConsentAnswer};
 
-/// A home, and the Adapter's own folder, in a folder of the test's own that goes with it.
 struct World {
     root: PathBuf,
     home: PathBuf,
@@ -27,24 +21,22 @@ struct World {
 }
 
 impl World {
-    /// A home with no pi in it: `.pi/agent` does not exist.
     fn without_pi() -> World {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let temp = std::env::temp_dir()
             .canonicalize()
             .expect("the temporary folder");
-        // The name holds a quote and a backslash, which a path of the app may hold and
-        // which a JSON string must escape.
         let root = temp.join(format!("yaar-pi-settings-{}-{n}", std::process::id()));
         let home = root.join("home");
+        // The Adapter folder's name holds a quote and a backslash, which the JSON entry must
+        // escape.
         let folder = root.join("data").join("agents").join("pi \"q\" \\b");
         fs::create_dir_all(&home).expect("make the home");
         fs::create_dir_all(&folder).expect("make the folder of the Adapter");
         World { root, home, folder }
     }
 
-    /// A home with pi installed: its folder of settings exists and is empty.
     fn with_pi() -> World {
         let world = World::without_pi();
         fs::create_dir_all(world.agent_folder()).expect("make pi's folder");
@@ -59,7 +51,6 @@ impl World {
         self.agent_folder().join(SETTINGS_FILE)
     }
 
-    /// The extension's absolute path, as the Adapter writes it.
     fn extension(&self) -> String {
         self.folder
             .join(EXTENSION)
@@ -69,12 +60,10 @@ impl World {
             .to_owned()
     }
 
-    /// The extension's path as a JSON string, quotes included.
     fn quoted(&self) -> String {
         serde_json::to_string(&self.extension()).expect("a string is JSON")
     }
 
-    /// `template` with each `@` the entry, as a JSON string.
     fn fill(&self, template: &str) -> String {
         template.replace('@', &self.quoted())
     }
@@ -87,7 +76,6 @@ impl World {
         fs::read(self.settings()).expect("read the settings")
     }
 
-    /// An Adapter of this home, as a Keeper started later makes one.
     fn pi(&self) -> Pi {
         Pi::in_home(&self.home)
     }
@@ -114,8 +102,7 @@ impl World {
             .expect("the modification time")
     }
 
-    /// Gives the settings a modification time long ago, so that a write shows in it
-    /// without the test waiting for the clock.
+    /// A modification time long ago, so that a write shows without waiting for the clock.
     fn age(&self) -> SystemTime {
         let long_ago = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
         fs::File::options()
@@ -126,7 +113,6 @@ impl World {
         long_ago
     }
 
-    /// Everything under the home and the folder of the Adapter, by path and kind.
     fn tree(&self) -> BTreeSet<String> {
         fn walk(folder: &Path, root: &Path, found: &mut BTreeSet<String>) {
             for entry in fs::read_dir(folder).expect("read the folder") {
@@ -151,7 +137,6 @@ impl World {
         found
     }
 
-    /// The names in pi's folder of settings.
     fn agent_names(&self) -> BTreeSet<String> {
         fs::read_dir(self.agent_folder())
             .expect("read pi's folder")
@@ -170,19 +155,15 @@ impl World {
 
 impl Drop for World {
     fn drop(&mut self) {
-        // A test that made a folder read-only or a lock of its own leaves it removable.
         let _ = fs::remove_dir_all(&self.root);
     }
 }
 
-/// The JSON of `bytes`, after a byte-order mark.
 fn parse(bytes: &[u8]) -> Value {
     let text = std::str::from_utf8(bytes).expect("text");
     serde_json::from_str(text.strip_prefix('\u{feff}').unwrap_or(text)).expect("JSON")
 }
 
-/// `after` is `before` with the one string `entry` added to the top-level `extensions`,
-/// which is made where it was not: the file means the same, and one string more.
 fn assert_means_the_same_and_the_entry(before: &[u8], after: &[u8], entry: &str) {
     let mut expected = parse(before);
     let list = expected
@@ -198,8 +179,6 @@ fn assert_means_the_same_and_the_entry(before: &[u8], after: &[u8], entry: &str)
     );
 }
 
-/// One layout of a settings file: its bytes, what a yes makes of them (`@` is the entry as a
-/// JSON string) and what taking the yes back makes of those.
 struct Layout {
     name: &'static str,
     before: &'static str,
@@ -207,8 +186,8 @@ struct Layout {
     no: Option<&'static str>,
 }
 
-/// Where `no` is `None` the bytes come back as they were (the array was there); where it
-/// is not, the yes made the key, which stays with an empty array.
+/// Where `no` is `None` the bytes come back as they were; otherwise the yes made the key, which
+/// stays with an empty array.
 const LAYOUTS: &[Layout] = &[
     Layout {
         name: "pretty, two paths, other keys before and after",
@@ -310,8 +289,6 @@ const LAYOUTS: &[Layout] = &[
     },
 ];
 
-// CONSENT-01
-
 #[test]
 fn a_yes_with_no_file_writes_one_as_pi_would() {
     let world = World::with_pi();
@@ -371,8 +348,6 @@ fn a_yes_leaves_an_array_of_two_with_the_entry_third() {
 
 #[test]
 fn a_yes_with_the_entry_already_there_writes_nothing() {
-    // The same path written plain, with its slashes escaped and with a letter escaped:
-    // the string is what counts, not how it is spelled.
     let spellings: [fn(&str) -> String; 3] = [
         |path| serde_json::to_string(path).unwrap(),
         |path| serde_json::to_string(path).unwrap().replace('/', "\\/"),
@@ -427,8 +402,6 @@ fn a_second_yes_writes_nothing() {
 
 #[test]
 fn the_entry_is_the_extensions_absolute_path_as_a_json_string() {
-    // The folder's name holds a quote and a backslash, so a path put in unescaped would
-    // make the file no JSON.
     let world = World::with_pi();
     world.put(b"{\"extensions\": []}");
 
@@ -477,8 +450,6 @@ fn the_question_names_the_extension_and_the_settings_and_says_the_answer_can_cha
     assert_eq!(consent.problem, None);
 }
 
-// CONSENT-02
-
 #[test]
 fn taking_the_yes_back_takes_out_the_one_string_and_changes_nothing_else() {
     for layout in LAYOUTS {
@@ -522,7 +493,6 @@ fn a_no_after_a_yes_on_no_file_leaves_the_file_the_app_made_with_an_empty_array(
 
 #[test]
 fn taking_the_yes_back_leaves_the_users_own_entries_wherever_ours_stands() {
-    // (the array as typed, what is left of it when ours is gone)
     let arrays: [(&str, &str); 4] = [
         ("[@, \"/b\", \"/c\"]", "[\"/b\", \"/c\"]"),
         ("[\"/a\", @, \"/c\"]", "[\"/a\", \"/c\"]"),
@@ -539,7 +509,6 @@ fn taking_the_yes_back_leaves_the_users_own_entries_wherever_ours_stands() {
             world.fill(typed)
         );
         world.put(text.as_bytes());
-        // A yes the user made before: the kept answer says so, the entry is in the file.
         world.answer(ConsentAnswer::Yes);
         assert_eq!(
             world.bytes(),
@@ -615,10 +584,6 @@ fn the_kept_answer_follows_the_last_one_given() {
     assert!(!world.folder.join(CONSENT_FILE).exists());
 }
 
-// CONSENT-03
-
-/// Files pi would not read as it writes them: what is wrong with each, the bytes, and the
-/// words the problem says it in.
 fn unreadable_files() -> Vec<(&'static str, Vec<u8>, &'static str)> {
     let not_json = "not JSON";
     let not_strings = "not a list of strings";
@@ -759,8 +724,8 @@ fn a_no_and_ask_again_are_kept_where_the_file_cannot_be_read_and_it_is_left_alon
     assert_eq!(world.kept().as_deref(), Some("no\n"));
     assert_eq!(world.bytes(), b"{\"extensions\": [1]}");
     assert_eq!(world.modified(), before);
-    // A restart: the file cannot be read and the app writes nothing after a no, so a kept
-    // no says nothing of it.
+    // A restart: the file cannot be read and nothing is written after a no, so a kept no says
+    // nothing of it.
     assert_eq!(world.consent().answer, ConsentAnswer::No);
     assert_eq!(world.consent().problem, None);
 
@@ -783,8 +748,6 @@ fn a_no_and_ask_again_are_kept_where_the_file_cannot_be_read_and_it_is_left_alon
     world.only_the_settings_are_in_pi_folder();
 }
 
-/// Gives each answer a world of its own, so that a write by one cannot be undone by the next,
-/// and reads the whole tree after each call.
 fn assert_nothing_is_asked_or_written(prepare: &dyn Fn(&World)) {
     for answer in [
         ConsentAnswer::Yes,
@@ -860,8 +823,6 @@ fn a_settings_file_that_cannot_be_read_as_a_file_is_a_problem_and_stays() {
     assert_eq!(world.kept(), None);
 }
 
-// CONSENT-04
-
 #[test]
 fn a_yes_a_no_and_a_question_not_yet_answered_are_each_kept_across_a_restart() {
     let cases = [
@@ -877,7 +838,6 @@ fn a_yes_a_no_and_a_question_not_yet_answered_are_each_kept_across_a_restart() {
             world.answer(given);
         }
 
-        // The Keeper is started again: a new Adapter on the same home and folder.
         let again = world.consent();
 
         assert_eq!(again.answer, kept, "{given:?}");
@@ -892,7 +852,6 @@ fn a_kept_yes_whose_entry_the_user_took_out_is_asked_again_and_nothing_is_writte
     world.put(original.as_bytes());
     world.answer(ConsentAnswer::Yes);
     assert_eq!(world.consent().answer, ConsentAnswer::Yes);
-    // The user takes the entry out by hand.
     world.put(original.as_bytes());
     let before = world.age();
     let tree = world.tree();
@@ -983,8 +942,6 @@ fn an_answer_is_kept_where_the_adapters_folder_does_not_exist_yet() {
     assert_eq!(world.kept().as_deref(), Some("no\n"));
     assert_eq!(world.consent().answer, ConsentAnswer::No);
 }
-
-// Of its own: how the file is written.
 
 #[test]
 fn a_settings_file_that_is_a_symbolic_link_stays_a_link_and_its_target_holds_the_entry() {
@@ -1116,7 +1073,6 @@ fn a_lock_pi_holds_makes_a_yes_change_nothing_and_say_so_and_stays_pis() {
         BTreeSet::from([SETTINGS_FILE.to_owned(), format!("{SETTINGS_FILE}.lock")])
     );
 
-    // pi lets go: the same yes now goes through.
     fs::remove_dir_all(&lock).unwrap();
     let consent = world.answer(ConsentAnswer::Yes);
     assert_eq!(consent.answer, ConsentAnswer::Yes);
@@ -1176,7 +1132,6 @@ fn a_no_whose_entry_could_not_be_taken_out_is_told_again_after_a_restart_until_i
     let before = world.age();
     let tree = world.tree();
 
-    // The Keeper is started again, and again: the entry is still in pi's settings.
     let first = world.consent();
     let second = world.consent();
 
@@ -1195,7 +1150,6 @@ fn a_no_whose_entry_could_not_be_taken_out_is_told_again_after_a_restart_until_i
     assert_eq!(world.modified(), before);
     assert_eq!(world.tree(), tree);
 
-    // The user says no again, and now the entry goes.
     let again = world.answer(ConsentAnswer::No);
     assert_eq!((again.answer, again.problem), (ConsentAnswer::No, None));
     assert!(

@@ -1,8 +1,3 @@
-//! Component test: the terminal pane on GPUI's test platform, with no window on any screen.
-//! Keys, clicks and the wheel go in; the pane is read back through the model it shows.
-//! The test plays the Keeper on the other end of a socket pair: it answers what the pane
-//! asks and reads what the pane sends a program.
-
 mod common;
 
 use std::time::Duration;
@@ -21,7 +16,6 @@ use common::{
     Panes, drawn, key_of, lines, open_panes, refused, terminal, wait_until, workspace_id,
 };
 
-/// Whether the focus is in the view of this terminal.
 fn has_the_focus(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> bool {
     let view = panes
         .pane
@@ -31,8 +25,6 @@ fn has_the_focus(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> 
     cx.update(|window, _| focus.is_focused(window))
 }
 
-/// What the pane shows, as the model says it: the terminals drawn and the one with the
-/// keys.
 fn shown(panes: &Panes, cx: &mut VisualTestContext) -> Vec<TerminalId> {
     panes.pane.read_with(cx, |pane, _| pane.shown())
 }
@@ -46,12 +38,9 @@ fn the_pane_holds_several_terminals_at_once_and_switches_between_them(cx: &mut T
     let (mut panes, mut cx) = open_panes(cx);
     let (t1, t2, t3) = (terminal('1'), terminal('2'), terminal('3'));
 
-    // Three presses of the key of New Terminal, each after leaving the terminal.
     for _ in 0..3 {
         panes.press_in_the_app::<NewTerminal>(&mut cx);
     }
-    // The questions come in the order they were asked and may be answered in any order:
-    // the terminals are made as the answers come, each its own, and none is lost.
     let asked: Vec<_> = (0..3).map(|_| panes.keeper.request(&mut cx)).collect();
     for (_, request) in &asked {
         let Request::OpenTerminal { workspace, .. } = request else {
@@ -77,7 +66,6 @@ fn the_pane_holds_several_terminals_at_once_and_switches_between_them(cx: &mut T
             panes.keeper.output(&t1, b"one$");
         }
     }
-    // The second terminal's output arrives while the third is shown.
     panes.keeper.output(&t3, b"three$");
     panes.keeper.output(&t2, b"two$");
     wait_until(&mut cx, "the output of every terminal", |cx| {
@@ -86,7 +74,6 @@ fn the_pane_holds_several_terminals_at_once_and_switches_between_them(cx: &mut T
             .all(|(id, text)| lines(&panes.pane, id, cx).first().map(String::as_str) == Some(text))
     });
 
-    // Holds several terminals at once.
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),
         [t1.clone(), t2.clone(), t3.clone()]
@@ -101,7 +88,6 @@ fn the_pane_holds_several_terminals_at_once_and_switches_between_them(cx: &mut T
     assert_eq!(lines(&panes.pane, &t2, &cx)[0], "two$");
     assert_eq!(lines(&panes.pane, &t3, &cx)[0], "three$");
 
-    // Switches between them: the last one opened is shown and has the focus.
     assert_eq!(shown(&panes, &mut cx), vec![t3.clone()]);
     assert_eq!(focused(&panes, &mut cx), Some(t3.clone()));
     assert!(has_the_focus(&panes, &t3, &mut cx));
@@ -113,7 +99,6 @@ fn the_pane_holds_several_terminals_at_once_and_switches_between_them(cx: &mut T
         assert_eq!(focused(panes, cx), Some(now.clone()), "after {key}");
         assert!(has_the_focus(panes, now, cx), "after {key}");
     };
-    // Round from the last to the first, and back.
     step(&mut panes, &mut cx, key_of::<NextTerminal>(), &t1);
     assert_eq!(lines(&panes.pane, &t1, &cx)[0], "one$");
     step(&mut panes, &mut cx, key_of::<PreviousTerminal>(), &t3);
@@ -138,7 +123,6 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
 
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert!(panes.pane.read_with(&cx, |pane, _| pane.split()));
-    // The focused terminal is on the left and the next one in the list on the right.
     let two = shown(&panes, &mut cx);
     assert_eq!(two, [t2.clone(), t1.clone()]);
     let (first, second) = (
@@ -150,7 +134,6 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
         "the slots are not side by side: {first:?} and {second:?}"
     );
 
-    // Keys go to the terminal that has the focus: the one of the slot clicked.
     panes.click_slot(1, &mut cx);
     assert_eq!(focused(&panes, &mut cx), Some(two[1].clone()));
     cx.simulate_input("q");
@@ -161,7 +144,6 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
     cx.simulate_input("w");
     assert_eq!(panes.keeper.input(&mut cx), (two[0].clone(), b"w".to_vec()));
 
-    // A key with bytes of its own, which the view encodes, goes the same way.
     cx.simulate_keystrokes("escape");
     assert_eq!(
         panes.keeper.input(&mut cx),
@@ -174,21 +156,16 @@ fn the_split_view_shows_two_terminals_at_once_and_keys_go_to_the_focused_one(
         (two[1].clone(), b"\x1b".to_vec())
     );
 
-    // No other frame of input came between.
     cx.run_until_parked();
     assert!(panes.keeper.no_input_waits());
 }
 
-/// How many frames the window was asked for since the last look, after the app has been
-/// run until it has nothing left to do.
 fn frames_asked(cx: &mut VisualTestContext) -> usize {
     let asked = cx.update(|window, cx| window.simulate_next_frame(cx));
     cx.run_until_parked();
     asked
 }
 
-/// Moves the clock of the executor on by 100 ms `steps` times and says that the window
-/// asked for a frame after each.
 fn frames_keep_coming(steps: u32, from: u32, cx: &mut VisualTestContext) {
     for step in 1..=steps {
         cx.executor().advance_clock(Duration::from_millis(100));
@@ -200,10 +177,8 @@ fn frames_keep_coming(steps: u32, from: u32, cx: &mut VisualTestContext) {
     }
 }
 
-/// The clock stands `from` ms after a key and the frames end 1 ms after `edge`: moves it
-/// to `edge`, where the frame drawn still asks for the next, then 2 ms on, past the end,
-/// where the frame drawn asks for none. A count is of the frames asked by the last draw,
-/// so the one pending is drawn first.
+/// Moves the clock to `edge`, where the frame drawn still asks for the next, then 2 ms on, where
+/// it asks for none. A count is of the last draw's frames, so the pending frame is drawn first.
 fn frames_end_at(from: u64, edge: u64, cx: &mut VisualTestContext, what: &str) {
     cx.executor()
         .advance_clock(Duration::from_millis(edge - from));
@@ -224,8 +199,8 @@ fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestA
     let one = terminal('1');
     panes.open_terminal(&one, &mut cx);
     assert!(has_the_focus(&panes, &one, &mut cx));
-    // Settled: drawing again asks for nothing. The clock does not move, so a pane that
-    // asks for frames for ever is told here rather than waited for.
+    // The clock does not move, so a pane that asks for frames for ever fails here instead of
+    // hanging.
     let mut drawn = 0;
     while frames_asked(&mut cx) > 0 {
         drawn += 1;
@@ -235,15 +210,10 @@ fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestA
         );
     }
 
-    // A key typed in the terminal: a frame at every step up to 900 ms.
     cx.simulate_keystrokes("a");
     frames_keep_coming(9, 0, &mut cx);
-    // The edge: still asked for a millisecond before the second is over, and not
-    // a millisecond after it.
     frames_end_at(900, 999, &mut cx, "one second");
 
-    // A key that runs an action never reaches a key listener, and counts all the same:
-    // 500 ms after the first key it moves the end to 1,500 ms.
     cx.simulate_keystrokes("a");
     cx.executor().advance_clock(Duration::from_millis(500));
     cx.simulate_keystrokes(key_of::<ScrollPageUp>());
@@ -251,7 +221,6 @@ fn after_each_key_the_pane_keeps_asking_for_frames_for_one_second(cx: &mut TestA
     frames_end_at(1_400, 1_499, &mut cx, "1,500 ms");
 }
 
-/// Waits until the screen of a terminal has this text in its first line.
 fn wait_for_first_line(panes: &Panes, id: &TerminalId, text: &str, cx: &mut VisualTestContext) {
     wait_until(cx, &format!("{text:?} on the screen"), |cx| {
         panes
@@ -262,10 +231,8 @@ fn wait_for_first_line(panes: &Panes, id: &TerminalId, text: &str, cx: &mut Visu
     });
 }
 
-/// Has the program write `bytes`, and waits until the pane has read them: a marker is
-/// written after them at the top of the screen, and the wait is for it. The output
-/// travels on a thread of its own, so that a state it sets, such as a mouse mode, is only
-/// to be counted on once something it wrote after it is on the screen.
+/// Writes `bytes`, then `marker` on the top line, and waits for the marker: the output travels
+/// on its own thread, so a state it sets (a mouse mode) holds only once later output is on screen.
 fn program_writes(
     panes: &Panes,
     id: &TerminalId,
@@ -279,7 +246,6 @@ fn program_writes(
     wait_for_first_line(panes, id, marker, cx);
 }
 
-/// A pane with one terminal that has the focus.
 fn one_terminal(cx: &mut TestAppContext) -> (Panes, VisualTestContext, TerminalId) {
     let (mut panes, mut cx) = open_panes(cx);
     let one = terminal('1');
@@ -317,8 +283,6 @@ fn what_the_program_wrote_before_the_answer_was_read_is_not_lost(cx: &mut TestAp
     let one = terminal('1');
     panes.press_in_the_app::<NewTerminal>(&mut cx);
     let (id, _) = panes.keeper.request(&mut cx);
-    // The Keeper writes the first line of the shell, and the pane reads it only after
-    // it has taken the answer.
     panes.keeper.output(&one, b"prompt$ ");
     panes.keeper.reply(
         id,
@@ -348,7 +312,6 @@ fn a_second_press_before_the_first_answer_loses_neither_terminal(cx: &mut TestAp
 #[gpui_kit::test]
 fn the_pane_hands_the_focus_on_to_the_focused_terminal(cx: &mut TestAppContext) {
     let (mut panes, mut cx) = open_panes(cx);
-    // With no terminal the focus stays on the pane, outside any program.
     cx.update(|window, cx| panes.pane_focus.focus(window, cx));
     cx.run_until_parked();
     assert!(cx.update(|window, _| panes.pane_focus.is_focused(window)));
@@ -358,7 +321,6 @@ fn the_pane_hands_the_focus_on_to_the_focused_terminal(cx: &mut TestAppContext) 
     panes.open_terminal(&two, &mut cx);
     panes.click_elsewhere(&mut cx);
     assert!(!has_the_focus(&panes, &two, &mut cx));
-    // As when the Frame moves the focus from pane to pane.
     cx.update(|window, cx| panes.pane_focus.focus(window, cx));
     cx.run_until_parked();
     assert!(has_the_focus(&panes, &two, &mut cx));
@@ -372,7 +334,6 @@ fn the_split_view_does_nothing_with_fewer_than_two_terminals(cx: &mut TestAppCon
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert!(!panes.pane.read_with(&cx, |pane, _| pane.split()));
     assert_eq!(shown(&panes, &mut cx), [one]);
-    // Closing it again is no more than a key.
     panes.open_terminal(&terminal('2'), &mut cx);
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert!(panes.pane.read_with(&cx, |pane, _| pane.split()));
@@ -390,14 +351,11 @@ fn in_the_split_view_the_next_terminal_goes_to_the_other_slot_when_it_is_shown_t
     for id in &ids {
         panes.open_terminal(id, &mut cx);
     }
-    // 3 has the focus; the split shows it and the next one in the list, which is 1.
     panes.press_in_the_app::<ToggleSplit>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [ids[2].clone(), ids[0].clone()]);
-    // The next terminal after 3 is shown in the other slot: the focus moves there.
     panes.press_in_the_app::<NextTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [ids[2].clone(), ids[0].clone()]);
     assert_eq!(focused(&panes, &mut cx), Some(ids[0].clone()));
-    // The next after 1 is 2, shown nowhere: it takes the place of 1 in its slot.
     panes.press_in_the_app::<NextTerminal>(&mut cx);
     assert_eq!(shown(&panes, &mut cx), [ids[2].clone(), ids[1].clone()]);
     assert_eq!(focused(&panes, &mut cx), Some(ids[1].clone()));
@@ -430,13 +388,11 @@ fn the_window_title_follows_the_title_of_the_focused_terminal(cx: &mut TestAppCo
     });
     assert_eq!(cx.window_title().as_deref(), Some("hello - YAAR"));
 
-    // A second terminal that gave no title takes the focus, and the title with it.
     panes.open_terminal(&terminal('2'), &mut cx);
     assert_eq!(cx.window_title().as_deref(), Some("YAAR"));
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
     assert_eq!(cx.window_title().as_deref(), Some("hello - YAAR"));
 
-    // The program takes its title back.
     panes.keeper.output(&one, b"\x1b]0;\x07");
     wait_until(&mut cx, "the title is gone", |cx| {
         let view = panes
@@ -455,7 +411,6 @@ fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &m
     let (one, two) = (terminal('1'), terminal('2'));
     panes.open_terminal(&one, &mut cx);
     panes.open_terminal(&two, &mut cx);
-    // The first terminal has the focus, as the one that ends.
     panes.press_in_the_app::<PreviousTerminal>(&mut cx);
     assert_eq!(focused(&panes, &mut cx), Some(one.clone()));
     panes.keeper.output(&one, b"bye");
@@ -480,10 +435,8 @@ fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &m
         [one.clone(), two.clone()]
     );
 
-    // The Keeper no longer holds the terminal: what is typed in it is not sent. The
-    // absence is read up to a known input, since input travels on threads that the test
-    // does not wait for: a sentinel typed in the other terminal comes first, or the ended
-    // one sent something before it.
+    // What is typed in the ended terminal is not sent. The absence is read up to a sentinel typed
+    // in the other terminal, since input travels on threads the test does not wait for.
     cx.simulate_input("x");
     cx.simulate_keystrokes("escape");
     panes.press_in_the_app::<NextTerminal>(&mut cx);
@@ -495,15 +448,12 @@ fn a_terminal_whose_program_ended_stays_with_its_last_screen_and_says_how(cx: &m
 #[gpui_kit::test]
 fn the_keeper_is_told_the_size_of_the_grid_when_it_changes_and_only_then(cx: &mut TestAppContext) {
     let (mut panes, mut cx, one) = one_terminal(cx);
-    // The terminal was asked for at the size the pane has before it is laid out, and
-    // is then fitted to its slot.
     wait_until(&mut cx, "the first fit", |_| {
         panes.keeper.resizes(&one).len() == 1
     });
     let fitted = panes.grid(&one);
     assert_ne!(fitted, FIRST_SIZE);
 
-    // Drawing again and again, and typing, tells nobody anything.
     cx.simulate_input("x");
     assert_eq!(panes.keeper.input(&mut cx).1, b"x");
     for _ in 0..3 {
@@ -512,7 +462,6 @@ fn the_keeper_is_told_the_size_of_the_grid_when_it_changes_and_only_then(cx: &mu
     }
     assert_eq!(panes.keeper.resizes(&one), [fitted]);
 
-    // A smaller window fits fewer cells: one more resize.
     cx.simulate_resize(size(px(700.), px(400.)));
     cx.run_until_parked();
     wait_until(&mut cx, "the second fit", |_| {
@@ -523,7 +472,6 @@ fn the_keeper_is_told_the_size_of_the_grid_when_it_changes_and_only_then(cx: &mu
     cx.run_until_parked();
     assert_eq!(panes.keeper.resizes(&one).len(), 2);
 
-    // The next terminal is opened at the size the grids have now.
     panes.press_in_the_app::<NewTerminal>(&mut cx);
     let (_, asked) = panes.keeper.open(&terminal('2'), &mut cx);
     assert_eq!(asked, smaller);
@@ -532,8 +480,6 @@ fn the_keeper_is_told_the_size_of_the_grid_when_it_changes_and_only_then(cx: &mu
 #[gpui_kit::test]
 fn a_key_reaches_the_program_once_in_the_form_the_encoder_gives(cx: &mut TestAppContext) {
     let (panes, mut cx, one) = one_terminal(cx);
-    // Text goes through the input handler, a key with a form of its own through the
-    // key listener: neither is sent twice, nor by both.
     for (key, bytes) in [
         ("h", &b"h"[..]),
         ("ctrl-c", &[0x03]),
@@ -549,7 +495,6 @@ fn a_key_reaches_the_program_once_in_the_form_the_encoder_gives(cx: &mut TestApp
             "the key {key}"
         );
     }
-    // After the program asked for the application cursor keys.
     program_writes(&panes, &one, b"\x1b[?1h", "cursor-keys", &mut cx);
     cx.simulate_keystrokes("up");
     assert_eq!(panes.keeper.input(&mut cx).1, b"\x1bOA");
@@ -563,9 +508,8 @@ fn a_held_letter_repeats_as_text_and_is_not_left_to_the_systems_accent_popup(
     cx: &mut TestAppContext,
 ) {
     let (panes, mut cx, one) = one_terminal(cx);
-    // The first press of a letter is typed text, which the platform hands to the input
-    // handler: the key listener sends nothing for it. Each repeat of the held key is
-    // sent as its text.
+    // The first press of a letter is typed text for the input handler, so the key listener sends
+    // nothing for it; each repeat of the held key is sent as its text.
     let press = |held: bool| KeyDownEvent {
         keystroke: Keystroke {
             key: "e".to_owned(),
@@ -575,7 +519,6 @@ fn a_held_letter_repeats_as_text_and_is_not_left_to_the_systems_accent_popup(
         is_held: held,
         prefer_character_input: false,
     };
-    // The keystroke is the one the system gives: with its text.
     cx.simulate_event(press(false));
     cx.simulate_event(press(true));
     cx.simulate_event(press(true));
@@ -584,7 +527,6 @@ fn a_held_letter_repeats_as_text_and_is_not_left_to_the_systems_accent_popup(
     });
     assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"e".to_vec()));
     assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"e".to_vec()));
-    // Nothing more: the first press and the release sent nothing.
     cx.simulate_input("z");
     assert_eq!(panes.keeper.input(&mut cx), (one, b"z".to_vec()));
 }
@@ -592,7 +534,6 @@ fn a_held_letter_repeats_as_text_and_is_not_left_to_the_systems_accent_popup(
 #[gpui_kit::test]
 fn the_terminal_answers_the_questions_of_its_program(cx: &mut TestAppContext) {
     let (panes, mut cx, one) = one_terminal(cx);
-    // Primary device attributes: the answer is a control sequence that ends in `c`.
     panes.keeper.output(&one, b"\x1b[c");
     let (from, answer) = panes.keeper.input(&mut cx);
     assert_eq!(from, one);
@@ -602,8 +543,6 @@ fn the_terminal_answers_the_questions_of_its_program(cx: &mut TestAppContext) {
     );
 }
 
-/// Fills the screen of a terminal with numbered lines, so that it has a history, and
-/// says the number on the first line shown.
 fn fill_with_lines(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> usize {
     let text: String = (0..200).map(|n| format!("line-{n}\r\n")).collect();
     panes.keeper.output(id, text.as_bytes());
@@ -615,7 +554,6 @@ fn fill_with_lines(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -
     top_line(panes, id, cx)
 }
 
-/// The number of the line on top of the screen.
 fn top_line(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> usize {
     let top = lines(&panes.pane, id, cx)[0].clone();
     top.strip_prefix("line-")
@@ -634,7 +572,6 @@ fn the_wheel_and_the_scroll_keys_move_through_the_history_and_typing_comes_back(
     let over = panes.cell_centre(&one, 0, 1, 1, &mut cx);
     cx.simulate_mouse_move(over, None, Modifiers::none());
 
-    // A step of the wheel up is three lines of history.
     cx.simulate_event(ScrollEvent {
         position: over,
         delta: ScrollDelta::Lines(point(0., 1.)),
@@ -642,7 +579,6 @@ fn the_wheel_and_the_scroll_keys_move_through_the_history_and_typing_comes_back(
     });
     cx.run_until_parked();
     assert_eq!(top_line(&panes, &one, &mut cx), newest - 3);
-    // Down brings the lines back.
     cx.simulate_event(ScrollEvent {
         position: over,
         delta: ScrollDelta::Lines(point(0., -1.)),
@@ -651,17 +587,14 @@ fn the_wheel_and_the_scroll_keys_move_through_the_history_and_typing_comes_back(
     cx.run_until_parked();
     assert_eq!(top_line(&panes, &one, &mut cx), newest);
 
-    // A page up, by the key the terminal keeps for it.
     cx.simulate_keystrokes(key_of::<ScrollPageUp>());
     let paged = top_line(&panes, &one, &mut cx);
     assert!(
         paged < newest - 3,
         "a page is more than a step: {paged} and {newest}"
     );
-    // Nothing of this reached the program.
     assert!(panes.keeper.no_input_waits());
 
-    // Typing shows the newest line again.
     cx.simulate_input("x");
     assert_eq!(panes.keeper.input(&mut cx).1, b"x");
     assert_eq!(top_line(&panes, &one, &mut cx), newest);
@@ -690,7 +623,6 @@ fn on_the_alternate_screen_a_step_of_the_wheel_is_an_arrow_key_for_the_program(
         panes.keeper.input(&mut cx),
         (one.clone(), b"\x1b[B\x1b[B".to_vec())
     );
-    // The application cursor keys change the form of the arrow.
     program_writes(&panes, &one, b"\x1b[?1h", "cursor-keys", &mut cx);
     cx.simulate_event(step(1.));
     assert_eq!(panes.keeper.input(&mut cx), (one, b"\x1bOA".to_vec()));
@@ -702,12 +634,10 @@ fn a_drag_selects_text_and_copy_puts_the_selection_on_the_clipboard(cx: &mut Tes
     panes.keeper.output(&one, b"hello world");
     wait_for_first_line(&panes, &one, "hello world", &mut cx);
 
-    // Copying with nothing selected copies nothing.
     cx.write_to_clipboard(ClipboardItem::new_string("kept".to_owned()));
     cx.simulate_keystrokes(key_of::<Copy>());
     assert_eq!(clipboard(&cx).as_deref(), Some("kept"));
 
-    // A drag from the first cell to the fifth.
     let from = panes.cell_centre(&one, 0, 0, 0, &mut cx);
     let to = panes.cell_centre(&one, 0, 4, 0, &mut cx);
     cx.simulate_mouse_down(from, MouseButton::Left, Modifiers::none());
@@ -716,12 +646,10 @@ fn a_drag_selects_text_and_copy_puts_the_selection_on_the_clipboard(cx: &mut Tes
     cx.simulate_keystrokes(key_of::<Copy>());
     assert_eq!(clipboard(&cx).as_deref(), Some("hello"));
 
-    // A click selects nothing: copying leaves the clipboard as it is.
     cx.write_to_clipboard(ClipboardItem::new_string("kept".to_owned()));
     cx.simulate_click(from, Modifiers::none());
     cx.simulate_keystrokes(key_of::<Copy>());
     assert_eq!(clipboard(&cx).as_deref(), Some("kept"));
-    // None of it went to the program.
     assert!(panes.keeper.no_input_waits());
 }
 
@@ -735,8 +663,6 @@ fn paste_sends_the_clipboard_as_a_paste_and_an_empty_clipboard_sends_nothing(
 ) {
     let (panes, mut cx, one) = one_terminal(cx);
 
-    // With nothing on the clipboard the key sends nothing: the next input is the one
-    // typed after it.
     cx.simulate_keystrokes(key_of::<Paste>());
     cx.simulate_input("s");
     assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"s".to_vec()));
@@ -745,7 +671,6 @@ fn paste_sends_the_clipboard_as_a_paste_and_an_empty_clipboard_sends_nothing(
     cx.simulate_keystrokes(key_of::<Paste>());
     assert_eq!(panes.keeper.input(&mut cx), (one.clone(), b"a\rb".to_vec()));
 
-    // A program that asked for bracketed paste gets the marks.
     program_writes(&panes, &one, b"\x1b[?2004h", "bracketed", &mut cx);
     cx.simulate_keystrokes(key_of::<Paste>());
     assert_eq!(
@@ -759,7 +684,6 @@ fn a_program_that_asked_for_the_mouse_is_told_of_it_and_moves_in_one_cell_are_to
     cx: &mut TestAppContext,
 ) {
     let (mut panes, mut cx, one) = one_terminal(cx);
-    // Every move, in the SGR form.
     program_writes(&panes, &one, b"\x1b[?1003h\x1b[?1006h", "mouse-on", &mut cx);
 
     let a = panes.cell_centre(&one, 0, 3, 2, &mut cx);

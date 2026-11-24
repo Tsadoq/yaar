@@ -1,5 +1,4 @@
-//! The text search on real folders: a git repository the test makes, and folders that are
-//! none. Searches go through `TextSearch` and `is_ignored`, as the Navigator calls them.
+//! Searches on real folders: a git repository the test makes, and folders that are none.
 
 mod support;
 
@@ -10,16 +9,12 @@ use std::time::{Duration, Instant};
 use support::{Scratch, write};
 use yaar_text_search::{Found, SearchError, TextSearch, is_ignored};
 
-/// How long a test waits for a fact before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// The search the app runs: on half the cores.
 fn search() -> TextSearch {
     TextSearch::new(TextSearch::half_the_cores())
 }
 
-/// A match as the tests state it: the path relative to the folder searched, then line,
-/// column and text.
 fn found(folder: &std::path::Path, list: &[Found]) -> Vec<(String, u32, u32, String)> {
     list.iter()
         .map(|f| {
@@ -37,7 +32,6 @@ fn found(folder: &std::path::Path, list: &[Found]) -> Vec<(String, u32, u32, Str
         .collect()
 }
 
-/// The paths, relative to `folder`, of the files `word` is found in, each once.
 fn files_with(folder: &std::path::Path, word: &str) -> Vec<String> {
     let mut files: Vec<String> = found(folder, &search().all(folder, word).expect("a search"))
         .into_iter()
@@ -47,8 +41,6 @@ fn files_with(folder: &std::path::Path, word: &str) -> Vec<String> {
     files
 }
 
-/// The repository of TEXT-01: one commit of `a.rs`, `ignored/` in `.gitignore`, then
-/// files git has not seen, one of them listed in `.git/info/exclude`.
 fn repository_of_the_row(scratch: &Scratch) -> PathBuf {
     let root = scratch.repository();
     scratch.init(&root);
@@ -67,8 +59,6 @@ fn repository_of_the_row(scratch: &Scratch) -> PathBuf {
 fn a_name_defined_in_a_new_untracked_file_is_found_and_one_in_an_ignored_file_is_not() {
     let scratch = Scratch::new();
     let root = repository_of_the_row(&scratch);
-    // The row's sentence needs the file untracked, and ignored by nothing, and the other two
-    // files left out by git itself: git is the authority on both, not the test's own rules.
     let status = scratch.git(&root, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(status.contains("?? fresh.rs"), "fresh.rs is untracked");
     for left_out in ["ignored/only_here.txt", "excluded.txt"] {
@@ -90,8 +80,6 @@ fn a_name_defined_in_a_new_untracked_file_is_found_and_one_in_an_ignored_file_is
         "the name of the untracked file is found, where it stands"
     );
 
-    // The two ways git leaves a file out, and the control half: the tracked name is found
-    // by the same search, so the empty lists are not an empty search.
     for name in ["ignored_only_name", "excluded_name"] {
         assert_eq!(
             search().all(&root, name).expect("a search"),
@@ -99,6 +87,8 @@ fn a_name_defined_in_a_new_untracked_file_is_found_and_one_in_an_ignored_file_is
             "{name} occurs only in a file git leaves out"
         );
     }
+    // Control: the same search finds a tracked name, so the empty lists above are not an empty
+    // search.
     let tracked = search().all(&root, "tracked_name").expect("a search");
     assert_eq!(
         found(&root, &tracked),
@@ -223,8 +213,7 @@ fn a_file_with_a_nul_byte_is_not_searched_wherever_the_nul_stands() {
     let root = scratch.repository();
     scratch.init(&root);
     write(&root, "early.bin", b"needle\n\0binary\n");
-    // A match long before a NUL that lies beyond the first buffer the search reads: the
-    // file is binary all the same, and none of its matches is given.
+    // The NUL lies beyond the first buffer the search reads.
     let mut late = b"needle\n".to_vec();
     late.extend(std::iter::repeat_n(b'x', 1 << 20));
     late.extend(b"\n\0\n");
@@ -242,8 +231,6 @@ fn hidden_files_are_searched_and_git_s_own_folder_never() {
     write(&root, ".github/workflows/ci.yml", b"needle\n");
     write(&root, ".dotfile", b"needle\n");
     write(&root, ".git/inside.txt", b"needle\n");
-    // A nested repository has a `.git` too, at any depth, and one that is a file, as a
-    // linked worktree's is.
     write(&root, "vendor/inner/.git/HEAD", b"needle\n");
     write(&root, "vendor/linked/.git", b"needle\n");
     write(&root, "vendor/inner/code.txt", b"needle\n");
@@ -281,7 +268,6 @@ fn the_rules_of_a_gitignore_at_every_level_count_and_a_deeper_one_wins() {
 #[test]
 fn a_folder_that_is_no_repository_is_searched_by_the_gitignore_files_it_holds() {
     let scratch = Scratch::new();
-    // An export of an old side: no `.git`, `.gitignore` files all the same.
     let root = scratch.path().join("export");
     write(&root, ".gitignore", b"skipped.txt\n");
     write(&root, "sub/.gitignore", b"*.tmp\n");
@@ -310,8 +296,7 @@ fn only_gits_rules_count_not_the_ignore_files_of_other_tools() {
 #[test]
 fn the_rules_of_the_folders_above_the_one_searched_do_not_count() {
     let scratch = Scratch::new();
-    // The scratch folder, which holds the folder searched, ignores everything in it: a test
-    // may run under any folder, and a worktree is searched on its own.
+    // The scratch folder ignores everything in it: a test may run under any folder.
     write(scratch.path(), ".gitignore", b"*\n");
     let root = scratch.path().join("export");
     write(&root, "kept.txt", b"needle\n");
@@ -357,9 +342,7 @@ fn the_channel_gives_every_match_and_closes_when_every_file_was_searched() {
         write(&root, &format!("f{file}.txt"), b"needle\n");
     }
     let receiver = search().search(&root, "needle").expect("a search");
-    // Drained until the channel says it is closed, which is the clause: every file was
-    // searched, then no sender is left. A search that held one open fails here with a
-    // sentence, at the deadline.
+    // Drained until the channel closes: no sender left means every file was searched.
     let deadline = Instant::now() + DEADLINE;
     let mut list: Vec<Found> = Vec::new();
     loop {
@@ -441,8 +424,7 @@ fn is_ignored_says_what_the_search_leaves_out() {
     ] {
         assert!(!is_ignored(&root, &root.join(kept)), "{kept}");
     }
-    // A path outside the folder is not ignored by its rules, though the rules of the
-    // repository would leave it out when the folder is a part of it.
+    // Outside the folder: not ignored, though the repository's rules would leave it out.
     let outside = scratch.path().join("outside.rs");
     assert!(!is_ignored(&root, &outside));
     assert!(!is_ignored(
@@ -451,9 +433,6 @@ fn is_ignored_says_what_the_search_leaves_out() {
     ));
 }
 
-/// `folder`, an absolute path, spelled relative to the folder the test runs in: as many
-/// `..` as the working folder is deep, then the folder's own parts. No test may change the
-/// working folder of its process, so the folder is reached by this way round.
 fn relative_to_the_working_folder(folder: &std::path::Path) -> PathBuf {
     let here = std::env::current_dir()
         .and_then(|here| here.canonicalize())
@@ -469,7 +448,6 @@ fn is_ignored_takes_a_relative_folder_with_the_absolute_paths_the_search_gives()
     let root = repository_of_the_row(&scratch);
     let folder = relative_to_the_working_folder(&root);
     assert!(folder.is_relative(), "{folder:?} is relative");
-    // The search makes its folder absolute, so each path it gives is absolute.
     let found = search().all(&folder, "brand_new_name").expect("a search");
     assert_eq!(found.len(), 1, "the control: the search found the new file");
     assert!(found[0].path.is_absolute(), "{:?}", found[0].path);
@@ -488,7 +466,6 @@ fn is_ignored_takes_a_relative_folder_with_the_absolute_paths_the_search_gives()
         !is_ignored(&folder, &found[0].path),
         "the file the search found is not ignored"
     );
-    // Both spelled relative: the same answers.
     assert!(is_ignored(&folder, &folder.join("ignored/only_here.txt")));
     assert!(!is_ignored(&folder, &folder.join("fresh.rs")));
 }
@@ -504,8 +481,6 @@ fn is_ignored_agrees_with_what_the_search_finds_in_every_file() {
         b"*.log\n/build\ndocs/*.md\n!docs/keep.md\n",
     );
     write(&root, ".git/info/exclude", b"private/\n");
-    // A deeper file takes back what a shallower one leaves out, so the order the rules are
-    // weighed in shows: the deepest first.
     write(&root, "src/.gitignore", b"gen_*\n!keep.log\n");
     let files = [
         "a.rs",
@@ -553,8 +528,7 @@ fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_reposi
     write(&main, "a.rs", b"fn tracked_name() {}\n");
     scratch.git(&main, &["add", "a.rs"]);
     scratch.git(&main, &["commit", "--quiet", "-m", "first"]);
-    // The main repository's private exclude file, which a linked worktree shares: its own
-    // `.git` is a file that points at the main one.
+    // A linked worktree shares the main repository's exclude file.
     write(&main, ".git/info/exclude", b"secret.txt\n");
     let linked = scratch.path().join("linked");
     scratch.git(
@@ -572,13 +546,9 @@ fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_reposi
         linked.join(".git").is_file(),
         "a linked worktree's .git is a file"
     );
-    // A repository inside the folder searched has an exclude file of its own, which counts
-    // for the files below it and for no other.
     let inner = linked.join("vendor/inner");
     write(&linked, "vendor/inner/placeholder", b"");
     scratch.init(&inner);
-    // It also takes back the name the main repository's exclude file leaves out: the
-    // deepest exclude file is weighed first.
     write(&inner, ".git/info/exclude", b"hid.txt\n!secret.txt\n");
     let files = [
         "a.rs",
@@ -594,7 +564,6 @@ fn is_ignored_agrees_with_the_search_in_a_linked_worktree_and_in_a_nested_reposi
         write(&linked, file, b"needle\n");
     }
 
-    // Git is the authority on what a repository leaves out; a name it lists is no guess.
     let untracked = scratch.git(&linked, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(
         !untracked.contains("secret.txt") && untracked.contains("?? hid.txt"),
@@ -633,7 +602,6 @@ fn a_relative_folder_gives_matches_by_absolute_paths() {
     let root = scratch.repository();
     scratch.init(&root);
     write(&root, "file.txt", b"needle\n");
-    // The same folder, spelled relative to the folder the test runs in.
     let here = std::env::current_dir().expect("the working folder");
     let up = here.components().count() - 1;
     let relative: PathBuf = std::iter::repeat_n("..", up)
@@ -662,7 +630,7 @@ fn a_link_to_a_folder_is_no_folder_to_a_rule_that_names_folders() {
     write(&root, ".gitignore", b"linked/\n");
     write(&root, "real/file.txt", b"needle\n");
     std::os::unix::fs::symlink("real", root.join("linked")).expect("make the link");
-    // Git is the authority: a pattern of folders leaves out no link, which is no folder.
+    // A folder pattern leaves out no link, which is no folder.
     let status = scratch.git(&root, &["status", "--porcelain", "--untracked-files=all"]);
     assert!(status.contains("?? linked"), "git keeps the link: {status}");
     assert!(!is_ignored(&root, &root.join("linked")));

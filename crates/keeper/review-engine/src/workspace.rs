@@ -4,14 +4,8 @@ use yaar_store::{ReviewId, WorkspaceId};
 
 use crate::review::Review;
 
-/// The reviews of `workspace`, given those it has: a workspace with no review of an agent
-/// session has exactly one review, which belongs to no agent.
-///
-/// When `reviews` holds no review of an agent session and none of no agent, one review of
-/// no agent is added, with the id `new_id` draws, and nothing else changes; `new_id` is
-/// called then and only then. When it holds one of no agent, it is given back as it is.
-/// The reviews of agent sessions, and what becomes of the review of no agent when a session
-/// starts, are a later slice's: `reviews` is given back as it is when it holds one.
+/// Adds one review of no agent, with the id `new_id` draws, when `reviews` is empty;
+/// `new_id` is called only then. Otherwise `reviews` is given back as it is.
 pub fn with_review_of_no_agent(
     workspace: &WorkspaceId,
     reviews: Vec<Review>,
@@ -34,7 +28,6 @@ mod tests {
         ReviewId::new(format!("{n:032x}"))
     }
 
-    // REV-17A
     #[test]
     fn a_workspace_with_no_review_has_one_of_no_agent_and_one_that_has_it_keeps_it() {
         let w = WorkspaceId::new("w");
@@ -49,15 +42,12 @@ mod tests {
         assert_eq!(made[0].workspace(), &w);
         assert_eq!(made[0].agent(), None);
 
-        // Given back as it is, still empty, it comes back unchanged and draws no id: a
-        // review with no thread in it is still the workspace's review.
         let mut review = made.into_iter().next().expect("the review");
         let empty = with_review_of_no_agent(&w, vec![review.clone()], || {
             panic!("a workspace that has its review draws no id")
         });
         assert_eq!(empty, vec![review.clone()]);
 
-        // Given back with a thread in it, the same.
         review
             .start_thread(
                 ThreadId::new(format!("{:032x}", 1)),

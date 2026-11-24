@@ -1,6 +1,3 @@
-//! Component test: reaching a socket through the Link's own rule, on real folders and
-//! real sockets.
-
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::os::unix::ffi::OsStrExt;
@@ -13,7 +10,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use yaar_link::{SOCKET_PATH_MAX, check_private_folder, connect, socket_address};
 
-/// A folder of this test's own, removed when the test ends.
 struct Place(PathBuf);
 
 impl Place {
@@ -25,7 +21,6 @@ impl Place {
         Self(path)
     }
 
-    /// A path for a socket in this folder that is `length` bytes long, to the byte.
     fn socket_of(&self, length: usize) -> PathBuf {
         let folder = self.0.as_os_str().len() + "/".len();
         let path = self.0.join("s".repeat(length - folder));
@@ -33,7 +28,6 @@ impl Place {
         path
     }
 
-    /// A folder inside, made for the user alone.
     fn private(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         fs::DirBuilder::new()
@@ -50,9 +44,6 @@ impl Drop for Place {
     }
 }
 
-/// A socket path too long to bind by one byte, that no other test and no other run asks
-/// for, with the short place it leads to. The folder of the short place is removed when
-/// the test ends.
 struct TooLong {
     wanted: PathBuf,
     short: PathBuf,
@@ -75,7 +66,7 @@ impl TooLong {
             .mode(mode)
             .create(self.folder())
             .expect("make the folder of the short path");
-        // Whatever the mask of this process took away or left.
+        // The mask of this process may have removed bits at creation.
         fs::set_permissions(self.folder(), fs::Permissions::from_mode(mode)).expect("set its mode");
     }
 }
@@ -141,20 +132,15 @@ fn a_file_is_refused_and_a_folder_that_is_not_there_is_the_systems_own_error() {
     );
 }
 
-/// Whether the tests run as the administrator, who alone can give a folder away or
-/// start a process as somebody else. They do in the container of the Linux checks.
 fn is_administrator() -> bool {
     // SAFETY: `geteuid` only reads and cannot fail.
     unsafe { libc::geteuid() == 0 }
 }
 
-/// A user who is not the administrator.
 const SOMEBODY_ELSE: u32 = 1;
 
 #[test]
 fn a_folder_of_another_user_is_refused() {
-    // Shown only where the tests run as the administrator. Elsewhere there is no folder
-    // of another user that is closed to everybody else and can be counted on.
     if !is_administrator() {
         return;
     }
@@ -167,9 +153,6 @@ fn a_folder_of_another_user_is_refused() {
     );
 }
 
-/// Starts a process that runs as `user` and listens at `socket` from its first moment:
-/// when this returns, the socket listens. The process takes no connection, and stays
-/// until it is killed or this test process is gone.
 fn listener_of(user: u32, socket: &Path) -> Child {
     // SAFETY: an address is plain numbers and bytes, and all zeros is a valid one.
     let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
@@ -181,9 +164,8 @@ fn listener_of(user: u32, socket: &Path) -> Child {
     }
     let length = size_of::<libc::sockaddr_un>() as libc::socklen_t;
 
-    // The user of a listening socket is the one who called `listen`, so the new process
-    // has to do that itself, as the user it has become by then. After that it only has
-    // to stay: `cat` waits for an input that ends with this process.
+    // The listening socket belongs to the user who called `listen`, so the child binds and listens
+    // itself after the uid change; `cat` then only waits on stdin.
     let mut stays = Command::new("cat");
     stays.uid(user).stdin(Stdio::piped()).stdout(Stdio::null());
     // SAFETY: the three calls may be made between `fork` and `exec`, and the closure
@@ -205,20 +187,16 @@ fn listener_of(user: u32, socket: &Path) -> Child {
 
 #[test]
 fn a_process_of_another_user_at_the_other_end_is_refused() {
-    // Shown only where the tests run as the administrator: nobody else can start a
-    // process as another user.
     if !is_administrator() {
         return;
     }
     let place = Place::new();
-    // The other user has to get to its folder, whatever the mask of this process is.
     fs::set_permissions(&place.0, fs::Permissions::from_mode(0o755)).expect("open the way");
     let folder = place.private("theirs");
     std::os::unix::fs::chown(&folder, Some(SOMEBODY_ELSE), None).expect("give the folder away");
     let socket = folder.join("keeper.sock");
     let mut theirs = listener_of(SOMEBODY_ELSE, &socket);
 
-    // The path can be bound, so no folder is checked: what is refused is the process.
     assert_eq!(socket_address(&socket), socket);
     let refused = connect(&socket);
     theirs.kill().expect("end the process");
@@ -230,8 +208,6 @@ fn a_process_of_another_user_at_the_other_end_is_refused() {
 fn the_longest_path_the_system_binds_is_kept_and_one_byte_more_leads_to_the_short_place() {
     let place = Place::new();
 
-    // As long as the limit says: the system binds it, so it is the address, and a
-    // listener there is reached where it is.
     let fits = place.socket_of(SOCKET_PATH_MAX);
     assert_eq!(socket_address(&fits), fits);
     let listener = UnixListener::bind(&fits).expect("the system binds a path of this length");
@@ -242,8 +218,6 @@ fn the_longest_path_the_system_binds_is_kept_and_one_byte_more_leads_to_the_shor
     );
     drop(listener);
 
-    // One byte more, in the same folder: the system refuses it, so the address is the
-    // short place.
     let over = place.socket_of(SOCKET_PATH_MAX + 1);
     UnixListener::bind(&over).expect_err("the system binds no path of this length");
     let short = socket_address(&over);
@@ -276,7 +250,6 @@ fn a_short_place_whose_folder_is_open_to_others_is_not_connected_to() {
     listener.set_nonblocking(true).expect("do not wait");
 
     assert_eq!(kind_of(connect(&long.wanted)), ErrorKind::PermissionDenied);
-    // Refused before anything was connected: nobody waits at the listener.
     assert_eq!(kind_of(listener.accept()), ErrorKind::WouldBlock);
 }
 
@@ -297,18 +270,14 @@ fn a_short_place_behind_a_link_is_not_connected_to() {
 #[test]
 fn where_nothing_listens_the_error_is_the_systems_own() {
     let place = Place::new();
-    // A path that can be bound, with no socket file.
     assert_eq!(
         kind_of(connect(&place.0.join("keeper.sock"))),
         ErrorKind::NotFound
     );
-    // A socket file nobody listens at any more.
     let stale = place.0.join("stale.sock");
     drop(UnixListener::bind(&stale).expect("bind"));
     assert_eq!(kind_of(connect(&stale)), ErrorKind::ConnectionRefused);
 
-    // A long path whose short place was never made, and one whose folder is there and
-    // private with nothing in it.
     let long = TooLong::new(&place);
     assert_eq!(kind_of(connect(&long.wanted)), ErrorKind::NotFound);
     long.make_folder(0o700);
@@ -320,8 +289,6 @@ fn a_path_that_can_be_bound_is_reached_as_it_is() {
     let place = Place::new();
     let socket = place.0.join("keeper.sock");
     let listener = UnixListener::bind(&socket).expect("bind");
-    // The folder is open to others here, as the app's own folder may be: the check of
-    // the folder is for the short place only. The process at the other end is this one.
     fs::set_permissions(&place.0, fs::Permissions::from_mode(0o755)).expect("open the folder");
     let stream = connect(&socket).expect("connect");
     let (accepted, _) = listener.accept().expect("accept");

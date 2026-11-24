@@ -1,31 +1,12 @@
 #!/bin/bash
-# The checks of the real Claude Code and pi, in terminals of the packaged app: LOAD-01 to
-# LOAD-05, LOAD-07, LOAD-08, CLI-01 to CLI-05, DELIVER-02, REPLY-01 and TERM-05.
+# Walks the checks of the real Claude Code and pi in terminals of the packaged app.
 #
-#   packaging/checklists/real-clis.sh [--dry-run]
+# packaging/checklists/real-clis.sh [--dry-run]
 #
-# What it does: prints each check in order, with what to do and what to expect, and asks
-# "yes / no / note / skip" (the answers can come from a file, see lib.sh). It starts nothing
-# of the CLIs': they are your logins and your money, so each check is one run of yours, once.
-# It starts no window, posts no input and reads nothing of the CLIs' folders. Write what you
-# saw in a note: "no" and "skip" ask for a line.
-#
-# Two things to write down with no pass or fail, as notes on whichever item shows them: which
-# dialogs of each CLI the app is not told of (a dialog the CLI does not report leaves the
-# one-click control offered while it should not be), and whether pi has a command that
-# resumes one of two sessions of a worktree.
-#
-# --dry-run: runs no program of the system or of the app, and writes real-clis-dry-run.md
-# instead of real-clis.md.
-#
-# What it needs of the owner: both CLIs installed and logged in; the packaged app on the
-# reference Mac; a repository to work in; a folder neither CLI has been run in (LOAD-05).
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/real-clis.md (date, version, system, one
-# row a check, the sign-off).
-#
-# Exit codes: 0 the walk is written (whatever its answers); 1 it could not be walked or
-# written (a sentence says which); 2 usage error.
+# Starts nothing of the CLIs: they are the owner's logins and money, each check is one run of his.
+# Note which CLI dialogs the app is not told of, and whether pi can resume one of two sessions of
+# a worktree. Needs both CLIs logged in, the app on a Mac, a repository, and a folder
+# neither CLI has run in. Exit: 0 written, 1 could not be walked or written, 2 usage.
 set -euo pipefail
 
 CK_NAME=real-clis.sh

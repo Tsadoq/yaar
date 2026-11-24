@@ -1,15 +1,5 @@
-//! Component tests: what the Keeper answers the pieces of Claude Code, the hook program
-//! and the reply tool's server, through the surface they use, with a real repository, a real
-//! database and the built programs beneath: the review that rides with the user's message,
-//! the allows, and the agent's replies.
-//!
-//! The hook program and the tool server are the built ones, run the way Claude Code runs
-//! them, the hook with recorded inputs moved into the test's own worktree; the Keeper is the
-//! library on a thread of the test. A review is attached with `Request::AttachReview` and
-//! the text it should carry is read with `Request::GetAttachment`, as a Window does, so that
-//! what the hook is answered with is compared with what the view control shows. The Keeper runs git with the environment of its process, so each test sets that
-//! environment as its first statement, and these tests are run by `cargo nextest`, which gives
-//! each test a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
@@ -32,9 +22,6 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord, PiRecord};
 
-/// How long a test waits for the Keeper before it fails: longer than the plan's ten
-/// seconds, as every test file of this crate has it, since a Keeper starts git and shells
-/// of its own and a throttled machine runs them slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -42,42 +29,33 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// A session with a review, and what the recordings of it hold: `claude/review-file-read.jsonl`
-/// is the start (line 0), the user's message (2) and the read of a long review's file (3)
-/// of one session.
+/// Start (line 0), the user's message (2) and the read of a long review's file (3) of one session.
 const REVIEW_FILE: &str = "claude/review-file-read.jsonl";
-/// `claude/turn-tools.jsonl`: the start (1) and the user's message (2) of a session, and the
-/// message Claude Code started itself (33).
+/// Start (1) and the user's message (2) of a session, and the message Claude Code started itself
+/// (33).
 const TURN_TOOLS: &str = "claude/turn-tools.jsonl";
-/// `claude/permission-dialogs.jsonl`: a session's start (0), its message (2), the permission
-/// request (4), its end by `/clear` (13) and the start of the session that follows (14).
+/// A session's start (0), its message (2), the permission request (4), its end by `/clear` (13)
+/// and the start of the session that follows (14).
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
-/// `claude/reply-tool-hooks.jsonl`: a session's start (1), a read (3) and the `PreToolUse` of
-/// a call of the reply tool (11).
+/// A session's start (1), a read (3) and the `PreToolUse` of a call of the reply tool (11).
 const REPLY_HOOKS: &str = "claude/reply-tool-hooks.jsonl";
-/// `claude/reply-tool-mcp.jsonl`: what Claude Code sent a tool server; line 7 is a call of
-/// the reply tool.
+/// What Claude Code sent a tool server; line 7 is a call of the reply tool.
 const REPLY_TRACE: &str = "claude/reply-tool-mcp.jsonl";
 
-/// `pi/turn-tools.jsonl`: a session's start (line 1) and its first message (3), the end of
-/// its run (28), its end by `/new` (127) and the start of the session that follows in the
-/// same terminal and process (129).
+/// A session's start (1) and first message (3), the end of its run (28), its end by `/new` (127)
+/// and the start of the session that follows in the same terminal and process (129).
 const PI_TURN_TOOLS: &str = "pi/turn-tools.jsonl";
-/// `pi/queued-message.jsonl`: a session's start (line 1), a message of the user while it is
-/// idle (19) and a message pi's own extension queued while a run was open (31).
+/// A session's start (1), a user message while it is idle (19) and a message pi's own extension
+/// queued while a run was open (31).
 const PI_QUEUED: &str = "pi/queued-message.jsonl";
-/// What the user types while pi works, typed by hand: records 0 to 3 open a run with a shell
-/// command that is running, record 4 is the user's message typed then, record 12 the end of
-/// the run.
+/// A hand-made recording: records 0 to 3 open a run with a running shell command, record 4
+/// is the user's message typed then, record 12 the end of the run.
 const PI_TYPED_WHILE_WORKING: &str = "pi-typed-while-working.jsonl";
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// programs the Keeper starts: no configuration of the user or of the system, a fixed
-    /// author, an empty home. It has to be the first statement of a test.
+    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -100,10 +78,8 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -138,8 +114,6 @@ impl Scratch {
         self.data().join(yaar_store::FILE_NAME)
     }
 
-    /// The folder of the Adapter's own reviews of the session `cli` names, where a review
-    /// too long to ride inline is written.
     fn reviews_of(&self, cli: &str) -> PathBuf {
         self.data()
             .join("agents")
@@ -148,10 +122,8 @@ impl Scratch {
             .join(cli)
     }
 
-    /// The folder of the test's own copies of the hook program and the tool server, made at
-    /// the first call. Cargo puts a program it built in place again each time, and where
-    /// tests run side by side the program is gone for a moment: a copy is made at the first
-    /// try that finds it, and is the test's own.
+    /// The test's own copies of the hook program and the tool server: cargo replaces a program on
+    /// each build, so under parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         for (name, built) in [
@@ -178,7 +150,6 @@ impl Scratch {
         folder
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -192,7 +163,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -214,8 +184,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` and an identity of its
-    /// own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -228,17 +196,11 @@ impl Scratch {
         folder
     }
 
-    /// The Keeper's database, opened beside the Keeper. The Store is written for one process
-    /// and one connection of the Keeper's, and these tests keep to what it was written for:
-    /// they read what the Keeper kept, and write only the one state the app makes nowhere,
-    /// while the Keeper is at rest between two hooks.
     fn store(&self) -> Store {
         Store::open(&self.database()).expect("open the Keeper's database")
     }
 
-    /// Runs the hook program with `payload` on its standard input, in the terminal of the
-    /// app `terminal`, as Claude Code does. Its parent is this test, the process every piece
-    /// of these tests reports as the CLI.
+    /// Its parent is this test, the process every piece of these tests reports as the CLI.
     fn hook(&self, terminal: &TerminalId, payload: &[u8]) -> Answer {
         let mut child = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM))
             .env(SOCKET_VARIABLE, self.socket())
@@ -286,20 +248,16 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// What the hook program printed for one hook, and how long it took from the start of the
-/// program to its end.
 struct Answer {
     printed: Vec<u8>,
     took: Duration,
 }
 
 impl Answer {
-    /// Whether the hook printed nothing: Claude Code goes on as it would have.
     fn is_nothing(&self) -> bool {
         self.printed.is_empty()
     }
 
-    /// What it printed, as JSON.
     fn json(&self) -> Value {
         serde_json::from_slice(&self.printed).unwrap_or_else(|e| {
             panic!(
@@ -309,7 +267,6 @@ impl Answer {
         })
     }
 
-    /// The text that goes to the model with the message, which an answer to a message holds.
     fn context(&self) -> String {
         let answer = self.json();
         assert_eq!(
@@ -322,14 +279,11 @@ impl Answer {
             .to_owned()
     }
 
-    /// Whether it is the allow of a read or of a call.
     fn allows(&self) -> bool {
         self.json()["hookSpecificOutput"]["permissionDecision"] == "allow"
     }
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a test
-/// reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -351,8 +305,6 @@ impl Window {
         }
     }
 
-    /// Reads one frame and keeps it. Fails the test at the deadline, with the facts that
-    /// came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
@@ -371,7 +323,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -384,7 +335,6 @@ impl Window {
         }
     }
 
-    /// The next `ReviewsChanged` of `workspace` that this window has not looked at.
     fn reviews_changed(&mut self, workspace: &WorkspaceId) {
         loop {
             while self.looked_at < self.facts.len() {
@@ -400,7 +350,6 @@ impl Window {
         }
     }
 
-    /// Reads until the end of the turn `turn` is told, and gives the state it ended on.
     fn until_turn_ended(&mut self, turn: &TurnId) -> Option<String> {
         loop {
             while self.looked_at < self.facts.len() {
@@ -427,7 +376,6 @@ impl Window {
         workspace
     }
 
-    /// Reads until `text` is in the output of `terminal`.
     fn output_until(&mut self, terminal: &TerminalId, text: &str) {
         loop {
             let heard = self.output.iter().find(|(from, _)| from == terminal);
@@ -438,8 +386,7 @@ impl Window {
         }
     }
 
-    /// Opens a terminal with a shell in it, and waits until the shell has started: the CLI
-    /// whose reports the tests make is typed in a shell of the app, so the Keeper holds the
+    /// The CLI whose reports the tests make is typed in a shell of the app, so the Keeper holds the
     /// terminal its reports name.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
@@ -450,7 +397,6 @@ impl Window {
         let Ok(Reply::TerminalOpened { terminal }) = opened else {
             panic!("no terminal: {opened:?}");
         };
-        // A line the typed one does not hold: the shell is reading when it is seen.
         write_message(
             &mut self.stream,
             &Message::Input {
@@ -478,9 +424,6 @@ impl Window {
     }
 }
 
-/// A server of the reply tool, started as Claude Code starts it: from the folder its session
-/// works in, with the session's id in its environment, its parent being whatever started it.
-/// Ended and collected when the test ends, whatever way it does.
 struct Tools {
     child: Child,
     lines: Receiver<String>,
@@ -488,7 +431,6 @@ struct Tools {
 }
 
 impl Tools {
-    /// The server of the session `cli`, started by this test, which is then its parent.
     fn start(setup: &Setup, cli: &str) -> Tools {
         let mut command = Command::new(
             setup
@@ -499,7 +441,7 @@ impl Tools {
         Tools::run(setup, &mut command, cli)
     }
 
-    /// The same, started by a shell that stays its parent: another process than this test.
+    /// Started by a shell that stays its parent: another process than this test.
     fn start_under_a_shell(setup: &Setup, cli: &str) -> Tools {
         let tools = setup
             .scratch
@@ -526,7 +468,6 @@ impl Tools {
             .expect("start the tool server");
         let output = child.stdout.take().expect("its standard output");
         let (to_test, lines) = mpsc::channel();
-        // Ends when the server's output closes, which is when it ends.
         std::thread::spawn(move || {
             for line in BufReader::new(output).lines().map_while(Result::ok) {
                 if to_test.send(line).is_err() {
@@ -541,8 +482,6 @@ impl Tools {
         }
     }
 
-    /// A call of the reply tool as Claude Code sent one (line 7 of its recorded trace), with
-    /// the thread, the body and whether it is addressed changed. Gives the call's result.
     fn reply(&mut self, thread: &ThreadId, body: &str, addressed: Option<bool>) -> Value {
         let trace = recorded::mcp_messages(REPLY_TRACE);
         let mut call = trace[7].message.clone();
@@ -580,7 +519,6 @@ impl Drop for Tools {
     }
 }
 
-/// What the tool server's result says: whether it is an error, and its text.
 fn told(result: &Value) -> (bool, &str) {
     (
         result["isError"] == true,
@@ -590,7 +528,6 @@ fn told(result: &Value) -> (bool, &str) {
     )
 }
 
-/// A Keeper with one repository open and a Window attached.
 struct Setup {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -598,12 +535,10 @@ struct Setup {
     repo: PathBuf,
     workspace: WorkspaceId,
     terminal: TerminalId,
-    /// How many ids have been drawn for threads and comments.
     ids: u128,
 }
 
 impl Setup {
-    /// Has to be the first statement of a test.
     fn new() -> Setup {
         let scratch = Scratch::new();
         let repo = scratch.repository("repo");
@@ -622,23 +557,17 @@ impl Setup {
         }
     }
 
-    /// Runs the hook of `record`, moved into the repository, and gives what it printed. It
-    /// is answered once the Keeper has taken the report, so what the report did is kept by
-    /// the time this returns.
     fn hook(&self, record: &HookRecord) -> Answer {
         self.scratch
             .hook(&self.terminal, &record.in_project(&self.repo).input_bytes())
     }
 
-    /// Reports one event of pi, as its reporting program does: the payload as the extension
-    /// writes it, from the terminal of the app, of the process of this test. A connection of
-    /// its own, as the program makes one for each report, so that the facts this Window
-    /// waits for are not read by it.
+    /// Reports one pi event on a connection of its own, as pi's reporting program does, so it
+    /// reads none of the facts this Window waits for.
     fn pi(&self, record: &PiRecord) -> Reply {
         self.pi_from(&self.terminal, std::process::id(), record)
     }
 
-    /// [`Setup::pi`] from another terminal and process.
     fn pi_from(&self, terminal: &TerminalId, pid: u32, record: &PiRecord) -> Reply {
         self.pi_payload(terminal, pid, record.in_project(&self.repo).payload_bytes())
     }
@@ -657,12 +586,10 @@ impl Setup {
             .unwrap_or_else(|refused| panic!("the report was refused: {refused:?}"))
     }
 
-    /// The review of the session that Claude Code names `cli`.
     fn review_of(&mut self, cli: &str) -> Review {
         self.review_of_agent(yaar_adapter_claude::NAME, cli)
     }
 
-    /// The review of the session that the CLI `agent` names `cli`.
     fn review_of_agent(&mut self, agent: &str, cli: &str) -> Review {
         let session = self
             .scratch
@@ -685,9 +612,6 @@ impl Setup {
         format!("{:032x}", self.ids)
     }
 
-    /// A draft on the first line of `a.txt`, in a thread of its own: the thread and the
-    /// comment. The save is told to every Window, and this waits for that, so that what it
-    /// tells is not taken for what a later step tells.
     fn draft(&mut self, review: &Review, text: &str) -> (ThreadId, CommentId) {
         let (thread, comment) = (ThreadId::new(self.id()), CommentId::new(self.id()));
         let saved = self.window.ask(Request::SaveDraft {
@@ -710,9 +634,6 @@ impl Setup {
         (thread, comment)
     }
 
-    /// Attaches `review`, as the user does with the control: the whole review, to the next
-    /// message of its session. The attach is told to every Window, and this waits for that,
-    /// so that what it tells is not taken for what a later step tells.
     fn attach(&mut self, review: &Review) {
         let attached = self.window.ask(Request::AttachReview {
             review: review.id.clone(),
@@ -725,9 +646,6 @@ impl Setup {
         self.window.reviews_changed(&self.workspace);
     }
 
-    /// What the next message of the review's session would carry, as the control that views
-    /// the attachment shows it: the unsent comments of what is attached after the instruction
-    /// of Claude Code's delivery.
     fn attachment(&mut self, review: &Review) -> String {
         let shown = self.window.ask(Request::GetAttachment {
             review: review.id.clone(),
@@ -738,8 +656,6 @@ impl Setup {
         text
     }
 
-    /// Starts a session by its recorded start, and gives its review, attached and holding a
-    /// draft thread: the thread and the text it should be sent as.
     fn session_with_a_draft(
         &mut self,
         start: &HookRecord,
@@ -752,7 +668,6 @@ impl Setup {
         (review, thread, comment)
     }
 
-    /// [`Setup::session_with_a_draft`] for a session of pi, started by its recorded start.
     fn pi_session_with_a_draft(
         &mut self,
         start: &PiRecord,
@@ -765,8 +680,6 @@ impl Setup {
         (review, thread, comment)
     }
 
-    /// The turn of `review`'s session that runs now, as `ListAgents` tells it; none between
-    /// turns.
     fn open_turn_of(&mut self, review: &Review) -> Option<TurnId> {
         let Ok(Reply::Agents(agents)) = self.window.ask(Request::ListAgents) else {
             panic!("no list of agents");
@@ -779,22 +692,18 @@ impl Setup {
             .turn
     }
 
-    /// Waits for the Keeper to tell that the reviews changed `times` times: the send and
-    /// then the state of its round each tell one.
     fn changes(&mut self, times: usize) {
         for _ in 0..times {
             self.window.reviews_changed(&self.workspace);
         }
     }
 
-    /// Waits until every round of the review of the session `cli` holds its state, which is
-    /// a repeated look at a fact that only becomes true: the recording thread keeps it off the
-    /// agents' way, and no change of the reviews is a barrier for it.
+    /// Waits until every round of the session's review holds its state. The state is recorded off
+    /// the agents' way and no change of the reviews marks it, so this polls until the deadline.
     fn wait_for_states(&mut self, cli: &str) {
         self.wait_for_states_of(yaar_adapter_claude::NAME, cli);
     }
 
-    /// [`Setup::wait_for_states`] for a session of the CLI `agent`.
     fn wait_for_states_of(&mut self, agent: &str, cli: &str) {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -816,9 +725,6 @@ impl Setup {
         }
     }
 
-    /// Waits until the message of the session `cli` is sent and the state of its round is
-    /// kept: the two changes the send tells, and then the fact itself, which holds whatever
-    /// else was told before them.
     fn settled(&mut self, cli: &str) {
         self.changes(2);
         self.wait_for_states(cli);
@@ -829,7 +735,6 @@ impl Setup {
     }
 }
 
-/// The comment `comment` of `review`, wherever it is.
 fn comment_of<'a>(review: &'a Review, comment: &CommentId) -> &'a yaar_link::Comment {
     review
         .threads
@@ -839,7 +744,6 @@ fn comment_of<'a>(review: &'a Review, comment: &CommentId) -> &'a yaar_link::Com
         .unwrap_or_else(|| panic!("the review holds no comment {comment}"))
 }
 
-/// The comments of the agent, in every thread of `review`.
 fn agent_comments(review: &Review) -> Vec<&yaar_link::Comment> {
     review
         .threads
@@ -855,7 +759,6 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
     let mut setup = Setup::new();
     let session = recorded::hook_events(REVIEW_FILE);
     let (review, _, comment) = setup.session_with_a_draft(&session[0], "Why is this `one`?");
-    // What the view control shows, read before the message.
     let shown = setup.attachment(&review);
     assert!(
         shown.starts_with(yaar_adapter_claude::INSTRUCTION),
@@ -863,7 +766,6 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
     );
     assert!(shown.contains("Why is this `one`?"), "{shown}");
 
-    // The user's message: the recorded prompt.
     let answer = setup.hook(&session[2]);
     let context = answer.context();
     assert_eq!(context, shown);
@@ -872,14 +774,11 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
         answer.json()["systemMessage"],
         "yaar: review round 1 attached (1 threads)"
     );
-    // How long the answer took, for the report on a throttled run.
     eprintln!(
         "the answer to the UserPromptSubmit took {:?} from the start of the hook program",
         answer.took
     );
 
-    // The comments are sent: told once for the send and once for the state its round is
-    // given after, off the agent's way.
     setup.changes(1);
     let after_the_send = setup.review_of(session[0].session());
     let [round] = &after_the_send.rounds[..] else {
@@ -888,9 +787,8 @@ fn a_message_of_the_user_is_answered_with_the_attached_review_after_the_instruct
     assert_eq!((round.number, round.sent_by), (1, SentBy::Delivered));
     assert_eq!(comment_of(&after_the_send, &comment).round, Some(1));
     assert_eq!(after_the_send.attached, None);
-    // Whether the state is kept already when the reading above is made depends on how fast the
-    // recording thread is, so the reading above shows the send only. The state is looked at
-    // until it is there, not counted from the changes that were told.
+    // Whether the state is kept when the reading above is made depends on the recording thread, so
+    // that reading shows the send only. The state is looked at until it is there.
     setup.wait_for_states(session[0].session());
     setup.stop();
 }
@@ -902,7 +800,6 @@ fn the_instruction_travels_whatever_the_user_wrote() {
     let (review, ..) = setup.session_with_a_draft(&session[0], "Rename it.");
     let shown = setup.attachment(&review);
 
-    // The one field changed: the prompt of the recorded message, which is `ok`.
     let mut message = session[2].clone();
     message.input["prompt"] = json!("ok");
     let context = setup.hook(&message).context();
@@ -922,21 +819,18 @@ fn a_message_that_claude_code_started_itself_is_answered_nothing_and_the_attachm
     let (review, _, comment) = setup.session_with_a_draft(&session[1], "Name this.");
     let shown = setup.attachment(&review);
 
-    // The `<task-notification>` prompt of the recording.
     assert!(
         session[33].input["prompt"]
             .as_str()
             .is_some_and(|prompt| prompt.starts_with("<task-notification>"))
     );
     assert!(setup.hook(&session[33]).is_nothing());
-    // The report was taken when the hook returned: the review is as it was.
+    // The report was taken when the hook returned, so the review can be read at once.
     let kept = setup.review_of(session[1].session());
     assert_eq!(kept.attached, Some(yaar_link::Attachment::Review));
     assert!(kept.rounds.is_empty());
     assert_eq!(comment_of(&kept, &comment).round, None);
 
-    // The user's own message then carries it, which also shows the nothing was not a failure
-    // of the delivery.
     assert_eq!(setup.hook(&session[2]).context(), shown);
     setup.stop();
 }
@@ -954,7 +848,6 @@ fn a_permission_request_is_answered_nothing_whatever_is_attached() {
     assert_eq!(kept.attached, Some(yaar_link::Attachment::Review));
     assert!(kept.rounds.is_empty());
     assert_eq!(comment_of(&kept, &comment).round, None);
-    // It stays for the message the dialog's answer does not run.
     assert_eq!(setup.hook(&session[2]).context(), shown);
     setup.stop();
 }
@@ -980,21 +873,17 @@ fn a_message_carries_only_the_review_of_its_own_session() {
     let mut setup = Setup::new();
     let first = recorded::hook_events(REVIEW_FILE);
     let second = recorded::hook_events(TURN_TOOLS);
-    // Two sessions that run at once in one worktree have a review each.
     let (review_a, thread_a, _) = setup.session_with_a_draft(&first[0], "For A.");
     setup.hook(&second[1]);
     let review_b = setup.review_of(second[1].session());
     assert_ne!(review_a.id, review_b.id);
     let shown_a = setup.attachment(&review_a);
 
-    // A message of B, which has nothing attached: nothing is answered, and what is attached
-    // to A is as it was. B's report was taken when its hook returned.
     assert!(setup.hook(&second[2]).is_nothing());
     let a = setup.review_of(first[0].session());
     assert_eq!(a.attached, Some(yaar_link::Attachment::Review));
     assert!(a.rounds.is_empty());
 
-    // A's message carries A's review, and only it.
     let context = setup.hook(&first[2]).context();
     assert_eq!(context, shown_a);
     assert!(context.contains(thread_a.as_str()));
@@ -1007,8 +896,7 @@ fn a_message_carries_only_the_review_of_its_own_session() {
 fn a_review_that_cannot_be_handed_out_sends_nothing_and_the_comments_stay_attached() {
     let mut setup = Setup::new();
     let session = recorded::hook_events(REVIEW_FILE);
-    // The one field changed, in the start and in the message: a session id that is no folder
-    // name, which Claude Code's delivery refuses to write a file for.
+    // A session id that is no folder name: Claude Code's delivery refuses to write a file for it.
     let named = |record: &HookRecord| {
         let mut record = record.clone();
         record.input["session_id"] = json!("not a folder name/..");
@@ -1031,8 +919,6 @@ fn a_review_longer_than_the_inline_limit_is_a_file_the_session_may_read_and_no_o
     let mut setup = Setup::new();
     let session = recorded::hook_events(REVIEW_FILE);
     let cli = session[0].session().to_owned();
-    // 10,001 characters: the text that carries it is longer than the 10,000 units a hook may
-    // answer.
     let long = "x".repeat(10_001);
     let (review, ..) = setup.session_with_a_draft(&session[0], &long);
     let shown = setup.attachment(&review);
@@ -1040,7 +926,6 @@ fn a_review_longer_than_the_inline_limit_is_a_file_the_session_may_read_and_no_o
     let context = setup.hook(&session[2]).context();
     assert!(context.starts_with(yaar_adapter_claude::INSTRUCTION));
     assert_ne!(context, shown, "the review rode inline");
-    // The path the agent is told to read, and the file written whole at it.
     let folder = setup.scratch.reviews_of(&cli);
     let file = context
         .lines()
@@ -1056,7 +941,6 @@ fn a_review_longer_than_the_inline_limit_is_a_file_the_session_may_read_and_no_o
         shown
     );
 
-    // The recorded `PreToolUse` of `Read`, with the one field changed that names a file.
     assert_eq!(session[3].input["tool_name"], "Read");
     let read = |setup: &Setup, file: &Path| {
         let mut record = session[3].clone();
@@ -1064,9 +948,6 @@ fn a_review_longer_than_the_inline_limit_is_a_file_the_session_may_read_and_no_o
         setup.hook(&record)
     };
     assert!(read(&setup, Path::new(file)).allows());
-    // A file of the worktree, a file of another session's folder of reviews, a path that
-    // leads out of the session's own folder through its parent, and the folder itself: the
-    // CLI asks about each.
     let another = setup.scratch.reviews_of("another-session");
     std::fs::create_dir_all(&another).expect("make the folder");
     std::fs::write(another.join("r-1.md"), "not yours").expect("write the file");
@@ -1092,17 +973,13 @@ fn the_call_of_the_reply_tool_is_allowed_and_a_call_of_another_tool_is_not() {
     let session = recorded::hook_events(REPLY_HOOKS);
     setup.hook(&session[1]);
 
-    // The `PreToolUse` of the call of the app's tool, as the recording names it once its
-    // working names are the app's.
     assert!(
         session[11].input["tool_name"]
             .as_str()
             .is_some_and(|name| name == yaar_adapter_claude::LISTED_REPLY_TOOL)
     );
     assert!(setup.hook(&session[11]).allows());
-    // The `PreToolUse` of a read of a file of the project asks the CLI's own question.
     assert!(setup.hook(&session[3]).is_nothing());
-    // One field changed: another server's tool.
     let mut other = session[11].clone();
     other.input["tool_name"] = json!("mcp__plugin_other_server__reply_to_thread");
     assert!(setup.hook(&other).is_nothing());
@@ -1120,8 +997,6 @@ fn a_reply_of_the_tool_server_is_kept_in_its_thread_and_answered_with_its_result
     setup.settled(&cli);
 
     let mut tools = Tools::start(&setup, &cli);
-    // A body with quotes, a line break and characters that are more bytes than they are
-    // characters: it is kept as it is and counted in characters.
     let body = "It's \"done\": see `a.txt`.\nSecond line, with ünïcödé and 日本語.";
     let result = tools.reply(&first, body, Some(true));
     assert_eq!(
@@ -1136,8 +1011,6 @@ fn a_reply_of_the_tool_server_is_kept_in_its_thread_and_answered_with_its_result
         )
     );
     assert_ne!(body.chars().count(), body.len());
-    // The reply is told to every Window, and is kept in its thread, in the round the review
-    // is in, as the comment of the agent.
     setup.changes(1);
     let kept = setup.review_of(&cli);
     let thread = kept
@@ -1154,7 +1027,6 @@ fn a_reply_of_the_tool_server_is_kept_in_its_thread_and_answered_with_its_result
     );
     assert!(thread.addressed);
 
-    // Left out, the mark is not given: the thread is open.
     let result = tools.reply(&second, "Not sure.", None);
     assert_eq!(
         told(&result),
@@ -1193,18 +1065,16 @@ fn a_reply_naming_the_thread_of_another_sessions_review_is_answered_with_an_erro
     setup.wait_for_states(&cli_a);
     setup.wait_for_states(&cli_b);
 
-    // A's server names B's thread.
     let mut tools = Tools::start(&setup, &cli_a);
     let result = tools.reply(&thread_b, "Not mine.", Some(true));
     assert_eq!(
         told(&result),
         (true, format!("there is no thread {thread_b}").as_str())
     );
-    // It was taken when the result came: nothing of the agent is in either review.
+    // The reply was taken when the tool's result came: no wait is needed.
     assert_eq!(agent_comments(&setup.review_of(&cli_a)).len(), 0);
     assert_eq!(agent_comments(&setup.review_of(&cli_b)).len(), 0);
 
-    // Its own thread is kept, so the refusal was not a server that cannot reach the Keeper.
     let result = tools.reply(&thread_a, "Mine.", Some(false));
     assert!(!told(&result).0, "{result}");
     assert_eq!(agent_comments(&setup.review_of(&cli_a)).len(), 1);
@@ -1224,16 +1094,13 @@ fn after_a_clear_a_reply_of_the_server_that_names_the_cleared_session_is_kept_in
     setup.hook(&session[2]);
     setup.settled(&cleared);
 
-    // The recorded end of that session by `/clear`, and the start of the session that
-    // follows in the same terminal and process.
     assert_eq!(session[13].input["reason"], "clear");
     setup.hook(&session[13]);
     setup.hook(&session[14]);
     let taken = setup.review_of(&new);
     assert_eq!(taken.id, review.id, "the new session took the review over");
 
-    // The server of Claude Code was started before the clear and still names the old
-    // session. It is Claude Code's, and so is its parent: this test, as the hooks' is.
+    // Claude Code's server started before the clear still names the old session.
     let mut tools = Tools::start(&setup, &cleared);
     let result = tools.reply(&thread, "After the clear.", Some(true));
     assert!(!told(&result).0, "{result}");
@@ -1258,7 +1125,6 @@ fn after_a_clear_a_reply_naming_the_cleared_session_from_another_process_is_refu
     setup.hook(&session[13]);
     setup.hook(&session[14]);
 
-    // Started by a shell, so that its parent is not the process the new session runs in.
     let mut tools = Tools::start_under_a_shell(&setup, &cleared);
     let result = tools.reply(&thread, "From elsewhere.", Some(true));
     let (is_error, why) = told(&result);
@@ -1281,21 +1147,18 @@ fn a_reply_naming_a_session_that_has_ended_with_its_review_is_kept_in_the_sessio
     let second = recorded::hook_events(TURN_TOOLS);
     let cli_a = first[0].session().to_owned();
     let cli_b = second[1].session().to_owned();
-    // Two sessions of one process, each with a review and a thread.
     let (review_a, _, _) = setup.session_with_a_draft(&first[0], "For A.");
     let (review_b, thread_b, _) = setup.session_with_a_draft(&second[1], "For B.");
     setup.hook(&second[2]);
     setup.settled(&cli_b);
 
-    // The recorded end of A, whose reason is not `clear`: A runs no more and keeps its
-    // review, which only a session that starts later may take.
     assert_eq!(first[7].event, "SessionEnd");
     assert_ne!(first[7].input["reason"], "clear");
     setup.hook(&first[7]);
     assert_eq!(setup.review_of(&cli_a).id, review_a.id);
 
-    // A server that still names A, from the process B runs in: the report is of B, so the
-    // thread of B's review is found, which A's review does not hold.
+    // The server still names A, from the process B runs in: the report is of B, so B's review is
+    // found.
     let mut tools = Tools::start(&setup, &cli_a);
     let result = tools.reply(&thread_b, "For the one that runs.", Some(true));
     assert!(!told(&result).0, "{result}");
@@ -1317,20 +1180,15 @@ fn a_reply_naming_a_session_that_runs_with_no_review_is_kept_in_the_session_of_i
     let cli_b = second[1].session().to_owned();
     let (review_a, thread_a, _) = setup.session_with_a_draft(&first[0], "For A.");
     let (review_b, ..) = setup.session_with_a_draft(&second[1], "For B.");
-    // A's comment is sent, which a reply to its thread needs.
     setup.hook(&first[2]);
     setup.settled(&cli_a);
 
-    // B runs, and its review is of no agent: the Store allows the state, the app makes it
-    // nowhere today, and the Keeper's rule says whose a report that names B then is.
     setup
         .scratch
         .store()
         .set_review_agent(&yaar_store::ReviewId::new(review_b.id.as_str()), None)
         .expect("give B's review to no agent");
 
-    // A server that names B, from the process A runs in as well: B has no review, so the
-    // report is of A.
     let mut tools = Tools::start(&setup, &cli_b);
     let result = tools.reply(&thread_a, "For the one that has a review.", Some(true));
     assert!(!told(&result).0, "{result}");
@@ -1341,7 +1199,6 @@ fn a_reply_naming_a_session_that_runs_with_no_review_is_kept_in_the_session_of_i
     setup.stop();
 }
 
-/// The one round `review` holds, sent by delivery.
 fn delivered_round(review: &Review) -> &yaar_link::Round {
     let [round] = &review.rounds[..] else {
         panic!("not one round: {:?}", review.rounds);
@@ -1356,13 +1213,11 @@ fn a_message_of_a_pi_session_is_answered_with_the_attached_review_after_the_inst
     let mut setup = Setup::new();
     let run = recorded::pi_events(PI_TURN_TOOLS);
     let (review, _, comment) = setup.pi_session_with_a_draft(&run[1], "Why is this `one`?");
-    // What the view control shows, read before the message.
     let shown = setup.attachment(&review);
     assert!(shown.starts_with(yaar_adapter_pi::INSTRUCTION), "{shown}");
     assert!(shown.contains("Why is this `one`?"), "{shown}");
     assert_eq!(setup.open_turn_of(&review), None);
 
-    // The user's message: the recorded `input`, which opens the run.
     assert_eq!(run[3].event, "input");
     let Reply::Answer { bytes } = setup.pi(&run[3]) else {
         panic!("the message was not answered with the review");
@@ -1370,7 +1225,6 @@ fn a_message_of_a_pi_session_is_answered_with_the_attached_review_after_the_inst
     let answer: Value = serde_json::from_slice(&bytes).expect("the answer is JSON");
     assert_eq!(answer, json!({ "review": shown }));
 
-    // The comments are sent, in round one, whose turn is the one the message opened.
     let sent = setup.review_of_agent(yaar_adapter_pi::NAME, run[1].session());
     let round = delivered_round(&sent);
     assert_eq!(comment_of(&sent, &comment).round, Some(1));
@@ -1397,7 +1251,6 @@ fn the_round_of_a_message_of_claude_code_is_sent_in_the_turn_the_message_opened_
         .expect("the message opened a turn");
     assert_eq!(delivered_round(&sent).turn, Some(opened));
 
-    // A second draft, copied as text: no turn runs the copy, whatever turn is open.
     setup.draft(&sent, "And this?");
     let Ok(Reply::Copied { round, .. }) = setup.window.ask(Request::CopyReview {
         review: review.id.clone(),
@@ -1418,9 +1271,6 @@ fn the_round_of_a_message_of_claude_code_is_sent_in_the_turn_the_message_opened_
     setup.stop();
 }
 
-/// The hand-made records of a message typed while pi works, with the review attached after
-/// the run opened, and what the Keeper answers the message with: the run opened by record 1,
-/// the answer to record 4, and the Window after the whole run, which is told the run's end.
 /// `behavior` is the one field of record 4 changed, `streamingBehavior`, where it is given.
 fn a_message_typed_while_pi_works(behavior: Option<&str>) {
     let mut setup = Setup::new();
@@ -1435,8 +1285,6 @@ fn a_message_typed_while_pi_works(behavior: Option<&str>) {
         behavior.unwrap_or("steer")
     );
 
-    // The run is open, a shell command of it running: the session start, the message that
-    // opened it (nothing was attached), the run's start and the call of the tool.
     assert_eq!(setup.pi(&records[0]), Reply::Done);
     let review = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
     for record in &records[1..=3] {
@@ -1445,20 +1293,16 @@ fn a_message_typed_while_pi_works(behavior: Option<&str>) {
     let run = setup
         .open_turn_of(&review)
         .expect("the first message opened a turn");
-    // The review is attached while pi works.
     let (_, comment) = setup.draft(&review, "Look at this while you work.");
     setup.attach(&review);
     let shown = setup.attachment(&review);
 
-    // The message typed then goes with the review, at the report that pi took it.
     let Reply::Answer { bytes } = setup.pi(&typed) else {
         panic!("the message that pi queued was not answered with the review");
     };
     let answer: Value = serde_json::from_slice(&bytes).expect("the answer is JSON");
     assert_eq!(answer, json!({ "review": shown }));
     assert!(shown.starts_with(yaar_adapter_pi::INSTRUCTION), "{shown}");
-    // Marked sent now, when pi reported the message: the rest of the run is not reported
-    // yet. The round's turn is the run that was open, and no turn started for the message.
     let sent = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
     let round = delivered_round(&sent);
     assert_eq!(comment_of(&sent, &comment).round, Some(1));
@@ -1466,7 +1310,6 @@ fn a_message_typed_while_pi_works(behavior: Option<&str>) {
     assert_eq!(round.turn, Some(run.clone()));
     assert_eq!(setup.open_turn_of(&review), Some(run.clone()));
 
-    // The rest of the run, which asks and gives nothing, up to the end of the run.
     for record in &records[5..=12] {
         assert_eq!(setup.pi(record), Reply::Done, "{}", record.event);
     }
@@ -1476,7 +1319,6 @@ fn a_message_typed_while_pi_works(behavior: Option<&str>) {
         "the run that was open ended with a state"
     );
     let after = setup.review_of_agent(yaar_adapter_pi::NAME, records[0].session());
-    // The state of the round is recorded off the agent's way, so it is not compared.
     assert_eq!(
         delivered_round(&after).turn,
         Some(run),
@@ -1506,14 +1348,11 @@ fn a_message_pi_queued_by_its_own_extension_is_answered_nothing_and_the_attachme
 
     assert_eq!(queued[31].payload["source"], "extension");
     assert_eq!(setup.pi(&queued[31]), Reply::Done);
-    // The report was taken when it was answered: the review is as it was.
     let kept = setup.review_of_agent(yaar_adapter_pi::NAME, queued[1].session());
     assert_eq!(kept.attached, Some(yaar_link::Attachment::Review));
     assert!(kept.rounds.is_empty());
     assert_eq!(comment_of(&kept, &comment).round, None);
 
-    // The user's own message then carries it, which also shows the nothing was not a
-    // failure of the delivery.
     assert_eq!(queued[19].payload["source"], "interactive");
     let Reply::Answer { bytes } = setup.pi(&queued[19]) else {
         panic!("the user's message was not answered with the review");
@@ -1525,8 +1364,6 @@ fn a_message_pi_queued_by_its_own_extension_is_answered_nothing_and_the_attachme
     setup.stop();
 }
 
-/// The payload of a call of pi's reply tool, as the extension writes it, in the session `of`
-/// names.
 fn reply_payload(of: &PiRecord, setup: &Setup, thread: &ThreadId, body: &str) -> Vec<u8> {
     let of = of.in_project(&setup.repo);
     serde_json::to_vec(&json!({
@@ -1540,7 +1377,6 @@ fn reply_payload(of: &PiRecord, setup: &Setup, thread: &ThreadId, body: &str) ->
     .expect("a payload")
 }
 
-/// What the app answered a call of the reply tool, as the extension reads it.
 fn tool_answer(reply: Reply) -> Value {
     let Reply::Answer { bytes } = reply else {
         panic!("the call was answered with no bytes: {reply:?}");
@@ -1554,7 +1390,6 @@ fn a_reply_of_pi_is_kept_in_its_thread_and_answered_with_its_result_and_one_nami
     let mut setup = Setup::new();
     let first = recorded::pi_events(PI_TURN_TOOLS);
     let second = recorded::pi_events(PI_QUEUED);
-    // Two sessions in two terminals, each with a thread of its own, A's comment sent.
     let (review_a, thread_a, _) = setup.pi_session_with_a_draft(&first[1], "For A.");
     let other_terminal = setup.window.open_terminal(&setup.workspace);
     // Another process that is alive for as long as the test runs: this one's parent.
@@ -1573,7 +1408,6 @@ fn a_reply_of_pi_is_kept_in_its_thread_and_answered_with_its_result_and_one_nami
         Reply::Answer { .. }
     ));
 
-    // A reply with a hostile body, kept as it was written.
     let body = "Done: `rename`, \"quoted\", $(touch PWNED)\nsecond line\\";
     let answered = tool_answer(setup.pi_payload(
         &setup.terminal.clone(),
@@ -1603,7 +1437,6 @@ fn a_reply_of_pi_is_kept_in_its_thread_and_answered_with_its_result_and_one_nami
     assert!(thread.addressed);
     assert!(!thread.resolved, "a reply never resolves");
 
-    // A reply of B's session naming A's thread: an error for the tool, nothing kept.
     let refused = tool_answer(setup.pi_payload(
         &other_terminal,
         other_pid,
@@ -1621,7 +1454,6 @@ fn a_reply_of_pi_is_kept_in_its_thread_and_answered_with_its_result_and_one_nami
         agent_comments(&setup.review_of_agent(yaar_adapter_pi::NAME, first[1].session())).len(),
         1
     );
-    // Its own thread is kept, so the refusal was not a Keeper that cannot be reached.
     let kept_b = tool_answer(setup.pi_payload(
         &other_terminal,
         other_pid,
@@ -1640,8 +1472,6 @@ fn after_pis_new_a_reply_of_the_new_session_is_kept_in_the_review_it_took_over()
     assert!(matches!(setup.pi(&run[3]), Reply::Answer { .. }));
     assert_eq!(setup.pi(&run[28]), Reply::Done);
 
-    // The recorded end of that session by `/new`, and the start of the session that follows
-    // in the same terminal and process.
     assert_eq!(run[127].event, "session_shutdown");
     assert_eq!(run[127].payload["reason"], "new");
     assert_eq!(setup.pi(&run[127]), Reply::Done);
@@ -1651,7 +1481,6 @@ fn after_pis_new_a_reply_of_the_new_session_is_kept_in_the_review_it_took_over()
     let taken = setup.review_of_agent(yaar_adapter_pi::NAME, run[129].session());
     assert_eq!(taken.id, review.id, "the new session took the review over");
 
-    // The agent calls the tool in the new session: its id is the new one.
     let answered = tool_answer(setup.pi_payload(
         &setup.terminal.clone(),
         std::process::id(),
@@ -1677,8 +1506,8 @@ fn the_turn_a_round_was_sent_in_is_told_again_after_the_keeper_is_started_again(
         .turn
         .clone()
         .expect("the round has a turn");
-    // The state of the round is recorded off the agent's way, and a Keeper stopped before it
-    // is would show none: wait for it, so that what is read after is the whole round.
+    // The state of the round is recorded off the agent's way: wait for it, as a Keeper stopped
+    // before it is would show none.
     setup.wait_for_states_of(yaar_adapter_pi::NAME, run[1].session());
     let Setup {
         scratch,

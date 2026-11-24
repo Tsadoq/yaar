@@ -1,12 +1,3 @@
-//! Tests of what the system tests of the agents stand on: the stand-in on a world's search
-//! path, the Keeper run under a wrapper, the tap's view of the stop-everything frame, and
-//! the client's reading of a terminal as lines and of the stand-in's prompt.
-//!
-//! The Keeper's side of the agent requests is not built when these tests are written, so
-//! the client's calls for it are tried against the real Keeper only as far as the request
-//! they send, and as far as the reply they read against a peer of the test's own that
-//! speaks the Link; the calls are also used, and so tried, by the packages that wire them.
-
 use std::ffi::OsString;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixListener;
@@ -32,7 +23,6 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// The lines of what a terminal's program wrote, as the bytes came.
 fn lines_of(output: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(output)
         .split("\r\n")
@@ -40,8 +30,6 @@ fn lines_of(output: &[u8]) -> Vec<String> {
         .collect()
 }
 
-/// A world with its stand-ins on the search path, a Keeper, and a shell of the app open
-/// in a workspace.
 fn world_with_a_shell() -> (World, Client, TerminalId) {
     let mut world = World::new();
     world.agents_on_path();
@@ -55,12 +43,10 @@ fn world_with_a_shell() -> (World, Client, TerminalId) {
     (world, client, terminal)
 }
 
-/// The process that started `pid`, read where the system keeps it.
 fn parent_of(pid: u32) -> u32 {
     #[cfg(target_os = "linux")]
     {
         let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).expect("read the stat");
-        // The name may hold spaces and brackets: the fields start after the last bracket.
         let after_name = stat.rsplit_once(')').expect("the name ends in a bracket").1;
         after_name
             .split_whitespace()
@@ -81,7 +67,6 @@ fn parent_of(pid: u32) -> u32 {
     }
 }
 
-/// The programs of the app that tests start, by the names Cargo builds them under.
 const PROGRAMS: [&str; 4] = [
     "yaar-keeper",
     "yaar-review",
@@ -100,14 +85,12 @@ fn every_program_a_test_starts_is_built_from_the_tree_and_the_companions_lie_bes
             .mode();
         assert_ne!(mode & 0o111, 0, "{name} runs");
     }
-    // The Keeper looks for the hook program beside itself.
     assert_eq!(
         program("yaar-keeper").parent(),
         program("yaar-claude-hook").parent()
     );
 
-    // Nothing is left for a build to do: a program that was built earlier and has gone
-    // stale would show up here as one that Cargo builds again.
+    // A stale program built earlier would show up here as one that Cargo builds again.
     let mut build = Command::new(std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into()));
     build.args([
         "build",
@@ -145,8 +128,7 @@ fn every_program_a_test_starts_is_built_from_the_tree_and_the_companions_lie_bes
 fn a_shell_of_the_app_finds_the_worlds_claude_before_any_other() {
     let (world, mut client, terminal) = world_with_a_shell();
     client.type_line(&terminal, "command -v claude; printf 'path-%s\\n' done");
-    // The prompt of the shell may stand in front of what the line prints, so each line is
-    // read by its end.
+    // The shell prompt may precede what the line prints, so each line is read by its end.
     let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
         lines_of(bytes)
             .iter()
@@ -161,7 +143,6 @@ fn a_shell_of_the_app_finds_the_worlds_claude_before_any_other() {
         .agents_dir()
         .expect("the world has a folder of agents");
     let claude = agents.join("claude").display().to_string();
-    // The line is the path, or what the shell wrote in front of it, ended by a space.
     let line = &lines[marker - 1];
     assert!(
         *line == claude || line.ends_with(&format!(" {claude}")),
@@ -197,7 +178,6 @@ fn the_agents_folder_holds_the_stand_in_as_claude_pi_and_otheragent() {
             "{name} runs"
         );
     }
-    // A second call leaves the same folder.
     world.agents_on_path();
     assert_eq!(world.agents_dir(), Some(agents));
 }
@@ -205,10 +185,8 @@ fn the_agents_folder_holds_the_stand_in_as_claude_pi_and_otheragent() {
 #[test]
 fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_its_agent_clis() {
     let world = World::new();
-    // Every terminal of the app is a login shell, and the system's profile may add folders
-    // to the search path that the process had no part in: macOS's puts `/usr/local/bin`
-    // and the rest of `/etc/paths` in, in an order of its own. Where the machine has a
-    // `claude` or a `pi` in one of those, this is what keeps a test from starting it.
+    // A login shell's system profile may add folders to the search path (macOS adds `/etc/paths`);
+    // the world's own profile, run after it, keeps a `claude` or `pi` found there from starting.
     let printed = world
         .command(Path::new("/bin/sh"))
         .args([
@@ -226,7 +204,6 @@ fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_i
         .unwrap_or_else(|| {
             panic!("a login shell found an agent CLI or printed nothing: {printed}")
         });
-    // The machine's folders are all still there, whichever the order the system chose.
     let found: Vec<PathBuf> = std::env::split_paths(path).collect();
     for folder in std::env::split_paths(&without_agent_clis(&machine)) {
         assert!(
@@ -237,9 +214,6 @@ fn a_login_shell_of_a_world_with_no_stand_in_has_the_machines_search_path_less_i
     }
 }
 
-/// The search path `profile` of a world leaves a shell that started with `start` as its
-/// path and no more than that: what the profile alone makes of it, whichever system's
-/// profile ran before it.
 fn path_after_the_profile(world: &World, start: &OsString) -> Vec<PathBuf> {
     let printed = world
         .command(Path::new("/bin/sh"))
@@ -271,14 +245,12 @@ fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_a
     // The app may put a folder first; a name with a blank and a star must stay one folder.
     let put_first = folder("put first", &[]);
     let odd = folder("odd *", &["git"]);
-    // A folder the star would match, were the name globbed, is not in the search path.
     folder("odd x", &[]);
     let with_claude = folder("with-claude", &["claude", "git"]);
     let with_pi = folder("with-pi", &["pi"]);
     let machine = std::env::var_os("PATH").expect("the machine has a search path");
     let machine: Vec<PathBuf> = std::env::split_paths(&without_agent_clis(&machine)).collect();
 
-    // Twice a folder, an empty entry, folders of agent CLIs among the others.
     let start = std::env::join_paths(
         [
             &put_first,
@@ -307,8 +279,6 @@ fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_a
         "the folders once each, in the order they came, the agent CLIs' folders lost"
     );
 
-    // The folders the machine's own path holds come back where a system's profile
-    // dropped them, after what the shell had.
     let sparse = std::env::join_paths([&odd]).expect("join the folders");
     let path = path_after_the_profile(&world, &sparse);
     assert_eq!(path.first(), Some(&odd));
@@ -316,8 +286,6 @@ fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_a
         assert!(path.contains(folder), "{} is lost", folder.display());
     }
 
-    // With the stand-ins: their folder first, and the folder the shell started with
-    // next. The shell's own options and variables are not left behind.
     world.agents_on_path();
     let agents = world.agents_dir().expect("a folder of stand-ins");
     let path = path_after_the_profile(&world, &start);
@@ -345,10 +313,8 @@ fn the_profile_of_a_world_keeps_the_folders_a_shell_started_with_and_drops_the_a
 #[cfg(target_os = "macos")]
 #[test]
 fn a_login_shell_of_a_world_keeps_a_folder_the_program_that_started_it_put_first() {
-    // macOS's system profile runs `path_helper`, which keeps every folder the shell was
-    // started with but puts the folders of `/etc/paths` and `/etc/paths.d` ahead of them:
-    // what the app puts first on the path of a terminal's shell is still there after the
-    // login, no longer first. Only that it is kept is asserted here.
+    // macOS's `path_helper` keeps every folder the shell started with but moves the folders of
+    // `/etc/paths` and `/etc/paths.d` ahead of them, so only that `put_first` is kept is asserted.
     let world = World::new();
     let put_first = world.home().join("put-first");
     std::fs::create_dir_all(&put_first).expect("make the folder");
@@ -388,7 +354,6 @@ fn the_search_path_of_a_world_loses_the_folders_that_hold_claude_or_pi_and_nothi
     let with_pi = folder("with-pi", &[("pi", 0o755)]);
     let with_both = folder("with-both", &[("claude", 0o755), ("pi", 0o755)]);
     let with_others = folder("with-others", &[("claudette", 0o755), ("git", 0o755)]);
-    // A file of that name that nothing can run is no agent CLI.
     let not_runnable = folder("not-runnable", &[("claude", 0o644)]);
     let empty = folder("empty", &[]);
 
@@ -439,7 +404,6 @@ fn a_program_of_a_world_with_stand_ins_gets_the_agents_folder_first_and_the_name
     let search = value(&after, "PATH").expect("a search path");
     let first = std::env::split_paths(&search).next().expect("a folder");
     assert_eq!(Some(first), world.agents_dir());
-    // What follows is the machine's own search path, less the folders of agent CLIs.
     let machine = std::env::var_os("PATH").expect("the machine has a search path");
     let rest: Vec<_> = std::env::split_paths(&search).skip(1).collect();
     assert_eq!(
@@ -451,7 +415,6 @@ fn a_program_of_a_world_with_stand_ins_gets_the_agents_folder_first_and_the_name
 #[test]
 fn a_keeper_run_by_a_wrapper_is_told_apart_from_it_and_both_are_gone_after_a_kill() {
     let mut world = World::new();
-    // The shell runs the Keeper, the last argument, as its child, and waits for it.
     let wrapper = ["/bin/sh", "-c", "\"$0\" & wait"].map(OsString::from);
     let pid = world.start_keeper_under(&wrapper);
     let tracer = parent_of(pid);
@@ -465,7 +428,6 @@ fn a_keeper_run_by_a_wrapper_is_told_apart_from_it_and_both_are_gone_after_a_kil
     assert!(!is_alive(tracer), "the wrapper is still there");
     assert_eq!(world.keeper_pid(), None);
 
-    // The world starts another on the same folders.
     let again = world.start_keeper();
     assert_ne!(again, pid);
     assert_eq!(world.keeper_pid(), Some(again));
@@ -489,7 +451,6 @@ fn a_world_that_ends_while_its_keeper_runs_under_a_wrapper_ends_both() {
 #[test]
 fn a_keeper_that_ended_under_a_wrapper_that_runs_on_is_not_the_worlds_keeper_any_more() {
     let mut world = World::new();
-    // The wrapper stays when the Keeper has gone, as a tracer may with other processes.
     let wrapper = ["/bin/sh", "-c", "\"$0\" & wait; exec sleep 3600"].map(OsString::from);
     let pid = world.start_keeper_under(&wrapper);
     let tracer = parent_of(pid);
@@ -499,7 +460,6 @@ fn a_keeper_that_ended_under_a_wrapper_that_runs_on_is_not_the_worlds_keeper_any
         wait_until(DEADLINE, || world.keeper_pid().is_none()),
         "the Keeper {pid} is gone, and the world still has it"
     );
-    // The world holds nothing of it, so it may start another.
     let again = world.start_keeper_under(&wrapper);
     assert_ne!(again, pid);
     assert!(!is_alive(tracer), "the first wrapper is still there");
@@ -515,7 +475,6 @@ fn a_keeper_that_ended_under_a_wrapper_that_runs_on_is_not_the_worlds_keeper_any
 #[test]
 fn a_wrapper_that_ends_before_its_keeper_leaves_the_keeper_the_worlds_to_end() {
     let mut world = World::new();
-    // The wrapper ends once the test makes a file, leaving the Keeper running.
     let wrapper = [
         "/bin/sh",
         "-c",
@@ -525,7 +484,6 @@ fn a_wrapper_that_ends_before_its_keeper_leaves_the_keeper_the_worlds_to_end() {
     let pid = world.start_keeper_under(&wrapper);
     let tracer = parent_of(pid);
     std::fs::write(world.home().join("go"), "").expect("let the wrapper end");
-    // A Keeper whose parent has ended is handed on to another process.
     assert!(
         wait_until(DEADLINE, || parent_of(pid) != tracer),
         "the wrapper {tracer} did not end"
@@ -574,14 +532,13 @@ fn the_tap_sees_the_stop_everything_frame_and_passes_it_on() {
     let pid = world.start_keeper();
     let tap = world.tap();
     let mut client = Client::attach(&tap.socket());
-    // Everything sent before this reply has passed the tap, so a stop that was sent would
-    // be there.
+    // Once this reply comes, everything sent before it has passed the tap,
+    // so a stop already sent would be seen by the check below.
     client.workspaces();
     assert!(!tap.wait_for_stop(Duration::from_millis(100)));
 
     client.stop_everything();
     assert!(tap.wait_for_stop(DEADLINE));
-    // The frame went on to the Keeper, which stops, and it is no request.
     assert!(
         wait_until(DEADLINE, || world.keeper_pid().is_none()),
         "the Keeper {pid} still runs"
@@ -594,7 +551,6 @@ fn a_vanished_client_leaves_the_keeper_serving_the_next_one() {
     let mut world = World::new();
     world.start_keeper();
     let mut client = world.client();
-    // A request on its way, and a reply that is never read.
     client.send(Request::ListWorkspaces);
     client.vanish();
     assert!(world.client().workspaces().is_empty());
@@ -611,8 +567,6 @@ fn the_new_calls_of_the_client_send_the_requests_the_link_names() {
     let terminal = TerminalId::new("t".repeat(32));
     let turn = TurnId::new("u".repeat(32));
 
-    // What the Keeper answers is the business of the packages that wire it: here only
-    // what was asked. A call that refuses to go on with a refusal panics, and is let to.
     let _ = client.open_launcher(&workspace, "claude", SIZE);
     let _ = client.history(&workspace);
     let _ = client.uncommitted(&workspace, Some(&review));
@@ -625,8 +579,6 @@ fn the_new_calls_of_the_client_send_the_requests_the_link_names() {
     let _ = client.attach_terminal(&terminal, SIZE);
     let _ = catch_unwind(AssertUnwindSafe(|| client.agents()));
     let _ = catch_unwind(AssertUnwindSafe(|| client.terminals()));
-    // The reply to the last request has come, so every request before it has passed the
-    // tap.
     client.workspaces();
 
     assert_eq!(
@@ -676,7 +628,6 @@ fn the_new_calls_of_the_client_send_the_requests_the_link_names() {
     );
 }
 
-/// The screen a shell of the app draws after `command`, once it printed `marker`.
 fn screen_after(command: &str, marker: &str, size: TerminalSize) -> Vec<String> {
     let mut world = World::new();
     world.start_keeper();
@@ -686,12 +637,12 @@ fn screen_after(command: &str, marker: &str, size: TerminalSize) -> Vec<String> 
     let terminal = client
         .open_terminal(&workspace, size)
         .expect("open a terminal");
-    // The prompt is waited for: a line typed before it is echoed first, and the prompt then
-    // lands in front of the first thing the line prints.
+    // Wait for the prompt: a line typed before it is echoed first and the prompt lands in front of
+    // its output.
     client.wait_for_output(&terminal, DEADLINE, |bytes| !bytes.is_empty());
-    // The marker is built so that the line typed does not hold it.
     client.type_line(
         &terminal,
+        // printf builds the marker so that the typed line, echoed back, does not hold it.
         &format!("{command}; printf 'screen-%s\\n' {marker}"),
     );
     let done = format!("screen-{marker}");
@@ -711,8 +662,6 @@ fn the_screen_is_the_lines_the_emulator_draws_with_their_trailing_blanks_dropped
         columns: 40,
         rows: 12,
     };
-    // A carriage return overwrites, and a wide character takes two cells of which the
-    // second is no character.
     let screen = screen_after(
         "printf 'one\\ntwo   \\nab\\rXY\\n\\346\\227\\245x\\n'",
         "done",
@@ -775,14 +724,12 @@ fn the_screen_of_a_terminal_that_wrote_nothing_is_blank() {
         columns: 20,
         rows: 4,
     };
-    // Nothing was read from the Keeper yet: the client holds no output of the terminal.
     assert_eq!(client.screen(&terminal, size), ["", "", "", ""]);
 }
 
 #[test]
 fn the_wait_for_a_prompt_looks_only_after_the_byte_it_is_given_and_says_where_the_prompt_ended() {
     let (_world, mut client, terminal) = world_with_a_shell();
-    // The prompt is printed by a command whose typed line does not hold it.
     let prompt = "printf 'standin%s ' '>'";
 
     client.type_line(&terminal, prompt);
@@ -794,8 +741,7 @@ fn the_wait_for_a_prompt_looks_only_after_the_byte_it_is_given_and_says_where_th
         String::from_utf8_lossy(&run[..first])
     );
 
-    // The first prompt is behind `first`: a second wait for one starts after it, so it
-    // is not answered by that one, and what came between is what was printed meanwhile.
+    // A second wait for a prompt starts after the first one, so the first does not answer it.
     client.type_line(&terminal, &format!("printf 'mid-%s\\n' marker; {prompt}"));
     let second = client.wait_for_prompt(&terminal, first);
     assert!(second > first);
@@ -833,8 +779,6 @@ fn a_typed_line_reaches_the_program_with_the_enter_key_after_it() {
 
 #[test]
 fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_follows() {
-    // Waits for the stand-in itself and for the text of a script, which another package
-    // builds: this is the first test that runs the program.
     let script = Script(vec![Step::Turn, Step::Exit]);
     let (mut world, repo) = World::with_standin("default", &script);
     let keeper = world.keeper_pid().expect("the Keeper runs");
@@ -858,14 +802,10 @@ fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_f
         .expect("open a terminal");
     client.type_line(&terminal, "claude");
     let prompt = client.wait_for_prompt(&terminal, 0);
-    // While it runs: the stand-in is among what the Keeper started, a shell and the program
-    // that shell started.
     let started = descendants_of(keeper);
     let running = world.agent_log("default").pid;
     assert!(started.contains(&running), "{running} not in {started:?}");
     client.type_line(&terminal, "hello");
-    // The stand-in ran with the default script and log, which the shell got from the
-    // world.
     assert!(
         wait_until(DEADLINE, || world
             .agent_log("default")
@@ -893,8 +833,6 @@ fn a_world_with_a_stand_in_has_a_repository_a_keeper_and_a_script_the_stand_in_f
     );
 }
 
-/// What a scripted Keeper does about one request: sends `before`, then the reply, then
-/// `after`.
 struct Answer {
     before: Vec<Message>,
     reply: Result<Reply, Refusal>,
@@ -911,10 +849,6 @@ impl Answer {
     }
 }
 
-/// A peer at `place`'s socket that speaks the Link as a Keeper does, for a test of the
-/// client alone, where the Keeper of the app does not answer what the test needs: it
-/// answers the requests it gets, in order, as `answers` say, and then waits for the client
-/// to go. Gives what it was asked. It is no Keeper of the app and no test of one.
 fn scripted_keeper(place: &Place, answers: Vec<Answer>) -> std::thread::JoinHandle<Vec<Request>> {
     let listener = UnixListener::bind(place.socket()).expect("listen");
     std::thread::spawn(move || {
@@ -938,7 +872,6 @@ fn scripted_keeper(place: &Place, answers: Vec<Answer>) -> std::thread::JoinHand
                 write_message(&mut stream, &message).expect("send");
             }
         }
-        // Until the client goes, so that what was sent last is read.
         while read_message(&mut stream).is_ok() {}
         asked
     })
@@ -966,7 +899,6 @@ fn what_a_terminal_wrote_before_the_attach_was_refused_is_kept() {
     );
     let mut client = Client::attach(&place.socket());
 
-    // No kept output follows a refusal, so what came before it is all there is.
     assert_eq!(
         client.attach_terminal(&terminal, SIZE),
         Err(Refusal::UnknownTerminal {
@@ -988,13 +920,10 @@ fn an_attach_replaces_what_the_client_held_of_a_terminal_by_the_kept_output_and_
     let keeper = scripted_keeper(
         &place,
         vec![
-            // The terminal's first bytes reach the client that opened it.
             Answer {
                 before: vec![output(&terminal, "old")],
                 ..Answer::to(Ok(Reply::Workspaces(Vec::new())))
             },
-            // The Keeper then sends the kept output from its start, `old` among it, and
-            // what another terminal wrote meanwhile comes before the reply.
             Answer {
                 before: vec![output(&terminal, "early"), output(&other, "other")],
                 after: vec![output(&terminal, "old+ring")],
@@ -1072,7 +1001,6 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
             Answer::to(Ok(Reply::Done)),
             Answer::to(Ok(Reply::Terminals(vec![info.clone()]))),
             Answer::to(Ok(Reply::Agents(vec![agents.clone()]))),
-            // Two facts about agents come and one is the one waited for.
             Answer {
                 after: vec![
                     Message::Fact(Fact::AgentsChanged(WorkspaceAgents {
@@ -1096,7 +1024,6 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
         client.open_launcher(&workspace, "claude", SIZE),
         Ok(terminal.clone())
     );
-    // A terminal that was opened has no output yet, and a screen of blank lines.
     assert_eq!(client.screen(&terminal, SIZE).len(), usize::from(SIZE.rows));
     assert_eq!(client.history(&workspace), Ok(history));
     assert_eq!(client.history(&workspace), Err(refused));
@@ -1107,7 +1034,6 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
     assert_eq!(client.terminals(), [info]);
     assert_eq!(client.agents(), std::slice::from_ref(&agents));
 
-    // The wait skips the facts of another workspace and those `wanted` does not accept.
     assert_eq!(client.show_workspace(None), Ok(()));
     let waited = client.wait_for_agents(&workspace, DEADLINE, |agents| {
         agents.shown == Some(SessionState::Works)
@@ -1117,9 +1043,6 @@ fn the_new_calls_of_the_client_give_what_the_reply_holds_and_the_refusal_when_it
     assert_eq!(keeper.join().expect("the scripted Keeper").len(), 10);
 }
 
-// Killing everything, as a restart of the machine does.
-
-/// Every path under `folder`, relative to it, folders and links among them.
 fn tree_of(folder: &Path) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     let mut open = vec![folder.to_owned()];
@@ -1149,9 +1072,6 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
     let keeper = world.keeper_pid().expect("the Keeper runs");
     let mut client = world.client();
     let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
-    // One terminal runs the agent, in the middle of a turn; another runs a shell that has
-    // started a shell that has started a program, three levels below the Keeper's own
-    // child.
     let agent = client
         .open_terminal(&workspace, SIZE)
         .expect("open a terminal");
@@ -1191,8 +1111,6 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
         assert!(started.contains(&pid), "{pid} not in {started:?}");
     }
 
-    // What a restart empties: files, a folder, a link and a socket in each of the two, and
-    // what the link leads to, which is kept.
     let root = world
         .socket()
         .parent()
@@ -1209,8 +1127,8 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
         std::os::unix::fs::symlink(&kept, folder.join("link")).expect("a link");
         drop(UnixListener::bind(folder.join("socket")).expect("a socket"));
     }
-    // Without the temporary files a git of the Keeper's state store makes and removes by
-    // itself: one that ended between this look and the kill takes its own away.
+    // Leaves out the temporary files a git in the Keeper's state store makes and removes itself:
+    // one that ends between this look and the kill takes its own file away.
     let permanent = |paths: Vec<PathBuf>| -> Vec<PathBuf> {
         paths
             .into_iter()
@@ -1228,7 +1146,6 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
 
     world.kill_everything();
 
-    // Returned, so everything is gone already: no wait.
     let alive: Vec<u32> = started
         .iter()
         .copied()
@@ -1247,17 +1164,14 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
         "kept",
         "a link was followed"
     );
-    // "As it was" is read as: no path of the data folder is gone, and the file the test
-    // wrote has its content. The Keeper writes to the folder until the kill, so no other
-    // content can be compared with a look taken before it.
+    // "As it was" means no path of the data folder is gone: the Keeper writes to the folder until
+    // the kill, so no content but the test's own file can be compared with the look before it.
     let data_after = permanent(tree_of(&world.data_dir()));
     let lost: Vec<_> = data_before
         .iter()
         .filter(|p| !data_after.contains(p))
         .collect();
     assert!(lost.is_empty(), "the data folder lost {lost:?}");
-    // The stand-in's log is as it was, and nothing of the agent ran at its end: it was
-    // killed, not asked to stop.
     let log_after = std::fs::read(&log_file).expect("the log");
     assert!(log_after.starts_with(&log_before));
     let log = world.agent_log("default");
@@ -1270,7 +1184,6 @@ fn killing_everything_ends_what_the_keeper_started_empties_the_runtime_and_tempo
         log.did
     );
 
-    // A Keeper starts again on what was kept: the folder opened before is still known.
     world.start_keeper();
     let mut client = world.client();
     assert_eq!(client.workspaces().len(), 1);
@@ -1282,9 +1195,6 @@ fn killing_everything_of_a_world_with_no_keeper_is_refused() {
     World::new().kill_everything();
 }
 
-// An agent started outside every terminal of the app.
-
-/// The variables `env` printed, as pairs.
 fn variables_in(text: &str) -> Vec<(String, String)> {
     text.lines()
         .filter_map(|line| line.split_once('='))
@@ -1320,13 +1230,11 @@ fn an_agent_started_outside_runs_in_a_terminal_of_the_worlds_with_the_worlds_plu
     assert!(ended, "{log:?}");
     assert_eq!(log.pid, pid);
     assert_eq!(log.received, b"go\r");
-    // The plugin's hooks ran, through the app's own hook program.
     assert!(log.did.iter().any(|did| matches!(
         did,
         Did::Hook { event, killed: false, .. } if event == "SessionStart"
     )));
 
-    // What it started its shell command with is its own environment.
     let env = variables_in(&std::fs::read_to_string(repo.path().join("env.out")).expect("env.out"));
     let value = |name: &str| env.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str());
     assert_eq!(value("YAAR_TERMINAL"), None, "{env:?}");
@@ -1345,7 +1253,6 @@ fn an_agent_started_outside_runs_in_a_terminal_of_the_worlds_with_the_worlds_plu
         "{env:?}"
     );
 
-    // It ended on its own; dropping what is left of it leaves nothing running.
     drop(agent);
     assert!(!is_alive(pid));
 }
@@ -1375,8 +1282,6 @@ fn each_wait_for_the_prompt_of_an_agent_outside_waits_for_one_it_printed_after_t
     });
     assert!(held, "{:?}", world.agent_log("claude"));
     std::fs::write(repo.path().join("go"), "").expect("make the file");
-    // The first prompt is behind: this wait is for the second, which the stand-in prints
-    // when its next `turn` begins, after the first turn's end.
     agent.wait_for_prompt();
     let log = world.agent_log("claude");
     assert!(
@@ -1398,16 +1303,12 @@ fn each_wait_for_the_prompt_of_an_agent_outside_waits_for_one_it_printed_after_t
     assert_eq!(world.agent_log("claude").received, b"one\rtwo\r");
 }
 
-// pi installed in a world, its yes, and pi started outside the app's terminals.
-
-/// The text of a shell's `env` line for `name`, the value alone.
 fn value_of<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
     env.iter()
         .find(|(n, _)| n == name)
         .map(|(_, value)| value.as_str())
 }
 
-/// Where the Keeper of `world` writes the extension of pi, which pi's settings list.
 fn extension_of(world: &World) -> PathBuf {
     world.data_dir().join("agents/pi/extension/yaar.ts")
 }
@@ -1422,7 +1323,6 @@ fn a_pi_started_outside_runs_in_a_terminal_of_the_world_with_the_extension_of_it
     let repo = world.repository("app");
     let extension = extension_of(&world);
     assert!(extension.is_file(), "the Keeper wrote the extension");
-    // The user said no, or was never asked: nothing of pi's is written but by hand below.
     assert!(!world.pi_settings().exists());
 
     let script = Script(vec![
@@ -1447,24 +1347,17 @@ fn a_pi_started_outside_runs_in_a_terminal_of_the_world_with_the_extension_of_it
     assert_eq!(log.pid, pid);
     assert_eq!(log.received, b"go\r");
 
-    // It found the extension in pi's settings, which list it and nothing else, and it was
-    // started by no `-e`.
     assert_eq!(log.extensions, std::slice::from_ref(&extension));
     assert!(log.args.is_empty(), "{:?}", log.args);
     let settings: serde_json::Value =
         serde_json::from_slice(&std::fs::read(world.pi_settings()).expect("pi's settings"))
             .expect("JSON");
     assert_eq!(settings, serde_json::json!({"extensions": [extension]}));
-    // It reported, through the program the world named: the stand-in as pi writes what the
-    // program printed under pi's event.
     assert!(log.did.iter().any(|did| matches!(
         did,
         Did::Hook { event, killed: false, .. } if event == "session_start"
     )));
 
-    // What it started its shell command with is its own environment: no terminal of the
-    // app, the reporting program the Keeper's shells name, and nothing that puts a folder
-    // ahead on the search path for pi.
     let env = variables_in(&std::fs::read_to_string(repo.path().join("env.out")).expect("env.out"));
     assert_eq!(value_of(&env, "YAAR_TERMINAL"), None, "{env:?}");
     assert_eq!(
@@ -1495,16 +1388,14 @@ fn the_first_report_of_a_pi_started_outside_makes_the_keeper_follow_it_as_a_sess
     let repo = world.repository("app");
     let mut client = world.client();
     let (_, workspace) = client.open_folder(repo.path()).expect("open the folder");
-    // Told apart from a session of the app's own terminal: the world has none open.
     assert!(client.terminals().is_empty());
 
     let script = Script(vec![Step::Turn, Step::End, Step::Exit]);
     let mut agent = world.start_agent_outside(Dialect::Pi, &script, repo.path());
     agent.wait_for_prompt();
 
-    // The stand-in reported its start through the program the world named: the Keeper follows
-    // pi as a session of the workspace the stand-in works in, which runs in no terminal of
-    // the app.
+    // The stand-in's start report makes the Keeper follow pi as a session of the workspace;
+    // pi runs in no terminal of the app.
     let mut seen = Vec::new();
     let followed = wait_until(DEADLINE, || {
         seen = client.agents();
@@ -1534,9 +1425,9 @@ fn the_reporting_program_a_pi_started_outside_is_given_is_the_one_the_shells_of_
     let heard = client.wait_for_output(&terminal, DEADLINE, |bytes| {
         lines_of(bytes).iter().any(|line| line == "done-mark")
     });
-    // The prompt of the shell lands in front of the first line the command prints, so the
-    // line is read from the marker the command prints itself. The line typed, echoed back,
-    // holds the marker too, and is told apart by what follows: not a path.
+    // The shell prompt lands in front of the first printed line, so the line is read from the
+    // marker; the typed line, echoed back, holds the marker too and is told apart by what follows:
+    // not a path.
     let named = lines_of(&heard)
         .into_iter()
         .filter_map(|line| {
@@ -1549,8 +1440,6 @@ fn the_reporting_program_a_pi_started_outside_is_given_is_the_one_the_shells_of_
     drop((world, client));
 }
 
-/// The requests a peer at the world's socket took, which answers every one with `Done` and
-/// takes each from a connection of its own, as the reporting program makes them.
 struct Reports {
     taken: std::sync::Arc<std::sync::Mutex<Vec<Request>>>,
     socket: PathBuf,
@@ -1559,7 +1448,6 @@ struct Reports {
 }
 
 impl Reports {
-    /// Listens at the socket of `world`, which no Keeper holds.
     fn at(world: &World) -> Reports {
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::sync::{Arc, Mutex};
@@ -1610,7 +1498,8 @@ impl Reports {
 impl Drop for Reports {
     fn drop(&mut self) {
         self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        // The thread sits in `accept`: a connection wakes it.
+        // The thread blocks in `accept`: this connection wakes it so it sees `stop` and can be
+        // joined.
         let _ = std::os::unix::net::UnixStream::connect(&self.socket);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -1618,8 +1507,6 @@ impl Drop for Reports {
     }
 }
 
-/// Writes the file the Keeper of `world` would write as pi's extension, for a test that
-/// starts no Keeper.
 fn write_the_extension_by_hand(world: &World) -> PathBuf {
     let extension = extension_of(world);
     std::fs::create_dir_all(extension.parent().expect("a folder")).expect("make the folder");
@@ -1640,9 +1527,8 @@ fn what_a_pi_started_outside_reports_reaches_the_socket_of_the_world_from_no_ter
     let pid = agent.pid();
     agent.wait_for_prompt();
     agent.type_line("go");
-    // Every report is waited for by the stand-in, which does not go on before the program
-    // that carried it has left, and the peer keeps a request before it answers: after the
-    // end of the stand-in all five are in.
+    // The stand-in waits for every report and the peer keeps a request before answering, so after
+    // the stand-in ends all five are in.
     let ended = wait_until(DEADLINE, || {
         world
             .agent_log("pi")
@@ -1687,8 +1573,6 @@ fn pi_installed_in_a_world_is_a_folder_with_nothing_in_it_and_a_world_that_never
     assert!(tree_of(&folder).is_empty());
     let before = tree_of(&installed.home());
     installed.start_keeper();
-    // The Keeper listens, so its pieces are written: the folder of pi is as it was, and
-    // nothing of pi's is in the home beside it.
     assert!(tree_of(&folder).is_empty(), "{:?}", tree_of(&folder));
     assert!(!installed.pi_settings().exists());
     let after = tree_of(&installed.home());
@@ -1707,7 +1591,6 @@ fn pi_installed_in_a_world_is_a_folder_with_nothing_in_it_and_a_world_that_never
     let mut never = World::new();
     never.start_keeper();
     let mut client = never.client();
-    // Answered, so the Keeper is past its start.
     client.workspaces();
     assert!(!never.home().join(".pi").exists());
     assert!(!never.pi_settings().exists());
@@ -1716,8 +1599,6 @@ fn pi_installed_in_a_world_is_a_folder_with_nothing_in_it_and_a_world_that_never
 #[test]
 fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_lack_it_and_leaves_them_alone_where_they_list_it()
  {
-    // Settings where the entry is missing, in three shapes: no file at all, a file with
-    // other keys and another extension, and a file with an empty array.
     let cases: [(&str, Option<&str>); 3] = [
         ("no file", None),
         (
@@ -1736,7 +1617,6 @@ fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_la
                 world.install_pi();
                 std::fs::write(world.pi_settings(), before).expect("write the settings");
             }
-            // Pi never ran in this world: there is no folder for the file yet.
             None => assert!(!folder.exists()),
         }
         let repo = world.repository("app");
@@ -1758,7 +1638,6 @@ fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_la
             1,
             "{what}: {settings}"
         );
-        // Everything that was there stays.
         match what {
             "other keys" => {
                 assert_eq!(settings["theme"], "dark");
@@ -1767,13 +1646,10 @@ fn a_pi_started_outside_finds_its_extension_listed_by_hand_where_the_settings_la
             "an empty array" => assert_eq!(listed.len(), 1),
             _ => assert_eq!(settings.as_object().map(|o| o.len()), Some(1)),
         }
-        // The folder was made for the file where there was none.
         assert!(folder.is_dir(), "{what}");
         drop(agent);
     }
 
-    // Settings that list it already, as the Keeper writes them after a yes, laid out as a
-    // user's editor would: the same bytes after the stand-in started.
     let mut world = World::new();
     world.agents_on_path();
     let extension = write_the_extension_by_hand(&world);
@@ -1801,9 +1677,6 @@ fn a_pi_started_outside_before_the_keeper_wrote_its_extension_is_refused_naming_
     let _ = world.start_agent_outside(Dialect::Pi, &Script(vec![Step::Exit]), repo.path());
 }
 
-/// A peer at the socket of `world`, which no Keeper holds, that answers the requests of one
-/// client, in order, each with `Consents` of the next of `replies`, and gives what it was
-/// asked once the client has gone.
 fn consents_peer(
     world: &World,
     replies: Vec<Vec<Consent>>,
@@ -1811,8 +1684,8 @@ fn consents_peer(
     let listener = UnixListener::bind(world.socket()).expect("listen");
     listener.set_nonblocking(true).expect("poll the listener");
     std::thread::spawn(move || {
-        // No client within the deadline: the peer gives what it was asked, which is nothing,
-        // so the test fails on that and not on a join that never returns.
+        // No client within the deadline: the peer returns no requests, so the test fails on that
+        // and not on a join that never returns.
         let mut stream = None;
         wait_until(DEADLINE, || {
             stream = listener.accept().ok().map(|(stream, _)| stream);
@@ -1841,7 +1714,6 @@ fn consents_peer(
     })
 }
 
-/// What `allow_pi_extension` of `world` panicked with.
 fn allowing_panics(world: &World) -> String {
     let said =
         catch_unwind(AssertUnwindSafe(|| world.allow_pi_extension())).expect_err("the call panics");
@@ -1862,8 +1734,6 @@ fn question_of_pi(answer: ConsentAnswer, problem: Option<&str>) -> Consent {
 
 #[test]
 fn the_yes_of_the_world_is_sent_for_pi_and_waited_for_until_the_keeper_lists_it() {
-    // The reply to the answer says not asked, and so does the first look after it: the call
-    // goes on looking, and gives once the Keeper lists the yes.
     let world = World::new();
     let not_yet = || vec![question_of_pi(ConsentAnswer::NotAsked, None)];
     let peer = consents_peer(
@@ -1875,7 +1745,6 @@ fn the_yes_of_the_world_is_sent_for_pi_and_waited_for_until_the_keeper_lists_it(
         ],
     );
     world.allow_pi_extension();
-    // The client the call used is gone when it returns, so the peer's wait for it ends.
     assert_eq!(
         peer.join().expect("the peer"),
         [
@@ -1892,14 +1761,12 @@ fn the_yes_of_the_world_is_sent_for_pi_and_waited_for_until_the_keeper_lists_it(
 #[test]
 fn the_yes_of_a_world_with_no_question_of_pi_or_a_settings_file_the_keeper_could_not_change_panics_saying_why()
  {
-    // A Keeper with no question of pi: pi is not installed in that world.
     let world = World::new();
     let peer = consents_peer(&world, vec![Vec::new()]);
     let said = allowing_panics(&world);
     assert!(said.contains("install_pi"), "{said}");
     peer.join().expect("the peer");
 
-    // A settings file it could not change: its problem is what the call says.
     let world = World::new();
     let peer = consents_peer(
         &world,
@@ -1915,8 +1782,6 @@ fn the_yes_of_a_world_with_no_question_of_pi_or_a_settings_file_the_keeper_could
 
 #[test]
 fn every_program_of_the_app_is_built_for_a_test_that_asks_for_it() {
-    // The hook program of Claude Code among them: a test of the Keeper runs it as Claude
-    // Code would, and finds it beside the Keeper.
     for name in [
         "yaar-keeper",
         "yaar-review",

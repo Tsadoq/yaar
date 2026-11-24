@@ -1,6 +1,3 @@
-//! What pi's extension reports, read as the app's events, what a report asks, and what the
-//! Adapter answers: the tables of the crate's doc.
-
 use std::collections::HashSet;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -13,21 +10,18 @@ use yaar_agent::{
 
 use crate::REPLY_EVENT;
 
-/// What the Adapter remembers between reports: for each session, by pi's id of it, whether
-/// a run of its agent is open, so that a message pi queues while it works starts no turn.
+/// Per session: whether a run of the agent is open, so that a message pi queues while it works
+/// starts no turn.
 #[derive(Debug, Default)]
 pub(crate) struct Remembered {
-    /// pi's session ids whose run is open.
     open: HashSet<String>,
 }
 
-/// One payload, read as far as every report needs: the object, and its `event`.
 struct Payload {
     fields: Map<String, Value>,
 }
 
 impl Payload {
-    /// The payload of `report`: a JSON object that names its `event`.
     fn of(report: &Report<'_>) -> Result<Payload, ReportError> {
         let value: Value = serde_json::from_slice(report.payload)
             .map_err(|e| unreadable(format!("the payload is not JSON: {e}")))?;
@@ -44,29 +38,24 @@ impl Payload {
         self.text("event").unwrap_or_default()
     }
 
-    /// pi's id of the session the event is of. Every event the crate's doc names holds one.
     fn session(&self) -> Result<&str, ReportError> {
         self.text("sessionId")
             .ok_or_else(|| unreadable(format!("{} names no session", self.event())))
     }
 
-    /// The text under `key`, none where it is missing or is not text.
     fn text(&self, key: &str) -> Option<&str> {
         self.fields.get(key).and_then(Value::as_str)
     }
 
-    /// The folder pi works in, `cwd`.
     fn folder(&self) -> Option<PathBuf> {
         self.text("cwd").map(PathBuf::from)
     }
 
-    /// The tool of a `tool_call` or a `tool_result`.
     fn tool(&self) -> Result<&str, ReportError> {
         self.text("toolName")
             .ok_or_else(|| unreadable(format!("{} names no tool", self.event())))
     }
 
-    /// The text `key` of the tool's input, as `path` and `command`.
     fn input_text(&self, key: &str) -> Result<&str, ReportError> {
         self.fields
             .get("input")
@@ -81,7 +70,6 @@ impl Payload {
             })
     }
 
-    /// Whether the tool failed.
     fn failed(&self) -> bool {
         self.fields
             .get("isError")
@@ -89,8 +77,7 @@ impl Payload {
             .unwrap_or(false)
     }
 
-    /// The file a tool names, as the app gives it: absolute, a relative one joined to the
-    /// folder pi works in, and never cleaned up.
+    /// The file a tool names: a relative path is joined to `cwd` and never cleaned up.
     fn file(&self) -> Result<PathBuf, ReportError> {
         let named = Path::new(self.input_text("path")?);
         Ok(match self.folder() {
@@ -104,15 +91,13 @@ fn unreadable(why: String) -> ReportError {
     ReportError::Unreadable(why)
 }
 
-/// The lines of the file as it is now that a unified diff changed: for each hunk header
-/// `@@ -a,b +c,d @@`, `c` to `c + d - 1`, or `c` alone where `d` is 0 (the lines were taken
-/// out and none put in), the first line being 1. None where the diff holds no hunk.
+/// Lines of the file after a unified diff: per hunk `@@ -a,b +c,d @@`, `c` to `c + d - 1`, or `c`
+/// alone when `d` is 0 (lines only taken out). None where the diff holds no hunk.
 fn lines_of(patch: &str) -> Option<Vec<RangeInclusive<u32>>> {
     let lines: Vec<_> = patch.lines().filter_map(hunk).collect();
     (!lines.is_empty()).then_some(lines)
 }
 
-/// The lines the new side of one hunk header names; none for a line that is no header.
 fn hunk(line: &str) -> Option<RangeInclusive<u32>> {
     let (_old, rest) = line.strip_prefix("@@ -")?.split_once(" +")?;
     let new = rest.split(' ').next()?;
@@ -126,11 +111,8 @@ fn hunk(line: &str) -> Option<RangeInclusive<u32>> {
 }
 
 impl Remembered {
-    /// The events of one report, as the crate's doc says. A payload that is no JSON object,
-    /// or names no `event`, is [`ReportError::Unreadable`]; one whose `event` the crate doc's
-    /// table does not name gives no event and no error, whatever else it holds (a recording's
-    /// `factory` line names no session); one the table names with no `sessionId` is
-    /// [`ReportError::Unreadable`].
+    /// A payload that is no JSON object or names no `event` is `Unreadable`, and so is a known
+    /// `event` with no `sessionId`; an `event` outside the known set gives nothing.
     pub(crate) fn report(&mut self, report: &Report<'_>) -> Result<Vec<Reported>, ReportError> {
         let payload = Payload::of(report)?;
         if !is_named(payload.event()) {
@@ -151,8 +133,6 @@ impl Remembered {
             .collect())
     }
 
-    /// The events of a payload of the session `session`, and what the Adapter remembers of
-    /// the session after it.
     fn events(&mut self, payload: &Payload, session: &str) -> Result<Vec<Event>, ReportError> {
         let reason = payload.text("reason");
         Ok(match payload.event() {
@@ -166,8 +146,8 @@ impl Remembered {
             "session_shutdown" => match reason {
                 Some("reload") => Vec::new(),
                 _ => {
-                    // A session pi brings back under its id, after a resume or a restart,
-                    // starts with no run open.
+                    // A session pi brings back under its id (resume, restart) starts with no run
+                    // open.
                     self.open.remove(session);
                     vec![Event::SessionEnded]
                 }
@@ -220,13 +200,10 @@ impl Remembered {
                 }],
                 _ => Vec::new(),
             },
-            // A call of the reply tool gives no event, only what it asks.
             _ => Vec::new(),
         })
     }
 
-    /// What one report asks: see the crate's doc. It remembers nothing; `folder` is not
-    /// read, since pi's delivery writes no file.
     pub(crate) fn asked(
         &self,
         folder: &Path,
@@ -235,8 +212,7 @@ impl Remembered {
         let _ = folder;
         let payload = Payload::of(report)?;
         let asks = match payload.event() {
-            // A message an extension sent carries no review; the user's does, whether pi
-            // is idle or queues it.
+            // A message an extension sent carries no review; the user's does, idle or queued.
             "input" if payload.text("source") != Some("extension") => Asks::Message,
             REPLY_EVENT => Asks::Reply(reply(&payload)?),
             _ => return Ok(None),
@@ -249,10 +225,6 @@ impl Remembered {
         }))
     }
 
-    /// The answer to a call of the reply tool, as bytes the extension reads:
-    /// `{"text": "recorded reply to <thread> (addressed|open, <n> characters)"}` for
-    /// [`Answer::Replied`], `{"error": <why>}` for [`Answer::Refused`], and nothing for
-    /// [`Answer::Allow`], which pi never asks for.
     pub(crate) fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
         let _ = asked;
         let said = match answer {
@@ -267,12 +239,10 @@ impl Remembered {
             }
             Answer::Refused { why } => json!({ "error": why }),
         };
-        // A JSON value is always written.
         serde_json::to_vec(&said).unwrap_or_default()
     }
 }
 
-/// Whether the crate's doc names the event: the ones the Adapter reads.
 fn is_named(event: &str) -> bool {
     matches!(
         event,
@@ -287,7 +257,6 @@ fn is_named(event: &str) -> bool {
     )
 }
 
-/// The step of a shell command, as the agent wrote the command.
 fn command(phase: Phase, payload: &Payload) -> Result<Event, ReportError> {
     Ok(Event::Command {
         phase,
@@ -295,7 +264,6 @@ fn command(phase: Phase, payload: &Payload) -> Result<Event, ReportError> {
     })
 }
 
-/// What the agent said to a thread, from the `arguments` of a call of the reply tool.
 fn reply(payload: &Payload) -> Result<AgentReply, ReportError> {
     let arguments = payload
         .fields

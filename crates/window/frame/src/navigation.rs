@@ -1,46 +1,6 @@
-//! The shared model of code intelligence: the Window's one way to the Navigator.
-//!
-//! A pane asks what a name is, where it is defined and who uses it, through this model, as
-//! it asks the Keeper through the others; it holds no Navigator. The model holds the
-//! Frame's end of the Navigator's port, `yaar_navigator::Port`, once the Window program
-//! connected one ([`Navigation::connect`]); until then every ask resolves to
-//! [`NavError::NotConnected`] and no state is known. A pane's test connects a port whose
-//! other end the test plays, as it plays the Keeper on a socket.
-//!
-//! What it tells the Navigator by itself, once connected and from then on:
-//! - [`yaar_navigator::Ask::Workspaces`], every workspace of `WorkspaceList` with its
-//!   repository and folder (none for one whose worktree is gone), at the connect and at
-//!   every change of the list; and [`yaar_navigator::Ask::OnScreen`], the workspace on
-//!   screen, at the connect and whenever it changes;
-//! - [`yaar_navigator::Ask::Consents`], every `Setting::ServersInRepository` of
-//!   `SettingList`, at the connect and whenever the settings change;
-//! - [`yaar_navigator::Ask::StopAfter`], the stop time of `SettingList`, at the connect only
-//!   when the user set one (the Navigator has the default of its own) and at each change of
-//!   it, so that a time set while the Navigator runs is in force at once; a setting that
-//!   tells what the list holds already tells nothing;
-//! - [`yaar_navigator::Ask::FilesChanged`], the paths of the changed files of the
-//!   workspace on screen as `WorkspaceChanges` holds them (the old path of a renamed file
-//!   too), each time it takes an answer of the Keeper (a file may change again with its
-//!   path in the list already), together with the paths the last such answer for that
-//!   workspace held, so that a file that left the list because it was put back is told
-//!   too; nothing when there are no paths, nothing after a refusal, and nothing at the
-//!   connect (a server starts from the files on disk, so a new Navigator holds nothing
-//!   stale), though the list the changes model holds then, when it holds one, is the last
-//!   answer the next one is set against; a path may be told again and may no longer exist;
-//! - for each [`yaar_navigator::Told::ExportWanted`], `Request::ExportVersion` to the
-//!   Keeper through the link, and the answer handed back as
-//!   [`yaar_navigator::Ask::Exported`]: `failed` none for `Reply::Done`, else the refusal
-//!   or the loss of the link as a sentence.
-//!
-//! [`Navigation::disconnect`] lets the Navigator go, as the app's quit does.
-//!
-//! What it keeps of what the Navigator tells: the languages, and the newest list of servers
-//! ([`Navigation::servers`]), each change of which notifies the model's observers. Each
-//! answer resolves the [`Asking`] of its id.
-//!
-//! Facts and answers of the Keeper arrive in no fixed order (see the module doc of
-//! `models`); what this model tells the Navigator is read from the other models when they
-//! notify, so it is never older than they are.
+//! The Window's one way to the Navigator: until the Window program connects one every ask resolves
+//! to [`NavError::NotConnected`]. `Ask::StopAfter` goes at connect only when the user set a time,
+//! since the Navigator has a default of its own.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -59,12 +19,9 @@ use crate::link_model::{AskError, KeeperLink};
 use crate::models::{WorkspaceChanges, WorkspaceList};
 use crate::settings::SettingList;
 
-/// Why an ask brought no answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavError {
-    /// No Navigator is connected.
     NotConnected,
-    /// The Navigator ended before it answered.
     Gone,
 }
 
@@ -79,7 +36,6 @@ impl std::fmt::Display for NavError {
 
 impl std::error::Error for NavError {}
 
-/// Where the answer to one ask goes, by the kind of answer the ask takes.
 enum Waiter {
     Hover(async_channel::Sender<Answered<Option<String>>>),
     Definition(async_channel::Sender<Answered<Vec<Location>>>),
@@ -87,34 +43,26 @@ enum Waiter {
     Open(async_channel::Sender<Result<OpenedFile, String>>),
 }
 
-/// The asks of one connection that wait for their answer. An ask leaves it when it is
-/// answered, and when its [`Asking`] is dropped; clearing it drops every sender, so that
-/// each waiting task resolves to [`NavError::Gone`].
 type Waiting = Rc<RefCell<HashMap<AskId, Waiter>>>;
 
-/// What an [`Asking`] needs to tell the Navigator that nobody waits any more.
 struct Withdraw {
     asks: async_channel::Sender<Ask>,
     waiting: Waiting,
 }
 
-/// An ask on its way: a future of its answer. Dropped before the answer came, it tells the
-/// Navigator [`yaar_navigator::Ask::Cancel`], so that the reviewer who moved on leaves no
-/// work behind.
+/// Dropped before the answer came, it tells the Navigator [`yaar_navigator::Ask::Cancel`], so that
+/// the reviewer who moved on leaves no work behind.
 pub struct Asking<T> {
     id: AskId,
     task: Task<Result<T, NavError>>,
-    /// None for an ask that was never sent.
     withdraw: Option<Withdraw>,
 }
 
 impl<T> Asking<T> {
-    /// The ask's id, as the Navigator sees it.
     pub fn id(&self) -> AskId {
         self.id
     }
 
-    /// An ask that went nowhere, resolved to `error`.
     fn failed(id: AskId, error: NavError) -> Self {
         Self {
             id,
@@ -129,10 +77,7 @@ impl<T> Drop for Asking<T> {
         let Some(Withdraw { asks, waiting }) = &self.withdraw else {
             return;
         };
-        // An ask that was answered, or whose connection ended, left the table: nothing is
-        // waited for, so nothing is cancelled.
         if waiting.borrow_mut().remove(&self.id).is_some() {
-            // A Navigator that ended has no work left to cancel.
             let _ = asks.try_send(Ask::Cancel { id: self.id });
         }
     }
@@ -149,42 +94,30 @@ impl<T: Unpin + 'static> std::future::Future for Asking<T> {
     }
 }
 
-/// What the model keeps of the Navigator it is connected to, and of what it told it.
 struct Connection {
     asks: async_channel::Sender<Ask>,
     waiting: Waiting,
-    /// Reads what the Navigator tells. Dropped with the connection.
     _reading: Task<()>,
-    /// False once the Navigator's channel closed: it ended.
     alive: bool,
-    /// What the Navigator was last told, none before the first telling: a change is told
-    /// once, and an observer that fires for another reason tells nothing.
     told_workspaces: Option<Vec<WorkspaceRoot>>,
     told_on_screen: Option<Option<WorkspaceId>>,
     told_consents: Option<Vec<RepositoryConsent>>,
-    /// The stop time the Navigator runs on because it was told, none while it runs on its
-    /// own default: a time is told only when it is not this.
     told_stop_after: Option<Duration>,
-    /// The paths of the last answer for the changes, by workspace.
     told_changes: HashMap<WorkspaceId, BTreeSet<PathBuf>>,
 }
 
-/// The Window's one way to the Navigator.
 pub struct Navigation {
     link: Entity<KeeperLink>,
     workspaces: Entity<WorkspaceList>,
     changes: Entity<WorkspaceChanges>,
     settings: Entity<SettingList>,
     connection: Option<Connection>,
-    /// The id of the last ask made over any connection, so that no id is used twice.
     last_ask: u64,
     languages: Vec<Language>,
     servers: Vec<ServerState>,
 }
 
 impl Navigation {
-    /// The model of one window, with no Navigator connected: it observes `workspaces`,
-    /// `changes` and `settings`, and asks the Keeper through `link`.
     pub fn new(
         link: Entity<KeeperLink>,
         workspaces: Entity<WorkspaceList>,
@@ -217,19 +150,14 @@ impl Navigation {
         }
     }
 
-    /// Connects the Frame's end of a Navigator's port: from now on the model tells it what
-    /// the module doc says, at once and then at each change, and reads what it tells. A
-    /// second connect replaces the first, whose asks waiting resolve to
-    /// [`NavError::Gone`].
     pub fn connect(&mut self, port: Port, cx: &mut Context<Self>) {
         if let Some(old) = self.connection.take() {
-            // Each sender goes with its entry, so each waiting task resolves.
             old.waiting.borrow_mut().clear();
         }
         let Port { asks, told } = port;
-        // The list the changes model holds is the last answer of the Keeper this Navigator
-        // is owed: it is not told, since a server starts from the files on disk, but the
-        // next answer is set against it, so that a file put back since is told changed.
+        // The changes model's list is the last Keeper answer this Navigator is owed: not told (a
+        // server starts from the files on disk), but the next answer is set against it, so a file
+        // put back is told changed.
         let mut told_changes = HashMap::new();
         let held = self.changes.read(cx);
         if let Some(taken) = held.changes() {
@@ -259,51 +187,38 @@ impl Navigation {
             told_stop_after: None,
             told_changes,
         });
-        // What the last Navigator told is no news of this one.
         self.forget(cx);
         self.tell_workspaces(cx);
         self.tell_consents(cx);
         self.tell_stop_after(cx);
-        // Whether a Navigator is connected changed, as far as an observer can tell.
         cx.notify();
     }
 
-    /// Lets go of the Navigator, as the quit of the app does: the channel of asks is
-    /// closed, for every sender made from it, so that the Navigator, which ends when no
-    /// sender is left, does not wait for an ask on its way or an export the Keeper has not
-    /// answered, each of which holds one; every ask still waiting resolves to
-    /// [`NavError::Gone`], and the model shows no Navigator and nothing it told. The model
-    /// may be connected again.
+    /// Closes the channel for every sender made from it: the Navigator ends when no sender is left,
+    /// and an ask on its way or an export the Keeper has not answered holds one.
     pub fn disconnect(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.take() else {
             return;
         };
         // Closing is for every clone of the sender; dropping this one would not be.
         connection.asks.close();
-        // Each sender goes with its entry, so each waiting task resolves.
         connection.waiting.borrow_mut().clear();
         self.forget(cx);
-        // Whether a Navigator is connected changed, as far as an observer can tell.
         cx.notify();
     }
 
-    /// Whether a Navigator is connected. A change of the answer, at a connect and at the
-    /// end of the Navigator, notifies the model's observers.
     pub fn is_connected(&self) -> bool {
         self.alive().is_some()
     }
 
-    /// Every language the Navigator's registry knows, as it told them.
     pub fn languages(&self) -> &[Language] {
         &self.languages
     }
 
-    /// Every server, as the Navigator last told them.
     pub fn servers(&self) -> &[ServerState] {
         &self.servers
     }
 
-    /// The language of a file, by its extension; none for a file no row knows.
     pub fn language_of(&self, path: &Path) -> Option<&Language> {
         let extension = path.extension()?.to_str()?;
         self.languages
@@ -311,9 +226,7 @@ impl Navigation {
             .find(|language| language.extensions.iter().any(|known| known == extension))
     }
 
-    /// The state of the server for the file `path` of `workspace`: of its old side of
-    /// `old_side`, or of the files on disk for none. None for a file of no known language,
-    /// and while the Navigator told no state for that server.
+    /// None for a file of no known language, and while the Navigator told no state for that server.
     pub fn state_for(
         &self,
         workspace: &WorkspaceId,
@@ -328,7 +241,6 @@ impl Navigation {
         })
     }
 
-    /// Asks what the server reports for the name at `place`.
     pub fn hover(
         &mut self,
         place: Place,
@@ -337,7 +249,6 @@ impl Navigation {
         self.begin(|id| Ask::Hover { id, place }, Waiter::Hover, cx)
     }
 
-    /// Asks where the name at `place` is defined.
     pub fn definition(
         &mut self,
         place: Place,
@@ -346,7 +257,6 @@ impl Navigation {
         self.begin(|id| Ask::Definition { id, place }, Waiter::Definition, cx)
     }
 
-    /// Asks for every reference to the name at `place`.
     pub fn references(
         &mut self,
         place: Place,
@@ -355,7 +265,6 @@ impl Navigation {
         self.begin(|id| Ask::References { id, place }, Waiter::References, cx)
     }
 
-    /// Asks for the file of `location`, read, for the file view.
     pub fn open(
         &mut self,
         location: Location,
@@ -364,21 +273,18 @@ impl Navigation {
         self.begin(|id| Ask::Open { id, location }, Waiter::Open, cx)
     }
 
-    /// The user accepted the offer to download the server of `language`.
     pub fn download(&mut self, language: &str) {
         self.say(Ask::Download {
             language: language.to_owned(),
         });
     }
 
-    /// The user asked for the update of the server of `language`.
     pub fn update(&mut self, language: &str) {
         self.say(Ask::Update {
             language: language.to_owned(),
         });
     }
 
-    /// The old side of the change on screen in `workspace` is now `version`, or none.
     pub fn old_side_shown(&mut self, workspace: &WorkspaceId, version: Option<String>) {
         self.say(Ask::OldSide {
             workspace: workspace.clone(),
@@ -386,9 +292,6 @@ impl Navigation {
         });
     }
 
-    /// The user's answer on the servers inside `repository`: set as
-    /// `Setting::ServersInRepository` through `SettingList::set`, which the Keeper keeps
-    /// and tells every Window; the Navigator hears it from the settings.
     pub fn answer_consent(
         &mut self,
         repository: RepositoryId,
@@ -406,8 +309,6 @@ impl Navigation {
         });
     }
 
-    /// The answer the user gave on the servers inside `repository`, as the settings hold
-    /// it; none while the question waits.
     pub fn consent(&self, repository: &RepositoryId, cx: &App) -> Option<bool> {
         self.settings
             .read(cx)
@@ -422,22 +323,16 @@ impl Navigation {
             })
     }
 
-    /// The connection, while its Navigator is there.
     fn alive(&self) -> Option<&Connection> {
         self.connection.as_ref().filter(|c| c.alive)
     }
 
-    /// Sends the Navigator an ask nobody waits for. Nothing is sent while none is
-    /// connected; what the model tells by itself is told in full at the connect.
     fn say(&mut self, ask: Ask) {
         if let Some(connection) = self.alive() {
-            // A Navigator that ended has no one to tell; the reader says so.
             let _ = connection.asks.try_send(ask);
         }
     }
 
-    /// Sends an ask that wants an answer, with a fresh id, and gives the [`Asking`] that
-    /// waits for it.
     fn begin<T: 'static>(
         &mut self,
         ask: impl FnOnce(AskId) -> Ask,
@@ -450,7 +345,6 @@ impl Navigation {
             return Asking::failed(id, NavError::NotConnected);
         };
         let (answer, answered) = async_channel::bounded(1);
-        // Entered before the ask leaves: the answer may come at once.
         connection.waiting.borrow_mut().insert(id, waiter(answer));
         if connection.asks.try_send(ask(id)).is_err() {
             connection.waiting.borrow_mut().remove(&id);
@@ -467,7 +361,6 @@ impl Navigation {
         }
     }
 
-    /// Takes what the Navigator told.
     fn take(&mut self, told: Told, cx: &mut Context<Self>) {
         match told {
             Told::Languages(languages) => {
@@ -502,9 +395,8 @@ impl Navigation {
         }
     }
 
-    /// Hands an answer to the ask it is for. `give` says whether the waiter takes an
-    /// answer of this kind: one that is not the kind the ask takes is no answer to it, and
-    /// the ask goes on waiting.
+    /// `give` says whether the waiter takes an answer of this kind: one that is not the kind the
+    /// ask takes is no answer to it, and the ask goes on waiting.
     fn answer(&mut self, id: AskId, give: impl FnOnce(&Waiter) -> bool) {
         let Some(connection) = &self.connection else {
             return;
@@ -515,20 +407,17 @@ impl Navigation {
         }
     }
 
-    /// The Navigator's channel closed: it ended. What waits for it is told so, and what it
-    /// told is no longer known.
     fn ended(&mut self, cx: &mut Context<Self>) {
         if let Some(connection) = &mut self.connection {
             connection.alive = false;
             connection.waiting.borrow_mut().clear();
         }
         self.forget(cx);
-        // `forget` notifies only for what there was to forget, and a Navigator that told
-        // no server and no language still was connected.
+        // `forget` notifies only for what there was to forget; a Navigator that told no server and
+        // no language still was connected.
         cx.notify();
     }
 
-    /// Drops the languages and the servers a Navigator told.
     fn forget(&mut self, cx: &mut Context<Self>) {
         if !self.languages.is_empty() || !self.servers.is_empty() {
             self.languages.clear();
@@ -537,8 +426,6 @@ impl Navigation {
         }
     }
 
-    /// Asks the Keeper to write the version the Navigator wants, and tells the Navigator
-    /// how it went.
     fn export(&mut self, wanted: ExportAsk, cx: &mut Context<Self>) {
         let Some(asks) = self.alive().map(|connection| connection.asks.clone()) else {
             return;
@@ -556,7 +443,6 @@ impl Navigation {
                 Ok(_) => Some(AskError::Unexpected.to_string()),
                 Err(error) => Some(error.to_string()),
             };
-            // A Navigator that ended is told nothing.
             let _ = asks.try_send(Ask::Exported {
                 asked: wanted,
                 failed,
@@ -565,8 +451,6 @@ impl Navigation {
         .detach();
     }
 
-    /// Tells the Navigator the workspaces, then the one on screen, each when it is not
-    /// what it was last told.
     fn tell_workspaces(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected() {
             return;
@@ -599,8 +483,6 @@ impl Navigation {
         }
     }
 
-    /// Tells the Navigator the answers on the servers inside repositories, when they are
-    /// not what it was last told.
     fn tell_consents(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected() {
             return;
@@ -630,10 +512,6 @@ impl Navigation {
         }
     }
 
-    /// Tells the Navigator the stop time the user set, when it is not what it runs on: at
-    /// the connect only a time that is set, since the Navigator has the default of its own;
-    /// afterwards each change. A time that went back to none, as when the Keeper refused it,
-    /// is told as the default the settings give.
     fn tell_stop_after(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected() {
             return;
@@ -649,15 +527,13 @@ impl Navigation {
         }
     }
 
-    /// Tells the Navigator which files changed, when the changes of the workspace on
-    /// screen were just taken from an answer of the Keeper.
     fn tell_files_changed(&mut self, cx: &mut Context<Self>) {
         if !self.is_connected() {
             return;
         }
         let changes = self.changes.read(cx);
-        // While an answer is awaited, or after one that was refused, the model shows the
-        // last list again: that is not news.
+        // While an answer is awaited, or after one that was refused, the model shows the last list
+        // again: that is not news.
         if changes.is_loading() || changes.refusal().is_some() {
             return;
         }
@@ -682,8 +558,8 @@ impl Navigation {
     }
 }
 
-/// The paths a list of changes names: each file's, and the old path of a renamed file as
-/// well, which changed on disk too: it is gone, and a server still holds what it had.
+/// Each file's path and the old path of a renamed file: that one changed on disk too, and a server
+/// still holds what it had.
 fn changed_paths(changes: &Changes) -> BTreeSet<PathBuf> {
     changes
         .files

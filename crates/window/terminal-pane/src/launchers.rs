@@ -1,38 +1,5 @@
-//! The launchers next to the shell, and the controls that resume the sessions a restart cut
-//! off. Built by the package "the terminal pane" of slice 7.
-//!
-//! A line at the top of the pane, `terminal-launchers`, offers a new shell
-//! (`terminal-launcher-shell`, as [`crate::NewTerminal`] opens one) and, next to it, one
-//! launcher for each agent CLI the Keeper names (`yaar_frame::AgentList::clis`, in that
-//! order), `terminal-launcher-<agent>` with the CLI's title. A click on one opens a terminal
-//! for the workspace on screen that runs `yaar_link::Program::Agent` of that CLI, as
-//! [`crate::NewTerminal`] opens a shell: the same request, the same size, the same focus
-//! and notice. One launcher is the chosen one, the first until the user chooses another,
-//! drawn with `terminal-launcher-chosen-<agent>` over it: [`crate::NewAgentTerminal`]
-//! opens the chosen CLI's, and [`crate::NextAgentCli`] makes the next one the chosen one,
-//! after the last the first. With no CLI named, neither key opens anything, and the notice
-//! says so.
-//!
-//! Under it, while the workspace on screen has sessions the agents model lists as
-//! resumable (`yaar_link::Session::resumable`), a line `terminal-resume` offers a control
-//! for each, in the order the model lists them, `terminal-resume-<n>`, n counted from 0,
-//! with the words `Resume <the session's title>`. A click opens a terminal that runs
-//! `yaar_link::Program::Resume` of that session, once: while the pane holds a resume it opened
-//! for the session, another click asks nothing. The pane lets go of it when the session is
-//! listed resumable no more, and when the terminal it opened ends, which is all the pane
-//! hears of a resumed program that fails before it reports. [`crate::ResumeAgent`] does the
-//! same for
-//! the first resumable session of the workspace on screen the pane has not opened a resume
-//! for since it was listed: a second press reaches the second session, not the first again.
-//! The line goes with the last resumable session, as the Keeper tells the agents again
-//! when a resumed session reports.
-//!
-//! The two lines are a row of their own at the top of the pane, above the notice, the line
-//! that says how to open a terminal and the terminals, so that no terminal's first rows lie
-//! under them. The room the terminals are laid out in, which the pane's canvas measures and
-//! a terminal attached before any is laid out is sized from, is what lies below that row:
-//! every terminal has the height of the pane less the row, and the resume line, which comes
-//! and goes, changes it as a window made smaller does.
+//! The launchers next to the shell, one per agent CLI the Keeper names, and the controls that
+//! resume the sessions a restart cut off.
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
@@ -41,55 +8,35 @@ use yaar_link::{AgentCli, Fact, Program, Reply, Request, Session, SessionId, Ter
 
 use crate::{NewAgentTerminal, NextAgentCli, ResumeAgent, TerminalPane};
 
-/// The height of each of the two lines.
 const LINE: Pixels = px(28.);
 
-/// What the notice says when New Agent Terminal finds no CLI to start.
 const NO_CLI: &str = "The Keeper names no agent CLI to start.";
 
-/// What the notice says when Resume Agent finds no session to resume.
 const NOTHING_TO_RESUME: &str = "No session of this workspace is left to resume.";
 
-/// A resume the pane asked for.
 struct Resume {
-    /// The session it brings back.
     session: SessionId,
-    /// The terminal the Keeper opened for it, once the pane has the answer.
     terminal: Option<TerminalId>,
 }
 
-/// What the pane keeps of its launchers: the resumes it asked for. Which CLI is the chosen
-/// one is the Frame's to keep ([`yaar_frame::AgentList::chosen_cli`]), as the review pane
-/// and a worktree made with an agent read it too.
+/// The chosen CLI is the Frame's to keep: other panes read it too.
 #[derive(Default)]
 pub(crate) struct Launchers {
-    /// The resumes the pane asked for, until their session is listed resumable no more or
-    /// their terminal ends.
     resumed: Vec<Resume>,
-    /// Terminals that ended while a resume still waited for its answer: a program that
-    /// fails at once can end before the pane takes the answer that names its terminal.
     ended: Vec<TerminalId>,
-    /// Keeps `resumed` in step with the agents model, once there is something in it.
     watching: Option<Subscription>,
-    /// Keeps `resumed` in step with the terminals that end, as long as `watching` does.
     hearing: Option<Subscription>,
 }
 
 impl TerminalPane {
-    /// The launchers the pane offers next to the shell: one for each agent CLI the Keeper
-    /// names, in that order.
     pub fn launchers(&self, cx: &App) -> Vec<AgentCli> {
         self.models.agents.read(cx).clis().to_vec()
     }
 
-    /// The CLI [`crate::NewAgentTerminal`] opens now; none while the Keeper names none. The
-    /// choice is the Window's one, the Frame's [`yaar_frame::AgentList::chosen_cli`].
     pub fn chosen_cli(&self, cx: &App) -> Option<AgentCli> {
         self.models.agents.read(cx).chosen_cli().cloned()
     }
 
-    /// The sessions of the workspace on screen the pane offers to resume, in the order the
-    /// agents model lists them.
     pub fn resumable(&self, cx: &App) -> Vec<SessionId> {
         self.resumable_sessions(cx)
             .into_iter()
@@ -97,7 +44,6 @@ impl TerminalPane {
             .collect()
     }
 
-    /// The sessions of the workspace on screen the agents model lists as resumable.
     fn resumable_sessions(&self, cx: &App) -> Vec<Session> {
         let Some(workspace) = self.models.workspaces.read(cx).selected() else {
             return Vec::new();
@@ -117,8 +63,6 @@ impl TerminalPane {
             .unwrap_or_default()
     }
 
-    /// Forgets the resumes opened for sessions the agents model lists resumable no more,
-    /// so that a session listed again, as after another restart, is offered again.
     fn forget_resumed(&mut self, cx: &App) {
         let agents = self.models.agents.read(cx);
         self.launchers.resumed.retain(|resume| {
@@ -128,7 +72,6 @@ impl TerminalPane {
         });
     }
 
-    /// Whether the pane holds a resume it asked for `session`.
     fn holds(&self, session: &SessionId) -> bool {
         self.launchers
             .resumed
@@ -136,12 +79,9 @@ impl TerminalPane {
             .any(|resume| resume.session == *session)
     }
 
-    /// Starts forgetting resumes with every change of the agents model, rather than with
-    /// every frame: a window that is not drawn while the Keeper tells a session resumable
-    /// no more, and then resumable again, would never see it not resumable. And with every
-    /// terminal that ends: the Keeper clears a session's resumable mark only when the
-    /// resumed CLI reports it, so a CLI that fails before that leaves the session listed
-    /// and its control drawn, which has to ask again.
+    /// Forgets held resumes on every change of the agents model, not every frame: an undrawn
+    /// window would miss a session that stopped being resumable. Also when a terminal ends: the
+    /// Keeper clears the resumable mark only when the resumed CLI reports.
     fn watch_agents(&mut self, cx: &mut Context<Self>) {
         if self.launchers.watching.is_none() {
             self.launchers.watching = Some(cx.observe(&self.models.agents, |pane, _, cx| {
@@ -156,8 +96,6 @@ impl TerminalPane {
         }
     }
 
-    /// Lets go of the resume whose terminal ended; a terminal that ends before its resume
-    /// has an answer is remembered for the answer.
     fn resumed_ended(&mut self, fact: &Fact) {
         let Fact::TerminalEnded { terminal, .. } = fact else {
             return;
@@ -170,9 +108,6 @@ impl TerminalPane {
         }
     }
 
-    /// Takes the Keeper's answer to the question for the resume of `session`: the terminal
-    /// it opened is the one whose end lets the resume go, or none was opened and the
-    /// session can be tried again.
     fn resume_answered(&mut self, session: &SessionId, answer: &Result<Reply, AskError>) {
         let opened = match answer {
             Ok(Reply::TerminalOpened { terminal }) => Some(terminal),
@@ -210,10 +145,6 @@ impl TerminalPane {
         }
     }
 
-    /// Asks the Keeper for a new terminal for the workspace on screen that runs `program`,
-    /// as [`crate::NewTerminal`] asks for a shell: at the size the pane lays terminals out
-    /// at, shown and focused once the Keeper answers, its refusal the notice. Whether a
-    /// question was asked: with no workspace on screen there is nothing to open one in.
     fn launch(&mut self, program: Program, cx: &mut Context<Self>) -> bool {
         let Some(workspace) = self.models.workspaces.read(cx).selected().cloned() else {
             return false;
@@ -228,9 +159,7 @@ impl TerminalPane {
             .models
             .link
             .update(cx, |link, cx| link.ask(request, cx));
-        // Detached, as the question for a shell is: a task that is dropped is cancelled,
-        // and its answer lost. The pane is held weakly, so a pane that is gone takes no
-        // answer.
+        // Detached: a dropped task is cancelled.
         cx.spawn(async move |pane, cx| {
             let answer = asked.await;
             pane.update(cx, |pane, cx| {
@@ -246,12 +175,9 @@ impl TerminalPane {
         true
     }
 
-    /// Asks for the terminal that resumes `session`, and remembers that it was asked for.
     fn resume(&mut self, session: SessionId, cx: &mut Context<Self>) {
-        // The Keeper refuses a session only once it runs, which is later than the answer
-        // to this question: a second ask while the first stands would open a second
-        // terminal on one session. A refusal forgets it, so that a retry goes through, and
-        // so does the end of the terminal it opened.
+        // The Keeper refuses a session only once it runs, later than the answer: a second ask
+        // meanwhile would open a second terminal on one session.
         if self.holds(&session) {
             return;
         }
@@ -267,8 +193,6 @@ impl TerminalPane {
         }
     }
 
-    /// One control of a line: a button that does `act` when it is clicked, under the
-    /// selector `selector`.
     fn control(
         &self,
         selector: String,
@@ -278,8 +202,7 @@ impl TerminalPane {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let theme = cx.theme();
-        // The mark of the chosen launcher is a ring over the control, which takes no click
-        // from it.
+        // The mark of the chosen launcher is a ring over the control, which takes no click from it.
         let mark = chosen.map(|selector| {
             div()
                 .debug_selector(move || selector.clone())
@@ -307,7 +230,6 @@ impl TerminalPane {
             .on_click(cx.listener(move |pane, _: &ClickEvent, _, cx| act(pane, cx)))
     }
 
-    /// A line of the top row, `selector` its name, with `controls` in it.
     fn line(&self, selector: &'static str, cx: &App) -> Div {
         let theme = cx.theme();
         div()
@@ -325,8 +247,6 @@ impl TerminalPane {
             .border_color(theme.border)
     }
 
-    /// The two lines of the module's doc, as the pane's top row (`terminal-launchers`, and
-    /// `terminal-resume` under it while there is a session to resume).
     pub(crate) fn render_launchers(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let chosen = self.chosen_cli(cx);
         let mut launchers = self.line("terminal-launchers", cx).child(self.control(
@@ -383,8 +303,6 @@ impl TerminalPane {
         )
     }
 
-    /// What [`crate::NewAgentTerminal`] does: opens the chosen CLI's launcher, or says
-    /// that the Keeper names none.
     pub(crate) fn new_agent_terminal(
         &mut self,
         _: &NewAgentTerminal,
@@ -402,8 +320,6 @@ impl TerminalPane {
         }
     }
 
-    /// What [`crate::NextAgentCli`] does: the next CLI is the chosen one, the first after
-    /// the last; nothing while the Keeper names none.
     pub(crate) fn next_agent_cli(
         &mut self,
         _: &NextAgentCli,
@@ -413,13 +329,8 @@ impl TerminalPane {
         self.models
             .agents
             .update(cx, |agents, cx| agents.choose_next_cli(cx));
-        // The pane draws the mark of the chosen launcher from the model, which notifies the
-        // pane when the choice moves.
     }
 
-    /// What [`crate::ResumeAgent`] does: resumes the first session of the workspace on
-    /// screen that no resume was opened for since it was listed, or says that none is
-    /// left.
     pub(crate) fn resume_agent(&mut self, _: &ResumeAgent, _: &mut Window, cx: &mut Context<Self>) {
         let next = self
             .resumable_sessions(cx)

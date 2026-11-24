@@ -1,13 +1,3 @@
-//! What the two programs, and the app's pieces inside an agent CLI, say about agents: what
-//! a piece reports, the sessions with their states, the turns with their steps, and the
-//! history of a worktree with the changes no agent made.
-//!
-//! A piece of the app inside an agent CLI, as the hook program of Claude Code, speaks the
-//! Link too: it says hello, sends one [`crate::Request::Report`] with what the CLI handed
-//! it, waits for the answer and leaves. The Keeper hands the report to the Adapter of that
-//! CLI, which turns it into the app's own events; a Window hears only what follows from
-//! them, as facts.
-
 use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
@@ -20,262 +10,164 @@ use crate::workspace::{
     write_commit,
 };
 
-/// What a piece of the app inside an agent CLI reports, as the CLI handed it to the piece.
-/// The Keeper reads it through the Adapter named by `agent`; the Link carries it as it
-/// came, so that a new CLI needs no new message.
+/// What a piece of the app inside an agent CLI reports, as the CLI handed it. The Keeper reads
+/// it through the Adapter named by `agent`, so a new CLI needs no new message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentReport {
-    /// The Adapter the report is for, by its name: `claude` for Claude Code.
     pub agent: String,
-    /// The terminal of the app the CLI runs in, as its environment names it; none for a
-    /// CLI that runs outside the app's terminals.
+    /// None for a CLI that runs outside the app's terminals.
     pub terminal: Option<TerminalId>,
-    /// The process of the agent CLI, as the piece found it: for the hook program of
-    /// Claude Code, its parent.
+    /// The agent CLI's process: for Claude Code's hook program, its parent.
     pub pid: u32,
-    /// What the CLI handed its piece, byte for byte: for Claude Code the input of the hook.
     pub payload: Vec<u8>,
 }
 
-/// What an agent session is doing, as the sidebar and the agent's terminal show it.
-///
-/// The order of the variants is the order in which a workspace with several sessions
-/// shows them: the first that holds for any session is the workspace's. Idle comes last:
-/// a workspace shows it only when every session is idle, so that the four states the
-/// sidebar marks keep their own order whatever else runs.
+/// Variant order is the display priority: a workspace shows the first state any session holds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SessionState {
-    /// The agent waits at a permission prompt for the user's answer.
     WaitsForPermission,
-    /// The agent has finished a turn, and the reviewer has not marked the change reviewed
-    /// since.
     Unreviewed,
-    /// The agent works on a turn.
     Works,
-    /// The session has ended, or its process is gone; its review stays.
     NotRunning,
-    /// The agent runs and waits for the user's next message, with nothing unreviewed.
     Idle,
 }
 
-/// One session of an agent CLI, as the Keeper knows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Session {
-    /// Its id.
     pub id: SessionId,
-    /// The Adapter of its CLI, by its name: `claude`.
     pub agent: String,
-    /// The name the Window shows for it: the CLI's name and the number of the session
-    /// among that CLI's sessions in the workspace, `Claude Code 2`.
     pub title: String,
-    /// The workspace it works in.
     pub workspace: WorkspaceId,
-    /// The terminal it runs in; none once it runs no more, or when it reported from
-    /// outside the app's terminals.
+    /// None once it runs no more, or when it reported from outside the app's terminals.
     pub terminal: Option<TerminalId>,
-    /// What it is doing.
     pub state: SessionState,
-    /// Its turn that runs, from the turn's start to its end; none between turns. A
-    /// Window that follows the agent learns the turn's id here as it starts.
     pub turn: Option<TurnId>,
-    /// The review that belongs to it; none once the next session of its CLI took that
-    /// review over.
+    /// None once the next session of its CLI took the review over.
     pub review: Option<ReviewId>,
-    /// What of that review goes with the user's next message to the session: the review,
-    /// or one thread of it alone; none while nothing is attached. The agent's terminal
-    /// shows it, with the controls that view and detach it.
     pub attached: Option<Attachment>,
-    /// Whether the turn that runs began with a message of the user: false for a turn the
-    /// CLI started by itself, as Claude Code does when a background task ends, and while
-    /// no turn runs. Only a message of the user switches the review pane to Flow.
+    /// False for a turn the CLI started itself (a background task ended) and while no turn runs.
+    /// Only a user message switches the review pane to Flow.
     pub turn_from_user: bool,
-    /// Whether the session ran when its Keeper stopped, as at a restart of the machine,
-    /// and has not run since: the Window offers to resume it, with its CLI's own command
-    /// for bringing a session back.
+    /// True when it ran as its Keeper stopped and has not run since: the Window offers to resume
+    /// it.
     pub resumable: bool,
 }
 
-/// An agent CLI the app supports, as the Window offers to start it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentCli {
-    /// Its Adapter, by its name: `claude`. A launcher of it is
-    /// [`crate::Program::Agent`] or [`crate::Program::AgentFor`] with this name.
     pub agent: String,
-    /// The name a person reads: `Claude Code`.
     pub title: String,
 }
 
-/// What the user said when an Adapter asked leave to write into the user's own settings
-/// of its CLI, as the Keeper keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConsentAnswer {
-    /// Not asked yet, or asked and not answered: the Window shows the question.
     NotAsked,
-    /// Yes: the Adapter's entry is in the CLI's settings.
     Yes,
-    /// No: the app writes nothing into the CLI's settings, and takes out what it wrote.
+    /// The app writes nothing into the CLI's settings and removes what it wrote.
     No,
 }
 
-/// One Adapter that writes into the user's own settings of its CLI only with the user's
-/// leave, and how that stands. Only an Adapter that needs leave, and whose CLI is
-/// installed, is listed.
+/// An Adapter that writes into its CLI's settings only with the user's leave, and how that
+/// stands. Only one that needs leave and whose CLI is installed is listed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Consent {
-    /// The Adapter, by its name: `pi`.
     pub agent: String,
-    /// What the Window asks the user, in the Adapter's words: what the app will write and
-    /// where, and that the answer can be changed. The Window shows it as it is.
     pub question: String,
-    /// What the user said.
     pub answer: ConsentAnswer,
-    /// What went wrong the last time the app looked at the CLI's settings or changed them,
-    /// in a sentence the Window shows as it is: a settings file the app cannot read as the
-    /// CLI writes it, which the app then left as it was. None when nothing went wrong.
     pub problem: Option<String>,
 }
 
-/// The agent sessions of one workspace, and the state the workspace shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceAgents {
-    /// The workspace.
     pub workspace: WorkspaceId,
-    /// The state the sidebar shows for it: the first of [`SessionState`]'s order that
-    /// holds for any of its sessions; none when no session of a supported agent CLI ever
-    /// reported in it.
     pub shown: Option<SessionState>,
-    /// Its sessions: those that run, and those that ended and still hold a review, in the
-    /// order they started.
+    /// Running sessions and ended ones that still hold a review, in start order.
     pub sessions: Vec<Session>,
 }
 
-/// One step of a turn: what the agent read, changed or ran, in the order it happened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Step {
-    /// The agent read a file with its own tool.
     Read {
-        /// The path, relative to the folder of the worktree when it lies inside it,
-        /// absolute otherwise.
+        /// Relative to the worktree folder when inside it, absolute otherwise.
         path: PathBuf,
     },
-    /// The agent changed a file with its edit tool.
     Edit {
-        /// The path, as for [`Step::Read`].
         path: PathBuf,
-        /// The lines of the file after the edit that it changed, numbered from 1, in
-        /// order; none where the CLI did not say.
+        /// The lines it changed, in the file after the edit, from 1, in order; None where the CLI
+        /// did not say.
         lines: Option<Vec<RangeInclusive<u32>>>,
     },
-    /// The agent wrote a file whole with its write tool, a new file among them.
     Write {
-        /// The path, as for [`Step::Read`].
         path: PathBuf,
     },
-    /// The agent ran a shell command. The files it wrote are not named here: the watcher
-    /// of the worktree sees them.
+    /// The files it wrote are not named: the worktree watcher sees them.
     Command {
-        /// The command, as the agent wrote it.
         command: String,
     },
 }
 
-/// How a turn ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TurnEnd {
-    /// The agent finished its answer.
     Finished,
-    /// The user interrupted the turn, or denied a permission the turn waited for.
+    /// The user interrupted the turn, or denied a permission it waited for.
     Interrupted,
 }
 
-/// One turn of a session, with its steps.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Turn {
-    /// Its id.
     pub id: TurnId,
-    /// The session it belongs to.
     pub session: SessionId,
-    /// Its number among the turns of the session, from 1.
+    /// Its number among the session's turns, from 1.
     pub number: u32,
-    /// How it ended; none while it runs.
     pub ended: Option<TurnEnd>,
-    /// The state the turn's change counts from, by its full id: the newest state of the
-    /// worktree recorded before the turn started, which the live diff of Flow compares
-    /// with the files on disk while the turn runs, and with [`Turn::state`] once it ended.
-    /// A turn that started while the state of the turn before was still being recorded
-    /// counts from that state: none until it is kept, which is before the
-    /// [`crate::Fact::TurnEnded`] of the turn before is told, so a Window that hears that
-    /// fact and asks again reads it. None where the worktree had no recorded state then:
-    /// the change then counts from the commit checked out.
+    /// Full id of the newest state recorded before the turn started, which its change counts from.
+    /// None while the previous turn's state is still being recorded (ask again after that turn's
+    /// `Fact::TurnEnded`), or when nothing is recorded: then it counts from the checked-out commit.
     pub start: Option<String>,
-    /// The state of the worktree recorded when it ended, by its full id; none while it
-    /// runs, and when the recording failed.
+    /// Full id of the state recorded at its end; None while it runs or when recording failed.
     pub state: Option<String>,
-    /// Its steps, in the order they happened.
     pub steps: Vec<Step>,
 }
 
-/// One entry of the history of a worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HistoryEntry {
-    /// A commit of the branch.
     Commit(Commit),
-    /// A turn of an agent that ended, with the state recorded at its end.
     Turn {
-        /// The turn.
         turn: TurnId,
-        /// Its session.
         session: SessionId,
-        /// The state recorded when it ended, by its full id; none when the recording
-        /// failed. A Window shows such a turn and does not let it be selected.
+        /// None when recording failed. Shown but not selectable.
         state: Option<String>,
     },
-    /// A turn of an agent that ended, whose recorded state was deleted since by the
-    /// clean-up of states nothing refers to: it stays in the history, marked as expired. A
-    /// Window shows it so and does not let it be selected.
+    /// Its state was deleted by the clean-up; stays in the history, not selectable.
     ExpiredTurn {
-        /// The turn.
         turn: TurnId,
-        /// Its session.
         session: SessionId,
     },
 }
 
-/// A changed file that is not committed, and who made the change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreditedFile {
-    /// The file, as the changes list it.
     pub file: ChangedFile,
-    /// The sessions it is credited to; empty when no agent made the change, as for an
-    /// edit made outside the app or by an agent CLI the app does not support, and for a
-    /// file two sessions wrote through shell commands at once.
+    /// Empty when no agent made the change: an outside edit, an unsupported CLI, or a file two
+    /// sessions wrote through shell commands at once.
     pub by: Vec<SessionId>,
 }
 
-/// The history of a worktree: what Changes shows as its tree, but for its last entry,
-/// the uncommitted changes, which [`crate::Request::GetUncommitted`] reads. It is read
-/// from what the Keeper keeps and from the commits, without asking git what changed on
-/// disk, so that a window that opens draws it at once.
+/// The worktree's history as Changes shows it, without the uncommitted changes
+/// (`Request::GetUncommitted`). Read from what the Keeper keeps and from the commits, without
+/// asking git what changed on disk, so a window that opens draws it at once.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct History {
-    /// The workspace.
     pub workspace: WorkspaceId,
-    /// The version the first entry is counted from, by its full id: the commit the changes
-    /// of the workspace are counted from. None where nothing is committed yet.
     pub start: Option<String>,
-    /// The commits of the branch since `start` and the turns that ended on them, oldest
-    /// first, in the order they happened.
+    /// Commits since `start` and the turns that ended on them, oldest first.
     pub entries: Vec<HistoryEntry>,
 }
 
-/// A terminal the Keeper holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerminalInfo {
-    /// Its id.
     pub id: TerminalId,
-    /// The workspace it was opened for.
     pub workspace: WorkspaceId,
-    /// What it was opened to run.
     pub program: Program,
 }
 

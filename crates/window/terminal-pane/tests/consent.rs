@@ -1,12 +1,4 @@
-//! Component test (CONSENT-06): the question an Adapter asks before it writes into the
-//! user's own settings of its CLI, in the terminal pane, on GPUI's test platform with no
-//! window on any screen. The test plays the Keeper on the other end of a socket pair: it
-//! tells the question, reads the answer the pane sends, and tells what the Keeper would
-//! tell next; the pane is read back through the model it shows and the elements it draws.
-//!
-//! The words of a question are the test's data: the pane names no CLI. A negative clause
-//! ("nothing more is sent") is read after a barrier: the next request the Keeper end reads
-//! is one the test caused after it, so nothing came between.
+//! The words of a question are the test's data: the pane names no CLI.
 
 mod common;
 
@@ -19,7 +11,6 @@ use yaar_terminal_pane::{
 
 use common::{Panes, click_in, drawn, key_of, open_panes, terminal, wait_drawn, wait_until};
 
-/// A question of the Adapter `agent` in words of the test's own.
 fn consent(agent: &str, answer: ConsentAnswer) -> Consent {
     Consent {
         agent: agent.to_owned(),
@@ -36,8 +27,6 @@ fn answering(agent: &str, answer: ConsentAnswer) -> Request {
     }
 }
 
-/// Tells the Window the questions, and waits until the pane shows them: the ones not
-/// answered, and the ones whose settings could not be changed.
 fn tell(panes: &Panes, consents: Vec<Consent>, cx: &mut VisualTestContext) {
     let wanted: Vec<Consent> = consents
         .iter()
@@ -52,7 +41,6 @@ fn tell(panes: &Panes, consents: Vec<Consent>, cx: &mut VisualTestContext) {
     });
 }
 
-/// Answers the next request, which has to be `wanted`, with the list `consents`.
 fn answer(panes: &mut Panes, wanted: Request, consents: Vec<Consent>, cx: &mut VisualTestContext) {
     let (id, request) = panes.keeper.request(cx);
     assert_eq!(request, wanted);
@@ -72,8 +60,6 @@ fn gone(cx: &mut VisualTestContext) {
     }
 }
 
-/// After a barrier: the next request is the one of Cmd-T, so that nothing was sent
-/// before it.
 fn nothing_else_was_sent(panes: &mut Panes, cx: &mut VisualTestContext) {
     panes.press_in_the_app::<NewTerminal>(cx);
     let (_, request) = panes.keeper.request(cx);
@@ -109,24 +95,20 @@ fn each_question_the_keeper_tells_shows_in_the_adapters_words_with_two_controls_
     ];
     tell(&panes, told.clone(), &mut cx);
 
-    // The words as told, each question in the order of the Adapters.
     assert_eq!(questions(&panes, &mut cx), told);
     let line = drawn("terminal-consent", &mut cx).expect("the line");
     let first = drawn("terminal-consent-question-0", &mut cx).expect("the first question");
     let second = drawn("terminal-consent-question-1", &mut cx).expect("the second question");
     assert!(drawn("terminal-consent-question-2", &mut cx).is_none());
     assert!(first.bottom() <= second.top());
-    // The controls come after the last question and answer every one.
     let yes = drawn("terminal-consent-yes", &mut cx).expect("the yes control");
     let no = drawn("terminal-consent-no", &mut cx).expect("the no control");
     assert!(second.bottom() <= yes.top() && second.bottom() <= no.top());
     assert!(yes.right() <= no.left());
-    // No problem to show where none went wrong.
     assert!(drawn("terminal-consent-problem-0", &mut cx).is_none());
     assert!(drawn("terminal-consent-problem-1", &mut cx).is_none());
 
-    // The line lies in the pane's top row: every element of it is inside, and it ends at
-    // or above where the terminal begins.
+    // The line lies in the pane's top row and ends at or above where the terminal begins.
     for part in [first, second, yes, no] {
         assert!(line.contains(&part.origin) && line.contains(&part.bottom_right()));
     }
@@ -135,8 +117,7 @@ fn each_question_the_keeper_tells_shows_in_the_adapters_words_with_two_controls_
     assert!(line.bottom() <= slot.top());
 }
 
-/// The width of what is drawn for `selector`, which on the test platform is the number of
-/// its characters times the width of one.
+/// The drawn width of `selector`: on the test platform, its characters times the width of one.
 fn width(selector: &str, cx: &mut VisualTestContext) -> f32 {
     let bounds = drawn(selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"));
     f32::from(bounds.size.width)
@@ -147,11 +128,9 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
     cx: &mut TestAppContext,
 ) {
     let (panes, mut cx) = open_panes(cx);
-    // No spaces: the test platform measures a space differently from a letter. The words
-    // are told twice, and the question's and the problem's lengths cross between the two
-    // tells: only a question drawn with the question's words and a problem drawn with the
-    // problem's can make the two widths change in opposite ways. The Adapter's name is the
-    // same both times.
+    // No spaces: the test platform measures a space differently from a letter. The words are told
+    // twice with lengths crossing: only a question drawn with the question's words and a problem
+    // with the problem's can make the two widths change in opposite ways.
     let short = "Shortwords";
     let long = "Somewhatlongerwordsoftheadapterhere";
     let told = |words: &str, problem: &str| {
@@ -183,8 +162,6 @@ fn the_text_drawn_for_a_question_and_its_problem_is_the_words_told_and_not_the_n
     );
 }
 
-/// The width the text system gives `text` at the size of the controls' text, `text_xs`: a
-/// control is that wide and its padding.
 fn text_width(text: &str, cx: &mut VisualTestContext) -> f32 {
     cx.update(|window: &mut Window, _| {
         let size = window.rem_size() * 0.75;
@@ -206,9 +183,8 @@ fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_n
         vec![consent("pi", ConsentAnswer::NotAsked)],
         &mut cx,
     );
-    // Both controls have the same padding and the same text size, so the widths differ
-    // by the characters of their labels, and "Install" has more than "No": a swapped or
-    // a repeated label shows as the wrong order or as no difference.
+    // Both controls have the same padding and text size, so the widths differ by the labels: a
+    // swapped or repeated label shows as the wrong order or as no difference.
     let yes = width("terminal-consent-yes", &mut cx);
     let no = width("terminal-consent-no", &mut cx);
     assert!(
@@ -221,14 +197,8 @@ fn the_control_that_answers_yes_is_the_one_labelled_install_and_the_other_says_n
         "a character of a label is {per_character} wide"
     );
 
-    // The words are the pane's two constants: the one of the control that sends the yes
-    // is "Install" and the other's is "No". The test platform gives no text, only widths,
-    // so each drawn control is held to the width its constant's words make it: what a
-    // control is wider than its words is its padding, the same for both.
     assert_eq!(YES_LABEL, "Install");
     assert_eq!(NO_LABEL, "No");
-    // The pane names the words each control draws in a selector built from the very text
-    // it draws, so a control that draws other words than its constant's is not found.
     assert!(
         drawn(&format!("terminal-consent-yes-label:{YES_LABEL}"), &mut cx).is_some(),
         "the control that answers yes does not draw {YES_LABEL:?}"
@@ -270,7 +240,6 @@ fn a_problem_the_keeper_tells_is_shown_under_its_question(cx: &mut TestAppContex
     assert!(problem.bottom() <= next.top());
     assert!(drawn("terminal-consent-problem-1", &mut cx).is_none());
 
-    // A yes whose write failed is asked again with its problem, though answered.
     let mut failed = consent("pi", ConsentAnswer::Yes);
     failed.problem = Some("the settings could not be written".to_owned());
     tell(&panes, vec![failed.clone()], &mut cx);
@@ -285,13 +254,11 @@ fn the_line_blocks_nothing_and_the_terminals_are_resized_as_it_comes_and_goes(
     let (mut panes, mut cx) = open_panes(cx);
     let (t1, t2) = (terminal('a'), terminal('b'));
     panes.open_terminal(&t1, &mut cx);
-    // The grid the terminal fits in the whole pane, which its first resize tells.
     wait_until(&mut cx, "the terminal to fit the pane", |_| {
         panes.keeper.resizes(&t1).len() == 1
     });
     let whole = panes.keeper.resizes(&t1)[0];
 
-    // It comes: the terminal has the room under the line, which is less.
     tell(
         &panes,
         vec![consent("pi", ConsentAnswer::NotAsked)],
@@ -304,13 +271,10 @@ fn the_line_blocks_nothing_and_the_terminals_are_resized_as_it_comes_and_goes(
     assert_eq!(under.columns, whole.columns);
     assert!(under.rows < whole.rows);
 
-    // It blocks nothing: a terminal opens while it shows, and is laid out in the room
-    // under the line.
     panes.open_terminal(&t2, &mut cx);
     assert_eq!(panes.grid(&t2), under);
     assert!(drawn("terminal-consent", &mut cx).is_some());
 
-    // It goes: the terminal on screen has the whole pane again.
     panes.keeper.tell(Fact::ConsentsChanged(vec![consent(
         "pi",
         ConsentAnswer::Yes,
@@ -332,9 +296,7 @@ fn a_click_on_a_control_sends_the_answer_and_the_line_goes_once_the_answer_is_to
         &mut cx,
     );
 
-    // Install: the next request is the answer, with no question for the list before it.
     click_in("terminal-consent-yes", &mut cx);
-    // The line stays until the answer is told: the Keeper has not said yes yet.
     assert!(drawn("terminal-consent", &mut cx).is_some());
     answer(
         &mut panes,
@@ -346,7 +308,6 @@ fn a_click_on_a_control_sends_the_answer_and_the_line_goes_once_the_answer_is_to
     nothing_else_was_sent(&mut panes, &mut cx);
     assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.notice()), None);
 
-    // No, for the question told again.
     tell(
         &panes,
         vec![consent("pi", ConsentAnswer::NotAsked)],
@@ -386,7 +347,6 @@ fn one_answer_goes_for_every_question_shown(cx: &mut TestAppContext) {
             consent("other", ConsentAnswer::NotAsked),
         ])),
     );
-    // The line holds the question still unanswered until the last answer is told.
     let pane = panes.pane.clone();
     wait_until(&mut cx, "the first answer to be taken", |cx| {
         pane.read_with(cx, |pane, cx| pane.questions(cx).len()) == 1
@@ -441,7 +401,6 @@ fn the_two_keys_answer_with_a_question_shown_from_outside_the_terminal_and_on_ma
     gone(&mut cx);
     nothing_else_was_sent(&mut panes, &mut cx);
 
-    // The keys are kept on macOS, where they work with the focus in the terminal too.
     if cfg!(target_os = "macos") {
         tell(
             &panes,
@@ -486,7 +445,6 @@ fn a_list_the_keeper_tells_without_a_question_takes_the_line_away(cx: &mut TestA
         &mut cx,
     );
 
-    // Another Window answered: nothing of this one was sent for it.
     panes.keeper.tell(Fact::ConsentsChanged(vec![consent(
         "pi",
         ConsentAnswer::Yes,
@@ -503,10 +461,8 @@ fn with_no_question_shown_the_keys_ask_the_list_and_answer_each_adapter_it_names
     let (mut panes, mut cx) = open_panes(cx);
     let t = terminal('a');
     panes.open_terminal(&t, &mut cx);
-    // Answered, not asked: no line.
     tell(&panes, vec![consent("pi", ConsentAnswer::No)], &mut cx);
 
-    // A yes after a no: the list first, then the answer for each Adapter it names.
     panes.press_in_the_app::<InstallAgentExtensions>(&mut cx);
     answer(
         &mut panes,
@@ -539,7 +495,6 @@ fn with_no_question_shown_the_keys_ask_the_list_and_answer_each_adapter_it_names
     assert!(drawn("terminal-consent", &mut cx).is_none());
     assert_eq!(panes.pane.read_with(&cx, |pane, _| pane.notice()), None);
 
-    // A no after a yes, with the focus in the terminal on macOS: the same, the other way.
     let keep = || {
         vec![
             consent("pi", ConsentAnswer::No),
@@ -583,7 +538,6 @@ fn with_no_adapter_listed_the_notice_says_so_and_nothing_more_is_sent(cx: &mut T
         panes.pane.read_with(&cx, |pane, _| pane.notice()),
         Some(NOTHING_TO_INSTALL.to_owned())
     );
-    // The same for the other key; the barrier shows nothing came between.
     panes.press_in_the_app::<KeepAgentExtensionsOut>(&mut cx);
     answer(&mut panes, Request::ListConsents, Vec::new(), &mut cx);
     nothing_else_was_sent(&mut panes, &mut cx);

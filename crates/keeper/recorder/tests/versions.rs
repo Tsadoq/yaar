@@ -1,7 +1,3 @@
-//! Component tests: any two versions of a worktree compared, and a file read in any of
-//! them, through the surface the rest of the Keeper uses, in real repositories the tests
-//! make.
-
 mod support;
 
 use std::collections::BTreeSet;
@@ -19,21 +15,17 @@ fn open(folder: &Path) -> Worktree {
     Worktree::open(&found(), folder).expect("open")
 }
 
-/// A store in the scratch folder, outside every repository, as the app's folder is.
 fn store(scratch: &Scratch) -> StateStore {
     StateStore::open(&found(), &scratch.join("app/states/one.git")).expect("open the store")
 }
 
-/// A document long enough for git to pair it with a copy that has one line changed.
+/// Long enough for git to pair it with a copy that has one line changed.
 fn document(last: &str) -> String {
     format!("one\ntwo\nthree\nfour\nfive\nsix\nseven\n{last}\n")
 }
 
-/// What a path went through, as one word: git's own letters, a rename with the path it
-/// came from.
 type Pair = (String, String);
 
-/// The paths and changes of a comparison, as a set, in git's words.
 fn as_pairs(changed: &[ChangedPath]) -> BTreeSet<Pair> {
     changed
         .iter()
@@ -52,8 +44,6 @@ fn as_pairs(changed: &[ChangedPath]) -> BTreeSet<Pair> {
         .collect()
 }
 
-/// What `git diff --name-status -M -z` printed, read by the test and not by the crate:
-/// `M`, `A`, `D` and `T` and their path, and `R` and a score with the old path and the new.
 fn pairs_of(printed: &[u8]) -> BTreeSet<Pair> {
     let mut fields = printed
         .split(|byte| *byte == 0)
@@ -74,9 +64,6 @@ fn pairs_of(printed: &[u8]) -> BTreeSet<Pair> {
     pairs
 }
 
-/// What git's diff of two versions says, asked in the real repository, which reads the
-/// objects of a state through the store's folder as a second place for objects: the store
-/// the call under test works on is left as it is.
 fn git_diff(repo: &Path, store: &StateStore, from: &str, to: &str) -> BTreeSet<Pair> {
     let output = Command::new("git")
         .arg("-C")
@@ -97,8 +84,6 @@ fn git_diff(repo: &Path, store: &StateStore, from: &str, to: &str) -> BTreeSet<P
     pairs_of(&output.stdout)
 }
 
-/// A byte copy of `repo`, in which the user's own git can be asked what it would have
-/// done, without touching the real one.
 fn byte_copy(scratch: &Scratch, repo: &Path, name: &str) -> PathBuf {
     let copy = scratch.join(name);
     let status = Command::new("cp")
@@ -111,12 +96,8 @@ fn byte_copy(scratch: &Scratch, repo: &Path, name: &str) -> PathBuf {
     copy
 }
 
-/// A repository with commits C0 to C3 and states S1 on C1 and S3 on C2, and in it the
-/// paths that go through every change a diff names: edited, added, deleted, and a file
-/// that moved and was edited on the way.
-///
-/// C0 holds `doc.txt` and C1 replaces it with `notes.txt`, which is that document with a
-/// line changed: a rename git pairs.
+/// Commits C0 to C3, states S1 on C1 and S3 on C2; `doc.txt` becomes `notes.txt` with one line
+/// changed.
 struct Lived {
     repo: PathBuf,
     commits: [String; 4],
@@ -157,8 +138,6 @@ fn lived(scratch: &Scratch, store: &StateStore) -> Lived {
     }
 }
 
-// REC-02, the first clause: any two of commits and states, both orders. The expectation is
-// what git itself prints for the two trees.
 #[test]
 fn the_diff_between_any_two_of_commits_and_states_equals_gits_diff_of_the_two_trees() {
     let scratch = Scratch::new();
@@ -178,7 +157,6 @@ fn the_diff_between_any_two_of_commits_and_states_equals_gits_diff_of_the_two_tr
                 .expect("compare");
             let expected = git_diff(&lived.repo, &store, from, to);
             assert_eq!(as_pairs(&given), expected, "from {from} to {to}");
-            // Ordered by path, as the paths of a diff are.
             let paths: Vec<&PathBuf> = given.iter().map(|changed| &changed.path).collect();
             assert!(paths.is_sorted(), "{paths:?}");
             renames += expected
@@ -205,15 +183,12 @@ fn the_diff_between_any_two_of_commits_and_states_equals_gits_diff_of_the_two_tr
     );
 }
 
-// REC-02, the second clause: a version and the files on disk, which no commit holds.
 #[test]
 fn the_diff_between_a_version_and_the_files_on_disk_equals_gits_diff_of_a_commit_of_everything() {
     let scratch = Scratch::new();
     let store = store(&scratch);
     let lived = lived(&scratch, &store);
     let worktree = open(&lived.repo);
-    // Every kind of change on disk, staged or not: edited, deleted, untracked, a file
-    // that moved and was edited, and one that is ignored.
     write(&lived.repo, ".gitignore", "*.log\n");
     write(&lived.repo, "noise.log", "ignored\n");
     write(&lived.repo, "base.txt", "base\nchanged on disk\n");
@@ -231,9 +206,6 @@ fn the_diff_between_a_version_and_the_files_on_disk_equals_gits_diff_of_a_commit
     );
     git(&lived.repo, &["add", "base.txt"]);
 
-    // What git says, in a byte copy: everything added to its list of files and written
-    // as a tree, then the diff of the version and that tree, with the states' objects
-    // read from the store.
     let copy = byte_copy(&scratch, &lived.repo, "copy");
     git(&copy, &["add", "--all"]);
     let tree = git(&copy, &["write-tree"]);
@@ -268,8 +240,8 @@ fn the_diff_between_a_version_and_the_files_on_disk_equals_gits_diff_of_a_commit
     );
 }
 
-// The files on disk are read as a recording reads them, and a blob they hold that only
-// the real repository has is not in the store: git reads it from there to pair a rename.
+// A blob that only the real repository has is not in the store: git reads it from there to pair a
+// rename.
 #[test]
 fn a_rename_to_a_file_whose_content_only_the_real_repository_holds_is_paired() {
     let scratch = Scratch::new();
@@ -277,7 +249,6 @@ fn a_rename_to_a_file_whose_content_only_the_real_repository_holds_is_paired() {
     let lived = lived(&scratch, &store);
     let worktree = open(&lived.repo);
     let [_, _, c2, _] = &lived.commits;
-    // `doc.txt` as C0 had it: a blob no state and no commit the store holds has.
     std::fs::remove_file(lived.repo.join("notes.txt")).expect("delete");
     write(&lived.repo, "doc.txt", &document("the original"));
 
@@ -297,7 +268,6 @@ fn a_commit_that_is_compared_is_kept_and_reads_with_the_repository_gone() {
     let store = store(&scratch);
     let lived = lived(&scratch, &store);
     let worktree = open(&lived.repo);
-    // No state was taken on either: the store has not got them.
     let [c0, _, _, c3] = &lived.commits;
     assert!(
         store.paths(c0).is_err() && store.paths(c3).is_err(),
@@ -382,8 +352,6 @@ fn something_that_is_no_commit_is_refused_and_leaves_the_store_as_it_was() {
     assert_eq!(git(store.folder(), &["for-each-ref"]), refs_before);
 }
 
-// The commit that is asked first is not kept when the one asked second is refused: a call
-// that is an error changes nothing in the store.
 #[test]
 fn a_comparison_that_is_refused_keeps_neither_of_its_versions() {
     let scratch = Scratch::new();

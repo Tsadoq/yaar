@@ -1,19 +1,7 @@
-//! Row THREAD-08: the recorded corpus of real file changes, each followed in one round and
-//! in three. The pairs of `crates/shared/diff/corpus/pairs.tar.zst` and the truth of
-//! `corpus/anchors.tsv` of this crate are compiled into the test program, so that it opens
-//! no file and runs no git.
-//!
-//! The truth is `git blame --reverse -M` between the first version of a file and the last,
-//! repaired and corrected by hand: it knows the two ends and nothing between them. Three
-//! rounds therefore cut the change into three steps, and the thread is carried through
-//! each in turn with [`carry_file`], where one round carries it through the whole change
-//! at once. The `n` hunks of the diff of the two versions are cut at `ceil(n / 3)` and
-//! `ceil(2n / 3)`; a change of one or two hunks has empty steps, which change nothing.
-//!
-//! The follower is a rule, not an oracle, and this test names where it differs from the
-//! truth instead of hiding it: [`ONE_ROUND`] and [`THREE_ROUNDS`] hold each anchor that
-//! differs, with what the follower gives. The test fails on a difference that is not
-//! listed and on a listed one that went away, so a change of the rule shows at once.
+//! Follows the recorded corpus of real file changes (`crates/shared/diff/corpus/pairs.tar.zst`,
+//! truth in `corpus/anchors.tsv`) in one round and in three. The truth is `git blame --reverse -M`
+//! between the first and last version, hand-corrected: it knows the two ends only. The lists name
+//! each anchor the rule places otherwise than the truth.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
@@ -28,24 +16,17 @@ use super::{FileStep, Notice, Place, Placed, carry_file};
 const ARCHIVE: &[u8] = include_bytes!("../../../../shared/diff/corpus/pairs.tar.zst");
 const ANCHORS: &str = include_str!("../../corpus/anchors.tsv");
 
-/// The most anchors one round may place otherwise than the truth does: the rule's own
-/// count, 6 wrong places, 9 notices though the code survived and 2 not noticed though the
-/// code was gone.
+/// The most anchors one round may place otherwise than the truth: 6 wrong places, 9 notices
+/// though the code survived, 2 not noticed though the code was gone.
 const MOST_DIFFERING_IN_ONE_ROUND: usize = 17;
 
-/// What became of the lines of an anchor, as the truth says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Truth {
-    /// Every line is there, in one block.
     Intact,
-    /// Some of the lines are there.
     Partial,
-    /// None is.
     Gone,
 }
 
-/// One anchor of the corpus with the truth about it, in the lines of its pair's two
-/// versions, counted from 1.
 #[derive(Debug, Clone)]
 struct Anchor {
     pair: String,
@@ -57,7 +38,6 @@ struct Anchor {
     last_after: u32,
 }
 
-/// What a follower gave for an anchor it did not place as the truth says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Differs {
     pair: &'static str,
@@ -83,19 +63,13 @@ const fn differs(
     }
 }
 
-/// The anchors that one round places otherwise than the truth does, with what the follower
-/// gives: the lines it puts the thread on and its notice. Seventeen, the rule's own count
-/// in the experiment that chose it: six intact blocks placed on other lines with no notice,
-/// nine intact blocks given a notice, and two changed or deleted lines given none.
 const ONE_ROUND: &[Differs] = &[
-    // Intact, placed on other lines.
     differs("p0017", "a5", 122, 122, None),
     differs("p0035", "a6", 206, 206, None),
     differs("p0087", "a9", 621, 621, None),
     differs("p0420", "a6", 29, 29, None),
     differs("p0435", "a4", 103, 103, None),
     differs("p0523", "a4", 565, 566, None),
-    // Intact, given a notice.
     differs("p0129", "a3", 413, 413, Some(Notice::Changed)),
     differs("p0257", "a8", 65, 65, Some(Notice::Deleted)),
     differs("p0282", "a0", 16, 17, Some(Notice::Changed)),
@@ -105,17 +79,13 @@ const ONE_ROUND: &[Differs] = &[
     differs("p0442", "a8", 475, 475, Some(Notice::Deleted)),
     differs("p0532", "a4", 211, 221, Some(Notice::Changed)),
     differs("p0532", "a9", 211, 221, Some(Notice::Changed)),
-    // Changed or deleted, given no notice.
     differs("p0400", "a6", 2693, 2694, None),
     differs("p0530", "a3", 148, 148, None),
 ];
 
-/// The anchors that three rounds place otherwise than the truth does: the seventeen of
-/// [`ONE_ROUND`], placed as one round places them, and eleven more. Each of the eleven is
-/// an intact block that moved: one round follows it, and three rounds lose it where a round
-/// cut the move in two.
+/// Those of [`ONE_ROUND`] and eleven intact blocks that moved, lost where a round cut the move in
+/// two.
 const THREE_ROUNDS: &[Differs] = &[
-    // The seventeen of one round.
     differs("p0017", "a5", 122, 122, None),
     differs("p0035", "a6", 206, 206, None),
     differs("p0087", "a9", 621, 621, None),
@@ -133,7 +103,6 @@ const THREE_ROUNDS: &[Differs] = &[
     differs("p0532", "a9", 211, 221, Some(Notice::Changed)),
     differs("p0400", "a6", 2693, 2694, None),
     differs("p0530", "a3", 148, 148, None),
-    // Intact and moved, given a notice by three rounds only.
     differs("p0040", "a7", 59, 59, Some(Notice::Changed)),
     differs("p0089", "a7", 8, 8, Some(Notice::Changed)),
     differs("p0257", "a4", 209, 209, Some(Notice::Changed)),
@@ -147,10 +116,8 @@ const THREE_ROUNDS: &[Differs] = &[
     differs("p0431", "a6", 279, 279, Some(Notice::Deleted)),
 ];
 
-/// The files of a tar archive, by name. Of each header of 512 bytes only two fields are
-/// read: the name, at the start, and the size, as octal digits at byte 124. The content
-/// follows its header and is filled up to the next 512 bytes; a header with no name ends
-/// the archive.
+/// Only the name (at the start) and the size (octal digits at byte 124) of each 512-byte header are
+/// read; a header with no name ends the archive.
 fn files(archive: &[u8]) -> Vec<(&str, &[u8])> {
     let mut files = Vec::new();
     let mut at = 0;
@@ -164,7 +131,6 @@ fn files(archive: &[u8]) -> Vec<(&str, &[u8])> {
     files
 }
 
-/// A field of a tar header, up to the zero byte or the space that ends it.
 fn field(bytes: &[u8]) -> &str {
     let end = bytes
         .iter()
@@ -173,8 +139,6 @@ fn field(bytes: &[u8]) -> &str {
     std::str::from_utf8(&bytes[..end]).expect("a field in ASCII")
 }
 
-/// Every change of the corpus: its name, the file before and the file after, in the
-/// order of the archive.
 fn pairs(archive: &[u8]) -> Vec<(String, Vec<u8>, Vec<u8>)> {
     files(archive)
         .chunks(2)
@@ -190,8 +154,6 @@ fn pairs(archive: &[u8]) -> Vec<(String, Vec<u8>, Vec<u8>)> {
         .collect()
 }
 
-/// The anchors of `anchors.tsv` the truth gives a verdict for, by pair: `SPLIT` and
-/// `EXCLUDE` are left out.
 fn anchors() -> BTreeMap<String, Vec<Anchor>> {
     let mut by_pair: BTreeMap<String, Vec<Anchor>> = BTreeMap::new();
     for row in ANCHORS.lines().skip(1) {
@@ -220,13 +182,10 @@ fn anchors() -> BTreeMap<String, Vec<Anchor>> {
     by_pair
 }
 
-/// The lines of a version as git counts them: each with the line feed that ends it.
 fn lines(bytes: &[u8]) -> Vec<&[u8]> {
     bytes.split_inclusive(|byte| *byte == b'\n').collect()
 }
 
-/// `old` with `hunks`, the first hunks of its diff to `new`, applied: the removed lines
-/// left out and the lines the hunk names in `new` put in their place.
 fn applied(old: &[u8], new: &[u8], hunks: &[Hunk]) -> Vec<u8> {
     let (old, new) = (lines(old), lines(new));
     let mut out: Vec<&[u8]> = Vec::new();
@@ -245,7 +204,6 @@ fn applied(old: &[u8], new: &[u8], hunks: &[Hunk]) -> Vec<u8> {
     out.concat()
 }
 
-/// The first version, the two between and the last, cut by hunks as the module's doc says.
 fn versions(first: &[u8], last: &[u8]) -> [Vec<u8>; 4] {
     let diff = FileDiff::new(first, last);
     let hunks = diff.hunks();
@@ -261,8 +219,6 @@ fn versions(first: &[u8], last: &[u8]) -> [Vec<u8>; 4] {
     versions
 }
 
-/// How a file changes from one version to the next, as the engine would tell it: a file
-/// that did not change is not listed in a tree's changes.
 fn step<'a>(before: &'a [u8], after: &'a [u8]) -> FileStep<'a> {
     if before == after {
         FileStep::Unchanged
@@ -271,7 +227,6 @@ fn step<'a>(before: &'a [u8], after: &'a [u8]) -> FileStep<'a> {
     }
 }
 
-/// The anchors of one pair as threads on the new side of the file in its first version.
 fn threads(anchors: &[Anchor]) -> Vec<Placed> {
     anchors
         .iter()
@@ -287,9 +242,7 @@ fn threads(anchors: &[Anchor]) -> Vec<Placed> {
         .collect()
 }
 
-/// Whether a follower placed the anchor as the truth says in the last version: a block
-/// that is intact on the lines the truth names with no notice, code that changed or was
-/// deleted with a notice.
+/// An intact block on the lines the truth names with no notice; changed or deleted code with one.
 fn agrees(anchor: &Anchor, got: &Placed) -> bool {
     assert_eq!(got.at.path, PathBuf::from("file"));
     assert_eq!(got.at.side, Side::New);
@@ -302,7 +255,6 @@ fn agrees(anchor: &Anchor, got: &Placed) -> bool {
     }
 }
 
-/// What the follower gave for each anchor it did not place as the truth says.
 fn disagreements(anchors: &[Anchor], got: &[Placed]) -> Vec<Differs> {
     anchors
         .iter()
@@ -318,12 +270,10 @@ fn disagreements(anchors: &[Anchor], got: &[Placed]) -> Vec<Differs> {
         .collect()
 }
 
-/// A name that lives as long as the program, for a [`Differs`] built at run time.
 fn leak(name: &str) -> &'static str {
     Box::leak(name.to_owned().into_boxed_str())
 }
 
-/// The lines the diff of the two versions adds to the new one, counted from 1.
 fn added_lines(first: &[u8], last: &[u8]) -> BTreeSet<u32> {
     FileDiff::new(first, last)
         .hunks()
@@ -332,14 +282,10 @@ fn added_lines(first: &[u8], last: &[u8]) -> BTreeSet<u32> {
         .collect()
 }
 
-/// What `carry_file` gives for every anchor of every pair, in one round and in three.
 struct Followed {
     one: Vec<Differs>,
     three: Vec<Differs>,
-    /// How many anchors were placed.
     placed: usize,
-    /// For each anchor that three rounds place otherwise than the truth does and one round
-    /// as the truth does, whether its truth lines are all lines the one-step diff adds.
     moved: Vec<(Differs, bool)>,
 }
 
@@ -400,15 +346,12 @@ fn follow_the_corpus() -> Followed {
     followed
 }
 
-/// A list of the constants above in the order the corpus is followed in: by pair, then by
-/// anchor, though the constants are grouped by what went wrong.
 fn by_name(list: &[Differs]) -> Vec<Differs> {
     let mut sorted = list.to_vec();
     sorted.sort_by_key(|d| (d.pair, d.anchor));
     sorted
 }
 
-/// A list of anchors as the test prints it, to be put in the constants above.
 fn written(list: &[Differs]) -> String {
     list.iter()
         .map(|d| {
@@ -420,20 +363,18 @@ fn written(list: &[Differs]) -> String {
         .collect()
 }
 
-// THREAD-08
 #[test]
 fn over_the_corpus_of_real_changes_each_followed_in_one_round_and_in_three_the_anchors_that_differ_from_the_truth_are_named()
  {
     let followed = follow_the_corpus();
     assert_eq!(followed.placed, 5536, "the anchors with a verdict");
     println!(
-        "THREAD-08: of {} anchors one round differs on {}, three rounds on {}",
+        "of {} anchors one round differs on {}, three rounds on {}",
         followed.placed,
         followed.one.len(),
         followed.three.len()
     );
 
-    // Where the rule differs from the truth is what the lists say, no more and no less.
     assert!(
         followed.one == by_name(ONE_ROUND) && followed.three == by_name(THREE_ROUNDS),
         "one round differs on:\n{}three rounds differ on:\n{}",
@@ -441,8 +382,6 @@ fn over_the_corpus_of_real_changes_each_followed_in_one_round_and_in_three_the_a
         written(&followed.three)
     );
 
-    // The ceilings: the rule misplaces few anchors in one round, and three rounds go wrong
-    // further only on code that moved, which a round may cut in two.
     assert!(
         followed.one.len() <= MOST_DIFFERING_IN_ONE_ROUND,
         "one round differs on {} anchors, past {MOST_DIFFERING_IN_ONE_ROUND}",

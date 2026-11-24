@@ -1,54 +1,6 @@
-//! Link (`S-PROTO`): what the Keeper and the Window say to each other.
-//!
-//! Owns: the messages between the two programs and the exchange of versions.
-//!
-//! Surface:
-//! - [`Message`], with [`write_message`] and [`read_message`], which carry it as a frame;
-//! - [`Hello`], [`handshake`] and [`PROTOCOL_VERSION`], the exchange of versions;
-//! - [`Request`] with its [`RequestKind`] and [`Origin`], [`Reply`], [`Refusal`] and
-//!   [`Fact`]: what a Window asks, what the Keeper answers, and what it tells unasked;
-//! - [`Message::Input`] and [`Message::Output`], the bytes of a terminal in both
-//!   directions, which are a stream and have no reply;
-//! - what those carry: [`Repository`], [`Workspace`], [`Changes`], [`FileSides`] and their
-//!   parts; [`TerminalId`], [`TerminalSize`], [`Program`] and [`Ending`];
-//!   [`WorkspaceReviews`] with its [`Review`]s, [`Thread`]s, [`Comment`]s and [`Round`]s,
-//!   the [`Anchor`] a thread sits on, and [`DraftOn`], what a draft that is saved belongs
-//!   to; [`AgentReport`], what a piece of the app inside an agent CLI reports;
-//!   [`WorkspaceAgents`] with its [`Session`]s and their [`SessionState`]; [`Turn`]s with
-//!   their [`Step`]s; [`History`] with its [`HistoryEntry`]s and [`CreditedFile`]s;
-//!   [`TerminalInfo`], a terminal the Keeper holds; [`Setting`], a setting the user
-//!   set, as the [`FlowForm`] of a workspace; and what slice 6 adds to reviews: the
-//!   [`ThreadState`] of a thread, where it sits now ([`Placed`]) and the [`Notice`] of
-//!   code that changed under it, and the [`AgentCli`]s offered when a review is attached;
-//!   and the [`Consent`] of an Adapter that asks the user's leave before it writes into
-//!   the user's own settings of its CLI, with the [`ConsentAnswer`] the user gave; and
-//!   what slice 9 adds: the settings of the whole app ([`TurnEndSelects`],
-//!   [`ThemeChoice`], [`TerminalPlace`], [`OptionKey`]), and the room the recorded states
-//!   take ([`StateSizes`] with each workspace's [`StateSize`]);
-//! - [`Age`], how the side that sent a hello stands to this one in version;
-//! - [`socket_path`], [`socket_address`], [`data_dir`] and [`cache_dir`], the places both
-//!   programs find by the same rule, and [`connect`] with [`check_private_folder`], by which whoever
-//!   reaches the Keeper makes sure it is the user's own;
-//! - [`user_shell`], the user's login shell, which both programs find by the same rule: the
-//!   Keeper runs it in each terminal, and the Window takes the environment it prints for the
-//!   language servers.
-//!
-//! A message travels as one frame: a length of four bytes, little endian, that counts what
-//! follows; one byte that names the kind; the payload.
-//!
-//! Two frames never change shape, whatever the protocol version: [`Message::Hello`] and
-//! [`Message::Shutdown`]. A Window of one version must be able to tell a Keeper of another
-//! who it is, and to ask it to stop. Every other frame is spoken only between two sides of
-//! the same protocol version, and is refused when it holds anything but its fields.
-//!
-//! A new kind of request is one line in the table of `request.rs` and one variant of
-//! [`Request`]. The table makes it say who starts it, and that puts it in
-//! [`RequestKind::ALL`]: a test that walks the requests a user starts cannot miss it.
-//!
-//! Two kinds of program connect to the Keeper's socket: a Window, which stays and is told
-//! every fact from its first reply on (what changed before that, it asks for), and a piece
-//! of the app inside an agent CLI, which says hello, sends one request whose origin is
-//! [`Origin::Agent`], takes its reply and leaves. Both say the same hello.
+//! A frame is four bytes little endian that count what follows, one kind byte, the payload. Hello
+//! and Shutdown keep their shape in every protocol version, so sides of different versions can
+//! identify each other and stop; any other frame is refused when it holds more than its fields.
 
 mod agent;
 pub mod login;
@@ -88,41 +40,19 @@ pub use workspace::{
 
 use wire::{In, Out};
 
-/// The version of the protocol this crate speaks. Raised whenever a frame other than
-/// the two fixed ones changes, and never lowered: of two sides that speak different
-/// versions, the one with the lower number is the older. [`Hello::age_against`] rests on
-/// that.
-///
-/// 2: requests, replies and facts about workspaces. 3: terminals, and the two frames of
-/// their bytes. 4: reviews, and a workspace whose worktree is gone. 5: agents, their
-/// sessions, turns and steps, the history of a worktree, a terminal's launcher of an agent,
-/// and attaching to a terminal that still runs. 6: the user's settings, the form of Flow of
-/// a workspace among them, the state a turn's change counts from, and the workspace of a
-/// step. 7: attaching a review and what a piece of an agent CLI is answered with, the
-/// agent's replies, the states of a thread and where it sits now, rounds whose state is
-/// recorded after the send, the launcher of a CLI for a review and the resumption of a
-/// session. 8: the agent CLIs the Keeper has an Adapter for, what a review shows of a
-/// change with who is credited with each file, and the turn a round was sent in. 9: a
-/// version of a workspace written into a folder of the app's cache as the old side of a
-/// diff, and the user's answer on the language servers inside a repository, a setting. 10:
-/// the settings of the whole app, a worktree made with an agent in one step, the room the
-/// recorded states take and their clean-up, and a turn whose state expired.
+/// Raised whenever a frame other than the two fixed ones changes, never lowered:
+/// [`Hello::age_against`] relies on it.
 pub const PROTOCOL_VERSION: u16 = 10;
 
-/// The largest frame a reader accepts.
 pub const MAX_FRAME: u32 = 16 * 1024 * 1024;
 
-/// The folder name of the app in the user's data and runtime folders.
 pub const APP_FOLDER: &str = "yaar-review";
 
-/// The variable that names the Keeper's socket outright: see [`socket_path`]. Every shell
-/// of the app has it, so that a piece of the app inside an agent CLI finds the Keeper
-/// that started that shell.
+/// Names the Keeper's socket outright. Every shell of the app has it, so a piece inside an agent
+/// CLI finds its Keeper.
 pub const SOCKET_VARIABLE: &str = "YAAR_SOCKET";
 
-/// The variable that names, in every shell of the app, the id of its terminal: a piece of
-/// the app inside an agent CLI passes it on, so that the Keeper knows which terminal the
-/// CLI runs in.
+/// Passed on by a piece inside an agent CLI so the Keeper knows which terminal it runs in.
 pub const TERMINAL_VARIABLE: &str = "YAAR_TERMINAL";
 
 const MAGIC: [u8; 4] = *b"YAAR";
@@ -134,19 +64,14 @@ const KIND_FACT: u8 = 5;
 const KIND_INPUT: u8 = 6;
 const KIND_OUTPUT: u8 = 7;
 
-/// The first frame each side sends: who it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hello {
-    /// The protocol version the sender speaks.
     pub protocol: u16,
-    /// The process id of the sender.
     pub pid: u32,
-    /// The version of the program that sends, as shown to the user.
     pub app_version: String,
 }
 
 impl Hello {
-    /// A `Hello` for this process, speaking [`PROTOCOL_VERSION`].
     pub fn for_this_process(app_version: &str) -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
@@ -155,19 +80,13 @@ impl Hello {
         }
     }
 
-    /// Whether two sides can go on talking after the exchange.
     pub fn speaks_with(&self, other: &Hello) -> bool {
         self.protocol == other.protocol
     }
 
-    /// How the side that sent this hello stands to the side that sent `mine`, in version.
-    ///
-    /// The protocol decides first: it only ever rises, so a lower one is older whatever
-    /// the versions of the app say. With the same protocol the two versions of the app
-    /// are compared, read as numbers parted by dots, `0.2.10` after `0.2.9`; whatever
-    /// follows the numbers, as `-beta` or `+abc`, is not compared. The answer is
-    /// [`Age::Unknown`] when the protocols are the same and either version does not start
-    /// with a number, or when the numbers are the same and the texts differ.
+    /// Protocol first, then the app versions as dot-separated numbers (`0.2.10` after `0.2.9`),
+    /// ignoring a suffix such as `-beta`. Unknown when a version has no leading number, or equal
+    /// numbers come with different texts.
     pub fn age_against(&self, mine: &Hello) -> Age {
         use std::cmp::Ordering;
         match self.protocol.cmp(&mine.protocol) {
@@ -192,21 +111,15 @@ impl Hello {
     }
 }
 
-/// How one side of the Link stands to the other in version: see [`Hello::age_against`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Age {
-    /// An older version than this side.
     Older,
-    /// The same version.
     Same,
-    /// A newer version than this side.
     Newer,
-    /// Another version, and which one is newer cannot be told.
     Unknown,
 }
 
-/// The numbers a version of the app starts with, parted by dots: `[0, 2, 10]` for
-/// `0.2.10-beta`. None when it does not start with a number.
+/// `[0, 2, 10]` for `0.2.10-beta`; None without a leading number.
 fn version_numbers(version: &str) -> Option<Vec<u64>> {
     let numeric = version
         .split(['-', '+'])
@@ -218,8 +131,6 @@ fn version_numbers(version: &str) -> Option<Vec<u64>> {
     (!numeric.is_empty()).then_some(numeric)
 }
 
-/// Compares two lists of version numbers; a missing number counts as 0, so `1.2` and
-/// `1.2.0` are the same.
 fn compare_numbers(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
     let len = a.len().max(b.len());
     let at = |numbers: &[u64], i: usize| numbers.get(i).copied().unwrap_or(0);
@@ -229,62 +140,38 @@ fn compare_numbers(a: &[u64], b: &[u64]) -> std::cmp::Ordering {
         .unwrap_or(std::cmp::Ordering::Equal)
 }
 
-/// One message between the Window and the Keeper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
-    /// Who the sender is. The first frame in each direction.
     Hello(Hello),
-    /// The Window asks the Keeper to stop everything and exit.
     Shutdown,
-    /// A Window asks the Keeper for something.
     Request {
-        /// Pairs the reply with this request.
         id: RequestId,
-        /// What is asked.
         request: Request,
     },
-    /// The Keeper answers one request.
     Reply {
-        /// The id of the request this answers.
         to: RequestId,
-        /// What was asked for, or why it was refused.
         reply: Result<Reply, Refusal>,
     },
-    /// The Keeper tells a Window what changed.
     Fact(Fact),
-    /// A Window sends bytes to the program of a terminal: what the user typed or pasted,
-    /// encoded as the terminal's state asks, and the terminal's answers to the program's
-    /// questions. Nothing answers it. Bytes for a terminal the Keeper does not hold, as
-    /// one whose program has ended, are dropped.
+    /// Nothing answers it. Bytes for a terminal the Keeper does not hold are dropped.
     Input {
-        /// The terminal.
         terminal: TerminalId,
-        /// The bytes, in the order the program is to read them.
         bytes: Vec<u8>,
     },
-    /// The Keeper sends a Window bytes the program of a terminal wrote, in the order it
-    /// wrote them. Sent to the Window that opened the terminal, for as long as it is
-    /// attached. Nothing answers it.
+    /// Sent to the Window that opened the terminal, while it is attached. Nothing answers it.
     Output {
-        /// The terminal.
         terminal: TerminalId,
-        /// The bytes, as the program wrote them.
         bytes: Vec<u8>,
     },
 }
 
-/// Why a frame could not be read.
 #[derive(Debug)]
 pub enum LinkError {
-    /// The other side closed the connection between two frames.
     Closed,
-    /// The connection failed.
     Io(io::Error),
-    /// The frame is longer than [`MAX_FRAME`], or empty.
+    /// Longer than [`MAX_FRAME`], or empty.
     BadLength(u32),
-    /// The frame names a kind this version does not know.
     UnknownKind(u8),
-    /// The payload does not have the shape its kind requires.
     Malformed(&'static str),
 }
 
@@ -308,7 +195,6 @@ impl From<io::Error> for LinkError {
     }
 }
 
-/// Writes one message as one frame and flushes.
 pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> {
     let mut frame = vec![0u8; 4];
     match message {
@@ -357,7 +243,7 @@ pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> 
             frame = body.0;
         }
     }
-    // What the reader would refuse is not sent.
+    // Never send what the reader would refuse.
     let len = u32::try_from(frame.len() - 4)
         .ok()
         .filter(|len| *len <= MAX_FRAME)
@@ -367,11 +253,9 @@ pub fn write_message(out: &mut impl Write, message: &Message) -> io::Result<()> 
     out.flush()
 }
 
-/// Reads one frame and returns its message.
 pub fn read_message(input: &mut impl Read) -> Result<Message, LinkError> {
     let mut len = [0u8; 4];
-    // A read that a signal interrupts before it gives a byte is tried again, as
-    // `read_exact` does for the rest of the frame.
+    // A read a signal interrupts is retried, as `read_exact` does for the rest of the frame.
     let first = loop {
         match input.read(&mut len[..1]) {
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
@@ -449,7 +333,6 @@ fn parse_hello(payload: &[u8]) -> Result<Hello, LinkError> {
     })
 }
 
-/// Sends `mine` and reads the other side's [`Hello`].
 pub fn handshake(stream: &mut (impl Read + Write), mine: &Hello) -> Result<Hello, LinkError> {
     write_message(stream, &Message::Hello(mine.clone()))?;
     match read_message(stream)? {
@@ -458,14 +341,8 @@ pub fn handshake(stream: &mut (impl Read + Write), mine: &Hello) -> Result<Hello
     }
 }
 
-/// Where the Keeper is asked to listen.
-///
-/// `YAAR_SOCKET` names the socket outright. Otherwise it is `keeper.sock` in the app's
-/// runtime folder: under `XDG_RUNTIME_DIR` on Linux when that is set, else in
-/// [`data_dir`].
-///
-/// A socket is bound and reached at [`socket_address`] of this path, which differs from it
-/// only when the path is longer than the system allows.
+/// `YAAR_SOCKET`, else `keeper.sock` in the app's runtime folder: `XDG_RUNTIME_DIR/yaar-review`
+/// off macOS when set, else [`data_dir`]. Bind and reach it at [`socket_address`] of this path.
 pub fn socket_path() -> PathBuf {
     socket_path_from(|name| std::env::var_os(name).map(PathBuf::from))
 }
@@ -482,9 +359,7 @@ fn socket_path_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     folder.join("keeper.sock")
 }
 
-/// The app's folder in the user's data folder, where what must outlive a restart of the
-/// machine is kept: `~/Library/Application Support/yaar-review` on macOS,
-/// `$XDG_DATA_HOME/yaar-review` or `~/.local/share/yaar-review` elsewhere.
+/// Holds what must outlive a restart of the machine.
 pub fn data_dir() -> PathBuf {
     data_dir_from(|name| std::env::var_os(name).map(PathBuf::from))
 }
@@ -502,25 +377,18 @@ fn data_dir_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     folder.join(APP_FOLDER)
 }
 
-/// The app's folder in the user's cache folder, where what can be made again is kept: the
-/// old side of a diff written for a language server, and the build folders of those
-/// servers. `~/Library/Caches/yaar-review` on macOS, `$XDG_CACHE_HOME/yaar-review` or
-/// `~/.cache/yaar-review` elsewhere. Both programs find it by this rule: the Window names
-/// a folder in it, and the Keeper writes there only.
+/// Holds what can be made again, as the old side of a diff written for a language server. The
+/// Window names a folder in it, and the Keeper writes only inside that folder.
 pub fn cache_dir() -> PathBuf {
     cache_dir_from(|name| std::env::var_os(name).map(PathBuf::from))
 }
 
-/// The user's shell: `SHELL` from this process's environment when it names, by an absolute
-/// path, a file that can be run; else the shell of the user's entry in the system's list
-/// of users; else `/bin/sh`. The Keeper runs it as the login shell of each terminal, and
-/// the Window runs it once to take the environment the language servers run in.
+/// `SHELL` when it is an absolute path to a runnable file; else the user's entry in the system's
+/// list of users; else `/bin/sh`.
 pub fn user_shell() -> PathBuf {
     shell_from(std::env::var_os("SHELL"), passwd_shell)
 }
 
-/// The choice of [`user_shell`], with the value of `SHELL` and the look at the system's
-/// list of users handed in.
 fn shell_from(
     variable: Option<std::ffi::OsString>,
     passwd: impl FnOnce() -> Option<PathBuf>,
@@ -532,7 +400,6 @@ fn shell_from(
         .unwrap_or_else(|| PathBuf::from("/bin/sh"))
 }
 
-/// An absolute path to a file with an execute bit.
 fn can_run(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.is_absolute()
@@ -540,8 +407,6 @@ fn can_run(path: &Path) -> bool {
             .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
 }
 
-/// The shell in the entry of the user this process runs as, in the system's list of
-/// users.
 fn passwd_shell() -> Option<PathBuf> {
     // SAFETY: `getpwuid_r` fills the entry and the buffer it is given, and the entry's
     // strings point into that buffer, which outlives their use below.
@@ -586,40 +451,23 @@ fn cache_dir_from(var: impl Fn(&str) -> Option<PathBuf>) -> PathBuf {
     folder.join(APP_FOLDER)
 }
 
-/// The longest path a socket can be bound at, in bytes: the system's limit less the byte
-/// that ends the path.
+/// The system's limit less the byte that ends the path.
 pub const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
-/// Where a socket wanted at `wanted` is really bound and reached.
-///
-/// It is `wanted` itself when that is at most [`SOCKET_PATH_MAX`] bytes long. A longer
-/// path, as a long user name or a deep runtime folder makes it, cannot be bound at all,
-/// so both programs then use a short one computed from the long one alone:
-/// `/tmp/yaar-review-<hash>/keeper.sock`, where `<hash>` is the 64-bit FNV-1a hash of the
-/// bytes of `wanted`, written as 16 lowercase hexadecimal digits.
-///
-/// The Keeper applies this to the path it is told to listen at, and whoever connects
-/// applies it to the same path, so the two meet without having to agree on anything else.
-/// The rule is as fixed as the two frames that never change: a Window of one version has
-/// to find the Keeper of another.
-///
-/// The short path lies where any user can make folders, under a name anyone can compute.
-/// It is therefore used only while its folder is the user's own: the Keeper makes the
-/// folder for the user alone, and both the Keeper before it binds and whoever connects
-/// refuse it otherwise, by [`check_private_folder`]. Connect through [`connect`], which
-/// does this.
+/// Where a socket wanted at `wanted` is bound: `wanted` itself, or, past [`SOCKET_PATH_MAX`],
+/// `/tmp/yaar-review-<hash>/keeper.sock`, `<hash>` the FNV-1a of its bytes in 16 hex digits,
+/// fixed across versions. Safe only once [`check_private_folder`] passes: use [`connect`].
 pub fn socket_address(wanted: &Path) -> PathBuf {
     short_place(wanted).unwrap_or_else(|| wanted.to_owned())
 }
 
-/// The short path that stands in for `wanted`; none when `wanted` can be bound itself.
 fn short_place(wanted: &Path) -> Option<PathBuf> {
     let wanted = wanted.as_os_str().as_bytes();
     if wanted.len() <= SOCKET_PATH_MAX {
         return None;
     }
-    // FNV-1a, 64 bits, written out: the hasher of the standard library may change from
-    // one compiler to the next, and this value may not.
+    // FNV-1a, 64 bits, written out: the standard library's hasher may change between compilers,
+    // this value may not.
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for byte in wanted {
         hash ^= u64::from(*byte);
@@ -630,15 +478,8 @@ fn short_place(wanted: &Path) -> Option<PathBuf> {
     )))
 }
 
-/// Connects to the socket wanted at `wanted`, where [`socket_address`] puts it, and makes
-/// sure that the other end is the user's own.
-///
-/// Two things are refused, both with [`io::ErrorKind::PermissionDenied`]:
-/// - a short path whose folder is not the user's own, by [`check_private_folder`], before
-///   anything is connected;
-/// - on any path, a process at the other end that runs as another user.
-///
-/// Where nothing listens the error is the system's own, as from connecting directly.
+/// Refuses with [`io::ErrorKind::PermissionDenied`] a short path whose folder is not the user's
+/// own, and any peer that runs as another user.
 pub fn connect(wanted: &Path) -> io::Result<UnixStream> {
     let short = short_place(wanted);
     if let Some(folder) = short.as_deref().and_then(Path::parent) {
@@ -658,15 +499,10 @@ pub fn connect(wanted: &Path) -> io::Result<UnixStream> {
     Ok(stream)
 }
 
-/// Passes when `folder` is one that only the user of this process can use: a folder and
-/// not a link to one, owned by that user, and closed to everybody else. Anything else is
-/// refused with [`io::ErrorKind::PermissionDenied`]; a folder that is not there is the
-/// system's own error.
-///
-/// The Keeper calls this on the folder of a short socket path after making it, and
-/// [`connect`] calls it before connecting there.
+/// Passes when `folder` is a folder, not a link, owned by this user and closed to everybody else;
+/// else PermissionDenied, but a missing folder gives the system's own error.
 pub fn check_private_folder(folder: &Path) -> io::Result<()> {
-    // Not followed: a link is judged as a link, whatever it leads to.
+    // Not followed: a link is judged as a link.
     let found = std::fs::symlink_metadata(folder)?;
     let wrong = if found.file_type().is_symlink() {
         "is a link"
@@ -685,14 +521,12 @@ pub fn check_private_folder(folder: &Path) -> io::Result<()> {
     ))
 }
 
-/// The user this process runs as.
 fn this_user() -> u32 {
     // SAFETY: `geteuid` only reads and cannot fail.
     unsafe { libc::geteuid() }
 }
 
-/// The user of the process at the other end of a connected socket, as the system knows
-/// it. Nothing the other end sends can change the answer.
+/// The user of the process at the other end, as the system knows it; the peer cannot change it.
 #[cfg(target_os = "linux")]
 fn user_at_the_other_end(stream: &UnixStream) -> io::Result<u32> {
     let mut found = libc::ucred {
@@ -718,8 +552,6 @@ fn user_at_the_other_end(stream: &UnixStream) -> io::Result<u32> {
     Ok(found.uid)
 }
 
-/// The user of the process at the other end of a connected socket, as the system knows
-/// it. Nothing the other end sends can change the answer.
 #[cfg(not(target_os = "linux"))]
 fn user_at_the_other_end(stream: &UnixStream) -> io::Result<u32> {
     let mut user: libc::uid_t = 0;
@@ -760,8 +592,7 @@ mod tests {
 
     #[test]
     fn the_hello_frame_keeps_its_bytes() {
-        // These bytes are the promise to every later version. If this test has to change,
-        // a Window and a Keeper of different versions can no longer tell each other apart.
+        // These bytes are the promise to every later version.
         let bytes = frame(&Message::Hello(Hello {
             protocol: 1,
             pid: 0x0102_0304,
@@ -800,8 +631,6 @@ mod tests {
         assert!(matches!(read_message(&mut input), Err(LinkError::Closed)));
     }
 
-    /// A reader that fails once with `Interrupted`, as a read does when a signal reaches
-    /// the process, before it gives its bytes.
     struct Interrupted<R> {
         inner: R,
         interrupted: bool,
@@ -959,7 +788,6 @@ mod tests {
 
     #[test]
     fn a_setting_of_the_app_is_the_same_thing_as_any_other_of_its_kind_and_no_other() {
-        // Two values of each kind of the app's settings.
         let pairs = [
             (
                 Setting::TurnEnd(TurnEndSelects::WhatChanged),
@@ -1049,7 +877,6 @@ mod tests {
         }
     }
 
-    /// A path of 128 bytes, as a long user name makes it on macOS.
     const LONG: &str = "/Users/a-user-whose-name-is-longer-than-most-and-longer-than-a-socket-allows/Library/Application Support/yaar-review/keeper.sock";
 
     #[test]
@@ -1062,7 +889,7 @@ mod tests {
             PathBuf::from("/run/user/1000/yaar-review/keeper.sock")
         );
 
-        // One byte more cannot be bound, and so leads to the short place.
+        // One byte more cannot be bound, so it leads to the short place.
         let too_long = format!("{fits}s");
         let short = socket_address(Path::new(&too_long));
         assert_ne!(short, PathBuf::from(&too_long));
@@ -1071,10 +898,8 @@ mod tests {
 
     #[test]
     fn the_address_of_a_path_too_long_keeps_its_value() {
-        // Like the bytes of the hello, this value is a promise to every other version: a
-        // Window that computes another address does not find the Keeper that is running.
-        // The digits are the 64-bit FNV-1a hash of the path, worked out apart from this
-        // crate.
+        // Fixed across versions, like the hello: a Window that computes another address does not
+        // find the running Keeper.
         assert!(LONG.len() > SOCKET_PATH_MAX);
         assert_eq!(
             socket_address(Path::new(LONG)),
@@ -1109,7 +934,6 @@ mod tests {
                             "89abcdef0123456789abcdef0123456789abcdef".to_owned(),
                         )),
                     },
-                    // Gone: removed by git, and listed for its reviews.
                     Workspace {
                         id: WorkspaceId::new("44444444444444444444444444444444"),
                         path: PathBuf::from("/home/a/gits/yaar.worktrees/removed"),
@@ -1125,7 +949,6 @@ mod tests {
         ]
     }
 
-    /// The full id of a commit, as the Link carries it.
     const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
     fn base(name: &str, source: BaseSource) -> Base {
@@ -1167,7 +990,6 @@ mod tests {
         }
     }
 
-    /// One message of every shape the Link has beyond the two fixed frames.
     fn every_shape() -> Vec<Message> {
         let workspace = WorkspaceId::new("11111111111111111111111111111111");
         let requests = [
@@ -1332,7 +1154,6 @@ mod tests {
             Request::GetStateSizes,
             Request::CleanUpStates,
         ];
-        // The two other answers to a question for leave.
         let refused = Request::AnswerConsent {
             agent: "pi".to_owned(),
             answer: ConsentAnswer::No,
@@ -1341,8 +1162,6 @@ mod tests {
             agent: "pi".to_owned(),
             answer: ConsentAnswer::NotAsked,
         };
-        // The launcher of a CLI started for a review, a session resumed, and the review
-        // attached whole.
         let for_a_review = Request::OpenTerminal {
             workspace: workspace.clone(),
             program: Program::AgentFor {
@@ -1368,8 +1187,6 @@ mod tests {
             review: review_id(),
             thread: None,
         };
-        // A launcher, a report from outside the app's terminals, the files on disk as the
-        // new side, no workspace on screen, and the uncommitted list of no review named.
         let launcher = Request::OpenTerminal {
             workspace: workspace.clone(),
             program: Program::Agent {
@@ -1405,7 +1222,6 @@ mod tests {
             workspace: workspace.clone(),
             review: None,
         };
-        // A draft saved again, or a reply, names a thread that exists.
         let in_a_thread = Request::SaveDraft {
             review: review_id(),
             thread: ThreadId::new("55555555555555555555555555555555"),
@@ -1418,7 +1234,6 @@ mod tests {
             path: PathBuf::from("src/lib.rs"),
             viewed: false,
         };
-        // The same kind of request, asking for no old version.
         let without_old = Request::ReadFile {
             workspace: workspace.clone(),
             since: None,
@@ -1828,7 +1643,6 @@ mod tests {
             });
         }
         messages.extend(facts.into_iter().map(Message::Fact));
-        // The bytes of a terminal, every byte value among them, and none at all.
         let every_byte: Vec<u8> = (0..=u8::MAX).collect();
         messages.push(Message::Input {
             terminal: terminal(),
@@ -1845,7 +1659,6 @@ mod tests {
         messages
     }
 
-    /// The id of a terminal, as the Keeper makes one.
     fn terminal() -> TerminalId {
         TerminalId::new("33333333333333333333333333333333")
     }
@@ -1854,7 +1667,6 @@ mod tests {
         ReviewId::new("88888888888888888888888888888888")
     }
 
-    /// pi's question for leave, answered as given.
     fn consent(answer: ConsentAnswer, problem: Option<&str>) -> Consent {
         Consent {
             agent: "pi".to_owned(),
@@ -1864,7 +1676,6 @@ mod tests {
         }
     }
 
-    /// The full id of a recorded state.
     const STATE: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
 
     fn session_id() -> SessionId {
@@ -1875,7 +1686,6 @@ mod tests {
         TurnId::new("dddddddddddddddddddddddddddddddd")
     }
 
-    /// The sessions of a workspace in every state, one with no terminal and no review.
     fn agents() -> WorkspaceAgents {
         let states = [
             SessionState::WaitsForPermission,
@@ -1915,7 +1725,6 @@ mod tests {
         }
     }
 
-    /// A turn with a step of every kind, counted from a state when it ended with one.
     fn turn(ended: Option<TurnEnd>, state: Option<&str>) -> Turn {
         Turn {
             id: turn_id(),
@@ -1950,8 +1759,6 @@ mod tests {
         }
     }
 
-    /// A history with a commit and a turn, and changes made by a session and by no
-    /// agent.
     fn history() -> History {
         History {
             workspace: WorkspaceId::new("11111111111111111111111111111111"),
@@ -1979,7 +1786,6 @@ mod tests {
         }
     }
 
-    /// Uncommitted changes made by a session and by no agent.
     fn uncommitted() -> Vec<CreditedFile> {
         vec![
             CreditedFile {
@@ -2014,9 +1820,6 @@ mod tests {
         }
     }
 
-    /// Reviews of every shape a review can have: of no agent and of a session, with a
-    /// draft, a sent comment, an agent's reply, a resolved thread, an attachment of the
-    /// review and of one thread, and rounds of both kinds.
     fn reviews() -> WorkspaceReviews {
         let comment = |id: char, author: Author, round: Option<u32>| Comment {
             id: CommentId::new(id.to_string().repeat(32)),
@@ -2164,9 +1967,6 @@ mod tests {
                 _ => None,
             })
             .collect();
-        // One of each, in the order of the table; eleven kinds are tried a second time, the
-        // opening of a terminal a third and a fourth, for each kind of program, and the
-        // answer to a question for leave a third, for each answer.
         assert_eq!(tried[..RequestKind::ALL.len()], *RequestKind::ALL);
         assert_eq!(
             tried[RequestKind::ALL.len()..],
@@ -2224,20 +2024,10 @@ mod tests {
             ]
         );
         assert_eq!(RequestKind::GetChanges.origin(), Origin::Window);
-        // The Window reads the sizes of the recorded states to show them, when the
-        // settings screen opens and after a fact says they changed.
         assert_eq!(RequestKind::GetStateSizes.origin(), Origin::Window);
-        // The Window reads the reviews to show them, and keeps what the user types in a
-        // comment box by itself: no control stands for either.
         assert_eq!(RequestKind::GetReviews.origin(), Origin::Window);
         assert_eq!(RequestKind::SaveDraft.origin(), Origin::Window);
-        // The Window tells the size it shows a terminal at by itself, whenever its
-        // layout changes.
         assert_eq!(RequestKind::ResizeTerminal.origin(), Origin::Window);
-        // The Window reads the agents, the history, the versions of a change, the
-        // terminals and the settings to have something to show, and tells by itself which
-        // workspace it shows; a user who selects a workspace starts nothing of the
-        // Keeper's. Keeping a setting is the user's: a control of the Window sends it.
         for kind in [
             RequestKind::ListAgents,
             RequestKind::GetHistory,
@@ -2249,20 +2039,13 @@ mod tests {
             RequestKind::AttachTerminal,
             RequestKind::GetUncommitted,
             RequestKind::GetSettings,
-            // What the control that views an attachment shows is read to be shown; the
-            // control itself sends nothing a user starts.
             RequestKind::GetAttachment,
-            // The launchers offered are read to be drawn, and what a review shows of a
-            // change is read to be shown.
             RequestKind::ListClis,
             RequestKind::CompareForReview,
-            // Which Adapters need the user's leave is read to know what to ask; the answer
-            // is the user's, by a control.
             RequestKind::ListConsents,
         ] {
             assert_eq!(kind.origin(), Origin::Window, "{kind:?}");
         }
-        // Only a piece of the app inside an agent CLI reports.
         let by_agent: Vec<RequestKind> = RequestKind::ALL
             .iter()
             .copied()
@@ -2274,8 +2057,7 @@ mod tests {
 
     #[test]
     fn a_request_keeps_its_bytes() {
-        // Not a promise to other versions, as the hello is: a check that the layout is
-        // the one wire.rs describes.
+        // Not a cross-version promise: checks the layout wire.rs describes.
         let bytes = frame(&Message::Request {
             id: RequestId(0x0102_0304),
             request: Request::SetBase {
@@ -2298,8 +2080,6 @@ mod tests {
 
     #[test]
     fn the_bytes_of_a_terminal_keep_their_frame() {
-        // Not a promise to other versions either: a check of the layout of the two frames
-        // that carry a terminal's bytes, which no reply follows.
         let bytes = frame(&Message::Input {
             terminal: TerminalId::new("t1"),
             bytes: vec![0x1b, b'[', b'A'],
@@ -2390,7 +2170,7 @@ mod tests {
 
     #[test]
     fn a_list_that_claims_more_items_than_its_frame_holds_is_refused() {
-        // A fact with the list of repositories, whose count says four thousand million.
+        // A fact whose list of repositories claims four thousand million items.
         let bytes = [7u8, 0, 0, 0, 5, 1, 0, 0xff, 0xff, 0xff, 0xff];
         assert!(matches!(
             read_message(&mut Cursor::new(bytes)),
@@ -2444,17 +2224,14 @@ mod tests {
         let not_runnable = folder.join("not-runnable");
         executable(&runnable, 0o755);
         executable(&not_runnable, 0o644);
-        // What the system's list of users names, which the test chooses.
         let listed = folder.join("listed");
         executable(&listed, 0o755);
         let from_list = || Some(listed.clone());
 
-        // `SHELL` wins when it can be run, and the list is not asked.
         assert_eq!(
             shell_from(Some(runnable.clone().into()), || panic!("asked the list")),
             runnable
         );
-        // Otherwise the shell of the list of users.
         for other in [
             Some(not_runnable.clone().into()),
             Some(folder.clone().into()),
@@ -2465,7 +2242,6 @@ mod tests {
         ] {
             assert_eq!(shell_from(other.clone(), from_list), listed, "{other:?}");
         }
-        // And `/bin/sh` when that cannot be run either.
         for listed in [None, Some(not_runnable), Some(PathBuf::from("sh"))] {
             assert_eq!(
                 shell_from(None, || listed.clone()),

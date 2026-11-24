@@ -1,52 +1,7 @@
 #!/bin/bash
-# Row PKG-07: apt refuses the repository when its index or a package was changed after
-# signing. Run on a fresh client, before anything was installed.
-#
-#   .github/scripts/linux-tampered.sh <rehearsal-dir>
-#
-# Makes three copies of <rehearsal-dir>/site under a temporary folder, each changed after the
-# signing, and serves each with serve-site.sh on ports 8001, 8002 and 8003:
-#   index:    in every dists/stable/main/binary-*/Packages the text "Section: devel" becomes
-#             "Section: devil" (same length), and Packages.gz is made again from it
-#             (gzip -n -9); InRelease and Release.gpg are left as signed;
-#   signed:   one byte inside the signed text of dists/stable/InRelease changed (the first
-#             "stable" after "Suite: " becomes "stabla"), and the same in Release, so that
-#             what apt refuses is the signature itself and not a hash;
-#   package:  the last byte of each pool/**/*.deb flipped (same length).
-# For each, as the user tester, runs the install line against that copy
-# (YAAR_BASE_URL=http://127.0.0.1:<port>, YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download)
-# and asserts:
-#   - the install line exits with a status other than 0;
-#   - its output holds, for index, "File has unexpected size" or "Hash Sum mismatch"; for
-#     signed, "NOSPLIT", "BADSIG" or "signatures were invalid"; for package, "Hash Sum
-#     mismatch";
-#   - afterwards no yaar-review is installed (`dpkg-query -W yaar-review` fails), and neither
-#     /etc/apt/keyrings/yaar-review.asc nor /etc/apt/sources.list.d/yaar-review.sources
-#     exists (the install script put them back as they were).
-# Then, for index and signed, the refusal is apt's own, not the script's: root writes a
-# source and a key of the test's own, /etc/apt/keyrings/yaar-test.asc (the site's
-# apt/yaar-review.asc copied) and /etc/apt/sources.list.d/yaar-test.sources (`Types: deb`,
-# `URIs: http://127.0.0.1:<port>/apt`, `Suites: stable`, `Components: main`, `Signed-By:
-# /etc/apt/keyrings/yaar-test.asc`), runs `apt-get update` on that source only (`-o
-# Dir::Etc::sourcelist=/etc/apt/sources.list.d/yaar-test.sources -o
-# Dir::Etc::sourceparts=-`), asserts exit 100, and removes both files and apt's lists of
-# that source.
-# Then the control: the unchanged site on port 8000 answers the same `apt-get update`, through
-# the same two files pointed at port 8000, with exit 0 and no "W:" or "E:" line; both files
-# are removed after.
-# Stops its three servers at the end (serve-site.sh stop).
-#
-# Exit codes: 0 every copy refused and the control passed; 1 otherwise; 2 usage error.
-#
-# What the header leaves: the three copies and their servers are made first, so that a copy
-# that cannot be made fails the step before anything is served; `apt-get update` runs
-# with DEBIAN_FRONTEND=noninteractive; the key and the source of the test's own are removed
-# whatever happened (the trap), and so are apt's lists of ports 8000 to 8003 that this step
-# made; apt 3 (Debian 13) words a changed signed text as "Message has been manipulated" and
-# "OpenPGP signature verification failed", which the list of the signed copy takes in beside
-# the header's three; the install line is run with `set -o pipefail`, so that a site that does not answer
-# fails the line instead of handing bash an empty script; a command that stops the script
-# without a sentence of its own is named in one, and the exit code is 1.
+# apt refuses a repository whose index or package changed after signing; run on a fresh client.
+# .github/scripts/linux-tampered.sh <rehearsal-dir>: altered copies of its site on 8001, 8002, 8003.
+# apt 3 words a changed signed text as "Message has been manipulated".
 set -euo pipefail
 
 NAME=linux-tampered.sh
@@ -76,8 +31,6 @@ export DEBIAN_FRONTEND=noninteractive
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-tampered.XXXXXX")
 SERVING=()
-# A command that set -e stopped on says so in a sentence, with the code this script's header
-# names, instead of leaving the failing tool's own status.
 cleanup() {
   local status=$1 cmd=$2 port
   if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
@@ -103,9 +56,6 @@ if [ -e "$KEY" ] || [ -e "$SOURCE" ]; then
   fail "$KEY or $SOURCE is there already: this step runs on a client that has nothing of the app"
 fi
 
-# ---------------------------------------------------------------------------- the copies
-
-# index: "Section: devel" becomes "Section: devil" in every Packages, Packages.gz made again.
 cp -a "$REHEARSAL/site" "$SCRATCH/index"
 FOUND=0
 for packages in "$SCRATCH"/index/apt/dists/stable/main/binary-*/Packages; do
@@ -117,7 +67,6 @@ for packages in "$SCRATCH"/index/apt/dists/stable/main/binary-*/Packages; do
 done
 [ "$FOUND" -ge 1 ] || fail "$REHEARSAL/site holds no Packages file"
 
-# signed: the first "stable" after "Suite: " in InRelease and in Release becomes "stabla".
 cp -a "$REHEARSAL/site" "$SCRATCH/signed"
 for f in InRelease Release; do
   path=$SCRATCH/signed/apt/dists/stable/$f
@@ -126,7 +75,6 @@ for f in InRelease Release; do
   sed -i '0,/^Suite: stable$/s//Suite: stabla/' "$path"
 done
 
-# package: the last byte of each .deb of the pool flipped, same length.
 cp -a "$REHEARSAL/site" "$SCRATCH/package"
 DEBS=$(find "$SCRATCH/package/apt/pool" -type f -name '*.deb' | LC_ALL=C sort)
 [ -n "$DEBS" ] || fail "$REHEARSAL/site holds no .deb in apt/pool"
@@ -146,15 +94,12 @@ for pair in index:8001 signed:8002 package:8003; do
   SERVING+=("$port")
 done
 
-# ------------------------------------------------------------------------ the install line
-
 install_line() {
   sudo -n -u "$1" env YAAR_BASE_URL="http://127.0.0.1:$2" \
     YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download \
     bash -c 'set -o pipefail; curl -fsSL "$YAAR_BASE_URL/install.sh" | bash'
 }
 
-# The install line against one copy, refused with one of the sentences apt says.
 refused_by_install_line() {
   local copy=$1 port=$2 status=0 saw="" want
   shift 2
@@ -176,8 +121,6 @@ refused_by_install_line() {
 refused_by_install_line index 8001 "File has unexpected size" "Hash Sum mismatch"
 refused_by_install_line signed 8002 "NOSPLIT" "BADSIG" "signatures were invalid" "Message has been manipulated" "OpenPGP signature verification failed"
 refused_by_install_line package 8003 "Hash Sum mismatch"
-
-# ----------------------------------------------------------------- apt's own refusal, alone
 
 # Root writes a key and a source of the test's own and updates that source only.
 test_source() {
@@ -214,7 +157,6 @@ for pair in index:8001 signed:8002; do
   echo "$NAME: apt itself refused the $copy copy (apt-get update exit 100)"
 done
 
-# The control: the unchanged site, through the same two files, updates with nothing said.
 test_source 8000
 status=0
 update_test_source > "$SCRATCH/control.update" || status=$?

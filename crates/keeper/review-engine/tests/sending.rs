@@ -1,6 +1,3 @@
-//! The one send of a review, through the engine with the real Store and the real Recorder
-//! beneath, on a repository the test makes.
-
 mod support;
 
 use std::io;
@@ -18,7 +15,6 @@ use yaar_review_engine::{
 };
 use yaar_store::{AttachedRecord, Store};
 
-/// What a delivery was handed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Handed {
     text: String,
@@ -27,8 +23,7 @@ struct Handed {
     threads: usize,
 }
 
-/// A delivery module written in the test: it has an instruction of its own, keeps what it
-/// is handed, and gives the text back, or fails.
+/// A delivery module of the test: keeps what it is handed, and gives the text back or fails.
 struct Keeper {
     instruction: &'static str,
     handed: Vec<Handed>,
@@ -66,8 +61,6 @@ impl Delivery for Keeper {
 
 const INSTRUCTION: &str = "Answer each thread with the reply tool.";
 
-// A repository with one commit, a worktree changed on disk, and the engine over a Store
-// and the Recorder: the review of the workspace with a draft on thread 1, attached.
 struct Round {
     scratch: Scratch,
     repo: std::path::PathBuf,
@@ -114,9 +107,8 @@ fn attached_review_in_a_repository() -> Round {
     }
 }
 
-// What git says of a repository that a send must not change: its HEAD, its branch, its
-// index as bytes and the status of its worktree. The index is read before the status is
-// asked for, since a status may refresh it.
+// What a send must not change: HEAD, branch, index bytes and worktree status. The index is
+// read before the status, since a status may refresh it.
 fn repository_as_git_has_it(repo: &Path) -> (String, String, Vec<u8>, String) {
     let head = git(repo, &["rev-parse", "HEAD"]);
     let branch = git(repo, &["symbolic-ref", "HEAD"]);
@@ -135,7 +127,6 @@ fn round_of(reviews: &Reviews, review: &ReviewId, comment: u128) -> Option<u32> 
         .round
 }
 
-// REV-08
 #[test]
 fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_round_starts_and_the_state_of_the_worktree_is_recorded()
  {
@@ -151,12 +142,10 @@ fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_r
     // Read once to leave the index as git has it before the send.
     git(&repo, &["status", "--porcelain"]);
     let before = repository_as_git_has_it(&repo);
-    // The worktree moves on after the draft was written.
     write(&repo, "a.txt", "one changed again\n");
     write(&repo, "c.txt", "a new file\n");
     let mut keeper = Keeper::new(INSTRUCTION);
 
-    // When the message that carries a review is submitted.
     let (bytes, sent) = reviews
         .send_attached(&review, SentBy::Delivered, &mut keeper)
         .expect("send")
@@ -175,8 +164,6 @@ fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_r
         }]
     );
 
-    // The attached comments are sent, nothing is attached: read by a second engine on the
-    // same file, as after a restart.
     drop(reviews);
     drop(store);
     let store = self::store(&scratch);
@@ -190,7 +177,6 @@ fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_r
         None
     );
 
-    // A round starts: the first, delivered, with no state yet.
     assert_eq!(kept.rounds().len(), 1);
     let round = &kept.rounds()[0];
     assert_eq!(
@@ -204,7 +190,6 @@ fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_r
     );
     assert_eq!(sent.round, *round);
 
-    // And the state of the worktree is recorded, after, off the agent's way.
     let states = reviews.states_of(&w).expect("the state store");
     let known = states.states().expect("list the states").len();
     let recorded = reviews
@@ -235,14 +220,11 @@ fn when_the_message_that_carries_a_review_is_submitted_its_comments_are_sent_a_r
         Some(b"one changed again\n".to_vec())
     );
 
-    // The repository's HEAD, branch, index and status are as before the send; the status
-    // lists what the test changed, and nothing the app made.
     let after = repository_as_git_has_it(&repo);
     assert_eq!(
         (&after.0, &after.1, &after.2),
         (&before.0, &before.1, &before.2)
     );
-    // (The helper trims the white space around what git prints.)
     assert_eq!(after.3, "M a.txt\n?? c.txt");
 }
 
@@ -292,7 +274,6 @@ fn a_delivery_with_an_instruction_of_its_own_is_handed_the_attached_text_with_th
         .expect("a second thread");
     let mut keeper = Keeper::new("Reply with the tool, never in prose.");
 
-    // What the view shows, then what is sent: the same text, byte for byte.
     let viewed = reviews
         .attached_text(&review, keeper.instruction())
         .expect("read")
@@ -316,7 +297,6 @@ fn a_delivery_with_an_instruction_of_its_own_is_handed_the_attached_text_with_th
     );
     assert_eq!((handed.threads, handed.round), (2, 1));
 
-    // Nothing is attached after: the view has nothing, and a second send hands nothing.
     assert_eq!(
         reviews
             .attached_text(&review, keeper.instruction())
@@ -383,7 +363,6 @@ fn a_send_whose_attachment_carries_nothing_hands_nothing_out_and_the_attachment_
     let review = reviews.session_started(&started).expect("start");
     let mut keeper = Keeper::new(INSTRUCTION);
 
-    // Nothing attached at all.
     assert!(
         reviews
             .send_attached(&review, SentBy::Delivered, &mut keeper)
@@ -395,7 +374,6 @@ fn a_send_whose_attachment_carries_nothing_hands_nothing_out_and_the_attachment_
         None
     );
 
-    // Attached, and then the one thread resolved: nothing to carry, and still attached.
     reviews
         .save_draft(
             None,
@@ -457,7 +435,6 @@ fn a_follow_up_sent_in_a_new_round_takes_the_addressed_mark_of_its_thread_away()
     reviews
         .send_attached(&review, SentBy::Delivered, &mut keeper)
         .expect("send round 1");
-    // The agent replies in round 1 and says it addressed the thread.
     store
         .put_reply(
             &ThreadId::new(id(1)),
@@ -480,7 +457,6 @@ fn a_follow_up_sent_in_a_new_round_takes_the_addressed_mark_of_its_thread_away()
     };
     assert!(thread(&reviews).addressed);
 
-    // The reviewer follows up, and the follow-up rides with the next message.
     reviews
         .save_draft(
             Some(&worktree),
@@ -501,7 +477,6 @@ fn a_follow_up_sent_in_a_new_round_takes_the_addressed_mark_of_its_thread_away()
         .expect("send round 2")
         .expect("something was sent");
 
-    // The agent has a follow-up to answer: the thread is not addressed any more.
     let after = thread(&reviews);
     assert!(!after.addressed);
     assert_eq!(after.comments.last().expect("a comment").round, Some(2));
@@ -522,7 +497,6 @@ fn the_general_send_of_everything_records_its_round_at_the_state_it_is_given_and
         .expect("a state to send at");
     let mut copy = CopyAsText;
 
-    // Everything with no state is refused, and nothing is handed out or changed.
     let refused = reviews.send(&review, Scope::Everything, SentBy::Copied, None, &mut copy);
     assert!(
         matches!(
@@ -533,8 +507,6 @@ fn the_general_send_of_everything_records_its_round_at_the_state_it_is_given_and
     );
     assert!(reviews.review(&review).expect("read").rounds().is_empty());
 
-    // With a state it is sent at that state, and what was attached stays attached: only a
-    // send of what is attached takes it away.
     let (bytes, sent) = reviews
         .send(
             &review,
@@ -556,7 +528,6 @@ fn the_general_send_of_everything_records_its_round_at_the_state_it_is_given_and
     assert_eq!(kept.rounds()[0].sent_by, SentBy::Copied);
     assert_eq!(kept.attached(), Some(&Attachment::Review));
 
-    // Nothing left to carry: not an error, nothing handed out.
     assert!(
         reviews
             .send(
@@ -610,7 +581,6 @@ fn a_round_gets_its_state_once_and_a_round_that_is_not_there_or_has_one_records_
         ),
         "{again:?}"
     );
-    // A refused call records no state: only the first call's is there.
     assert_eq!(states.states().expect("list").len(), known);
 }
 
@@ -632,7 +602,6 @@ fn the_review_of_a_session_is_the_one_whose_agent_it_is() {
         reviews.review_of_session(&second.id).expect("find"),
         Some(r2)
     );
-    // A session whose review the next session took over has none.
     store
         .set_ended(&first.id, yaar_store::EndedBy::Cli)
         .expect("end");
@@ -643,7 +612,6 @@ fn the_review_of_a_session_is_the_one_whose_agent_it_is() {
         reviews.review_of_session(&third.id).expect("find"),
         Some(r1.clone())
     );
-    // A session the Store does not hold has none.
     assert_eq!(
         reviews
             .review_of_session(&yaar_review_engine::SessionId::new(id(99)))
@@ -683,7 +651,6 @@ fn a_thread_attached_alone_is_sent_alone_as_the_view_shows_it_and_the_other_draf
         .expect("send")
         .expect("something was sent");
 
-    // What was handed out is what the view showed: the one thread, and not the other's draft.
     assert_eq!(keeper.handed.len(), 1);
     let handed = &keeper.handed[0];
     assert_eq!(handed.text, viewed.text);
@@ -702,7 +669,6 @@ fn a_thread_attached_alone_is_sent_alone_as_the_view_shows_it_and_the_other_draf
     assert_eq!((handed.threads, handed.round), (1, 1));
     assert_eq!(sent.comments, vec![CommentId::new(id(1001))]);
 
-    // The other draft is still a draft, and nothing is attached, also in a Store opened anew.
     drop(reviews);
     drop(store);
     let store = self::store(&scratch);
@@ -715,7 +681,6 @@ fn a_thread_attached_alone_is_sent_alone_as_the_view_shows_it_and_the_other_draf
     );
 }
 
-/// A review in a repository with two rounds sent and no state recorded for either.
 fn two_rounds_waiting_for_their_state() -> Round {
     let round = attached_review_in_a_repository();
     let Round {
@@ -755,9 +720,6 @@ fn two_rounds_waiting_for_their_state() -> Round {
     round
 }
 
-/// Records the two waiting rounds in `order`, with a change of a file before each call, and
-/// shows that each round holds the state its own call returned, also from a Store opened
-/// anew.
 fn each_round_gets_the_state_its_own_call_recorded(order: [u32; 2]) {
     let Round {
         scratch,
@@ -768,7 +730,6 @@ fn each_round_gets_the_state_its_own_call_recorded(order: [u32; 2]) {
         review,
     } = two_rounds_waiting_for_their_state();
 
-    // Each call names its round, and the files differ between the two calls.
     let mut recorded = Vec::new();
     for round in order {
         write(
@@ -799,7 +760,6 @@ fn each_round_gets_the_state_its_own_call_recorded(order: [u32; 2]) {
     };
     assert_eq!(states_of(&reviews), expected);
 
-    // Also from a Store opened anew.
     drop(reviews);
     drop(store);
     let reviews = engine(&scratch, self::store(&scratch));
@@ -827,8 +787,8 @@ fn the_threads_a_round_counts_are_threads_and_not_the_comments_of_a_thread_with_
         review,
         repo: _,
     } = attached_review_in_a_repository();
-    // A second unsent comment of the reviewer on the thread the draft started: the Store
-    // keeps one, as a draft saved again after a restart could leave.
+    // A second unsent comment on the thread the draft started, which the Store keeps: a draft
+    // saved again after a restart can leave one.
     store
         .put_comment(
             &ThreadId::new(id(1)),

@@ -1,27 +1,5 @@
-//! How Flow is drawn, and the bar at the top of the pane that names both views.
-//!
-//! Built by the review pane's first package of slice 5, with `flow.rs`.
-//!
-//! The bar, `review-bar`, is drawn in both views, one row high, outside the element that
-//! holds the pane's key context: `review-view-changes` and `review-view-flow` name the two
-//! views, the one on screen marked, and a click on either shows it; `flow-follow` is the
-//! control of follow, which says whether follow is on, paused or off and turns it on or
-//! off on a click; in Flow, `flow-form-timeline` and `flow-form-live` name the two forms,
-//! the one shown marked, and a click on the other switches to it, as
-//! [`crate::ToggleFlowForm`] does. A click on `flow-follow` runs what
-//! [`crate::ToggleFollow`] runs (`ReviewPane::toggle_follow`). No click on the bar calls
-//! `acted`: the bar's controls call `steered`, and the bar lies outside the element whose
-//! listeners pause follow. A mouse down anywhere on the bar puts the focus on the pane's
-//! rows, so that the pane's keys work after a click on it.
-//!
-//! Flow itself is one list in the element that holds the pane's key context, as the rows
-//! of Changes are: the timeline, one entry a row, drawn under `flow-entry-<i>`, the entry
-//! of the reviewer marked; or, in the second form, an element `flow-live` that fills the
-//! same place and holds the live diff, which `live_draw.rs` draws in it
-//! ([`ReviewPane::render_live`]); no `flow-entry-<i>` and no `flow-empty` of the timeline is
-//! drawn then. Above the list
-//! go the lines of follow, `follow.rs`'s to draw. With no turn in the timeline, the list is
-//! one line, `flow-empty`, that says so.
+//! Drawing Flow, and the bar at the top that names both views. The bar lies outside the element
+//! whose listeners pause follow, and its controls call `steered`, never `acted`.
 
 use std::cell::RefCell;
 use std::ops::Range;
@@ -35,7 +13,6 @@ use yaar_link::{FlowForm, Step, TurnEnd};
 use crate::draw::ROW_HEIGHT;
 use crate::{Following, ReviewPane, TimelineEntry, ToggleFollow, View};
 
-/// Tells the pane which entries of the timeline the list laid out, once for each frame.
 struct InView(Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
@@ -55,7 +32,6 @@ impl UniformListDecoration for InView {
 }
 
 impl ReviewPane {
-    /// The bar at the top of the pane, in both views.
     pub(crate) fn render_bar(
         &mut self,
         window: &mut Window,
@@ -63,8 +39,8 @@ impl ReviewPane {
     ) -> Option<Div> {
         let _ = window;
         let theme = cx.theme();
-        // A control of the bar, which runs `then` on a mouse down and never calls `acted`:
-        // the bar chooses what Flow shows, it does not read it.
+        // Runs `then` on mouse down and never calls `acted`: the bar chooses what Flow shows, it
+        // does not read it.
         let control =
             |label: &str,
              selector: &'static str,
@@ -127,8 +103,7 @@ impl ReviewPane {
                 .whitespace_nowrap()
                 .border_b_1()
                 .border_color(theme.border)
-                // A click anywhere on the bar puts the focus on the rows, where the keys
-                // of the pane work.
+                // The focus goes to the rows, where the keys of the pane work.
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|pane, _: &MouseDownEvent, window, cx| {
@@ -147,8 +122,7 @@ impl ReviewPane {
                     in_flow,
                     |pane, _, cx| pane.show_view(View::Flow, cx),
                 ))
-                // The spacer keeps the middle of the bar free of controls: what is on
-                // the right of it is Flow's own.
+                // Keeps the middle of the bar free of controls: what is right of it is Flow's own.
                 .child(div().flex_1())
                 .children(forms)
                 .child(
@@ -170,8 +144,6 @@ impl ReviewPane {
         )
     }
 
-    /// Flow, in the form on screen, with the lines of follow above it: the timeline, or
-    /// `flow-live` around [`ReviewPane::render_live`].
     pub(crate) fn render_flow(
         &mut self,
         window: &mut Window,
@@ -195,7 +167,6 @@ impl ReviewPane {
             .into_any_element()
     }
 
-    /// The timeline: one list, one entry a row; with no turn, the line that says so.
     fn render_timeline(&mut self, cx: &mut Context<Self>) -> AnyElement {
         if self.flow.entries().is_empty() {
             let theme = cx.theme();
@@ -227,8 +198,6 @@ impl ReviewPane {
         .into_any_element()
     }
 
-    /// The entry at `index` of the timeline: the reviewer's entry marked, and the one
-    /// Flow is at.
     fn draw_timeline_entry(
         &self,
         index: usize,
@@ -266,8 +235,7 @@ impl ReviewPane {
                 }),
             )
             .child(
-                // The words are in the selector: a test reads what was handed to the
-                // text system, as it does for the lines of a diff.
+                // The words are in the selector: a test reads what was handed to the text system.
                 div()
                     .debug_selector({
                         let words = words.clone();
@@ -279,7 +247,6 @@ impl ReviewPane {
     }
 }
 
-/// What an entry of the timeline says.
 fn entry_words(entry: &TimelineEntry) -> String {
     match entry {
         TimelineEntry::Turn { title, .. } => title.clone(),

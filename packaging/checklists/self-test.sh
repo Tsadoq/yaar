@@ -1,55 +1,7 @@
 #!/bin/bash
-# Proves the scripts of this folder that open nothing: conventions.sh (with a file of
-# answers, and with --dry-run) and serve-release.sh (on a hand-made folder laid out as the
-# artifact release-final, on a free port, stopped by its pid); the dry runs of the three
-# other walkers; and what the measuring scripts only read (the logs of an earlier run, made
-# up here). The scripts that open the app's window or post input are not run by anything but
-# the owner's word.
-#
-#   packaging/checklists/self-test.sh
-#
-# What it checks, one sentence each when it fails:
-#   conventions.sh   the 17 items of macOS and the 11 of Linux are each printed once, with
-#                    their position; the answers of a file land in the Markdown file with the
-#                    note of a no and the reason of a skip; a "no" or a skip leaves the
-#                    sign-off unsigned and names the items; all yes asks for the signature;
-#                    answers that end early stop it with a sentence and write no file; a
-#                    wrong command line is exit 2; --dry-run calls no program of the system
-#                    and the app (stand-ins for them record every call), and writes its
-#                    own file; items 11 and 16 print their light theme steps; a pipe in a
-#                    note stays in its cell; a walker that does not end in 20 s is stopped
-#                    by its pid and fails the test; nothing named yaar-checklists* is made
-#                    or changed in the real home (HOME, TMPDIR and PATH of the runs are in
-#                    this script's scratch).
-#   serve-release.sh the install and uninstall lines are printed with the server's own
-#                    address and no test variable; the site is served at / and the release
-#                    files at /download/, byte for byte; the server listens on 127.0.0.1
-#                    only; a second server on the same port, a folder that is not laid out
-#                    as release-final and a file that disagrees with SHA256SUMS are
-#                    refused with a sentence, as are a listed file that is missing, a
-#                    SHA256SUMS that lists nothing and one that lacks any one of the six
-#                    packages (each dropped in turn, and the sentence names its kind);
-#                    stopped by the pid it printed, the
-#                    script and its server are gone, the port refuses, and no scratch is
-#                    left.
-#   the walkers      screen-walk.sh, real-clis.sh and linux-hardware.sh print their items
-#                    once each in a dry run and call no program of the system.
-#   the measures     typing.sh, scroll.sh and start-time.sh read made-up logs: key to
-#                    screen times (early, 13 ms, 399 ms, 401 ms, the 20 ms after the next
-#                    key: a frame 19 ms after it is the key's, one exactly 20 ms after is
-#                    not, the median of an even and of an odd count, the 95th percentile
-#                    below the largest), frames a
-#                    second and long gaps, the marks of a start; none leaves anything in
-#                    TMPDIR; start-time.sh --linux gives 1 for any status but 0 and 1 of
-#                    the machine's run (a stand-in for the machine's script, on the Mac).
-#   programs         a program is found by its full path, not its name; a new copy among
-#                    known ones is found; a process of another user is not this user's
-#                    (launchd's on the Mac; a copy run as nobody, by root, on Linux).
-#
-# Needs of the machine: curl, lsof, awk, cmp. Touches nothing outside its scratch folder
-# (`mktemp -d`, removed at the end); the only network is 127.0.0.1.
-#
-# Exit codes: 0 every check holds; 1 one does not (the sentence names it); 2 usage error.
+# Self-test of the checklist scripts that open nothing (conventions, serve-release, the dry runs,
+# analysis of made-up logs). Needs curl, lsof, awk, cmp; the only network is 127.0.0.1.
+# Exit: 0 every check holds, 1 one does not, 2 usage.
 set -euo pipefail
 
 CK_NAME=self-test.sh
@@ -97,9 +49,6 @@ wait_for() {
   done
 }
 
-# refuse <what> <out file> <err file> <serve-release.sh arguments>: runs it detached and
-# waits for it to end by itself; one that is still serving after 20 s did not refuse. The
-# status is left in REFUSAL_STATUS.
 refuse() {
   local what=$1 out=$2 err=$3
   shift 3
@@ -118,10 +67,6 @@ refuse() {
   fi
 }
 
-# Everything in the real home whose name starts with yaar-checklists (the results folder is
-# the one place these scripts write to, and a script that took the real home by another name
-# would show here), with the checksum of each file: a file made, changed or removed shows. The
-# rest of the real home is other work's and is not looked at.
 real_state() {
   local found
   found=$(find "$REAL_HOME" -maxdepth 1 -name 'yaar-checklists*' 2> /dev/null | sort)
@@ -141,8 +86,6 @@ export HOME="$S/home" TMPDIR="$S/tmp"
 TODAY=$(date +%Y-%m-%d)
 RESULTS="$HOME/yaar-checklists/$TODAY"
 
-# Stand-ins for what a run that is not a dry run asks of the system. Each records that it
-# was called; a dry run must call none of them.
 cat > "$S/bin/sw_vers" << EOF
 #!/bin/sh
 echo called >> "$S/calls"
@@ -154,30 +97,22 @@ echo called >> "$S/calls"
 echo "yaar-review 9.9.9"
 EOF
 chmod 755 "$S/bin/sw_vers" "$S/bin/yaar-review"
-# The other programs a dry run could reach for. Each only records that it was called, with
-# its arguments, in the file `calls`, and does nothing else.
 for spy in uname lspci cargo curl sudo apt apt-get dpkg foot open gio ssh; do
   printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$spy" "$S" > "$S/bin/$spy"
   chmod 755 "$S/bin/$spy"
 done
 
-# no_calls <what>: no stand-in was called by the run just made.
 no_calls() {
   [ ! -e "$S/calls" ] || fail "$1 called a program of the system or of the app (calls: $(tr '\n' ';' < "$S/calls"))"
 }
 
-# tmp_clean <what>: the run just made left nothing in TMPDIR, which is this test's own.
 tmp_clean() {
   local left
   left=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | head -n 1)
   [ -z "$left" ] || fail "$1 left $left in its TMPDIR: its scratch is not removed when it ends"
 }
 
-# run_walker <what> <out file> <err file> <answers file> <command...>: runs a script with
-# its answers from a file and waits for it to end by itself; one that is still running after
-# 20 s is stopped by its pid and the test fails with the end of what it said. A walker that
-# loops on a line it cannot take would otherwise hang the test and fill the disk, so it may
-# not write a file of more than 40 MB. The status is left in WALK_STATUS.
+# A walker looping on an unreadable line would fill the disk, so output is capped at 40 MB.
 run_walker() {
   local what=$1 out=$2 err=$3 answers=$4
   shift 4
@@ -205,12 +140,7 @@ lines() {
   done
 }
 
-# ---------------------------------------------------------------------------------------
-# conventions.sh
-# ---------------------------------------------------------------------------------------
-
 conv() {
-  # conv <list> <answers file> <output file> [more arguments]: the status in $CONV_STATUS.
   local list=$1 answers=$2 out=$3
   shift 3
   run_walker "conventions.sh $list" "$out" "$out.err" "$answers" \
@@ -218,8 +148,6 @@ conv() {
   CONV_STATUS=$WALK_STATUS
 }
 
-# macOS, 17 items: 1 yes, 2 note then yes, 3 no with a reason, 4 to 8 yes, 9 skip with a
-# reason, 10 to 17 yes.
 {
   echo yes
   echo note
@@ -243,7 +171,6 @@ done
 [ "$(grep -c '^Item ' "$S/out-mixed.txt")" -eq 17 ] || fail "conventions.sh macos printed other than 17 items"
 pass "conventions.sh macos prints its 17 items once each, with their place"
 
-# item_block <output file> <n> <list size>: the lines of item <n>, up to the next item.
 item_block() {
   awk -v from="^Item $2 of $3: " '$0 ~ from { on = 1; next } on && /^Item / { exit } on { print }' "$1"
 }
@@ -279,7 +206,6 @@ pass "the answers land in conventions-macos-dry-run.md, with notes, and the sign
 [ ! -e "$RESULTS/conventions-macos.md" ] || fail "a dry run wrote the real sign-off file conventions-macos.md"
 pass "a dry run asks nothing of the system and leaves the real file name alone"
 
-# All yes: the signature is asked and given.
 {
   lines 17 yes
   echo yes
@@ -290,7 +216,6 @@ grep -q '^Signed: I accept these as following the platform (CONV-01, macOS)\.$' 
   || fail "all yes and a yes to the signature did not write the signed line"
 pass "all yes, then yes, signs"
 
-# The same, but the signature is refused with a reason.
 {
   lines 17 yes
   echo no
@@ -301,7 +226,6 @@ conv macos "$S/answers-nosign.txt" "$S/out-nosign.txt" --dry-run
 grep -q '^Not signed: I want to look at item 16 again$' "$OUT" || fail "a refused signature did not write its reason"
 pass "a refused signature is written with its reason"
 
-# Answers that end early stop it, and no file is written.
 rm -f "$OUT"
 lines 5 yes > "$S/answers-short.txt"
 conv macos "$S/answers-short.txt" "$S/out-short.txt" --dry-run
@@ -311,7 +235,6 @@ grep -q '^conventions.sh: .*ended before' "$S/out-short.txt.err" \
 [ ! -e "$OUT" ] || fail "answers that end early left a half-written file"
 pass "answers that end early stop it with a sentence and no file"
 
-# A no needs its reason: an empty line is asked again, not taken.
 {
   echo no
   echo ""
@@ -324,7 +247,6 @@ conv macos "$S/answers-empty.txt" "$S/out-empty.txt" --dry-run
 grep -q '^| 1 | .* | no | the reason, after an empty line |$' "$OUT" || fail "an empty line was taken as the reason of a no"
 pass "an empty reason is asked again"
 
-# Linux: 11 items, a note with a pipe in it on the first: the pipe must not split its cell.
 {
   echo note
   echo "left | right"
@@ -341,8 +263,6 @@ grep -q '^| 1 | .* | yes | left \\| right |$' "$RESULTS/conventions-linux-dry-ru
 no_calls "conventions.sh linux --dry-run"
 pass "conventions.sh linux prints and records its 11 items, a pipe in a note staying in its cell"
 
-# Not a dry run: the version and the system are asked, through the stand-ins, and the real
-# file name is used.
 rm -f "$S/calls"
 conv macos "$S/answers-yes.txt" "$S/out-real.txt"
 [ "$CONV_STATUS" -eq 0 ] || fail "conventions.sh macos with stand-in programs did not exit 0 (it said: $(cat "$S/out-real.txt.err"))"
@@ -352,7 +272,6 @@ grep -q 'yaar-review 9.9.9' "$REAL_OUT" || fail "$REAL_OUT does not hold the ver
 grep -q '26.0 (TESTBUILD)' "$REAL_OUT" || fail "$REAL_OUT does not hold the system's version"
 pass "without --dry-run the file is conventions-macos.md with the version and the system"
 
-# Usage errors.
 CONV_STATUS=0
 "$HERE/conventions.sh" > /dev/null 2> "$S/usage.err" < /dev/null || CONV_STATUS=$?
 [ "$CONV_STATUS" -eq 2 ] || fail "conventions.sh with no list gave exit $CONV_STATUS, not 2"
@@ -361,10 +280,6 @@ CONV_STATUS=0
 [ "$CONV_STATUS" -eq 2 ] || fail "conventions.sh windows gave exit $CONV_STATUS, not 2"
 grep -q '^conventions.sh: ' "$S/usage.err" || fail "the usage error does not name conventions.sh"
 pass "a missing or unknown list is exit 2"
-
-# ---------------------------------------------------------------------------------------
-# serve-release.sh
-# ---------------------------------------------------------------------------------------
 
 F="$S/release-final"
 mkdir -p "$F/site/apt" "$F/release"
@@ -413,8 +328,6 @@ serve_status=$REFUSAL_STATUS
 grep -q 'yaar-review_0.1.0_amd64.deb' "$S/serve-sums.err" || fail "the refusal of a changed file does not name the file"
 pass "a file that disagrees with SHA256SUMS is refused, by name"
 
-# A listed file that is not in the folder is refused by name, and so is a SHA256SUMS that
-# lists nothing.
 cp -R "$F" "$S/release-missing"
 rm "$S/release-missing/release/yaar-review_0.1.0_amd64.deb"
 refuse "a listed file that is missing" "$S/serve-missing.out" "$S/serve-missing.err" "$S/release-missing"
@@ -427,10 +340,6 @@ refuse "a SHA256SUMS that lists nothing" "$S/serve-empty.out" "$S/serve-empty.er
 grep -q '^serve-release.sh: .*SHA256SUMS' "$S/serve-empty.err" || fail "the refusal of an empty SHA256SUMS does not name serve-release.sh and the file"
 pass "a listed file that is missing, and a SHA256SUMS that lists nothing, are refused by name"
 
-# A SHA256SUMS whose last line has no newline after it is read to its end: the last file
-# listed, changed after the sums were made, is refused by name.
-# (A seventh file, listed last, so that the six packages are all listed whatever happens to
-# the last line.)
 cp -R "$F" "$S/release-nonl"
 last_listed=extra-notes.txt
 printf 'the notes of the test\n' > "$S/release-nonl/release/$last_listed"
@@ -442,7 +351,6 @@ refuse "a SHA256SUMS with no final newline, its last file changed" "$S/serve-non
 [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a changed last listed file, no newline after its line, gave exit $REFUSAL_STATUS, not 1"
 grep -q "$last_listed" "$S/serve-nonl.err" || fail "the refusal of a changed last file with no final newline does not name $last_listed (it said: $(cat "$S/serve-nonl.err"))"
 
-# What release-final holds, each missing in turn: the folder is refused, naming it.
 for gone in site/index.html site/apt site/.nojekyll release/SHA256SUMS.asc; do
   cp -R "$F" "$S/release-gone"
   rm -rf "${S:?}/release-gone/$gone"
@@ -452,10 +360,6 @@ for gone in site/index.html site/apt site/.nojekyll release/SHA256SUMS.asc; do
   rm -rf "$S/release-gone"
 done
 
-# Each of the six packages must be listed, each by its own name: a SHA256SUMS that lacks one
-# of them, whichever it is, is refused and says which kind is missing. (The other five lines
-# stay, so that a pattern that is wider than its package, one that another package satisfies,
-# lets the run through and is seen.)
 for gone in yaar-review_0.1.0_amd64.deb yaar-review_0.1.0_arm64.deb \
   yaar-review-0.1.0-linux-x86_64.tar.gz yaar-review-0.1.0-linux-aarch64.tar.gz \
   yaar-review-0.1.0-macos-universal.zip yaar-review-0.1.0-macos-universal.dmg; do
@@ -476,7 +380,6 @@ refuse "a SHA256SUMS line in binary mode" "$S/serve-star.out" "$S/serve-star.err
 grep -q "two spaces" "$S/serve-star.err" || fail "the refusal of a binary-mode line does not name the format (it said: $(cat "$S/serve-star.err"))"
 pass "the last line of SHA256SUMS counts without a newline, the layout of release-final and the six packages are required, and a binary-mode line is refused with the format"
 
-# Start it, detached, on a free port.
 : > "$S/serve.out"
 nohup "$HERE/serve-release.sh" "$F" --port 0 > "$S/serve.out" 2> "$S/serve.err" < /dev/null &
 SERVE_PID=$!
@@ -503,7 +406,6 @@ grep -q "^serve-release.sh: pid $SERVE_PID " "$S/serve.out" \
   || fail "serve-release.sh did not print its own pid $SERVE_PID (stdout: $(cat "$S/serve.out"))"
 
 fetch() {
-  # fetch <path> <file>: the body of GET <path> into <file>, failing on any status but 200.
   curl -fsS --max-time 10 -o "$2" "$BASE$1"
 }
 fetch /install.sh "$S/got-install.sh" || fail "GET /install.sh did not answer 200"
@@ -534,7 +436,6 @@ SERVER_PID=$(sed -n 's/^serve-release.sh: server pid \([0-9][0-9]*\)$/\1/p' "$S/
 SERVERS="$SERVERS $SERVER_PID"
 kill -0 "$SERVER_PID" 2> /dev/null || fail "the server pid $SERVER_PID that serve-release.sh printed is not running"
 
-# A second server on the busy port is refused.
 refuse "a busy port" "$S/serve2.out" "$S/serve2.err" "$F" --port "$PORT"
 serve_status=$REFUSAL_STATUS
 [ "$serve_status" -eq 1 ] || fail "a second serve-release.sh on the busy port $PORT gave exit $serve_status, not 1"
@@ -542,7 +443,6 @@ grep -q '^serve-release.sh: ' "$S/serve2.err" || fail "the refusal of a busy por
 kill -0 "$SERVE_PID" 2> /dev/null || fail "the second start stopped the first server"
 pass "a second server on the busy port is refused and the first goes on"
 
-# Stop it by the pid it printed.
 kill "$SERVE_PID"
 gone() { ! kill -0 "$SERVE_PID" 2> /dev/null; }
 wait_for gone || fail "serve-release.sh (pid $SERVE_PID) was still there 20 s after SIGTERM"
@@ -555,12 +455,7 @@ leftover=$(find "$TMPDIR" -maxdepth 1 -name 'yaar-serve-release*' | head -n 1)
 [ -z "$leftover" ] || fail "serve-release.sh left its scratch $leftover"
 pass "stopped by its pid, the script and its server are gone, the port refuses, no scratch is left"
 
-# ---------------------------------------------------------------------------------------
-# The other walkers, in a dry run: their items, once each
-# ---------------------------------------------------------------------------------------
-
 walk_count() {
-  # walk_count <script> <items> <dry-run file name>: all yes, then the signature.
   local script=$1 items=$2 file=$3
   { lines "$items" yes; echo yes; } > "$S/answers-count.txt"
   rm -f "$S/calls"
@@ -584,10 +479,6 @@ walk_count real-clis.sh 15 real-clis-dry-run.md
 walk_count linux-hardware.sh 8 linux-hardware-dry-run.md
 pass "screen-walk.sh, real-clis.sh and linux-hardware.sh print their 5, 15 and 8 checks once each and sign"
 
-# The graphics line of linux-hardware.sh, with a stand-in lspci of the test's own: a machine
-# whose lspci lists no display controller gets a sentence in its place (the script ended
-# silently with status 1 when grep found none), the first of several lines is the one taken,
-# and a failing lspci ends the script with a sentence.
 mkdir -p "$S/lspci-bin"
 graphics_with() {
   # graphics_with <what lspci prints> <its status>: the line and the status of ck_graphics_line.
@@ -614,9 +505,6 @@ graphics_with "00:00.0 Host bridge: Some Corporation" 3
 grep -q '^graphics-test: lspci failed' "$S/graphics.err" || fail "ck_graphics_line said nothing when lspci fails (it said: $(cat "$S/graphics.err"))"
 pass "the graphics line is the first display line of lspci, a sentence when there is none, and a failing lspci ends it with a sentence"
 
-# Not a dry run, where Linux is what runs this: linux-hardware.sh on a copy of this folder
-# whose memory.sh is a stand-in, with an lspci that lists no display controller, writes its
-# file and says so on standard output.
 if [ "$(uname -s)" = Linux ]; then
   mkdir -p "$S/lh/bin"
   cp "$HERE"/*.sh "$S/lh/"
@@ -634,10 +522,6 @@ if [ "$(uname -s)" = Linux ]; then
 else
   printf '%s: not shown here: linux-hardware.sh without --dry-run runs on Linux only\n' "$CK_NAME"
 fi
-
-# ---------------------------------------------------------------------------------------
-# What the measuring scripts read, on files made here: nothing is started or posted
-# ---------------------------------------------------------------------------------------
 
 BASE_NS=1000000000000
 {
@@ -666,17 +550,14 @@ BASE_NS=1000000000000
   echo "end"
 } > "$S/keys.cap"
 got=$("$HERE/typing.sh" --analyse "$S/keys.input" "$S/keys.cap" 2> "$S/keys.err")
-# The times are 16 of 30 ms, then 40, 50 and 80: the 95th percentile is the value at rank 17
-# (50), which is not the largest (80).
+# 16 times of 30 ms, then 40, 50, 80: p95 is the value at rank 17 (50), not the largest.
 [ "$got" = "n=19 median=30.00 p95=50.00" ] || fail "typing.sh --analyse gave '$got', not 'n=19 median=30.00 p95=50.00' for 19 matched keys (stderr: $(cat "$S/keys.err"))"
 grep -qx 'missed=1 early=10' "$S/keys.err" || fail "typing.sh --analyse did not count 1 missed and 10 early keys (stderr: $(cat "$S/keys.err"))"
 tmp_clean "typing.sh --analyse"
 pass "typing.sh reads key to screen times: the first changed frame after each post, early and missed keys counted, a missing display time falling back to the time seen, the 95th percentile below the largest"
 
-# The edges, one key a second so that the next key never bounds a key: a frame 11 ms after a
-# post is too soon to be the key's (early), one 13 ms after is its own; one 399 ms after is
-# its own and one 401 ms after is not (missed); the last key is bounded by the 400 ms too.
-# Six keys are matched, so the median is the mean of the two in the middle.
+# One key a second, so the next key never bounds a key. 11 ms after a post is too soon (early),
+# 13 ms is its own; 399 ms is its own, 401 ms is missed.
 {
   echo "post $((BASE_NS)) 0 a"
   echo "post $((BASE_NS + 1000000000)) 1 a"
@@ -705,13 +586,7 @@ grep -qx 'missed=1 early=1' "$S/edges.err" || fail "typing.sh --analyse did not 
 tmp_clean "typing.sh --analyse"
 pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 399 ms as its own and 401 ms as missed, and takes the mean of the two in the middle for an even count"
 
-# The grace after the next key is 20 ms and "before" it: a key whose first changed frame
-# comes 19 ms after the next key's post is still matched (119 ms, inside the grace), and the
-# next key meets that same frame 19 ms after its own post, which is no longer early; a first
-# frame exactly 20 ms after the next key's post is not before it, so that key is missed, and
-# the next key matches it (20 ms). The times are 19, 20 and 119 ms: the median is the 20, the
-# 95th percentile (rank 2 of 0 to 2) is the 119, and one key is missed and none is early. A
-# grace of 15 ms or of 24 ms, or a frame at exactly the limit taken as matched, changes n.
+# The grace after the next key is 20 ms, exclusive: 19 ms still matches, exactly 20 ms does not.
 {
   echo "post $((BASE_NS)) 0 a"
   echo "post $((BASE_NS + 100000000)) 1 a"
@@ -762,9 +637,6 @@ grep -qx 'total: frames=148 seconds=1.50 fps=98.7 long=1 long_pct=0.68' "$S/scro
 tmp_clean "scroll.sh --analyse"
 pass "scroll.sh reads frames a second and gaps longer than two refresh intervals, phase by phase"
 
-# The edge of "longer than two refresh intervals" at 100 Hz (20 ms): a gap of exactly 20 ms
-# is not long, one of 21 ms is, so is one of 30 ms, and one of 19 ms is not. One phase of
-# five frames whose four gaps are 20, 21, 19 and 30 ms has two long gaps.
 {
   echo "sstart $BASE_NS dy=30 hz=100 n=5"
   echo "send $((BASE_NS + 200000000))"
@@ -800,8 +672,34 @@ got=$("$HERE/start-time.sh" --read "$S/marks-nodiff.err" 1000000 | tail -n 1)
 tmp_clean "start-time.sh --read"
 pass "start-time.sh reads the marks main, first_frame and first_diff, the first of each, and says none for one that is not there"
 
-# --linux on the Mac runs in the virtual machine through its script. Here that script is a
-# stand-in that answers with a status of the test's choosing, and nothing is started.
+# The tools of the measures that post input have no default place: one that is asked for and not
+# named stops with the variable to set, and a folder named by YAAR_KIT is read as tools/<name>.
+for pair in fakeinput:YAAR_FAKEINPUT adecap:YAAR_ADECAP stream_script:YAAR_STREAM; do
+  func=${pair%%:*}
+  variable=${pair##*:}
+  if got=$(env -u YAAR_KIT -u YAAR_FAKEINPUT -u YAAR_ADECAP -u YAAR_STREAM \
+    bash -c 'set -euo pipefail; . "$1/lib.sh"; "ck_$2"' _ "$HERE" "$func" 2>&1); then
+    fail "ck_$func gave '$got' with no tool named, and no variable was asked for"
+  fi
+  case $got in
+    *"set $variable to "*) ;;
+    *) fail "ck_$func did not say to set $variable when no tool is named (got: $got)" ;;
+  esac
+  got=$(env -u YAAR_FAKEINPUT -u YAAR_ADECAP -u YAAR_STREAM YAAR_KIT=/somewhere \
+    bash -c 'set -euo pipefail; . "$1/lib.sh"; "ck_$2"' _ "$HERE" "$func")
+  case $got in
+    /somewhere/tools/*) ;;
+    *) fail "ck_$func did not look for its tool under the folder YAAR_KIT names (got: $got)" ;;
+  esac
+  got=$(env -u YAAR_KIT YAAR_FAKEINPUT=/own/fakeinput YAAR_ADECAP=/own/adecap.app YAAR_STREAM=/own/stream.pl \
+    bash -c 'set -euo pipefail; . "$1/lib.sh"; "ck_$2"' _ "$HERE" "$func")
+  case $got in
+    /own/*) ;;
+    *) fail "ck_$func did not take the tool its own variable names (got: $got)" ;;
+  esac
+done
+pass "the tools of the measures that post input have no default place: a missing one names the variable to set, YAAR_KIT names a folder of them, and a tool's own variable wins"
+
 if [ "$(uname -s)" = Darwin ]; then
   cat > "$S/fakevm.sh" << 'FAKE'
 #!/bin/sh
@@ -837,14 +735,11 @@ FAKE
   pass "start-time.sh --linux passes the machine's 0 and 1 on, and any other status becomes 1 with a sentence that names it"
 fi
 
-# The programs of the app are found by their full path: two copies of one program at two
-# paths are two programs.
 mkdir -p "$S/a" "$S/b"
 cp /bin/sleep "$S/a/yaar-review"
 cp /bin/sleep "$S/b/yaar-review"
 if [ "$(uname -s)" = Darwin ]; then
-  # A copy of a system program is killed by the kernel until it is signed again, ad hoc and
-  # without a keychain, as a copy of ours.
+  # A copy of a system program is killed by the kernel until it is signed again, ad hoc.
   codesign -s - --force "$S/a/yaar-review" 2> /dev/null
   codesign -s - --force "$S/b/yaar-review" 2> /dev/null
 fi
@@ -865,8 +760,6 @@ wait_for found_a || fail "a process started from $S/a/yaar-review was not found 
 [ -z "$(pids_of "$S/c/yaar-review")" ] || fail "a path nothing runs from found a process"
 pass "a program is found by its full path, not by its name"
 
-# A copy started after the first one is the one new process of its path (what typing.sh
-# ends as its reference, and nothing else).
 "$S/a/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
 PID_A2=$!
 SERVERS="$SERVERS $PID_A2"
@@ -883,10 +776,7 @@ kill "$PID_A" "$PID_A2" "$PID_B"
 if wait "$PID_A" "$PID_A2" "$PID_B" 2> /dev/null; then :; fi
 pass "the one new process of a program is found by its full path, whichever application is in front"
 
-# A process of another user is not this user's: the summed memory and the signals of the
-# scripts reach this user's copies alone.
 if [ "$(uname -s)" = Darwin ] && [ "$(id -u)" -ne 0 ]; then
-  # launchd, pid 1, is root's: the one program of another user every Mac runs.
   LAUNCHD=$(ps -o comm= -p 1)
   [ -n "$LAUNCHD" ] || fail "ps shows no program for pid 1"
   [ -z "$(pids_of "$LAUNCHD")" ] || fail "ck_pids_of found $LAUNCHD, which root runs, as a process of $(id -un)"
@@ -909,9 +799,9 @@ elif [ "$(uname -s)" = Linux ] && [ "$(id -u)" -eq 0 ] && command -v setpriv > /
     return 1
   }
   wait_for runs_as_nobody || fail "the copy of $S/o/yaar-review did not start as the user nobody"
-  # Root may read another user's /proc/<pid>/exe only with the capability to trace it (a
-  # container does not give it by default: podman run --cap-add=SYS_PTRACE). Without it the
-  # link cannot be read and this check would pass whatever ck_pids_of did.
+  # Root reads another user's /proc/<pid>/exe only with the capability to trace it (a container
+  # lacks it: podman run --cap-add=SYS_PTRACE); without it this check passes whatever ck_pids_of
+  # does.
   reads_exe() {
     local d
     for d in /proc/[0-9]*; do
@@ -932,8 +822,6 @@ elif [ "$(uname -s)" = Linux ] && [ "$(id -u)" -eq 0 ] && command -v setpriv > /
 else
   printf '%s: not shown here: a process of another user needs the Mac as a user, or Linux as root with setpriv\n' "$CK_NAME"
 fi
-
-# ---------------------------------------------------------------------------------------
 
 real_state_after=$(real_state)
 [ "$real_state_before" = "$real_state_after" ] || fail "something named yaar-checklists* in the real $REAL_HOME changed during the run"

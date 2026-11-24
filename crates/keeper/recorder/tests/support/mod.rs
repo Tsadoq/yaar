@@ -1,8 +1,6 @@
-//! What the tests of this crate share: a folder of their own, an environment in which git
-//! reads nothing of the user's, and git itself as the test runs it to make a repository
-//! and to ask what git says.
+//! Helpers shared by the test programs: a scratch folder, an environment in which git reads nothing
+//! of the user's, and git calls.
 
-// Each test program uses the helpers it needs, and none uses all of them.
 #![allow(dead_code)]
 
 use std::io::Write;
@@ -10,8 +8,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// The variables with which a process tells git which repository to use, whatever folder
-/// it runs in.
 const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -21,21 +17,17 @@ const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_PREFIX",
 ];
 
-/// The variables with which a shell hands git settings that no file holds: a count of
-/// settings with their numbered keys and values (removing the count voids them), the
-/// settings of an outer git, and one file of configuration.
+/// Removing `GIT_CONFIG_COUNT` also voids the numbered `GIT_CONFIG_KEY_n` and
+/// `GIT_CONFIG_VALUE_n`, so they are not listed.
 const CONFIGURATION_VARIABLES: [&str; 3] =
     ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"];
 
-/// A folder of the test's own, removed when the test ends.
 pub struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, and an empty
-    /// home. It has to be the first statement of a test.
+    /// Sets environment variables, so it must be the first statement of a test.
     pub fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -55,10 +47,8 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and the tests of this crate are run by `cargo nextest`, which gives each
-        // test a process of its own: no other thread exists yet.
+        // SAFETY: changing the environment is sound only while no other thread reads it; this is
+        // the first statement of a test, and nextest gives each test a process of its own.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -74,12 +64,10 @@ impl Scratch {
         Scratch { root }
     }
 
-    /// The folder itself, with every link in its path resolved.
     pub fn path(&self) -> &Path {
         &self.root
     }
 
-    /// A path inside the folder.
     pub fn join(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
@@ -91,8 +79,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Runs git in `folder` and gives what it printed, as bytes. Fails the test when git
-/// fails.
 pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -109,7 +95,6 @@ pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-/// Runs git in `folder` and gives what it printed, without the white space around it.
 pub fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8(git_bytes(folder, args))
         .expect("git printed text")
@@ -117,7 +102,6 @@ pub fn git(folder: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// Runs git in `folder` with `input` on its standard input, and gives what it printed.
 pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
     let mut child = Command::new("git")
         .arg("-C")
@@ -141,9 +125,8 @@ pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
         .to_owned()
 }
 
-/// Makes a repository at `folder` whose first branch is `main`, with an identity of its
-/// own in its configuration: git on Linux guesses none, and a commit made there must not
-/// depend on the variables of this process.
+/// Git on Linux guesses no identity, and a commit made here must not depend on this
+/// process's variables, so the repository gets an identity of its own.
 pub fn init(folder: &Path) {
     std::fs::create_dir_all(folder).expect("make the folder");
     git(folder, &["init", "--quiet", "-b", "main"]);
@@ -151,14 +134,12 @@ pub fn init(folder: &Path) {
     git(folder, &["config", "user.email", "test@example.invalid"]);
 }
 
-/// Writes a file of the worktree, making the folders above it.
 pub fn write(folder: &Path, path: &str, content: &str) {
     let file = folder.join(path);
     std::fs::create_dir_all(file.parent().expect("a folder above")).expect("make the folders");
     std::fs::write(file, content).expect("write the file");
 }
 
-/// Commits everything in the worktree and gives the id of the commit.
 pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["add", "--all"]);
     git(
@@ -168,7 +149,6 @@ pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["rev-parse", "HEAD"])
 }
 
-/// Writes a program of the shell at `path`.
 pub fn program(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(path.parent().expect("a folder above")).expect("make the folders");
@@ -176,8 +156,7 @@ pub fn program(path: &Path, script: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("make it run");
 }
 
-/// Gives a file of the worktree another time of its last change and leaves its content
-/// alone, so that git has to read the file to learn that nothing changed.
+/// Changes the time of the last change and leaves the content alone, so git has to read the file.
 pub fn touch(folder: &Path, path: &str) {
     let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000);
     std::fs::File::options()
@@ -188,8 +167,6 @@ pub fn touch(folder: &Path, path: &str) {
         .expect("set the time");
 }
 
-/// A git that writes down every start of it, one line each: its process id, then its
-/// arguments. Returns the program and the file it writes to.
 pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     let list = scratch.join("starts-of-git");
     let wrapper = scratch.join("bin/git-listed");
@@ -203,12 +180,8 @@ pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     (wrapper, list)
 }
 
-/// Makes the `git` that the tests find on the search path one of the age of git 2.34, the
-/// one of Ubuntu 22.04: it says so when asked its version, and it refuses, in the words
-/// git 2.34 uses, the three forms that git does not know: `-z` after `worktree list`, `-Z`
-/// after `cat-file` and the atom `ahead-behind` of `for-each-ref`. Whatever else it is
-/// asked, it hands to the git it found. It has to come right after [`Scratch::new`], before
-/// the test starts a thread.
+/// Stand-in for git 2.34 that refuses `worktree list -z`, `cat-file -Z` and the `ahead-behind`
+/// atom; the rest goes to the real git. Must come right after `Scratch::new`.
 pub fn an_older_git(scratch: &Scratch) {
     let search = std::env::var_os("PATH").expect("a search path");
     let real = std::env::split_paths(&search)
@@ -236,7 +209,7 @@ pub fn an_older_git(scratch: &Scratch) {
     );
     let mut folders = vec![folder];
     folders.extend(std::env::split_paths(&search));
-    // SAFETY: as in `Scratch::new`: the first statements of a test, in a process of its own.
+    // SAFETY: as in `Scratch::new`.
     unsafe {
         std::env::set_var(
             "PATH",
@@ -245,7 +218,7 @@ pub fn an_older_git(scratch: &Scratch) {
     }
 }
 
-/// Whether a process with this id is there, running or waiting to be waited for.
+/// True also for a process that has ended but not been waited for.
 pub fn is_alive(pid: &str) -> bool {
     Command::new("sh")
         .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])

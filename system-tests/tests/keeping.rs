@@ -1,13 +1,4 @@
-//! System tests of what the Keeper holds for an agent while its Window is away or stuck:
-//! the turn, its steps, its recorded state and its terminal's screen for a client that
-//! comes later, and an agent that is not slowed by a client that reads nothing.
-//!
-//! The stand-in runs in a shell of the app as Claude Code and as pi: each test is a function
-//! of a [`Dialect`], the test function that carries the row's name runs it as Claude Code,
-//! and the one with `_as_pi` after the name runs the same body as pi, in a world whose pi is
-//! installed and whose user said yes to the app's extension. The client is the test's own;
-//! it leaves by dropping its connection with no goodbye, and it is stopped by not reading
-//! from it, which is what the Keeper sees of a Window that is gone or stuck.
+//! System tests of what the Keeper holds for an agent while its Window is away or stuck.
 
 use std::fs;
 use std::path::PathBuf;
@@ -24,49 +15,37 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
-/// How many files the agent reads while the client is away.
 const READS: usize = 100;
 
-/// How long the agent may take to finish its turn of two hundred hooks, each of them a
-/// process of its own, on a machine that builds other things. A bound on a wait for a
-/// fact, not a measure: the turn is over as soon as the stand-in has made its last step.
+/// A bound on a wait, not a measure: two hundred hooks, each a process, on a busy machine.
 const TURN_DEADLINE: Duration = Duration::from_secs(60);
 
-/// How many lines the stand-in writes in a flood of HOLD-06.
 const FLOOD_LINES: u32 = 200_000;
 
-/// How long a flood of that many lines may take: through a terminal and a Keeper that is
-/// built without optimisation, on a machine that builds other things. A bound on a wait.
 const FLOOD_DEADLINE: Duration = Duration::from_secs(120);
 
-/// How much longer than a client that reads everything a client that is stopped may keep
-/// the agent's longest write waiting.
+/// How much longer than a client that reads everything a stopped client may keep the agent's
+/// longest write waiting.
 const ALLOWED: Duration = Duration::from_millis(100);
 
-/// How often the pair of runs of HOLD-06 is measured before the row is said to fail: the
-/// agent's longest write is a time, and a machine that is busy makes one run's longest
-/// longer than another's by itself.
+/// How many times the pair of runs is measured before the test fails: the agent's longest write is
+/// a time, and a busy machine makes one run's longest longer than another's by itself.
 const ATTEMPTS: usize = 3;
 
-/// A script of the steps in `words`, each the way `Script::parse` reads it.
 fn script(words: &[String]) -> Script {
     Script::parse(&words.join("\n"))
 }
 
-/// A stand-in the test started in a shell, with the script and log of its own.
 struct Started {
     name: String,
 }
 
 impl Started {
-    /// What the stand-in wrote down so far.
     fn log(&self, world: &World) -> yaar_system_tests::standin::StandinLog {
         world.agent_log(&self.name)
     }
 }
 
-/// Types into `terminal` the start of `dialect`'s CLI with the script `script` as `name`'s
-/// own: the stand-in follows the script and writes down its log as `name`.
 fn start_in(
     dialect: Dialect,
     world: &World,
@@ -89,9 +68,6 @@ fn start_in(
     Started { name: name.into() }
 }
 
-/// Whether the newest output of a terminal, the tail of what came, shows the stand-in at
-/// its prompt after a turn: its `● Done`, and the prompt after that. Looks at the tail
-/// only, so that a wait on a run of megabytes does not read it all again at every frame.
 fn at_prompt_after_a_turn(bytes: &[u8]) -> bool {
     let tail = &bytes[bytes.len().saturating_sub(4 * 1024)..];
     let tail = String::from_utf8_lossy(tail);
@@ -99,15 +75,11 @@ fn at_prompt_after_a_turn(bytes: &[u8]) -> bool {
         .is_some_and(|done| tail[done..].contains(PROMPT))
 }
 
-/// Ends the test the way it must: the client leaves, the Keeper ends with the world, and
-/// every process the Keeper started, the stand-ins among them, is gone before the test is
-/// over.
 fn end(world: World, client: Client) {
     drop(client);
     leave(world);
 }
 
-/// Ends the world, and waits until every process its Keeper started is gone.
 fn leave(mut world: World) {
     let keeper = world.keeper_pid().expect("the Keeper runs");
     let started = descendants_of(keeper);
@@ -118,7 +90,6 @@ fn leave(mut world: World) {
     );
 }
 
-// HOLD-01.
 #[test]
 fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back()
  {
@@ -127,7 +98,6 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
     );
 }
 
-// HOLD-01, as pi.
 #[test]
 fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_screen_and_every_step_in_order_when_it_comes_back_as_pi()
  {
@@ -135,8 +105,8 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_its_state_the_scree
 }
 
 fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(dialect: Dialect) {
-    // The folder of the world, which the worktree is not in: the file that lets the agent
-    // go on is made there, so that making it is no change of the worktree.
+    // The file that lets the agent go on is made outside the worktree, so making it changes nothing
+    // in it.
     let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let go = world.home().with_file_name("go");
     let named: Vec<String> = (1..=READS).map(|k| format!("f{k:03}.txt")).collect();
@@ -144,15 +114,13 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         repo.write(file, &format!("{file}\n"));
     }
     let head = repo.commit("Add the files the agent reads");
-    // The agent reads them in an order that is neither by name nor by its reverse, so that
-    // steps kept in the order of their paths are not mistaken for steps kept in the order
-    // they came: 37 and 100 share no factor, so each file is read once.
+    // An order neither by name nor its reverse; 37 and 100 share no factor, so each file is read
+    // once.
     let files: Vec<String> = (0..READS).map(|k| named[k * 37 % READS].clone()).collect();
     assert_ne!(files, named, "the reads are in the order of their names");
     let mut steps = vec!["turn".to_owned(), format!("hold {}", go.display())];
     steps.extend(files.iter().map(|file| format!("read {file}")));
     steps.extend(["end".to_owned(), "turn".to_owned()]);
-    // The step of `end`: after `turn` and `hold`, and the reads.
     let end_step = 2 + READS;
     world.agent_script("default", &script(&steps));
 
@@ -168,14 +136,10 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         agents.shown == Some(SessionState::Works)
     });
 
-    // The client leaves while the agent works, with no goodbye.
     client.vanish();
 
-    // A file the agent does not touch, written while the client is away and the turn is
-    // open: only a state taken when the turn ends holds it.
     repo.write("late.txt", "written while the agent works\n");
 
-    // The agent finishes its turn.
     let began = Instant::now();
     fs::write(&go, "").expect("let the agent go on");
     let agent = Started {
@@ -193,8 +157,6 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         began.elapsed()
     );
 
-    // A client that connects later finds the turn: the session has finished a turn that
-    // is not reviewed, and the history holds it with its state.
     let mut later = world.client();
     let shown = |later: &mut Client| {
         later
@@ -226,7 +188,6 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
     assert_eq!(*session_of_turn, session.id);
     assert_eq!(session.agent, dialect.name());
 
-    // Its recorded state is what the files hold, `late.txt` of the turn's end among them.
     assert_eq!(
         later.compare(&workspace, state, None).expect("compare"),
         vec![]
@@ -242,7 +203,6 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         [std::path::Path::new("late.txt")]
     );
 
-    // Every one of the events sent meanwhile, in order.
     let kept = later.turn(turn).expect("the turn is kept");
     assert_eq!(kept.ended, Some(TurnEnd::Finished));
     assert_eq!(kept.state.as_deref(), Some(state.as_str()));
@@ -263,7 +223,6 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
         "the steps differ from the reads at {first_difference:?}"
     );
 
-    // The terminal's screen: the last of what the agent printed, and its prompt.
     let last_read = format!("● Read {}", files.last().expect("reads"));
     let cut = later
         .attach_terminal(&terminal, SIZE)
@@ -286,15 +245,13 @@ fn a_client_that_leaves_while_the_agent_works_finds_the_turn_when_it_comes_back(
     end(world, later);
 }
 
-/// The turns of the history of `workspace` that hold a state, each with its session and
-/// its state, oldest first.
 fn turns_with_state(
     client: &mut Client,
     workspace: &WorkspaceId,
 ) -> Vec<(yaar_link::TurnId, yaar_link::SessionId, String)> {
     let mut found = Vec::new();
-    // The state is recorded when the turn ends, and the Keeper tells the session finished
-    // before it has: the history holds it a moment later.
+    // The Keeper tells the session finished before the state is recorded: the history holds it
+    // later.
     wait_until(DEADLINE, || {
         found = client
             .history(workspace)
@@ -315,8 +272,6 @@ fn turns_with_state(
     found
 }
 
-/// What one run of HOLD-06 measured: the longest a single write of the stand-in's flood
-/// waited.
 fn longest_write(world: &World, name: &str) -> Duration {
     let log = world.agent_log(name);
     log.did
@@ -328,11 +283,6 @@ fn longest_write(world: &World, name: &str) -> Duration {
         .unwrap_or_else(|| panic!("{name} wrote down no flood: {:?}", log.did))
 }
 
-/// A run of the stand-in whose script is `turn`, `flood`, `end`, `turn`, in a terminal of
-/// `workspace` opened by a client of its own, which reads everything the agent writes up
-/// to its second prompt when `reading` holds, and nothing after the first prompt when it
-/// does not, until the stand-in's log holds its flood. Gives the longest write of the
-/// flood. The client is gone when the run is over.
 fn flood_run(
     dialect: Dialect,
     world: &World,
@@ -363,8 +313,6 @@ fn flood_run(
     if reading {
         client.wait_for_output(&terminal, FLOOD_DEADLINE, at_prompt_after_a_turn);
     } else {
-        // Nothing is read from the socket from here: the Keeper has a client that is
-        // stuck, and the agent goes on writing into its terminal.
         assert!(
             wait_until(FLOOD_DEADLINE, || agent
                 .log(world)
@@ -375,9 +323,8 @@ fn flood_run(
         );
     }
     drop(client);
-    // The agent reported the end of its turn through its CLI's own piece of the app: as pi
-    // it did so only because pi found the extension, so that a run in a world with no yes
-    // is no run of pi. The report may come after the flood, hence the wait.
+    // The stand-in reports its turn's end through its CLI's piece of the app, as pi only when pi
+    // found the extension. The report may come after the flood, hence the wait.
     assert!(
         wait_until(DEADLINE, || agent.log(world).did.iter().any(
             |did| matches!(did, Did::Hook { event, .. } if event == dialect.turn_end_event())
@@ -388,13 +335,11 @@ fn flood_run(
     longest_write(world, name)
 }
 
-// HOLD-06.
 #[test]
 fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds() {
     a_stopped_client_does_not_hold_the_agent_up(Dialect::ClaudeCode);
 }
 
-// HOLD-06, as pi. The limit is the row's own, as for Claude Code.
 #[test]
 fn a_client_that_is_stopped_does_not_hold_the_agent_up_by_more_than_a_hundred_milliseconds_as_pi() {
     a_stopped_client_does_not_hold_the_agent_up(Dialect::Pi);
@@ -404,12 +349,9 @@ fn a_stopped_client_does_not_hold_the_agent_up(dialect: Dialect) {
     let (world, repo) = World::with_standin_as(dialect, "default", &Script(vec![]));
     let mut setup = world.client();
     let workspace = setup.open_folder(repo.path()).expect("open the folder").1;
-    // This client reads nothing again: it goes, so that only the runs' own clients are
-    // there for the Keeper to write to.
     drop(setup);
 
-    // The pair is measured up to three times; one pair that holds shows the row, and a
-    // Keeper that waits for the client that is stopped fails every one.
+    // One pair that holds is enough; a Keeper that waits for the stopped client fails every one.
     let mut pairs = Vec::new();
     for attempt in 1..=ATTEMPTS {
         let base = flood_run(
@@ -443,6 +385,5 @@ fn a_stopped_client_does_not_hold_the_agent_up(dialect: Dialect) {
          (reading, stopped) {pairs:?}"
     );
 
-    // The runs' terminals and their stand-ins end with the world.
     leave(world);
 }

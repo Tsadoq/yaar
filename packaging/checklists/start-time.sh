@@ -1,58 +1,16 @@
 #!/bin/bash
-# PERF-01 and PERF-02: the time from the start of the packaged app to the diff of a
-# workspace on screen, against 0.3 s.
+# Time from starting the packaged app to the diff of a workspace on screen, against 0.3 s.
 #
-#   packaging/checklists/start-time.sh [--runs N]            macOS: the app in /Applications
-#   packaging/checklists/start-time.sh --linux [--runs N]    Linux: the desktop entry's Exec
-#   packaging/checklists/start-time.sh --read <file> <t0 in ms since 1970>
+# packaging/checklists/start-time.sh [--runs N]            macOS: the app in /Applications
+# packaging/checklists/start-time.sh --linux [--runs N]    Linux: the desktop entry's Exec
+# packaging/checklists/start-time.sh --read <file> <t0 in ms since 1970>
 #
-# What it measures: with the trace variable YAAR_TRACE_START set, the app writes one line a
-# mark on its standard error, `yaar-trace <name> epoch_ms=<ms>` (crates/window/frame/src/
-# trace.rs): `main` when the Window program starts, `first_frame` when the Frame draws its
-# first frame, `first_diff` the frame after the review pane first draws a diff with rows.
-# This script notes the clock just before it asks the system to start the app and prints each
-# mark as milliseconds after that. The figure of PERF-01 and PERF-02 is `first_diff` of the
-# FIRST start, against 300 ms. The time of the call itself (`open`, or the start of the
-# program) is inside it, as it is for a user.
-#
-# macOS: `open -g -n --env YAAR_TRACE_START=1 --stderr <file> /Applications/YAAR.app` (an app
-# started by `open` has its standard error where `open --stderr` sends it, and nowhere
-# else). The app reopens the workspace it was last left on, so open the app once before, on a
-# workspace that has a diff, and quit it. Then, for a cold start: restart the Mac, log in,
-# wait two minutes, and run this once (RUNS defaults to 1; later starts of one run are warm
-# and are printed for comparison only). The script refuses to start while YAAR is already
-# running, ends the app it started by SIGTERM to the pid of its Window program (matched by
-# full path), and waits for the Keeper to leave (it lingers 5 s) before a next start. It
-# posts no input.
-#
-# --linux: runs the Exec line of the package's desktop entry
-# (/usr/share/applications/io.github.tsadoq.yaar.desktop) with YAAR_TRACE_START=1 and its
-# standard error in a file, detached, and ends it by its pid. It needs a graphical session:
-# DISPLAY or WAYLAND_DISPLAY in the environment, or named in YAAR_SESSION_ENV as words
-# `NAME=value` (for example "WAYLAND_DISPLAY=wayland-1 XDG_RUNTIME_DIR=/run/user/1000"), which
-# are passed to the app. Run on a Linux machine it measures that machine. Run on the Mac it
-# measures the project's virtual machine: it copies this folder to the machine, runs
-# `start-time.sh --linux` there through the machine's own ssh (YAAR_VM, default
-# ~/ade-phase4-2026-11-12/vm/vm.sh; the machine must be running: start it yourself), and
-# copies the results folder back. PERF-02 is "after the machine's own restart, a cold start,
-# the .deb installed there".
-#
-# --read <file> <t0>: prints the marks of a file that an earlier start wrote, as
-# milliseconds after <t0>, and starts nothing. This is the reading the other modes use.
-#
-# What it needs of the owner: the packaged app installed, a workspace with a diff left open
-# in it, the screen unlocked, mains power, nobody at the keyboard. The older measure it
-# follows is ~/yaar-phase5-2026-11-17/cold-start/run.sh, which timed the first frame of the
-# empty window; this one times the diff.
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/start-time-<macos|linux>-<HHMMSS>/ with
-# context.txt (date, system, uptime, power, load, the app's sha256), start-<n>.err (the app's
-# standard error), starts.tsv (run, main_ms, first_frame_ms, first_diff_ms) and verdict.txt.
-#
-# Exit codes: 0 the first start's first_diff is within 300 ms; 1 it is over, or a mark is
-# missing, or a start failed (a sentence says which); 2 usage error. With --linux on the
-# Mac, the run in the machine ends 0 or 1 as above; any other status of it (ssh failing is
-# 255) is said in a sentence and becomes 1.
+# The figure is `first_diff` of the FIRST start, from the marks the app writes on stderr when
+# YAAR_TRACE_START is set. The app reopens its last workspace: open it once on a diff and quit.
+# For a cold start restart the Mac, log in, wait two minutes, run once. --linux needs DISPLAY or
+# WAYLAND_DISPLAY, or YAAR_SESSION_ENV as `NAME=value` words; on the Mac it runs in the virtual
+# machine that the program YAAR_VM names drives. Exit: 0 within 300 ms, 1 over, a mark missing or
+# a start failed, 2 usage.
 set -euo pipefail
 
 CK_NAME=start-time.sh
@@ -93,7 +51,6 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-# row <file> <t0>: "main_ms first_frame_ms first_diff_ms", "none" for a mark not there.
 row() {
   local name ms out=""
   for name in main first_frame first_diff; do
@@ -116,29 +73,25 @@ if [ -n "$READ_FILE" ]; then
   exit 0
 fi
 
-# ---------------------------------------------------------------------------------------
-# macOS, run from the Mac, into the virtual machine
-# ---------------------------------------------------------------------------------------
-
 if [ "$LINUX" -eq 1 ] && [ "$(ck_os)" = Darwin ]; then
-  VM=${YAAR_VM:-$HOME/ade-phase4-2026-11-12/vm/vm.sh}
-  [ -x "$VM" ] || ck_die "no virtual machine script at $VM: name it in YAAR_VM"
+  VM=${YAAR_VM:-}
+  [ -n "$VM" ] || ck_die "set YAAR_VM to the program that drives the Linux virtual machine: it takes status, start, ssh, scp-to and scp-from"
+  [ -x "$VM" ] || ck_die "no virtual machine program at $VM: name it in YAAR_VM"
   VM_STATE=$("$VM" status) || ck_die "$VM status failed"
   case $VM_STATE in
     running*) ;;
     *) ck_die "the virtual machine is not running ($VM_STATE): start it with '$VM start', restart it for a cold start, and run this again" ;;
   esac
   # shellcheck disable=SC2016 # the remote shell expands $HOME
-  "$VM" ssh 'rm -rf "$HOME/yaar-checklists-kit"' || ck_die "could not clear yaar-checklists-kit in the virtual machine"
-  "$VM" scp-to "$HERE" yaar-checklists-kit > /dev/null || ck_die "could not copy $HERE to the virtual machine"
+  "$VM" ssh 'rm -rf "$HOME/yaar-checklists-scripts"' || ck_die "could not clear yaar-checklists-scripts in the virtual machine"
+  "$VM" scp-to "$HERE" yaar-checklists-scripts > /dev/null || ck_die "could not copy $HERE to the virtual machine"
   ck_tmpdir
   REMOTE_LOG="$CK_TMPDIR/remote.log"
-  # The session words are quoted for the remote shell with single quotes.
   SESSION=${YAAR_SESSION_ENV:-}
   case $SESSION in
     *"'"*) ck_die "YAAR_SESSION_ENV holds a single quote, which cannot be passed on" ;;
   esac
-  if "$VM" ssh "YAAR_SESSION_ENV='$SESSION' bash \"\$HOME/yaar-checklists-kit/start-time.sh\" --linux --runs $RUNS" | tee "$REMOTE_LOG"; then
+  if "$VM" ssh "YAAR_SESSION_ENV='$SESSION' bash \"\$HOME/yaar-checklists-scripts/start-time.sh\" --linux --runs $RUNS" | tee "$REMOTE_LOG"; then
     REMOTE_STATUS=0
   else
     REMOTE_STATUS=$?
@@ -155,10 +108,6 @@ if [ "$LINUX" -eq 1 ] && [ "$(ck_os)" = Darwin ]; then
   printf '%s: copied to %s\n' "$CK_NAME" "$LOCAL/vm-${REMOTE_DIR##*/}"
   exit "$REMOTE_STATUS"
 fi
-
-# ---------------------------------------------------------------------------------------
-# One system: start, read, end
-# ---------------------------------------------------------------------------------------
 
 if [ "$LINUX" -eq 1 ]; then
   KIND=linux
@@ -246,6 +195,7 @@ stop_app() {
   elif [ -n "$PID" ] && kill -0 "$PID" 2> /dev/null; then
     kill -TERM "$PID"
   fi
+  # The Keeper lingers 5 s after the Window is gone.
   if ! ck_wait_until 20 not_running; then
     ck_die "the app did not leave in 20 s after SIGTERM: a program at $WINDOW_PROGRAM or $KEEPER_PROGRAM is still running"
   fi
@@ -262,6 +212,7 @@ while [ "$RUN" -le "$RUNS" ]; do
   : > "$ERR"
   T0=$(ck_now_ms)
   if [ "$KIND" = macos ]; then
+    # An app started by `open` has its stderr only where --stderr sends it.
     open -g -n --env YAAR_TRACE_START=1 --stderr "$ERR" "$APP"
   else
     if command -v setsid > /dev/null; then

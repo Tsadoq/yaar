@@ -1,7 +1,3 @@
-//! A round shown as sent until its agent's first edit, and what changed since a round's
-//! comments were sent. Built by the engine's package "rounds and what changed since" of
-//! slice 6.
-
 use yaar_recorder::{ChangedPath, Worktree};
 use yaar_store::{ReviewId, SessionId};
 
@@ -9,10 +5,8 @@ use crate::engine::{EngineError, Reviews};
 use crate::review::{Review, ReviewError};
 
 impl Reviews {
-    /// The agent of `session` reported an edit, with its edit or its write tool: the newest
-    /// round of its review counts as edited from now on, by
-    /// [`crate::Review::agent_edited`], and that is kept. Gives the review and the round
-    /// when one changed; none when none did, and for a session with no review.
+    /// The newest round of the session's review counts as edited from now on. Gives the review and
+    /// round when one changed.
     pub fn agent_edited(
         &self,
         session: &SessionId,
@@ -37,13 +31,8 @@ impl Reviews {
         Ok(Some((review.id().clone(), round)))
     }
 
-    /// What changed since the comments of round `round` of `review` were sent: the paths
-    /// that differ between the state recorded at that send and the state of `worktree`,
-    /// the worktree of the review's workspace, recorded now, renames paired as git pairs
-    /// them. Refused with [`crate::ReviewError::UnknownRound`] for a round the review does
-    /// not hold or whose state is not recorded yet. The call records a state of the
-    /// worktree, so, as at any recorded state, the threads follow the code to it and their
-    /// placements are kept.
+    /// Refused with [`crate::ReviewError::UnknownRound`] for an unknown round or one with no state
+    /// yet. Records a state, so the threads follow the code to it.
     pub fn changed_since_round(
         &self,
         worktree: &Worktree,

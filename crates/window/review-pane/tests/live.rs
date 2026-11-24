@@ -1,10 +1,5 @@
-//! Component test: the live diff of Flow, on GPUI's test platform. Keys, clicks and the
-//! wheel go in; the pane is read back through the model it shows. The test plays the Keeper
-//! on the other end of a socket pair: it sets the agents, the turns and the settings the
-//! Keeper would hold, tells the facts the Keeper tells, and answers what the live diff asks.
-//!
-//! A negative clause ("asks nothing") is read after a barrier: something the test causes
-//! after it, through the same path, whose arrival shows that everything before it arrived.
+//! A negative clause is read after a barrier: a later request through the same path, whose arrival
+//! shows the earlier ones arrived.
 
 mod common;
 
@@ -25,22 +20,18 @@ use common::{
     wait_until, working_on, workspace,
 };
 
-/// The state the turn counts from.
 fn s0() -> String {
     "5".repeat(40)
 }
 
-/// The state recorded at the end of the turn.
 fn s1() -> String {
     "6".repeat(40)
 }
 
-/// A state the reviewer last marked reviewed, other than the turn's start.
 fn s9() -> String {
     "7".repeat(40)
 }
 
-/// The start another turn is given later.
 fn s5() -> String {
     "8".repeat(40)
 }
@@ -53,7 +44,6 @@ fn write(path: &str) -> Step {
     Step::Write { path: path.into() }
 }
 
-/// Session `a`, which works on `turn`, as the agents model shows it.
 fn session_a_on(turn: &TurnId) -> Session {
     working_on(
         session('a', "Claude Code 1", SessionState::Works, None),
@@ -78,7 +68,6 @@ fn press(keys: &str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// A click on the bar, away from every control of it: the pane has the focus afterwards.
 fn focus_by_the_bar(stage: &Stage, cx: &mut VisualTestContext) {
     click("review-bar", cx);
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
@@ -96,7 +85,6 @@ fn live_change(stage: &Stage, cx: &mut VisualTestContext) -> Option<LiveChange> 
         .read_with(cx, |pane, _| pane.live_change().cloned())
 }
 
-/// The paths of the headings of the changed files of the live diff, in order.
 fn headings(rows: &[PaneRow]) -> Vec<String> {
     rows.iter()
         .filter_map(|row| match row {
@@ -106,7 +94,6 @@ fn headings(rows: &[PaneRow]) -> Vec<String> {
         .collect()
 }
 
-/// The paths of the files read, in order.
 fn reads(rows: &[PaneRow]) -> Vec<String> {
     rows.iter()
         .filter_map(|row| match row {
@@ -116,7 +103,6 @@ fn reads(rows: &[PaneRow]) -> Vec<String> {
         .collect()
 }
 
-/// Whether every file of the live diff shows its lines.
 fn all_read(rows: &[PaneRow]) -> bool {
     !rows.iter().any(|row| {
         matches!(
@@ -129,8 +115,6 @@ fn all_read(rows: &[PaneRow]) -> bool {
     })
 }
 
-/// Keeps the app running until the live diff holds the changed files `wanted`, in order,
-/// each with its lines read, and the files read `read` after them.
 fn wait_for_live(stage: &Stage, wanted: &[&str], read: &[&str], cx: &mut VisualTestContext) {
     let what = format!("the files {wanted:?} and the reads {read:?}");
     wait_until(cx, &what, |cx| {
@@ -141,8 +125,6 @@ fn wait_for_live(stage: &Stage, wanted: &[&str], read: &[&str], cx: &mut VisualT
     });
 }
 
-/// Keeps the app running until the files read, in the live diff, are `wanted`: a fact the
-/// Keeper told reaches the pane by a thread of its own, which the app does not wait for.
 fn wait_for_reads(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     let what = format!("the files read {wanted:?}");
     wait_until(cx, &what, |cx| {
@@ -154,7 +136,6 @@ fn wait_for_reads(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     });
 }
 
-/// Keeps the app running until the live diff holds `row`.
 fn wait_for_row(stage: &Stage, row: &PaneRow, cx: &mut VisualTestContext) {
     wait_until(cx, &format!("the row {row:?}"), |cx| {
         stage
@@ -163,8 +144,6 @@ fn wait_for_row(stage: &Stage, row: &PaneRow, cx: &mut VisualTestContext) {
     });
 }
 
-/// Answers the next request, which has to list the files of the change from `from` to
-/// `to`, with `files`.
 fn compared(
     stage: &mut Stage,
     from: &str,
@@ -183,9 +162,6 @@ fn compared(
     stage.keeper.reply(asked, Ok(Reply::Compared(files)));
 }
 
-/// Answers the next requests, as many as `files` has rows, each of which has to read the
-/// two versions of one of them, from `old` to `new`, in any order: a few are on their way
-/// at once.
 fn answer_reads(
     stage: &mut Stage,
     old: &str,
@@ -221,11 +197,6 @@ fn answer_reads(
     }
 }
 
-/// Answers the two requests that come together when a list is answered while another
-/// reason to ask was there already: the read of the file `read` (named by its path, what
-/// it was and what it is now), new to the list, and the list asked once more, from `from`
-/// to the files on disk. They come in either order; the list is answered, with `files`,
-/// when both are in.
 fn a_read_and_the_next_list(
     stage: &mut Stage,
     from: &str,
@@ -275,8 +246,6 @@ fn a_read_and_the_next_list(
     }
 }
 
-/// A pane on workspace `1` in the live form of Flow, with session `a` idle and no turn,
-/// the changes of the workspace answered, and the focus in the pane, Flow on screen.
 fn in_the_live_diff(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
@@ -302,7 +271,6 @@ fn in_the_live_diff(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     (stage, cx)
 }
 
-/// Starts turn `turn` of session `a`, counted from `start`, in the workspace on screen.
 fn start_turn(stage: &mut Stage, turn: &TurnId, start: &str, cx: &mut VisualTestContext) {
     stage.keeper.set_turn(running_turn(
         turn.clone(),
@@ -317,9 +285,6 @@ fn start_turn(stage: &mut Stage, turn: &TurnId, start: &str, cx: &mut VisualTest
     cx.run_until_parked();
 }
 
-/// What the Frame asks when the files of the workspace change, which the pane answers with
-/// no file of Changes: answered, in either order with what the live diff asks of its own,
-/// `files` being what it is told of the turn's change from `from` to the files on disk.
 fn the_files_changed(
     stage: &mut Stage,
     from: &str,
@@ -366,8 +331,8 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     let t = turn_id('t');
     let (mut stage, mut cx) = in_the_live_diff(cx);
 
-    // With no turn there is nothing to show, and nothing is asked: the barrier is the
-    // turn that starts next, whose list is the next request.
+    // With no turn there is nothing to show and nothing is asked: the barrier is the turn that
+    // starts next, whose list is the next request.
     assert!(drawn("flow-live", &mut cx).is_some());
     assert!(drawn("flow-empty", &mut cx).is_some());
     assert_eq!(live_change(&stage, &mut cx), None);
@@ -381,8 +346,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
 
-    // The diff of the running turn: the files it changed so far against the state it
-    // started from.
     answer_reads(
         &mut stage,
         &s0(),
@@ -432,8 +395,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     assert!(drawn("flow-text-2-new:two", &mut cx).is_some());
     assert!(drawn("flow-empty", &mut cx).is_none());
 
-    // It grows as writes arrive: a file the agent wrote whole, then a file a shell
-    // command wrote, which only the watcher tells of.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, write("b.txt")));
@@ -447,7 +408,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         ],
         &mut cx,
     );
-    // Only the file new to the list is read: a.txt is not.
     answer_reads(
         &mut stage,
         &s0(),
@@ -466,7 +426,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         ],
         &mut cx,
     );
-    // After a change the watcher told of, every file is read again, in any order.
     answer_reads(
         &mut stage,
         &s0(),
@@ -480,8 +439,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     );
     wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
 
-    // The files it read and did not change come after every file it changed, one row
-    // each, with no request: the row is there before anything is answered.
     let changed = live_rows(&stage, &mut cx).len();
     stage
         .keeper
@@ -505,7 +462,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         "a file read has no heading, hunk or lines: {rows:#?}"
     );
     assert!(drawn(&format!("flow-read-{}", rows.len() - 1), &mut cx).is_some());
-    // A second file read comes after the first; a file read again is not listed twice.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 3, read("q.txt")));
@@ -518,10 +474,9 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     assert_eq!(reads(&rows), ["r.txt", "q.txt"]);
     assert!(matches!(rows[rows.len() - 2], PaneRow::Read { .. }));
 
-    // A file the agent edits again is read again, though the list holds it just as it did:
-    // its diff grows. Only that file is read, which is also the barrier for the three reads
-    // above: a read that had asked for the list would have its question come first, and the
-    // read of a.txt would not be the next request.
+    // A file the agent edits again is read again, though the list is as before. Only that file is
+    // read, which is also the barrier for the three reads above: a read that had asked for the list
+    // would have its question come first.
     stage.keeper.tell(step_fact(
         session_id('a'),
         t.clone(),
@@ -564,9 +519,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
 
-    // A file whose status changes in a later list is taken anew: a shell command removes
-    // a.txt, and its heading says so; written again, it says Modified again. Each change is
-    // told by the watcher alone, which reads every file again, a.txt with no new side.
     let a_is = |status: FileStatus| PaneRow::File {
         path: a.clone(),
         status,
@@ -628,8 +580,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     let rows = live_rows(&stage, &mut cx);
     assert!(!rows.contains(&a_is(FileStatus::Deleted)), "{rows:#?}");
 
-    // It leaves the group when the turn changes it: while the list that write asked for
-    // is not answered, r.txt is still a file read.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 6, write("r.txt")));
@@ -645,9 +595,8 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     );
     cx.run_until_parked();
     assert_eq!(reads(&live_rows(&stage, &mut cx)), ["r.txt", "q.txt"]);
-    // One question for the list is on its way at a time: a write and a change the watcher
-    // told of, meanwhile, ask nothing, so the Frame's question about the changes is the
-    // next request.
+    // One question for the list is on its way at a time: a write and a watcher change, meanwhile,
+    // ask nothing, so the Frame's question about the changes is the next request.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 7, write("a.txt")));
@@ -669,8 +618,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         ]
     };
     stage.keeper.reply(asked, Ok(Reply::Compared(four())));
-    // Once it is answered, the file new to it is read and the list is asked once more, for
-    // what came meanwhile; that list, after a change the watcher told of, reads every file.
     a_read_and_the_next_list(
         &mut stage,
         &s0(),
@@ -704,9 +651,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         })
     );
 
-    // With the timeline form on screen it asks nothing either: the Frame's question about
-    // the changes, after a write and a change the watcher told of, is the next request.
-    // Back in the live form it asks once.
     press("shift-l", &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
@@ -749,10 +693,8 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
 
-    // Hidden, it asks nothing, not even for the files of a list that was on its way when
-    // it was hidden, and asks once when it comes on screen again. The barrier is a change
-    // the Frame asks the Keeper about, told twice: no question of the live diff comes
-    // between the Frame's.
+    // Hidden, the live diff asks nothing, not even for a list on its way, and asks once on return.
+    // The barrier is a change the Frame asks the Keeper about, told twice.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 9, write("d.txt")));
@@ -789,7 +731,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     }
     press("f", &mut cx);
     assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
-    // The file the list brought is read now, and the list is asked once.
     a_read_and_the_next_list(&mut stage, &s0(), ("d.txt", "", "new d\n"), all, &mut cx);
     let every_file = [
         ("a.txt", "one\n", "one\ntwo\nthree\n"),
@@ -806,9 +747,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         &mut cx,
     );
 
-    // The turn ends with a state recorded, under the default setting, which selects what
-    // changed since the last review in Changes: that list is asked first, and the live
-    // diff's after it, now to the state the turn ended with.
     stage.keeper.tell(Fact::TurnEnded {
         workspace: id('1'),
         session: session_id('a'),
@@ -848,10 +786,9 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
     );
     assert_eq!(stage.pane.read_with(&cx, |pane, _| pane.view()), View::Flow);
 
-    // The turn ended with a state: its change runs between two recorded states, which no
-    // later write changes, so a change of the files the watcher tells of asks nothing of
-    // the live diff. The barrier is the Frame's own question, told twice: a question of
-    // the live diff would come between the two.
+    // The turn's change runs between two recorded states that no later write changes, so a watcher
+    // change asks nothing of the live diff. The barrier is the Frame's own question, told twice:
+    // a question of the live diff would come between the two.
     for _ in 0..2 {
         stage
             .keeper
@@ -864,8 +801,8 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         );
     }
 
-    // The running turn is the one shown while its start is not known: it counts from the
-    // commit checked out, and starts over from its start once that is kept.
+    // While its start is not known the running turn counts from the commit checked out,
+    // and from its start once that is kept.
     let t2 = turn_id('u');
     let b = session('b', "Claude Code 2", SessionState::Idle, None);
     stage.keeper.set_turn(running_turn(
@@ -890,7 +827,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
         })
     );
     assert_eq!(live_rows(&stage, &mut cx), []);
-    // A turn that has only read so far: its list holds no file, and the read is a row.
     stage.keeper.tell(step_fact(
         session_id('b'),
         t2.clone(),
@@ -904,8 +840,6 @@ fn the_live_diff_shows_the_diff_of_the_running_turn_and_grows_as_writes_arrive(
             path: "seen by u.txt".into()
         }]
     );
-    // The start is kept when the turn before is recorded: the Window reads the turn again
-    // at the end of another turn of the workspace, and counts from it.
     stage.keeper.set_turn(running_turn(
         t2.clone(),
         session_id('b'),
@@ -972,7 +906,6 @@ fn a_list_the_keeper_refused_is_asked_again_with_the_files_the_writes_named_befo
     );
     wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
 
-    // The Keeper refuses the list a write of a.txt asked for. What is shown stays.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, write("a.txt")));
@@ -992,8 +925,6 @@ fn a_list_the_keeper_refused_is_asked_again_with_the_files_the_writes_named_befo
     );
     wait_for_live(&stage, &["a.txt", "b.txt", "c.txt"], &[], &mut cx);
 
-    // The next write asks again, and a.txt, which the refused question was about, is read
-    // again with c.txt, which this write names: b.txt is not.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 2, write("c.txt")));
@@ -1054,9 +985,8 @@ fn a_turn_that_ended_before_the_window_opened_is_shown_to_the_state_it_ended_wit
     stage.keeper.show(&changes, |_| texts("", ""), &mut cx);
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
-    // A window with no changes of its own shows the last turn recorded in Changes, which
-    // asks too, and in no fixed order with the live diff: the live diff's questions are
-    // told by what they count from.
+    // A window with no changes of its own shows the last turn recorded in Changes, which asks too,
+    // in no fixed order with the live diff.
     let mut read_a = false;
     while !read_a {
         let (asked, request) = stage.keeper.request(&mut cx);
@@ -1128,7 +1058,6 @@ fn a_file_read_outside_the_worktree_is_listed_by_its_whole_path_and_a_file_read_
         .keeper
         .reply(asked, texts("x\n", "x\n").map(Reply::File));
     wait_for_live(&stage, &["new name.txt"], &[], &mut cx);
-    // The list is here: the old name of a renamed file is the file that changed.
     stage.keeper.tell(step_fact(
         session_id('a'),
         t.clone(),
@@ -1138,7 +1067,6 @@ fn a_file_read_outside_the_worktree_is_listed_by_its_whole_path_and_a_file_read_
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 2, read("/etc/hosts")));
-    // The first read came before the second, which is here: the old name was left out.
     wait_for_reads(&stage, &["/etc/hosts"], &mut cx);
 }
 
@@ -1149,7 +1077,6 @@ fn files_read_before_the_first_list_is_answered_are_rows_and_leave_the_group_whe
     let t = turn_id('t');
     let (mut stage, mut cx) = in_the_live_diff(cx);
     start_turn(&mut stage, &t, &s0(), &mut cx);
-    // The first list is asked and not answered while the turn reads.
     let first_list = stage.keeper.expect(
         Request::CompareVersions {
             workspace: id('1'),
@@ -1177,7 +1104,6 @@ fn files_read_before_the_first_list_is_answered_are_rows_and_leave_the_group_whe
         ],
         "before the list is here nothing is taken out of the group"
     );
-    // The list holds a file the turn read: it is a changed file now, and no file read.
     stage.keeper.reply(
         first_list,
         Ok(Reply::Compared(vec![file("a.txt", FileStatus::Modified)])),
@@ -1233,7 +1159,6 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
                 )
             })
     };
-    // The reviewer starts on the first changed line.
     assert_eq!(
         at(&stage, &mut cx),
         Some(("a.txt".to_owned(), Side::Old, 0))
@@ -1253,7 +1178,6 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
         at(&stage, &mut cx),
         Some(("b.txt".to_owned(), Side::Old, 1))
     );
-    // The end: the file read has no line to stand on, so `j` stays on the last line.
     press("j", &mut cx);
     assert_eq!(
         at(&stage, &mut cx),
@@ -1264,7 +1188,6 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
         at(&stage, &mut cx),
         Some(("b.txt".to_owned(), Side::New, 0))
     );
-    // A click on a line puts the reviewer there.
     let rows = live_rows(&stage, &mut cx);
     let index = rows
         .iter()
@@ -1279,7 +1202,6 @@ fn j_and_k_move_through_the_lines_of_the_live_diff_across_its_files_and_pass_the
     );
 }
 
-/// A live diff of turn `t` that holds `a.txt`, `one` and then `two` added.
 fn with_a_change(t: &TurnId, cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     let (mut stage, mut cx) = in_the_live_diff(cx);
     start_turn(&mut stage, t, &s0(), &mut cx);

@@ -1,5 +1,3 @@
-//! What the component tests of the Store share.
-
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -9,7 +7,6 @@ use yaar_store::FILE_NAME;
 pub struct Scratch(pub PathBuf);
 
 impl Scratch {
-    /// A new, empty folder under the system's temporary folder.
     pub fn new() -> Self {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -18,7 +15,6 @@ impl Scratch {
         Self(folder)
     }
 
-    /// The database file of this folder.
     pub fn file(&self) -> PathBuf {
         self.0.join(FILE_NAME)
     }

@@ -1,17 +1,6 @@
-//! Component test: code intelligence in the diff, on GPUI's test platform. Keys, clicks
-//! and the wheel go in; the pane is read back through the model it shows. The test plays
-//! the Keeper on the other end of a socket pair and the Navigator at the pane's port: it
-//! reads the asks the pane really makes and tells answers in the shapes `port.rs` defines,
-//! and computes nothing the Navigator computes.
-//!
-//! A name's place on screen: the text of a line is drawn by an element whose selector is
-//! `review-text-<row>-<side>:<text>`, and the font of the pane is of fixed width, so the
-//! middle of the character at offset `k` is `left + (k + 0.5) * cell`, the cell being the
-//! element's width over the text's characters.
-//!
-//! A negative clause ("asks nothing") is read after a barrier: an ask the test causes
-//! after it, which the pane makes through the same port, so that it arrives after
-//! everything the pane asked before it.
+//! Line text has selector `review-text-<row>-<side>:<text>`; the font is fixed-width, so
+//! the middle of the character at offset `k` is `left + (k + 0.5) * cell`.
+//! A negative clause is read after a barrier: later asks arrive after earlier ones.
 
 mod common;
 
@@ -34,8 +23,6 @@ use common::{
     wait_until, workspace,
 };
 
-/// The new side of the file the tests of the hover read: an added line holds the name
-/// under test.
 const NEW: &str =
     "fn main() {\n    let sides = vec![1, 2];\n    let total = perimeter(sides);\n}\n";
 const OLD: &str = "fn main() {\n    let sides = vec![1, 2];\n}\n";
@@ -46,12 +33,10 @@ fn workspace_id() -> WorkspaceId {
     id('1')
 }
 
-/// The id of a commit or a state that is this digit forty times.
 fn version(digit: char) -> String {
     digit.to_string().repeat(40)
 }
 
-/// The language the tests tell the pane about, as the Navigator tells it once at its start.
 fn rust() -> Language {
     Language {
         name: "rust".to_owned(),
@@ -60,9 +45,6 @@ fn rust() -> Language {
     }
 }
 
-/// Opens the pane on the change of `path`, from `old` to `new`, waits for its lines, and
-/// connects the Navigator, which tells the language of the file. The first line of the
-/// diff is clicked: the pane has the focus, so that its keys work.
 fn open_on(
     path: &str,
     status: FileStatus,
@@ -78,14 +60,12 @@ fn open_on(
     (stage, navigator, cx)
 }
 
-/// Connects the Navigator to the pane's models; it tells the languages it knows.
 fn connect_navigator(stage: &Stage, cx: &mut VisualTestContext) -> NavigatorEnd {
     let navigator = NavigatorEnd::connect(&stage.models, cx);
     navigator.tell(Told::Languages(vec![rust()]), cx);
     navigator
 }
 
-/// The index of the row of the diff that is this one.
 fn row_of(pane: &Entity<ReviewPane>, wanted: Row, cx: &mut VisualTestContext) -> usize {
     pane.read_with(cx, |pane, _| {
         pane.rows()
@@ -95,8 +75,6 @@ fn row_of(pane: &Entity<ReviewPane>, wanted: Row, cx: &mut VisualTestContext) ->
     .unwrap_or_else(|| panic!("no row {wanted:?}"))
 }
 
-/// Where the character at offset `at` of `text` is drawn: the middle of its cell, in the
-/// element of the text of the row, by the rule in the header.
 fn char_point(
     row: usize,
     side: &str,
@@ -110,8 +88,6 @@ fn char_point(
     point(bounds.left() + cell * (at as f32 + 0.5), bounds.center().y)
 }
 
-/// Where the first byte of `name` in `text` is drawn, in the element of the text of the
-/// row, by the rule in the header.
 fn name_point(
     row: usize,
     side: &str,
@@ -125,8 +101,6 @@ fn name_point(
     char_point(row, side, text, offset, cx)
 }
 
-/// What the mark of the name should cover, as the left and right edge of the name `name`
-/// of `text`: where its first character starts and where its last one ends.
 fn name_edges(
     row: usize,
     side: &str,
@@ -146,8 +120,6 @@ fn name_edges(
     )
 }
 
-/// The mark of the name is drawn under the name, no wider and no further left or right:
-/// its edges are the name's, to the rounding of the layout to whole pixels.
 fn assert_marks(row: usize, side: &str, text: &str, name: &str, cx: &mut VisualTestContext) {
     let mark = bounds("review-name", cx);
     let (left, right) = name_edges(row, side, text, name, cx);
@@ -158,7 +130,6 @@ fn assert_marks(row: usize, side: &str, text: &str, name: &str, cx: &mut VisualT
     );
 }
 
-/// A click on `name` in the text of a row.
 fn click_name(
     row: usize,
     side: &str,
@@ -192,7 +163,6 @@ fn notice(pane: &Entity<ReviewPane>, cx: &mut VisualTestContext) -> Option<Strin
     pane.read_with(cx, |pane, _| pane.notice())
 }
 
-/// The place of `name` in `text`, line `line` from 1, as the pane has to ask for it.
 fn place(tree: Tree, path: &str, line: u32, text: &str, name: &str, shown: &[&str]) -> Place {
     Place {
         workspace: workspace_id(),
@@ -205,7 +175,6 @@ fn place(tree: Tree, path: &str, line: u32, text: &str, name: &str, shown: &[&st
     }
 }
 
-/// The next ask, which has to be a hover.
 fn hover_ask(navigator: &mut NavigatorEnd, cx: &mut VisualTestContext) -> (AskId, Place) {
     match navigator.ask(cx) {
         Ask::Hover { id, place } => (id, place),
@@ -213,8 +182,8 @@ fn hover_ask(navigator: &mut NavigatorEnd, cx: &mut VisualTestContext) -> (AskId
     }
 }
 
-/// The next ask, which has to be a hover, answered with a text, so that moving on to
-/// another line cancels nothing; gives where it was asked.
+/// Answers the next ask, which has to be a hover, with a text, so that moving to another line
+/// cancels nothing. Returns where it was asked.
 fn hover_answered(navigator: &mut NavigatorEnd, cx: &mut VisualTestContext) -> Place {
     let (id, place) = hover_ask(navigator, cx);
     navigator.tell(
@@ -243,7 +212,6 @@ fn location(path: &str, line: u32, text: &str) -> Location {
     }
 }
 
-/// The three places the references of the tests lie at.
 fn three() -> Vec<Location> {
     vec![
         location(
@@ -264,18 +232,15 @@ fn bounds(selector: &str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
     drawn(selector, cx).unwrap_or_else(|| panic!("{selector} is not drawn"))
 }
 
-// RP-21
 #[gpui_kit::test]
 fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by_text_match(
     cx: &mut TestAppContext,
 ) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
     let pane = &stage.pane;
-    // The reviewer comes to the diff on the first changed line, on its first name.
     assert_eq!(name(pane, &mut cx).as_deref(), Some("let"));
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
 
-    // A click on a name puts the reviewer on that line and name.
     click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
     assert_eq!(name(pane, &mut cx).as_deref(), Some("perimeter"));
     assert_eq!(
@@ -286,10 +251,8 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
             line: 2,
         }
     );
-    // The mark of the name is drawn under the name, and no wider.
     assert_marks(added, "new", ADDED, "perimeter", &mut cx);
 
-    // `shift-k` asks the hover of that name, of the files on disk.
     cx.simulate_keystrokes("shift-k");
     let (first, asked) = hover_ask(&mut navigator, &mut cx);
     let at_perimeter = place(
@@ -301,7 +264,6 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
         &["src/lib.rs"],
     );
     assert_eq!(asked, at_perimeter);
-    // While it is on its way the pane says so.
     assert_eq!(
         hover(pane, &mut cx),
         Some(HoverShown {
@@ -313,7 +275,6 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
     );
     assert!(drawn("review-hover-waiting", &mut cx).is_some());
 
-    // What the Navigator reports is shown under the rows, with no mark of a guess.
     navigator.tell(
         Told::Hover {
             id: first,
@@ -333,7 +294,6 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
     assert!(drawn("review-hover-waiting", &mut cx).is_none());
     assert!(drawn("review-hover-guessed", &mut cx).is_none());
 
-    // An answer found by text match, while no server is ready, carries the mark.
     cx.simulate_keystrokes("shift-k");
     let (second, _) = hover_ask(&mut navigator, &mut cx);
     navigator.tell(
@@ -355,7 +315,6 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
         .is_some()
     );
 
-    // An answer with nothing to say is said so.
     cx.simulate_keystrokes("shift-k");
     let (third, _) = hover_ask(&mut navigator, &mut cx);
     navigator.tell(
@@ -370,7 +329,6 @@ fn hovering_a_name_shows_what_the_navigator_reports_and_marks_an_answer_found_by
     assert!(drawn("review-hover-guessed", &mut cx).is_none());
 }
 
-// RP-21, the mouse resting on a name
 #[gpui_kit::test]
 fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -378,19 +336,16 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
     click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
 
-    // The mouse comes to rest on `sides`, a name of the line other than the reviewer's.
     let on_sides = name_point(added, "new", ADDED, "sides", &mut cx);
     cx.simulate_mouse_move(on_sides, None, Modifiers::none());
-    // One millisecond short of the delay: nothing was asked. The barrier is an ask of
-    // the reviewer's own, which comes after anything the resting asked.
+    // One millisecond short of the delay: nothing asked. The barrier is the reviewer's own ask,
+    // which comes after anything the resting asked.
     cx.executor()
         .advance_clock(HOVER_DELAY - Duration::from_millis(1));
     cx.simulate_keystrokes("shift-k");
     let (by_key, asked) = hover_ask(&mut navigator, &mut cx);
     assert_eq!(asked.name, "perimeter", "the mouse asked before its time");
 
-    // The delay passes: the hover of the name under the mouse is asked, and replaces the
-    // one asked by key, which was not answered and is cancelled.
     cx.executor().advance_clock(Duration::from_millis(1));
     let (by_mouse, asked) = hover_ask(&mut navigator, &mut cx);
     assert_eq!(
@@ -405,7 +360,6 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
         )
     );
     assert_eq!(navigator.ask(&mut cx), Ask::Cancel { id: by_key });
-    // The reviewer stays where they were: the mouse only asks.
     assert_eq!(name(pane, &mut cx).as_deref(), Some("perimeter"));
     navigator.tell(
         Told::Hover {
@@ -419,7 +373,6 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
         Some(("sides".to_owned(), Some("sides: &[u32]".to_owned())))
     );
 
-    // A mouse that moves on to another name before the delay asks for the second only.
     let on_total = name_point(added, "new", ADDED, "total", &mut cx);
     cx.simulate_mouse_move(on_total, None, Modifiers::none());
     cx.executor()
@@ -439,12 +392,10 @@ fn the_mouse_resting_on_a_name_asks_its_hover_after_the_delay(cx: &mut TestAppCo
     assert_eq!(asked.name, "let");
 }
 
-// RP-21, the mouse resting and the wheel
 #[gpui_kit::test]
 fn a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away_is_not_asked(
     cx: &mut TestAppContext,
 ) {
-    // Many lines after the one with the names, so that the rows can scroll.
     let long = format!("{NEW}{}", "    keep();\n".repeat(60));
     let (stage, mut navigator, mut cx) =
         open_on("src/lib.rs", FileStatus::Modified, OLD, &long, cx);
@@ -452,8 +403,8 @@ fn a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
     click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
 
-    // The mouse comes to rest on `sides`; before the delay is up the wheel scrolls the rows,
-    // and the pointer, which did not move, is over another line.
+    // The wheel scrolls the rows before the delay is up; the pointer, which did not move, is then
+    // over another line.
     let on_sides = name_point(added, "new", ADDED, "sides", &mut cx);
     cx.simulate_mouse_move(on_sides, None, Modifiers::none());
     cx.executor()
@@ -470,15 +421,13 @@ fn a_wheel_scroll_ends_the_rest_of_the_mouse_so_that_the_name_that_scrolled_away
         "the wheel did not move the rows"
     );
 
-    // The delay is up. The key's ask is the barrier: the first ask the Navigator gets is
-    // the key's, for the name the reviewer is on, not the hover of `sides`.
+    // The key's ask is the barrier: the first ask is the key's, not the hover of `sides`.
     cx.executor().advance_clock(Duration::from_millis(1));
     cx.simulate_keystrokes("shift-k");
     let (_, asked) = hover_ask(&mut navigator, &mut cx);
     assert_eq!(asked.name, "perimeter", "the mouse asked after the wheel");
 }
 
-// RP-21, a key that moves the reviewer drops the hover at once
 #[gpui_kit::test]
 fn a_key_that_moves_the_reviewer_drops_the_hover_before_any_frame_is_drawn(
     cx: &mut TestAppContext,
@@ -498,8 +447,7 @@ fn a_key_that_moves_the_reviewer_drops_the_hover_before_any_frame_is_drawn(
     );
     assert!(hover(pane, &mut cx).is_some());
 
-    // The action is dispatched at the pane's focus and the pane read in one go, so that no
-    // frame is drawn between the key and the read.
+    // Dispatched and read in one go, so that no frame is drawn between the key and the read.
     let shown = cx.update(|window, cx| {
         stage
             .focus
@@ -509,15 +457,11 @@ fn a_key_that_moves_the_reviewer_drops_the_hover_before_any_frame_is_drawn(
     assert_eq!(shown, None, "the hover waited for the next frame");
 }
 
-/// Where the characters of `ADDED` lie, by offset: four spaces, then `let` (4 to 7), a
-/// space, `total` (8 to 13), a space, `=`, a space, `perimeter` (16 to 25), `(`, `sides`
-/// (26 to 31), `)` and `;`.
 const LET: std::ops::Range<usize> = 4..7;
 const TOTAL: std::ops::Range<usize> = 8..13;
 const PERIMETER: std::ops::Range<usize> = 16..25;
 const SIDES: std::ops::Range<usize> = 26..31;
 
-// RP-21, the name the pointer is on is the name whose characters hold it
 #[gpui_kit::test]
 fn a_click_chooses_the_name_whose_characters_hold_the_pointer_and_none_at_its_edges(
     cx: &mut TestAppContext,
@@ -526,10 +470,6 @@ fn a_click_chooses_the_name_whose_characters_hold_the_pointer_and_none_at_its_ed
     let pane = &stage.pane;
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
 
-    // Each case: the name the reviewer is on, the character clicked, the name it is on
-    // after. The first and last characters of a name are the name's; the character
-    // before and the character after it are not, and a click on one leaves the reviewer
-    // where they were.
     let cases = [
         ("sides", LET.end - 1, "let"),
         ("sides", LET.end, "sides"),
@@ -558,7 +498,6 @@ fn a_click_chooses_the_name_whose_characters_hold_the_pointer_and_none_at_its_ed
     }
 }
 
-// RP-21, the mouse resting where no name is
 #[gpui_kit::test]
 fn the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -566,9 +505,7 @@ fn the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing(cx: &mut TestAppCon
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
     click_name(added, "new", ADDED, "let", Modifiers::none(), &mut cx);
 
-    // The mouse rests on the characters next to a name, which are no name's: the `(`
-    // after `perimeter`, and the space after `total`. The delay passes, and the executor
-    // runs what the delay released. The barrier is an ask of the reviewer's own: if the
+    // The characters next to a name are no name's. The barrier is the reviewer's own ask: if the
     // mouse asked, it came first.
     for at in [PERIMETER.end, TOTAL.end] {
         let on = char_point(added, "new", ADDED, at, &mut cx);
@@ -584,8 +521,6 @@ fn the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing(cx: &mut TestAppCon
         );
     }
 
-    // The mouse rests on `sides` and leaves the rows before the delay passes, for the
-    // corner of the window, where no row is. It asks nothing when the delay is over.
     let on_sides = name_point(added, "new", ADDED, "sides", &mut cx);
     cx.simulate_mouse_move(on_sides, None, Modifiers::none());
     let away = point(px(1.), px(1.));
@@ -602,7 +537,6 @@ fn the_mouse_resting_on_no_name_or_off_the_rows_asks_nothing(cx: &mut TestAppCon
     assert_eq!(asked.name, "let", "the mouse asked for a name it left");
 }
 
-// RP-21, the keys that move the name, and what moving does to the hover
 #[gpui_kit::test]
 fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_way(
     cx: &mut TestAppContext,
@@ -613,7 +547,6 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     click_name(added, "new", ADDED, "perimeter", Modifiers::none(), &mut cx);
 
     let names = ["let", "total", "perimeter", "sides"];
-    // Name by name to the end of the line, where `l` stays, and back to its start.
     cx.simulate_keystrokes("l");
     assert_eq!(name(pane, &mut cx).as_deref(), Some("sides"));
     cx.simulate_keystrokes("l");
@@ -624,14 +557,12 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     }
     cx.simulate_keystrokes("h");
     assert_eq!(name(pane, &mut cx).as_deref(), Some("let"));
-    // The mark follows the name, and is under it only.
     assert_marks(added, "new", ADDED, "let", &mut cx);
     cx.simulate_keystrokes("l l");
     assert_marks(added, "new", ADDED, "perimeter", &mut cx);
     cx.simulate_keystrokes("h h");
     assert_marks(added, "new", ADDED, "let", &mut cx);
 
-    // Moving to another name drops the hover that was shown for the first.
     cx.simulate_keystrokes("shift-k");
     let (first, _) = hover_ask(&mut navigator, &mut cx);
     navigator.tell(
@@ -646,16 +577,13 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     assert_eq!(hover(pane, &mut cx), None);
     assert!(drawn("review-hover", &mut cx).is_none());
 
-    // A hover still on its way when the reviewer moves to another line is cancelled.
     cx.simulate_keystrokes("shift-k");
     let (waiting, _) = hover_ask(&mut navigator, &mut cx);
     cx.simulate_keystrokes("j");
     assert_eq!(navigator.ask(&mut cx), Ask::Cancel { id: waiting });
     assert_eq!(hover(pane, &mut cx), None);
-    // On the next line, which is the unchanged `}`, the name is its first.
     assert_eq!(name(pane, &mut cx), None, "`}}` holds no name");
 
-    // Escape takes a hover away, and asks nothing.
     cx.simulate_keystrokes("k");
     cx.simulate_keystrokes("shift-k");
     let (shown, _) = hover_ask(&mut navigator, &mut cx);
@@ -670,12 +598,10 @@ fn l_and_h_move_the_name_and_moving_drops_the_hover_and_cancels_the_one_on_its_w
     cx.simulate_keystrokes("escape");
     assert_eq!(hover(pane, &mut cx), None);
     assert_eq!(notice(pane, &mut cx), None);
-    // It asked nothing: the ask of the next key is the next ask the pane makes.
     cx.simulate_keystrokes("shift-k");
     assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 }
 
-// RP-24
 #[gpui_kit::test]
 fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -691,7 +617,6 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
         &["src/lib.rs"],
     );
 
-    // `g r` asks for the references of the name the reviewer is on.
     cx.simulate_keystrokes("g r");
     let Ask::References { id: first, place } = navigator.ask(&mut cx) else {
         panic!("the references were not asked")
@@ -710,7 +635,6 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
     );
     assert!(drawn("review-references-waiting", &mut cx).is_some());
 
-    // The three places told are listed under the rows, each with its path and line.
     navigator.tell(
         Told::References {
             id: first,
@@ -738,10 +662,8 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
     assert!(drawn("review-references-guessed", &mut cx).is_none());
     let chosen = bounds("review-reference-chosen", &mut cx);
     assert!(bounds("review-reference-0", &mut cx).contains(&chosen.center()));
-    // The list takes the focus: the pane's own keys do not work in it, the list's do.
     cx.update(|window, _| assert!(!stage.focus.is_focused(window)));
 
-    // `j` chooses the next, and `k` the one before.
     cx.simulate_keystrokes("j");
     assert_eq!(references(pane, &mut cx).map(|shown| shown.chosen), Some(1));
     let chosen = bounds("review-reference-chosen", &mut cx);
@@ -756,7 +678,6 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
     assert_eq!(references(pane, &mut cx).map(|shown| shown.chosen), Some(0));
     cx.simulate_keystrokes("j");
 
-    // `enter` opens the chosen one: the file is asked for, and the file view shows it.
     cx.simulate_keystrokes("enter");
     let Ask::Open {
         id: opening,
@@ -775,16 +696,13 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
     );
     let view = pane.read_with(&cx, |pane, _| pane.file_view().cloned());
     assert_eq!(view.map(|view| view.line), Some(3));
-    // The list closed with the file view's opening, and the rows are not drawn.
     assert_eq!(references(pane, &mut cx), None);
-    // `escape` goes back to the diff.
     cx.simulate_keystrokes("escape");
     assert_eq!(
         pane.read_with(&cx, |pane, _| pane.file_view().cloned()),
         None
     );
 
-    // A click on an entry opens it, too.
     cx.simulate_keystrokes("g r");
     let Ask::References { id: again, .. } = navigator.ask(&mut cx) else {
         panic!("the references were not asked again")
@@ -807,7 +725,6 @@ fn the_references_to_a_name_are_listed_and_any_of_them_opens(cx: &mut TestAppCon
     assert_eq!(location, three()[2]);
 }
 
-/// A file of this many lines, `line 1` to `line <lines>`, as the Navigator opens it.
 fn opened(path: &str, relative: &str, lines: usize) -> yaar_navigator::OpenedFile {
     yaar_navigator::OpenedFile {
         path: PathBuf::from(path),
@@ -819,7 +736,6 @@ fn opened(path: &str, relative: &str, lines: usize) -> yaar_navigator::OpenedFil
     }
 }
 
-// RP-24, a list found by text match
 #[gpui_kit::test]
 fn a_list_of_references_is_marked_only_when_it_was_found_by_text_match(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -858,14 +774,12 @@ fn a_list_of_references_is_marked_only_when_it_was_found_by_text_match(cx: &mut 
             .is_some(),
             guessed
         );
-        // Escape closes the list and gives the focus back to the rows.
         cx.simulate_keystrokes("escape");
         assert_eq!(references(pane, &mut cx), None);
         cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     }
 }
 
-// RP-24, with none
 #[gpui_kit::test]
 fn with_no_reference_the_notice_says_none_was_found(cx: &mut TestAppContext) {
     let (stage, mut navigator, mut cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -891,12 +805,10 @@ fn with_no_reference_the_notice_says_none_was_found(cx: &mut TestAppContext) {
         notice(pane, &mut cx).as_deref(),
         Some("No references to perimeter were found")
     );
-    // The rows have the focus: the pane's keys work.
     cx.simulate_keystrokes("l");
     assert_eq!(name(pane, &mut cx).as_deref(), Some("sides"));
 }
 
-// RP-25
 #[gpui_kit::test]
 fn on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_layouts(
     cx: &mut TestAppContext,
@@ -905,9 +817,8 @@ fn on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_
     let new = "fn run() {\n    keep();\n    fresh_call(y);\n}\n";
     let (stage, mut navigator, mut cx) = open_on("src/run.rs", FileStatus::Modified, old, new, cx);
     let pane = &stage.pane;
-    // The model was told the old side of the change shown: the version it counts from.
-    // Nothing makes the model's own asks arrive before the test looks: it waits for the
-    // fact, which stays true once it is.
+    // Waits for the fact, which stays true once it is: nothing orders the model's own asks before
+    // the look.
     wait_until(&mut cx, "the old side told", |cx| {
         navigator.standing(cx).contains(&Ask::OldSide {
             workspace: workspace_id(),
@@ -943,7 +854,6 @@ fn on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_
     };
     assert_eq!(asked, in_the_old_version);
 
-    // The control half: an added line of the same change asks the files on disk.
     let added_text = "    fresh_call(y);";
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
     click_name(
@@ -968,7 +878,6 @@ fn on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_
         )
     );
 
-    // The split view: the old half of the changed row, by a click on its name.
     cx.simulate_keystrokes("s");
     let changed = row_of(
         pane,
@@ -993,7 +902,6 @@ fn on_a_removed_line_hover_and_go_to_definition_ask_for_the_old_version_in_both_
     assert_eq!(asked, in_the_old_version);
 }
 
-// RP-25, a renamed file
 #[gpui_kit::test]
 fn a_removed_line_of_a_renamed_file_is_asked_by_the_path_it_had(cx: &mut TestAppContext) {
     let old = "fn run() {\n    old_call(x);\n}\n";
@@ -1040,7 +948,6 @@ fn a_removed_line_of_a_renamed_file_is_asked_by_the_path_it_had(cx: &mut TestApp
     assert_eq!(asked.tree, Tree::Worktree);
 }
 
-/// A history of one turn, which ended in the state `s1`, counted from `start`.
 fn one_turn(start: &str, s1: &str) -> History {
     History {
         workspace: workspace_id(),
@@ -1053,9 +960,6 @@ fn one_turn(start: &str, s1: &str) -> History {
     }
 }
 
-/// Opens the pane on the turn of `src/run.rs` from `old` to `new`, which ends at a version,
-/// with the Navigator connected and the old side of the turn told. Gives the version the
-/// turn starts at and the one it ends at.
 fn open_on_a_turn(
     old: &str,
     new: &str,
@@ -1088,7 +992,6 @@ fn open_on_a_turn(
     });
     let mut navigator = connect_navigator(&stage, &mut cx);
 
-    // The turn is selected by a click on its entry in the tree.
     let entry = bounds("review-history-0", &mut cx).center();
     cx.simulate_click(entry, Modifiers::none());
     let compared = stage.keeper.expect(
@@ -1140,7 +1043,6 @@ fn open_on_a_turn(
     (stage, navigator, cx, start, s1)
 }
 
-// RP-25, a change that ends at a version
 #[gpui_kit::test]
 fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_side_its_version(
     cx: &mut TestAppContext,
@@ -1151,8 +1053,8 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
         cx,
     );
     let pane = &stage.pane;
-    // An added line asks as the new side of the version the change ends at, with the whole
-    // text of the file there; a removed one the version before.
+    // An added line asks as the new side of the version the change ends at, with the file's whole
+    // text; a removed one the version before.
     let added = row_of(pane, Row::Added { new: 0 }, &mut cx);
     let removed = row_of(pane, Row::Removed { old: 0 }, &mut cx);
     click_name(
@@ -1193,7 +1095,6 @@ fn in_a_change_that_ends_at_a_version_the_new_side_carries_its_text_and_the_old_
     assert_eq!(asked.name, "old_one");
 }
 
-// RP-25, a last line with no line feed
 #[gpui_kit::test]
 fn a_past_version_whose_last_line_has_no_line_feed_is_asked_with_its_text_as_the_file_has_it(
     cx: &mut TestAppContext,
@@ -1220,7 +1121,6 @@ fn a_past_version_whose_last_line_has_no_line_feed_is_asked_with_its_text_as_the
     );
 }
 
-// The place of a name, as a position of the diff gives it
 #[gpui_kit::test]
 fn the_place_of_a_name_is_read_from_a_position_of_the_diff(cx: &mut TestAppContext) {
     let (stage, _navigator, cx) = open_on("src/lib.rs", FileStatus::Modified, OLD, NEW, cx);
@@ -1231,7 +1131,6 @@ fn the_place_of_a_name_is_read_from_a_position_of_the_diff(cx: &mut TestAppConte
         line: 2,
     };
     let held = pane.read_with(&cx, |pane, cx| pane.place_at(&on, cx));
-    // The reviewer is on the first name of the first changed line until they move.
     assert_eq!(
         held,
         Some(place(
@@ -1243,7 +1142,6 @@ fn the_place_of_a_name_is_read_from_a_position_of_the_diff(cx: &mut TestAppConte
             &["src/lib.rs"]
         ))
     );
-    // A line of no name has no place.
     let closing = Position {
         path: PathBuf::from("src/lib.rs"),
         side: Side::New,
@@ -1255,7 +1153,6 @@ fn the_place_of_a_name_is_read_from_a_position_of_the_diff(cx: &mut TestAppConte
     );
 }
 
-// RP-21, the click with the secondary key held
 #[gpui_kit::test]
 fn a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_pointer(
     cx: &mut TestAppContext,
@@ -1264,7 +1161,6 @@ fn a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_p
     let pane = &stage.pane;
     let added = row_of(pane, Row::Added { new: 2 }, &mut cx);
 
-    // On a name: the reviewer comes to it, and its definition is asked.
     let secondary = cx.update(|_, cx| Modifiers::secondary_key(cx));
     click_name(added, "new", ADDED, "perimeter", secondary, &mut cx);
     assert_eq!(name(pane, &mut cx).as_deref(), Some("perimeter"));
@@ -1283,15 +1179,14 @@ fn a_click_with_the_secondary_key_goes_to_the_definition_of_the_name_under_the_p
         )
     );
 
-    // Off every name, at the end of the line: nothing is asked. The barrier is the hover
-    // that the next key asks, which comes after anything the click asked.
+    // A secondary-key click off every name, past the end of the line, asks nothing. The barrier is
+    // the hover the next key asks, which comes after anything the click asked.
     let text = bounds(&format!("review-text-{added}-new:{ADDED}"), &mut cx);
     cx.simulate_click(point(text.right() + px(20.), text.center().y), secondary);
     cx.simulate_keystrokes("shift-k");
     assert!(matches!(navigator.ask(&mut cx), Ask::Hover { .. }));
 }
 
-// The name keys outside Changes, and a Navigator that ends
 #[gpui_kit::test]
 fn in_flow_the_name_keys_say_so_and_ask_nothing_and_a_navigator_that_ends_is_said(
     cx: &mut TestAppContext,
@@ -1311,13 +1206,12 @@ fn in_flow_the_name_keys_say_so_and_ask_nothing_and_a_navigator_that_ends_is_sai
         notice(pane, &mut cx).as_deref(),
         Some("Names are asked on the lines of Changes")
     );
-    // Back in Changes, the first ask the pane makes is the barrier: none came before it.
+    // Barrier: no ask came before the first one the pane makes in Changes.
     cx.simulate_keystrokes("f shift-k");
     assert_eq!(notice(pane, &mut cx), None);
     let (_, asked) = hover_ask(&mut navigator, &mut cx);
     assert_eq!(asked.name, "perimeter");
 
-    // The Navigator ends before it answers: the hover on its way is told so.
     drop(navigator);
     wait_until(&mut cx, "the end of the Navigator to be said", |cx| {
         pane.read_with(cx, |pane, _| pane.notice()).is_some()
@@ -1327,7 +1221,6 @@ fn in_flow_the_name_keys_say_so_and_ask_nothing_and_a_navigator_that_ends_is_sai
         Some("code intelligence stopped before it answered")
     );
     assert_eq!(hover(pane, &mut cx), None);
-    // With none connected any more, a key that asks says so.
     cx.simulate_keystrokes("g r");
     assert_eq!(
         notice(pane, &mut cx).as_deref(),

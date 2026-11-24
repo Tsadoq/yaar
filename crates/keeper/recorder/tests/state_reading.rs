@@ -1,6 +1,3 @@
-//! Component tests: the contents of files in recorded states, read through one process a
-//! state store keeps running, in real repositories the tests make.
-
 mod support;
 
 use std::io::{Read, Write};
@@ -13,16 +10,15 @@ use support::{
 };
 use yaar_recorder::{CommitId, Git, RecordedState, StateStore, Worktree};
 
-/// How long a test waits for a fact that is not in the test's hands.
+/// How long a test waits for a fact that is not in its hands.
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// The lines of the list that are starts of the process that hands out contents, as
-/// process ids. Other runs of `cat-file` (a check that an object is there) are not it.
 fn content_processes(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()
         .lines()
-        // Of a git that has `-Z` and of one that has not; `--batch-check` is another process.
+        // The reader's start, by a git that has `-Z` or by one that has not; `--batch-check` is
+        // another process.
         .filter(|line| line.ends_with("cat-file --batch -Z") || line.ends_with("cat-file --batch"))
         .map(|line| line.split(' ').next().expect("a process id").to_owned())
         .collect()
@@ -32,8 +28,6 @@ fn content_of(n: usize, version: &str) -> Vec<u8> {
     format!("content {n}, {version}\n").into_bytes()
 }
 
-/// A repository of 20 files: `first` commit holds them as "first", the `second` commit
-/// changes file 0.
 struct Repository {
     worktree: Worktree,
     first: String,
@@ -64,7 +58,6 @@ fn repository(scratch: &Scratch) -> Repository {
     }
 }
 
-/// A store in the scratch folder whose every start of git is written to the returned list.
 fn listed_store(scratch: &Scratch) -> (StateStore, PathBuf) {
     let (program, list) = git_that_keeps_a_list(scratch);
     let store = StateStore::open(&Git::at(program), &scratch.join("app/states/one.git"))
@@ -115,7 +108,6 @@ fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_
         "none before a read"
     );
 
-    // 20 files in each of three commits, and one that is in none of them: 63 reads.
     for (commit, file_1, file_0) in [
         (first.as_str(), "first", "first"),
         (second.as_str(), "first", "second"),
@@ -129,7 +121,6 @@ fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_
                 n => content_of(n, "first"),
             };
             let path = format!("file-{n}.txt");
-            // The commit the state was taken on and the kept commit are held by the store.
             assert_eq!(
                 store.content(commit, Path::new(&path)).expect("content"),
                 Some(expected),
@@ -143,7 +134,6 @@ fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_
             None
         );
     }
-    // The way a version is named when it may need copying in reads through the same process.
     assert_eq!(
         store
             .content_in(None, state_two.id.as_str(), Path::new("file-1.txt"))
@@ -267,16 +257,13 @@ fn what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_p
     let state_one = store.record(&worktree).expect("record");
     let file_0 = Path::new("file-0.txt");
 
-    // The store does not hold the first commit: the process is started and finds nothing.
     assert_eq!(store.content(&first, file_0).expect("content"), None);
-    // A state taken after the process started is read by it.
     write(worktree.root(), "file-0.txt", "changed once more\n");
     let state_two = store.record(&worktree).expect("record again");
     assert_eq!(
         store.content(state_two.id.as_str(), file_0).expect("state"),
         Some(b"changed once more\n".to_vec())
     );
-    // So is a commit copied in after it was asked for and not found.
     assert_eq!(
         store
             .content_in(Some(&worktree), &first, file_0)
@@ -294,9 +281,8 @@ fn what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_p
     assert_eq!(content_processes(&list).len(), 1);
 }
 
-/// A FIFO of the scratch folder that the test itself holds open for reading and writing,
-/// so that a program opening either end never waits for the test, and the test never
-/// waits for the program to open.
+/// A FIFO the test holds open for reading and writing, so a program opening either end never waits
+/// for the test and the test never waits for the program.
 struct Pipe {
     file: std::fs::File,
     path: PathBuf,
@@ -318,8 +304,8 @@ impl Pipe {
     }
 }
 
-/// A recording that stops inside a clean filter until it is told to go on. A filter runs
-/// while the store holds the lock of recording, which is what the test needs to be in.
+/// A recording that stops inside a clean filter until it is released. A filter runs while
+/// the store holds the recording lock, which is the state the test needs.
 struct HeldRecording {
     started: Pipe,
     go: Pipe,
@@ -327,7 +313,6 @@ struct HeldRecording {
 }
 
 impl HeldRecording {
-    /// Sets up the filter of `*.slow` files in the repository at `repo`.
     fn new(scratch: &Scratch, repo: &Path) -> HeldRecording {
         let started = Pipe::new(scratch.join("started"));
         let go = Pipe::new(scratch.join("go"));
@@ -361,8 +346,6 @@ impl HeldRecording {
         }
     }
 
-    /// Lets the recording go on. Said once more by the drop, so that a test that failed
-    /// does not leave the filter waiting.
     fn release(&mut self) {
         let _ = self.go.file.write_all(b"\n");
     }
@@ -382,8 +365,8 @@ fn a_state_is_read_while_another_is_being_recorded() {
     let state: RecordedState = store.record(&worktree).expect("record");
     let mut held = HeldRecording::new(&scratch, worktree.root());
     write(&held.repo, "new.slow", "one\n");
-    // The reader of the filter's signal waits in a thread of its own, so that the test
-    // waits for it with a deadline.
+    // The filter's signal is awaited on a thread of its own, so the test waits for it with a
+    // deadline.
     let mut signal = held.started.file.try_clone().expect("clone the pipe");
     let (told, hears) = mpsc::channel();
     std::thread::spawn(move || {
@@ -400,9 +383,8 @@ fn a_state_is_read_while_another_is_being_recorded() {
             "the recording is held in its filter"
         );
 
-        // The recording holds its own lock; reading is not behind it. The read runs in a
-        // thread of its own so that a read that waited for the recording fails the test
-        // after the deadline instead of for ever.
+        // Reading is not behind the recording lock. The read runs in its own thread so a read that
+        // waited for the recording fails after the deadline instead of hanging.
         let (answers, answered) = mpsc::channel();
         let (store, state) = (&store, &state);
         let read = threads.spawn(move || {

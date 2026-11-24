@@ -1,52 +1,6 @@
-//! Store (`H-STORE`).
-//!
-//! Owns: the SQLite database and its one writer: reviews, sessions, steps of turns, marks, settings.
-//!
-//! Surface: [`Store`], opened on one database file, and what it keeps:
-//! - the repositories the user opened ([`RepositoryRecord`]) and their workspaces
-//!   ([`WorkspaceRecord`]), each with the base the user set for it, under the ids
-//!   [`RepositoryId`] and [`WorkspaceId`];
-//! - the agent sessions of each workspace ([`SessionRecord`]), the turns of each
-//!   ([`TurnRecord`]) with the state its change counts from and the state recorded at its
-//!   end, and the steps of each turn ([`StepRecord`]), under the ids [`SessionId`] and
-//!   [`TurnId`]; see the module `sessions.rs`;
-//! - the user's settings ([`Setting`]): what a turn end selects ([`TurnEndSelects`]), the
-//!   time before the language servers of a workspace off screen stop, the [`Theme`], the
-//!   place of the terminal pane ([`TerminalPlace`]), and for each workspace the form of
-//!   Flow chosen last there ([`FlowForm`]); the base of a workspace is kept with the
-//!   workspace. See the module `settings.rs`;
-//! - the reviews of each workspace ([`ReviewRecord`]) with their [`Thread`]s, each on an
-//!   [`Anchor`], their [`Comment`]s and [`Round`]s, under the ids [`ReviewId`],
-//!   [`ThreadId`] and [`CommentId`]; and the files marked viewed ([`ViewedRecord`]).
-//!
-//! One database file holds everything, for all workspaces, in the app's folder; nothing of
-//! it lies in a worktree or in a repository. No other crate opens the file or knows its
-//! tables: the parts of the Keeper keep and find their records through the calls here.
-//!
-//! One thread writes. Each call below that changes something is one transaction, handed
-//! to that thread, and returns when the change is on the drive: what such a call has
-//! returned is still there after the Keeper is killed, and after the machine loses its
-//! power. One call saves without waiting for the drive, [`Store::save_draft`], made at
-//! every keystroke of a draft: what it has returned is still there after the Keeper is
-//! killed, and the writer flushes the drive once the typing pauses. See the module
-//! `reviews.rs` for both.
-//!
-//! The tables carry a version, SQLite's `user_version`. Version 1 holds the repositories
-//! and the workspaces; version 2 adds the reviews and the files marked viewed; version 3
-//! adds the agent sessions, the turns of each and the steps of each turn; version 4 adds the
-//! state each turn's change counts from and the settings; version 5 adds what a review
-//! round of an agent needs: a round whose state is recorded after its send and whether
-//! its agent edited since, where each thread sits now, what is attached to the next
-//! message, and who is credited with each path of a recorded state; version 6 adds the CLI's
-//! own record of a session, the turn a round was sent in, and which recorded
-//! states had their credits kept, none among them; version 7 adds the settings of one
-//! repository, the user's answer on the language servers inside it. A database
-//! of an older version is brought forward step by step when it is opened, and before the
-//! first step the file is copied beside itself, as `store.db.v<its version>`, so that a
-//! step that goes wrong loses nothing. A database of a newer version is refused, and left
-//! as it is.
-//!
-//! What goes wrong is told in words of this crate: no caller sees the database library.
+//! SQLite database of the Keeper behind one writer thread.
+//! A changing call returns once its transaction is on the drive; `Store::save_draft` returns
+//! before, and the writer flushes when typing pauses.
 
 use std::ffi::OsString;
 use std::fmt;
@@ -71,21 +25,15 @@ pub use sessions::{
 };
 pub use settings::{FlowForm, OptionKey, Setting, TerminalPlace, Theme, TurnEndSelects};
 
-/// The name of the database file in the app's folder.
 pub const FILE_NAME: &str = "store.db";
 
-/// The version of the tables this build makes and reads.
 const VERSION: u32 = 7;
 
-/// The steps that make the tables, in order: `STEPS[n]` brings a database from version
-/// `n` to version `n + 1`, and ends by setting `user_version` to that. A later version
-/// adds one step at the end.
 const STEPS: [&str; VERSION as usize] = [
     TABLES, TABLES_2, TABLES_3, TABLES_4, TABLES_5, TABLES_6, TABLES_7,
 ];
 
-/// The tables of version 1. `seq` is the order in which the rows were first kept. A
-/// path is kept as its bytes, since a path need not be text.
+/// `seq` is the order in which rows were first kept. Paths are kept as bytes, not text.
 const TABLES: &str = "
     CREATE TABLE repository (
         seq INTEGER PRIMARY KEY,
@@ -102,9 +50,7 @@ const TABLES: &str = "
     PRAGMA user_version = 1;
 ";
 
-/// What version 2 adds to the tables of version 1: the reviews, their threads, comments
-/// and rounds, and the files marked viewed. A path is kept as its bytes; a side, an
-/// author and a way of sending are small numbers, in the order their types list them.
+/// Side, author and way of sending are small numbers in the order their types list them.
 /// A comment whose `round` is null is a draft.
 const TABLES_2: &str = "
     CREATE TABLE review (
@@ -155,13 +101,9 @@ const TABLES_2: &str = "
     PRAGMA user_version = 2;
 ";
 
-/// What version 3 adds: the agent sessions, the turns of each and the steps of each turn.
-/// A session names its workspace by id, with no foreign key, as a review does; `ended` is
-/// the order of ends, a number one more than the largest kept, and `ended_by` how, a small
-/// number in the order `EndedBy` lists its kinds. A turn's `ended` and a step's `kind` are
-/// small numbers, in the order their types list them; a step's `what` is a path, as its
-/// bytes, or a command, as its text; `lines` are the lines of an edit, as `a-b` parted by
-/// `,` (`3-3,10-12`), empty for an edit that named none and null where none were said.
+/// `ended` orders session ends (largest kept + 1). `ended_by`, a turn's `ended` and a step's
+/// `kind` are numbers in the order of their types. `what` is path bytes or command text.
+/// `lines` is `a-b` ranges joined by `,`: empty for an edit that named none, null if none said.
 const TABLES_3: &str = "
     CREATE TABLE session (
         seq INTEGER PRIMARY KEY,
@@ -197,11 +139,7 @@ const TABLES_3: &str = "
     PRAGMA user_version = 3;
 ";
 
-/// What version 4 adds: the state each turn's change counts from, the settings the user
-/// set for the whole app, one row each, and the settings of each workspace, one row for
-/// each workspace and setting. A setting is kept by its name, as text, with its value as
-/// text: the names and the values are those the module `settings.rs` writes. A turn that
-/// was kept before has no start.
+/// Turns kept before this version have a null `start`.
 const TABLES_4: &str = "
     ALTER TABLE turn ADD COLUMN start TEXT;
     CREATE TABLE setting (
@@ -217,14 +155,9 @@ const TABLES_4: &str = "
     PRAGMA user_version = 4;
 ";
 
-/// What version 5 adds: a round's state may be null until it is recorded after the
-/// send, and a round knows whether its agent edited since; where a thread sits now, null
-/// while it sits on its anchor, with its notice; what of a review is attached, null for
-/// nothing, 0 for the review and 1 for one thread, named by `attached_thread`; and who is
-/// credited with each path of a recorded state, one row per path and session, the session
-/// `''` for a change no agent made. SQLite cannot drop the `NOT NULL` of a column, so the
-/// table `round` is made again and its rows copied; a round that was kept before has not
-/// been edited since.
+/// SQLite cannot drop a column's `NOT NULL`, so `round` is rebuilt. `attached` is null for
+/// nothing, 0 for the review, 1 for one thread (`attached_thread`). In `state_credit` the
+/// session `''` is a change no agent made.
 const TABLES_5: &str = "
     CREATE TABLE round_5 (
         review TEXT NOT NULL REFERENCES review (id),
@@ -256,12 +189,8 @@ const TABLES_5: &str = "
     PRAGMA user_version = 5;
 ";
 
-/// What version 6 adds: the CLI's own record of a session, a file, null where its reports
-/// named none, which a CLI's command for bringing the session back may need; the turn of its review's
-/// session a round was sent in, null for a copy and for a round kept before; and a row for
-/// each recorded state whose credits were kept, so that a state kept with no credits, as
-/// that of a worktree with nothing uncommitted, is told from one nothing was kept with.
-/// Every state a version 5 database holds credits of was kept with them.
+/// `state_kept` tells a state kept with no credits (a worktree with nothing uncommitted) from
+/// one nothing was kept for.
 const TABLES_6: &str = "
     ALTER TABLE session ADD COLUMN cli_record BLOB;
     ALTER TABLE round ADD COLUMN turn TEXT;
@@ -275,9 +204,6 @@ const TABLES_6: &str = "
     PRAGMA user_version = 6;
 ";
 
-/// What version 7 adds: the settings of one repository, as the user's answer on the
-/// language servers that lie inside it, one row per repository and name, as
-/// `workspace_setting` holds those of a workspace.
 const TABLES_7: &str = "
     CREATE TABLE repository_setting (
         repository TEXT NOT NULL,
@@ -288,18 +214,15 @@ const TABLES_7: &str = "
     PRAGMA user_version = 7;
 ";
 
-/// Names one workspace: 32 lowercase hexadecimal digits, drawn at random when its
-/// worktree is first seen, and written into the git folder of that worktree.
+/// 32 lowercase hex digits, drawn at random when the worktree is first seen.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WorkspaceId(String);
 
 impl WorkspaceId {
-    /// The id with this text.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// The text of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -311,18 +234,14 @@ impl fmt::Display for WorkspaceId {
     }
 }
 
-/// Names one repository: 32 lowercase hexadecimal digits, drawn at random when the
-/// repository is first opened and kept here with the git folder of the repository.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RepositoryId(String);
 
 impl RepositoryId {
-    /// The id with this text.
     pub fn new(id: impl Into<String>) -> Self {
         Self(id.into())
     }
 
-    /// The text of the id.
     pub fn as_str(&self) -> &str {
         &self.0
     }
@@ -334,49 +253,25 @@ impl fmt::Display for RepositoryId {
     }
 }
 
-/// A repository the user opened.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RepositoryRecord {
-    /// Its id, as Workspaces made it.
     pub id: RepositoryId,
-    /// The git folder its worktrees share, where it was last seen.
     pub git_dir: PathBuf,
 }
 
-/// A workspace: one worktree of an opened repository.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkspaceRecord {
-    /// Its id, as it stands in the git folder of the worktree.
     pub id: WorkspaceId,
-    /// The id of its repository.
     pub repository: RepositoryId,
-    /// The folder of the worktree, where it was last seen.
     pub path: PathBuf,
-    /// The base the user set, in the words Workspaces keeps it in; none while the
-    /// default stands.
     pub base: Option<String>,
 }
 
-/// Why the Store could not do what was asked.
 #[derive(Debug)]
 pub enum StoreError {
-    /// The database file or its folder could not be made or opened.
-    Open {
-        /// The file that was to be opened.
-        path: PathBuf,
-        /// What went wrong, as a sentence.
-        reason: String,
-    },
-    /// The database was written by a later version of the app.
-    Newer {
-        /// The version of the tables in the file.
-        found: u32,
-        /// The newest version this build knows.
-        known: u32,
-    },
-    /// The database refused a read or a write; the sentence says what it said.
+    Open { path: PathBuf, reason: String },
+    Newer { found: u32, known: u32 },
     Database(String),
-    /// The writer is gone: the Store was shut, or its thread died.
     Closed,
 }
 
@@ -398,9 +293,6 @@ impl fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// Why a piece of work on the connection did not give its answer: the database failed,
-/// or the Store refused what was asked in a sentence of its own. The database library's
-/// error stays inside the crate.
 #[derive(Debug)]
 enum Failed {
     Sql(rusqlite::Error),
@@ -422,28 +314,17 @@ impl From<Failed> for StoreError {
     }
 }
 
-/// What is handed to the writer: one piece of work on what the writer holds.
 type Job = Box<dyn FnOnce(&mut Writer) + Send>;
 
-/// What the writer thread holds: the one connection, and since when a draft saved
-/// without a flush of the drive waits for one.
 struct Writer {
     connection: Connection,
-    /// When the last draft was saved that the drive has not been flushed for; none when
-    /// there is no such draft.
     unflushed_since: Option<Instant>,
 }
 
 impl Writer {
-    /// Moves everything the write-ahead file holds into the database file and empties
-    /// the file; with `checkpoint_fullfsync` on, the drive is flushed in full for it.
-    ///
-    /// A checkpoint that a reader of another connection keeps from finishing is not an
-    /// error of the database: it answers with a row whose first column is 1. That is a
-    /// failure here all the same, and the writer keeps waiting for a flush, so that the
-    /// timer tries again.
+    /// A checkpoint that a reader of another connection keeps from finishing answers with a row
+    /// whose first column is 1, not an error. That is a failure here, so the timer retries.
     fn flush(&mut self) -> Result<(), Failed> {
-        // The statement answers with a row, so it is a query.
         let blocked = self
             .connection
             .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
@@ -468,8 +349,6 @@ impl Writer {
         }
     }
 
-    /// Runs until the last way to the writer is dropped: each job in turn, and a flush
-    /// once no draft was saved for `FLUSH_AFTER`.
     fn run(mut self, jobs: &mpsc::Receiver<Job>) {
         loop {
             let job = match self.unflushed_since {
@@ -483,8 +362,7 @@ impl Writer {
             match job {
                 Ok(job) => job(&mut self),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
-                    // A flush that failed is tried again after another pause, not in a
-                    // loop.
+                    // A failed flush is retried after another pause, not in a loop.
                     if self.flush().is_err() {
                         self.unflushed_since = Some(Instant::now());
                     }
@@ -492,29 +370,23 @@ impl Writer {
                 Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        // Closing the connection checkpoints too; doing it here keeps the draft's flush
-        // from depending on that.
+        // Closing the connection checkpoints too; doing it here keeps the draft's flush from
+        // depending on that.
         if self.unflushed_since.is_some() {
             let _ = self.flush();
         }
     }
 }
 
-/// The database, and the way to its one writer.
-///
-/// Cheap to clone, and every clone reaches the same writer; it may be used from several
-/// threads at once. The writer stops, and the file is closed, when the last clone is
-/// dropped: that drop returns when both are done.
+/// Cheap to clone; clones share one writer. The last drop stops the writer and closes the file.
 #[derive(Debug, Clone)]
 pub struct Store {
-    // The order of the two fields is the order in which a clone lets go of them: first
-    // its way to the writer, then its hold on the writer's thread. The writer ends when
-    // no way to it is left, so whoever lets go of the thread last finds it ending.
+    // Field order is drop order: the way to the writer first, then the thread handle, so whoever
+    // lets go last finds the writer ending.
     writer: mpsc::Sender<Job>,
     _closing: Arc<Closing>,
 }
 
-/// Waits for the writer when the last clone of a [`Store`] is dropped.
 #[derive(Debug)]
 struct Closing {
     writer: Option<JoinHandle<()>>,
@@ -530,13 +402,8 @@ impl Drop for Closing {
 }
 
 impl Store {
-    /// Opens the database at `file`, making the file and its folder when they are not
-    /// there. A database of a newer version than this build knows is refused and left
-    /// as it is. One of an older version is copied beside itself, as
-    /// `<file>.v<its version>`, and then brought forward to this build's version; a new,
-    /// empty file is filled with every version in turn and copied nowhere.
-    ///
-    /// One process opens a database at a time; that is the Keeper's to see to.
+    /// A newer version is refused and left as it is. An older one is copied to
+    /// `<file>.v<its version>` and brought forward; a new file is copied nowhere.
     pub fn open(file: &Path) -> Result<Store, StoreError> {
         let refused = |reason: String| StoreError::Open {
             path: file.to_owned(),
@@ -547,8 +414,7 @@ impl Store {
         }
         let mut connection = Connection::open(file).map_err(|e| refused(e.to_string()))?;
 
-        // The version is read before anything is set: a database of a later version is
-        // not touched, not even to change how it is written.
+        // Read before anything is set, so a newer database is not touched at all.
         let found: u32 = connection
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .map_err(|e| refused(e.to_string()))?;
@@ -558,9 +424,8 @@ impl Store {
                 known: VERSION,
             });
         }
-        // A change is on the drive when the call that made it returns: a write-ahead
-        // log, flushed in full at each transaction. On macOS only `fullfsync` makes the
-        // drive empty its own cache; elsewhere the setting does nothing.
+        // A write-ahead log flushed in full at each transaction. Only `fullfsync` makes the drive
+        // empty its cache on macOS; elsewhere the setting does nothing.
         let mode: String = connection
             .query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))
             .map_err(|e| refused(e.to_string()))?;
@@ -596,7 +461,6 @@ impl Store {
         })
     }
 
-    /// Every repository the user opened, in the order they were first kept.
     pub fn repositories(&self) -> Result<Vec<RepositoryRecord>, StoreError> {
         self.ask(|connection| {
             connection
@@ -611,8 +475,6 @@ impl Store {
         })
     }
 
-    /// Keeps a repository: new when its id is not known, else its git folder is brought
-    /// up to date.
     pub fn put_repository(&self, record: &RepositoryRecord) -> Result<(), StoreError> {
         let id = record.id.0.clone();
         let git_dir = bytes(&record.git_dir);
@@ -629,7 +491,6 @@ impl Store {
         })
     }
 
-    /// Every workspace of every repository, in the order they were first kept.
     pub fn workspaces(&self) -> Result<Vec<WorkspaceRecord>, StoreError> {
         self.ask(|connection| {
             connection
@@ -646,9 +507,7 @@ impl Store {
         })
     }
 
-    /// Keeps a workspace: new when its id is not known, else its repository and its
-    /// folder are brought up to date. The base the user set for it is left as it is.
-    /// The repository has to be kept already.
+    /// Leaves the base the user set as it is.
     pub fn put_workspace(
         &self,
         id: &WorkspaceId,
@@ -669,8 +528,6 @@ impl Store {
         })
     }
 
-    /// Sets the base the user chose for a workspace. A workspace the Store does not hold
-    /// is left alone.
     pub fn set_base(&self, workspace: &WorkspaceId, base: &str) -> Result<(), StoreError> {
         let (workspace, base) = (workspace.0.clone(), base.to_owned());
         self.ask(move |connection| {
@@ -683,8 +540,6 @@ impl Store {
         })
     }
 
-    /// Hands one piece of work to the writer and waits for what it gives. Each
-    /// statement is a transaction of its own.
     fn ask<T, W>(&self, work: W) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -693,7 +548,6 @@ impl Store {
         self.try_ask(move |connection| work(connection).map_err(Failed::Sql))
     }
 
-    /// As [`ask`](Self::ask), for work that may refuse in a sentence of its own.
     fn try_ask<T, W>(&self, work: W) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -702,8 +556,6 @@ impl Store {
         self.with_writer(move |writer| work(&mut writer.connection))
     }
 
-    /// As [`try_ask`](Self::try_ask), for work that needs what the writer holds besides
-    /// the connection.
     fn with_writer<T, W>(&self, work: W) -> Result<T, StoreError>
     where
         T: Send + 'static,
@@ -722,9 +574,6 @@ impl Store {
     }
 }
 
-/// Brings the tables of a database found at version `found` up to [`VERSION`], one step
-/// at a time, each in a transaction. A database of an older version is copied first, so
-/// that a step that goes wrong loses nothing.
 fn bring_forward(connection: &mut Connection, file: &Path, found: u32) -> Result<(), String> {
     if found > 0 && found < VERSION {
         copy_beside(connection, file, found)?;
@@ -739,11 +588,9 @@ fn bring_forward(connection: &mut Connection, file: &Path, found: u32) -> Result
     Ok(())
 }
 
-/// Copies everything the database holds that is committed, the write-ahead file's
-/// content included, to `<file>.v<version>`. The copy is made under another name and
-/// renamed once it is on the drive, so that a copy cut short is never taken for a whole
-/// one; a copy left by an earlier try is replaced, since the database has not moved on
-/// from that version.
+/// Copies the committed content, write-ahead file included, to `<file>.v<version>.partial`,
+/// then renames it to `<file>.v<version>` once on the drive: a cut-short copy is never taken
+/// for a whole one.
 fn copy_beside(connection: &Connection, file: &Path, version: u32) -> Result<(), String> {
     let beside = |suffix: String| {
         let mut name = file.as_os_str().to_owned();
@@ -767,8 +614,8 @@ fn copy_beside(connection: &Connection, file: &Path, version: u32) -> Result<(),
         .and_then(|copied| copied.sync_all())
         .and_then(|()| std::fs::rename(&partial, &copy))
         .map_err(|e| format!("could not keep the copy {}: {e}", copy.display()))?;
-    // The rename is kept by flushing the folder; where a folder cannot be opened it is
-    // only as safe as the drive makes it.
+    // The rename is kept by flushing the folder; where a folder cannot be opened it is only as
+    // safe as the drive makes it.
     if let Some(folder) = copy.parent() {
         let _ = std::fs::File::open(folder).and_then(|folder| folder.sync_all());
     }
@@ -787,7 +634,6 @@ fn path(bytes: Vec<u8>) -> PathBuf {
 mod tests {
     use super::*;
 
-    /// A folder of the test's own, removed when the test ends.
     struct Folder(PathBuf);
 
     impl Folder {
@@ -814,9 +660,6 @@ mod tests {
         }
     }
 
-    /// Makes a database of version 1, as the build of slice 1 made them, holding one
-    /// repository and two workspaces, and hands back the connection it was made with:
-    /// kept open, the rows the connection wrote still lie in the write-ahead file.
     fn version_one(file: &Path) -> Connection {
         let old = Connection::open(file).expect("make the file");
         old.execute_batch(
@@ -863,8 +706,6 @@ mod tests {
             .expect("read")
     }
 
-    // Unit tests that make a file, because a database of an older version can only be
-    // made beside the Store: no call of the Store writes one.
     #[test]
     fn a_database_of_version_1_is_copied_and_then_brought_to_version_7_with_all_it_held() {
         let folder = Folder::new("upgrade");
@@ -885,7 +726,6 @@ mod tests {
             ["w-2", "w-1"]
         );
         assert_eq!(workspaces[0].base.as_deref(), Some("main"));
-        // The tables of version 2 are there to be used.
         store
             .put_review(&ReviewRecord {
                 id: ReviewId::new("v"),
@@ -900,8 +740,6 @@ mod tests {
         drop(store);
 
         assert_eq!(user_version(&folder.file()), 7);
-        // The copy is of version 1: the rows the write-ahead file held are in it, and
-        // none of what version 2 adds.
         assert_eq!(user_version(&folder.copy()), 1);
         assert_eq!(
             rows(&folder.copy()),
@@ -911,8 +749,6 @@ mod tests {
         assert!(tables(&folder.file()).contains(&"review".to_owned()));
     }
 
-    /// Makes a database of version 2, as the build of slice 3 made them, holding one
-    /// review of no agent, and hands back the connection it was made with.
     fn version_two(file: &Path) -> Connection {
         let old = version_one(file);
         old.execute_batch(TABLES_2).expect("make the tables of 2");
@@ -941,7 +777,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             [("v-1", None, Some("abc"))]
         );
-        // The tables of version 3 are there to be used.
         let session = SessionRecord {
             id: SessionId::new("s-1"),
             workspace: WorkspaceId::new("w-1"),
@@ -978,8 +813,6 @@ mod tests {
                 "workspace_setting"
             ]
         );
-        // The copy is of version 2: its review is in it, and none of what version 3 adds.
-        // The file was not of version 1, so no copy of that version is made.
         assert_eq!(user_version(&copy), 2);
         assert!(!folder.copy().exists());
         assert!(tables(&copy).contains(&"review".to_owned()));
@@ -993,9 +826,6 @@ mod tests {
         assert_eq!(held, "abc");
     }
 
-    /// Makes a database of version 3, as the build of slice 4 made them, holding one
-    /// session with two turns, the first ended with a state and with two steps, and hands
-    /// back the connection it was made with.
     fn version_three(file: &Path) -> Connection {
         let old = version_two(file);
         old.execute_batch(TABLES_3).expect("make the tables of 3");
@@ -1021,7 +851,6 @@ mod tests {
         let store = Store::open(&folder.file()).expect("open");
         drop(old);
         let turns = store.turns_of(&WorkspaceId::new("w-1")).expect("turns");
-        // Neither turn has a start: version 3 kept none.
         assert_eq!(
             turns
                 .iter()
@@ -1056,7 +885,6 @@ mod tests {
                 .map(|s| (s.cli_session, s.running)),
             Some(("cli-1".to_owned(), true))
         );
-        // What version 4 adds is there to be used on the turns that were kept before.
         store
             .set_turn_start(&TurnId::new("t-2"), &"f".repeat(40))
             .expect("set the start");
@@ -1075,8 +903,6 @@ mod tests {
         drop(store);
 
         assert_eq!(user_version(&folder.file()), 7);
-        // The copy is of version 3: its turns are in it, and none of what version 4 adds.
-        // The file was not of version 1 or 2, so no copy of those is made.
         assert_eq!(user_version(&copy), 3);
         assert!(!folder.copy().exists());
         assert!(!folder.0.join(format!("{FILE_NAME}.v2")).exists());
@@ -1100,10 +926,6 @@ mod tests {
         );
     }
 
-    /// Makes a database of version 4, as the build of slice 5 made them: the version 3
-    /// database, whose turn `t-1` now has a start, with two threads of review `v-1`, the
-    /// first holding a comment of the reviewer and the reply of the agent and the second a
-    /// draft, two rounds, and one setting of the app and one of a workspace.
     fn version_four(file: &Path) -> Connection {
         let old = version_three(file);
         old.execute_batch(TABLES_4).expect("make the tables of 4");
@@ -1138,8 +960,6 @@ mod tests {
         let [review] = reviews.as_slice() else {
             panic!("one review was kept: {reviews:?}");
         };
-        // Every round keeps its state and has not been edited; nothing of what version 5
-        // adds is set on what was kept.
         assert_eq!(
             review.rounds,
             [
@@ -1185,7 +1005,6 @@ mod tests {
                 vec![("c-3", Author::Reviewer, "a draft", None)],
             ]
         );
-        // The sessions, turns and steps of version 3 and the start of version 4.
         let turns = store.turns_of(&WorkspaceId::new("w-1")).expect("turns");
         assert_eq!(
             turns
@@ -1216,7 +1035,6 @@ mod tests {
                 },
             ]
         );
-        // What version 5 adds is there to be used on what was kept before.
         store
             .set_round_edited(&review.id, 2)
             .expect("set the edit mark");
@@ -1242,8 +1060,6 @@ mod tests {
         drop(store);
 
         assert_eq!(user_version(&folder.file()), 7);
-        // The copy is of version 4, whole, and has none of what version 5 adds. The file
-        // was not of an earlier version, so no copy of those is made.
         assert_eq!(user_version(&copy), 4);
         for earlier in 1..4 {
             assert!(!folder.0.join(format!("{FILE_NAME}.v{earlier}")).exists());
@@ -1279,10 +1095,6 @@ mod tests {
         );
     }
 
-    /// Makes a database of version 5, as the build of slice 6 made them: the version 4
-    /// database with the rounds `v-1` 1 and 2 sent and what version 5 adds, a session that
-    /// ran, and credits kept for two states of `w-1`, one of them for a path no agent made,
-    /// and for a state of `w-2`; a third state of `w-1` has a round and nothing kept.
     fn version_five(file: &Path) -> Connection {
         let old = version_four(file);
         old.execute_batch(TABLES_5).expect("make the tables of 5");
@@ -1306,7 +1118,6 @@ mod tests {
         drop(old);
         let review = ReviewId::new("v-1");
         let kept = store.review(&review).expect("review").expect("kept");
-        // Every round is as it was, and none was sent in a turn that anyone knows.
         assert_eq!(
             kept.rounds
                 .iter()
@@ -1328,8 +1139,6 @@ mod tests {
             2,
             "the settings are kept"
         );
-        // The credits are as they were, and so are the states they belong to: each state
-        // a version 5 database held credits of was kept with them, and no other.
         let w1 = WorkspaceId::new("w-1");
         assert_eq!(
             store.credits_of(&w1, "eee").expect("credits"),
@@ -1359,8 +1168,6 @@ mod tests {
                 "{workspace} {state}"
             );
         }
-        // What version 6 adds is there to be used on what was kept before. The session
-        // has no record of its CLI until one is kept.
         let session = SessionId::new("s-1");
         assert_eq!(store.session_cli_record(&session).expect("record"), None);
         store
@@ -1380,8 +1187,6 @@ mod tests {
         drop(store);
 
         assert_eq!(user_version(&folder.file()), 7);
-        // The copy is of version 5, whole, and has none of what version 6 adds. The file
-        // was not of an earlier version, so no copy of those is made.
         assert_eq!(user_version(&copy), 5);
         for earlier in 1..5 {
             assert!(!folder.0.join(format!("{FILE_NAME}.v{earlier}")).exists());
@@ -1407,10 +1212,6 @@ mod tests {
         );
     }
 
-    /// Makes a database of version 6, as the build of slice 7 made them: the version 5
-    /// database with the CLI's record of session `s-1`, the turn round 2 of review `v-1`
-    /// was sent in, the states whose credits were kept and two files marked viewed, so
-    /// that every table of the file holds a row.
     fn version_six(file: &Path) -> Connection {
         let old = version_five(file);
         old.execute_batch(TABLES_6).expect("make the tables of 6");
@@ -1432,8 +1233,6 @@ mod tests {
 
         let store = Store::open(&folder.file()).expect("open");
         drop(old);
-        // Everything version 6 held is there: the setting of the app and of a workspace,
-        // the record of the session, the turn of the round, the credits and the states.
         assert_eq!(
             store.settings().expect("settings"),
             [
@@ -1458,8 +1257,6 @@ mod tests {
         let w1 = WorkspaceId::new("w-1");
         assert_eq!(store.credits_of(&w1, "eee").expect("credits").len(), 2);
         assert!(store.credits_were_kept(&w1, "fff").expect("kept"));
-        // What version 7 adds is there to be used on the repository the file held, and
-        // lists after the settings of the workspaces that were there.
         let answer = Setting::ServersInRepository {
             repository: RepositoryId::new("r-1"),
             allowed: true,
@@ -1473,8 +1270,6 @@ mod tests {
         drop(store);
 
         assert_eq!(user_version(&folder.file()), 7);
-        // The copy is of version 6, whole, and has none of what version 7 adds. The file
-        // was not of an earlier version, so no copy of those is made.
         assert_eq!(user_version(&copy), 6);
         for earlier in 1..6 {
             assert!(!folder.0.join(format!("{FILE_NAME}.v{earlier}")).exists());
@@ -1506,9 +1301,6 @@ mod tests {
             .expect("the copy holds the record of version 6");
         assert_eq!(record, b"/s/one.jsonl");
 
-        // Every table the copy holds has in the upgraded file the rows it has in the
-        // copy, none lost and none changed, and the tables that hold something are the
-        // ones the file was filled with, so that the comparison is not of empty tables.
         let upgraded = Connection::open(folder.file()).expect("open the upgraded file");
         let names = tables(&copy);
         assert_eq!(
@@ -1560,8 +1352,6 @@ mod tests {
         );
     }
 
-    /// Every row of a table as one line of its quoted values, in a fixed order, so that
-    /// two files can be compared row for row whatever the columns hold.
     fn rows_of(connection: &Connection, table: &str) -> Vec<String> {
         let columns: Vec<String> = connection
             .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))
@@ -1593,7 +1383,6 @@ mod tests {
         drop(Store::open(&folder.file()).expect("open"));
         assert!(folder.copy().is_file());
 
-        // Were the copy made again it would be there again.
         std::fs::remove_file(folder.copy()).expect("remove the copy");
         drop(Store::open(&folder.file()).expect("open again"));
         assert!(!folder.copy().exists());
@@ -1648,7 +1437,6 @@ mod tests {
         assert!(!Path::new(&partial).exists());
     }
 
-    /// Keeps a review with one thread that holds one draft, and gives the draft's id.
     fn with_one_draft(store: &Store) -> CommentId {
         let review = ReviewId::new("1".repeat(32));
         store
@@ -1691,8 +1479,7 @@ mod tests {
         draft
     }
 
-    /// The `synchronous` setting of the writer's connection: 2 is FULL, which every change
-    /// but a draft's save waits for the drive with.
+    /// 2 is FULL, which every change but a draft's save waits for the drive with.
     fn synchronous(store: &Store) -> i64 {
         store
             .with_writer(|writer| {
@@ -1703,17 +1490,15 @@ mod tests {
             .expect("read the setting")
     }
 
-    // Unit tests that hold a second connection open, because no call of the Store holds
-    // a read open while the writer works.
+    // Hold a second connection: no call of the Store holds a read open while the writer works.
     #[test]
     fn a_flush_the_database_could_not_finish_is_a_failure_and_the_writer_tries_again() {
         let folder = Folder::new("blocked");
         let store = Store::open(&folder.file()).expect("open");
         let draft = with_one_draft(&store);
 
-        // A reader that still sees the file as it was before the save keeps the
-        // write-ahead file from being emptied: the checkpoint answers with a row that says
-        // it was blocked, and not with an error.
+        // A reader still seeing the file as before the save keeps the write-ahead file from
+        // being emptied: the checkpoint answers with a row saying it was blocked, not an error.
         let reader = Connection::open(folder.file()).expect("open a reader");
         reader
             .execute_batch("BEGIN; SELECT count(*) FROM thread;")
@@ -1726,8 +1511,6 @@ mod tests {
         let wal = folder.0.join(format!("{FILE_NAME}-wal"));
         assert!(std::fs::metadata(&wal).expect("the write-ahead file").len() > 0);
 
-        // The draft still waits for a flush: once the reader lets go the writer empties
-        // the file by itself, with a deadline for the fact.
         reader.execute_batch("COMMIT").expect("let go");
         let deadline = Instant::now() + std::time::Duration::from_secs(30);
         while std::fs::metadata(&wal).expect("the write-ahead file").len() > 0 {
@@ -1736,8 +1519,8 @@ mod tests {
         }
     }
 
-    // A unit test, because the setting is the connection's own and only the writer reads
-    // it; a kill of the process cannot tell the two settings apart.
+    // `synchronous` belongs to the connection, so only the writer can read it; a kill test cannot
+    // tell NORMAL from FULL, since a killed process loses nothing under either.
     #[test]
     fn a_draft_save_puts_the_wait_for_the_drive_back_whether_or_not_it_changed_a_row() {
         let folder = Folder::new("synchronous");
@@ -1752,8 +1535,6 @@ mod tests {
         assert_eq!(synchronous(&store), 2, "after a refused save");
     }
 
-    // A unit test that makes a file, because a database of a later version can only be
-    // made beside the Store: no call of the Store writes one.
     #[test]
     fn a_database_of_a_later_version_is_refused_and_left_as_it_is() {
         let folder = std::env::temp_dir().join(format!("yaar-store-newer-{}", std::process::id()));

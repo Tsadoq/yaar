@@ -1,9 +1,5 @@
-//! A copy of git's list of the files of a worktree, for one read.
-//!
-//! git's diff of a commit against the files brings that list up to date and writes it
-//! back, under a lock, whatever it is told about locks. Reading must neither write the
-//! user's list nor hold its lock while the user's own git wants it, so such a read runs
-//! on a copy, in a folder nobody else can enter, that is gone when the read is over.
+//! A private copy of git's index for one read: git's diff against the files rewrites the index
+//! under a lock whatever it is told, which a read must neither do nor hold.
 
 use std::fs;
 use std::io::{self, Write};
@@ -11,32 +7,26 @@ use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// The copy, and the folder made for it.
 pub(crate) struct IndexCopy {
     folder: PathBuf,
 }
 
 impl IndexCopy {
-    /// Copies the list at `index`. Where there is none yet, as in a repository in which
-    /// nothing was ever staged, the copy is none either, which git reads as an empty
-    /// list.
     pub(crate) fn of(index: &Path) -> io::Result<IndexCopy> {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         let temp = std::env::temp_dir();
         let copy = loop {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);
             let folder = temp.join(format!("yaar-index-{}-{n}", std::process::id()));
-            // A name that is taken, by whatever left it there, is passed over: the
-            // folder has to be made here, for this user alone.
             match fs::DirBuilder::new().mode(0o700).create(&folder) {
                 Ok(()) => break IndexCopy { folder },
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
             }
         };
-        // Read and written plainly, not with `fs::copy`: on macOS that one asks the system
-        // to copy the file, which touches the user's list, and a watcher of the worktree
-        // then sees a change of it at every read the app makes.
+        // Read and written plainly, not with `fs::copy`: on macOS that asks the system to copy the
+        // file, which touches the user's index, and a watcher of the worktree then sees a change at
+        // every read.
         let mut from = match fs::File::open(index) {
             Ok(from) => from,
             Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(copy),
@@ -44,14 +34,13 @@ impl IndexCopy {
         };
         let mut to = fs::File::create(copy.file())?;
         io::copy(&mut from, &mut to)?;
-        // The list's own time, as `fs::copy` keeps it on macOS: git compares the time of a
-        // file with the list's to know which entries it cannot trust, and a list that
-        // looked newer than it is would make it trust a stale one.
+        // The index's own time, as `fs::copy` keeps it on macOS: git compares file times with the
+        // index's to know which entries it cannot trust, and an index that looked newer would make
+        // it trust a stale one.
         to.set_modified(from.metadata()?.modified()?)?;
         Ok(copy)
     }
 
-    /// Where the copy is.
     pub(crate) fn file(&self) -> PathBuf {
         self.folder.join("index")
     }
@@ -63,16 +52,14 @@ impl Drop for IndexCopy {
     }
 }
 
-/// The bytes of a worktree's own list of files, taken before a command of the user's own
-/// git changes it, so that a command that is refused can put them back.
+/// The bytes of a worktree's index before a command of the user's git changes it, to put back when
+/// the command is refused.
 pub(crate) struct IndexBackup {
     file: PathBuf,
-    // None where the list did not exist yet.
     bytes: Option<Vec<u8>>,
 }
 
 impl IndexBackup {
-    /// Reads the list at `index`; a list that is not there yet is remembered as none.
     pub(crate) fn take(index: &Path) -> io::Result<IndexBackup> {
         let bytes = match fs::read(index) {
             Ok(bytes) => Some(bytes),
@@ -85,7 +72,6 @@ impl IndexBackup {
         })
     }
 
-    /// The list as it is now, none where it is not there.
     fn read_now(&self) -> io::Result<Option<Vec<u8>>> {
         match fs::read(&self.file) {
             Ok(now) => Ok(Some(now)),
@@ -94,16 +80,10 @@ impl IndexBackup {
         }
     }
 
-    /// Puts the list back as it was, byte for byte, through git's own lock: the bytes go
-    /// to `index.lock`, created where none is, and that is renamed over the list, which
-    /// is how git writes it, so that no one reads half of it and another git that is
-    /// writing the list at the moment is not overwritten. Where the lock is held, the
-    /// list is left as it is and the error says so. A list that is as it was already is
-    /// not touched, and one that did not exist is removed. The list is compared with the
-    /// bytes only once the lock is taken.
+    /// Puts the index back byte for byte through git's own lock (`index.lock` renamed over the
+    /// index), so that no one reads half of it and a concurrent git writer is not overwritten.
+    /// Where the lock is held the index is left and the error says so.
     pub(crate) fn restore(self) -> io::Result<()> {
-        // A list that is as it was needs no lock, and taking one could only fail a put-back
-        // that has nothing to put.
         if self.read_now()? == self.bytes {
             return Ok(());
         }
@@ -121,8 +101,7 @@ impl IndexBackup {
                     e
                 }
             })?;
-        // Read with the lock held: no other git can write the list between the read and
-        // the rename.
+        // Read with the lock held, so no other git can write between the read and the rename.
         let now = match self.read_now() {
             Ok(now) => now,
             Err(e) => {
@@ -136,13 +115,11 @@ impl IndexBackup {
         }
         let put_back = match &self.bytes {
             Some(bytes) => held.write_all(bytes).and_then(|()| {
-                // The mode git gave the list, if there is one still.
                 if let Ok(old) = fs::metadata(&self.file) {
                     held.set_permissions(old.permissions())?;
                 }
                 fs::rename(&lock, &self.file)
             }),
-            // A list that did not exist is not there to be renamed over.
             None => match fs::remove_file(&self.file) {
                 Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
                 _ => Ok(()),

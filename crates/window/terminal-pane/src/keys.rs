@@ -1,41 +1,19 @@
-//! What a key, a paste or a change of focus sends to the program of a terminal.
-//!
-//! The encoder follows the terminal's state, as [`crate::Modes`] reads it from the
-//! emulator: xterm's forms where the program asked for nothing, the application cursor
-//! keys where it asked for them, and the kitty keyboard protocol where it pushed its
-//! flags. Of those flags it implements 1, every key with Ctrl or Option and Escape in the
-//! protocol's own form, and 2, the repeat and the release of a key; see
-//! [`crate::IMPLEMENTED_FLAGS`].
-//!
-//! Under those flags Ctrl or Option with a symbol typed with Shift is sent as the key that
-//! types the symbol without Shift, with Shift among the modifiers, as the protocol asks
-//! (Ctrl-Shift-0 is `CSI 48 ; 6 u`). GPUI gives such a key as the symbol, so the encoder
-//! maps the shifted symbols of the U.S. layout back to their key. That mapping is the U.S.
-//! layout's: the shifted symbols of another layout are sent as they come.
-//!
-//! A key that types text goes to the program through the view's input handler, which
-//! also composes dead keys and the text of an input method: [`encode_key`] gives none for
-//! it. A Cmd key never reaches a program: it gives none either.
+//! What a key, a paste or a change of focus sends to the program, following [`crate::Modes`]. A key
+//! that types text goes through the view's input handler: [`encode_key`] gives none for it.
 
 use gpui_kit::Keystroke;
 
 use crate::modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes};
 
-/// What Option does, on macOS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OptionKey {
-    /// It is Meta: Option with a key sends that key with the Meta prefix, or in the kitty
-    /// form with the Alt modifier.
     Meta,
-    /// It types the character the keyboard layout gives, as macOS does everywhere else.
     Characters,
 }
 
 impl OptionKey {
-    /// What Option does until the user's setting says otherwise: on macOS, Meta when
-    /// `layout_id` is exactly `com.apple.keylayout.US`, and characters on every other
-    /// layout, U.S. Extended and U.S. International among them; Meta on every system but
-    /// macOS (`mac` false), where Alt is always Meta.
+    /// Meta on macOS only when `layout_id` is exactly `com.apple.keylayout.US` (U.S. Extended and
+    /// International type characters); Alt is always Meta elsewhere.
     pub fn for_layout(layout_id: &str, mac: bool) -> OptionKey {
         if !mac || layout_id == "com.apple.keylayout.US" {
             OptionKey::Meta
@@ -46,9 +24,6 @@ impl OptionKey {
 }
 
 impl OptionKey {
-    /// What Option does given the user's setting: on macOS the setting's own choice, and
-    /// with none made (`ByLayout`) what [`OptionKey::for_layout`] says of `layout_id`; on
-    /// every other system (`mac` false) Alt is Meta whatever the setting says.
     pub fn of_setting(setting: yaar_link::OptionKey, layout_id: &str, mac: bool) -> OptionKey {
         match setting {
             _ if !mac => OptionKey::Meta,
@@ -61,7 +36,6 @@ impl OptionKey {
 
 const ESC: u8 = 0x1b;
 
-/// The kind of press an escape code reports under flag 2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Event {
     Press,
@@ -69,19 +43,22 @@ enum Event {
     Release,
 }
 
-/// What a key sends, before the state of the terminal decides how it is written.
 #[derive(Debug, PartialEq, Eq)]
 enum Key {
     /// Bytes as they are: the key has no escape code that flag 2 could report on.
     Bytes(Vec<u8>),
-    /// An arrow, Home or End: `CSI A`, or `SS3 A` in the application cursor mode.
-    Cursor { letter: u8, modifiers: u32 },
-    /// F1 to F4, numbered 1 to 4: `SS3 P` in the legacy state.
-    Function { number: u8, modifiers: u32 },
-    /// A key written `CSI number ~`.
-    Tilde { number: u32, modifiers: u32 },
-    /// A key written `CSI code u`; `events` says whether flag 2 reports its repeats and
-    /// releases (Enter, Tab and Backspace are not: they are control bytes).
+    Cursor {
+        letter: u8,
+        modifiers: u32,
+    },
+    Function {
+        number: u8,
+        modifiers: u32,
+    },
+    Tilde {
+        number: u32,
+        modifiers: u32,
+    },
     Code {
         code: u32,
         modifiers: u32,
@@ -89,15 +66,11 @@ enum Key {
     },
 }
 
-/// The parameter of the modifiers of an escape code: 1, plus 1 for Shift, 2 for Alt, 4
-/// for Ctrl.
 fn modifier_parameter(keystroke: &Keystroke) -> u32 {
     let m = &keystroke.modifiers;
     1 + u32::from(m.shift) + 2 * u32::from(m.alt) + 4 * u32::from(m.control)
 }
 
-/// What a key with Ctrl sends in the legacy state: the control byte of a letter and of
-/// the few signs that have one, the character itself for every other key.
 fn control_bytes(character: char) -> Vec<u8> {
     let byte = match character {
         'a'..='z' => character as u8 - b'a' + 1,
@@ -113,9 +86,8 @@ fn control_bytes(character: char) -> Vec<u8> {
     vec![byte]
 }
 
-/// The key that types `symbol` without Shift, for the symbols a U.S. keyboard types with
-/// it. The table is that layout's: a symbol of any other layout has no entry and goes as
-/// it comes, because the key that types it is not known here.
+/// The key that types `symbol` without Shift on a U.S. keyboard; another layout's symbol has no
+/// entry.
 fn unshifted(symbol: char) -> Option<char> {
     const US_SHIFTED: [(char, char); 21] = [
         (')', '0'),
@@ -146,8 +118,6 @@ fn unshifted(symbol: char) -> Option<char> {
         .map(|&(_, base)| base)
 }
 
-/// What the keystroke is to the encoder, or none when it is no business of the
-/// encoder's.
 fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<Key> {
     let m = &keystroke.modifiers;
     let flags = modes.keyboard.intersection(IMPLEMENTED_FLAGS);
@@ -156,8 +126,7 @@ fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<K
     let key = keystroke.key.as_str();
 
     if m.platform {
-        // Every Cmd key is the app's. Three of them mean a line edit to a shell on
-        // macOS, where the people who press them expect it.
+        // Every Cmd key is the app's, except three that mean a line edit to a shell on macOS.
         let alone = !m.shift && !m.alt && !m.control;
         return match key {
             "left" if cfg!(target_os = "macos") && alone => Some(Key::Bytes(vec![0x01])),
@@ -167,7 +136,6 @@ fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<K
         };
     }
 
-    // The ESC that Alt puts before what a key sends in the legacy state.
     let meta = |bytes: Vec<u8>| {
         if m.alt {
             let mut prefixed = vec![ESC];
@@ -218,8 +186,7 @@ fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<K
         } else {
             Key::Bytes(meta(vec![ESC]))
         }),
-        // Option with the arrows that move by a word: what a shell reads as such, in
-        // every state, as the terminals people compare this one to send it.
+        // Word-wise moves, which a shell reads as such in every state.
         "left" if m.alt && !m.shift && !m.control => Some(Key::Bytes(vec![ESC, b'b'])),
         "right" if m.alt && !m.shift && !m.control => Some(Key::Bytes(vec![ESC, b'f'])),
         "up" | "down" | "right" | "left" | "home" | "end" => Some(Key::Cursor {
@@ -260,17 +227,13 @@ fn classify(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<K
                     }
                 }
             };
-            // A key with no Ctrl and no Option as Meta types text, which reaches the
-            // program through the view's input handler: composed, if the layout or an
-            // input method composes it.
             let option_is_meta = m.alt && (option == OptionKey::Meta || m.control);
             if !m.control && !option_is_meta {
                 return None;
             }
             if kitty {
-                // The protocol names the key without Shift, and Shift a modifier. GPUI
-                // gives a symbol typed with Shift as the symbol, so it is taken back to
-                // its key.
+                // The protocol names the key without Shift, and Shift a modifier. GPUI gives the
+                // shifted symbol, so it is taken back to its key.
                 let (code, modifiers) = match unshifted(character) {
                     Some(base) if !m.shift => (base, modifiers + 1),
                     Some(base) => (base, modifiers),
@@ -302,7 +265,6 @@ fn tilde(number: u32, modifiers: u32) -> Key {
     Key::Tilde { number, modifiers }
 }
 
-/// `CSI number ; modifiers : event final`, with what a plain press leaves out left out.
 fn csi(number: Option<u32>, modifiers: u32, event: Option<u8>, last: u8) -> Vec<u8> {
     let mut text = String::from("\x1b[");
     if let Some(number) = number {
@@ -321,7 +283,6 @@ fn csi(number: Option<u32>, modifiers: u32, event: Option<u8>, last: u8) -> Vec<
 }
 
 impl Key {
-    /// The bytes of this key for one event, in the state `modes` describes.
     fn render(&self, event: Event, modes: &Modes) -> Vec<u8> {
         let flags = modes.keyboard.intersection(IMPLEMENTED_FLAGS);
         let kitty = flags.contains(KeyboardFlags::DISAMBIGUATE);
@@ -344,8 +305,8 @@ impl Key {
                         vec![ESC, b'[', letter]
                     }
                 } else {
-                    // The first parameter of a modified key is 1, so that the
-                    // modifiers are the second.
+                    // The first parameter of a modified key is 1, so that the modifiers are the
+                    // second.
                     csi(Some(1), modifiers, event, letter)
                 }
             }
@@ -372,9 +333,7 @@ impl Key {
     }
 }
 
-/// The bytes a key press sends to the program, or none when the key is not the
-/// encoder's: text the input handler sends, a Cmd key, or a key that sends nothing.
-/// `repeat` says that the key is held and this press is a repeat of the one before.
+/// None for text (the input handler sends it), a Cmd key, or a key that sends nothing.
 pub fn encode_key(
     keystroke: &Keystroke,
     modes: &Modes,
@@ -385,25 +344,21 @@ pub fn encode_key(
     classify(keystroke, modes, option).map(|key| key.render(event, modes))
 }
 
-/// The bytes the release of a key sends: only under flag 2, and only for a key whose
-/// press the encoder sent.
 pub fn encode_release(keystroke: &Keystroke, modes: &Modes, option: OptionKey) -> Option<Vec<u8>> {
     let flags = modes.keyboard.intersection(IMPLEMENTED_FLAGS);
     if !flags.contains(KeyboardFlags::REPORT_EVENT_TYPES) {
         return None;
     }
     let key = classify(keystroke, modes, option)?;
-    // A key sent as plain bytes has no escape code to carry the event; the protocol
-    // reports no release for Enter, Tab and Backspace either.
+    // A key sent as plain bytes has no escape code to carry the event, and the protocol
+    // reports no release for Enter, Tab and Backspace.
     match key {
         Key::Bytes(_) | Key::Code { events: false, .. } => None,
         _ => Some(key.render(Event::Release, modes)),
     }
 }
 
-/// The bytes of pasted text: the text, with line ends as Return sends them, and between
-/// the two marks of bracketed paste when the program asked for it. Text that holds the
-/// closing mark loses it, so that a paste cannot end itself early.
+/// Text that holds the closing mark loses it, so that a paste cannot end itself early.
 pub fn encode_paste(text: &str, modes: &Modes) -> Vec<u8> {
     const OPEN: &[u8] = b"\x1b[200~";
     const CLOSE: &[u8] = b"\x1b[201~";
@@ -424,8 +379,6 @@ pub fn encode_paste(text: &str, modes: &Modes) -> Vec<u8> {
     marked
 }
 
-/// The bytes that tell the program the terminal gained or lost the focus, when it asked
-/// for them.
 pub fn encode_focus(focused: bool, modes: &Modes) -> Option<Vec<u8>> {
     modes
         .focus_events
@@ -467,7 +420,6 @@ mod tests {
         Keystroke::parse(source).expect("a keystroke")
     }
 
-    /// A key GPUI reports for a symbol typed with Shift: the symbol, with Shift set.
     fn shifted(source: &'static str) -> Keystroke {
         let mut keystroke = key(source);
         keystroke.modifiers.shift = true;
@@ -478,7 +430,6 @@ mod tests {
         encode_key(keystroke, modes, OptionKey::Meta, false)
     }
 
-    /// What each key sends in a state, as text with `ESC` written `E`.
     #[track_caller]
     fn assert_sends(modes: &Modes, rows: &[(&'static str, Option<&str>)]) {
         for (source, expected) in rows {
@@ -516,7 +467,6 @@ mod tests {
                 "{other}"
             );
         }
-        // Off macOS Alt is Meta whatever the layout says.
         for layout in [us, "com.apple.keylayout.ABC", "", "xkb:de"] {
             assert_eq!(
                 OptionKey::for_layout(layout, false),
@@ -577,12 +527,10 @@ mod tests {
                 ("shift-!->!", None),
                 ("space-> ", None),
                 ("shift-space-> ", None),
-                // A letter whose text has not arrived: an input method has it.
                 ("a", None),
                 ("alt-e->é", Some("Ee")),
             ],
         );
-        // The same under the kitty flags: text keys stay text.
         assert_sends(
             &KITTY,
             &[("a->a", None), ("shift-A->A", None), ("space-> ", None)],
@@ -673,8 +621,6 @@ mod tests {
                 );
             }
         }
-        // Keys that are not text are the encoder's as before, and with Ctrl the key is
-        // no text.
         let characters = |source: &'static str, modes: &Modes| {
             encode_key(&key(source), modes, OptionKey::Characters, false).map(|b| show(&b))
         };
@@ -761,7 +707,6 @@ mod tests {
                 ("left", Some("EOD")),
                 ("home", Some("EOH")),
                 ("end", Some("EOF")),
-                // A modifier makes the form with parameters in either state.
                 ("shift-up", Some("E[1;2A")),
                 ("ctrl-end", Some("E[1;5F")),
             ],
@@ -775,7 +720,6 @@ mod tests {
                 &modes,
                 &[("alt-left", Some("Eb")), ("alt-right", Some("Ef"))],
             );
-            // With another modifier too it is the arrow with its modifiers.
             assert_sends(
                 &modes,
                 &[
@@ -827,7 +771,6 @@ mod tests {
                 ("shift-f12", Some("E[24;2~")),
             ],
         );
-        // Application cursor keys change no function key.
         assert_sends(&APP_CURSOR, &[("f1", Some("EOP")), ("f5", Some("E[15~"))]);
     }
 
@@ -850,8 +793,6 @@ mod tests {
         );
     }
 
-    /// The symbols a U.S. keyboard types with Shift, each with the key that types it
-    /// without, written out here on its own: the test does not read the encoder's table.
     const US_SHIFTED: [(char, char); 21] = [
         (')', '0'),
         ('!', '1'),
@@ -876,8 +817,6 @@ mod tests {
         ('?', '/'),
     ];
 
-    /// A keystroke of `symbol` with the modifiers named, in the two forms GPUI can give
-    /// it: Shift folded into the symbol, and Shift still set beside it.
     fn symbol_keys(modifiers: &str, symbol: char) -> [Keystroke; 2] {
         let mut folded = key("a");
         folded.key = symbol.to_string();
@@ -890,8 +829,6 @@ mod tests {
 
     #[test]
     fn under_flag_1_a_symbol_typed_with_shift_is_its_key_and_shift_among_the_modifiers() {
-        // The protocol names the key without Shift and says that Shift is a modifier;
-        // GPUI gives the symbol, so the encoder takes the symbol back to its key.
         for (symbol, base) in US_SHIFTED {
             for (modifiers, parameter) in [("ctrl", 6), ("alt", 4), ("ctrl-alt", 8)] {
                 for keystroke in symbol_keys(modifiers, symbol) {
@@ -903,7 +840,6 @@ mod tests {
                 }
             }
         }
-        // The release says the same key, and so does the second flag's repeat.
         for keystroke in symbol_keys("ctrl", ')') {
             assert_eq!(
                 encode_release(&keystroke, &KITTY_EVENTS, OptionKey::Meta).map(|b| show(&b)),
@@ -927,7 +863,6 @@ mod tests {
                 ("alt-/", Some("E[47;3u")),
                 ("ctrl-shift-0", Some("E[48;6u")),
                 ("ctrl-shift-a", Some("E[97;6u")),
-                // A symbol of another layout is not on the table: it goes as it comes.
                 ("ctrl-£", Some("E[163;5u")),
                 ("ctrl-§", Some("E[167;5u")),
             ],
@@ -979,7 +914,6 @@ mod tests {
             &[
                 ("f1", Some("E[P")),
                 ("f2", Some("E[Q")),
-                // `CSI R` is the cursor report.
                 ("f3", Some("E[13~")),
                 ("f4", Some("E[S")),
                 ("shift-f1", Some("E[1;2P")),
@@ -992,7 +926,6 @@ mod tests {
                 ("delete", Some("E[3~")),
             ],
         );
-        // The cursor mode still decides the plain arrows.
         let modes = Modes {
             app_cursor: true,
             ..KITTY
@@ -1014,12 +947,10 @@ mod tests {
             ("f3", "E[13;1:2~"),
             ("f5", "E[15;1:2~"),
             ("delete", "E[3;1:2~"),
-            // Return, Tab and Backspace are control bytes: no event types.
             ("enter", "<0d>"),
             ("shift-enter", "E[13;2u"),
             ("backspace", "<7f>"),
             ("shift-tab", "E[9;2u"),
-            // Not an escape code: nothing to mark.
             ("alt-left", "Eb"),
         ] {
             assert_eq!(
@@ -1028,7 +959,6 @@ mod tests {
                 "{source}"
             );
         }
-        // Without flag 2 a repeat is the press.
         for source in ["ctrl-a", "escape", "up", "f3"] {
             assert_eq!(
                 repeat(source, &KITTY),
@@ -1036,7 +966,6 @@ mod tests {
                 "{source}"
             );
         }
-        // A press under flag 2 carries no event type: it is the default.
         assert_sends(
             &KITTY_EVENTS,
             &[
@@ -1081,34 +1010,28 @@ mod tests {
             encode_release(&key(source), modes, OptionKey::Meta)
         };
         for source in [
-            // Text: the input handler sent it.
             "a->a",
             "space-> ",
             "shift-A->A",
-            // Control bytes the protocol reports no release for.
             "enter",
             "shift-enter",
             "tab",
             "shift-tab",
             "backspace",
             "ctrl-backspace",
-            // Not escape codes.
             "alt-left",
             "alt-right",
-            // Not the encoder's.
             "cmd-a",
             "cmd-left",
             "shift",
         ] {
             assert_eq!(release(source, &KITTY_EVENTS), None, "{source}");
         }
-        // Nothing is reported without flag 2.
         for modes in [LEGACY, KITTY, APP_CURSOR] {
             for source in ["ctrl-a", "escape", "up", "f1", "delete"] {
                 assert_eq!(release(source, &modes), None, "{source} under {modes:?}");
             }
         }
-        // Alt as characters: the key was text.
         assert_eq!(
             encode_release(&key("alt-b"), &KITTY_EVENTS, OptionKey::Characters),
             None
@@ -1117,8 +1040,6 @@ mod tests {
 
     #[test]
     fn flag_2_alone_reports_the_keys_that_are_escape_codes_in_any_case() {
-        // The arrows are escape codes in the legacy state, so their release can be said;
-        // Ctrl-A is a control byte there, and Escape is one.
         let release = |source: &'static str| {
             encode_release(&key(source), &EVENTS_ONLY, OptionKey::Meta).map(|b| show(&b))
         };
@@ -1202,12 +1123,10 @@ mod tests {
             encode_paste("a\x1b[201~b\x1b[201~", &modes),
             b"\x1b[200~ab\x1b[201~"
         );
-        // Taking the mark out must not leave another one made of what was around it.
         assert_eq!(
             encode_paste("\x1b[2\x1b[201~01~x", &modes),
             b"\x1b[200~x\x1b[201~"
         );
-        // Other escape sequences are the text's own.
         assert_eq!(
             encode_paste("\x1b[200~x", &modes),
             b"\x1b[200~\x1b[200~x\x1b[201~"

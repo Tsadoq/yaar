@@ -1,17 +1,5 @@
-//! Component tests: what the Keeper does with the recorded states, through the Link as a
-//! Window speaks it: the room they take, the clean-up the user asks for, the sweep by the set
-//! time at the Keeper's start and while it runs, and the files of long reviews that go with
-//! them. A real Keeper runs in this process, on a database, a folder of state stores and
-//! repositories the test makes, with a clock of the test's own.
-//!
-//! The turns are the agents' own: the hook program of Claude Code, built, is run with
-//! recorded inputs moved into the test's worktree, as `tests/flow.rs` does, and a file of the
-//! worktree is changed in each turn so that its end records a state of its own. The Keeper
-//! reads the time from the test's clock, which never moves by itself: the test moves it past
-//! the set time and waits for the fact the Keeper tells, never for a span to pass. The Keeper
-//! runs git and the shells of its terminals with the environment of its process, so each test
-//! sets that environment as its first statement, and these tests are run by `cargo nextest`,
-//! which gives each test a process of its own.
+//! Each test sets the process environment first, so each needs a process of its own (cargo
+//! nextest).
 
 use std::fs;
 use std::io::Write as _;
@@ -35,9 +23,6 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails: longer than the plan's ten
-/// seconds, as every test file of this crate has it, since a Keeper starts git and shells
-/// of its own and a throttled machine runs them slowly.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -49,31 +34,23 @@ const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const HOUR: Duration = Duration::from_secs(60 * 60);
 const MINUTE: Duration = Duration::from_secs(60);
 
-/// The recording `claude/turn-tools.jsonl`: the lines that begin a session and a turn, the
-/// one that ends the turn, the prompt Claude Code started itself sixteen milliseconds after
-/// that stop, and the stop of that second turn.
 const TOOLS: &str = "claude/turn-tools.jsonl";
 const SESSION_AND_PROMPT: [usize; 2] = [1, 2];
 const STOP: usize = 32;
 const PROMPT_AGAIN: usize = 33;
 const STOP_AGAIN: usize = 34;
 
-/// `claude/review-file-read.jsonl`: a session's start (line 0) and its end (7), whose reason
-/// is not `clear`.
+/// A session's start (line 0) and its end (7), whose reason is not `clear`.
 const REVIEW_FILE: &str = "claude/review-file-read.jsonl";
 
-/// A clock of the test's own: a base taken once, and an offset the test moves, and one the
-/// clock moves itself at each read once the test asks for it.
 #[derive(Debug)]
 struct TestClock {
     base: SystemTime,
     offset: Mutex<Duration>,
-    /// How far each read moves the offset on after it: none until `step_at_each_read`.
     step: Mutex<Duration>,
 }
 
 impl TestClock {
-    /// 2026-01-01T00:00:00Z, the offset none.
     fn new() -> Arc<TestClock> {
         Arc::new(TestClock {
             base: UNIX_EPOCH + Duration::from_secs(1_767_225_600),
@@ -82,18 +59,14 @@ impl TestClock {
         })
     }
 
-    /// Moves the clock `by` forward.
     fn move_on(&self, by: Duration) {
         *self.offset.lock().unwrap_or_else(PoisonError::into_inner) += by;
     }
 
-    /// From now on, every read gives the time and then moves the clock `by` forward, as a
-    /// clock does that runs while the program reads it.
     fn step_at_each_read(&self, by: Duration) {
         *self.step.lock().unwrap_or_else(PoisonError::into_inner) = by;
     }
 
-    /// Sets the clock to the base and `offset`.
     fn set(&self, offset: Duration) {
         *self.offset.lock().unwrap_or_else(PoisonError::into_inner) = offset;
     }
@@ -108,14 +81,10 @@ impl Clock for TestClock {
     }
 }
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
+    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -138,17 +107,13 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -174,17 +139,12 @@ impl Scratch {
         self.0.join("data")
     }
 
-    /// The folder the Claude Code Adapter writes the files of long reviews into, one folder
-    /// for each session by the CLI's own id of it.
     fn reviews(&self) -> PathBuf {
         self.data().join("agents").join("claude").join("reviews")
     }
 
-    /// The folder of the test's own copy of the built hook program, made at the first
-    /// call. Every test process asks `program` to build, and cargo puts a program it built
-    /// in place again each time: where tests run side by side, the program is gone for a
-    /// moment, and one started from there fails. A copy is made at the first try that finds
-    /// the program, and is the test's own.
+    /// The test's own copy of the built hook program: cargo replaces the program on each build, so
+    /// under parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
@@ -205,8 +165,6 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test, reading the time from `clock`,
-    /// with the folder of the hook program as where the pieces of the agents lie.
     fn keeper(&self, clock: &Arc<TestClock>) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -221,7 +179,6 @@ impl Scratch {
         std::thread::spawn(move || run_with_clock(options, clock))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -243,8 +200,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` holding `notes.txt`, and
-    /// an identity of its own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         fs::create_dir_all(&folder).expect("make the folder");
@@ -257,8 +212,6 @@ impl Scratch {
         folder
     }
 
-    /// The states the Keeper recorded for `workspace`, oldest first, by their full ids,
-    /// read from the state store as git does.
     fn states_of(&self, workspace: &WorkspaceId) -> Vec<String> {
         let store = self.data().join("states").join(format!("{workspace}.git"));
         if !store.exists() {
@@ -287,13 +240,10 @@ impl Scratch {
         numbered.into_iter().map(|(_, id)| id).collect()
     }
 
-    /// The Keeper's database, opened a second time to read what it kept.
     fn store(&self) -> Store {
         Store::open(&self.data().join(yaar_store::FILE_NAME)).expect("open the Keeper's database")
     }
 
-    /// Runs the hook program with `payload` on its standard input, as Claude Code does,
-    /// in the terminal `terminal` of the app. It must succeed.
     fn hook(&self, terminal: &TerminalId, payload: &[u8]) {
         let mut child = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM))
             .env(SOCKET_VARIABLE, self.socket())
@@ -320,19 +270,16 @@ impl Drop for Scratch {
     }
 }
 
-/// A `git` of the test's own, first on the search path: it runs the real git for every call
-/// but one. The `prune` of the store named by [`PruneGate::hold_store`] is held, the first
-/// time only, until [`PruneGate::release`], and `held` appears in the gate's folder once the
-/// call has reached it. Its fifo is kept open by the test for reading and writing, so that a
-/// release is never lost and a test that fails lets the held call go when the gate drops.
+/// A `git` of the test's own first on the search path: it runs the real git except for the first
+/// `prune` of the store named by `hold_store`, held until `release`. The fifo is kept open so a
+/// release is never lost.
 struct PruneGate {
     folder: PathBuf,
     go: fs::File,
 }
 
 impl PruneGate {
-    /// Puts the git in front of the search path of this process. It has to be called right
-    /// after [`Scratch::new`], before anything starts a thread.
+    /// Must be called right after `Scratch::new`, before anything starts a thread.
     fn new(scratch: &Scratch) -> PruneGate {
         let folder = scratch.0.join("gate");
         fs::create_dir_all(&folder).expect("make the gate's folder");
@@ -384,20 +331,17 @@ impl PruneGate {
         .expect("make the git a program");
         let mut places = vec![bin];
         places.extend(std::env::split_paths(&search));
-        // SAFETY: as in `Scratch::new`: no other thread exists yet, and each test has a
-        // process of its own.
+        // SAFETY: as in `Scratch::new`.
         unsafe {
             std::env::set_var("PATH", std::env::join_paths(places).expect("a search path"));
         }
         PruneGate { folder, go }
     }
 
-    /// Holds the first `prune` of the state store `store` (its folder's name, `<id>.git`).
     fn hold_store(&self, store: &str) {
         fs::write(self.folder.join("target"), store).expect("name the store");
     }
 
-    /// Waits, up to the deadline, until a `prune` is held.
     fn wait_held(&self) {
         let held = self.folder.join("held");
         let deadline = Instant::now() + DEADLINE;
@@ -407,14 +351,11 @@ impl PruneGate {
         }
     }
 
-    /// Lets the held `prune` go on. The fifo stays open until the gate drops, so that the
-    /// word waits in it for a call that has not yet opened it.
     fn release(&self) {
         (&self.go).write_all(b"go\n").expect("let it go");
     }
 }
 
-/// Runs git in `folder` and gives what it printed, trimmed.
 fn git(folder: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -431,9 +372,8 @@ fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
-/// What git prints for a read, with the exit code: the bytes a test of "nothing of the
-/// user's is written" compares. No optional lock, so that a read never rewrites the index of
-/// a repository committed to in the same second.
+/// No optional lock, so a read never rewrites the index of a repository committed to in the same
+/// second.
 fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -449,7 +389,6 @@ fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     all
 }
 
-/// Every file below `folder`, relative to it, with its size.
 fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
     for entry in fs::read_dir(folder).expect("read the folder") {
         let path = entry.expect("an entry").path();
@@ -465,8 +404,6 @@ fn files_below(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, u64)>) {
     }
 }
 
-/// What a clean-up must leave as it was: the seven reads of the repository and every file
-/// of its objects with its size (ruling (c)).
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     reads: Vec<Vec<u8>>,
@@ -500,8 +437,6 @@ fn reads(repo: &Path) -> Reads {
     }
 }
 
-/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
-/// Gives their ids, which `still_there` finds again.
 fn plant(scratch: &Scratch, repo: &Path) -> Vec<String> {
     let file = scratch.0.join("blob.txt");
     fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
@@ -516,15 +451,12 @@ fn plant(scratch: &Scratch, repo: &Path) -> Vec<String> {
     vec![blob, dangling]
 }
 
-/// `git cat-file -e` of each planted object succeeds.
 fn still_there(repo: &Path, planted: &[String]) {
     for id in planted {
         git(repo, &["cat-file", "-e", id]);
     }
 }
 
-/// 64 KB that no other call with another seed gives and that no compression shrinks: a
-/// xorshift over a `u64`, so that each state holds room of its own.
 fn noise(seed: u64) -> Vec<u8> {
     let mut x = seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1;
     let mut bytes = Vec::with_capacity(64 * 1024);
@@ -537,8 +469,6 @@ fn noise(seed: u64) -> Vec<u8> {
     bytes
 }
 
-/// The blocks a file or a folder and everything in it use on disk, links not followed: the
-/// test's own count, as `du` makes it.
 fn blocks_of(path: &Path) -> u64 {
     let meta = fs::symlink_metadata(path).expect("metadata");
     let mut bytes = meta.blocks() * 512;
@@ -550,7 +480,6 @@ fn blocks_of(path: &Path) -> u64 {
     bytes
 }
 
-/// Sets the modification time of the file `path`.
 fn set_modified(path: &Path, time: SystemTime) {
     fs::File::options()
         .write(true)
@@ -560,8 +489,6 @@ fn set_modified(path: &Path, time: SystemTime) {
         .expect("set the modification time");
 }
 
-/// Writes `reviews/<cli>/r-1.md` of the Adapter's folder with `text`, last modified at
-/// `modified`, and gives its path.
 fn review_file(scratch: &Scratch, cli: &str, text: &str, modified: SystemTime) -> PathBuf {
     let folder = scratch.reviews().join(cli);
     fs::create_dir_all(&folder).expect("make the session's folder");
@@ -571,8 +498,6 @@ fn review_file(scratch: &Scratch, cli: &str, text: &str, modified: SystemTime) -
     file
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -599,13 +524,10 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it. Fails the test at the deadline, with the facts that
-    /// came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
             Ok(Message::Reply { to, reply }) => self.replies.push((to, reply)),
-            // The shell of a terminal prints; nobody here reads it.
             Ok(Message::Output { .. }) => {}
             Ok(other) => panic!("waiting for {waiting_for}, a frame nobody sends: {other:?}"),
             Err(e) => panic!(
@@ -615,13 +537,11 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         self.reply_to(id)
     }
 
-    /// Waits for the reply to the request `id`.
     fn reply_to(&mut self, id: RequestId) -> Result<Reply, Refusal> {
         loop {
             if let Some(at) = self.replies.iter().position(|(to, _)| *to == id) {
@@ -631,7 +551,6 @@ impl Window {
         }
     }
 
-    /// The first fact from here on that `wanted` takes, passing over the ones before it.
     fn until<T>(&mut self, what: &str, mut wanted: impl FnMut(&Fact) -> Option<T>) -> T {
         loop {
             while self.looked_at < self.facts.len() {
@@ -644,8 +563,6 @@ impl Window {
         }
     }
 
-    /// The turn of the next `AgentsChanged` of `workspace` that shows a running turn
-    /// `wanted` takes.
     fn turn_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -661,7 +578,6 @@ impl Window {
         })
     }
 
-    /// The next `TurnEnded` of `turn`, with the state recorded.
     fn ended(&mut self, turn: &TurnId) -> Option<String> {
         self.until("the end of a turn", |fact| match fact {
             Fact::TurnEnded {
@@ -671,7 +587,6 @@ impl Window {
         })
     }
 
-    /// The next `StatesDeleted` of `workspace` from here on.
     fn states_deleted(&mut self, workspace: &WorkspaceId) {
         self.until("StatesDeleted", |fact| match fact {
             Fact::StatesDeleted { workspace: lost } if lost == workspace => Some(()),
@@ -679,7 +594,6 @@ impl Window {
         });
     }
 
-    /// Every workspace a `StatesDeleted` named so far, in the order told.
     fn deleted_so_far(&self) -> Vec<WorkspaceId> {
         self.facts
             .iter()
@@ -700,7 +614,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it: what a CLI typed in that shell reports from.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -713,7 +626,6 @@ impl Window {
         terminal
     }
 
-    /// `GetStateSizes`.
     fn sizes(&mut self) -> StateSizes {
         match self.ask(Request::GetStateSizes) {
             Ok(Reply::StateSizes(sizes)) => sizes,
@@ -721,7 +633,6 @@ impl Window {
         }
     }
 
-    /// `GetHistory` of `workspace`: its entries.
     fn history(&mut self, workspace: &WorkspaceId) -> Vec<HistoryEntry> {
         match self.ask(Request::GetHistory {
             workspace: workspace.clone(),
@@ -731,7 +642,6 @@ impl Window {
         }
     }
 
-    /// Sets the time states are kept, in days, and waits for the Keeper to say it is set.
     fn keep_for(&mut self, days: u32) {
         let set = self.ask(Request::SetSetting {
             setting: Setting::KeepStates { days },
@@ -739,8 +649,7 @@ impl Window {
         assert_eq!(set, Ok(Reply::Done));
     }
 
-    /// The barrier: `ListWorkspaces` is answered after everything the Keeper did for this
-    /// Window before it.
+    /// `ListWorkspaces` is answered after everything the Keeper did for this Window before it.
     fn barrier(&mut self) {
         assert!(matches!(
             self.ask(Request::ListWorkspaces),
@@ -748,47 +657,37 @@ impl Window {
         ));
     }
 
-    /// Asks the Keeper to stop and waits for it.
     fn stop(&mut self, keeper: JoinHandle<std::io::Result<Exit>>) {
         write_message(&mut self.stream, &Message::Shutdown).expect("ask for the stop");
         assert_eq!(keeper.join().expect("join").expect("run"), Exit::Shutdown);
     }
 }
 
-/// One repository with its workspace, a terminal of the app and the CLI session its turns
-/// are reported for.
 struct Work {
     repo: PathBuf,
     workspace: WorkspaceId,
     terminal: TerminalId,
-    /// The CLI's id of the session.
     cli: String,
-    /// The objects no ref reaches, planted before the Keeper first looked at the repository.
     planted: Vec<String>,
-    /// How many turns of it ended.
     turns: u64,
 }
 
-/// The state a turn's end recorded, and the turn.
 #[derive(Debug, Clone)]
 struct Ended {
     turn: TurnId,
     state: String,
 }
 
-/// A Keeper with a Window attached, on a clock of the test's own.
 struct World {
     scratch: Scratch,
     clock: Arc<TestClock>,
     keeper: Option<JoinHandle<std::io::Result<Exit>>>,
     window: Window,
     records: Vec<HookRecord>,
-    /// How many repositories were made: each gets a CLI session id of its own.
     made: u32,
 }
 
 impl World {
-    /// Has to be called with the scratch folder of a test that made it its first statement.
     fn on(scratch: Scratch) -> World {
         let clock = TestClock::new();
         let keeper = scratch.keeper(&clock);
@@ -803,14 +702,10 @@ impl World {
         }
     }
 
-    /// Has to be the first statement of a test.
     fn new() -> World {
         World::on(Scratch::new())
     }
 
-    /// Stops the Keeper, sets the clock to `offset` past its base and starts a Keeper again
-    /// on the same data, with a new Window attached. The Keeper that starts makes no turn
-    /// run: the sessions the old one held are cut off.
     fn restart_at(&mut self, offset: Duration) {
         let keeper = self.keeper.take().expect("a Keeper that runs");
         self.window.stop(keeper);
@@ -819,18 +714,14 @@ impl World {
         self.window = self.scratch.window();
     }
 
-    /// A repository `name` opened as a workspace, with objects planted that no ref reaches,
-    /// a terminal of the app, shown, and its first state recorded: a turn that starts before
-    /// it has no state to count from. The state is taken by a thread of the Keeper after the
-    /// watcher runs, and nothing of the Link tells of it, so it is looked for in the state
-    /// store until the deadline.
+    /// A repository opened as a workspace, with objects planted that no ref reaches, shown with a
+    /// terminal, once its first state is recorded; nothing on the Link tells of that state.
     fn work(&mut self, name: &str) -> Work {
         let repo = self.scratch.repository(name);
         let planted = plant(&self.scratch, &repo);
         self.adopt(repo, planted)
     }
 
-    /// [`World::work`] for a folder that is made and has its objects planted already.
     fn adopt(&mut self, repo: PathBuf, planted: Vec<String>) -> Work {
         self.made += 1;
         let workspace = self.window.open(&repo);
@@ -855,7 +746,6 @@ impl World {
         }
     }
 
-    /// Runs the hook of the line `line` of the recording as the session of `work`.
     fn hooks(&self, work: &Work, lines: &[usize]) {
         for line in lines {
             let mut record: HookRecord = self.records[*line].in_project(&work.repo);
@@ -864,8 +754,6 @@ impl World {
         }
     }
 
-    /// One turn of the session of `work`: it begins, a file of the worktree changes, it ends,
-    /// and the state its end recorded is waited for.
     fn turn(&mut self, work: &mut Work, previous: Option<&TurnId>) -> Ended {
         match previous {
             None => self.hooks(work, &SESSION_AND_PROMPT),
@@ -887,7 +775,6 @@ impl World {
         Ended { turn, state }
     }
 
-    /// Two turns of `work`, one after the other.
     fn two_turns(&mut self, work: &mut Work) -> [Ended; 2] {
         let one = self.turn(work, None);
         let two = self.turn(work, Some(&one.turn));
@@ -895,7 +782,6 @@ impl World {
         [one, two]
     }
 
-    /// Stops the Keeper that runs, at the end of a test.
     fn finish(mut self) -> Scratch {
         let keeper = self.keeper.take().expect("a Keeper that runs");
         self.window.stop(keeper);
@@ -903,14 +789,12 @@ impl World {
     }
 }
 
-/// Whether the history shows `turn` as expired.
 fn is_expired(entries: &[HistoryEntry], turn: &TurnId) -> bool {
     entries
         .iter()
         .any(|entry| matches!(entry, HistoryEntry::ExpiredTurn { turn: t, .. } if t == turn))
 }
 
-/// The turns of the history in the order it lists them, each with whether it is expired.
 fn turns_listed(entries: &[HistoryEntry]) -> Vec<(TurnId, bool)> {
     entries
         .iter()
@@ -922,7 +806,6 @@ fn turns_listed(entries: &[HistoryEntry]) -> Vec<(TurnId, bool)> {
         .collect()
 }
 
-/// The state the history gives `turn`, when it shows it with one.
 fn state_in(entries: &[HistoryEntry], turn: &TurnId) -> Option<String> {
     entries.iter().find_map(|entry| match entry {
         HistoryEntry::Turn {
@@ -934,8 +817,6 @@ fn state_in(entries: &[HistoryEntry], turn: &TurnId) -> Option<String> {
     })
 }
 
-/// Waits, up to the deadline, until `gone` no longer exists: a look at a fact that stays true
-/// once it is.
 fn wait_until_gone(path: &Path) {
     let deadline = Instant::now() + DEADLINE;
     while path.exists() {
@@ -948,29 +829,21 @@ fn wait_until_gone(path: &Path) {
     }
 }
 
-// The room the states take
-
 #[test]
 fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no_workspace_claims()
 {
     let mut world = World::new();
-    // Before any state is recorded: no workspace, nothing taken.
     let none = world.window.sizes();
     assert!(none.workspaces.is_empty());
 
     let mut first = world.work("first");
     let mut second = world.work("second");
     world.two_turns(&mut first);
-    // One turn fewer, so that the two stores differ by the room of a state: a line given to
-    // the wrong workspace would not match the folder counted again.
     world.turn(&mut second, None);
 
-    // A store of no workspace the Keeper holds: it counts in the total and has no line.
     let stranger = world.scratch.data().join("states").join("stranger.git");
     fs::create_dir_all(&stranger).expect("make the stranger's folder");
     fs::write(stranger.join("blob"), noise(7)).expect("write the stranger's file");
-    // And room that is no store at all, a plain file of the folder of states: no line holds
-    // it, and the total is what the whole folder takes.
     fs::write(world.scratch.data().join("states").join("junk"), noise(8))
         .expect("write the junk file");
 
@@ -980,7 +853,6 @@ fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no
         .iter()
         .map(|size| &size.workspace)
         .collect();
-    // In the order the workspaces were first kept.
     assert_eq!(named, [&first.workspace, &second.workspace]);
     assert!(sizes.workspaces.iter().all(|size| size.bytes > 0));
     let sum: u64 = sizes.workspaces.iter().map(|size| size.bytes).sum();
@@ -989,7 +861,6 @@ fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no
         "the total {} holds the {sum} of the workspaces and the 64 KB of each stranger",
         sizes.total
     );
-    // Each line is what its store takes on disk: the test's own count of the folder.
     let states = world.scratch.data().join("states");
     let whole = blocks_of(&states);
     assert!(
@@ -1010,16 +881,11 @@ fn the_sizes_of_two_workspaces_come_with_a_total_that_holds_both_and_the_room_no
     let _ = world.finish();
 }
 
-// The clean-up the user asks for
-
 #[test]
 fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_workspace_that_lost_a_state_and_not_of_the_one_that_lost_none()
  {
     let mut world = World::new();
     let mut second_window = world.scratch.window();
-    // The first workspace is shown once and has its first state only, which is its newest
-    // and stays; the second has had two turns, and what its first state and the start of its
-    // first turn hold, nothing refers to.
     let quiet = world.work("quiet");
     let mut busy = world.work("busy");
     let [one, two] = world.two_turns(&mut busy);
@@ -1027,15 +893,12 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
     let repo_before = reads(&busy.repo);
     let quiet_before = reads(&quiet.repo);
 
-    // The states are older than the hour a recording keeps its newest state: the clean-up
-    // at once keeps the ones younger than that.
     world.clock.move_on(HOUR);
     let answered = world.window.ask(Request::CleanUpStates);
     let Ok(Reply::StateSizes(after)) = answered else {
         panic!("no sizes: {answered:?}");
     };
 
-    // The sizes it answers are no larger, and the busy workspace's is smaller.
     assert!(after.total <= before.total, "{after:?} against {before:?}");
     for size in &after.workspaces {
         let was = before
@@ -1058,9 +921,7 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
         "{after:?} against {before:?}"
     );
 
-    // The facts follow the reply, in one batch, in the order the workspaces were kept: the
-    // one that lost a state is told to both Windows, and the one that lost none, kept
-    // first, would have been told before it.
+    // Facts follow the reply in one batch, in the order the workspaces were kept.
     world.window.states_deleted(&busy.workspace);
     second_window.states_deleted(&busy.workspace);
     world.window.barrier();
@@ -1068,7 +929,6 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
     assert_eq!(world.window.deleted_so_far(), [busy.workspace.clone()]);
     assert_eq!(second_window.deleted_so_far(), [busy.workspace.clone()]);
 
-    // What stays: the newest state of the busy workspace, and the first turn's now expired.
     let states = world.scratch.states_of(&busy.workspace);
     assert!(states.contains(&two.state), "{states:?}");
     assert!(!states.contains(&one.state), "{states:?}");
@@ -1076,7 +936,6 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
     assert!(is_expired(&history, &one.turn), "{history:?}");
     assert_eq!(state_in(&history, &two.turn), Some(two.state.clone()));
 
-    // Nothing of the user's is written.
     assert_eq!(reads(&busy.repo), repo_before);
     assert_eq!(reads(&quiet.repo), quiet_before);
     still_there(&busy.repo, &busy.planted);
@@ -1088,8 +947,6 @@ fn a_clean_up_at_once_answers_sizes_no_larger_and_tells_both_windows_of_the_work
 fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_takes_it_from_one_that_is_gone()
  {
     let mut world = World::new();
-    // The one that stays is kept first, so that a fact told for it would come before the
-    // other's. The other is a linked worktree of a repository, whose folder is removed.
     let there = world.work("there");
     let base = world.scratch.repository("base");
     let planted = plant(&world.scratch, &base);
@@ -1107,7 +964,6 @@ fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_tak
     );
     let gone = world.adopt(linked.clone(), planted);
     assert!(!world.scratch.states_of(&gone.workspace).is_empty());
-    // Showing the first again lets the second go off screen; its folder is removed.
     let shown = world.window.ask(Request::ShowWorkspace {
         workspace: Some(there.workspace.clone()),
     });
@@ -1121,8 +977,6 @@ fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_tak
     let cleaned = world.window.ask(Request::CleanUpStates);
     assert!(matches!(cleaned, Ok(Reply::StateSizes(_))), "{cleaned:?}");
 
-    // The state of the worktree that is gone was nobody's and the worktree has no newest
-    // state to keep; the one that is there keeps its newest.
     world.window.states_deleted(&gone.workspace);
     world.window.barrier();
     assert_eq!(world.window.deleted_so_far(), vec![gone.workspace.clone()]);
@@ -1135,12 +989,8 @@ fn a_clean_up_at_once_keeps_the_newest_state_of_a_worktree_that_is_there_and_tak
     let _ = world.finish();
 }
 
-/// How long a test lets the sweep's thread come due and look, which is a few of its own looks
-/// at the clock: a wait for a fact that a correct Keeper never makes happen. Nothing tells
-/// that a sweep is held at a lock, or that it has not begun, so there is no barrier to read
-/// instead. A run that passes cannot fail on this wait, since what it waits for is let go
-/// only after it; a break could be missed only on a machine that takes longer than this for
-/// one sweep of a workspace.
+/// A wait for what a correct Keeper never makes happen: nothing on the Link tells that a sweep is
+/// held or has not begun, so there is no barrier.
 const SWEEP_LOOKS: Duration = Duration::from_secs(5);
 
 #[test]
@@ -1149,8 +999,6 @@ fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_
     let scratch = Scratch::new();
     let gate = PruneGate::new(&scratch);
     let mut world = World::on(scratch);
-    // As in the test before: the one that stays is kept first; the other is a linked
-    // worktree whose folder is removed.
     let there = world.work("there");
     let base = world.scratch.repository("base");
     let planted = plant(&world.scratch, &base);
@@ -1178,15 +1026,11 @@ fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_
     let store_folder = world.scratch.data().join("states").join(&store);
     gate.hold_store(&store);
 
-    // The clean-up deletes the state of the worktree that is gone and, with its turn let go,
-    // packs the store: its `prune` is held.
     world.clock.move_on(HOUR);
     let asked = world.window.send(Request::CleanUpStates);
     gate.wait_held();
-    // Now a sweep comes due. It finds the store empty, as the clean-up left it, and, if it
-    // went on beside the clean-up, would remove the folder the held `prune` is to run in.
-    // The wait is for that: a correct Keeper lets the sweep wait for the clean-up, so the
-    // folder stays, and it is let go after `SWEEP_LOOKS` all the same.
+    // A sweep comes due: beside the clean-up it would remove the folder the held `prune` runs in. A
+    // correct Keeper makes it wait.
     world.clock.move_on(HOUR);
     let started = Instant::now();
     while store_folder.exists() && started.elapsed() < SWEEP_LOOKS {
@@ -1214,8 +1058,6 @@ fn a_clean_up_at_once_of_a_worktree_that_is_gone_is_not_cut_off_by_a_sweep_that_
     let _ = world.finish();
 }
 
-// The files of long reviews
-
 #[test]
 fn the_files_of_long_reviews_of_a_session_that_ended_go_with_the_clean_up_and_those_of_one_that_runs_stay_byte_for_byte()
  {
@@ -1223,7 +1065,6 @@ fn the_files_of_long_reviews_of_a_session_that_ended_go_with_the_clean_up_and_th
     let work = world.work("repo");
     let repo_before = reads(&work.repo);
 
-    // Two sessions, as Claude Code reports them: the first ends, the second runs on.
     let ended = recorded::hook_events(REVIEW_FILE);
     let running = world.records[1].clone();
     let (cli_ended, cli_running) = (ended[0].session().to_owned(), running.session().to_owned());
@@ -1255,7 +1096,6 @@ fn the_files_of_long_reviews_of_a_session_that_ended_go_with_the_clean_up_and_th
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // A file of each, written now: the clean-up at once asks for no age.
     let now = SystemTime::now();
     let gone = review_file(
         &world.scratch,
@@ -1280,8 +1120,6 @@ fn the_files_of_long_reviews_of_a_session_that_ended_go_with_the_clean_up_and_th
     let _ = world.finish();
 }
 
-// The sweep by the set time
-
 #[test]
 fn at_its_start_the_keeper_deletes_the_states_nothing_refers_to_once_the_set_time_has_passed_and_the_history_marks_the_turn_expired()
  {
@@ -1291,8 +1129,6 @@ fn at_its_start_the_keeper_deletes_the_states_nothing_refers_to_once_the_set_tim
     let before = world.window.sizes();
     let repo_before = reads(&work.repo);
 
-    // The Keeper stops, the clock moves past the set time, and a Keeper starts again: its
-    // first sweep, after its first reply, deletes what nothing refers to.
     world.restart_at(31 * DAY + HOUR);
     world.window.barrier();
     world.window.states_deleted(&work.workspace);
@@ -1300,7 +1136,6 @@ fn at_its_start_the_keeper_deletes_the_states_nothing_refers_to_once_the_set_tim
     let history = world.window.history(&work.workspace);
     assert!(is_expired(&history, &one.turn), "{history:?}");
     assert_eq!(state_in(&history, &two.turn), Some(two.state.clone()));
-    // The expired turn stays where it was: before the one that followed it.
     assert_eq!(
         turns_listed(&history),
         [(one.turn.clone(), true), (two.turn.clone(), false)]
@@ -1321,11 +1156,8 @@ fn at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_repl
     let [one, two] = world.two_turns(&mut work);
     let repo_before = reads(&work.repo);
 
-    // The Keeper starts again with the clock past the set time, and the Window that attaches
-    // asks nothing: the Keeper has no reply to queue. The wait is for a sweep that a correct
-    // Keeper does not make, so there is nothing to wait for and the settle is one wait of
-    // `SWEEP_LOOKS`, on a channel that never gets a message while its sender is held, and
-    // the store is read once after it (a look at each tick would start a git each time).
+    // Restarted past the set time, a correct Keeper sweeps only after its first reply, and nobody
+    // has asked yet: one wait on a channel that never gets a message, then one read of the store.
     world.restart_at(31 * DAY + HOUR);
     let (hold, never) = std::sync::mpsc::channel::<()>();
     let _ = never.recv_timeout(SWEEP_LOOKS);
@@ -1336,7 +1168,6 @@ fn at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_repl
         "a sweep ran before the Keeper had queued a reply: {states:?}"
     );
 
-    // The first request is answered; the sweep then runs, and tells.
     world.window.barrier();
     world.window.states_deleted(&work.workspace);
     let history = world.window.history(&work.workspace);
@@ -1353,8 +1184,6 @@ fn at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_repl
 fn while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_passes_the_set_time()
  {
     let scratch = Scratch::new();
-    // A file of an ended session's long review, last written 40 days before the base: the
-    // first sweep, at the base, removes it, which says that sweep ran.
     let old = review_file(
         &scratch,
         "a-session-long-gone",
@@ -1367,10 +1196,6 @@ fn while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_
     let before = world.window.sizes();
     let repo_before = reads(&work.repo);
 
-    // The first sweep has run, at the base: it removes the files of ended sessions after it
-    // has expired the states, so a file that is gone says the states were weighed and
-    // every one was kept, as none was old. Now the clock passes the set time and the hour,
-    // and nothing is asked.
     wait_until_gone(old.parent().expect("its folder"));
     let states = world.scratch.states_of(&work.workspace);
     assert!(states.contains(&one.state) && states.contains(&two.state));
@@ -1387,12 +1212,6 @@ fn while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_
     let _ = world.finish();
 }
 
-/// A state goes once the set time and the hour have passed since it was recorded, not a day
-/// before and not a day after. Two workspaces have two turns each, `early` at the base and
-/// `late` an hour after it, and the Keeper starts again with the clock half an hour past
-/// `early`'s edge: `early`'s states are past it and `late`'s, an hour younger, half an hour
-/// short of it. The clock then moves an hour on, past `late`'s edge too. `keep` is the days
-/// the user set, none for the default of 30.
 fn a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(keep: Option<u32>) {
     let days = keep.unwrap_or(30);
     let mut world = World::new();
@@ -1408,9 +1227,8 @@ fn a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(keep: 
     let late_before = reads(&late.repo);
 
     world.restart_at(DAY * days + HOUR + HOUR / 2);
-    // The first sweep waits for the Keeper's first reply, which this request is. The fact
-    // of `early` is the barrier: a sweep ran, and it told its facts in one batch after it
-    // had weighed every workspace, `late` included.
+    // The first request lets the first sweep run. `early`'s fact is the barrier: the sweep tells
+    // its facts in one batch after weighing every workspace, `late` included.
     world.window.barrier();
     world.window.states_deleted(&early.workspace);
     world.window.barrier();
@@ -1418,7 +1236,6 @@ fn a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(keep: 
     let history = world.window.history(&early.workspace);
     assert!(is_expired(&history, &early_one.turn), "{history:?}");
     assert_eq!(state_in(&history, &early_two.turn), Some(early_two.state));
-    // Half an hour short of its edge, `late` keeps everything.
     let history = world.window.history(&late.workspace);
     assert_eq!(
         state_in(&history, &late_one.turn),
@@ -1431,7 +1248,6 @@ fn a_state_goes_when_the_set_time_and_the_hour_have_passed_and_not_before(keep: 
     let states = world.scratch.states_of(&late.workspace);
     assert!(states.contains(&late_one.state) && states.contains(&late_two.state));
 
-    // An hour on it is past the edge, and the sweep that is due tells it with nothing asked.
     world.clock.move_on(HOUR);
     world.window.states_deleted(&late.workspace);
     let history = world.window.history(&late.workspace);
@@ -1460,16 +1276,12 @@ fn a_longer_set_time_keeps_what_the_default_would_have_deleted() {
     world.window.keep_for(60);
     let mut old = world.work("old");
     world.two_turns(&mut old);
-    // The second workspace's turns come 30 days after the first's.
     world.clock.move_on(30 * DAY);
     let mut recent = world.work("recent");
     let [one, two] = world.two_turns(&mut recent);
     let repo_before = reads(&recent.repo);
     let old_before = reads(&old.repo);
 
-    // At 61 days and an hour the old workspace's states are past the 60 days and the
-    // hour, which says a sweep ran with the time set; the recent one's are 31 days and an
-    // hour old, past the default's 30 days and the hour, and are kept.
     world.restart_at(61 * DAY + HOUR);
     world.window.barrier();
     world.window.states_deleted(&old.workspace);
@@ -1496,8 +1308,6 @@ fn a_shortened_time_is_in_force_at_once() {
     let repo_before = reads(&recent.repo);
     let old_before = reads(&old.repo);
 
-    // At 31 days and an hour the old workspace's states are past the default; the recent
-    // one's are two days and an hour old. A sweep ran, and it kept them.
     world.clock.move_on(2 * DAY + HOUR);
     world.window.states_deleted(&old.workspace);
     let history = world.window.history(&recent.workspace);
@@ -1505,8 +1315,6 @@ fn a_shortened_time_is_in_force_at_once() {
     let states = world.scratch.states_of(&recent.workspace);
     assert!(states.contains(&one.state) && states.contains(&two.state));
 
-    // The clock stays where it is, and the time is shortened to a day: the same two days
-    // and an hour are past a day and the hour.
     world.window.keep_for(1);
     world.window.states_deleted(&recent.workspace);
     let history = world.window.history(&recent.workspace);
@@ -1526,7 +1334,6 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     let mut work = world.work("repo");
     let [one, _] = world.two_turns(&mut work);
 
-    // One session ends and one runs on.
     let ended = recorded::hook_events(REVIEW_FILE);
     let running = world.records[1].clone();
     let (cli_ended, cli_running) = (ended[0].session().to_owned(), running.session().to_owned());
@@ -1545,12 +1352,6 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
         std::thread::sleep(Duration::from_millis(10));
     }
 
-    // The sweep's time will be 31 days and an hour on the clock, so the set time of 30
-    // days reaches back to a day and an hour past the base. Files, each of a session of its
-    // own that is not held as running: one written at the clock's own time then, one a day
-    // before it and one at the very edge of the set time (all inside it, so kept), one a
-    // second past the edge and one 31 days before it (outside it, so gone), and one of the
-    // session that runs, as old as that.
     let then = world.clock.now() + 31 * DAY + HOUR;
     let fresh = review_file(
         &world.scratch,
@@ -1595,17 +1396,10 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
 
     world.clock.move_on(31 * DAY + HOUR);
     world.window.states_deleted(&work.workspace);
-    // The sweep removes the files (its step 2) before it tells its fact (step 3): that order
-    // is the barrier every assertion below rests on, for no surface of the Keeper holds a
-    // sweep between the two. A Keeper that told first would be caught here only if the
-    // removal lost the race against the round trip of `GetHistory`.
-    // The sweep that tells the fact also judged the files and the states by one time, the one
-    // it read when it began, so a clock that moves while it runs cannot leave a file behind
-    // for a state that went (a_sweep_judges_a_file_and_a_state_by_one_time_...).
+    // The sweep removes the files before it tells its fact: that order is the barrier the
+    // assertions rest on.
     let history = world.window.history(&work.workspace);
     assert!(is_expired(&history, &one.turn), "{history:?}");
-    // A session's files go by their age and by the set time, not by the sweep's own time:
-    // one resumed the next day still finds what it wrote.
     assert!(fresh.exists(), "a file written at the clock's now went");
     for file in &inside {
         assert!(
@@ -1631,12 +1425,6 @@ fn a_sweep_judges_a_file_and_a_state_by_one_time_however_the_clock_moves_while_i
     let mut work = world.work("repo");
     let [one, two] = world.two_turns(&mut work);
 
-    // The states are dated at the base, so the first goes once the clock reads the set time
-    // and the hour past it: `edge`. A file of an ended session, written a second short of an
-    // hour after the base, goes once the clock reads at least an hour past the base and the
-    // set time, a moment before `edge`'s own hour. A sweep that counts the file by the time
-    // it began and the state by a later one, at the clock's own pace, would hold the file for
-    // a state that is gone.
     let base = world.clock.now();
     let edge = 30 * DAY + HOUR;
     let file = review_file(
@@ -1646,12 +1434,8 @@ fn a_sweep_judges_a_file_and_a_state_by_one_time_however_the_clock_moves_while_i
         base + HOUR - Duration::from_secs(1),
     );
 
-    // The Keeper starts ten minutes short of `edge`, and its clock moves 40 minutes on at each
-    // read after the first request. The sweep that is due at once reads ten minutes short of
-    // `edge`: the state is young and the file is inside the set time, so nothing goes, and
-    // no fact is told. The sweep runs every hour (`SWEEP_EVERY`): the read 40 minutes on is not
-    // yet an hour past, so it is not due, and the next one, 80 minutes on, is due and goes by
-    // that one time: both go.
+    // The clock moves 40 minutes per read: the sweep due at once reads ten minutes short of `edge`;
+    // the hourly one reads 80 on and must judge file and state by that one time.
     world.restart_at(edge - 10 * MINUTE);
     world.clock.step_at_each_read(40 * MINUTE);
     world.window.barrier();

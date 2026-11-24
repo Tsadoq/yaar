@@ -1,21 +1,5 @@
-//! Component test (FRAME-14): the theme the Window draws in, through the model the Frame
-//! shows it by ([`yaar_frame::Looks`]) and the toolkit's own theme beneath it.
-//!
-//! GPUI's test platform reports a light system and gives a test no way to change it, so the
-//! test tells the model what the platform would, at [`Looks::system_is`], as the Window
-//! program does. The user's choice comes the way the Keeper's settings reach a Window: a
-//! `Fact::SettingChanged` told by the test's Keeper, and `SettingList::set` for a choice
-//! the Window makes itself. Every read is of the toolkit's theme, which every control
-//! draws with, and of what `yaar_frame::theme::applied` gives the terminal pane.
-//!
-//! Every telling, and every choice the test makes, is followed by a barrier
-//! (`run_until_parked`) before anything is read: a negative clause ("it does not follow",
-//! "nothing is rewritten", "told to nobody") would otherwise pass on a model that follows
-//! one task late. The settings reaching the model are waited for with the deadline.
-//!
-//! The test of `yaar_frame::open` tells the model nothing: it reads what `open` itself told
-//! it, from a pane built inside the opening, before the window exists, and from the model
-//! afterwards.
+//! GPUI's test platform reports a light system and cannot change it, so the test tells `Looks` the
+//! system itself.
 
 mod common;
 
@@ -36,12 +20,10 @@ fn named(name: &str) -> Setting {
     Setting::Theme(ThemeChoice::Named(name.to_owned()))
 }
 
-/// A Frame opened with nothing set, and the kit prepared, as the Window program leaves it.
 fn opened(cx: &mut TestAppContext) -> (Shown, VisualTestContext) {
     open_frame(WINDOW, Vec::new(), cx)
 }
 
-/// What the toolkit draws with: its mode and the colour of every role.
 fn kit(cx: &mut VisualTestContext) -> (ThemeMode, Colors) {
     cx.update(|_, app| {
         let theme = app.global::<Theme>();
@@ -49,7 +31,6 @@ fn kit(cx: &mut VisualTestContext) -> (ThemeMode, Colors) {
     })
 }
 
-/// The toolkit's ground colour alone.
 fn background(cx: &mut VisualTestContext) -> gpui_kit::Hsla {
     cx.update(|_, app| app.global::<Theme>().colors.background)
 }
@@ -58,8 +39,6 @@ fn applied_name(cx: &mut VisualTestContext) -> String {
     cx.update(|_, app| applied(app).name)
 }
 
-/// Tells the Looks what the platform would say of the system, and lets everything the
-/// telling set off run, so that a read after it sees what the model came to, late or not.
 fn system_is(shown: &Shown, appearance: Appearance, cx: &mut VisualTestContext) {
     shown
         .models
@@ -68,15 +47,10 @@ fn system_is(shown: &Shown, appearance: Appearance, cx: &mut VisualTestContext) 
     cx.run_until_parked();
 }
 
-/// The Keeper tells every Window that the theme is this; waits for the model of the
-/// settings to hold it, which is when `Looks` has seen it too.
 fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
     let Setting::Theme(choice) = setting.clone() else {
         panic!("a test of the theme tells a theme");
     };
-    // The Keeper keeps what it tells, as the real one does: the setting takes the place of
-    // the one it is the same thing as and the others stay, for the window may still ask for
-    // every setting after hearing the fact, and the answer must agree with it.
     let mut kept = shown
         .models
         .settings
@@ -91,12 +65,9 @@ fn told(shown: &mut Shown, setting: Setting, cx: &mut VisualTestContext) {
             .settings
             .read_with(cx, |list, _| list.theme() == choice)
     });
-    // What the choice set off has run before anything is read.
     cx.run_until_parked();
 }
 
-/// Whether the toolkit and the terminal pane's global show this definition: its mode, every
-/// colour it has for a role, and its name.
 #[track_caller]
 fn shows(
     mode: ThemeMode,
@@ -115,11 +86,8 @@ fn shows(
     );
 }
 
-/// What a pane finds when the Frame builds it: the system the model holds, and the kit's
-/// mode and colours.
 type Found = (Option<Appearance>, ThemeMode, Colors);
 
-/// A pane that draws nothing.
 struct Empty {
     focus: gpui_kit::FocusHandle,
 }
@@ -130,9 +98,8 @@ impl Render for Empty {
     }
 }
 
-/// A pane whose building writes down what the model and the kit hold at that moment. The
-/// Frame builds its panes inside the toolkit's opening of the window, before the first
-/// frame is drawn, so what is found is what the first frame is drawn in.
+/// A pane that writes down what the model and the toolkit hold as it is built: panes are built
+/// inside the toolkit's opening of the window, so that is what the first frame is drawn in.
 fn finding(found: &std::rc::Rc<std::cell::RefCell<Option<Found>>>) -> BuildPane {
     let found = found.clone();
     Box::new(move |models, _, cx| {
@@ -156,11 +123,9 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
     cx: &mut TestAppContext,
 ) {
     cx.update(gpui_kit::init);
-    // The kit is in a mode and colours of its own that no definition holds: what the first
-    // frame would be drawn in were nothing applied before the window is opened.
+    // The toolkit is put in colours no definition holds: what the first frame would be drawn in
+    // were nothing applied before the window opens.
     cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
-    // The Keeper is not reached from here: no socket answers at this place, and the
-    // program that would be started is looked for beside the test, where there is none.
     let found = std::rc::Rc::new(std::cell::RefCell::new(None));
     let opened = cx.update(|cx| {
         yaar_frame::open(
@@ -172,9 +137,6 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
         .expect("open the window")
     });
 
-    // The first frame is drawn in the definition, not only the window once it is open: what
-    // a pane finds as the Frame builds it, inside the opening and before the first draw, is
-    // the application's appearance and the built-in light colours.
     let (system, mode, colors) = found
         .borrow_mut()
         .take()
@@ -195,9 +157,6 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
         "the toolkit's colours when the panes are built"
     );
 
-    // Nobody told the model the system's setting, and it holds the application's: the
-    // test platform's, which is light. The definition applied is the built-in light one, in
-    // the toolkit's colours and in what the terminal reads.
     let (system, definition) = opened
         .models
         .looks
@@ -219,8 +178,6 @@ fn a_window_made_by_open_is_in_yaars_definition_of_the_applications_appearance_w
 
 #[gpui_kit::test]
 fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut TestAppContext) {
-    // The kit is in a mode the definitions would not leave it in if `Looks` applied one:
-    // dark, where the light one is what `applied` holds before anything was applied.
     cx.update(gpui_kit::init);
     cx.update(|cx| Theme::change(ThemeMode::Dark, None, cx));
     let before = cx.update(|cx| {
@@ -230,7 +187,6 @@ fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut
 
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link, cx));
-    // A choice is made too, which would be applied if anything were.
     models.settings.update(cx, |list, cx| {
         list.set(Setting::Theme(ThemeChoice::Named(LIGHT.to_owned())), cx);
     });
@@ -251,7 +207,6 @@ fn nothing_is_applied_and_no_system_is_known_before_the_window_tells_it(cx: &mut
         "and `applied` holds the light one"
     );
 
-    // The first telling applies the choice, the system's setting not being what decides.
     models
         .looks
         .update(cx, |looks, cx| looks.system_is(Appearance::Dark, cx));
@@ -294,8 +249,8 @@ fn with_no_theme_chosen_the_app_follows_the_system_as_it_changes(cx: &mut TestAp
 #[gpui_kit::test]
 fn the_definition_s_own_colours_are_in_the_toolkit_over_the_mode_s_own(cx: &mut TestAppContext) {
     let (shown, mut cx) = opened(cx);
-    // What the toolkit has of its own for the dark mode, and that the definition differs
-    // from it somewhere: otherwise this test would show nothing of the second update.
+    // The definition differs from the toolkit's own dark theme somewhere; otherwise this shows
+    // nothing of the second update.
     cx.update(|_, app| Theme::change(ThemeMode::Dark, None, app));
     let (_, kits_own) = kit(&mut cx);
     assert_ne!(
@@ -315,7 +270,6 @@ fn after_a_choice_the_system_is_not_followed(cx: &mut TestAppContext) {
     system_is(&shown, Appearance::Light, &mut cx);
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
 
-    // The Keeper tells that dark is chosen: dark at once, the system being light.
     told(&mut shown, named(DARK), &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
     shown.models.looks.read_with(&cx, |looks, cx| {
@@ -323,7 +277,6 @@ fn after_a_choice_the_system_is_not_followed(cx: &mut TestAppContext) {
         assert_eq!(looks.applied().name, DARK);
     });
 
-    // The system changes, and is noted, and changes nothing.
     system_is(&shown, Appearance::Light, &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
     system_is(&shown, Appearance::Dark, &mut cx);
@@ -334,7 +287,6 @@ fn after_a_choice_the_system_is_not_followed(cx: &mut TestAppContext) {
         assert_eq!(looks.system(), Some(Appearance::Light))
     });
 
-    // And the other way: light chosen while the system is dark.
     told(&mut shown, named(LIGHT), &mut cx);
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
     system_is(&shown, Appearance::Dark, &mut cx);
@@ -348,11 +300,9 @@ fn a_choice_of_the_system_follows_it_again_at_once(cx: &mut TestAppContext) {
     told(&mut shown, named(DARK), &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
 
-    // As the system: light at once, the system being light as it was last told.
     told(&mut shown, Setting::Theme(ThemeChoice::System), &mut cx);
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
 
-    // And it follows again.
     system_is(&shown, Appearance::Dark, &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
     system_is(&shown, Appearance::Light, &mut cx);
@@ -365,7 +315,6 @@ fn a_name_no_theme_has_is_the_system_s_setting(cx: &mut TestAppContext) {
     system_is(&shown, Appearance::Dark, &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
 
-    // A theme of an older app, or of a newer one, that this app has no definition of.
     told(&mut shown, named("Sepia"), &mut cx);
     shown.models.looks.read_with(&cx, |looks, cx| {
         assert_eq!(looks.chosen(cx), ThemeChoice::Named("Sepia".to_owned()));
@@ -373,7 +322,6 @@ fn a_name_no_theme_has_is_the_system_s_setting(cx: &mut TestAppContext) {
     });
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
 
-    // It is the system's setting that decides, so it is followed.
     system_is(&shown, Appearance::Light, &mut cx);
     shows(ThemeMode::Light, LIGHT, &light(), &mut cx);
     system_is(&shown, Appearance::Dark, &mut cx);
@@ -392,7 +340,6 @@ fn a_choice_the_keeper_held_at_the_connection_is_applied_at_the_first_telling(
             list.theme() == ThemeChoice::Named(DARK.to_owned())
         })
     });
-    // Holding the choice applies nothing: no system's setting is known.
     shown
         .models
         .looks
@@ -426,19 +373,16 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
     let (mut shown, mut cx) = opened(cx);
     system_is(&shown, Appearance::Light, &mut cx);
 
-    // The toolkit's colours are changed by hand; applying anything again would write the
-    // definition's over them, which is what this test looks for.
+    // Colours changed by hand: applying again would write the definition over them.
     let marker = gpui_kit::hsla(0.5, 0.5, 0.5, 1.0);
     cx.update(|_, app| {
         Theme::update(app, |theme| theme.colors.background = marker);
     });
     cx.run_until_parked();
 
-    // The system's setting told again as it was.
     system_is(&shown, Appearance::Light, &mut cx);
     assert_eq!(background(&mut cx), marker);
 
-    // A setting that is not the theme changes, and the settings model tells its observers.
     shown
         .keeper
         .set_settings(vec![Setting::TurnEnd(TurnEndSelects::KeepSelection)]);
@@ -454,7 +398,6 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
     cx.run_until_parked();
     assert_eq!(background(&mut cx), marker);
 
-    // The theme chosen as it already is in force: the system's light one, by its name.
     told(&mut shown, named(LIGHT), &mut cx);
     assert_eq!(
         background(&mut cx),
@@ -462,7 +405,6 @@ fn what_is_applied_already_is_not_applied_again(cx: &mut TestAppContext) {
         "light chosen while light is applied"
     );
 
-    // A change of the definition does write it.
     system_is(&shown, Appearance::Dark, &mut cx);
     told(&mut shown, Setting::Theme(ThemeChoice::System), &mut cx);
     shows(ThemeMode::Dark, DARK, &dark(), &mut cx);
@@ -477,11 +419,7 @@ fn a_named_theme_given_back_to_the_system_while_the_definition_stays_runs_the_la
 
     let (mut shown, mut cx) = opened(cx);
     system_is(&shown, Appearance::Light, &mut cx);
-    // The light theme chosen while the system is light: the definition stays, and only the
-    // window's own appearance is forced.
     told(&mut shown, named(LIGHT), &mut cx);
-    // The toolkit's colours are changed by hand: a step that writes the definition again
-    // would write it over this.
     let marker = gpui_kit::hsla(0.5, 0.5, 0.5, 1.0);
     cx.update(|_, app| {
         Theme::update(app, |theme| theme.colors.background = marker);
@@ -495,7 +433,6 @@ fn a_named_theme_given_back_to_the_system_while_the_definition_stays_runs_the_la
         let told_to = told_to.clone();
         move |_, app| app.observe(&looks, move |_, _| told_to.set(told_to.get() + 1))
     });
-    // The choice goes back to the system, which is light still.
     told(&mut shown, Setting::Theme(ThemeChoice::System), &mut cx);
 
     assert_eq!(

@@ -1,8 +1,3 @@
-//! What the tests of this crate share: a folder of their own, an environment in which git
-//! reads nothing of the user's, and git itself as the test runs it to make a repository
-//! and to ask what git says.
-
-// Each test program uses the helpers it needs, and none uses all of them.
 #![allow(dead_code)]
 
 use std::path::{Path, PathBuf};
@@ -15,8 +10,6 @@ use yaar_review_engine::{
 };
 use yaar_store::{Store, WorkspaceId};
 
-/// The variables with which a process tells git which repository to use, whatever folder
-/// it runs in.
 const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -26,21 +19,16 @@ const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_PREFIX",
 ];
 
-/// The variables with which a shell hands git settings that no file holds: a count of
-/// settings with their numbered keys and values (removing the count voids them), the
-/// settings of an outer git, and one file of configuration.
+/// Removing GIT_CONFIG_COUNT also voids every GIT_CONFIG_KEY_<n> and GIT_CONFIG_VALUE_<n>.
 const CONFIGURATION_VARIABLES: [&str; 3] =
     ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"];
 
-/// A folder of the test's own, removed when the test ends.
 pub struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, and an empty
-    /// home. It has to be the first statement of a test.
+    /// Must be the first statement of a test: cleans the process environment for git.
     pub fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -79,12 +67,10 @@ impl Scratch {
         Scratch { root }
     }
 
-    /// The folder itself, with every link in its path resolved.
     pub fn path(&self) -> &Path {
         &self.root
     }
 
-    /// A path inside the folder.
     pub fn join(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
@@ -96,8 +82,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Runs git in `folder` and gives what it printed, as bytes. Fails the test when git
-/// fails.
 pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -114,7 +98,6 @@ pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-/// Runs git in `folder` and gives what it printed, without the white space around it.
 pub fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8(git_bytes(folder, args))
         .expect("git printed text")
@@ -122,7 +105,6 @@ pub fn git(folder: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// Makes a repository at `folder` whose first branch is `main`.
 pub fn init(folder: &Path) {
     std::fs::create_dir_all(folder).expect("make the folder");
     git(folder, &["init", "--quiet", "-b", "main"]);
@@ -131,14 +113,12 @@ pub fn init(folder: &Path) {
     git(folder, &["config", "user.email", "test@example.invalid"]);
 }
 
-/// Writes a file of the worktree, making the folders above it.
 pub fn write(folder: &Path, path: &str, content: &str) {
     let file = folder.join(path);
     std::fs::create_dir_all(file.parent().expect("a folder above")).expect("make the folders");
     std::fs::write(file, content).expect("write the file");
 }
 
-/// Commits everything in the worktree and gives the id of the commit.
 pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["add", "--all"]);
     git(
@@ -148,8 +128,6 @@ pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["rev-parse", "HEAD"])
 }
 
-/// The files of a worktree with their bytes, by path: every file but those of `.git`,
-/// found by walking the folders, so that it is what is on disk and not what git says.
 pub fn files_of(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     fn walk(root: &Path, folder: &Path, found: &mut std::collections::BTreeMap<PathBuf, Vec<u8>>) {
         for entry in std::fs::read_dir(folder).expect("read the folder") {
@@ -170,23 +148,18 @@ pub fn files_of(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
     found
 }
 
-/// The id of a thread, a comment or a workspace the test draws: 32 digits.
 pub fn id(n: u128) -> String {
     format!("{n:032x}")
 }
 
-/// The workspace of the tests.
 pub fn workspace() -> WorkspaceId {
     WorkspaceId::new(id(0xaa))
 }
 
-/// The database of the scratch folder, opened.
 pub fn store(scratch: &Scratch) -> Store {
     Store::open(&scratch.join("app/store.db")).expect("open the store")
 }
 
-/// The engine over `store`, with its states in the scratch folder, outside every
-/// repository, as the app's folder is.
 pub fn engine(scratch: &Scratch, store: Store) -> Reviews {
     Reviews::new(
         store,
@@ -195,13 +168,10 @@ pub fn engine(scratch: &Scratch, store: Store) -> Reviews {
     )
 }
 
-/// The worktree at `folder`.
 pub fn open(folder: &Path) -> Worktree {
     Worktree::open(&Git::find().expect("git on the search path"), folder).expect("open")
 }
 
-/// The save that starts a thread `n` on line `line` of `path`, on the new side, in the
-/// files on disk, with the comment `n + 1000`: the first keystroke of a draft.
 pub fn new_thread(n: u128, path: &str, line: u32, code: &str, text: &str) -> DraftSave {
     DraftSave {
         thread: ThreadId::new(id(n)),
@@ -218,13 +188,10 @@ pub fn new_thread(n: u128, path: &str, line: u32, code: &str, text: &str) -> Dra
     }
 }
 
-/// A session `n` of the tests' workspace that runs in the terminal `t<n>`, kept in `store`
-/// as the Keeper keeps one before it tells the engine it started.
 pub fn session(store: &Store, n: u128) -> SessionRecord {
     session_in(store, n, workspace())
 }
 
-/// The same, in another workspace.
 pub fn session_in(store: &Store, n: u128, workspace: WorkspaceId) -> SessionRecord {
     let record = SessionRecord {
         id: SessionId::new(id(n)),

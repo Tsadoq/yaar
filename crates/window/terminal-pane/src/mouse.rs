@@ -1,45 +1,28 @@
-//! What a click, a drag or the wheel sends to the program of a terminal.
-//!
-//! A program that asked for mouse reports gets them in the form it asked for, SGR or the
-//! old one, for the actions its mode names. A program that asked for none gets nothing:
-//! a drag then selects text in the pane, and the wheel scrolls the history, or sends the
-//! arrow keys on the alternate screen when the program asked for that.
+//! What a click, a drag or the wheel sends to the program of a terminal, in the form it asked for.
 
 use gpui_kit::Modifiers;
 
 use crate::modes::{Modes, MouseMode};
 
-/// A button of the mouse.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseButton {
-    /// The left one.
     Left,
-    /// The middle one, or the wheel pressed.
     Middle,
-    /// The right one.
     Right,
 }
 
-/// One action of the mouse over a cell of the terminal.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseAction {
-    /// A button went down.
     Press(MouseButton),
-    /// A button came up.
     Release(MouseButton),
-    /// The pointer moved, with this button held or none.
     Move(Option<MouseButton>),
-    /// The wheel turned one step up.
     WheelUp,
-    /// The wheel turned one step down.
     WheelDown,
 }
 
-/// The bytes a mouse action over the cell at `column` and `line`, both counted from 0,
-/// sends to the program; none when the program did not ask to be told of it.
-///
-/// With no mouse reports asked for, on the alternate screen with alternate scroll on, a
-/// step of the wheel is one Up or Down arrow, as the cursor mode writes it.
+/// The bytes a mouse action over the cell at `column` and `line`, counted from 0, sends to the
+/// program; none when it did not ask to be told of it, except that with no reports asked for,
+/// a wheel step on the alternate screen with alternate scroll on is an arrow key.
 pub fn encode_mouse(
     action: MouseAction,
     column: u16,
@@ -98,8 +81,6 @@ pub fn encode_mouse(
     Some(vec![0x1b, b'[', b'M', byte(code)?, byte(x)?, byte(y)?])
 }
 
-/// The Up or Down arrow a step of the wheel is on the alternate screen, for a program
-/// that wants no mouse reports.
 fn wheel_as_arrow(action: MouseAction, modes: &Modes) -> Option<Vec<u8>> {
     if !modes.alt_screen || !modes.alternate_scroll {
         return None;
@@ -174,8 +155,7 @@ mod tests {
                 "{action:?}"
             );
         }
-        // Cells far to the right and below say themselves in full: the SGR form has no
-        // limit of 222.
+        // The SGR form has no limit of 222.
         assert_eq!(
             encode(Press(Left), 999, 300, &sgr),
             Some(b"\x1b[<0;1000;301M".to_vec())
@@ -197,7 +177,6 @@ mod tests {
             encode(Press(Middle), 9, 1, &old),
             Some(vec![0x1b, b'[', b'M', 33, 42, 34])
         );
-        // A release does not say which button: it is 3 in every case.
         for button in [Left, Middle, Right] {
             assert_eq!(
                 encode(Release(button), 3, 4, &old),
@@ -302,7 +281,6 @@ mod tests {
     #[test]
     fn a_motion_mode_adds_every_move() {
         let motion = modes(MouseMode::Motion, true);
-        // A move with no button is 3 and 32 more.
         assert_eq!(
             encode(Move(None), 3, 4, &motion),
             Some(b"\x1b[<35;4;5M".to_vec())
@@ -335,7 +313,6 @@ mod tests {
         };
         assert_eq!(encode(WheelUp, 3, 4, &screen), Some(b"\x1b[A".to_vec()));
         assert_eq!(encode(WheelDown, 3, 4, &screen), Some(b"\x1b[B".to_vec()));
-        // The arrows as the cursor mode says them.
         let application = Modes {
             app_cursor: true,
             ..screen
@@ -348,7 +325,6 @@ mod tests {
             encode(WheelDown, 3, 4, &application),
             Some(b"\x1bOB".to_vec())
         );
-        // Only the wheel.
         for action in [Press(Left), Release(Left), Move(None), Move(Some(Left))] {
             assert_eq!(encode(action, 3, 4, &screen), None, "{action:?}");
         }

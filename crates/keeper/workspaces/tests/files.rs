@@ -1,6 +1,3 @@
-//! Component tests: the two versions of a file of a workspace, through the call the
-//! Keeper makes, in real repositories the tests make and with a real database.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -65,8 +62,6 @@ fn the_two_versions_of_each_changed_file_are_the_one_in_the_commit_and_the_one_o
         Some(git(&repo, &["rev-parse", "main"]).as_str())
     );
 
-    // Asked the way the Window asks: the commit the changes are counted from, the path
-    // a renamed file had there, and the path now.
     let mut read = Vec::new();
     for file in &changes.files {
         let old_path = match &file.change {
@@ -89,7 +84,6 @@ fn the_two_versions_of_each_changed_file_are_the_one_in_the_commit_and_the_one_o
             ),
             ("gone.txt", sides(Some(b"soon gone\n"), None)),
             ("new-name.txt", sides(Some(renamed), Some(renamed))),
-            // Bytes that are no text come back as they are.
             (
                 "picture.bin",
                 sides(Some(&[0, 159, 146, 150, 0, 255]), Some(&[1, 0, 2]))
@@ -97,7 +91,6 @@ fn the_two_versions_of_each_changed_file_are_the_one_in_the_commit_and_the_one_o
         ]
     );
 
-    // With no commit to read the old version in, there is none.
     assert_eq!(
         workspaces
             .file(
@@ -155,9 +148,8 @@ fn a_commit_git_does_not_know_is_refused_and_a_file_the_commit_lacks_is_none() {
         file(&main, "added.txt").expect("file"),
         sides(None, Some(b"new\n"))
     );
-    // A commit is named by its full id: nothing else is a commit git knows here, so
-    // that an old side is never read from another commit than the changes were
-    // counted from.
+    // Only a full commit id counts: an old side is never read from another commit than the changes
+    // were counted from.
     let unknown = "0123456789abcdef0123456789abcdef01234567";
     for since in [unknown, "HEAD", "main", &main[..12], "", "--all"] {
         assert_eq!(
@@ -177,7 +169,6 @@ fn a_commit_git_does_not_know_is_refused_and_a_file_the_commit_lacks_is_none() {
     );
 }
 
-/// The process ids of the starts of the process that hands out contents.
 fn content_processes(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()
@@ -196,7 +187,6 @@ fn reading_many_files_of_a_workspace_starts_one_git_process_which_ends_with_the_
     let workspace = workspaces.open_folder(&repo).expect("open").workspace;
 
     for _ in 0..10 {
-        // Between the reads the Window asks other things, as it does.
         let changes = workspaces.changes(&workspace).expect("changes");
         workspaces.repositories().expect("repositories");
         for path in ["edited.txt", "gone.txt", "picture.bin"] {
@@ -231,8 +221,7 @@ fn several_threads_open_list_and_read_at_once_and_agree() {
     let workspaces = workspaces(&scratch);
     let since = CommitId::new(git(&repo, &["rev-parse", "main"]));
 
-    // Nothing was opened or listed before: every thread meets worktrees that have no
-    // id yet.
+    // Nothing was opened or listed before: every thread meets worktrees that have no id yet.
     let answers: Vec<(Opened, Opened, Vec<WorkspaceId>, FileSides)> = std::thread::scope(|s| {
         let asking: Vec<_> = (0..6)
             .map(|_| {

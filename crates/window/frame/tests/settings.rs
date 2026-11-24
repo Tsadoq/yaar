@@ -1,9 +1,3 @@
-//! Component test: the shared model of the settings, through what the panes use of it. The
-//! test plays the Keeper on the other end of a socket pair: it answers what the model asks,
-//! tells it facts, and reads back through the model.
-//!
-//! A negative clause is read after a barrier, see [`settle`].
-
 mod common;
 
 use std::io::{Cursor, ErrorKind, Read};
@@ -27,7 +21,6 @@ fn hello() -> Hello {
     }
 }
 
-/// The form of Flow chosen in workspace `workspace`.
 fn form(workspace: char, form: FlowForm) -> Setting {
     Setting::FlowForm {
         workspace: id(workspace),
@@ -35,9 +28,6 @@ fn form(workspace: char, form: FlowForm) -> Setting {
     }
 }
 
-/// The models of a window whose Keeper the test plays. `stage` sets what the Keeper knows
-/// before the Window reaches it, as the first answers hold it. The first question for the
-/// list of workspaces is answered.
 fn connected(stage: impl FnOnce(&KeeperEnd), cx: &mut TestAppContext) -> (Models, KeeperEnd) {
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
@@ -50,10 +40,9 @@ fn held(models: &Models, cx: &mut TestAppContext) -> Vec<Setting> {
     models.settings.read_with(cx, |list, _| list.all().to_vec())
 }
 
-/// A barrier: returns when the Keeper has heard everything the Window sent before it, and
-/// the Window has taken everything the Keeper sent before the answer to it. The Window
-/// asks for the list of workspaces and the Keeper answers with a list that carries `mark`,
-/// which the Window then holds. A count read after it is final for what came before.
+/// A barrier: returns when the Keeper has heard everything the Window sent before it and the
+/// Window has taken everything the Keeper sent before the answer. A count read after it is final
+/// for what came before.
 fn settle(mark: char, models: &Models, keeper: &mut KeeperEnd, cx: &mut TestAppContext) {
     models.workspaces.update(cx, |list, cx| list.refresh(cx));
     // The models of a Frame ask for more than the list: leave that unanswered.
@@ -124,7 +113,6 @@ fn a_fact_replaces_the_setting_of_its_workspace_or_adds_one_and_asks_nothing(
         [form('1', FlowForm::LiveDiff), form('3', FlowForm::LiveDiff)],
         "one setting for each workspace, a new one last"
     );
-    // The same fact again changes nothing, and nothing was asked for any of them.
     keeper.tell(Fact::SettingChanged(form('3', FlowForm::LiveDiff)));
     settle('x', &models, &mut keeper, cx);
     assert_eq!(held(&models, cx).len(), 2);
@@ -145,7 +133,6 @@ fn a_setting_set_shows_at_once_and_reaches_the_keeper_in_the_place_of_the_one_it
         list.set(form('1', FlowForm::LiveDiff), cx);
         list.set(form('2', FlowForm::LiveDiff), cx);
     });
-    // Before the Keeper heard or answered anything.
     assert_eq!(
         held(&models, cx),
         [form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)]
@@ -156,7 +143,6 @@ fn a_setting_set_shows_at_once_and_reaches_the_keeper_in_the_place_of_the_one_it
         keeper.settings_set(),
         [form('1', FlowForm::LiveDiff), form('2', FlowForm::LiveDiff)]
     );
-    // The Keeper kept them and said Done: nothing is asked again.
     assert_eq!(keeper.settings_asked(), 1);
     assert_eq!(
         held(&models, cx),
@@ -197,10 +183,8 @@ fn a_setting_the_keeper_refuses_shows_at_once_and_goes_when_the_list_is_asked_ag
     assert_eq!(keeper.settings_set(), [form('1', FlowForm::LiveDiff)]);
 }
 
-/// The next request of the Window on a stream the test reads itself.
-///
-/// The Window's tasks run while the test waits: the wait is a read that gives up after a
-/// moment, so that the app runs again between two looks, up to the deadline.
+/// The next request of the Window. Each read gives up after a millisecond so that the app runs
+/// between two looks, until the deadline.
 fn next_request(
     keeper: &mut std::os::unix::net::UnixStream,
     cx: &mut TestAppContext,
@@ -208,7 +192,6 @@ fn next_request(
     let deadline = Instant::now() + common::DEADLINE;
     let mut first = [0u8; 1];
     loop {
-        // What the Window sends is queued by the task that asks; run it first.
         cx.run_until_parked();
         keeper
             .set_read_timeout(Some(Duration::from_millis(1)))
@@ -222,7 +205,6 @@ fn next_request(
             Err(error) => panic!("a message of the Window: {error}"),
         }
     }
-    // The rest of the frame follows at once.
     keeper
         .set_read_timeout(Some(common::DEADLINE))
         .expect("a read timeout");
@@ -261,7 +243,6 @@ fn a_set_the_keeper_answers_with_a_reply_of_another_kind_has_the_list_asked_agai
             setting: form('1', FlowForm::LiveDiff)
         }
     );
-    // Not the `Done` that was asked for: what the Window shows may not be what is kept.
     let odd = Message::Reply {
         to: set,
         reply: Ok(Reply::Workspaces(Vec::new())),
@@ -297,7 +278,6 @@ fn a_list_the_keeper_refuses_to_give_leaves_the_list_as_it_was(cx: &mut TestAppC
         list.read_with(cx, |list, _| list.all() == kept)
     });
 
-    // A set that is answered with a reply of another kind has the list asked again.
     list.update(cx, |list, cx| list.set(form('1', FlowForm::LiveDiff), cx));
     let (set, request) = next_request(&mut keeper, cx);
     assert!(matches!(request, Request::SetSetting { .. }));
@@ -314,8 +294,6 @@ fn a_list_the_keeper_refuses_to_give_leaves_the_list_as_it_was(cx: &mut TestAppC
         [form('2', FlowForm::LiveDiff), form('1', FlowForm::LiveDiff)]
     );
 
-    // The Keeper cannot give the list now. A round trip after the refusal shows the
-    // Window took it in; the list holds what it held.
     let refused = Message::Reply {
         to: second,
         reply: Err(Refusal::Failed {
@@ -350,8 +328,6 @@ fn of_two_answers_for_the_settings_only_the_one_to_the_last_question_counts_and_
     let (first, request) = next_request(&mut keeper, cx);
     assert_eq!(request, Request::GetSettings);
 
-    // The form was chosen while the answer was on its way: the Keeper tells it and
-    // answers the next question with it.
     let now = vec![form('1', FlowForm::LiveDiff)];
     let told = Message::Fact(Fact::SettingChanged(now[0].clone()));
     write_message(&mut keeper, &told).expect("tell the fact");
@@ -361,8 +337,6 @@ fn of_two_answers_for_the_settings_only_the_one_to_the_last_question_counts_and_
     let (second, request) = next_request(&mut keeper, cx);
     assert_eq!(request, Request::GetSettings, "asked again");
 
-    // The old answer, made before the choice, comes late. A round trip after it shows the
-    // Window took it in; it is not held.
     let stale = Message::Reply {
         to: first,
         reply: Ok(Reply::Settings(vec![form('1', FlowForm::Timeline)])),
@@ -402,16 +376,9 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
     let (first, request) = next_request(&mut keeper, cx);
     assert_eq!(request, Request::GetSettings);
 
-    // The user chooses a form while the answer is on its way: the list shows it at once
-    // and the Keeper is asked to keep it.
     let chosen = form('1', FlowForm::LiveDiff);
     list.update(cx, |list, cx| list.set(chosen.clone(), cx));
 
-    // The answer comes now, made before the Keeper heard of the set: it holds another
-    // setting the Keeper keeps, and not the one just chosen. A round trip after it shows the
-    // Window took it in. What the Window sends before the round trip is read on the way: the
-    // set is answered as kept, and the question for the list the Window asks again after the
-    // set is kept to be answered below.
     let other = form('2', FlowForm::LiveDiff);
     let stale = Message::Reply {
         to: first,
@@ -435,8 +402,6 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
                 write_message(&mut keeper, &kept).expect("answer the set");
             }
             Request::GetSettings => {
-                // One question asked before the set would be answered by a Keeper that has
-                // not kept the chosen setting yet.
                 assert!(
                     set_heard,
                     "the list is asked for again before the Keeper heard the set"
@@ -463,8 +428,6 @@ fn an_answer_for_the_settings_asked_before_a_set_does_not_replace_the_list_the_s
         FlowForm::LiveDiff
     );
 
-    // The list is asked for again after the set, and what answers that question is held: the
-    // other setting the Keeper keeps shows beside the one chosen.
     let asked_again = asked_again.expect("the list is asked for again after the set");
     let kept_both = vec![other, chosen];
     let answered = Message::Reply {

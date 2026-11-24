@@ -1,113 +1,6 @@
-//! Which servers run, and when: the workspaces, the one on screen, the search for a
-//! server, the question before one inside a repository runs, the trial run, the start, and
-//! the stop of idle servers. Downloads and updates are `fetch.rs`'s, which calls the
-//! functions this module lists for it.
-//!
-//! # The servers of a workspace
-//!
-//! A server is named by its [`ServerKey`]: a workspace, a row and a side. For the
-//! workspace on screen, every row whose `markers` lie at the worktree's root has its new
-//! side's server ensured ([`ensure`]); any other key is ensured by `answers.rs` at the
-//! first ask about a file of its row, and by `answers.rs` for an old side once its export is
-//! written. A key ensured goes through these steps, and [`crate::Told::Servers`] is told
-//! after each change of any key ([`publish`]): one list for each event handled, which
-//! [`on_screen`] always tells, and before it, when it stopped any, the list of
-//! [`look_at_the_clock`]. A test that sends an ask that changes nothing reads the list that
-//! ask made, after everything the asks before it made the Navigator do:
-//!
-//! 1. Search: `search::look` and `search::order` give the candidates, kept as the list of
-//!    the key's candidates left. Each candidate that lies inside the workspace's repository
-//!    (`search::inside`, against the folders of every workspace of that repository, and the
-//!    export's folder for an old side) is
-//!    passed over unless the repository's answer is yes; with no answer yet the key keeps
-//!    the question, for the first such candidate only, and the candidates after it are
-//!    tried meanwhile. An answer told later ([`consents`]): a yes searches again
-//!    ([`search_again`]) every key of that repository's workspaces that keeps a question or
-//!    whose running server came after the one asked about in the order; a no drops the
-//!    question, and the key shows what it runs.
-//! 2. Trial: the next candidate whose server names `trial` is run once with those arguments,
-//!    in the server's environment, on a thread of its own, and passed over unless it ends
-//!    with success within [`crate::TRIAL_DEADLINE`] ([`crate::navigator::Event::Trial`]);
-//!    one whose server names none goes straight to the start.
-//! 3. Start: `driver::Server::start` with the [`Launch`] made from the candidate's server
-//!    and its row (the server's `args`, `ready`, `capabilities`, `initialization_options`,
-//!    `settings`, `environment`, then for an old side the row's `old_side.environment`; the
-//!    row's `extensions` as the language ids; the log `<own cache>/logs/<n>.log`, `<n>`
-//!    counting the servers this Navigator started, from 1), every variable expanded:
-//!    `{root}` the worktree's folder or the export's, `{worktree}` the worktree's folder,
-//!    `{target}` `<cache>/navigator/targets/<workspace>/new` or `old`, `{platform}`, `{servers}` the
-//!    downloaded version's folder of that server. Ready at [`ServerEvent::Ready`]. A start
-//!    that fails, an exit before the server was ready, and an exit after it, are each a
-//!    failure of that candidate: the next one is tried (FR-061). `answers::server_gone`
-//!    hears of the exit of a server that had been ready, and of its end when this module
-//!    stops it itself ([`stop`], [`search_again`], a download that takes its key's place):
-//!    a ready server is the only kind a request was ever sent to, and one that ended before
-//!    it was ready has no ask to answer.
-//! 4. None left: `search::when_none`, missing with or without the offer.
-//!
-//! # Where a key stands
-//!
-//! Each key known is in one of these phases. The state [`publish`] shows for it is the
-//! question ([`State::Asking`]) while the key keeps one, whatever its phase; otherwise the
-//! one of the table. Every phase but the last counts the key's generation, raised at each
-//! search, and an event of an earlier generation is dropped.
-//!
-//! | Phase | State shown | What moves it on | To |
-//! | --- | --- | --- | --- |
-//! | trying a candidate | [`State::Starting`] | the trial passed | starting it, the same candidate |
-//! | | | the trial failed, or took longer than [`crate::TRIAL_DEADLINE`] | the next candidate left, or none left |
-//! | starting a candidate | [`State::Starting`] | [`ServerEvent::Ready`] | ready |
-//! | | | the start failed, or [`ServerEvent::Exited`] | the next candidate left, or none left |
-//! | ready | [`State::Ready`], with `update` when the program is a downloaded one of another version than the row pins | [`ServerEvent::Exited`] | the next candidate left, or none left |
-//! | none left | `search::when_none` | [`search_again`] (a yes, or `fetch.rs`) | a new search |
-//! | downloading | [`State::Downloading`] | [`search_again`], from `fetch.rs` | a new search |
-//! | waiting for the shell | [`State::Starting`] | [`shell_taken`] | a new search, with the environment it gave |
-//!
-//! "Waiting for the shell" (slice 9; the module `shell.rs`): with
-//! `NavigatorConfig::login_shell` some and the shell not yet taken, the first key that
-//! would be searched starts the shell's thread instead (`shell::take` on a thread of its
-//! own, reporting `Event::Shell`), and it and every key that would be searched after it,
-//! before the report, are held in this phase, with no generation counted. [`shell_taken`]
-//! puts the environment the shell gave (or, when it failed, leaves the configuration's, and
-//! writes the line `shell.rs` names to the standard error) into
-//! `NavigatorConfig::environment` and `NavigatorConfig::search_path`, notes the shell as
-//! taken, and searches every held key, in the order they were held, as a first search does.
-//! A held key stopped meanwhile is forgotten and not searched. With `login_shell` none, or
-//! the shell taken, no key is ever held. A shell still running when [`close`] is called is
-//! killed with its process group.
-//!
-//! "The next candidate left": the head of the key's list is taken off it; one inside the
-//! repository is skipped as step 1 says; one whose server names `trial` is tried, any other
-//! started. An empty list is "none left". Any phase goes when the key is stopped
-//! ([`stop`]): its server stopped, or its trial run killed, the key forgotten.
-//!
-//! # Stopping
-//!
-//! The time a workspace left the screen is read from the [`crate::Clock`] when it leaves.
-//! [`look_at_the_clock`], run before every event is handled and at least every
-//! [`crate::LOOK_EVERY`], stops every server of each workspace off screen since
-//! [`crate::NavigatorConfig::stop_after`] or longer, both sides, and forgets their keys:
-//! they are not listed in [`crate::Told::Servers`] any more. A workspace that comes back
-//! on screen has its new side's servers ensured again; an old side's server starts again
-//! at the next ask about the old side. A workspace that leaves the list of
-//! [`crate::Ask::Workspaces`] has every server stopped at once, and its build folders,
-//! `<cache>/navigator/targets/<workspace>`, removed. [`close`] drops the asks still waiting and stops
-//! every server.
-//!
-//! Every stop here is done before the function that does it returns: [`stop`] calls
-//! `Server::stop` with [`crate::STOP_DEADLINE`], which returns once the process is reaped
-//! (a trial run on its way is killed and reaped the same way, so that none outlives the key
-//! or the Navigator), and only then forgets the key and publishes. So
-//! [`look_at_the_clock`], [`workspaces`], [`close`], and `old_side.rs` through [`stop`], have
-//! every process they stop gone when they return, and a [`crate::Told::Servers`] told after
-//! them names no process that still runs. Nothing here waits for a server's answer or its
-//! readiness: those come as events.
-//!
-//! # What other modules call
-//!
-//! `answers.rs` and `old_side.rs` call [`ensure`], [`ready_server`], [`running_server`],
-//! [`state_of`], [`stop`] and [`publish`]; `fetch.rs` calls [`offering`], [`updating`],
-//! [`on_an_older_copy`], [`downloading`], [`search_again`] and [`publish`]; nothing else here.
+//! Which servers run, and when: `ensure` takes a `ServerKey` through search, trial and start.
+//! Every stop reaps the process (and the trial run) before it returns, so a published
+//! `Told::Servers` names no process that still runs.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::ffi::OsString;
@@ -126,97 +19,62 @@ use crate::registry::{Registry, Row, Source, Vars, expand, expand_json};
 use crate::search::{Candidate, CandidateKind, inside, look, order, when_none};
 use crate::{STOP_DEADLINE, TRIAL_DEADLINE, answers};
 
-/// What this module keeps in [`Core::life`]: every key ensured with where it stands, the
-/// servers that run, the times workspaces left the screen.
 #[derive(Default)]
 pub(crate) struct Life {
-    /// Every key known.
     keys: BTreeMap<ServerKey, Keyed>,
-    /// When each workspace that is off screen left it, or was first looked at while it was.
     left: HashMap<WorkspaceId, Instant>,
-    /// How many servers this Navigator started: the number of the next one's log is one
-    /// more.
     started: u64,
-    /// The last generation given out. One count for every key, so that an event of a key
-    /// that was stopped can never be taken for one of the key made again in its place.
+    /// One count for every key, so that an event of a stopped key is never taken for one of the key
+    /// made again in its place.
     generation: u64,
-    /// Where the user's login shell stands: the keys wait for it, as the module doc says.
     shell: ShellTaken,
-    /// The keys held for the shell, in the order they were held.
     held: Vec<ServerKey>,
-    /// The shell's process group while it runs, so that the Navigator's end can kill it.
     shell_group: crate::shell::Group,
 }
 
-/// Where the user's login shell stands.
 #[derive(Default, PartialEq, Eq)]
 enum ShellTaken {
-    /// Not run yet: the first key to be searched runs it.
     #[default]
     NotYet,
-    /// Its thread is on its way.
     Running,
-    /// It reported, or none is given: no key is held any more.
     Taken,
 }
 
-/// One key and where it stands.
 struct Keyed {
-    /// The folder it serves: the worktree's, or the export's.
     root: PathBuf,
-    /// Which search the key is in. An event of another is dropped.
     generation: u64,
-    /// The candidates not tried yet, in the order they are.
     left: VecDeque<Candidate>,
-    /// The phase of the table in the module doc.
     phase: Phase,
-    /// The question the key keeps: the repository and the first candidate inside it that was
-    /// passed over for want of an answer. Kept beside the phase: the key carries on with
-    /// the candidates after that one.
     question: Option<(RepositoryId, PathBuf)>,
-    /// Whether this search passed over a candidate for the repository's answer, asked or
-    /// refused: a yes searches the key again, for that candidate comes before the one that
-    /// runs.
+    /// Whether this search passed over a candidate for the repository's answer: a yes searches
+    /// the key again, since that candidate comes before the one that runs.
     passed_over: bool,
 }
 
-/// A server of a key that runs, and what it is a copy of.
 struct Running {
-    /// The candidate it was started from.
     candidate: Candidate,
-    /// The process.
     server: Server,
-    /// For a downloaded copy, its version.
     version: Option<String>,
 }
 
-/// The phases of a key.
 enum Phase {
-    /// A trial run of the candidate is on its way. Its process is shared with the thread
-    /// that waits for it, so that stopping the key can end it too.
     Trying {
         candidate: Candidate,
         process: Arc<Mutex<Option<Child>>>,
     },
-    /// The server runs and its rule of readiness is not met.
-    Starting { running: Running },
-    /// The server runs and is ready.
-    Ready { running: Running },
-    /// No candidate is left.
+    Starting {
+        running: Running,
+    },
+    Ready {
+        running: Running,
+    },
     NoneLeft,
-    /// The download of a server for the row is on its way.
-    Downloading { offer: Offer },
-    /// The key waits for the user's login shell, and has not been searched.
+    Downloading {
+        offer: Offer,
+    },
     Held,
 }
 
-/// At the start of the Navigator: reads the registry from
-/// [`crate::NavigatorConfig::builtin`] and the user's file into [`Core::registry`],
-/// writing each [`crate::registry::RowError`] to the standard error as one line; tells
-/// [`crate::Told::Languages`], each row's name, title and extensions in the registry's
-/// order; and removes every folder `<cache>/navigator/<pid>-<k>` whose `<pid>`, the part of its name
-/// before the `-`, names no process that runs (a folder whose name is not of that form is
-/// left as it is).
 pub(crate) fn started(core: &mut Core) {
     let user = match std::fs::read_to_string(&core.config.user_file) {
         Ok(text) => Some(text),
@@ -258,8 +116,6 @@ pub(crate) fn started(core: &mut Core) {
     remove_stale_caches(&core.config.cache);
 }
 
-/// Removes each folder of `cache` named `<pid>-<k>` (two numbers) whose process does not
-/// run: the own cache of a Window that ended without removing it.
 fn remove_stale_caches(cache: &Path) {
     let Ok(entries) = std::fs::read_dir(cache) else {
         return;
@@ -273,8 +129,8 @@ fn remove_stale_caches(cache: &Path) {
         if !number(pid) || !number(k) {
             continue;
         }
-        // A number too large for a process id, and 0, which names a group and not a process,
-        // are no process of ours either way: left alone.
+        // A number too large for a process id, and 0, which names a group and not a process, are no
+        // process of ours.
         let Ok(pid) = pid.parse::<u32>() else {
             continue;
         };
@@ -287,7 +143,6 @@ fn remove_stale_caches(cache: &Path) {
     }
 }
 
-/// Whether a process of this id exists, whoever's it is.
 fn process_runs(pid: u32) -> bool {
     let Ok(pid) = libc::pid_t::try_from(pid) else {
         return false;
@@ -298,9 +153,6 @@ fn process_runs(pid: u32) -> bool {
     signalled == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
-/// [`crate::Ask::Workspaces`]: keeps the list; every key of a workspace no longer listed, or
-/// whose worktree is gone, is stopped and forgotten; a workspace listed before and no
-/// longer listed has `<cache>/navigator/targets/<workspace>` removed.
 pub(crate) fn workspaces(core: &mut Core, roots: Vec<WorkspaceRoot>) {
     let before: Vec<WorkspaceId> = core.workspaces.iter().map(|root| root.id.clone()).collect();
     core.workspaces = roots;
@@ -314,9 +166,8 @@ pub(crate) fn workspaces(core: &mut Core, roots: Vec<WorkspaceRoot>) {
                 None => true,
                 Some(root) => match &root.folder {
                     None => true,
-                    // The new side serves the worktree's folder: a workspace whose folder
-                    // moved is another place. An old side serves an export, which
-                    // `old_side.rs` keeps.
+                    // A workspace whose folder moved is another place. An old side serves an
+                    // export, which `old_side.rs` keeps.
                     Some(folder) => key.side == Side::New && *folder != keyed.root,
                 },
             }
@@ -334,18 +185,13 @@ pub(crate) fn workspaces(core: &mut Core, roots: Vec<WorkspaceRoot>) {
         }
     }
 
-    // A workspace on screen that the list now holds, or holds somewhere else, has its
-    // servers.
     if let Some(on_screen) = core.on_screen.clone() {
         ensure_by_markers(core, &on_screen);
     }
     publish(core);
 }
 
-/// [`crate::Ask::OnScreen`]: the workspace that left the screen has the time noted; the one that
-/// came on screen has the time taken away and its new side's servers ensured, by markers.
-/// It ends with [`publish`] every time, also when nothing changed: what it tells is what a
-/// test that moved its clock reads after the clock was looked at.
+/// Ends with `publish` also when nothing changed: a test that moved its clock reads what it tells.
 pub(crate) fn on_screen(core: &mut Core, workspace: Option<WorkspaceId>) {
     let now = core.config.clock.now();
     let previous = core.on_screen.take();
@@ -362,8 +208,6 @@ pub(crate) fn on_screen(core: &mut Core, workspace: Option<WorkspaceId>) {
     publish(core);
 }
 
-/// Ensures the new side's server of each row whose `markers` lie at the root of the
-/// worktree of `workspace`. Tells nothing.
 fn ensure_by_markers(core: &mut Core, workspace: &WorkspaceId) {
     let Some(folder) = core.folder_of(workspace) else {
         return;
@@ -389,7 +233,6 @@ fn ensure_by_markers(core: &mut Core, workspace: &WorkspaceId) {
     }
 }
 
-/// [`crate::Ask::Consents`]: keeps the answers, and searches again as the module doc says.
 pub(crate) fn consents(core: &mut Core, consents: Vec<RepositoryConsent>) {
     let before = std::mem::replace(&mut core.consents, consents);
     let answer = |list: &[RepositoryConsent], repository: &RepositoryId| {
@@ -421,13 +264,12 @@ pub(crate) fn consents(core: &mut Core, consents: Vec<RepositoryConsent>) {
             .collect();
         for key in keys {
             match now {
-                // The candidate passed over comes before the one that runs, or the key has
-                // none: from the start again.
+                // The candidate passed over comes before the one that runs, or the key has none:
+                // from the start again.
                 Some(true) if core.life.keys[&key].passed_over => {
                     restart(core, &key);
                     changed = true;
                 }
-                // The candidates stay passed over, and no question is left to wait for.
                 Some(false) => {
                     if let Some(keyed) = core.life.keys.get_mut(&key)
                         && keyed.question.take().is_some()
@@ -444,11 +286,6 @@ pub(crate) fn consents(core: &mut Core, consents: Vec<RepositoryConsent>) {
     }
 }
 
-/// What a server's reading thread told: ready, an answer (handed to
-/// `answers::server_answered`), or its exit. Only the exit of a server that had been ready
-/// is handed to `answers::server_gone`, since only such a server was ever sent a request;
-/// after any exit of the server a key was running, the next candidate is tried. An event of
-/// an earlier generation of the key is dropped.
 pub(crate) fn server_event(core: &mut Core, key: ServerKey, generation: u64, event: ServerEvent) {
     let Some(keyed) = core.life.keys.get_mut(&key) else {
         return;
@@ -473,14 +310,12 @@ pub(crate) fn server_event(core: &mut Core, key: ServerKey, generation: u64, eve
             let was_ready = match phase {
                 Phase::Ready { .. } => true,
                 Phase::Starting { .. } => false,
-                // No server of this search is running: the exit is of one already replaced.
                 other => {
                     keyed.phase = other;
                     return;
                 }
             };
-            // Only a server that was ready was ever sent a request, so only its exit can
-            // leave an ask waiting. The key stands as "none left" meanwhile.
+            // Only a ready server was sent a request, so only its exit can leave an ask waiting.
             if was_ready {
                 answers::server_gone(core, &key);
             }
@@ -494,7 +329,6 @@ pub(crate) fn server_event(core: &mut Core, key: ServerKey, generation: u64, eve
     }
 }
 
-/// A trial run ended: the candidate is started, or passed over for the next.
 pub(crate) fn trial_ended(
     core: &mut Core,
     key: ServerKey,
@@ -526,8 +360,6 @@ pub(crate) fn trial_ended(
     }
 }
 
-/// Stops the servers of every workspace off screen for the set time or longer, as the
-/// module doc says.
 pub(crate) fn look_at_the_clock(core: &mut Core) {
     if core.life.left.is_empty() {
         return;
@@ -559,8 +391,6 @@ pub(crate) fn look_at_the_clock(core: &mut Core) {
     }
 }
 
-/// The user's login shell gave its environment, or failed to, as `shell.rs` says: takes it
-/// and searches the keys held for it, as the table "Where a key stands" says.
 pub(crate) fn shell_taken(
     core: &mut Core,
     taken: Result<Vec<(OsString, OsString)>, crate::shell::ShellError>,
@@ -583,8 +413,8 @@ pub(crate) fn shell_taken(
     }
     let held = std::mem::take(&mut core.life.held);
     for key in held {
-        // A key stopped meanwhile is forgotten, and one made again after it is searched
-        // once, where it was first held.
+        // A key stopped meanwhile is forgotten, and one made again after it is searched once, where
+        // it was first held.
         if matches!(
             core.life.keys.get(&key).map(|keyed| &keyed.phase),
             Some(Phase::Held)
@@ -595,8 +425,6 @@ pub(crate) fn shell_taken(
     publish(core);
 }
 
-/// Whether a key to be searched now has to wait for the user's login shell, and starts the
-/// shell on a thread of its own when this is the first one.
 fn must_wait_for_the_shell(core: &mut Core) -> bool {
     match core.life.shell {
         ShellTaken::Taken => false,
@@ -628,7 +456,6 @@ fn must_wait_for_the_shell(core: &mut Core) -> bool {
     }
 }
 
-/// Puts `keyed` in the phase of a key that waits for the shell, and notes `key` as held.
 fn hold(core: &mut Core, key: &ServerKey, keyed: &mut Keyed) {
     keyed.left.clear();
     keyed.question = None;
@@ -638,12 +465,10 @@ fn hold(core: &mut Core, key: &ServerKey, keyed: &mut Keyed) {
     core.life.held.push(key.clone());
 }
 
-/// At the end: drops the asks still waiting, then stops every server, each as [`stop`] does.
 pub(crate) fn close(core: &mut Core) {
-    // The asks waiting at these servers are dropped first: the end of a server answers them
-    // by text match, and no one is left to read it.
+    // Dropped first: the end of a server would answer them by text match, and no one is left to
+    // read it.
     answers::forget_the_waiting(core);
-    // A shell still running is killed with its group, as a trial run is.
     core.life.shell_group.end();
     let keys: Vec<ServerKey> = core.life.keys.keys().cloned().collect();
     for key in &keys {
@@ -652,9 +477,7 @@ pub(crate) fn close(core: &mut Core) {
     publish(core);
 }
 
-/// Makes sure the server of `key` is running or being looked for, `root` the folder it
-/// serves: the worktree's folder for [`crate::navigator::Side::New`], the export's for an
-/// old side. Starts the search when the key is not known yet. Gives where it stands now.
+/// `root` is the worktree's folder for the new side, the export's for an old side.
 pub(crate) fn ensure(core: &mut Core, key: &ServerKey, root: &Path) -> State {
     if ensure_key(core, key, root) {
         publish(core);
@@ -662,13 +485,12 @@ pub(crate) fn ensure(core: &mut Core, key: &ServerKey, root: &Path) -> State {
     state_of(core, key).unwrap_or(State::Missing { offer: None })
 }
 
-/// [`ensure`] without telling. Gives whether the key was made.
 fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
     if core.life.keys.contains_key(key) {
         return false;
     }
-    // A workspace that is not on screen has its servers stopped after the set time, from
-    // the first one asked for.
+    // A workspace not on screen has its servers stopped after the set time, counted from the first
+    // one asked for.
     if core.on_screen.as_ref() != Some(&key.workspace)
         && !core.life.left.contains_key(&key.workspace)
     {
@@ -684,7 +506,6 @@ fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
         passed_over: false,
     };
     if must_wait_for_the_shell(core) {
-        // Held: no search, no generation counted, until the shell has reported.
         hold(core, key, &mut keyed);
         core.life.keys.insert(key.clone(), keyed);
         return true;
@@ -697,7 +518,6 @@ fn ensure_key(core: &mut Core, key: &ServerKey, root: &Path) -> bool {
     true
 }
 
-/// The server of `key`, when one runs and is ready.
 pub(crate) fn ready_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Server> {
     match &core.life.keys.get(key)?.phase {
         Phase::Ready { running } => Some(&running.server),
@@ -705,9 +525,8 @@ pub(crate) fn ready_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Se
     }
 }
 
-/// The server of `key`, when one runs, starting or ready: the process that can be told what
-/// changed. One whose rule of readiness is not met yet reads the files when it loads, and the
-/// driver holds what is sent before the answer to `initialize`.
+/// A server still starting reads the files when it loads, and the driver holds what is sent before
+/// the answer to `initialize`.
 pub(crate) fn running_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a Server> {
     match &core.life.keys.get(key)?.phase {
         Phase::Starting { running } | Phase::Ready { running } => Some(&running.server),
@@ -715,7 +534,6 @@ pub(crate) fn running_server<'a>(core: &'a Core, key: &ServerKey) -> Option<&'a 
     }
 }
 
-/// Where the server of `key` stands; none for a key not known.
 pub(crate) fn state_of(core: &Core, key: &ServerKey) -> Option<State> {
     core.life
         .keys
@@ -723,15 +541,11 @@ pub(crate) fn state_of(core: &Core, key: &ServerKey) -> Option<State> {
         .map(|keyed| shown(core, key, keyed).state)
 }
 
-/// Stops the server of `key`, if one runs, with `Server::stop` and
-/// [`crate::STOP_DEADLINE`], which returns once its process is reaped; then forgets the key
-/// and publishes.
 pub(crate) fn stop(core: &mut Core, key: &ServerKey) {
     stop_quietly(core, key);
     publish(core);
 }
 
-/// [`stop`] without telling. Gives whether the key was known.
 fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return false;
@@ -743,11 +557,6 @@ fn stop_quietly(core: &mut Core, key: &ServerKey) -> bool {
     true
 }
 
-/// Stops the server of the key's phase, or kills the trial run that is on its way, if
-/// there is one, and waits for its process to be reaped; the phase is none left after.
-/// Gives whether the server that ended was a ready one, the only kind a request was ever
-/// sent to: the caller then hands the key to `answers::server_gone`, once the key stands
-/// as it will after the stop.
 fn end_server(keyed: &mut Keyed) -> bool {
     match std::mem::replace(&mut keyed.phase, Phase::NoneLeft) {
         Phase::Starting { running } => running.server.stop(STOP_DEADLINE),
@@ -756,8 +565,8 @@ fn end_server(keyed: &mut Keyed) -> bool {
             return true;
         }
         Phase::Trying { process, .. } => {
-            // Taken out first, so that the thread that waits for it finds it gone and the
-            // lock is not held while the process is reaped.
+            // Taken out first, so that the thread that waits for it finds it gone and the lock is
+            // not held while the process is reaped.
             let taken = process
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
@@ -769,7 +578,6 @@ fn end_server(keyed: &mut Keyed) -> bool {
     false
 }
 
-/// The keys of the row `language` whose state is missing with an offer, each with it.
 pub(crate) fn offering(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
     core.life
         .keys
@@ -782,7 +590,6 @@ pub(crate) fn offering(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
         .collect()
 }
 
-/// The keys of the row `language` whose state shows an update, each with it.
 pub(crate) fn updating(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
     core.life
         .keys
@@ -792,12 +599,9 @@ pub(crate) fn updating(core: &Core, language: &str) -> Vec<(ServerKey, Offer)> {
         .collect()
 }
 
-/// The keys of the row `language` whose candidate, the one tried, started or running, is a
-/// downloaded copy of the server named `server` in a version other than `installed`, the one
-/// just installed: the folder of the copy they were given is gone or about to go, and a key
-/// that does not search again finds it missing, or runs from a folder that is not there. The
-/// phases trying, starting and ready all count: a candidate is chosen by the version that was
-/// installed when the key searched, whatever the key has reached since.
+/// The keys whose tried, starting or running candidate is a downloaded copy of `server` in a
+/// version other than the one just installed: its folder is gone or about to go, so they search
+/// again.
 pub(crate) fn on_an_older_copy(
     core: &Core,
     language: &str,
@@ -829,26 +633,20 @@ pub(crate) fn on_an_older_copy(
         .collect()
 }
 
-/// Shows `key` as [`State::Downloading`] with `offer` until it is searched again, and
-/// publishes.
 pub(crate) fn downloading(core: &mut Core, key: &ServerKey, offer: Offer) {
     let Some(keyed) = core.life.keys.get_mut(key) else {
         return;
     };
     let was_ready = end_server(keyed);
     keyed.phase = Phase::Downloading { offer };
-    // `fetch::download` hands over only keys that offer a download, which run nothing, so
-    // no ask waits at one today; the call keeps a caller that hands over a ready key from
-    // leaving its asks waiting.
+    // `fetch::download` hands over only keys that offer a download, which run nothing; the call
+    // keeps a ready key from leaving asks waiting.
     if was_ready {
         answers::server_gone(core, key);
     }
     publish(core);
 }
 
-/// Searches again for `key`, from step 1 of the module doc, with the root it was ensured
-/// with: stops its server if one runs (as [`stop`] does, without forgetting the key),
-/// raises its generation, and publishes. A key not known is left alone.
 pub(crate) fn search_again(core: &mut Core, key: &ServerKey) {
     if core.life.keys.contains_key(key) {
         restart(core, key);
@@ -856,7 +654,6 @@ pub(crate) fn search_again(core: &mut Core, key: &ServerKey) {
     }
 }
 
-/// [`search_again`] without telling.
 fn restart(core: &mut Core, key: &ServerKey) {
     let Some(mut keyed) = core.life.keys.remove(key) else {
         return;
@@ -876,7 +673,6 @@ fn restart(core: &mut Core, key: &ServerKey) {
     core.life.keys.insert(key.clone(), keyed);
 }
 
-/// Tells [`crate::Told::Servers`]: every key known, in the order the port's doc says.
 pub(crate) fn publish(core: &Core) {
     let place = |key: &ServerKey| {
         (
@@ -901,7 +697,6 @@ pub(crate) fn publish(core: &Core) {
     core.tell(Told::Servers(states));
 }
 
-/// The state of a key as the port tells it.
 fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
     let row = core.registry.row(&key.language);
     let name = |candidate: &Candidate| {
@@ -917,7 +712,6 @@ fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
         ),
         Phase::NoneLeft | Phase::Downloading { .. } | Phase::Held => (None, None, None),
     };
-    // The question takes the line while the key keeps one, whatever the phase.
     let state = if let Some((repository, program)) = &keyed.question {
         State::Asking {
             repository: repository.clone(),
@@ -952,8 +746,6 @@ fn shown(core: &Core, key: &ServerKey, keyed: &Keyed) -> ServerState {
     }
 }
 
-/// The update a ready server shows: the version the row pins for this machine, when the
-/// running copy is a downloaded one of another version.
 fn update_of(core: &Core, key: &ServerKey, keyed: &Keyed) -> Option<Offer> {
     let Phase::Ready { running } = &keyed.phase else {
         return None;
@@ -972,7 +764,6 @@ fn update_of(core: &Core, key: &ServerKey, keyed: &Keyed) -> Option<Offer> {
     })
 }
 
-/// The repository of a workspace the Navigator was told of.
 fn repository_of<'a>(core: &'a Core, workspace: &WorkspaceId) -> Option<&'a RepositoryId> {
     core.workspaces
         .iter()
@@ -980,8 +771,6 @@ fn repository_of<'a>(core: &'a Core, workspace: &WorkspaceId) -> Option<&'a Repo
         .map(|root| &root.repository)
 }
 
-/// Looks for the candidates of `key`, from the start: the list left is every candidate in
-/// the order of FR-060, and no question or passed over candidate is kept.
 fn search(core: &Core, key: &ServerKey, keyed: &mut Keyed) {
     keyed.left.clear();
     keyed.question = None;
@@ -1000,8 +789,6 @@ fn search(core: &Core, key: &ServerKey, keyed: &mut Keyed) {
     keyed.left = order(row, &found).into();
 }
 
-/// Takes candidates off the key's list until one is started or being tried, as step 1 to 3
-/// of the module doc say; with none left the phase is none left.
 fn advance(core: &mut Core, key: &ServerKey, keyed: &mut Keyed) {
     loop {
         let Some(candidate) = keyed.left.pop_front() else {
@@ -1051,9 +838,6 @@ fn advance(core: &mut Core, key: &ServerKey, keyed: &mut Keyed) {
     }
 }
 
-/// Whether the candidate's program lies inside a worktree of `repository`: the folder of
-/// each workspace of it the Navigator was told of, and for an old side the export too, which
-/// holds a copy of what the repository holds.
 fn lies_inside(
     core: &Core,
     key: &ServerKey,
@@ -1073,7 +857,6 @@ fn lies_inside(
     inside(&candidate.program, &folders)
 }
 
-/// The row and server a candidate is a copy of.
 fn server_of<'a>(
     core: &'a Core,
     key: &ServerKey,
@@ -1092,8 +875,6 @@ fn server_of<'a>(
     Ok((row, server))
 }
 
-/// Starts the trial run of `candidate`, and a thread of its own that waits for it and tells
-/// [`Event::Trial`]. The process belongs to the phase too, so that stopping the key ends it.
 fn try_out(
     core: &Core,
     key: &ServerKey,
@@ -1143,7 +924,6 @@ fn trial_fault(candidate: &Candidate, reason: &str) -> String {
     format!("{} cannot be tried: {reason}", candidate.program.display())
 }
 
-/// Starts the program of `launch` once with `args`, in its environment and its folder.
 fn spawn_trial(launch: &Launch, args: &[String]) -> std::io::Result<Child> {
     let mut command = Command::new(&launch.program);
     command
@@ -1163,9 +943,6 @@ fn spawn_trial(launch: &Launch, args: &[String]) -> std::io::Result<Child> {
     command.spawn()
 }
 
-/// Asks the kernel to kill the trial run when the thread that starts it ends, on Linux, as
-/// the driver does for a server. On macOS nothing ends a run whose Window crashed, and a
-/// trial is short.
 #[cfg(target_os = "linux")]
 fn end_with_the_window(command: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -1176,13 +953,11 @@ fn end_with_the_window(command: &mut Command) {
     // only, which are safe there, and touches no memory of this process's.
     unsafe {
         command.pre_exec(move || {
-            // The closure is part of the unsafe block above, whose comment covers these
-            // calls.
             if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            // The parent may have ended before the request took effect: its signal
-            // would never come.
+            // The parent may have ended before the request took effect: its signal would never
+            // come.
             if libc::getppid() != parent {
                 libc::_exit(1);
             }
@@ -1194,7 +969,6 @@ fn end_with_the_window(command: &mut Command) {
 #[cfg(not(target_os = "linux"))]
 fn end_with_the_window(_command: &mut Command) {}
 
-/// Kills the trial run, if there is one, and waits until it is reaped.
 fn kill_and_reap(child: Option<Child>) {
     if let Some(mut child) = child {
         let _ = child.kill();
@@ -1202,13 +976,8 @@ fn kill_and_reap(child: Option<Child>) {
     }
 }
 
-/// Waits for the trial run in `process`, and says whether it ended with success within
-/// [`TRIAL_DEADLINE`]; a run that takes longer is killed. A run the key's stop took away is
-/// no success.
 fn wait_for_trial(process: &Mutex<Option<Child>>) -> bool {
     let until = Instant::now() + TRIAL_DEADLINE;
-    // A repeated look at one fact that stays true once it is: the process ended. A trial is
-    // short, so the first looks come quickly. The lock is held for a look only.
     let mut pause = Duration::from_millis(1);
     loop {
         {
@@ -1233,7 +1002,6 @@ fn wait_for_trial(process: &Mutex<Option<Child>>) -> bool {
     }
 }
 
-/// Starts the server of `candidate`: the phase is starting.
 fn start(
     core: &mut Core,
     key: &ServerKey,
@@ -1270,16 +1038,12 @@ fn start(
     })
 }
 
-/// Puts in the variables of a row for one candidate of one key.
 struct Expander {
     vars: Vars,
-    /// Whether `{servers}` has a value: only a downloaded copy has a folder.
     servers: bool,
 }
 
 impl Expander {
-    /// `text` with its variables put in; an error when it names `{servers}` and the copy has
-    /// no such folder.
     fn text(&self, text: &str) -> Result<String, String> {
         let expanded = expand(text, &self.vars)?;
         if !self.servers {
@@ -1294,7 +1058,6 @@ impl Expander {
         Ok(expanded)
     }
 
-    /// [`Expander::text`] for every string of `value`.
     fn json(&self, value: &serde_json::Value) -> Result<serde_json::Value, String> {
         let expanded = expand_json(value, &self.vars)?;
         if !self.servers {
@@ -1310,11 +1073,9 @@ impl Expander {
     }
 }
 
-/// Why a row that names `{servers}` cannot start a copy that was not downloaded.
 const NO_SERVERS_FOLDER: &str =
     "the row names {servers}, and a copy that was not downloaded has no such folder";
 
-/// The variables of a row for `candidate` of `key`, served from `root`.
 fn expander(core: &Core, key: &ServerKey, root: &Path, candidate: &Candidate) -> Expander {
     let worktree = core
         .folder_of(&key.workspace)
@@ -1366,8 +1127,6 @@ fn expander(core: &Core, key: &ServerKey, root: &Path, candidate: &Candidate) ->
     }
 }
 
-/// The [`Launch`] of `candidate` for `key`, every variable of its row expanded; an error
-/// for a variable the row names that has no value.
 pub(crate) fn launch(
     core: &Core,
     key: &ServerKey,

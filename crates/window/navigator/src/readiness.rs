@@ -1,39 +1,29 @@
-//! When a server's answers count as sound: the three rules of a row's `ready` (ADR-015
-//! point 2, FR-067).
-//!
-//! A [`Readiness`] is fed what the server reports, in the order it reports it, and says
-//! where the server stands ([`Readying`]). It knows no server: every rule is data of a
-//! row (NAV-13).
+//! When a server's answers count as sound, by the rules of a row's `ready`. A [`Readiness`] is fed
+//! what the server reports, in order, and knows no server: every rule is row data.
 
 use serde_json::Value;
 
 use crate::registry::Ready;
 
-/// Where a server stands by its row's rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Readying {
-    /// Started, and the rule is not met: answers are found by text match meanwhile.
+    /// Started, and the rule not yet met: answers are found by text match meanwhile.
     Starting,
-    /// The rule was met: the server's answers are sound. A server once ready stays ready
-    /// until it ends.
+    /// A server once ready stays ready until it ends.
     Ready,
-    /// The server ended, or failed to answer `initialize`: missing.
+    /// Ended, or failed to answer `initialize`.
     Gone,
 }
 
-/// A server's readiness, fed what it reports.
 #[derive(Debug, Clone)]
 pub struct Readiness {
     rule: Ready,
     now: Readying,
-    /// The tokens of the `$/progress` reports begun and not yet ended.
     open: Vec<Value>,
-    /// Whether any `$/progress` began.
     began: bool,
 }
 
 impl Readiness {
-    /// A server just started, by `rule`: [`Readying::Starting`].
     pub fn new(rule: &Ready) -> Readiness {
         Readiness {
             rule: rule.clone(),
@@ -43,8 +33,6 @@ impl Readiness {
         }
     }
 
-    /// The server answered `initialize` with a result: ready by [`Ready::Answer`]. Gives
-    /// where it stands now.
     pub fn answered_initialize(&mut self) -> Readying {
         if self.now == Readying::Starting && self.rule == Ready::Answer {
             self.now = Readying::Ready;
@@ -52,9 +40,9 @@ impl Readiness {
         self.now
     }
 
-    /// The server sent a notification: `$/progress` with a `begin` or an `end` value counts
-    /// for [`Ready::Progress`], any notification of the rule's method whose parameters hold
-    /// the rule's `match` for [`Ready::Notification`]. Gives where it stands now.
+    /// Takes a notification in: `$/progress` with a `begin` or an `end` value counts for
+    /// [`Ready::Progress`]; one of the rule's method whose params hold its `match`, for
+    /// [`Ready::Notification`].
     pub fn notification(&mut self, method: &str, params: &Value) -> Readying {
         // Ready stays ready, and an ended server is not brought back by what it said last.
         if self.now != Readying::Starting {
@@ -79,19 +67,16 @@ impl Readiness {
         self.now
     }
 
-    /// The server ended, or its `initialize` failed. Gives [`Readying::Gone`].
     pub fn ended(&mut self) -> Readying {
         self.now = Readying::Gone;
         self.now
     }
 
-    /// Where it stands.
     pub fn now(&self) -> Readying {
         self.now
     }
 
-    /// Takes one `$/progress` report in: whether every report begun has now ended. A report
-    /// with no token or no kind is none.
+    /// Whether every report begun has now ended. A report with no token or no kind is none.
     fn progress(&mut self, params: &Value) -> bool {
         let Some(token) = params.get("token") else {
             return false;
@@ -120,7 +105,6 @@ mod tests {
     use super::*;
     use crate::registry::{BUILTIN, Registry};
 
-    /// The `ready` rule of the first server of the built-in row `row`.
     fn rule_of(row: &str) -> Ready {
         let (registry, errors) = Registry::read(BUILTIN, None);
         assert_eq!(errors, vec![]);
@@ -134,8 +118,6 @@ mod tests {
     fn progress(token: Value, kind: &str) -> Value {
         json!({ "token": token, "value": { "kind": kind, "title": "Indexing" } })
     }
-
-    // NAV-13, each built-in row by its own rule
 
     #[test]
     fn each_built_in_row_has_the_rule_its_server_needs() {
@@ -163,7 +145,6 @@ mod tests {
     fn a_server_by_the_answer_rule_is_ready_once_it_answered_initialize() {
         for row in ["typescript", "python"] {
             let mut readiness = Readiness::new(&rule_of(row));
-            // What it reports before that, of any kind, changes nothing.
             assert_eq!(
                 readiness.notification("experimental/serverStatus", &quiescent(true)),
                 Readying::Starting
@@ -185,7 +166,6 @@ mod tests {
             readiness.notification("experimental/serverStatus", &quiescent(false)),
             Readying::Starting
         );
-        // A progress report, begun and ended, is not its rule.
         assert_eq!(
             readiness.notification("$/progress", &progress(json!("roots"), "begin")),
             Readying::Starting
@@ -194,7 +174,6 @@ mod tests {
             readiness.notification("$/progress", &progress(json!("roots"), "end")),
             Readying::Starting
         );
-        // Another method with the same parameters is not the status.
         assert_eq!(
             readiness.notification("window/status", &quiescent(true)),
             Readying::Starting
@@ -256,7 +235,6 @@ mod tests {
             ready.notification("experimental/serverStatus", &quiescent(true));
             assert_eq!(ready.ended(), Readying::Gone, "{row} ready");
             assert_eq!(ready.now(), Readying::Gone);
-            // Nothing that comes after brings it back.
             assert_eq!(ready.answered_initialize(), Readying::Gone);
             assert_eq!(
                 ready.notification("experimental/serverStatus", &quiescent(true)),
@@ -264,8 +242,6 @@ mod tests {
             );
         }
     }
-
-    // NAV-13, the rule of a row the test writes
 
     fn notify(readiness: &mut Readiness, token: Value, kind: &str) -> Readying {
         readiness.notification("$/progress", &progress(token, kind))
@@ -336,7 +312,6 @@ mod tests {
             notify(&mut readiness, json!("a"), "report"),
             Readying::Starting
         );
-        // Other notifications, and a progress with no token or no kind, are no report.
         assert_eq!(
             readiness.notification(
                 "window/logMessage",

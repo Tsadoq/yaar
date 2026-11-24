@@ -1,30 +1,3 @@
-//! Threads on the old side when the base moves (ADR-013 point 4).
-//!
-//! A thread on a removed line sits on the version the change is counted from: its anchor's
-//! `tree` is that commit, its side old. While the base stands it does not move. When the
-//! commit the changes of a workspace are counted from changes (the user set another base,
-//! or the base branch, or the fork point, moved), [`crate::Reviews::base_moved`] carries
-//! each open thread on the old side placed on the old commit to the new one, by the rule
-//! the new side's threads follow ([`crate::carry_file`], one file at a time): with the
-//! file's text in `from` and in `to`, read through the state store, which keeps both
-//! commits (`StateStore::content_in`, which copies a commit it lacks from the worktree).
-//!
-//! What moves, and what does not:
-//!
-//! | Thread | What happens |
-//! | --- | --- |
-//! | On the old side, open, placed on `from` (its `now` is that commit, or with no `now` its anchor's `tree` is) | carried to `to`: its new placement is kept with `Store::set_places`, on the old side, with the notice the follower gives |
-//! | On the old side, resolved | stays where it is |
-//! | On the old side, placed on another commit | stays where it is: it is not on the base that moved |
-//! | On the new side | not touched: the new side's threads follow the states |
-//! | With an absolute path (a file outside the worktree) | not touched: it is never carried |
-//!
-//! The placements are kept in one call of the Store, under the engine's turn of writing.
-//! Every thread kept is given back, also one whose lines stayed where they were: its place
-//! now names `to`, which is what the next move of the base looks for. When at least one was
-//! kept, the Keeper tells `ReviewsChanged` of the workspace. A `from` equal to `to` moves
-//! nothing.
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -35,15 +8,13 @@ use crate::engine::{EngineError, Reviews, is_outside};
 use crate::follow::{FileStep, Notice, Place, Placed, carry_file};
 use crate::{ThreadId, WorkspaceId};
 
-/// One thread to be carried: where it sits on the old commit, as read.
 struct Candidate {
     thread: ThreadId,
-    /// What the Store held of its place when it was read; compared when it is kept.
+    /// What the Store held when read; compared before keeping, to skip threads changed meanwhile.
     was: Option<ThreadPlace>,
     at: Placed,
 }
 
-/// What one file became between the two commits, with the bytes it needs.
 enum Step {
     Unchanged,
     Changed {
@@ -69,9 +40,7 @@ impl Step {
     }
 }
 
-/// What became of the file at `path` of `from` in `to`, as `changes`, the paths that differ
-/// with renames paired, says. A file git does not list is unchanged, and so is one whose
-/// old bytes the store does not hold, which cannot be diffed.
+/// A file git does not list is unchanged, and so is one whose old bytes the store lacks.
 fn step_of(
     states: &StateStore,
     from: &str,
@@ -106,18 +75,9 @@ fn step_of(
 }
 
 impl Reviews {
-    /// The commit the changes of `workspace` are counted from moved from `from` to `to`:
-    /// carries its threads on the old side, as the module doc says, and gives the ids of the
-    /// threads whose place now names `to`, whether their lines moved or stayed.
-    ///
-    /// The commits are read through the workspace's state store, which copies from
-    /// `worktree` the one it lacks; when that fails nothing is carried. A file that cannot
-    /// be read leaves its threads where they are, the others are carried, and the first
-    /// such failure is given after they were kept (so their ids are not: see
-    /// [`Reviews::base_moved_in_part`], which gives both). The engine's turn is held only
-    /// to read the threads again, leave out any whose place changed meanwhile (another call
-    /// carried it, or the reviewer resolved it) and keep the rest with one
-    /// `Store::set_places`.
+    /// Gives the ids of the open old-side threads placed on `from` that now name `to`, also those
+    /// whose lines stayed. A file that cannot be read keeps its threads; the first such failure is
+    /// returned after the others were kept.
     pub fn base_moved(
         &self,
         workspace: &WorkspaceId,
@@ -131,12 +91,7 @@ impl Reviews {
         }
     }
 
-    /// [`Reviews::base_moved`] for a caller that tells others what was kept: the ids of the
-    /// threads whose place now names `to`, and with them the first failure to read a file,
-    /// when there was one, whose threads stay where they were. It fails as a whole only
-    /// when nothing was kept. No surface makes one file of a commit unreadable while the
-    /// rest are read, so that a carry keeps the threads of the other files is stated here
-    /// and held by no test.
+    /// Also gives the first read failure; fails as a whole only when nothing was kept.
     pub fn base_moved_in_part(
         &self,
         workspace: &WorkspaceId,

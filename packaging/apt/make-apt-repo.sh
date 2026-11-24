@@ -1,39 +1,10 @@
 #!/bin/bash
-# Builds or refreshes a signed apt repository made of static files only.
+# Builds or refreshes a signed apt repository of static files.
 #
-#   GNUPGHOME=<dir> YAAR_APT_KEY=<fingerprint> make-apt-repo.sh <repo-dir> [<deb>...]
-#
-# Each .deb named is copied into pool/main/<first letter>/<package>/ (a file of the same
-# name that is already there is never overwritten); then the index is rebuilt from
-# everything in pool/ and signed again. Give the .deb of both processors to publish both.
-# Refuses, naming the file, when apt-ftparchive complains of a file of the pool (it would
-# otherwise leave it out of the index and exit 0) or when a .deb of the pool is not in the
-# Packages file of its processor.
-#
-# Result, all under <repo-dir>:
-#   pool/main/y/yaar-review/*.deb
-#   dists/stable/main/binary-<arch>/Packages, Packages.gz    one folder per architecture
-#                                                            found in pool/
-#   dists/stable/Release       hashes of the Packages files
-#   dists/stable/Release.gpg   detached signature of Release
-#   dists/stable/InRelease     Release with the signature inline (the file apt asks for)
-#   yaar-review.asc            the public key, armoured; install.sh fetches it from here
-#
-# Needs: apt-ftparchive (package apt-utils), dpkg-deb (dpkg), gpg (gnupg), gzip.
-#
-# Exit codes: 0 written; 1 refused or failed (a sentence says why; whatever fails without a
-# sentence of its own, such as gzip or gpg, ends it with 1 and the line, never with the
-# tool's own code, gpg's 2 reading as a usage error); 2 usage error (no <repo-dir>).
-#
-# Environment:
-#   YAAR_APT_KEY   fingerprint or id of the signing key; its secret half is in GNUPGHOME
-#   GNUPGHOME      the keyring folder gpg reads
-#   SUITE          default stable
-#   ORIGIN, LABEL  default YAAR
+# GNUPGHOME=<dir> YAAR_APT_KEY=<fingerprint> make-apt-repo.sh <repo-dir> [<deb>...]
 set -euo pipefail
 umask 022
-# Whatever fails without a sentence of its own ends the script with 1, never with the failing
-# tool's own code (gpg's 2 would read as a usage error).
+# Any failure ends with 1, never the tool's own code (gpg's 2 would read as a usage error).
 set -E
 trap 'echo "make-apt-repo.sh: line $LINENO: a command failed" >&2; exit 1' ERR
 [ $# -ge 1 ] || { sed -n '2,4p' "$0" >&2; exit 2; }
@@ -55,7 +26,6 @@ for deb in "$@"; do
   [ -e "$d/$(basename "$deb")" ] || cp "$deb" "$d/"
 done
 cd "$REPO"
-# A file in pool/ that dpkg-deb cannot read would be left out of the index without a word.
 POOL_DEBS=$(find pool -name '*.deb') \
   || { echo "make-apt-repo.sh: cannot list the .deb files under $REPO/pool: a folder in it cannot be read" >&2; exit 1; }
 while IFS= read -r deb; do
@@ -66,10 +36,8 @@ done <<< "$POOL_DEBS"
 ARCHS=$(find pool -name '*.deb' -exec dpkg-deb -f {} Architecture \; | sort -u | grep -v '^all$' | tr '\n' ' ')
 ARCHS=${ARCHS% }
 [ -n "$ARCHS" ] || { echo "make-apt-repo.sh: no package in $REPO/pool" >&2; exit 1; }
-# apt-ftparchive can refuse a file of the pool, say so on standard error ("E: Errors apply to
-# file ...") and still exit 0, leaving the file out of the index. Its standard error goes to a
-# file, and anything in it ends this script: a published version must stay installable by its
-# number.
+# apt-ftparchive can print "E: Errors apply to file ..." and still exit 0, leaving the file out
+# of the index. Its stderr goes to a file and anything in it ends the script.
 ERRS=$(mktemp -d "${TMPDIR:-/tmp}/yaar-apt-repo.XXXXXX")
 trap 'rm -rf "$ERRS"' EXIT
 ftparchive() {
@@ -86,7 +54,6 @@ for a in $ARCHS; do
   ftparchive --arch "$a" packages "pool/$COMP" > "$b/Packages"
   gzip -n -9 -k "$b/Packages"
 done
-# Every file of the pool is in the index of its processor, whatever the indexer said.
 while IFS= read -r deb; do
   [ -n "$deb" ] || continue
   arch=$(dpkg-deb -f "$deb" Architecture)

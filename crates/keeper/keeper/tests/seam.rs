@@ -1,12 +1,6 @@
-//! Component test: a way of delivering a review written in a test is handed the same text as
-//! the three built ones, with nothing else changed. The review is made and read back
-//! through the Link, as a Window does; the send is the engine's own, on the Keeper's data
-//! folder while the Keeper is stopped, so that the four ways of delivery are tried one after
-//! the other on the very same review; and the Keeper started again shows the comments sent.
-//!
-//! The Keeper runs git with the environment of its process, so the test sets that
-//! environment as its first statement, and these tests are run by `cargo nextest`, which
-//! gives each test a process of its own.
+//! Component test: a delivery written in a test gets the same text as the built ones. The send runs
+//! on the Keeper's data folder while the Keeper is stopped. Each test sets the process environment
+//! first, so nextest runs it in a process of its own.
 
 use std::io;
 use std::os::unix::net::UnixStream;
@@ -27,16 +21,12 @@ use yaar_recorder::Git;
 use yaar_review_engine::{Attachment, EngineError, ReviewId, Reviews, SentBy as EngineSentBy};
 use yaar_store::Store;
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git: no configuration
-    /// of the user or of the system, a fixed author, an empty home. It has to be the first
-    /// statement of a test.
+    /// Sets the process environment for git. Must be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -58,10 +48,8 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: this runs as the first statement of a test, and nextest gives each test
+        // a process of its own, so no other thread exists yet.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -86,7 +74,6 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// The app's folder of the Keeper of this test.
     fn data(&self) -> PathBuf {
         self.0.join("data")
     }
@@ -95,7 +82,6 @@ impl Scratch {
         self.0.join("home")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -109,7 +95,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -131,7 +116,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit, `a.txt`, on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -166,8 +150,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. It saves drafts, which the Keeper tells every
-/// Window of, so a reply is read past the facts that come before it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -196,7 +178,6 @@ impl Window {
         }
     }
 
-    /// A draft on `line` of `a.txt`, in a thread of its own, with the ids `n` and `n + 1`.
     fn draft(&mut self, review: &Review, n: u128, line: u32, text: &str) {
         let saved = self.ask(Request::SaveDraft {
             review: review.id.clone(),
@@ -225,7 +206,6 @@ impl Window {
     }
 }
 
-/// What a recorder was handed by `hand_out`, as owned text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Handed {
     text: String,
@@ -234,8 +214,6 @@ struct Handed {
     threads: usize,
 }
 
-/// A delivery that keeps the `Rendered` it is handed and, wrapped around a way of delivery,
-/// either fails the hand-out, so that nothing is sent, or passes it on to that way.
 struct Recorder<'a> {
     way: &'a mut dyn Delivery,
     fails: bool,
@@ -261,8 +239,8 @@ impl Delivery for Recorder<'_> {
     }
 }
 
-/// A way of delivery that exists only in this test: its own instruction, and a hand-out that
-/// gives back the length of what it was handed, which no built way gives.
+/// Exists only in this test; its hand-out returns the length of what it was handed, which no
+/// built way does.
 struct ByTheTest;
 
 const OWN_INSTRUCTION: &str = "This is a review handed out by a way of delivery of the test. \
@@ -283,8 +261,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
     let scratch = Scratch::new();
     let repo = scratch.repository("repo");
 
-    // Before: through the Link, a workspace, the review of no agent with two threads that
-    // hold a draft each, read back, and the Keeper stopped.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let Ok(Reply::Opened { workspace, .. }) = window.ask(Request::OpenFolder { path: repo }) else {
@@ -318,7 +294,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
     assert_eq!(kept.rounds, []);
     window.stop(keeper);
 
-    // The engine's own send, on the Keeper's data, which nothing else holds now.
     let store = Store::open(&scratch.data().join(yaar_store::FILE_NAME)).expect("the Store");
     let reviews = Reviews::new(
         store,
@@ -332,8 +307,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
     let attached = reviews.review(&id).expect("read the review");
     assert!(attached.attached().is_some());
 
-    // The Adapters, as the Keeper holds them: the Claude Code Adapter's delivery and pi's,
-    // each from `delivery(folder, asked)` with an `Asked` of the test's own.
     let adapters = adapters(&scratch.home());
     let (claude_folder, pi_folder) = (
         scratch.data().join("agents").join("claude"),
@@ -377,8 +350,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
             .take()
             .unwrap_or_else(|| panic!("{name} was handed nothing"));
         if succeeds {
-            // The way of the test succeeds: the comments are sent, in the first round, and
-            // what the engine gives back is what the way gave.
             let (bytes, sent) = sent
                 .expect("the test's own way delivers")
                 .expect("something");
@@ -388,8 +359,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
             );
             assert_eq!(sent.round.number, 1);
         } else {
-            // A built way, failed by the recorder: nothing is sent, and the review is as it
-            // was, its comments drafts and its attachment kept.
             assert!(
                 matches!(sent, Err(EngineError::HandOut(_))),
                 "{name}: {sent:?}"
@@ -403,8 +372,8 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
         handed.push((*name, instruction, got));
     }
 
-    // Four instructions, each its own, so that taking each off the front of its text
-    // leaves something that was the same for all.
+    // Four distinct instructions: taking each off the front of its own text must leave one
+    // body, the same for all four.
     let instructions: Vec<&str> = handed
         .iter()
         .map(|(_, instruction, _)| *instruction)
@@ -446,7 +415,6 @@ fn a_way_of_delivery_written_in_the_test_is_handed_the_same_text_as_the_three_bu
     drop(ways);
     drop(reviews);
 
-    // After: the Keeper started again, the Link shows the comments sent in round 1.
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let after = window.reviews(&workspace);

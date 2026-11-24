@@ -1,54 +1,10 @@
 #!/bin/sh
-# Serves a release as GitHub Pages and the release's download address would, on this machine
-# only, for the install jobs.
-#
-#   .github/scripts/serve-site.sh start <site-dir> <release-dir> <port>
-#   .github/scripts/serve-site.sh switch <site-dir> <port>
-#   .github/scripts/serve-site.sh stop <port>
-#
-# start: makes $RUNNER_TEMP/served-<port> (or ${TMPDIR:-/tmp}/served-<port> without a
-# runner), a symbolic link `root` in it to <site-dir> and a folder `root-download` holding
-# <release-dir>'s files, and starts `python3 -m http.server <port> --bind 127.0.0.1` in the
-# background with the folder served laid out as
-#   http://127.0.0.1:<port>/            the site (install.sh, index.html, apt/)
-#   http://127.0.0.1:<port>/download/   the release files, as releases/latest/download serves
-#                                       them
-# (a small python3 handler of its own may do the mapping; python3's standard library only).
-# The server is detached from the step entirely, or a container's step waits for it and
-# hangs: `setsid` (else `nohup`), standard input from /dev/null, standard output and
-# standard error both to served-<port>/log, never to the step's own streams.
-# Writes the server's process id to served-<port>/pid. Waits, up to 10 s, until GET
-# /install.sh answers 200, and fails otherwise with the log; the process it started is then
-# ended, so that a failed start leaves nothing that holds the port.
-# switch: points the site of the server on <port> at <site-dir> (the link `root`), so that
-# the same address now serves another site, as a new deployment of Pages does; the
-# download folder stays. Used by PKG-06. A client that holds an older copy of a file is
-# given the file whole at every request, whatever its If-Modified-Since says: a new
-# deployment need not hold files newer than the last one's, and apt, told "not modified",
-# keeps the index of the repository it had.
-# stop: ends the server of <port> by the pid it wrote (never by name) and waits for it.
-#
-# Exit codes: 0 served; 1 failed; 2 usage error.
-#
-# What the header leaves: the server is a small handler of python3's standard library (the
-# one `python3 -m http.server` has, with the folder it reads from chosen by the first part
-# of the path, and without the look-up of its own address's name that python3's
-# HTTPServer makes when it binds, which asks the resolver and can stall for many seconds on
-# a machine whose resolver is slow, as GitHub's Mac was once), which writes its own process
-# id once it has bound its port, so that the pid is the server's whatever wrapper started
-# it; a start that is not answered in time ends the process it started, by the process id
-# of the wrapper it ran (the server's own, since neither setsid nor nohup forks here), and
-# says whether the server ever wrote its pid; each look of the wait is cut at 3 s, so that
-# a server that holds a request cannot keep the wait past its own 10 s; the files of <release-dir> are linked into
-# root-download, not copied (a release holds hundreds of megabytes); a stopped server whose
-# process is a zombie that nobody reaped (a container's first process may not reap) counts
-# as ended; a command that stops the script without a sentence of its own is named in one,
-# and the exit code is 1.
+# Serves a release as GitHub Pages would, on 127.0.0.1: / is the site, /download/ the release files.
+# serve-site.sh start <site-dir> <release-dir> <port> | switch <site-dir> <port> | stop <port>
+# The server is fully detached (setsid or nohup, stdin from /dev/null) or a container's step hangs.
 set -eu
 
 NAME=serve-site.sh
-# SAID is 1 once a sentence of this script's own has been printed; the trap below speaks for
-# a command that set -e stopped on, so that no failure ends the script without one.
 SAID=0
 on_exit() {
   if [ "$1" -ne 0 ] && [ "$SAID" -eq 0 ]; then
@@ -123,7 +79,6 @@ served = sys.argv[2]
 site = os.path.join(served, "root")
 download = os.path.join(served, "root-download")
 
-
 class Handler(http.server.SimpleHTTPRequestHandler):
     def send_head(self):
         # Every request is answered whole. The parent answers 304 to a client whose
@@ -140,7 +95,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return os.path.join(download, *parts[1:])
         return os.path.join(site, *parts)
 
-
 class Server(http.server.ThreadingHTTPServer):
     def server_bind(self):
         # HTTPServer's own bind asks the resolver for the name of the address it bound
@@ -150,7 +104,6 @@ class Server(http.server.ThreadingHTTPServer):
         host, port = self.server_address[:2]
         self.server_name = host
         self.server_port = port
-
 
 try:
     os.setsid()
@@ -165,7 +118,6 @@ server.serve_forever()
 PY
 }
 
-# Ends the process `start` started, and waits for it (it is this script's own child).
 end_started() {
   kill "$started" 2> /dev/null || return 0
   gone=$(($(date +%s) + 5))

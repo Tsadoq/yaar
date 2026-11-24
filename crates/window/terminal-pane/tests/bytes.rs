@@ -1,35 +1,6 @@
-//! Component test: the bytes a program in a terminal receives from the keys and the mouse.
-//!
-//! The pane runs on GPUI's test platform with the app prepared as the Window program
-//! prepares it, and a real pseudo-terminal sits behind the test's Keeper: every `Input`
-//! frame the pane sends is written to the master end, and the test reads the slave end,
-//! which it holds in raw mode as a program in a terminal does. What it reads is what any
-//! program reading its terminal would get; the line discipline in raw mode passes every
-//! byte on unchanged, so a difference is the pane's. Nothing runs on the slave: the test
-//! is the program, and no process is started.
-//!
-//! The expected bytes are data, in `tests/matrix/`, one row to a line:
-//!
-//! ```text
-//! state <TAB> key as GPUI writes it <TAB> expected bytes in hex <TAB> source [<TAB> macos|linux]
-//! ```
-//!
-//! A row with a system in its fifth column holds on that system only. The expected bytes
-//! are the ones Ghostty sent, recorded in phase 4, and a row that is not Ghostty's says so
-//! in its source, with the reason: a departure the plan lists, or a key Ghostty never saw.
-//! The keys the app keeps for itself (`departures.tsv`) are not rows of the matrix: they
-//! never reach a program. The mouse rows are written from xterm's rules, as nothing of the
-//! mouse was recorded.
-//!
-//! A key is pressed on the test platform as a user's key arrives: through the keystroke
-//! interceptors, the key bindings, the view's key listener and, for a key that types text,
-//! the input handler. Every key and every mouse action is followed by a sentinel, text
-//! whose bytes are known, and what is read up to it is what the key sent: a key that sends
-//! nothing is shown by the sentinel arriving first.
-//!
-//! The Option rows follow the layout of the test platform, which is no layout of macOS:
-//! the pane takes Option as characters on macOS, where the matrix holds the text each key
-//! types, and Alt as Meta on Linux, where it holds the Meta forms. Each system tests one.
+//! Behind a real pseudo-terminal: each `Input` frame goes to the master end, the test reads the
+//! slave end in raw mode. Rows: `tests/matrix/README`. Every action is followed by a sentinel; a
+//! key that sends nothing shows as the sentinel arriving first.
 
 mod common;
 
@@ -62,9 +33,6 @@ const KITTY3: &str = include_str!("matrix/kitty3.tsv");
 const MOUSE: &str = include_str!("matrix/mouse.tsv");
 const DEPARTURES: &str = include_str!("matrix/departures.tsv");
 
-// ---------------------------------------------------------------------------- the data
-
-/// One row of the matrix.
 struct Row {
     state: String,
     key: String,
@@ -81,7 +49,6 @@ fn unhex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-/// Every row of a file, of every system.
 fn all_rows(file: &str) -> Vec<Row> {
     file.lines()
         .map(|line| {
@@ -101,7 +68,6 @@ fn all_rows(file: &str) -> Vec<Row> {
         .collect()
 }
 
-/// The rows of one state that hold on the system the test runs on.
 fn rows(file: &str, state: &str) -> Vec<Row> {
     let found: Vec<Row> = all_rows(file)
         .into_iter()
@@ -112,10 +78,6 @@ fn rows(file: &str, state: &str) -> Vec<Row> {
     found
 }
 
-// ----------------------------------------------------------------------- the pty bridge
-
-/// A pseudo-terminal: the master end takes what the pane sends, the slave end is what the
-/// program reads.
 struct Pty {
     master: Arc<File>,
     slave: File,
@@ -140,7 +102,6 @@ fn checked(result: libc::c_int, what: &str) -> libc::c_int {
 }
 
 impl Pty {
-    /// Opens a pair and puts the slave in raw mode, as a program in a terminal does.
     fn open() -> Pty {
         // SAFETY: plain calls of the system on descriptors made here and owned from the
         // moment they exist, and on a buffer as long as the length says.
@@ -177,7 +138,6 @@ impl Pty {
         }
     }
 
-    /// A function that writes bytes to the master, to hand the test's Keeper as its tap.
     fn tap(&self) -> impl FnMut(&TerminalId, &[u8]) + Send + 'static {
         let master = self.master.clone();
         move |_, bytes| {
@@ -187,8 +147,6 @@ impl Pty {
         }
     }
 
-    /// Reads the slave until what was read ends with `ending`, and gives what came before
-    /// it. Fails at the deadline, saying what did come.
     fn read_until(&self, ending: &[u8]) -> Vec<u8> {
         let deadline = Instant::now() + DEADLINE;
         let mut bytes = Vec::new();
@@ -227,20 +185,16 @@ impl Pty {
 
 #[test]
 fn the_pty_in_raw_mode_passes_every_byte_unchanged() {
-    // The test reads what a program gets from the line discipline, so the bridge itself has
-    // to add and take away nothing: not a carriage return, a Ctrl-C, an end of file, a
-    // newline, a control character of any kind.
+    // The bridge must add and take away nothing: no carriage return, Ctrl-C, end of file or
+    // newline.
     let pty = Pty::open();
     let every: Vec<u8> = (0..=255).collect();
     (&*pty.master).write_all(&every).expect("write");
     assert_eq!(pty.read_until(&[255]), &every[..255]);
 }
 
-// ------------------------------------------------------------------------ the test rig
-
-/// A key of the matrix as the platform delivers it. GPUI's parser cannot write the key `-`
-/// together with its text (`alt--->–` splits at the wrong dash), so the matrix calls it
-/// `minus` and the platform's name for it is put back here.
+/// GPUI's parser cannot write the key `-` with its text (`alt--->–` splits at the wrong dash), so
+/// the matrix says `minus` and the platform's name is put back here.
 fn keystroke(key: &str, os: gpui_kit::OperatingSystem) -> Keystroke {
     let mut keystroke = Keystroke::parse_with_os(key, os)
         .unwrap_or_else(|error| panic!("the matrix writes the key {key:?}: {error}"));
@@ -250,22 +204,20 @@ fn keystroke(key: &str, os: gpui_kit::OperatingSystem) -> Keystroke {
     keystroke
 }
 
-/// A pane with one terminal, focused, on a pty.
 struct Rig {
     panes: Panes,
     cx: VisualTestContext,
     id: TerminalId,
     pty: Pty,
     sentinels: usize,
-    // Set when a key took the focus out of the terminal, which the sentinel after it could
-    // not have followed: the focus is put back and the walk reports it.
+    // Set when a key took the focus out of the terminal, which the sentinel could not follow: the
+    // focus is put back and the walk reports it.
     lost_the_focus: bool,
 }
 
 impl Rig {
-    /// A terminal whose program wrote `state` first, as a program sets what it asks of its
-    /// terminal. The wait is for a marker the program writes after it, since the output
-    /// travels on a thread of its own.
+    /// Waits for a marker the program writes after the state, since the output travels on its own
+    /// thread.
     fn new(cx: &mut TestAppContext, state: &[u8]) -> Rig {
         let pty = Pty::open();
         let (mut panes, mut cx) = open_panes_tapping(cx, pty.tap());
@@ -287,13 +239,12 @@ impl Rig {
             sentinels: 0,
             lost_the_focus: false,
         };
-        // Whatever the terminal said of itself on the way, and its first size, is behind
-        // this: the cells a mouse action aims at are known after it.
+        // The terminal's own answers and its first size are behind this, so after it the cells a
+        // mouse action aims at are known.
         rig.settle();
         rig
     }
 
-    /// Types the next sentinel and reads what the program received before it.
     fn settle(&mut self) -> Vec<u8> {
         self.sentinels += 1;
         let sentinel = format!("<s{}>", self.sentinels);
@@ -301,18 +252,14 @@ impl Rig {
         self.pty.read_until(sentinel.as_bytes())
     }
 
-    /// Whether the focus is where a key lands in the terminal.
     fn has_the_focus(&mut self) -> bool {
         self.panes.focused_terminal(&mut self.cx).as_ref() == Some(&self.id)
     }
 
-    /// Puts the focus back into the terminal, when a key took it away.
     fn refocus(&mut self) {
         self.panes.click_slot(0, &mut self.cx);
     }
 
-    /// Presses a key as the platform delivers it, with its text when it types one, and
-    /// gives what the program received.
     fn press(&mut self, key: &str) -> Vec<u8> {
         self.cx.update(|window, cx| {
             let keystroke = keystroke(key, cx.platform_info().os);
@@ -321,7 +268,6 @@ impl Rig {
         self.after_a_key()
     }
 
-    /// Presses a key and lets it go, and gives what the program received.
     fn press_and_release(&mut self, key: &str) -> Vec<u8> {
         self.cx.update(|window, cx| {
             let keystroke = keystroke(key, cx.platform_info().os);
@@ -331,8 +277,6 @@ impl Rig {
         self.after_a_key()
     }
 
-    /// Lets what a key started run out, brings the focus back if the key took it away, and
-    /// gives what the program received.
     fn after_a_key(&mut self) -> Vec<u8> {
         self.cx.run_until_parked();
         if !self.has_the_focus() {
@@ -342,15 +286,12 @@ impl Rig {
         self.settle()
     }
 
-    /// The middle of a cell of the terminal in the first slot.
     fn cell(&mut self, column: usize, line: usize) -> Point<Pixels> {
         self.panes
             .cell_centre(&self.id, 0, column, line, &mut self.cx)
     }
 }
 
-/// Shows the keys of a state that send what the matrix does not say, as one failure with
-/// every difference in it.
 fn assert_no_difference(state: &str, checked: usize, differences: Vec<String>) {
     assert!(
         differences.is_empty(),
@@ -360,8 +301,6 @@ fn assert_no_difference(state: &str, checked: usize, differences: Vec<String>) {
     );
 }
 
-/// Walks the rows of a state of the keyboard: the program set `state`, each key of the
-/// matrix is pressed, and what the program received is set against its row.
 fn walk_keys(cx: &mut TestAppContext, state: &[u8], file: &str, name: &str, release: bool) {
     let mut rig = Rig::new(cx, state);
     let wanted = rows(file, name);
@@ -387,8 +326,6 @@ fn walk_keys(cx: &mut TestAppContext, state: &[u8], file: &str, name: &str, rele
     }
     assert_no_difference(name, wanted.len(), differences);
 }
-
-// ------------------------------------------------------------------------- the keyboard
 
 #[gpui_kit::test]
 fn in_the_legacy_state_every_key_of_the_matrix_sends_the_expected_bytes(cx: &mut TestAppContext) {
@@ -422,9 +359,8 @@ fn after_a_program_pushed_kitty_flags_7_it_gets_the_press_of_every_key_in_flag_1
 fn after_a_program_pushed_kitty_flags_7_the_release_of_a_key_sends_what_the_matrix_says(
     cx: &mut TestAppContext,
 ) {
-    // A key goes down and up: the program gets its press, which the rows above show, and
-    // then its release. The matrix holds what the release alone sends, so the press, which
-    // the same key shows in the state of its own, is read from it.
+    // A key goes down and up. The matrix holds what the release alone sends, so the press is
+    // taken from the same key's row in the kitty3 state.
     let mut rig = Rig::new(cx, b"\x1b[>7u");
     let presses: HashMap<String, Vec<u8>> = rows(KITTY3, "kitty3")
         .into_iter()
@@ -455,9 +391,6 @@ fn after_a_program_pushed_kitty_flags_7_the_release_of_a_key_sends_what_the_matr
     assert_no_difference("kitty3-release", wanted.len(), differences);
 }
 
-// ----------------------------------------------------------------------------- the mouse
-
-/// What the program asked of the terminal for each state of the mouse in the matrix.
 fn mouse_state(name: &str) -> &'static [u8] {
     match name {
         "off" => b"",
@@ -473,8 +406,6 @@ fn mouse_state(name: &str) -> &'static [u8] {
     }
 }
 
-/// The modifiers of an action's name and the rest of it: `shift-press-left` is Shift and
-/// `press-left`.
 fn split_modifiers(name: &str) -> (Modifiers, &str) {
     for (prefix, modifiers) in [
         (
@@ -516,10 +447,6 @@ fn button(name: &str) -> MouseButton {
 }
 
 impl Rig {
-    /// Does one action of the matrix at the cell in column 3 and line 1 and gives what the
-    /// program received for the action alone. What an action needs before it (a press
-    /// before a release or a drag) and what it leaves behind (a button still down) is done
-    /// and read apart, so that each row is one action's bytes.
     fn act(&mut self, name: &str) -> Vec<u8> {
         let (modifiers, action) = split_modifiers(name);
         let none = Modifiers::none();
@@ -641,8 +568,6 @@ fn on_the_alternate_screen_with_alternate_scroll_and_application_cursor_keys_the
     walk_mouse(cx, "alt-scroll-appcursor");
 }
 
-// ------------------------------------------------------------------------- the data itself
-
 #[test]
 fn the_matrix_has_a_source_for_every_row_and_one_row_for_a_key_in_a_state_on_a_system() {
     let mut seen = HashSet::new();
@@ -736,8 +661,6 @@ fn a_key_that_is_left_out_of_the_matrix_as_a_departure_is_no_row_of_it() {
     }
 }
 
-/// The modifiers of a key as the matrix writes it, and its name: `alt-shift-a->Å` is Alt
-/// and Shift, and `a`.
 fn modifiers_and_name(key: &str) -> (Vec<&str>, &str) {
     // The text follows the last `->` that has any after it: `ctrl->` is Ctrl with `>`.
     let key = key
@@ -756,14 +679,13 @@ fn modifiers_and_name(key: &str) -> (Vec<&str>, &str) {
         modifiers.push(&prefix[..prefix.len() - 1]);
         rest = &rest[prefix.len()..];
     }
-    // The matrix says `minus` for the key `-` (see `keystroke`).
     (modifiers, if rest == "minus" { "-" } else { rest })
 }
 
 #[test]
 fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_departure_leaves_out() {
-    // A guard on the data's reach: a file cut short fails here and not in silence. A key
-    // that is left out is named in `departures.tsv`, with its reason.
+    // A guard on the data's reach: a file cut short fails here. A key left out is named in
+    // `departures.tsv`.
     let departures: Vec<(String, String)> = DEPARTURES
         .lines()
         .map(|line| line.split('\t').collect::<Vec<_>>())
@@ -804,7 +726,6 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
         (KITTY1, "kitty1"),
         (KITTY3, "kitty3"),
     ] {
-        // How many rows hold the key of each name, apart from the Cmd rows.
         let mut count: HashMap<String, usize> = HashMap::new();
         let mut cmd: HashSet<String> = HashSet::new();
         for row in rows(file, state) {
@@ -832,7 +753,6 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
                 "{state}: rows of {names:?} on {SYSTEM}"
             );
         };
-        // None, Shift, Ctrl, Alt, Ctrl-Shift, Alt-Shift.
         for letter in 'a'..='z' {
             check(&[&letter.to_string()], 6);
         }
@@ -842,7 +762,6 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
         for name in ["enter", "tab", "backspace", "escape", "space", "delete"] {
             check(&[name], 6);
         }
-        // None, Shift, Alt and Ctrl.
         for name in [
             "up", "down", "left", "right", "home", "end", "pageup", "pagedown",
         ] {
@@ -876,9 +795,7 @@ fn the_matrix_holds_each_key_of_its_groups_with_each_modifier_but_those_a_depart
 
 #[test]
 fn the_matrix_holds_every_mouse_action_with_each_modifier_in_every_state_of_the_mouse() {
-    // A guard on the data's reach, as the one above is for the keys: the alternate screen
-    // is a state of the mouse like the others, and a state with an action left out would
-    // pass in silence.
+    // A guard as above: a state with an action left out would pass in silence.
     let mut wanted = Vec::new();
     for modifiers in ["", "shift-", "alt-", "ctrl-"] {
         for action in ["press", "release", "drag"] {

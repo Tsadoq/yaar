@@ -1,14 +1,6 @@
-//! Component test: attaching a review, the states of its threads, and what only the
-//! reviewer does to threads, in the Review pane on GPUI's test platform, with no window on
-//! any screen. Keys, clicks and the wheel go in; the pane is read back through the model it
-//! shows. The test plays the Keeper on the other end of a socket pair as the Keeper of
-//! slice 6 plays it: what the Keeper works out (a thread's state, what is attached) is set
-//! as the data the Link carries, and a new answer to `GetReviews` comes after
-//! `Fact::ReviewsChanged`.
-//!
-//! A negative clause ("sends nothing", "not drawn") is read after a barrier: something the
-//! test causes after it, through the same path, whose arrival shows that everything before
-//! it arrived.
+//! Component tests of attaching a review and the states of threads. The test plays the
+//! Keeper on a socket pair. A negative assertion is read after a barrier: a later event on
+//! the same path, whose arrival shows that everything before it arrived.
 
 mod common;
 
@@ -54,8 +46,8 @@ fn pi() -> AgentCli {
     }
 }
 
-/// A thread of the reviewer on the new side of `path` at `line`, in the state `state`: a
-/// draft has a comment that was not sent, the others one of round 1.
+/// A thread of the reviewer on the new side of `path` at `line`: a draft holds one unsent
+/// comment, any other state one of round 1, plus the agent's answer when addressed or waiting.
 fn thread(digit: char, path: &str, line: u32, state: ThreadState) -> Thread {
     let draft = state == ThreadState::Draft;
     let mut comments = vec![Comment {
@@ -95,12 +87,10 @@ fn thread(digit: char, path: &str, line: u32, state: ThreadState) -> Thread {
     }
 }
 
-/// The session `a` of the tests, in this state, with the review of the tests.
 fn session_a(state: SessionState) -> Session {
     session('a', "Claude Code 1", state, Some(review_id()))
 }
 
-/// The review of session `a` with these threads, attached as given.
 fn review_of_a(threads: Vec<Thread>, attached: Option<Attachment>) -> WorkspaceReviews {
     let mut review = review_with(review_id(), Some(session_id('a')), None);
     review.threads = threads;
@@ -111,9 +101,6 @@ fn review_of_a(threads: Vec<Thread>, attached: Option<Attachment>) -> WorkspaceR
 const OLD: &str = "a\nb\nc\nd\ne\n";
 const NEW: &str = "a\nB\nC\nD\nE\n";
 
-/// A window with the pane in it, that shows the changes of workspace `1` against its base
-/// (`story.txt` from [`OLD`] to [`NEW`]), with the review of session `a`, which is in
-/// this state.
 fn open_on_story(
     reviews: WorkspaceReviews,
     state: SessionState,
@@ -141,8 +128,6 @@ fn open_on_story(
     (stage, cx)
 }
 
-/// Whether the element with this selector was drawn in a frame made now: what was drawn
-/// before the last change is not what is read.
 fn is_drawn(selector: &str, cx: &mut VisualTestContext) -> bool {
     cx.run_until_parked();
     cx.update(|window, _| window.refresh());
@@ -150,7 +135,6 @@ fn is_drawn(selector: &str, cx: &mut VisualTestContext) -> bool {
     drawn(selector, cx).is_some()
 }
 
-/// Clicks the middle of the element with this selector.
 fn click(selector: &str, cx: &mut VisualTestContext) {
     assert!(is_drawn(selector, cx), "{selector} is not drawn");
     let at = drawn(selector, cx).expect("it was drawn").center();
@@ -158,8 +142,6 @@ fn click(selector: &str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// The Keeper tells that the reviews changed, to these, and the test waits until the pane
-/// holds them.
 fn tell_reviews(stage: &mut Stage, reviews: WorkspaceReviews, cx: &mut VisualTestContext) {
     let held = reviews.reviews.clone();
     stage.keeper.set_reviews(reviews);
@@ -174,8 +156,6 @@ fn tell_reviews(stage: &mut Stage, reviews: WorkspaceReviews, cx: &mut VisualTes
     });
 }
 
-/// Puts the reviewer on the line the row before the row of `thread` shows, by a click that
-/// also gives the pane the focus: the line the thread sits on.
 fn go_to_the_line_of(stage: &Stage, thread: &ThreadId, cx: &mut VisualTestContext) {
     let row = stage
         .pane
@@ -194,13 +174,11 @@ fn notice(stage: &Stage, cx: &mut VisualTestContext) -> Option<String> {
     stage.pane.read_with(cx, |pane, _| pane.notice())
 }
 
-/// Answers the next request, which has to be this one, with a yes.
 fn expect_done(stage: &mut Stage, wanted: Request, cx: &mut VisualTestContext) {
     let asked = stage.keeper.expect(wanted, cx);
     stage.keeper.reply(asked, Ok(Reply::Done));
 }
 
-/// The terminals the pane wants opened, as the shared list of terminals tells them.
 fn wanted_terminals(stage: &Stage, cx: &mut VisualTestContext) -> Rc<RefCell<Vec<Wanted>>> {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let sink = heard.clone();
@@ -218,8 +196,8 @@ fn wanted_terminals(stage: &Stage, cx: &mut VisualTestContext) -> Rc<RefCell<Vec
 fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves_reopens_and_resolves_every_addressed_one(
     cx: &mut TestAppContext,
 ) {
-    // T1 draft, T2 sent, T3 addressed, T4 waiting for the reviewer (on a file the diff
-    // does not show), T5 resolved: four on lines of the diff and one elsewhere.
+    // T1 draft, T2 sent, T3 addressed, T4 waiting for the reviewer (on a file the diff does not
+    // show), T5 resolved.
     let threads = vec![
         thread('1', "story.txt", 2, ThreadState::Draft),
         thread('2', "story.txt", 3, ThreadState::Sent),
@@ -229,8 +207,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
     ];
     let (mut stage, mut cx) = open_on_story(review_of_a(threads, None), SessionState::Idle, cx);
 
-    // The pane lists all threads: each has its row, on a line or under the heading of the
-    // threads on no line.
     let rows = stage.pane.read_with(&cx, |pane, _| pane.rows().to_vec());
     for digit in ['1', '2', '3', '4', '5'] {
         assert!(
@@ -248,7 +224,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         thread: thread_id('4')
     }));
 
-    // Each with its state, as the model says it and as the row draws it.
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.thread_states()),
         vec![
@@ -269,14 +244,11 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         let selector = format!("review-thread-state-{}:{mark}", thread_id(digit));
         assert!(is_drawn(&selector, &mut cx), "{selector} is not drawn");
     }
-    // A row carries its own state and no other.
     assert!(!is_drawn(
         &format!("review-thread-state-{}:sent", thread_id('3')),
         &mut cx
     ));
 
-    // The Keeper tells that the agent replied to T2 with the addressed mark: the mark of
-    // its row changes.
     let mut answered = thread('2', "story.txt", 3, ThreadState::Addressed);
     answered.comments.truncate(1);
     let threads = vec![
@@ -296,7 +268,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         &mut cx
     ));
 
-    // The reviewer on T2's line: Resolve Thread asks the Keeper to resolve it.
     go_to_the_line_of(&stage, &thread_id('2'), &mut cx);
     cx.simulate_keystrokes("x");
     expect_done(
@@ -307,7 +278,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         },
         &mut cx,
     );
-    // On T5's: Reopen Thread asks the Keeper to reopen it.
     go_to_the_line_of(&stage, &thread_id('5'), &mut cx);
     cx.simulate_keystrokes("u");
     expect_done(
@@ -318,7 +288,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         },
         &mut cx,
     );
-    // Wherever the reviewer is: Resolve Addressed.
     cx.simulate_keystrokes("shift-x");
     expect_done(
         &mut stage,
@@ -327,7 +296,6 @@ fn the_pane_lists_all_threads_each_with_its_state_and_only_the_reviewer_resolves
         },
         &mut cx,
     );
-    // The pane changed no state itself: each shows as the Keeper last said.
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.thread_states())[4],
         (thread_id('5'), ThreadState::Resolved)
@@ -344,8 +312,7 @@ fn resolving_reopening_and_attaching_a_thread_need_the_reviewer_on_a_thread_that
         thread('5', "story.txt", 5, ThreadState::Resolved),
     ];
     let (mut stage, mut cx) = open_on_story(review_of_a(threads, None), SessionState::Idle, cx);
-    // Rows of the diff with no thread on them: line 1 of story.txt, which is no change,
-    // is the first row of the diff after the heading of the file.
+    // Line 1 of story.txt is no change: the first diff row after the file heading.
     let rows = stage.pane.read_with(&cx, |pane, _| pane.rows().to_vec());
     let bare = rows
         .iter()
@@ -363,8 +330,6 @@ fn resolving_reopening_and_attaching_a_thread_need_the_reviewer_on_a_thread_that
         );
     }
 
-    // On a resolved thread, Resolve Thread and Attach Thread say so; on an unresolved one,
-    // Reopen Thread says so.
     go_to_the_line_of(&stage, &thread_id('5'), &mut cx);
     for key in ["x", "t"] {
         cx.simulate_keystrokes(key);
@@ -377,7 +342,6 @@ fn resolving_reopening_and_attaching_a_thread_need_the_reviewer_on_a_thread_that
     cx.simulate_keystrokes("u");
     assert!(notice(&stage, &mut cx).is_some_and(|words| words.contains("not resolved")));
 
-    // Attach Thread on a thread that holds a comment to send: the thread alone.
     cx.simulate_keystrokes("t");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -386,8 +350,8 @@ fn resolving_reopening_and_attaching_a_thread_need_the_reviewer_on_a_thread_that
         },
         &mut cx,
     );
-    // Barrier: none of the keys above sent anything, or this would not be the next
-    // request the Keeper heard.
+    // Barrier: the attach is the first request the Keeper heard, so the keys before `t` sent
+    // nothing.
     stage
         .keeper
         .reply(asked, Ok(Reply::AttachedReview { start: Vec::new() }));
@@ -398,7 +362,6 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     cx: &mut TestAppContext,
 ) {
     let threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
-    // A pane that opens on a review that was attached before: as after a restart.
     let (mut stage, mut cx) = open_on_story(
         review_of_a(threads.clone(), Some(Attachment::Review)),
         SessionState::NotRunning,
@@ -406,7 +369,6 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     );
     assert!(is_drawn("review-attached:review", &mut cx));
     assert!(!is_drawn("review-attached:thread", &mut cx));
-    // Nothing was attached by a key, so no offer is made.
     assert!(
         stage
             .pane
@@ -415,8 +377,6 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // Attaching it again gives the offer, as it does for a review attached in this
-    // session: the agent does not run, and the Keeper names the CLI to start.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
@@ -439,7 +399,6 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     });
     assert!(is_drawn("review-offer-start-claude", &mut cx));
 
-    // One thread alone.
     tell_reviews(
         &mut stage,
         review_of_a(threads.clone(), Some(Attachment::Thread(thread_id('1')))),
@@ -448,8 +407,6 @@ fn what_is_attached_of_the_review_shown_is_drawn_from_the_reviews_the_keeper_hol
     assert!(is_drawn("review-attached:thread", &mut cx));
     assert!(!is_drawn("review-attached:review", &mut cx));
 
-    // Detach Review asks the Keeper to take it away; the line goes when the Keeper says
-    // the reviews changed.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("shift-d");
     expect_done(
@@ -508,8 +465,6 @@ fn attaching_a_review_whose_agent_is_not_running_shows_the_offer_to_start_it_and
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.update(|window, cx| stage.focus.focus(window, cx));
 
-    // The review of session a, which does not run: `a` attaches it, and the answer names
-    // the CLI to start. The Keeper tells the review attached after it.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -538,8 +493,6 @@ fn attaching_a_review_whose_agent_is_not_running_shows_the_offer_to_start_it_and
     assert!(is_drawn("review-offer-start-claude", &mut cx));
     assert!(!is_drawn("review-offer-start-pi", &mut cx));
 
-    // A click on the control asks the terminal pane, through the shared list of
-    // terminals, to open the launcher of that CLI in the workspace for the review.
     click("review-offer-start-claude", &mut cx);
     let want = Wanted::AgentFor {
         workspace: id('1'),
@@ -547,7 +500,6 @@ fn attaching_a_review_whose_agent_is_not_running_shows_the_offer_to_start_it_and
         review: review_id(),
     };
     assert_eq!(*wanted.borrow(), std::slice::from_ref(&want));
-    // The offer is taken: it goes.
     assert!(
         stage
             .pane
@@ -556,7 +508,6 @@ fn attaching_a_review_whose_agent_is_not_running_shows_the_offer_to_start_it_and
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // Attached again, Start Agent takes the first CLI offered: the same wish.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -608,7 +559,6 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.update(|window, cx| stage.focus.focus(window, cx));
 
-    // The Keeper of slice 7 offers both CLIs for the review of no agent.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -634,7 +584,6 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     assert!(is_drawn("review-offer-start-claude", &mut cx));
     assert!(is_drawn("review-offer-start-pi", &mut cx));
 
-    // The second control starts the second CLI.
     let started = |agent: &str| Wanted::AgentFor {
         workspace: id('1'),
         agent: agent.to_owned(),
@@ -643,7 +592,6 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     click("review-offer-start-pi", &mut cx);
     assert_eq!(*wanted.borrow(), [started("pi")]);
 
-    // Offered again, Start Agent takes the first.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {
@@ -667,13 +615,10 @@ fn attaching_the_review_of_no_agent_shows_the_offer_of_each_cli_and_start_agent_
     assert_eq!(*wanted.borrow(), [started("pi"), started("claude")]);
 }
 
-/// The CLI the pane says Start Agent takes.
 fn chosen(stage: &Stage, cx: &mut VisualTestContext) -> Option<AgentCli> {
     stage.pane.read_with(cx, |pane, _| pane.offer_chosen())
 }
 
-/// Whether the mark of the chosen CLI is drawn over the control of the CLI `agent`, and
-/// over no other control.
 fn mark_is_over(agent: &str, others: &[&str], cx: &mut VisualTestContext) -> bool {
     let mark = format!("review-offer-chosen-{agent}");
     if !is_drawn(&mark, cx) {
@@ -687,8 +632,6 @@ fn mark_is_over(agent: &str, others: &[&str], cx: &mut VisualTestContext) -> boo
         && control.intersect(&mark) == mark
 }
 
-/// Attaches the review of no agent and answers the offer of these CLIs; the test waits
-/// until the pane holds the offer.
 fn attach_and_be_offered(
     stage: &mut Stage,
     review: &ReviewId,
@@ -740,7 +683,6 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control(
     });
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.update(|window, cx| stage.focus.focus(window, cx));
-    // What the answer to an attach is shown against: the Keeper holds the review attached.
     review.attached = Some(Attachment::Review);
     tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
     let started = |agent: &str| Wanted::AgentFor {
@@ -749,8 +691,7 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control(
         review: review.id.clone(),
     };
 
-    // Nothing is offered: nothing is chosen, and the key says so in the notice. The next
-    // request the test causes is the first the pane sent.
+    // The next request the test causes is the first the pane sent.
     assert_eq!(chosen(&stage, &mut cx), None);
     cx.simulate_keystrokes("ctrl-n");
     assert!(
@@ -758,12 +699,10 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control(
         "ctrl-n with no offer says to attach a review first"
     );
 
-    // The offer of two CLIs chooses the first and marks its control.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     assert!(mark_is_over("claude", &["pi"], &mut cx));
 
-    // Ctrl-N chooses the next, and the mark moves with it; after the last, the first.
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     assert!(mark_is_over("pi", &["claude"], &mut cx));
@@ -774,22 +713,19 @@ fn next_offered_agent_chooses_the_cli_start_agent_takes_and_marks_its_control(
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
 
-    // Start Agent starts the chosen CLI, not the first, and the offer is taken.
     cx.simulate_keystrokes("shift-n");
     assert_eq!(*wanted.borrow(), [started("pi")]);
     assert_eq!(chosen(&stage, &mut cx), None);
     assert!(!is_drawn("review-offer-chosen-pi", &mut cx));
     assert!(!is_drawn("review-offer-chosen-claude", &mut cx));
 
-    // The choice is the Window's, not the offer's: an offer made after another keeps the CLI
-    // chosen last, whatever order the answer names the CLIs in.
+    // The choice is the Window's, not the offer's: a later offer keeps the CLI chosen last.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     attach_and_be_offered(&mut stage, &review.id, vec![pi(), claude()], &mut cx);
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     assert!(mark_is_over("pi", &["claude"], &mut cx));
 
-    // A click on a control starts that CLI whatever is chosen.
     click("review-offer-start-claude", &mut cx);
     assert_eq!(*wanted.borrow(), [started("pi"), started("claude")]);
     assert_eq!(chosen(&stage, &mut cx), None);
@@ -825,7 +761,6 @@ fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_
     review.attached = Some(Attachment::Review);
     tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
 
-    // A step is one CLI along the offer, not a toggle between two.
     attach_and_be_offered(
         &mut stage,
         &review.id,
@@ -843,7 +778,6 @@ fn the_chosen_cli_of_an_offer_of_three_wraps_after_the_last_and_an_offer_of_one_
     );
     assert!(mark_is_over("pi", &["claude", "third"], &mut cx));
 
-    // One CLI offered: it stays chosen, with its mark, and nothing is said.
     attach_and_be_offered(&mut stage, &review.id, vec![claude()], &mut cx);
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
@@ -887,8 +821,6 @@ fn next_offered_agent_moves_the_choice_over_the_clis_the_offer_does_not_hold(
     review.attached = Some(Attachment::Review);
     tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
 
-    // The offer holds the first and the last of the list: a step goes over the CLI between
-    // them, so the Window's choice and the mark land on the one offered, never on `pi`.
     attach_and_be_offered(
         &mut stage,
         &review.id,
@@ -905,8 +837,8 @@ fn next_offered_agent_moves_the_choice_over_the_clis_the_offer_does_not_hold(
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     assert!(mark_is_over("claude", &["third"], &mut cx));
 
-    // The Window's choice is a CLI the offer lacks (another pane moved it to `pi`): the
-    // offer shows its first CLI, and a step goes to the next CLI of the list the offer holds.
+    // The Window's choice is a CLI the offer lacks: the offer shows its first CLI, and a step goes
+    // to the next one.
     stage
         .models
         .agents
@@ -918,9 +850,8 @@ fn next_offered_agent_moves_the_choice_over_the_clis_the_offer_does_not_hold(
     assert_eq!(chosen(&stage, &mut cx), Some(third.clone()));
     assert_eq!(notice(&stage, &mut cx), None);
 
-    // The Window's choice is `third`, which a new offer of the first two CLIs lacks: the
-    // offer shows `claude`, and `claude` is also the CLI after `third` in the list. A step
-    // must go past it to `pi`, or the key would seem to do nothing.
+    // The Window's choice `third` is missing from the new offer, which shows `claude`, the CLI
+    // after `third`: a step must go past it to `pi`, or the key would seem to do nothing.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
     assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(third));
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
@@ -931,7 +862,6 @@ fn next_offered_agent_moves_the_choice_over_the_clis_the_offer_does_not_hold(
     assert_eq!(notice(&stage, &mut cx), None);
 }
 
-/// The CLI the Window has chosen, as the shared list of agents holds it.
 fn chosen_of_the_window(stage: &Stage, cx: &mut VisualTestContext) -> Option<AgentCli> {
     stage
         .models
@@ -971,19 +901,14 @@ fn the_cli_of_the_offer_is_the_one_the_window_chose_and_next_offered_agent_moves
     review.attached = Some(Attachment::Review);
     tell_reviews(&mut stage, reviews_of(vec![review.clone()]), &mut cx);
 
-    // The first CLI of the list until one moves it.
     attach_and_be_offered(&mut stage, &review.id, vec![claude(), pi()], &mut cx);
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
 
-    // The key moves the Window's choice, which the shared list holds, not a choice of the
-    // pane's own.
     cx.simulate_keystrokes("ctrl-n");
     assert_eq!(chosen_of_the_window(&stage, &mut cx), Some(pi()));
     assert_eq!(chosen(&stage, &mut cx), Some(pi()));
     assert!(mark_is_over("pi", &["claude"], &mut cx));
 
-    // Another pane moves it (the terminal pane's key does the same): the offer follows, and
-    // its mark with it.
     stage
         .models
         .agents
@@ -991,8 +916,6 @@ fn the_cli_of_the_offer_is_the_one_the_window_chose_and_next_offered_agent_moves
     assert_eq!(chosen(&stage, &mut cx), Some(claude()));
     assert!(mark_is_over("claude", &["pi"], &mut cx));
 
-    // A choice that the answer did not offer gives way to the first CLI offered, without
-    // taking the choice from the Window; a step then goes to the next CLI offered.
     stage
         .models
         .agents
@@ -1026,8 +949,7 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
     stage
         .keeper
         .reply(asked, Ok(Reply::AttachedReview { start: Vec::new() }));
-    // The barrier: the attach shows in the reviews the Keeper tells after the answer, so
-    // the answer was taken before the pane holds them.
+    // Barrier: the attach shows in the reviews the Keeper tells after the answer.
     tell_reviews(
         &mut stage,
         review_of_a(threads.clone(), Some(Attachment::Review)),
@@ -1042,8 +964,7 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // With no offer, Start Agent says so and asks for no terminal: the pane's own request
-    // that follows is the barrier.
+    // With no offer, Start Agent asks for no terminal: the pane's next request is the barrier.
     let wanted = wanted_terminals(&stage, &mut cx);
     cx.simulate_keystrokes("shift-n");
     assert!(notice(&stage, &mut cx).is_some_and(|words| words.contains("offer")));
@@ -1057,7 +978,6 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
     );
     assert!(wanted.borrow().is_empty());
 
-    // The agent stops. An offer, then what is attached goes: the offer goes with it.
     stage
         .keeper
         .tell_agents(agents_of(vec![session_a(SessionState::NotRunning)]));
@@ -1096,8 +1016,6 @@ fn attaching_the_review_of_an_agent_that_runs_offers_nothing_and_an_offer_goes_w
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // Attached again from elsewhere, with nothing asked here: the offer that went does not
-    // come back.
     let mut again = review_of_a(threads, Some(Attachment::Review));
     again.reviews[0]
         .threads
@@ -1118,8 +1036,7 @@ fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_an
     cx: &mut TestAppContext,
 ) {
     let threads = vec![thread('1', "story.txt", 2, ThreadState::Draft)];
-    // Another thread, so that each reviews told below differs from the one before and the
-    // test can wait for it.
+    // Differs from the previous reviews so that the test can wait for it.
     let more = vec![
         threads[0].clone(),
         thread('2', "story.txt", 3, ThreadState::Draft),
@@ -1131,7 +1048,6 @@ fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_an
     );
     cx.update(|window, cx| stage.focus.focus(window, cx));
 
-    // The agent does not run: the offer is made.
     let attach = |answer: Vec<AgentCli>, stage: &mut Stage, cx: &mut VisualTestContext| {
         cx.simulate_keystrokes("a");
         let asked = stage.keeper.expect(
@@ -1158,7 +1074,6 @@ fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_an
     });
     assert!(is_drawn("review-offer-start", &mut cx));
 
-    // The agent is started some other way: its CLI is not offered to start any more.
     stage
         .keeper
         .tell_agents(agents_of(vec![session_a(SessionState::Idle)]));
@@ -1177,8 +1092,6 @@ fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_an
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // Attached again, the answer names no CLI: it replaces the offer that was made, which
-    // does not come back when the agent stops.
     attach(Vec::new(), &mut stage, &mut cx);
     tell_reviews(
         &mut stage,
@@ -1204,8 +1117,6 @@ fn an_offer_made_while_the_agent_did_not_run_is_not_shown_once_it_runs_and_an_an
     assert!(!is_drawn("review-offer-start", &mut cx));
 }
 
-/// Puts workspace `digit` on screen, with the change of `story.txt` the Keeper holds for
-/// it, and waits for its files.
 fn go_to_workspace(digit: char, stage: &mut Stage, cx: &mut VisualTestContext) {
     stage
         .models
@@ -1219,8 +1130,6 @@ fn go_to_workspace(digit: char, stage: &mut Stage, cx: &mut VisualTestContext) {
     wait_for_files(&stage.pane, cx);
 }
 
-/// The reviews of the next-review tests: that of no agent, and those of sessions `a` and
-/// `b`.
 fn three_reviews() -> (ReviewId, ReviewId, WorkspaceReviews) {
     let b = ReviewId::new("2".repeat(32));
     let none = no_agent_review();
@@ -1261,22 +1170,18 @@ fn next_review_and_the_session_bar_reach_the_review_of_no_agent_and_come_back_fr
             pane.sessions().len() == 2 && pane.review().is_some()
         })
     });
-    // The review of no agent is shown first; the bar names it after the sessions.
     assert_eq!(shown(&stage, &mut cx), Some(none.clone()));
     assert!(is_drawn("review-session-name-0:Claude Code 1", &mut cx));
     assert!(is_drawn("review-session-name-1:Claude Code 2", &mut cx));
     assert!(is_drawn("review-session-name-2:No agent", &mut cx));
     assert!(!is_drawn("review-session-3", &mut cx));
 
-    // Next Review goes through the sessions and on to the review of no agent, and from it
-    // to the first session again.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     for wanted in [review_id(), b.clone(), none.clone(), review_id(), b.clone()] {
         cx.simulate_keystrokes("shift-a");
         assert_eq!(shown(&stage, &mut cx), Some(wanted));
     }
 
-    // A click on the name of the review of no agent shows it.
     click("review-session-2", &mut cx);
     assert_eq!(shown(&stage, &mut cx), Some(none));
     click("review-session-0", &mut cx);
@@ -1288,7 +1193,6 @@ fn an_offer_is_made_for_one_review_and_goes_when_another_review_or_another_works
     cx: &mut TestAppContext,
 ) {
     let (none, b, mut reviews) = three_reviews();
-    // Both the review of no agent and that of session `a`, the one after it, are attached.
     for review in &mut reviews.reviews {
         if review.id == none || review.id == review_id() {
             review.attached = Some(Attachment::Review);
@@ -1314,7 +1218,6 @@ fn an_offer_is_made_for_one_review_and_goes_when_another_review_or_another_works
         })
     });
 
-    // The review of no agent is attached, and the offer is made for it.
     cx.update(|window, cx| stage.focus.focus(window, cx));
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
@@ -1336,8 +1239,6 @@ fn an_offer_is_made_for_one_review_and_goes_when_another_review_or_another_works
             .read_with(cx, |pane, _| pane.offer_to_start() == [claude()])
     });
 
-    // The next review, which is attached too: the offer is not made for it, and it does not
-    // come back with the review it was made for.
     cx.simulate_keystrokes("shift-a");
     assert!(is_drawn("review-attached:review", &mut cx));
     assert!(
@@ -1356,8 +1257,6 @@ fn an_offer_is_made_for_one_review_and_goes_when_another_review_or_another_works
     );
     assert!(!is_drawn("review-offer-start", &mut cx));
 
-    // Offered again, and the workspace on screen changes: the offer goes, and is not there
-    // when the workspace comes back.
     cx.simulate_keystrokes("a");
     let asked = stage.keeper.expect(
         Request::AttachReview {

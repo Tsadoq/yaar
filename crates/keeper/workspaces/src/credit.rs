@@ -1,5 +1,4 @@
-//! Who is credited with a changed path: the rule, with no file, no watcher and no clock of
-//! its own. Every moment is given by the caller.
+//! Who is credited with a changed path. No file, watcher or clock: the caller gives every moment.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -7,27 +6,19 @@ use std::time::{Duration, Instant};
 
 use yaar_recorder::Change;
 
-/// How long after a shell command ended a change seen still falls within it. The system
-/// tells of a write some milliseconds after it lands, about 12 ms on macOS and at once
-/// with inotify. It is short, since a change seen within it of a command that ended while
-/// another session's command runs counts for both, and makes a change no agent made: in
-/// the recording of two sessions in one folder, one session's command began 135 ms after
-/// the other's ended.
+/// / The system reports a write some ms after it lands (about 12 ms on macOS). Kept short: a
+/// / change seen within it of a command's end while another session's command runs is no one's.
 pub const SETTLE: Duration = Duration::from_millis(50);
 
-/// One uncommitted change of a worktree, with who made it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreditedPath {
-    /// The path, relative to the folder of the worktree.
+    /// Relative to the worktree folder.
     pub path: PathBuf,
-    /// What happened to it, from the commit checked out to the files on disk.
     pub change: Change,
-    /// The sessions it is credited to, by their ids, in the order they were first credited;
-    /// empty for a change no agent made.
+    /// Session ids in the order first credited; empty for a change no agent made.
     pub by: Vec<String>,
 }
 
-/// One shell command of a session: when it began, and when it ended, if it has.
 #[derive(Debug, Clone, Copy)]
 struct Window {
     began: Instant,
@@ -35,7 +26,6 @@ struct Window {
 }
 
 impl Window {
-    /// Whether a change seen at `seen` falls within the command, judged at `now`.
     fn holds(&self, seen: Instant, now: Instant) -> bool {
         let last = match self.ended {
             Some(ended) => ended + SETTLE,
@@ -45,26 +35,17 @@ impl Window {
     }
 }
 
-/// How long a moment seen is kept to be judged again. The report that a command began
-/// reaches the Keeper after the command's first writes can, since the hook that carries it
-/// is a process of its own; a moment older than this has every command that could hold it
-/// reported, and is judged for good.
+/// The report that a command began can reach the Keeper after the command's first writes (the
+/// hook is its own process); a moment older than this is judged for good.
 const GRACE: Duration = Duration::from_secs(5);
 
-/// How many things are noted between two times the ledger lets go of what it has judged
-/// for good, so that a build that writes thousands of files costs each of them little.
 const NOTES_PER_COMPACTION: usize = 1024;
 
-/// What the ledger holds of one path, or of one folder that appeared.
 #[derive(Debug)]
 struct Noted {
-    // The sessions that wrote it with their own tool, in the order they did.
     named: Vec<String>,
-    // The sessions credited with the moments already judged for good, in order.
     judged: Vec<String>,
-    // The moments the watcher saw it change, not yet judged for good.
     pending: Vec<Instant>,
-    // When anything was last noted of it.
     last: Instant,
 }
 
@@ -83,28 +64,21 @@ impl Noted {
     }
 }
 
-/// The ledger of one worktree: the writes the agents' tools named, the shell commands of
-/// each session with when they began and ended, and when each path was seen changing.
 #[derive(Debug, Default)]
 pub struct Ledger {
-    // What is held of each file.
     files: BTreeMap<PathBuf, Noted>,
-    // What is held of each folder that appeared, as a new one or moved in: the system does
-    // not always tell of what is written in it at once, or at all if it was moved in whole.
+    // Folders seen appearing, made or moved in: the system does not always tell of what is
+    // written in a new folder, nor at all of what a folder moved in whole holds.
     folders: BTreeMap<PathBuf, Noted>,
-    // The shell commands of each session, the oldest first.
     commands: BTreeMap<String, Vec<Window>>,
-    // How many things were noted since the ledger last let go of what it had judged.
     noted: usize,
 }
 
 impl Ledger {
-    /// A ledger that has noted nothing.
     pub fn new() -> Ledger {
         Ledger::default()
     }
 
-    /// `session` wrote `path`, relative to the worktree, with its own tool, at `at`.
     pub fn wrote(&mut self, session: &str, path: &Path, at: Instant) {
         let noted = self
             .files
@@ -117,7 +91,6 @@ impl Ledger {
         self.tick(at);
     }
 
-    /// A shell command of `session` began at `at`.
     pub fn began(&mut self, session: &str, at: Instant) {
         self.commands
             .entry(session.to_owned())
@@ -128,10 +101,8 @@ impl Ledger {
             });
     }
 
-    /// The shell command of `session` ended at `at`.
     pub fn ended(&mut self, session: &str, at: Instant) {
-        // Of several commands that run at once, the one that began first is taken to end
-        // first: the report of an end does not say which command it is. A report of an
+        // The command that began first is taken to end first: the end report does not say which. An
         // end for a command never reported begun closes nothing.
         let open = self
             .commands
@@ -142,7 +113,6 @@ impl Ledger {
         }
     }
 
-    /// The watcher saw `path`, relative to the worktree, change at `at`.
     pub fn seen(&mut self, path: &Path, at: Instant) {
         let noted = self
             .files
@@ -153,10 +123,8 @@ impl Ledger {
         self.tick(at);
     }
 
-    /// The watcher saw the folder `path`, relative to the worktree, appear at `at`, made
-    /// there or moved in. A file below it that the watcher never saw change is credited as
-    /// the folder is: the system may not have been watching the folder yet when the file
-    /// was written, or the file came with the folder.
+    /// / The folder `path` appeared at `at`. A file below it never seen changing is credited as the
+    /// / folder is: the system may not have been watching the folder yet when the file was written.
     pub fn appeared(&mut self, path: &Path, at: Instant) {
         let noted = self
             .folders
@@ -167,13 +135,9 @@ impl Ledger {
         self.tick(at);
     }
 
-    /// Who is credited with the change of `path`, judged at `now`: the sessions whose own
-    /// tool named it; else, for each time the watcher saw it change, the one session whose
-    /// shell command ran then, the command counted from its beginning to [`SETTLE`] after
-    /// its end, and none when no command or more than one ran then. A command that has
-    /// not ended runs until `now`. A path the watcher never saw change is judged by the
-    /// nearest folder it lies in that the watcher saw appear, the same way. Empty: no
-    /// agent made it.
+    /// Sessions whose own tool named `path`; else, per observed change, the one session whose
+    /// command ran then (beginning to `SETTLE` after its end; unended until `now`), none for
+    /// zero or several. A path never seen changing takes the nearest folder seen appearing.
     pub fn credit(&self, path: &Path, now: Instant) -> Vec<String> {
         if let Some(noted) = self.files.get(path) {
             return if noted.named.is_empty() {
@@ -182,9 +146,8 @@ impl Ledger {
                 noted.named.clone()
             };
         }
-        // The nearest folder that appeared speaks for the file: one that appeared under a
-        // folder a command made, with no command running, is no command's, and what lies
-        // in it is not the command's either.
+        // The nearest folder that appeared speaks for the file: one that appeared under a folder a
+        // command made, with no command running, is no command's, nor is what lies in it.
         path.ancestors()
             .skip(1)
             .find_map(|folder| self.folders.get(folder))
@@ -192,7 +155,6 @@ impl Ledger {
             .unwrap_or_default()
     }
 
-    /// The sessions the moments of `noted` credit, those judged for good first.
     fn judge(&self, noted: &Noted, now: Instant) -> Vec<String> {
         let mut credited = noted.judged.clone();
         for &seen in &noted.pending {
@@ -203,8 +165,6 @@ impl Ledger {
         credited
     }
 
-    /// The one session whose command runs at `seen`, judged at `now`; none when no
-    /// command or more than one session's runs then.
     fn sole_session(&self, seen: Instant, now: Instant) -> Option<&str> {
         let mut running = self
             .commands
@@ -214,22 +174,17 @@ impl Ledger {
         running.next().is_none().then_some(session.as_str())
     }
 
-    /// Forgets every folder that appeared. The watcher is gone, and a file written below
-    /// one while nothing watched was not seen written: it is no folder's.
     pub fn forget_folders(&mut self) {
         self.folders.clear();
     }
 
-    /// Forgets what was noted of `path`: it is committed, or no longer changed.
     pub fn forget(&mut self, path: &Path) {
         self.files.remove(path);
         self.folders.remove(path);
     }
 
-    /// Forgets what was noted of what is no longer changed: every path not in `changed`,
-    /// and every folder that holds none of them, unless it was noted at or after `asked`.
-    /// A change is listed from what git says at the moment it was asked, and a write made
-    /// since is not in that list yet; forgetting it would make it a change no agent made.
+    /// Forgets paths not in `changed` and folders holding none of them, unless noted at
+    /// or after `asked`: a write made since is not in the list yet.
     pub fn forget_unchanged(&mut self, changed: &BTreeSet<&Path>, asked: Instant) {
         let holders: BTreeSet<&Path> = changed
             .iter()
@@ -241,11 +196,6 @@ impl Ledger {
             .retain(|path, noted| holders.contains(path.as_path()) || noted.last >= asked);
     }
 
-    /// Lets go of what is judged for good as of `now`. A moment seen more than a grace
-    /// time before is credited to the session whose command held it, and kept as that;
-    /// a path with nothing credited and nothing to judge is the same as a path never
-    /// seen, and goes; so does a command that ended too long ago to hold any moment still
-    /// to be judged. What [`Ledger::credit`] says does not change.
     pub fn compact(&mut self, now: Instant) {
         self.noted = 0;
         let Some(cutoff) = now.checked_sub(GRACE) else {
@@ -269,8 +219,8 @@ impl Ledger {
         let empty = |noted: &Noted| {
             noted.named.is_empty() && noted.judged.is_empty() && noted.pending.is_empty()
         };
-        // A folder with nothing credited stays under one that credits: without its own
-        // entry, what lies in it would be judged by the folder above.
+        // A folder with nothing credited stays under one that credits: without its own entry,
+        // what lies in it would be judged by the folder above.
         let crediting: BTreeSet<PathBuf> = folders
             .iter()
             .filter(|(_, noted)| !empty(noted))
@@ -279,8 +229,8 @@ impl Ledger {
         folders.retain(|path, noted| {
             !empty(noted) || path.ancestors().skip(1).any(|up| crediting.contains(up))
         });
-        // A file under a folder that is kept stays, whatever it holds: without its own
-        // entry it would be judged by the folder.
+        // An empty file entry under a kept folder stays: without it the file would be judged by the
+        // folder.
         files.retain(|path, noted| {
             !empty(noted) || path.ancestors().skip(1).any(|up| folders.contains_key(up))
         });
@@ -296,7 +246,6 @@ impl Ledger {
         self.commands.retain(|_, windows| !windows.is_empty());
     }
 
-    /// Counts a thing noted at `at`, and lets go of what is judged once enough were.
     fn tick(&mut self, at: Instant) {
         self.noted += 1;
         if self.noted >= NOTES_PER_COMPACTION {
@@ -305,7 +254,6 @@ impl Ledger {
     }
 }
 
-/// Appends to `credited` each session of `more` it does not hold yet.
 fn join(credited: &mut Vec<String>, more: impl IntoIterator<Item = String>) {
     for session in more {
         if !credited.contains(&session) {
@@ -322,7 +270,6 @@ mod tests {
         Duration::from_millis(n)
     }
 
-    /// A moment of the test's own clock: `n` milliseconds after `start`.
     fn at(start: Instant, n: u64) -> Instant {
         start + ms(n)
     }
@@ -406,8 +353,8 @@ mod tests {
 
     #[test]
     fn a_change_seen_just_after_one_command_ended_and_before_the_next_began_is_the_first_ones() {
-        // The recording's gap: one session's command ends and the other's begins 135 ms
-        // later. The write the system tells of late still belongs to the first.
+        // The recording's gap: one command ends and the other begins 135 ms later; the late-told
+        // write still belongs to the first.
         let start = Instant::now();
         let mut ledger = Ledger::new();
         ledger.began("a", at(start, 0));
@@ -429,7 +376,6 @@ mod tests {
         ledger.began("a", at(start, 0));
         ledger.seen(Path::new("x.txt"), at(start, 1000));
         assert_eq!(by(&ledger, "x.txt", at(start, 1000)), ["a"]);
-        // Judged before the change was seen, the command has not reached it yet.
         assert!(by(&ledger, "x.txt", at(start, 999)).is_empty());
     }
 
@@ -464,7 +410,6 @@ mod tests {
         ledger.began("a", at(start, 10));
         ledger.began("a", at(start, 20));
         ledger.ended("a", at(start, 30));
-        // The first command ended at 30 ms; the second runs on.
         ledger.seen(Path::new("late.txt"), at(start, 5000));
         assert_eq!(by(&ledger, "late.txt", at(start, 6000)), ["a"]);
         ledger.ended("a", at(start, 40));
@@ -485,7 +430,6 @@ mod tests {
         assert!(by(&ledger, "y.txt", at(start, 20)).is_empty());
     }
 
-    /// The paths the ledger holds something of.
     fn paths_of(ledger: &Ledger) -> Vec<String> {
         ledger
             .files
@@ -500,8 +444,8 @@ mod tests {
 
     #[test]
     fn what_was_noted_after_the_changes_were_asked_for_is_not_forgotten_with_what_is_not_listed() {
-        // `git status` runs for a while, and a write lands and is noted before the list
-        // reaches the ledger: it is not in the list, and is still no stale credit.
+        // `git status` runs a while and a write lands before the list reaches the ledger: it is not
+        // in the list, and is still no stale credit.
         let start = Instant::now();
         let mut ledger = Ledger::new();
         ledger.began("a", at(start, 0));
@@ -563,7 +507,6 @@ mod tests {
         ledger.began("a", at(start, 0));
         ledger.appeared(Path::new("out"), at(start, 10));
         ledger.ended("a", at(start, 30));
-        // Edited by hand long after the command ended.
         ledger.seen(Path::new("out/by-hand.txt"), at(start, 4000));
         assert!(by(&ledger, "out/by-hand.txt", at(start, 5000)).is_empty());
     }
@@ -580,8 +523,6 @@ mod tests {
 
     #[test]
     fn a_file_the_watcher_never_saw_is_judged_by_the_nearest_folder_that_appeared_only() {
-        // A command made `docs`; later a folder was moved into it by hand. What the
-        // watcher never saw of the moved folder is not the command's.
         let start = Instant::now();
         let mut ledger = Ledger::new();
         ledger.began("a", at(start, 0));
@@ -592,8 +533,6 @@ mod tests {
         assert!(by(&ledger, "docs/assets/f.txt", now).is_empty());
         assert!(by(&ledger, "docs/assets/deep/f.txt", now).is_empty());
         assert_eq!(by(&ledger, "docs/other.txt", now), ["a"]);
-        // Letting go of what is judged keeps the nearest folder in the way, though it
-        // credits nobody.
         ledger.compact(at(start, 20_000));
         let now = at(start, 21_000);
         assert!(by(&ledger, "docs/assets/f.txt", now).is_empty());
@@ -612,12 +551,10 @@ mod tests {
         ledger.forget_folders();
         let now = at(start, 40);
         assert!(by(&ledger, "out/f.txt", now).is_empty());
-        // What the watcher saw of a file, and what a tool named, is kept.
         assert_eq!(by(&ledger, "out/seen.txt", now), ["a"]);
         assert_eq!(by(&ledger, "out/named.txt", now), ["a"]);
     }
 
-    /// Everything `credit` says of the paths of `ledger`, to compare before and after.
     fn credits_of(ledger: &Ledger, paths: &[&str], now: Instant) -> Vec<Vec<String>> {
         paths.iter().map(|path| by(ledger, path, now)).collect()
     }
@@ -655,8 +592,6 @@ mod tests {
         assert_eq!(before[3], ["b"]);
         ledger.compact(now);
         assert_eq!(credits_of(&ledger, &paths, now), before);
-        // And a moment seen since is judged as it would have been: the commands that
-        // ended long ago hold nothing new.
         ledger.seen(Path::new("a.txt"), at(start, 30_500));
         assert_eq!(by(&ledger, "a.txt", at(start, 31_000)), ["a"]);
         ledger.seen(Path::new("later.txt"), at(start, 30_600));
@@ -674,7 +609,6 @@ mod tests {
         ledger.seen(Path::new("fresh.txt"), at(start, 9000));
         ledger.wrote("a", Path::new("named.txt"), at(start, 30));
         ledger.compact(at(start, 10_000));
-        // `fresh.txt` is younger than the grace time and is still to be judged.
         assert_eq!(
             paths_of(&ledger),
             ["credited.txt", "fresh.txt", "named.txt"]
@@ -683,7 +617,6 @@ mod tests {
 
     #[test]
     fn a_ledger_that_is_never_asked_does_not_keep_every_path_it_saw() {
-        // A build writes thousands of files nobody asks about.
         let start = Instant::now();
         let mut ledger = Ledger::new();
         for n in 0..NOTES_PER_COMPACTION - 1 {
@@ -709,8 +642,6 @@ mod tests {
 
     #[test]
     fn a_moment_younger_than_the_grace_time_is_judged_by_a_command_reported_since() {
-        // The report of a command's beginning can reach the ledger after the write it
-        // made: the moment is still waiting to be judged.
         let start = Instant::now();
         let mut ledger = Ledger::new();
         ledger.seen(Path::new("x.txt"), at(start, 1000));

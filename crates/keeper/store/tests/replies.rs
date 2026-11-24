@@ -1,6 +1,3 @@
-//! Component tests: the replies of the agent, kept through the Store's calls while the
-//! reviewer types, on a real database file.
-
 mod support;
 
 use std::path::PathBuf;
@@ -14,7 +11,6 @@ use yaar_store::{
     StoreError, Thread, ThreadId, WorkspaceId,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -31,7 +27,6 @@ fn rid(n: u128) -> ReviewId {
     ReviewId::new(id(n))
 }
 
-/// A thread `n` with one draft of the reviewer, `first_comment`.
 fn thread(n: u128, first_comment: u128, text: &str) -> Thread {
     Thread {
         id: tid(n),
@@ -64,7 +59,6 @@ fn round(number: u32) -> Round {
     }
 }
 
-/// A reply of the agent, comment `n`, in round `round`.
 fn reply(n: u128, text: &str, round: u32) -> Comment {
     Comment {
         id: cid(n),
@@ -74,8 +68,6 @@ fn reply(n: u128, text: &str, round: u32) -> Comment {
     }
 }
 
-/// A review `1` of workspace `1` with a thread `10` whose comment was sent in round 1, and
-/// a thread `11` holding a draft.
 fn sent_and_draft(store: &Store) {
     store
         .put_review(&ReviewRecord {
@@ -108,7 +100,6 @@ fn review_of(store: &Store) -> ReviewRecord {
 
 const REPLIES: u128 = 400;
 
-/// How long a test waits for a fact that only becomes true.
 const DEADLINE: Duration = Duration::from_secs(10);
 
 #[test]
@@ -116,8 +107,8 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
     let scratch = Scratch::new();
     let replies: Vec<Comment> = (0..REPLIES)
         .map(|k| {
-            // Quotes, a line break and a multi-byte letter, so that a reply is not
-            // mistaken for another by its length alone.
+            // Quotes, a line break and a multi-byte letter, so that a reply is not mistaken
+            // for another by its length alone.
             reply(1000 + k, &format!("reply {k}: \"é\"\nsecond line"), 1)
         })
         .collect();
@@ -128,7 +119,6 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
 
         let (typing, typed_once) = mpsc::channel::<()>();
         let (replying, replied) = mpsc::channel::<()>();
-        // How many saves have returned, for the replier to see that the typing went on.
         let saves = Arc::new(AtomicU32::new(0));
         let typer = {
             let store = store.clone();
@@ -136,15 +126,12 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
             std::thread::spawn(move || {
                 let mut text = String::new();
                 for i in 0_u32.. {
-                    // One more letter each time, as a draft that is being typed.
                     text.push('x');
                     store.save_draft(&cid(110), &text).expect("save the draft");
                     saves.fetch_add(1, Ordering::SeqCst);
                     if i == 0 {
                         typing.send(()).expect("say the first save returned");
                     }
-                    // The replies are done once this arrives, or once the replier is gone
-                    // without saying so; the loop never waits.
                     if !matches!(replied.try_recv(), Err(mpsc::TryRecvError::Empty)) {
                         break;
                     }
@@ -156,28 +143,22 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
             let store = store.clone();
             let replies = replies.clone();
             std::thread::spawn(move || {
-                // Only once the typing is under way, so that the two overlap.
                 typed_once.recv().expect("the typer saved once");
                 let mut saved_before = 0;
                 for (k, comment) in replies.iter().enumerate() {
                     if k == replies.len() - 1 {
-                        // Before the last reply, a save has returned since the first
-                        // reply went in: the two overlapped. Looked at again until true,
-                        // within a deadline.
                         let deadline = Instant::now() + DEADLINE;
                         while saves.load(Ordering::SeqCst) <= saved_before {
                             assert!(Instant::now() < deadline, "the typer saved no more");
                             std::thread::yield_now();
                         }
                     }
-                    // Even replies mark the thread addressed, so the last one (odd) clears
-                    // the mark: a call that only ever set it would leave it.
+                    // Even replies mark the thread addressed, so the last one (odd) clears the
+                    // mark.
                     store
                         .put_reply(&tid(10), comment, k % 2 == 0)
                         .expect("put the reply");
                     if k == 0 {
-                        // Read once the first reply is in, so that a save counted later
-                        // returned between the first reply and the last.
                         saved_before = saves.load(Ordering::SeqCst);
                     }
                 }
@@ -194,7 +175,6 @@ fn four_hundred_replies_arrive_through_the_calls_while_a_draft_is_typed_and_all_
     assert_eq!(sent.comments.len(), 1 + replies.len());
     assert_eq!(sent.comments[0].text, "sent");
     assert_eq!(sent.comments[1..], replies[..]);
-    // The last reply, number 399, has no mark: it cleared the one reply 398 set.
     assert!(!sent.addressed);
     assert_eq!(kept.threads[1].comments[0].text, last_draft);
     assert_eq!(kept.threads[1].comments[0].round, None);
@@ -212,7 +192,6 @@ fn a_reply_that_the_store_cannot_take_is_refused_and_nothing_changes() {
     let scratch = Scratch::new();
     let store = Store::open(&scratch.file()).expect("open");
     sent_and_draft(&store);
-    // Another review with a second round, whose number review 1 does not have.
     store
         .put_review(&ReviewRecord {
             id: rid(2),
@@ -259,7 +238,6 @@ fn a_reply_that_the_store_cannot_take_is_refused_and_nothing_changes() {
             assert_eq!(review_of(&store), before, "after {comment:?}");
         }
     }
-    // A thread of another review is not the one the reply's round is looked up in.
     refusal_of(store.put_reply(&tid(20), &reply(505, "round 3", 3), true));
     assert_eq!(
         store.review(&rid(2)).expect("read").expect("kept").threads[0]
@@ -281,13 +259,11 @@ fn a_reply_sets_the_addressed_mark_to_what_it_says_and_never_resolves() {
         .put_reply(&tid(10), &reply(500, "done", 1), true)
         .expect("reply with the mark");
     assert!(addressed());
-    // A reply without the mark takes the earlier mark away.
     store
         .put_reply(&tid(10), &reply(501, "not quite", 1), false)
         .expect("reply without the mark");
     assert!(!addressed());
 
-    // A resolved thread stays resolved, with the mark, and with the reply kept.
     store.resolve_threads(&[tid(10)]).expect("resolve");
     store
         .put_reply(&tid(10), &reply(502, "late", 1), true)
@@ -303,7 +279,6 @@ fn a_reply_keeps_the_round_it_names_and_not_the_newest_of_the_review() {
     {
         let store = Store::open(&scratch.file()).expect("open");
         sent_and_draft(&store);
-        // Round 2 exists before the replies, so the newest round is not round 1.
         store
             .put_round(&rid(1), &round(2), &[cid(110)])
             .expect("put round 2");
@@ -314,7 +289,6 @@ fn a_reply_keeps_the_round_it_names_and_not_the_newest_of_the_review() {
             .put_reply(&tid(10), &reply(501, "of round 2", 2), false)
             .expect("reply naming round 2");
     }
-    // Read from a Store opened anew: what is on the drive.
     let store = Store::open(&scratch.file()).expect("open again");
     let rounds: Vec<Option<u32>> = review_of(&store).threads[0]
         .comments
@@ -337,7 +311,6 @@ fn resolving_several_threads_keeps_all_or_none() {
             .collect::<Vec<_>>()
     };
 
-    // One that is not kept, after two that are: none of the three is resolved.
     let sentence = refusal_of(store.resolve_threads(&[tid(10), tid(11), tid(99)]));
     assert!(sentence.contains(&id(99)), "{sentence}");
     assert_eq!(resolved(), [false, false]);
@@ -348,6 +321,5 @@ fn resolving_several_threads_keeps_all_or_none() {
         .resolve_threads(&[tid(10), tid(11)])
         .expect("resolve both");
     assert_eq!(resolved(), [true, true]);
-    // Resolving what is resolved is not a fault.
     store.resolve_threads(&[tid(10)]).expect("resolve again");
 }

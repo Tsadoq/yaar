@@ -1,49 +1,16 @@
 #!/bin/bash
-# The checks on a Linux machine with a graphics driver: HW-01, HW-02, HW-03, SYS-02 and
-# SYS-03.
+# Checks on a Linux machine with a hardware graphics driver (a VM draws in software and gives no
+# speed figure).
 #
-#   packaging/checklists/linux-hardware.sh [--server http://127.0.0.1:<port>] [--dry-run]
+# packaging/checklists/linux-hardware.sh [--server http://127.0.0.1:<port>] [--dry-run]
 #
-# Run it on the Linux machine (x86-64, a hardware graphics driver). The virtual machine draws
-# in software and gives no speed figure.
-#
-# What it does:
-#   1. With --server, installs the release from that server: the install line that
-#      serve-release.sh prints, run here (start serve-release.sh on this machine, on a copy
-#      of the folder of release-final, and give its address). The address must be
-#      127.0.0.1 or localhost. apt asks for sudo's password on the terminal; the script asks
-#      nothing. SYS-02 is this install on the machine you have; its other releases are the
-#      `install-linux` jobs.
-#   2. Records the system: the release, the kernel, the session type, the desktop, the
-#      graphics line of `lspci` when there is one.
-#   3. Runs `memory.sh --linux` (HW-03's memory, 60 s idle): it asks you to open the app on
-#      one workspace and leave it idle, then waits for you to press Return. Its last line goes
-#      into the header of the results file.
-#   4. Prints HW-01, HW-02, HW-03 (typing, scrolling and the flood by hand: nothing here posts
-#      keys or events on Linux, and the measuring kit of phase 4 is for macOS), SYS-02 and
-#      SYS-03 one at a time and asks "yes / no / note / skip" (the answers can come from a
-#      file, see lib.sh). A "no" on HW-01 is a decision for the owner: the promise of X11 on
-#      the two releases whose software driver leaves the window empty returns to him.
-#
-# Typing against foot, HW-03: Ghostty has no official build for Ubuntu 24.04, so the
-# reference is the terminal foot; that is the owner's to accept. By hand: open YAAR's terminal
-# pane and foot side by side, type the same text in each, record the screen with a tool of
-# yours that stamps frames, and compare: at most 10 ms later than foot, at the median and the
-# 95th percentile.
-#
-# --dry-run: runs no install, no memory.sh and no program of the system or the app, and
-# writes linux-hardware-dry-run.md instead of linux-hardware.md.
-#
-# What it needs of the owner: a Linux machine with a hardware driver, sudo for the install, a
-# graphical session, the app installed (or --server), `foot` for the typing check, and the
-# system with no Vulkan driver for SYS-03 (a second boot or a container-less test machine:
-# `VK_ICD_FILENAMES=/nonexistent yaar-review` is a way to take the driver away).
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/linux-hardware.md (date, version, system,
-# the memory line, one row a check, the sign-off) and memory-linux-<HHMMSS>.txt.
-#
-# Exit codes: 0 the walk is written (whatever its answers); 1 it could not be walked or
-# written (a sentence says which); 2 usage error.
+# --server (127.0.0.1 or localhost only) installs the release from a serve-release.sh server.
+# Then records the system, runs `memory.sh --linux`, and walks the typing, scrolling, flood,
+# install and no-Vulkan checks by hand: nothing posts input on Linux.
+# Typing, against foot (Ghostty has no Ubuntu 24.04 build): the pane and foot side by side, the
+# same text typed in each, the screen recorded with a tool that stamps frames; at most 10 ms later
+# at the median and p95. `VK_ICD_FILENAMES=/nonexistent yaar-review` takes the Vulkan driver away.
+# Exit: 0 written, 1 not walked or written, 2 usage.
 set -euo pipefail
 
 CK_NAME=linux-hardware.sh

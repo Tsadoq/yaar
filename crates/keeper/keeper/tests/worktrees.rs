@@ -1,14 +1,6 @@
-//! Component tests: a worktree made from a branch with an agent started in it in one
-//! request, and the folder a user names for a repository's worktrees, through the surface a
-//! Window uses, with the Keeper as the library on a thread of the test, real git and a real
-//! pseudo-terminal beneath.
-//!
-//! The agent is a stand-in of the test's own: a script named like the CLI, which a `.profile`
-//! of the test's home puts first on the search path of the user's login shell, that prints a
-//! marker with its working folder and then waits on its terminal. No real `claude` or `pi`
-//! runs and nothing of the user's home is read. The Keeper starts programs with the
-//! environment of its process, so each test sets that environment as its first statement,
-//! and these tests are run by `cargo nextest`, which gives each test a process of its own.
+//! Component tests of a worktree made with an agent started in it. The agent is a stand-in script
+//! named like the CLI, put first on the search path by the home's `.profile`. Each test sets the
+//! process environment first, so nextest runs it in a process of its own.
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -27,12 +19,10 @@ use yaar_link::{
     handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// How long a Keeper that ought to be waiting is given to show that it is not. Nothing a
-/// passing run does has to end within it: a Keeper that leaves earlier is a failure, one
-/// that is slower than this on a busy machine is missed, never wrongly blamed.
+/// A Keeper that ought to be waiting is given this long to show it is not; a slower one is missed,
+/// never wrongly blamed.
 const SETTLE: Duration = Duration::from_secs(3);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -40,33 +30,23 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// The two shells a test hands the Keeper as the user's.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shell {
-    /// `/bin/sh`: the login shell of the user, which reads the `.profile` of the home.
     Plain,
-    /// A file with an execute bit whose interpreter is no program: it passes for a shell
-    /// and cannot be started.
+    /// Has an execute bit but its interpreter is no program: cannot be started.
     Broken,
 }
 
-/// A folder of the test's own with a short path, removed when the test ends.
-///
-/// Under it: `home`, `tmp`, `data` (the Keeper's), `fake` (the stand-ins), `lair/repo` (the
-/// repository, alone in its folder: the folder of its worktrees is made beside it), and the
-/// Keeper's socket.
+/// A folder of the test's own, holding `home`, `tmp`, `data`, `fake` (the stand-ins),
+/// `lair/repo` (alone, as its worktrees' folder is made beside it) and the Keeper's socket.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the shell
-    /// of a terminal: no configuration of the user or of the system, a fixed author, a home
-    /// of the test's own, and the stand-ins first on the search path of `shell`. It has to
-    /// be the first statement of a test.
+    /// Sets the process environment for git and the shell. Must be the first statement of a test.
     fn new(shell: Shell) -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and git and the Keeper name a worktree by its resolved
-        // path.
+        // `/tmp` is a link on macOS, and git and the Keeper name a worktree by its resolved path.
         let root = Path::new("/tmp")
             .canonicalize()
             .expect("the temporary folder")
@@ -82,8 +62,8 @@ impl Scratch {
                  exec cat > /dev/null",
             );
         }
-        // A login shell's system profile sets the search path anew or puts the system's
-        // folders first, so the folder is put first again by the `.profile` of the home.
+        // A login shell's system profile resets the search path, so the home's `.profile` puts the
+        // stand-ins first again.
         std::fs::write(
             scratch.home().join(".profile"),
             format!(
@@ -116,18 +96,15 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: this runs as the first statement of a test, and nextest gives each test
+        // a process of its own, so no other thread exists yet.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("SHELL", &shell);
             std::env::set_var("HOME", scratch.home());
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
+            // Where the Keeper's copies of git's file lists and a terminal's programs go.
             std::env::set_var("TMPDIR", scratch.0.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -153,29 +130,24 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// The folder the repository lies alone in.
     fn lair(&self) -> PathBuf {
         self.0.join("lair")
     }
 
-    /// The folder the app keeps the worktrees of the repository in when no other is named.
     fn beside(&self) -> PathBuf {
         self.lair().join("repo.worktrees")
     }
 
-    /// A script `#!/bin/sh` with `body`, which can be run.
     fn program(&self, path: &Path, body: &str) {
         std::fs::write(path, format!("#!/bin/sh\n{body}\n")).expect("write the script");
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
             .expect("make it run");
     }
 
-    /// A `post-checkout` hook of the repository, which git runs once a worktree is made.
     fn hook(&self, repo: &Path, body: &str) {
         self.program(&repo.join(".git/hooks/post-checkout"), body);
     }
 
-    /// What the Keeper of this test is started with.
     fn options(&self) -> Options {
         Options {
             socket: self.socket(),
@@ -188,15 +160,13 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = self.options();
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
-    /// serves this Window: a fact told before that is told to a Window that is not there
-    /// yet, and the first reply is the proof that it is.
+    /// Waits until the Keeper serves this Window, which the first reply proves: a fact told
+    /// before then never reaches this Window.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -208,9 +178,6 @@ impl Scratch {
                     .set_read_timeout(Some(DEADLINE))
                     .expect("set the deadline of a read");
                 let mut window = Window { stream, next_id: 0 };
-                // The Keeper tells a fact to the Windows it serves: its first reply comes
-                // after the Window is one of them. `ListClis` tells no fact and keeps no
-                // state.
                 window
                     .ask(Request::ListClis)
                     .expect("the Keeper serves the Window");
@@ -225,14 +192,10 @@ impl Scratch {
         }
     }
 
-    /// The repository `lair/repo` with `main` at one commit, and a second branch `other`
-    /// at the same commit.
     fn repository(&self) -> PathBuf {
         self.repository_at(&self.lair().join("repo"))
     }
 
-    /// A repository like [`Scratch::repository`] in `folder`, which may lie anywhere in the
-    /// scratch folder.
     fn repository_at(&self, folder: &Path) -> PathBuf {
         let folder = folder.to_owned();
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -251,7 +214,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Runs git in `folder` and gives what it printed, trimmed.
 fn git(folder: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -268,9 +230,8 @@ fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
 }
 
-/// What git prints for a read that may fail, with the exit code: the bytes a test of
-/// "nothing is written" compares. No optional lock, so that a read never rewrites the
-/// index of a repository committed to in the same second.
+/// No optional lock, so a read never rewrites the index of a repository committed to in the same
+/// second.
 fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -286,8 +247,6 @@ fn read_git(repo: &Path, args: &[&str]) -> Vec<u8> {
     all
 }
 
-/// Every name below `folder`, with a letter for its kind (`l` link, `d` folder, `f` file),
-/// relative to `below`.
 fn walk(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, char)>) {
     for entry in std::fs::read_dir(folder).expect("read the folder") {
         let path = entry.expect("an entry").path();
@@ -306,8 +265,6 @@ fn walk(folder: &Path, below: &Path, found: &mut Vec<(PathBuf, char)>) {
     }
 }
 
-/// What a refusal, and a worktree taken away, must leave as it was: the seven reads of the
-/// repository, its objects with their sizes, and every name in the folder it lies in.
 #[derive(Debug, PartialEq, Eq)]
 struct Snapshot {
     reads: Vec<Vec<u8>>,
@@ -356,8 +313,6 @@ fn snapshot(scratch: &Scratch, repo: &Path) -> Snapshot {
     }
 }
 
-/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
-/// Gives their ids, which `still_there` finds again.
 fn plant(scratch: &Scratch, repo: &Path) -> Vec<String> {
     let file = scratch.0.join("blob.txt");
     std::fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
@@ -372,14 +327,12 @@ fn plant(scratch: &Scratch, repo: &Path) -> Vec<String> {
     vec![blob, dangling]
 }
 
-/// `git cat-file -e` of each planted object succeeds.
 fn still_there(repo: &Path, planted: &[String]) {
     for id in planted {
         git(repo, &["cat-file", "-e", id]);
     }
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -393,13 +346,10 @@ impl Window {
         id
     }
 
-    /// The next frame the Keeper sent, whatever it is. Fails the test at the deadline.
     fn next_any(&mut self) -> Message {
         read_message(&mut self.stream).expect("a frame from the Keeper")
     }
 
-    /// The next frame that is not the output of a program: what a started agent writes
-    /// comes when it comes, and no fact is waited for behind it.
     fn next(&mut self) -> Message {
         loop {
             match self.next_any() {
@@ -409,7 +359,6 @@ impl Window {
         }
     }
 
-    /// The reply to `id` and every frame that came before it, in the order they came.
     fn reply_to(&mut self, id: RequestId) -> (Result<Reply, Refusal>, Vec<Message>) {
         let mut seen = Vec::new();
         loop {
@@ -421,20 +370,16 @@ impl Window {
         }
     }
 
-    /// Sends a request and gives its reply with what came before it.
     fn ask_seen(&mut self, request: Request) -> (Result<Reply, Refusal>, Vec<Message>) {
         let id = self.send(request);
         self.reply_to(id)
     }
 
-    /// Sends a request and gives its reply, passing over what comes before it.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         self.ask_seen(request).0
     }
 
-    /// The barrier: `ListWorkspaces` is answered after everything the Keeper did for this
-    /// Window before it, the facts it told included. Gives the list and what came before
-    /// the reply.
+    /// `ListWorkspaces` is answered after everything the Keeper did for this Window before it.
     fn barrier(&mut self) -> (Vec<Repository>, Vec<Message>) {
         match self.ask_seen(Request::ListWorkspaces) {
             (Ok(Reply::Workspaces(list)), seen) => (list, seen),
@@ -442,7 +387,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder as a workspace, and reads the fact that tells the list.
     fn open(&mut self, folder: &Path) -> (RepositoryId, WorkspaceId) {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -458,7 +402,6 @@ impl Window {
         (repository, workspace)
     }
 
-    /// The request the app sends for a worktree with an agent.
     fn create(
         &mut self,
         repository: &RepositoryId,
@@ -475,9 +418,6 @@ impl Window {
         })
     }
 
-    /// Reads frames until the output of `terminal` holds `needle`, and gives all it read.
-    /// The marker is looked for in what came, never at where a line begins: a shell may
-    /// write its prompt after the echo of what it was told.
     fn output_holds(&mut self, terminal: &TerminalId, needle: &str) -> String {
         let mut text = String::new();
         loop {
@@ -510,7 +450,6 @@ impl Window {
         }
     }
 
-    /// Sets the folder for worktrees of `repository` as a user does.
     fn set_folder(
         &mut self,
         repository: &RepositoryId,
@@ -521,7 +460,6 @@ impl Window {
         })
     }
 
-    /// The next frame, which has to tell `setting`.
     fn told(&mut self, setting: &Setting) {
         match self.next() {
             Message::Fact(Fact::SettingChanged(told)) => assert_eq!(&told, setting),
@@ -542,8 +480,6 @@ fn worktrees_folder(repository: &RepositoryId, folder: Option<&Path>) -> Setting
     }
 }
 
-/// The workspace `id` among the lists of `repository` in the facts and the list: its folder
-/// and what is checked out.
 fn found_in(
     lists: &[Repository],
     repository: &RepositoryId,
@@ -557,7 +493,6 @@ fn found_in(
         .map(|workspace| (workspace.path.clone(), workspace.head.clone()))
 }
 
-/// The lists of repositories the facts among `seen` carry, in the order told.
 fn lists_told(seen: &[Message]) -> Vec<Vec<Repository>> {
     seen.iter()
         .filter_map(|message| match message {
@@ -567,7 +502,6 @@ fn lists_told(seen: &[Message]) -> Vec<Vec<Repository>> {
         .collect()
 }
 
-/// Whether a workspace on the branch `branch` is among the lists.
 fn some_list_holds_a_workspace_on(lists: &[Vec<Repository>], branch: &str) -> bool {
     lists.iter().flatten().any(|repository| {
         repository
@@ -577,7 +511,6 @@ fn some_list_holds_a_workspace_on(lists: &[Vec<Repository>], branch: &str) -> bo
     })
 }
 
-/// The folders `git worktree list --porcelain` names, as git prints them.
 fn worktree_folders(repo: &Path) -> Vec<PathBuf> {
     git(repo, &["worktree", "list", "--porcelain"])
         .lines()
@@ -586,15 +519,12 @@ fn worktree_folders(repo: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The sentence of a refusal of Workspaces, as the Link carries it.
 fn failed_with(refusal: &yaar_workspaces::Refusal) -> Refusal {
     Refusal::Failed {
         reason: refusal.to_string(),
     }
 }
 
-/// A worktree is made on a new branch from `main`, beside the repository, with `main` as its
-/// base, and the agent `agent` runs in it, all from one request.
 fn a_worktree_with_an_agent_in_one_request(agent: &str) {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
@@ -614,13 +544,6 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
         panic!("no worktree: {reply:?}");
     };
     assert_ne!(workspace, first);
-    // The list that holds the workspace on its new branch came before the reply. The output
-    // of the agent reaches the Window only after the reply (the step that lets it through is
-    // returned with the outcome, as for `OpenTerminal`), but this is a stated clause and
-    // not a shown one: no surface can hold the Keeper between the opening of the terminal
-    // and the queueing of the reply, and the shell writes later than the Keeper queues, so
-    // that the check below would pass without the step too. Slice 7's opening of a terminal
-    // is read the same way.
     assert!(
         seen.iter()
             .all(|message| matches!(message, Message::Fact(_))),
@@ -633,11 +556,9 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
         Some((expected.clone(), Some(Head::Branch("task/one".to_owned())))),
         "{told:?}"
     );
-    // The CLI ran in the new folder, in the terminal the reply names. Read first: a request
-    // that is asked meanwhile passes over the output that comes between it and its reply.
+    // Read first: a request asked meanwhile passes over the output between it and its reply.
     let marker = format!("STANDIN-RAN <{agent}> <{}>", expected.display());
     window.output_holds(&terminal, &marker);
-    // The other Window is told the same list.
     let heard = second_window.next();
     assert!(
         matches!(&heard, Message::Fact(Fact::Workspaces(list))
@@ -645,7 +566,6 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
         "{heard:?}"
     );
 
-    // Made by git, on the new branch, at the commit `main` names.
     assert!(
         worktree_folders(&repo).contains(&expected),
         "{:?}",
@@ -653,7 +573,6 @@ fn a_worktree_with_an_agent_in_one_request(agent: &str) {
     );
     assert_eq!(git(&expected, &["branch", "--show-current"]), "task/one");
     assert_eq!(git(&repo, &["rev-parse", "task/one"]), main_commit);
-    // Its base is `main`, as the user would have set it.
     let changes = window.ask(Request::GetChanges {
         workspace: workspace.clone(),
     });
@@ -697,12 +616,9 @@ fn a_worktree_is_made_from_a_branch_and_the_agent_is_started_in_it_by_one_reques
 fn each_refusal_makes_nothing_tells_nothing_and_runs_no_git() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
-    // A folder that is where a worktree would go, and a file in the place of a folder the
-    // user named.
     std::fs::create_dir_all(scratch.beside().join("taken")).expect("make the folder");
     let planted = plant(&scratch, &repo);
-    // The hook is put after the planting, whose checkout would run it. It writes where only
-    // a git that made a worktree could have.
+    // The hook is put after the planting, whose checkout would run it.
     let ran = scratch.0.join("hook-ran");
     scratch.hook(&repo, &format!("echo ran >> '{}'", ran.display()));
     let keeper = scratch.keeper();
@@ -785,10 +701,8 @@ fn each_refusal_makes_nothing_tells_nothing_and_runs_no_git() {
         ),
     ];
     for (what, repository, from, branch, agent, refusal) in cases {
-        // What is compared is read before the request is sent.
         let before = snapshot(&scratch, &repo);
         let (reply, seen) = window.create(&repository, from, branch, agent);
-        // The barrier: the list is answered after anything the request told.
         let (listed, after_the_reply) = window.barrier();
         assert_eq!(reply, Err(refusal), "{what}");
         assert!(seen.is_empty(), "{what}: {seen:?}");
@@ -799,8 +713,6 @@ fn each_refusal_makes_nothing_tells_nothing_and_runs_no_git() {
         still_there(&repo, &planted);
     }
 
-    // The user names a folder that is a file: kept when it is set, refused when a worktree
-    // is to be made in it.
     let a_file = scratch.0.join("a-file");
     std::fs::write(&a_file, "not a folder\n").expect("write the file");
     let named = worktrees_folder(&repository, Some(&a_file));
@@ -821,19 +733,15 @@ fn each_refusal_makes_nothing_tells_nothing_and_runs_no_git() {
     window.stop(keeper);
 }
 
-/// A `post-checkout` hook that waits on a gate the test holds: while it waits, git is in the
-/// middle of making a worktree.
-///
-/// The hook reads a pipe until the test closes it, and the test cannot open the pipe for
-/// writing before the hook has it open for reading: that is how the test knows the hook
-/// runs.
+/// A `post-checkout` hook that waits on a pipe the test holds: while it waits, git is in
+/// the middle of making a worktree. The test's open of the pipe for writing returns only
+/// once the hook has it open for reading, which proves the hook runs.
 struct Gate {
     running: mpsc::Receiver<()>,
     opening: JoinHandle<std::fs::File>,
 }
 
 impl Gate {
-    /// Puts the hook into the repository, to be put there before the first request.
     fn hook(scratch: &Scratch, repo: &Path) -> Gate {
         let pipe = scratch.0.join("gate");
         assert!(
@@ -859,14 +767,12 @@ impl Gate {
         }
     }
 
-    /// Waits until the hook runs.
     fn hook_runs(&self) {
         self.running
             .recv_timeout(DEADLINE)
             .expect("the hook never started");
     }
 
-    /// Lets the hook go.
     fn let_go(self) {
         drop(self.opening.join().expect("the opening of the gate"));
     }
@@ -891,8 +797,6 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
     });
     gate.hook_runs();
 
-    // The hook runs, so git is in the middle of the add: another Window's list, which
-    // waits for the Keeper's turn, is answered, and the request has not been.
     let (list, _) = other.barrier();
     assert_eq!(list.len(), 1);
     window
@@ -909,7 +813,6 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
         std::io::ErrorKind::WouldBlock
     );
 
-    // The gate is let go: the hook ends and the reply comes.
     gate.let_go();
     let (reply, _) = window.reply_to(id);
     assert!(
@@ -919,10 +822,9 @@ fn a_request_does_not_hold_up_the_keeper_while_git_runs_the_hook_of_the_user() {
     window.stop(keeper);
 }
 
-/// A stand-in `claude` that tells the test when its program ends: it prints a marker once
-/// its traps are set and then reads its terminal, and writes to the fifo `ended` as it
-/// exits, which the hang-up that ends a terminal brings about. The test reads the fifo from
-/// a thread: the channel it gives holds a message once the program has ended.
+/// Makes a stand-in `claude` that prints `AGENT-READY` once its traps are set, reads its
+/// terminal, and writes to the fifo `ended` as it exits, as a hang-up makes it do.
+/// The returned channel gets a message once it has ended.
 fn an_agent_that_tells_when_it_ends(scratch: &Scratch) -> mpsc::Receiver<()> {
     let pipe = scratch.0.join("ended");
     assert!(
@@ -944,7 +846,6 @@ fn an_agent_that_tells_when_it_ends(scratch: &Scratch) -> mpsc::Receiver<()> {
     );
     let (ended, hears) = mpsc::channel();
     std::thread::spawn(move || {
-        // Opened for reading once the program opens it for writing, and read to its end.
         let mut said = String::new();
         std::fs::File::open(pipe)
             .and_then(|mut file| file.read_to_string(&mut said))
@@ -958,7 +859,6 @@ fn an_agent_that_tells_when_it_ends(scratch: &Scratch) -> mpsc::Receiver<()> {
 fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_takes_it_away() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
-    // Planted before the hook is put, as planting checks a file out and a checkout runs it.
     let planted = plant(&scratch, &repo);
     let gate = Gate::hook(&scratch, &repo);
     let agent_ended = an_agent_that_tells_when_it_ends(&scratch);
@@ -966,8 +866,6 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
     let mut window = scratch.window();
     let (repository, first) = window.open(&repo);
     let mut other = scratch.window();
-    // An agent runs in the repository's own workspace: the end of its program says that the
-    // Keeper has ended its parts.
     let opened = window.ask(Request::OpenTerminal {
         workspace: first,
         program: Program::Agent {
@@ -979,7 +877,6 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
         panic!("no terminal: {opened:?}");
     };
     window.output_holds(&terminal, "AGENT-READY");
-    // Read before the request is sent.
     let before = snapshot(&scratch, &repo);
 
     window.send(Request::CreateWorktree {
@@ -996,24 +893,17 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
         "git has not made the worktree yet"
     );
 
-    // The Keeper is asked to stop while the hook still runs. It lets every Window go and
-    // takes the parts away before it waits for the work in flight, which ends the program of
-    // the terminal: that is read before the window of time is given, so that the work finds
-    // the parts gone whenever it is let go.
     write_message(&mut other.stream, &Message::Shutdown).expect("ask for the stop");
     let (stopped, stops) = mpsc::channel();
     std::thread::spawn(move || stopped.send(keeper.join()).expect("tell the test"));
     agent_ended
         .recv_timeout(DEADLINE)
         .expect("the Keeper did not end the program of the terminal");
-    // The one timed negative: a Keeper that does not wait for the work leaves nothing to
-    // look at while the work is held. A passing run cannot fail on it, since the hook is let
-    // go only after the window; a Keeper that leaves later than this on a busy machine is
-    // missed, never wrongly blamed.
+    // The one timed negative: a Keeper that leaves while git is held is caught within
+    // `SETTLE`. The hook is let go only after it, so a passing run cannot fail here.
     let left_early = stops.recv_timeout(SETTLE);
-    // The lock of the Keeper is held until the work ends, as the next Keeper may start as
-    // soon as it is let go: another one started now on the same data steps back. A Keeper
-    // that let the lock go before the wait would start, and not answer within the deadline.
+    // The Keeper's lock is held until the work ends: another Keeper started now on the same
+    // data steps back, and one that let go early would start and not answer in the deadline.
     let (second, seconds) = mpsc::channel();
     let options = scratch.options();
     std::thread::spawn(move || {
@@ -1034,9 +924,6 @@ fn a_keeper_that_is_asked_to_stop_while_git_makes_the_worktree_waits_for_it_and_
         .expect("the Keeper did not leave once the work had ended");
     assert_eq!(exit.expect("join").expect("run"), Exit::Shutdown);
 
-    // The work found the parts gone and took the worktree away before `run` returned, so
-    // nothing is waited for here: the repository is as it was, with no worktree, no branch
-    // and no folder.
     assert_eq!(worktree_folders(&repo), std::slice::from_ref(&repo));
     assert_eq!(git(&repo, &["branch", "--list", "slow"]), "");
     assert!(!made.exists(), "the folder of the worktree is left");
@@ -1049,14 +936,11 @@ fn a_git_that_fails_makes_nothing_and_tells_no_window() {
     let scratch = Scratch::new(Shell::Plain);
     let repo = scratch.repository();
     let planted = plant(&scratch, &repo);
-    // A hook that fails ends the user's git with a failure after it made the worktree, and
-    // what it says on its error output is git's own words, which the reply must carry.
     scratch.hook(&repo, "echo hook-said-no >&2\nexit 1");
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let (repository, _) = window.open(&repo);
     let (listed_before, _) = window.barrier();
-    // Read before the request is sent.
     let before = snapshot(&scratch, &repo);
 
     let (reply, seen) = window.create(&repository, "main", "failing", "claude");
@@ -1088,14 +972,11 @@ fn a_launcher_that_cannot_be_opened_takes_the_worktree_and_the_branch_away_again
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let (repository, _) = window.open(&repo);
-    // Read before the request is sent.
     let before = snapshot(&scratch, &repo);
     let (listed_before, _) = window.barrier();
 
     let (reply, seen) = window.create(&repository, "main", "broken", "claude");
 
-    // The worktree was made, and the opening of the launcher failed: the refusal is the
-    // Dock's sentence about the shell.
     let broken = scratch.0.join("broken-shell");
     let Err(Refusal::Failed { reason }) = reply else {
         panic!("not refused: {reply:?}");
@@ -1104,7 +985,6 @@ fn a_launcher_that_cannot_be_opened_takes_the_worktree_and_the_branch_away_again
         reason.starts_with(&format!("{} could not be started", broken.display())),
         "{reason}"
     );
-    // Nothing is left, and no Window heard of the workspace, before the barrier's reply.
     let (listed, after_the_reply) = window.barrier();
     assert_eq!(listed, listed_before);
     assert!(
@@ -1124,9 +1004,8 @@ fn a_launcher_that_cannot_be_opened_takes_the_worktree_and_the_branch_away_again
 fn a_worktree_that_cannot_be_taken_away_again_is_named_in_the_refusal_and_stays_listed() {
     let scratch = Scratch::new(Shell::Broken);
     let repo = scratch.repository();
-    // The user's hook locks the worktree git just made, so that git refuses to remove it:
-    // the opening of the launcher fails, and the take-away after it fails too. Put after
-    // nothing that checks out, as a hook runs for every checkout.
+    // The hook locks the worktree git just made, so git refuses to take it away when the
+    // broken shell fails to start. A hook runs on every checkout, so it is set after the setup.
     scratch.hook(&repo, "git worktree lock --reason held \"$(pwd -P)\"");
     let keeper = scratch.keeper();
     let mut window = scratch.window();
@@ -1135,7 +1014,6 @@ fn a_worktree_that_cannot_be_taken_away_again_is_named_in_the_refusal_and_stays_
 
     let (reply, seen) = window.create(&repository, "main", "broken", "claude");
 
-    // The Dock's sentence first, then which worktree stays.
     let broken = scratch.0.join("broken-shell");
     let Err(Refusal::Failed { reason }) = reply else {
         panic!("not refused: {reply:?}");
@@ -1151,11 +1029,8 @@ fn a_worktree_that_cannot_be_taken_away_again_is_named_in_the_refusal_and_stays_
         )),
         "{reason}"
     );
-    // It stays in git's list, and no terminal was made.
     assert!(worktree_folders(&repo).contains(&stays));
     assert!(window.terminals().is_empty());
-    // What it left is no secret from the Windows: the list they were told last is the one
-    // they would be given now, and it holds the workspace the folder stays as.
     let (listed, after_the_reply) = window.barrier();
     let told = lists_told(&seen);
     assert_eq!(told.last(), Some(&listed), "{seen:?}");
@@ -1168,7 +1043,6 @@ fn a_worktree_that_cannot_be_taken_away_again_is_named_in_the_refusal_and_stays_
         "{heard:?}"
     );
 
-    // The scratch is cleaned: the lock lifted, the worktree and its branch taken away.
     window.stop(keeper);
     git(
         &repo,
@@ -1200,7 +1074,6 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     let mut other = scratch.window();
     let places = scratch.0.join("places");
 
-    // No folder is named: the worktree lies beside the repository.
     let (reply, _) = window.create(&repository, "main", "first", "claude");
     assert!(
         matches!(reply, Ok(Reply::WorktreeCreated { .. })),
@@ -1208,7 +1081,6 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     );
     let _ = other.next();
 
-    // The folder, which is not there yet, is named. Both Windows are told, and it is listed.
     let named = worktrees_folder(&repository, Some(&places));
     assert!(matches!(
         window.set_folder(&repository, Some(&places)),
@@ -1219,14 +1091,12 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     assert!(window.settings().contains(&named));
     assert!(!places.exists(), "setting the folder made it");
 
-    // A Keeper started again on the same data lists it.
     window.stop(keeper);
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let mut other = scratch.window();
     assert!(window.settings().contains(&named));
 
-    // The next worktree lies in it, which the creation made.
     let (reply, seen) = window.create(&repository, "main", "in-place", "claude");
     let Ok(Reply::WorktreeCreated { workspace, .. }) = reply else {
         panic!("no worktree: {reply:?}");
@@ -1240,11 +1110,8 @@ fn the_folder_a_user_names_is_kept_told_and_used_until_none_is_named() {
     );
     assert!(worktree_folders(&repo).contains(&expected));
     assert!(expected.join("a.txt").is_file());
-    // The list that came with it is not what the next fact is waited for behind.
     assert!(matches!(other.next(), Message::Fact(Fact::Workspaces(_))));
 
-    // None is the way back: told, listed as none, and the worktrees lie beside the
-    // repository again (the worktrees now lie in two folders, so the rule beside it).
     let back = worktrees_folder(&repository, None);
     assert!(matches!(
         window.set_folder(&repository, None),
@@ -1323,7 +1190,6 @@ fn a_folder_that_is_refused_is_not_kept_and_not_told() {
     for (what, repository, folder, refusal) in cases {
         let reply = window.set_folder(&repository, Some(&folder));
         assert_eq!(reply, Err(refusal), "{what}");
-        // Still what was kept before, and nothing of the kind listed for the other.
         let folders: Vec<Setting> = window
             .settings()
             .into_iter()
@@ -1332,8 +1198,8 @@ fn a_folder_that_is_refused_is_not_kept_and_not_told() {
         assert_eq!(folders, std::slice::from_ref(&named), "{what}");
     }
 
-    // The barrier: the next setting kept is the next fact the other Window sees, so that
-    // nothing was told for the refusals before it.
+    // Barrier: the next setting kept is the next fact the other Window sees, so the
+    // refusals before it told nothing.
     let newer = worktrees_folder(&repository, Some(&scratch.0.join("newer")));
     assert!(matches!(
         window.set_folder(&repository, Some(&scratch.0.join("newer"))),
@@ -1374,7 +1240,6 @@ fn the_folder_named_for_one_repository_is_used_for_no_other() {
     assert!(worktree_folders(&second).contains(&beside_second));
     assert!(!places.exists());
 
-    // The folder is still the first repository's.
     let (reply, _) = window.create(&first_id, "main", "one", "claude");
     assert!(
         matches!(reply, Ok(Reply::WorktreeCreated { .. })),

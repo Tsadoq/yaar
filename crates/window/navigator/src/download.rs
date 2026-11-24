@@ -1,68 +1,5 @@
-//! The downloader: fetches the server a row pins, checks its digest, and unpacks it into the
-//! app's folder (FR-058, ADR-015 point 7). A download belongs to a server of a row, and is
-//! kept under the server's name: `<servers>/<server>/<version>/`.
-//!
-//! # What is sent
-//!
-//! One plain `GET` of the row's address. The request carries no account, no token, no
-//! cookie and no header that names the user, the machine or a path: `Host`, `User-Agent`
-//! [`USER_AGENT`] and `Accept`, and nothing else. Nothing is uploaded. TLS is rustls with
-//! ring, checked against the certificates the system trusts. No proxy is used: the agent is
-//! built with `.proxy(None)`, so that a proxy variable of the environment (`HTTP_PROXY`,
-//! `HTTPS_PROXY`, `ALL_PROXY`, in either case) is never read, and the request goes to the
-//! publisher's address and nowhere else.
-//!
-//! An address is fetched when [`allowed`] holds: `https://`, or `http://` to the loopback
-//! host written as an address, `127.0.0.1` or `[::1]` (never a name, which would go
-//! through name resolution). Any other is refused with [`DownloadError::NotAllowed`] before
-//! anything is sent. The digest guards what arrives either way; the loopback address is how
-//! the tests serve a download from a listener of their own, through this same code.
-//!
-//! Redirects are followed here, not by the HTTP library: the agent is built with
-//! `max_redirects(0)`, `max_redirects_will_error(false)` and `http_status_as_error(false)`,
-//! so that a 301, 302, 303, 307 or 308 comes back as an answer. Its `Location` is resolved
-//! against the address that answered (`url::Url::join`) and followed only when
-//! [`redirect_allowed`] holds for the two: the next address is [`allowed`], and an answer
-//! from an `https` address leads only to an `https` address. Anything else is refused with
-//! [`DownloadError::NotAllowed`] naming the next address, before a byte is sent to it. At
-//! most [`MAX_REDIRECTS`] are followed; one more is [`DownloadError::Network`]. A
-//! redirect from a loopback `http` address to another loopback `http` address is followed,
-//! as the tests' listener does; a row of the built-in table names `https` only.
-//!
-//! The agent waits at most [`CONNECT_WITHIN`] for a connection and at most
-//! [`READ_WITHIN`] for each read of the answer, so that a stalled server ends the download
-//! with [`DownloadError::Network`] instead of leaving it on its way for good.
-//!
-//! # What is written
-//!
-//! The bytes are hashed as they stream into a file `<servers>/.partial-<server>-<pid>-<n>`,
-//! `<pid>` this process and `<n>` counting up in it, so that two processes downloading at
-//! once never share a file. More bytes than the row's `size` stop the download at once,
-//! with [`DownloadError::TooLarge`], the file removed: a wrong answer cannot fill the disk
-//! before the digest is checked. A digest that differs from the row's removes that file
-//! and refuses the download ([`DownloadError::Digest`]) with nothing unpacked (LSP-05). A
-//! matching one is unpacked into `<servers>/<server>/.partial-<version>-<pid>-<n>`, its
-//! program made executable, the folder renamed to `<servers>/<server>/<version>` (when that
-//! folder is there already, written by another process, the partial folder is removed and
-//! the one there kept; a folder of that name without the program in it is no install, and is
-//! replaced), and then `<servers>/<server>/installed.toml` written, through a file renamed
-//! into place, naming the version, the digest and the program: from then on the row's
-//! downloaded candidate is that version ([`installed`]). The version that was installed
-//! before is removed after that. A failure at any step removes the partial files and
-//! folder, and the version folder this fetch made, and leaves what was installed before as
-//! it was.
-//!
-//! Of a tar file only regular files and folders are written. An entry of any other kind (a
-//! link, a device, a fifo) is refused, and so is one whose path is absolute or climbs out
-//! of the folder, whether `strip` parts are dropped from it first or not: nothing outside
-//! the folder is written. A `.` part counts for nothing, and an entry with no part left
-//! after the `strip` is passed over, as `tar --strip-components` does. A pax header that
-//! only carries notes for the whole archive is read past, being no file. The row's
-//! `program` must be a path of plain parts, and be in the unpacked folder when the archive
-//! has been read, or the download is refused with [`DownloadError::Unpack`].
-//!
-//! Nothing here decides when to download: the Navigator calls [`Downloader::fetch`] only
-//! once the user accepted an offer or asked for an update, never for a registered row.
+//! Fetches the server a row pins over https (or http to loopback), checks its SHA-256 and unpacks
+//! it into `<servers>/<server>/<version>/`.
 
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
@@ -79,52 +16,27 @@ use url::{Host, Url};
 
 use crate::registry::{Archive, Download, Platform, Registry};
 
-/// The user agent of every request: a fixed name for what the request is, which names
-/// neither the user, the machine, the project nor the app's version.
+/// A fixed name that names neither the user, the machine, the project nor the app's version.
 pub const USER_AGENT: &str = "language-server-download";
 
-/// The most redirects one download follows.
 pub const MAX_REDIRECTS: u32 = 5;
 
-/// How long the downloader waits for a connection.
 pub const CONNECT_WITHIN: Duration = Duration::from_secs(30);
 
-/// How long the downloader waits for each read of an answer.
 pub const READ_WITHIN: Duration = Duration::from_secs(60);
 
-/// The file, in a server's folder, that names the version in use: a TOML table of three
-/// strings, `version`, `sha256`, and `program`, the program's path relative to the
-/// version's folder `<servers>/<row>/<version>`, as the row's `program` names it.
-///
-/// ```toml
-/// version = "2026-11-09"
-/// sha256 = "e43a65008f8f4291320f33c0545dd577ad7623a7407b584a27155833d3722dfb"
-/// program = "rust-analyzer"
-/// ```
+/// Names the version in use: TOML strings `version`, `sha256` and `program` (relative to the
+/// version's folder).
 pub const INSTALLED_FILE: &str = "installed.toml";
 
-/// Why a download failed, as the user is told.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadError {
-    /// The address, or the address a redirect leads to, is not one [`allowed`] or
-    /// [`redirect_allowed`] lets the downloader fetch.
     NotAllowed(String),
-    /// The server answered with this status.
     Status(u16),
-    /// No answer, or one cut short: the reason.
     Network(String),
-    /// The bytes fetched are not the ones the row pins.
-    Digest {
-        /// The row's digest.
-        expected: String,
-        /// The digest of what arrived.
-        found: String,
-    },
-    /// More bytes arrived than the row's `size`: the size.
+    Digest { expected: String, found: String },
     TooLarge(u64),
-    /// The archive could not be unpacked: the reason.
     Unpack(String),
-    /// A file of the app's folder could not be written: the reason.
     Folder(String),
 }
 
@@ -149,19 +61,13 @@ impl std::fmt::Display for DownloadError {
 
 impl std::error::Error for DownloadError {}
 
-/// A server the app downloaded and uses, as `installed.toml` names it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Installed {
-    /// The version.
     pub version: String,
-    /// The digest of the bytes it was unpacked from.
     pub sha256: String,
-    /// Its program, by its absolute path.
     pub program: PathBuf,
 }
 
-/// The server the app downloaded for the server named `server` into `servers` and uses,
-/// when `installed.toml` names one whose program is there.
 pub fn installed(servers: &Path, server: &str) -> Option<Installed> {
     let record = read_record(servers, server)?;
     let program = servers
@@ -175,17 +81,14 @@ pub fn installed(servers: &Path, server: &str) -> Option<Installed> {
     })
 }
 
-/// What `installed.toml` says, read: its three strings, the version a single plain part and
-/// the program a path of plain parts, so that nothing the file names lies outside the
-/// server's folder.
+/// `installed.toml` as read: `version` is a single plain part and `program` a path of plain
+/// parts, so nothing the file names lies outside the server's folder.
 struct Record {
     version: String,
     sha256: String,
     program: String,
 }
 
-/// `installed.toml` of the server `server` in `servers`: none when it is not there, is not
-/// TOML, lacks a string, or names a version or a program that leaves the server's folder.
 fn read_record(servers: &Path, server: &str) -> Option<Record> {
     if !plain_part(server) {
         return None;
@@ -201,14 +104,10 @@ fn read_record(servers: &Path, server: &str) -> Option<Record> {
     (plain_part(&record.version) && plain_path(&record.program).is_some()).then_some(record)
 }
 
-/// Whether `name` can be one part of a path below the app's folder: not empty, not `.` or
-/// `..`, no separator and no NUL.
 fn plain_part(name: &str) -> bool {
     !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0'])
 }
 
-/// `path` as a relative path of plain parts, a `.` part dropped; none when it holds an
-/// absolute or climbing part or nothing at all.
 fn plain_path(path: &str) -> Option<PathBuf> {
     let mut plain = PathBuf::new();
     for part in Path::new(path).components() {
@@ -221,9 +120,8 @@ fn plain_path(path: &str) -> Option<PathBuf> {
     (!plain.as_os_str().is_empty()).then_some(plain)
 }
 
-/// Whether `url` is an address the downloader fetches from: `https://` to any host, or
-/// `http://` whose host is the address `127.0.0.1` or `[::1]`. Any other scheme, a host
-/// name (`localhost` included) over `http`, and a text that is no address, are not.
+/// `http` only to 127.0.0.1 or `[::1]`, never `localhost`, which goes through name resolution.
+/// Plain http to loopback is for the tests' own listener; the digest guards what arrives anyway.
 pub fn allowed(url: &str) -> bool {
     let Ok(url) = Url::parse(url) else {
         return false;
@@ -236,20 +134,15 @@ pub fn allowed(url: &str) -> bool {
     }
 }
 
-/// Whether a redirect from the address `from` to the address `to` is followed: `to` is
-/// [`allowed`], and when `from` is `https://`, `to` is `https://` too.
 pub fn redirect_allowed(from: &str, to: &str) -> bool {
     let from_https = Url::parse(from).is_ok_and(|from| from.scheme() == "https");
     allowed(to) && (!from_https || Url::parse(to).is_ok_and(|to| to.scheme() == "https"))
 }
 
-/// The downloader. One is enough for every download of a process.
 pub struct Downloader {
     agent: ureq::Agent,
 }
 
-/// The agent every download goes through, as the module doc says, waiting `connect` for a
-/// connection and `read` for each read, and trusting `roots`.
 fn agent(connect: Duration, read: Duration, roots: RootCerts) -> ureq::Agent {
     let tls = TlsConfig::builder()
         .provider(TlsProvider::Rustls)
@@ -260,7 +153,7 @@ fn agent(connect: Duration, read: Duration, roots: RootCerts) -> ureq::Agent {
         .tls_config(tls)
         // `Config::default()` reads the proxy variables of the environment; none is read.
         .proxy(None)
-        // The redirects are the downloader's, under its own rule.
+        // Redirects are followed by hand, so that none goes from https to http.
         .max_redirects(0)
         .max_redirects_will_error(false)
         // A 404 is an answer the downloader reads, not an error of the library.
@@ -273,10 +166,6 @@ fn agent(connect: Duration, read: Duration, roots: RootCerts) -> ureq::Agent {
 }
 
 impl Downloader {
-    /// A downloader with the certificates the system trusts, built as the module doc says:
-    /// no proxy, no redirect followed by the library, the user agent [`USER_AGENT`], the
-    /// waits [`CONNECT_WITHIN`] and [`READ_WITHIN`]. An error, as a sentence, when no
-    /// certificate could be read.
     pub fn new() -> Result<Downloader, String> {
         let found = rustls_native_certs::load_native_certs();
         if found.certs.is_empty() {
@@ -297,8 +186,6 @@ impl Downloader {
         })
     }
 
-    /// Fetches `download` of the server named `server` into `servers`, as the module doc
-    /// says, and gives what is installed now.
     pub fn fetch(
         &self,
         server: &str,
@@ -346,7 +233,6 @@ impl Downloader {
                 found,
             });
         }
-        // The digest matched: from here on the bytes are the ones the row pins.
         unpack(&partial_file, download, &program, &partial_folder)?;
 
         let before = read_record(servers, server).map(|record| record.version);
@@ -368,7 +254,6 @@ impl Downloader {
             return Err(folder_error(error));
         }
 
-        // Switched: the version that was in use before is no longer wanted.
         if let Some(old) = before.filter(|old| *old != download.version && plain_part(old)) {
             remove(&folder.join(old));
         }
@@ -379,8 +264,6 @@ impl Downloader {
         })
     }
 
-    /// Fetches the address of `download` and streams its bytes into the file `partial`,
-    /// hashing and counting them as they come. Gives the digest of what arrived.
     fn download_into(&self, download: &Download, partial: &Path) -> Result<String, DownloadError> {
         let response = self.get(&download.url)?;
         if response
@@ -413,8 +296,6 @@ impl Downloader {
         Ok(hex(context.finish().as_ref()))
     }
 
-    /// The answer to a `GET` of `url` whose status is 200, redirects followed by hand under
-    /// [`redirect_allowed`], at most [`MAX_REDIRECTS`] of them.
     fn get(&self, url: &str) -> Result<ureq::http::Response<ureq::Body>, DownloadError> {
         let mut at = Url::parse(url).map_err(|_| DownloadError::NotAllowed(url.to_owned()))?;
         let mut followed = 0;
@@ -459,7 +340,6 @@ impl Downloader {
     }
 }
 
-/// Removes, when dropped, each file or folder it holds, whether it is there or not.
 struct Removal(Vec<PathBuf>);
 
 impl Drop for Removal {
@@ -470,7 +350,6 @@ impl Drop for Removal {
     }
 }
 
-/// Removes a file, or a folder with what it holds; it is no error that nothing is there.
 fn remove(path: &Path) {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => {
@@ -491,13 +370,10 @@ fn unpack_error(error: impl std::fmt::Display) -> DownloadError {
     DownloadError::Unpack(error.to_string())
 }
 
-/// The digest in lowercase hexadecimal.
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Unpacks the downloaded file `archive` into the new folder `into`, as the module doc
-/// says, and makes `program` executable.
 fn unpack(
     archive: &Path,
     download: &Download,
@@ -550,8 +426,6 @@ fn unpack(
     fs::set_permissions(&target, fs::Permissions::from_mode(0o755)).map_err(folder_error)
 }
 
-/// The path of an entry once `strip` parts are dropped, none when no part is left, an error
-/// when the path is absolute or climbs.
 fn stripped(named: &Path, strip: u32) -> Result<Option<PathBuf>, DownloadError> {
     let mut parts = Vec::new();
     for part in named.components() {
@@ -570,7 +444,6 @@ fn stripped(named: &Path, strip: u32) -> Result<Option<PathBuf>, DownloadError> 
     Ok((!left.is_empty()).then(|| left.iter().collect()))
 }
 
-/// Writes what `from` gives to the new file `target`, its folders made, with `mode`.
 fn write_file(from: &mut dyn Read, target: &Path, mode: u32) -> Result<(), DownloadError> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).map_err(unpack_error)?;
@@ -580,10 +453,8 @@ fn write_file(from: &mut dyn Read, target: &Path, mode: u32) -> Result<(), Downl
     fs::set_permissions(target, fs::Permissions::from_mode(mode)).map_err(unpack_error)
 }
 
-/// Moves the unpacked folder `partial` to `version_folder`. When another process has put a
-/// folder with the program in it there already, that one is kept and `partial` is left for
-/// the caller to remove; a folder there with no program is no install and is replaced.
-/// Whether this call made the folder.
+/// A folder already there with the program in it, put by another process, is kept; one without it
+/// is replaced. Gives whether this call made the folder.
 fn place(partial: &Path, version_folder: &Path, program: &Path) -> Result<bool, DownloadError> {
     if version_folder.join(program).is_file() {
         return Ok(false);
@@ -591,14 +462,11 @@ fn place(partial: &Path, version_folder: &Path, program: &Path) -> Result<bool, 
     remove(version_folder);
     match fs::rename(partial, version_folder) {
         Ok(()) => Ok(true),
-        // Another process won the race to this folder.
         Err(_) if version_folder.join(program).is_file() => Ok(false),
         Err(error) => Err(folder_error(error)),
     }
 }
 
-/// Whether `servers` holds the pinned `download` of `server`: `installed.toml` names its
-/// version and digest, and its program is there.
 fn holds(servers: &Path, server: &str, download: &Download) -> bool {
     installed(servers, server).is_some_and(|held| {
         held.version == download.version
@@ -611,8 +479,6 @@ fn holds(servers: &Path, server: &str, download: &Download) -> bool {
     })
 }
 
-/// Each server of `registry` with a download for `platform`, and that download, in the
-/// order of the rows and of their servers.
 fn pinned_servers(
     registry: &Registry,
     platform: Platform,
@@ -629,12 +495,7 @@ fn pinned_servers(
         })
 }
 
-/// For each server of each row of `registry` with a download for `platform`: nothing when
-/// `servers` holds that version with that digest already, else [`Downloader::fetch`].
-/// `told` hears one line for each server, saying which it was, before its download is
-/// fetched, so that a failure is named by the last line told. What `cargo xtask
-/// language-servers` runs, and nothing else does. The first failure ends it. A downloader
-/// is made only for the first server that needs one.
+/// `told` hears a line before each fetch, so a failure is named by the last line.
 pub fn fill(
     registry: &Registry,
     platform: Platform,
@@ -661,9 +522,6 @@ pub fn fill(
     Ok(())
 }
 
-/// The names of the servers of `registry` with a download for `platform` whose pinned
-/// version `servers` does not hold with its digest: what a test that needs the real servers
-/// says is missing. Empty when the folder is complete.
 pub fn missing(registry: &Registry, platform: Platform, servers: &Path) -> Vec<String> {
     pinned_servers(registry, platform)
         .filter(|(name, download)| !holds(servers, name, download))
@@ -721,7 +579,6 @@ mod tests {
             "http://127.0.0.1:1/x",
             "http://example.org/y"
         ));
-        // Whatever the address of origin, the next address must be one that is fetched.
         assert!(!redirect_allowed(
             "https://a.example/x",
             "ftp://b.example/y"
@@ -732,10 +589,8 @@ mod tests {
         ));
     }
 
-    // A certificate and its key made for the test alone, with `openssl req -x509` for the
-    // address 127.0.0.1, valid from 2020 to 2120, not a certificate authority. They guard
-    // nothing: the key is public, and the downloader trusts the certificate only in the one
-    // test that builds its agent with it.
+    // Test-only certificate and key for 127.0.0.1; the key is public. Valid from 2020 to 2120, not
+    // a CA.
     const TEST_CERTIFICATE: &str = "\
 -----BEGIN CERTIFICATE-----
 MIIBtDCCAVqgAwIBAgIUYpSQHapmF/Opz8hiNEhioquUvyswCgYIKoZIzj0EAwIw
@@ -758,8 +613,6 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
 -----END PRIVATE KEY-----
 ";
 
-    /// A listener on `127.0.0.1` that serves one TLS connection with the test certificate:
-    /// it reads the request head, answers `302` to `location` and closes. Gives its port.
     fn redirecting_over_tls(location: String) -> u16 {
         use rustls::pki_types::pem::PemObject;
         use rustls::pki_types::{CertificateDer, PrivateKeyDer};
@@ -805,9 +658,6 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
         port
     }
 
-    /// A plain listener on `127.0.0.1` that answers every request with an empty 200, and
-    /// sends the first line of each request it hears to the channel, in the order the
-    /// connections arrived. Gives its port and the channel.
     fn hearing() -> (u16, std::sync::mpsc::Receiver<String>) {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("listen");
         let port = listener.local_addr().expect("its address").port();
@@ -856,8 +706,6 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
 
         let outcome = downloader.get(&format!("https://127.0.0.1:{tls_port}/server.tgz"));
 
-        // The refusal names the address the redirect led to, which is allowed as an address
-        // on its own: only the step from https to it is what is refused.
         assert!(
             allowed(&landing),
             "the landing address is one that is fetched"
@@ -867,9 +715,8 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
             Err(other) => panic!("the redirect was not refused by the rule: {other:?}"),
             Ok(_) => panic!("the redirect to {landing} was followed"),
         }
-        // The barrier: a request of the test's own, straight to the listener the redirect
-        // named. Connections are accepted in the order they arrive, so a request of the
-        // downloader's would be heard before it, and this is the first thing heard.
+        // Barrier: connections are accepted in arrival order, so a request of the downloader's
+        // would be heard before this one.
         let mut own = std::net::TcpStream::connect(("127.0.0.1", plain_port)).expect("connect");
         own.write_all(b"GET /barrier HTTP/1.1\r\n\r\n")
             .expect("send");
@@ -887,9 +734,6 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
         let downloader = Downloader::new().expect("a downloader");
         let config = downloader.agent.config();
 
-        // The figures are the decision's; the constants are what the agent is given. That no
-        // proxy is read is shown by `tests/download.rs`, which runs a download in a process
-        // whose environment names one.
         assert_eq!(CONNECT_WITHIN, Duration::from_secs(30));
         assert_eq!(READ_WITHIN, Duration::from_secs(60));
         assert_eq!(config.timeouts().connect, Some(CONNECT_WITHIN));
@@ -914,8 +758,8 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
                     _ => return,
                 }
             }
-            // Ten of a thousand bytes, then silence, the connection kept open until the test
-            // has its answer.
+            // Ten of a thousand bytes, then silence, the connection kept open until the test has
+            // its answer.
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n0123456789");
             let _ = held.recv();
         });
@@ -940,8 +784,8 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
             program: "p".to_owned(),
             size: 1000,
         };
-        // The download runs on a thread of its own, so that a missing wait fails this test
-        // with a sentence instead of holding it for good.
+        // The download runs on a thread of its own, so that a missing wait fails with a sentence
+        // instead of hanging.
         let (done, outcome) = channel();
         let target = folder.clone();
         let started = std::time::Instant::now();
@@ -959,8 +803,7 @@ iknCMQxXMg+fLnbpSmMIPZHMEz1xkfY5soU97rW7fCf+AHfJmC3lAP9w
         let _ = release.send(());
         server.join().expect("the stalling server");
 
-        // It ended by the wait, not by some other failure sooner: a slow machine only
-        // lengthens what was waited.
+        // The download ended by the read wait, not by an earlier failure.
         assert!(waited >= Duration::from_secs(1), "ended after {waited:?}");
         assert!(
             matches!(outcome, Err(DownloadError::Network(_))),

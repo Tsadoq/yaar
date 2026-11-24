@@ -1,5 +1,4 @@
-//! Component test: the Window's connection to the Keeper, through what every part of the
-//! Window uses of it. The test plays the Keeper on the other end of a socket pair.
+//! Component test: the Window's connection to the Keeper, played by the test on a socket pair.
 
 mod common;
 
@@ -45,15 +44,13 @@ fn status(link: &Entity<KeeperLink>, cx: &mut TestAppContext) -> LinkStatus {
     link.read_with(cx, |link, _| link.status().clone())
 }
 
-/// Every chunk of output a terminal holds, and whether its output has ended after them.
-/// Takes no waiting: what has not arrived is not there.
+/// Output a terminal holds, and whether it has ended. Never waits.
 fn drain(output: &TerminalOutput) -> (Vec<Vec<u8>>, bool) {
     let mut chunks = Vec::new();
     while let Some(bytes) = output.ready() {
         chunks.push(bytes);
     }
-    // One look at the end, which a waker that wakes nobody cannot be told apart from
-    // waiting: a pending look says the output goes on.
+    // A waker that wakes nobody: a pending poll means the output goes on.
     let mut next = pin!(output.next());
     let ended = matches!(
         next.as_mut()
@@ -63,7 +60,6 @@ fn drain(output: &TerminalOutput) -> (Vec<Vec<u8>>, bool) {
     (chunks, ended)
 }
 
-/// A link with a Keeper of the Window's own protocol at the other end.
 fn linked(cx: &mut TestAppContext) -> (Entity<KeeperLink>, KeeperEnd) {
     let link = cx.new(|_| KeeperLink::new());
     let keeper = KeeperEnd::attach(&link, cx);
@@ -79,7 +75,6 @@ fn a_request_goes_out_as_a_frame_and_its_answer_reaches_the_asker(cx: &mut TestA
     keeper.reply(id, Ok(Reply::Workspaces(repositories())));
     assert_eq!(answer(asked, cx), Ok(Reply::Workspaces(repositories())));
 
-    // A refusal reaches the asker as the Keeper worded it.
     let folder = PathBuf::from("/tmp/no repository here");
     let asked = link.update(cx, |link, cx| {
         link.ask(
@@ -104,7 +99,6 @@ fn a_request_goes_out_as_a_frame_and_its_answer_reaches_the_asker(cx: &mut TestA
 fn requests_arrive_in_the_order_asked_and_each_answer_finds_its_asker(cx: &mut TestAppContext) {
     let (link, mut keeper) = linked(cx);
 
-    // All three are asked before the app runs again: the order is that of the calls.
     let (first, second, third) = link.update(cx, |link, cx| {
         (
             link.ask(get_changes('1'), cx),
@@ -120,7 +114,6 @@ fn requests_arrive_in_the_order_asked_and_each_answer_finds_its_asker(cx: &mut T
         "requests that wait together have ids of their own"
     );
 
-    // Answered out of order, each by its id.
     let refused = |digit| Refusal::UnknownWorkspace {
         workspace: workspace(digit),
     };
@@ -168,7 +161,6 @@ fn a_closed_connection_answers_every_waiting_ask_and_every_later_one(cx: &mut Te
             link.ask(get_changes('2'), cx),
         )
     });
-    // The Keeper has both before it goes.
     keeper.expect(get_changes('1'), cx);
     keeper.expect(get_changes('2'), cx);
     keeper.close();
@@ -187,10 +179,8 @@ fn nothing_is_asked_while_no_keeper_of_the_same_version_is_reached(cx: &mut Test
         answer(asked, cx)
     };
 
-    // Not reached yet.
     assert_eq!(ask(cx), Err(AskError::NotLinked));
 
-    // Reached, and of another version: it may be told to stop and nothing else.
     let other = KeeperEnd::attach_speaking(PROTOCOL_VERSION + 1, &link, cx);
     assert!(matches!(
         link.read_with(cx, |link, _| link.status().clone()),
@@ -198,13 +188,11 @@ fn nothing_is_asked_while_no_keeper_of_the_same_version_is_reached(cx: &mut Test
     ));
     assert_eq!(ask(cx), Err(AskError::NotLinked));
 
-    // Not reachable.
     link.update(cx, |link, cx| {
         link.attached(Err("no Keeper".to_owned()), cx)
     });
     assert_eq!(ask(cx), Err(AskError::NotLinked));
 
-    // That outcome let the other Keeper go, and its end shows what it was sent: nothing.
     assert_eq!(other.rest(cx), Vec::<Message>::new());
 }
 
@@ -216,7 +204,6 @@ fn a_keeper_reached_anew_takes_the_place_of_the_one_before(cx: &mut TestAppConte
 
     let mut after = KeeperEnd::attach(&link, cx);
 
-    // Who waited on the first is told, and the first is let go with nothing more sent.
     assert_eq!(answer(waiting, cx), Err(AskError::NotLinked));
     assert_eq!(before.rest(cx), Vec::<Message>::new());
 
@@ -232,7 +219,6 @@ fn a_keeper_that_stops_speaking_the_link_is_let_go(cx: &mut TestAppContext) {
     let waiting = link.update(cx, |link, cx| link.ask(get_changes('1'), cx));
     keeper.expect(get_changes('1'), cx);
 
-    // A frame of one byte, of a kind the Link does not have.
     keeper.send_raw(&[1, 0, 0, 0, 99]);
 
     assert_eq!(answer(waiting, cx), Err(AskError::NotLinked));
@@ -258,14 +244,12 @@ fn a_request_too_long_for_a_frame_is_refused_and_the_connection_stays(cx: &mut T
         Err(AskError::Refused(Refusal::Failed { .. }))
     ));
 
-    // Nothing of it was sent: the next request is the first the Keeper reads.
     let asked = link.update(cx, |link, cx| link.ask(Request::ListWorkspaces, cx));
     let id: RequestId = keeper.expect(Request::ListWorkspaces, cx);
     keeper.reply(id, Ok(Reply::Done));
     assert_eq!(answer(asked, cx), Ok(Reply::Done));
 }
 
-/// Keeps the app running until the link is lost, and gives the reason.
 fn lost(link: &Entity<KeeperLink>, cx: &mut TestAppContext) -> String {
     wait_until(cx, "the link to be lost", |cx| {
         matches!(status(link, cx), LinkStatus::Lost(_))
@@ -334,7 +318,6 @@ fn a_keeper_reached_anew_is_not_lost_with_the_one_it_replaced(cx: &mut TestAppCo
     let (link, before) = linked(cx);
     let after = KeeperEnd::attach(&link, cx);
 
-    // The first connection ends, and its end is heard by nobody.
     assert_eq!(before.rest(cx), Vec::<Message>::new());
     cx.run_until_parked();
 
@@ -367,7 +350,6 @@ fn nothing_is_sent_for_no_bytes(cx: &mut TestAppContext) {
     link.update(cx, |link, _| link.send_input(&terminal('1'), Vec::new()));
     let _asked = link.update(cx, |link, cx| link.ask(get_changes('1'), cx));
 
-    // The first thing the Keeper reads is the request.
     keeper.expect(get_changes('1'), cx);
 }
 
@@ -405,7 +387,6 @@ fn a_paste_of_twenty_mebibytes_arrives_whole_in_order_in_frames_of_at_most_64_ki
         "the paste did not arrive as it was sent"
     );
     assert_eq!(frames, pasted.len().div_ceil(PIECE));
-    // The request given after the paste leaves after all of it.
     keeper.expect(get_changes('1'), cx);
 }
 
@@ -418,10 +399,8 @@ fn input_is_dropped_while_no_keeper_of_the_same_version_is_reached(cx: &mut Test
         })
     };
 
-    // Not reached yet.
     send(cx);
 
-    // Reached, and of another version.
     let other = KeeperEnd::attach_speaking(PROTOCOL_VERSION + 1, &link, cx);
     send(cx);
 
@@ -438,7 +417,6 @@ fn input_is_dropped_once_the_connection_is_lost(cx: &mut TestAppContext) {
     keeper.close();
     lost(&link, cx);
 
-    // Nothing to send it on, and nothing breaks.
     link.update(cx, |link, _| {
         link.send_input(&terminal('1'), b"ls".to_vec())
     });
@@ -453,7 +431,7 @@ fn a_keeper_that_reads_nothing_is_let_go_after_the_timeout_and_nothing_waits_for
     let link = cx.new(|_| KeeperLink::new());
     let keeper_end = KeeperEnd::attach_deaf(&link, cx);
 
-    // Far more than a socket holds: the writing thread blocks on it.
+    // Far more than a socket holds, so the writing thread blocks.
     let before = Instant::now();
     let waiting = link.update(cx, |link, cx| {
         link.send_input(&terminal('1'), vec![b'x'; 8 * 1024 * 1024]);
@@ -469,8 +447,7 @@ fn a_keeper_that_reads_nothing_is_let_go_after_the_timeout_and_nothing_waits_for
         "a Keeper is not let go before the timeout"
     );
 
-    // The Keeper is let go after 5 seconds; the rest of the time is for a machine that
-    // runs a great deal else.
+    // The Keeper is let go after 5 seconds; the rest is slack for a loaded machine.
     wait_until_within(
         Duration::from_secs(60),
         cx,
@@ -479,7 +456,6 @@ fn a_keeper_that_reads_nothing_is_let_go_after_the_timeout_and_nothing_waits_for
     );
     let why = lost(&link, cx);
     assert!(why.contains("took nothing"), "{why}");
-    // The request that waited behind the input is told it will not be answered.
     assert_eq!(answer(waiting, cx), Err(AskError::NotLinked));
     drop(keeper_end);
 }
@@ -488,11 +464,10 @@ fn a_keeper_that_reads_nothing_is_let_go_after_the_timeout_and_nothing_waits_for
 fn output_that_arrives_before_it_is_taken_waits_and_is_given_in_order(cx: &mut TestAppContext) {
     let (link, mut keeper) = linked(cx);
 
-    // Two terminals, written to before anybody asks for either.
     keeper.output(&terminal('1'), b"$ ");
     keeper.output(&terminal('2'), b"other");
     keeper.output(&terminal('1'), b"ls\r\n");
-    // A fact is a fence: the thread that reads has gone through all of the above.
+    // A fact is a fence: the reading thread has handled everything sent before it.
     let heard = Rc::new(RefCell::new(0));
     let _subscription = cx.update(|cx| {
         let heard = heard.clone();
@@ -515,7 +490,6 @@ fn output_that_arrives_before_it_is_taken_waits_and_is_given_in_order(cx: &mut T
         .expect("output of the second terminal");
     assert_eq!(drain(&second), (vec![b"other".to_vec()], false));
 
-    // What comes after it is taken reaches the one who took it, and nobody else.
     keeper.output(&terminal('1'), b"more");
     let bytes = answer(
         cx.foreground_executor()
@@ -564,7 +538,6 @@ fn output_ends_after_its_last_bytes_before_the_end_of_the_terminal_is_heard(
         .update(cx, |link, _| link.take_output(&terminal('1')))
         .expect("output");
     let untaken = terminal('2');
-    // What the one heard when the end of its terminal was told: all of it, and then the end.
     let at_the_end = Rc::new(RefCell::new(None));
     let _subscription = cx.update(|cx| {
         let at_the_end = at_the_end.clone();
@@ -590,7 +563,6 @@ fn output_ends_after_its_last_bytes_before_the_end_of_the_terminal_is_heard(
         "the output is complete and over when the end is told"
     );
 
-    // Bytes of an ended terminal are dropped, and the other terminal goes on.
     keeper.output(&terminal('1'), b"ghost");
     keeper.output(&untaken, b"!");
     let fence = link
@@ -623,7 +595,7 @@ fn the_output_of_a_terminal_that_ended_untaken_is_still_there_to_take(cx: &mut T
         let heard = heard.clone();
         cx.subscribe(&link, move |_, _: &Fact, _| *heard.borrow_mut() += 1)
     });
-    // The fence comes after the ghost.
+    // The fence comes after the ghost bytes.
     keeper.tell(Fact::ChangesChanged {
         workspace: workspace('1'),
     });
@@ -651,7 +623,6 @@ fn when_the_connection_ends_every_output_ends_after_what_it_holds(cx: &mut TestA
     lost(&link, cx);
 
     assert_eq!(drain(&taken), (vec![b"one".to_vec()], true));
-    // What was not taken yet is there to take, and ends too; so does one never heard of.
     let untaken = link
         .update(cx, |link, _| link.take_output(&terminal('2')))
         .expect("output");

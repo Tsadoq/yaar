@@ -1,17 +1,6 @@
-//! The login shell's environment, taken once at the start on a thread of its own.
-//!
-//! A Keeper that a Window started from the Finder, the Dock or a desktop's menu has the
-//! system's short search path, so the user's git would run the user's hooks without the
-//! programs of their login path. [`start`] runs [`yaar_link::login::take`] with the Keeper's
-//! own environment as the base and hands what it gives to the [`GitEnvironment`] every
-//! `Git` of the Keeper holds, which is what [`waiting_for`] made.
-//!
-//! The thread starts after the socket is bound, so that no Window waits for it, and it
-//! answers no Window: a read of git runs in the Keeper's own environment until the take has
-//! ended, and the user's own git waits for it (`GitEnvironment`). A shell that gives no
-//! environment is said in one line on the standard error,
-//! `yaar-keeper: the login shell <path> gave no environment: <why>`, and the Keeper goes on
-//! in its own.
+//! The login shell's environment, taken once at start on a thread of its own: a Keeper started
+//! from the Finder has a short search path, which the user's git hooks would run with. Until
+//! the take ends, reads of git use the Keeper's own environment and the user's own git waits.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -22,9 +11,6 @@ use yaar_recorder::GitEnvironment;
 
 use crate::Options;
 
-/// The environment the Keeper's git runs in, before the take: waiting for it, for at most
-/// the shell's deadline, when `options` name a shell, and the process's own for ever when
-/// they name none.
 pub(crate) fn waiting_for(options: &Options) -> GitEnvironment {
     match &options.login_shell {
         Some(shell) => GitEnvironment::waiting(shell.deadline),
@@ -32,18 +18,13 @@ pub(crate) fn waiting_for(options: &Options) -> GitEnvironment {
     }
 }
 
-/// A take under way.
 pub(crate) struct Take {
-    /// The shell's process group while it runs, which the end kills.
     group: ShellGroup,
     /// Set when the Keeper leaves: a shell killed for it is no fault to say.
     leaving: Arc<AtomicBool>,
-    /// The thread that runs the shell; none when the options named no shell.
     thread: Option<JoinHandle<()>>,
 }
 
-/// Starts the take of `options.login_shell`, if there is one, on a thread of its own, and
-/// ends `environment` with what it gave, or with none. Gives at once.
 pub(crate) fn start(options: &Options, environment: GitEnvironment) -> Take {
     let group = ShellGroup::default();
     let leaving = Arc::new(AtomicBool::new(false));
@@ -59,7 +40,6 @@ pub(crate) fn start(options: &Options, environment: GitEnvironment) -> Take {
         std::thread::Builder::new()
             .name("keeper-login-environment".to_owned())
             .spawn(move || {
-                // Whatever happens below, the take ends: a run that waits for it is woken.
                 let ends = EndsTheTake(environment);
                 let environment = &ends.0;
                 let own: Vec<_> = std::env::vars_os().collect();
@@ -98,8 +78,8 @@ pub(crate) fn start(options: &Options, environment: GitEnvironment) -> Take {
     }
 }
 
-/// Ends the take with none when it is dropped, if nothing ended it before: so that a thread
-/// that panics cannot leave the user's own git waiting for its whole deadline.
+/// Ends the take with none when dropped, if nothing ended it: a thread that panics cannot leave the
+/// user's git waiting for the whole deadline.
 struct EndsTheTake(GitEnvironment);
 
 impl Drop for EndsTheTake {
@@ -109,8 +89,6 @@ impl Drop for EndsTheTake {
 }
 
 impl Take {
-    /// The Keeper leaves: a shell still running is killed, and the thread is waited for.
-    /// What waits for the take is woken with none.
     pub(crate) fn end(mut self) {
         self.finish();
     }

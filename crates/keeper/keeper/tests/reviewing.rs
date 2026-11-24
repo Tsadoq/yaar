@@ -1,12 +1,5 @@
-//! Component tests: what the user does to a review of slice 6, through the surface a
-//! Window uses, with real repositories, a real database and the built hook program
-//! beneath, and what the Keeper tells the Windows of each change.
-//!
-//! A session exists because the hook program reported it, as Claude Code's does; the
-//! Keeper is the library on a thread of the test. The Keeper runs git and the shells of
-//! its terminals with the environment of its process, so each test sets that environment
-//! as its first statement, and these tests are run by `cargo nextest`, which gives each
-//! test a process of its own.
+//! Component tests of a review through the Window surface. Each test sets the process
+//! environment first, so nextest runs it in a process of its own.
 
 use std::io::Write as _;
 use std::os::unix::net::UnixStream;
@@ -29,7 +22,6 @@ use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -37,21 +29,14 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// The recording whose first session starts (line 0) and ends (line 13), and whose second
-/// session starts (line 14).
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
 
-/// What `a.txt` of every repository holds, a line each.
 const LINES: [&str; 3] = ["one", "two", "three"];
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
+    /// Sets the process environment for git and the shell. Must be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -74,17 +59,14 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: this runs as the first statement of a test, and nextest gives each test
+        // a process of its own, so no other thread exists yet.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go, and a program of a
-            // terminal's too: a folder that goes with the test.
+            // Where the Keeper's copies of git's file lists and a terminal's programs go.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -110,11 +92,8 @@ impl Scratch {
         self.0.join("data").join(yaar_store::FILE_NAME)
     }
 
-    /// The folder of the test's own copy of the built hook program, made at the first
-    /// call. Every test process asks `program` to build, and cargo puts a program it built
-    /// in place again each time: where tests run side by side, the program is gone for a
-    /// moment, and one started from there fails. A copy is made at the first try that finds
-    /// the program, and is the test's own.
+    /// The folder of the test's own copy of the hook program: cargo puts a rebuilt program in
+    /// place again for every test process, so under parallel tests it is briefly missing.
     fn companions(&self) -> PathBuf {
         let folder = self.0.join("companions");
         let copy = folder.join(yaar_adapter_claude::HOOK_PROGRAM);
@@ -135,13 +114,10 @@ impl Scratch {
         }
     }
 
-    /// Starts the Keeper's library on a thread of this test, with the folder of the hook
-    /// program as where the pieces of the agents lie.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         self.keeper_told(Some(self.companions()))
     }
 
-    /// The same, told this folder for the pieces, or none.
     fn keeper_told(&self, companions: Option<PathBuf>) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -155,7 +131,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -177,8 +152,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main` and an identity of its
-    /// own, since git guesses none on every system.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -191,14 +164,11 @@ impl Scratch {
         folder
     }
 
-    /// The database the Keeper kept, read once the Keeper has stopped.
     fn store(&self) -> Store {
         Store::open(&self.database()).expect("open the Keeper's database")
     }
 
-    /// Runs the hook program with `payload` on its standard input, as Claude Code does,
-    /// in the terminal `terminal` of the app; none for a CLI outside the app. Returns how
-    /// long it took. It must succeed and print nothing, whatever became of the report.
+    /// `terminal` None is a CLI outside the app. Returns how long it took.
     fn hook(&self, terminal: Option<&TerminalId>, payload: &[u8]) -> Duration {
         let mut command = Command::new(self.companions().join(yaar_adapter_claude::HOOK_PROGRAM));
         command
@@ -247,8 +217,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it. Everything it is sent is kept, so that a
-/// test reads it in order, and what it has looked at is not looked at again.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -277,8 +245,6 @@ impl Window {
         id
     }
 
-    /// Reads one frame and keeps it. Fails the test at the deadline, with the facts that
-    /// came.
     fn read(&mut self, waiting_for: &str) {
         match read_message(&mut self.stream) {
             Ok(Message::Fact(fact)) => self.facts.push(fact),
@@ -297,7 +263,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         loop {
@@ -308,7 +273,6 @@ impl Window {
         }
     }
 
-    /// The first fact from here on that `wanted` takes, passing over the ones before it.
     fn until<T>(&mut self, what: &str, mut wanted: impl FnMut(&Fact) -> Option<T>) -> T {
         loop {
             while self.looked_at < self.facts.len() {
@@ -321,7 +285,6 @@ impl Window {
         }
     }
 
-    /// The next `AgentsChanged` of `workspace` that `wanted` takes.
     fn agents_until(
         &mut self,
         workspace: &WorkspaceId,
@@ -336,7 +299,6 @@ impl Window {
         })
     }
 
-    /// Reads until `text` is in the output of `terminal`.
     fn output_until(&mut self, terminal: &TerminalId, text: &str) {
         loop {
             let heard = self.output.iter().find(|(from, _)| from == terminal);
@@ -357,7 +319,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it, and waits until the shell has started.
     fn open_terminal(&mut self, workspace: &WorkspaceId) -> TerminalId {
         let opened = self.ask(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -398,7 +359,6 @@ impl Window {
 }
 
 impl Window {
-    /// The reviews of a workspace.
     fn reviews(&mut self, workspace: &WorkspaceId) -> WorkspaceReviews {
         match self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -408,7 +368,7 @@ impl Window {
         }
     }
 
-    /// Saves the first comment of a new thread on line `line` (from 1) of `a.txt`.
+    /// `line` counts from 1.
     fn draft(&mut self, review: &ReviewId, n: u32, line: u32, text: &str) -> (ThreadId, CommentId) {
         let (thread, comment) = ids(n);
         let saved = self.ask(Request::SaveDraft {
@@ -433,22 +393,18 @@ impl Window {
         (thread, comment)
     }
 
-    /// Asks for what the review's next message would carry.
     fn attachment(&mut self, review: &ReviewId) -> Result<Reply, Refusal> {
         self.ask(Request::GetAttachment {
             review: review.clone(),
         })
     }
 
-    /// Reads until every fact the Keeper's lane of requests told for what was asked so
-    /// far is here: a reply comes after the facts of the requests before it.
+    /// A reply comes after the facts of the requests before it, so reading up to it gets them all.
     fn flush(&mut self) {
         let listed = self.ask(Request::ListWorkspaces);
         assert!(matches!(listed, Ok(Reply::Workspaces(_))), "{listed:?}");
     }
 
-    /// The facts that came after the first `mark` ones, ReviewsChanged of `workspace`
-    /// counted.
     fn reviews_changed_since(&self, mark: usize, workspace: &WorkspaceId) -> usize {
         self.facts[mark..]
             .iter()
@@ -456,21 +412,16 @@ impl Window {
             .count()
     }
 
-    /// Reads until an `AgentsChanged` of `workspace` has come after the first `mark`
-    /// facts, for a request that is known to tell the agents. It closes no count: an
-    /// `AgentsChanged` that a request wrongly caused looks the same as the one it waits
-    /// for, so a test that counts them ends on [`Window::agents_in_state_since`] instead.
+    /// Reads until an `AgentsChanged` of `workspace` comes after `mark`. It cannot end a count:
+    /// a wrongly caused one looks the same, so a counting test ends on `agents_in_state_since`.
     fn agents_told_since(&mut self, mark: usize, workspace: &WorkspaceId) {
         while self.agents_changed_since(mark, workspace) == 0 {
             self.read("the sessions told again");
         }
     }
 
-    /// Reads until an `AgentsChanged` of `workspace` shows a session in `state` after the
-    /// first `mark` facts, and gives the number of facts up to and including it. A test
-    /// that makes the state change itself, with a hook that returns once the agents' side
-    /// took its report, has every `AgentsChanged` of an earlier request in front of that
-    /// one: the agents' side tells in the order it was handed its work.
+    /// A hook returns once the agents' side took the report, so the `AgentsChanged` showing `state`
+    /// follows every earlier request's.
     fn agents_in_state_since(
         &mut self,
         mark: usize,
@@ -489,8 +440,6 @@ impl Window {
         }
     }
 
-    /// How many `AgentsChanged` of `workspace` came among the facts from `mark` up to
-    /// `end`.
     fn agents_changed_between(&self, mark: usize, end: usize, workspace: &WorkspaceId) -> usize {
         self.facts[mark..end]
             .iter()
@@ -500,7 +449,6 @@ impl Window {
             .count()
     }
 
-    /// How many `AgentsChanged` of `workspace` came after the first `mark` facts.
     fn agents_changed_since(&self, mark: usize, workspace: &WorkspaceId) -> usize {
         self.facts[mark..]
             .iter()
@@ -511,7 +459,6 @@ impl Window {
     }
 }
 
-/// The id of the thread `n` and of its first comment, 32 hexadecimal digits each.
 fn ids(n: u32) -> (ThreadId, CommentId) {
     (
         ThreadId::new(format!("{:032x}", 0x1000 + n)),
@@ -519,7 +466,6 @@ fn ids(n: u32) -> (ThreadId, CommentId) {
     )
 }
 
-/// A Keeper with one repository open and a Window attached.
 struct Setup {
     scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
@@ -529,7 +475,6 @@ struct Setup {
 }
 
 impl Setup {
-    /// Has to be the first statement of a test.
     fn new() -> Setup {
         let scratch = Scratch::new();
         let repo = scratch.repository("repo");
@@ -545,14 +490,11 @@ impl Setup {
         }
     }
 
-    /// Runs the hook of line `line` of `records`, moved into the repository, in `terminal`.
     fn hook_in(&self, terminal: &TerminalId, records: &[HookRecord], line: usize) {
         let record = records[line].in_project(&self.repo);
         self.scratch.hook(Some(terminal), &record.input_bytes());
     }
 
-    /// A session of Claude Code that runs in a shell of the app, and the review it holds:
-    /// the first session of the recording of dialogs, waiting for the user's message.
     fn session(&mut self) -> (yaar_link::SessionId, ReviewId, TerminalId) {
         let terminal = self.window.open_terminal(&self.workspace);
         let records = recorded::hook_events(DIALOGS);
@@ -568,7 +510,6 @@ impl Setup {
         )
     }
 
-    /// The review of the workspace that no agent holds, which exists once asked for.
     fn review_of_no_agent(&mut self) -> ReviewId {
         let reviews = self.window.reviews(&self.workspace);
         let [review] = &reviews.reviews[..] else {
@@ -584,7 +525,6 @@ impl Setup {
         })
     }
 
-    /// The session list of the workspace, as a Window reads it.
     fn sessions(&mut self) -> Vec<yaar_link::Session> {
         self.window
             .agents()
@@ -603,7 +543,6 @@ impl Setup {
             .expect("the review is kept")
     }
 
-    /// Stops the Keeper and gives what it kept, once it has gone.
     fn finish(self) -> (Store, Scratch) {
         self.window.stop(self.keeper);
         let store = self.scratch.store();
@@ -629,7 +568,6 @@ fn pi() -> AgentCli {
     }
 }
 
-/// The state the review tells of a thread.
 fn state_of(review: &yaar_link::Review, thread: &ThreadId) -> ThreadState {
     review
         .threads
@@ -652,8 +590,6 @@ fn attaching_a_review_whose_session_runs_offers_nothing_and_tells_the_reviews_an
         setup.attach(&review, None),
         Ok(Reply::AttachedReview { start: Vec::new() })
     );
-    // The reviews are told after the reply; the agent's terminal shows it from the
-    // agents.
     setup.window.flush();
     setup.window.agents_told_since(mark, &setup.workspace);
     assert_eq!(
@@ -710,8 +646,6 @@ fn attaching_the_review_of_a_session_that_ended_offers_its_cli_while_another_ses
     let mut setup = Setup::new();
     let (first, review, first_terminal) = setup.session();
     setup.window.draft(&review, 1, 1, "first draft");
-    // A second session starts in a terminal of its own while the first runs, so it holds a
-    // review of its own; then the first ends.
     let records = recorded::hook_events(DIALOGS);
     let second_terminal = setup.window.open_terminal(&setup.workspace);
     setup.hook_in(&second_terminal, &records, 14);
@@ -764,7 +698,6 @@ fn attaching_the_review_of_no_agent_offers_every_supported_cli() {
         })
     );
     assert_eq!(setup.review(&review).attached, Some(Attachment::Review));
-    // No agent holds it, so no text of its own: there is nobody to deliver to.
     assert_eq!(
         setup.window.attachment(&review),
         Err(Refusal::NothingToSend {
@@ -782,8 +715,7 @@ fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and
     let workspace = setup.workspace.clone();
     let (store, scratch) = setup.finish();
 
-    // A session of a CLI the Keeper has no Adapter for, as an older Keeper that knew one
-    // left it: it ended, and the review is its own.
+    // A CLI without an Adapter, as an older Keeper left it: ended, and the review is its own.
     let session = yaar_store::SessionId::new("5".repeat(32));
     store
         .put_session(&yaar_store::SessionRecord {
@@ -805,8 +737,6 @@ fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and
 
     let keeper = scratch.keeper();
     let mut window = scratch.window();
-    // Its CLI is the one to offer, and it cannot be started: the offer is empty, which
-    // every supported CLI is not.
     assert_eq!(
         window.ask(Request::AttachReview {
             review: review.clone(),
@@ -814,7 +744,6 @@ fn attaching_the_review_of_a_session_of_a_cli_with_no_adapter_offers_nothing_and
         }),
         Ok(Reply::AttachedReview { start: Vec::new() })
     );
-    // With no Adapter there is no instruction to put first and nobody to deliver to.
     assert_eq!(
         window.attachment(&review),
         Err(Refusal::NothingToSend {
@@ -854,8 +783,6 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
             thread: nowhere.clone()
         })
     );
-    // The only draft is on a resolved thread: nothing to carry, for the review and for
-    // the thread alone.
     for thread in [None, Some(&resolved)] {
         assert_eq!(
             setup.attach(&review, thread),
@@ -872,7 +799,6 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         })
     );
     assert_eq!(setup.review(&review).attached, None);
-    // A review that is not there is not one with nothing to carry.
     assert_eq!(
         setup.window.attachment(&nobody),
         Err(Refusal::UnknownReview {
@@ -880,7 +806,6 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         })
     );
 
-    // A draft and an attach that succeed: each tells, and the refusals before them did not.
     setup.window.draft(&review, 2, 2, "to keep");
     assert_eq!(
         setup.attach(&review, None),
@@ -893,7 +818,6 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         "the draft and the attach tell, the refusals do not"
     );
 
-    // A refused attach leaves what was attached as it was.
     assert_eq!(
         setup.attach(&review, Some(&resolved)),
         Err(Refusal::NothingToSend {
@@ -909,11 +833,8 @@ fn an_attach_that_names_what_is_not_there_or_carries_nothing_is_refused_and_tell
         "{text}"
     );
 
-    // The barrier for the agents: a permission request of the session changes its state,
-    // answers nothing even with a review attached, and goes through the agents' side after
-    // everything asked before it; its hook returns once the agents' side took the report.
-    // The `AgentsChanged` that shows the state is the last one the attach and the refusals
-    // could have caused, and only the attach's is before it.
+    // Barrier: a permission request goes through the agents' side after everything asked before it,
+    // so its `AgentsChanged` is the last the earlier requests could cause.
     let records = recorded::hook_events(DIALOGS);
     assert_eq!(records[4].event, "PermissionRequest");
     setup.hook_in(&terminal, &records, 4);
@@ -948,8 +869,7 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
     setup.window.flush();
     let mark = setup.window.facts.len();
 
-    // Reading what the attachment would carry changes nothing, so it tells nobody: the
-    // counts below are the detach's own.
+    // Reading tells nobody, so the counts below are the detach's own.
     let read = setup.window.attachment(&review);
     assert!(matches!(read, Ok(Reply::Attachment { .. })), "{read:?}");
     assert_eq!(
@@ -963,10 +883,6 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
         setup.window.reviews_changed_since(mark, &setup.workspace),
         1
     );
-    // The detach, and no read before it, told the agents once. A message of the session
-    // changes its state and goes through the agents' side after both, and its hook
-    // returns once the agents' side took the report: the `AgentsChanged` that shows the
-    // state is the last one the detach and the read could have caused.
     let records = recorded::hook_events(DIALOGS);
     setup.hook_in(&terminal, &records, 2);
     let end = setup
@@ -992,7 +908,6 @@ fn a_detach_takes_the_attachment_away_keeps_every_draft_and_tells_the_reviews_an
         })
     );
 
-    // Nothing attached is no error; a review that is not there is.
     assert_eq!(
         setup.window.ask(Request::DetachReview {
             review: review.clone()
@@ -1038,7 +953,6 @@ fn a_thread_is_resolved_and_reopened_by_the_reviewer_alone_and_one_attached_alon
     assert!(held.threads.iter().any(|t| t.id == first && t.resolved));
     assert_eq!(state_of(&held, &first), ThreadState::Resolved);
     assert_eq!(state_of(&held, &second), ThreadState::Draft);
-    // The thread stays attached and carries nothing.
     assert_eq!(held.attached, Some(Attachment::Thread(first.clone())));
     assert_eq!(
         setup.window.attachment(&review),
@@ -1068,8 +982,6 @@ fn a_thread_is_resolved_and_reopened_by_the_reviewer_alone_and_one_attached_alon
     };
     assert!(text.contains("first draft"), "{text}");
 
-    // A thread the review does not hold is refused, a thread of another review too, and
-    // the other review is as it was.
     let other_repo = setup.scratch.repository("other");
     let other_workspace = setup.window.open(&other_repo);
     let other_review = {
@@ -1145,32 +1057,22 @@ fn a_thread_is_resolved_and_reopened_by_the_reviewer_alone_and_one_attached_alon
     let _ = setup.finish();
 }
 
-/// A review of a session whose threads were sent in one round and then answered by the
-/// agent, on a Keeper that started anew.
 struct Answered {
-    // Kept for its end: the folder goes with the test.
     _scratch: Scratch,
     keeper: JoinHandle<std::io::Result<Exit>>,
     window: Window,
     workspace: WorkspaceId,
     review: ReviewId,
-    /// Sent, and not answered.
     sent: ThreadId,
-    /// The agent replied and marked it addressed.
     addressed: ThreadId,
-    /// The agent replied without the mark.
     waiting: ThreadId,
-    /// The reviewer resolved it.
     resolved: ThreadId,
-    /// Addressed too, the first of two threads to be so.
     also_addressed: ThreadId,
 }
 
 impl Answered {
-    /// Has to be the first statement of a test. Five threads are sent in a round of a
-    /// copy; one is resolved through the Keeper; the Keeper stops; the agent's replies are
-    /// kept through the engine on the Keeper's own database, as the reply tool's report
-    /// keeps them; the Keeper starts again.
+    /// Has to be the first statement of a test. Five threads are sent in one round and one is
+    /// resolved; the agent's replies are kept through the engine while the Keeper is stopped.
     fn new() -> Answered {
         let mut setup = Setup::new();
         let (session, review, _) = setup.session();
@@ -1258,8 +1160,6 @@ fn each_thread_is_told_in_the_state_the_engines_rule_gives_it() {
     );
     assert_eq!(state_of(&held, &world.resolved), ThreadState::Resolved);
 
-    // A new thread is a draft. A follow-up written after the agent addressed a thread
-    // makes it a draft again: the reviewer's unsent word comes before the agent's mark.
     let (fresh, _) = world.window.draft(&world.review, 6, 3, "a new thread");
     let (_, follow_up) = ids(7);
     assert_eq!(
@@ -1277,7 +1177,6 @@ fn each_thread_is_told_in_the_state_the_engines_rule_gives_it() {
     assert_eq!(state_of(&held, &world.also_addressed), ThreadState::Draft);
     assert_eq!(state_of(&held, &world.addressed), ThreadState::Addressed);
 
-    // Resolved comes before a draft: the reviewer resolves a thread with an unsent word.
     assert_eq!(
         world.window.ask(Request::ResolveThread {
             review: world.review.clone(),
@@ -1289,7 +1188,6 @@ fn each_thread_is_told_in_the_state_the_engines_rule_gives_it() {
         state_of(&world.review(), &world.also_addressed),
         ThreadState::Resolved
     );
-    // Reopened, it is told as what it is again.
     assert_eq!(
         world.window.ask(Request::ReopenThread {
             review: world.review.clone(),
@@ -1334,8 +1232,6 @@ fn resolving_every_addressed_thread_resolves_those_and_no_other_and_tells_only_w
     assert_eq!(state_of(&held, &world.sent), ThreadState::Sent);
     assert_eq!(state_of(&held, &world.resolved), ThreadState::Resolved);
 
-    // With none left it is no error, and tells nobody: the next request's reply comes
-    // after everything the first told.
     let mark = world.window.facts.len();
     assert_eq!(
         world.window.ask(Request::ResolveAddressed {

@@ -1,47 +1,8 @@
-//! The delivery module of Claude Code: how a review rides with the user's message, what
-//! the hooks answer, and what the reply tool's server is answered with.
-//!
-//! A review rides in the answer of the `UserPromptSubmit` hook: inline, as
-//! `hookSpecificOutput.additionalContext`, while the text is at most [`INLINE_LIMIT`]
-//! UTF-16 code units, Claude Code's limit for one string of a hook's output; else written
-//! whole to `<folder>/`[`REVIEWS`]`/<CLI session id>/<review id>-<round>.md`, the
-//! Adapter's own folder of the app, outside every repository, through a temporary file
-//! renamed into place. The answer then holds a pointer, well under the limit: the text of
-//! [`INSTRUCTION`], then the file's absolute path and the request to read it whole. Either
-//! answer also holds a `systemMessage`, the one line the user sees under the prompt,
-//! `yaar: review round <n> attached (<k> threads)`, `k` the threads the rendered review
-//! holds ([`yaar_agent::Rendered::threads`]); the `yaar: ` before it says whose line it
-//! is.
-//!
-//! The answers are JSON objects as Claude Code reads them from a hook's standard output:
-//!
-//! ```json
-//! {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "<text>"},
-//!  "systemMessage": "<line>"}
-//! ```
-//!
-//! ```json
-//! {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
-//!  "permissionDecisionReason": "<why>"}}
-//! ```
-//!
-//! The second is given only for a `Read` whose `file_path`, made canonical, lies inside the
-//! folder of reviews of the session that reports it, `<folder>/`[`REVIEWS`]`/<its id>/`
-//! made canonical, and for a call of [`LISTED_REPLY_TOOL`]: the two things the user allowed
-//! by installing the app. The rule needs nothing remembered, so it holds after the Keeper
-//! started again. A `PermissionRequest`, and every other hook, is answered with nothing.
-//!
-//! A CLI session id is a folder name only when it is made of ASCII letters, digits, `-`
-//! and `_`, as Claude Code's are; a review for a session of any other id is not written,
-//! and its delivery fails, so nothing is sent.
-//!
-//! A call of the reply tool reaches the Adapter as a report of the tool server, whose
-//! payload is a JSON object the server writes, `{"tool_server": "yaar", "session_id":
-//! "<CLAUDE_CODE_SESSION_ID>", "cwd": "<its folder>", "name": "reply_to_thread",
-//! "arguments": {...}}`; its answer is the `result` of the MCP call, as the server hands it
-//! to Claude Code: `{"content": [{"type": "text", "text": "recorded reply to <thread>
-//! (addressed|open, <n> characters)"}]}`, or with `"isError": true` and the reason when the
-//! reply was refused.
+//! A review rides in the `UserPromptSubmit` answer as `additionalContext`, or as a file under
+//! `<folder>/`[`REVIEWS`]`/<session>/` when longer than [`INLINE_LIMIT`]; both with a
+//! `systemMessage`. `allow` goes only to a `Read` inside the session's own folder and to
+//! [`LISTED_REPLY_TOOL`]; nothing is remembered. A reply-tool call arrives as a report
+//! `{"tool_server", "session_id", "cwd", "name", "arguments"}`, answered with an MCP `result`.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -54,31 +15,21 @@ use yaar_agent::{
 use crate::COMMAND;
 use crate::report::Remembered;
 
-/// The longest text that rides inline in a hook's answer, in UTF-16 code units, as Claude
-/// Code counts a string: 10,000 arrive whole, 10,001 are replaced by a path and a preview.
+/// Claude Code's limit for one string of a hook's output, in UTF-16 code units: it passes
+/// 10,000 whole and cuts 10,001 to a path and a preview, so a longer review goes to a file.
 pub const INLINE_LIMIT: usize = 10_000;
 
-/// The folder, inside the Adapter's own folder of the app, that holds the reviews too
-/// long to ride inline: a folder for each CLI session, named by its id, and in it one file
-/// for each round, `<review id>-<round>.md`.
 pub const REVIEWS: &str = "reviews";
 
-/// The tool server's name in the plugin's `.mcp.json`.
 pub const TOOL_SERVER_NAME: &str = "yaar";
 
-/// The program of the app that serves the reply tool to Claude Code over its standard
-/// input and output, in the folder of the app's programs beside the hook program.
 pub const TOOL_SERVER: &str = "yaar-claude-tools";
 
-/// The reply tool, as the tool server lists it.
 pub const REPLY_TOOL: &str = "reply_to_thread";
 
-/// The reply tool, as Claude Code lists it to the agent: `mcp__plugin_<plugin>_<server>__`
-/// and its name.
+/// As Claude Code lists it to the agent: `mcp__plugin_<plugin>_<server>__<tool>`.
 pub const LISTED_REPLY_TOOL: &str = "mcp__plugin_yaar-review_yaar__reply_to_thread";
 
-/// The instruction that goes first in every review delivered to Claude Code: how to answer
-/// each thread with the reply tool, and nothing that resolves one.
 pub const INSTRUCTION: &str = "This is a code review of your changes, attached to the \
 user's message. Address each thread below. For each thread, call the tool \
 mcp__plugin_yaar-review_yaar__reply_to_thread once, with `thread` set to the id written \
@@ -86,20 +37,11 @@ after \"Thread\" in its heading, `body` set to your reply to the reviewer, and \
 `addressed` set to true when your change addresses the comment, or false when you \
 disagree or need the reviewer's answer. Only the reviewer resolves a thread.";
 
-/// What a message Claude Code starts itself opens with, as a background task that finished
-/// reports: the user did not type it.
+/// What a message Claude Code starts itself opens with, such as a finished background task's
+/// report: the user did not type it.
 const SELF_STARTED: &str = "<task-notification>";
 
 impl Remembered {
-    /// What a report waits for: see [`yaar_agent::Adapter::asked`]. A `UserPromptSubmit`
-    /// whose prompt opens, after white space, with `<task-notification>` is a message
-    /// Claude Code started itself and asks nothing; any other prompt, whatever its words,
-    /// is [`yaar_agent::Asks::Message`]. A `PreToolUse` of `Read` of a file inside the
-    /// folder of reviews of that session under `folder` (this module's doc) is
-    /// [`yaar_agent::Asks::ReadOwnFile`], one of [`LISTED_REPLY_TOOL`] is
-    /// [`yaar_agent::Asks::OwnTool`]. A report of the tool server is
-    /// [`yaar_agent::Asks::Reply`]. A `PermissionRequest`, and every other hook, asks
-    /// nothing. It remembers nothing: the Keeper has given `report` the same report first.
     pub(crate) fn asked(
         &self,
         folder: &Path,
@@ -117,8 +59,8 @@ impl Remembered {
         };
 
         if input.get("tool_server").is_some() {
-            // A call that names no session is asked for all the same: the Keeper then finds
-            // the session by the process that called.
+            // A call that names no session is asked for all the same: the Keeper then
+            // finds the session by the process that called.
             let session = text(&input, "session_id").unwrap_or_default();
             return Ok(asked(session, Asks::Reply(reply_of(&input)?)));
         }
@@ -146,10 +88,8 @@ impl Remembered {
         Ok(asks.and_then(|asks| asked(session, asks)))
     }
 
-    /// What the piece hands Claude Code for `answer`, as this module's doc shows it: the
-    /// allow of a `PreToolUse`, or the result of a call of the reply tool. An answer that
-    /// does not belong to what `asked` waits for gives no bytes, which a hook prints as
-    /// nothing: an allow never goes to a message.
+    /// An answer not meant for what `asked` waits for gives no bytes: an allow never goes to a
+    /// message.
     pub(crate) fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
         let answered = match (&asked.asks, answer) {
             (Asks::ReadOwnFile, Answer::Allow) => allow("a file of the review the app delivered"),
@@ -175,8 +115,6 @@ impl Remembered {
     }
 }
 
-/// The reply a call of the tool server holds: `thread` and `body` are text, `addressed` a
-/// boolean that is false when left out.
 fn reply_of(input: &Value) -> Result<AgentReply, ReportError> {
     let unreadable = |why: &str| ReportError::Unreadable(format!("the tool call {why}"));
     if text(input, "name") != Some(REPLY_TOOL) {
@@ -197,9 +135,6 @@ fn reply_of(input: &Value) -> Result<AgentReply, ReportError> {
     })
 }
 
-/// Whether `file`, made canonical, lies inside the folder of reviews of `session` under
-/// `folder`, made canonical too. A folder that is not there yet holds nothing, and a path
-/// that cannot be made canonical (there is no such file) is not allowed.
 fn is_own_review(folder: &Path, session: &str, file: &Path) -> bool {
     if !is_folder_name(session) || !file.is_absolute() {
         return false;
@@ -211,7 +146,6 @@ fn is_own_review(folder: &Path, session: &str, file: &Path) -> bool {
         .is_ok_and(|file| file != own && file.starts_with(&own))
 }
 
-/// The output of a `PreToolUse` hook that allows the call.
 fn allow(why: &str) -> Value {
     json!({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
@@ -220,7 +154,6 @@ fn allow(why: &str) -> Value {
     }})
 }
 
-/// The result of a call of the reply tool, as MCP gives it to Claude Code.
 fn result(is_error: bool, message: &str) -> Value {
     let mut result = json!({"content": [{"type": "text", "text": message}]});
     if is_error {
@@ -229,13 +162,10 @@ fn result(is_error: bool, message: &str) -> Value {
     result
 }
 
-/// The string `key` holds, if it holds one.
 fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
     object.get(key)?.as_str()
 }
 
-/// Whether `name` can be one folder or file name of the app's own and no more: ASCII
-/// letters, digits, `-` and `_`, as Claude Code's session ids are.
 pub(crate) fn is_folder_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -243,13 +173,8 @@ pub(crate) fn is_folder_name(name: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
-/// The delivery of one review that rides with a message of the session `session`: inline,
-/// or as a file of the session's folder of reviews under `folder`, as this module's doc
-/// says.
 pub(crate) struct ToClaudeCode<'a> {
-    /// The Adapter's own folder of the app.
     pub(crate) folder: &'a Path,
-    /// The CLI session the message is of.
     pub(crate) session: &'a CliSession,
 }
 
@@ -258,11 +183,9 @@ impl Delivery for ToClaudeCode<'_> {
         INSTRUCTION
     }
 
-    /// The answer of the `UserPromptSubmit` hook that carries `rendered`; the file of a
-    /// long review is written before the answer is given.
     fn hand_out(&mut self, rendered: &Rendered<'_>) -> io::Result<Vec<u8>> {
-        // Checked for every delivery, so that a session whose id is no folder name gets
-        // nothing, however short its review: the allow of its reads could name no folder.
+        // Refused on every delivery, however short: a session whose id is no folder name has no
+        // folder of reviews, so the allow of its reads could name none.
         if !is_folder_name(&self.session.0) {
             return Err(invalid(format!(
                 "the session id {:?} is not made of ASCII letters, digits, `-` and `_`",
@@ -296,9 +219,8 @@ impl Delivery for ToClaudeCode<'_> {
 }
 
 impl ToClaudeCode<'_> {
-    /// Writes `rendered` whole as the file of its round in the session's folder, through a
-    /// temporary file renamed into place so that the agent never reads half of it, and
-    /// gives the file's absolute path.
+    /// Writes `rendered` whole as `<review>-<round>.md` in the session's folder through a temporary
+    /// file renamed into place, so the agent never reads half of it; gives the absolute path.
     fn write(&self, rendered: &Rendered<'_>) -> io::Result<PathBuf> {
         if !is_folder_name(rendered.review) {
             return Err(invalid(format!(
@@ -326,8 +248,6 @@ fn invalid(why: String) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, why)
 }
 
-/// The command that brings `session` back in the user's shell: `claude --resume` and the
-/// id, single-quoted for `sh` (a `'` inside written `'\''`).
 pub(crate) fn resume(session: &CliSession) -> String {
     format!("{COMMAND} --resume '{}'", session.0.replace('\'', r"'\''"))
 }
@@ -339,9 +259,8 @@ mod tests {
     use super::*;
     use crate::ClaudeCode;
 
-    /// The question what a `UserPromptSubmit` of `prompt` waits for, asked as the Keeper
-    /// does after the report. The folder is one no file can be made in, so a regression
-    /// that writes one fails the call instead of leaving a file behind.
+    // The tests' folder lies under /dev/null, where no file can be made: a regression that
+    // writes one fails instead of leaving a file behind.
     fn asked_of_prompt(prompt: &str) -> Option<Asked> {
         let input = json!({
             "hook_event_name": "UserPromptSubmit",

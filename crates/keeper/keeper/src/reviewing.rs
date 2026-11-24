@@ -1,25 +1,11 @@
-//! What the user does to a review of slice 6, and what a Window reads of it: attaching a
-//! review or one thread alone, with the offer to start its agent; detaching it; resolving a
-//! thread, reopening one, and resolving every addressed thread; and the text an attached
-//! review would carry. Also how a thread of the engine is told to a Window: its state and
-//! where it sits now.
-//!
-//! Each request is answered in the order of the Window's reviews, on its lane of them,
-//! through `Kept`: the engine keeps every change, and each change is told to every Window
-//! as `Fact::ReviewsChanged`; one that changes what is attached is also handed to the
-//! agents' side, which tells the sessions of the workspace again so that the agent's
-//! terminal shows it.
-
 use yaar_link::{Fact, Refusal, Reply, ReviewId, ThreadId};
 use yaar_review_engine::{Attachment, EngineError, Offer, ReviewError};
 
 use crate::agents::Agents;
 use crate::wiring::Kept;
 
-/// Attaches `review`, or `thread` alone, through the engine, with the sessions of its
-/// workspace as the agents' side knows them; answers with the CLIs to offer: none while
-/// its agent runs, its agent's CLI when it does not, every supported CLI
-/// (`Agents::supported`) for the review of no agent.
+/// Answers with the CLIs to offer: none while the review's agent runs, its agent's CLI when it does
+/// not, every supported CLI for a review of no agent.
 pub(crate) fn attach(
     kept: &Kept,
     agents: &Agents,
@@ -41,7 +27,6 @@ pub(crate) fn attach(
     told(facts, agents, review, &workspace);
     let start = match offer {
         Offer::Nothing => Vec::new(),
-        // A CLI the Keeper has no Adapter for cannot be started: nothing is offered.
         Offer::Start { cli } => agents
             .supported()
             .into_iter()
@@ -52,7 +37,6 @@ pub(crate) fn attach(
     Ok(Reply::AttachedReview { start })
 }
 
-/// Takes the attachment of `review` away.
 pub(crate) fn detach(
     kept: &Kept,
     agents: &Agents,
@@ -69,7 +53,6 @@ pub(crate) fn detach(
     Ok(Reply::Done)
 }
 
-/// Resolves a thread, or reopens it when `resolved` is false.
 pub(crate) fn resolve(
     kept: &Kept,
     review: &ReviewId,
@@ -91,7 +74,6 @@ pub(crate) fn resolve(
     Ok(Reply::Done)
 }
 
-/// Resolves every addressed thread of `review` that is not resolved.
 pub(crate) fn resolve_addressed(
     kept: &Kept,
     review: &ReviewId,
@@ -107,9 +89,6 @@ pub(crate) fn resolve_addressed(
     Ok(Reply::Done)
 }
 
-/// What the next message would carry to the agent of `review`: the engine's
-/// `Reviews::attached_text` after the instruction of the delivery module of that agent's
-/// CLI (`Agents::instruction`), which is the text that agent receives.
 pub(crate) fn attachment(
     kept: &Kept,
     agents: &Agents,
@@ -123,9 +102,6 @@ pub(crate) fn attachment(
         .reviews
         .review(&id)
         .map_err(|error| refused(review, error))?;
-    // The text is the CLI's: a review of no agent, of a session the Store does not hold or
-    // of a CLI the Keeper has no Adapter for has no instruction to put first and nobody to
-    // deliver to.
     let instruction = held
         .agent()
         .map(yaar_review_engine::SessionId::new)
@@ -144,9 +120,8 @@ pub(crate) fn attachment(
     }
 }
 
-/// The state of a thread as a Window is told it: the engine's
-/// `yaar_review_engine::Review::state_of`, in the Link's words. A thread the review does
-/// not hold is told as sent; the Keeper asks only for threads it holds.
+/// A thread the review does not hold is told as sent: the Keeper asks only for threads it
+/// holds.
 pub(crate) fn thread_state(
     review: &yaar_review_engine::Review,
     thread: &yaar_review_engine::ThreadId,
@@ -162,12 +137,10 @@ pub(crate) fn thread_state(
     }
 }
 
-/// The review in the engine's words.
 fn engine_id(review: &ReviewId) -> yaar_review_engine::ReviewId {
     yaar_review_engine::ReviewId::new(review.as_str())
 }
 
-/// The workspace `review` belongs to; the review's refusal when the Store holds none.
 fn workspace_of(
     kept: &Kept,
     review: &ReviewId,
@@ -178,15 +151,12 @@ fn workspace_of(
         .map_err(|error| refused(review, error))
 }
 
-/// What every Window is told when the reviews of `workspace` changed.
 fn reviews_changed(workspace: &yaar_review_engine::WorkspaceId) -> Fact {
     Fact::ReviewsChanged {
         workspace: yaar_link::WorkspaceId::new(workspace.as_str()),
     }
 }
 
-/// What attaching or detaching `review` tells: the reviews of its workspace to every
-/// Window, and the sessions of it again, so that the agent's terminal shows the change.
 fn told(
     facts: &mut Vec<Fact>,
     agents: &Agents,
@@ -197,8 +167,8 @@ fn told(
     agents.attachment_changed(review);
 }
 
-/// A refusal of the engine in the words of the Link. `review` is the one the request named:
-/// the engine's refusal of a send with nothing to carry does not say which.
+/// `review` is the one the request named: the engine's refusal of a send with nothing to carry does
+/// not say which.
 fn refused(review: &ReviewId, error: EngineError) -> Refusal {
     match error {
         EngineError::UnknownReview(unknown) => Refusal::UnknownReview {

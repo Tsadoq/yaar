@@ -1,5 +1,5 @@
 //! Attaching a review to the user's next message, detaching it, and the session a CLI
-//! started for a review, through the engine with the real Store beneath.
+//! started for a review, through the engine with the real Store.
 
 mod support;
 
@@ -12,7 +12,7 @@ use yaar_review_engine::{
 };
 use yaar_store::{AttachedRecord, EndedBy, Store, WorkspaceId};
 
-// A save that starts thread `n` on a version the test names, so that no worktree is needed.
+// Starts thread `n` on a version the test names, so that no worktree is needed.
 fn draft(n: u128, text: &str) -> DraftSave {
     DraftSave {
         thread: ThreadId::new(id(n)),
@@ -38,7 +38,6 @@ fn running(of: &yaar_store::SessionRecord) -> SessionNow {
     }
 }
 
-// The review of a session that started, with a draft on thread 1.
 fn review_with_a_draft(reviews: &Reviews, store: &Store) -> (yaar_store::SessionRecord, ReviewId) {
     let started = session(store, 1);
     let review = reviews.session_started(&started).expect("start");
@@ -76,7 +75,6 @@ fn an_attachment_is_kept_and_a_second_engine_on_the_same_file_reads_it() {
         .expect("attach");
     assert_eq!(offer, Offer::Nothing);
 
-    // As after a restart: the file opened anew, a new engine over it.
     drop(reviews);
     drop(store);
     let store = self::store(&scratch);
@@ -87,7 +85,6 @@ fn an_attachment_is_kept_and_a_second_engine_on_the_same_file_reads_it() {
     );
     assert_eq!(attached_in(&store, &review), Some(AttachedRecord::Review));
 
-    // One thread alone replaces it, and is kept as that.
     reviews
         .attach(
             &review,
@@ -127,7 +124,6 @@ fn attaching_gives_the_offer_to_start_an_agent_that_does_not_run_whatever_else_r
             cli: "claude".to_owned()
         }
     );
-    // Offered and attached: the review rides with the first message of the agent started.
     assert_eq!(attached_in(&store, &review), Some(AttachedRecord::Review));
 }
 
@@ -139,20 +135,17 @@ fn what_cannot_be_attached_is_refused_with_nothing_kept_and_what_was_attached_st
     let (started, review) = review_with_a_draft(&reviews, &store);
     let sessions = [running(&started)];
 
-    // A review that is not kept.
     let unknown = ReviewId::new(id(0xdead));
     assert!(matches!(
         reviews.attach(&unknown, Attachment::Review, &sessions),
         Err(EngineError::UnknownReview(found)) if found == unknown
     ));
-    // A thread the review does not hold.
     assert!(matches!(
         reviews.attach(&review, Attachment::Thread(ThreadId::new(id(9))), &sessions),
         Err(EngineError::Refused(ReviewError::UnknownThread(_)))
     ));
     assert_eq!(attached_in(&store, &review), None);
 
-    // A review whose only thread is resolved carries nothing.
     reviews
         .attach(&review, Attachment::Review, &sessions)
         .expect("attach");
@@ -188,7 +181,6 @@ fn a_detach_takes_the_attachment_away_and_keeps_every_draft() {
     assert_eq!(kept.unsent(Scope::Everything).len(), 1);
     assert!(kept.unsent(Scope::Attached).is_empty());
 
-    // Nothing attached is no error, and a review that is not kept is one.
     reviews.detach(&review).expect("detach again");
     assert!(matches!(
         reviews.detach(&ReviewId::new(id(0xdead))),
@@ -196,7 +188,6 @@ fn a_detach_takes_the_attachment_away_and_keeps_every_draft() {
     ));
 }
 
-// The review of a session `n` that ended in the workspace of the tests, with a draft.
 fn review_of_an_ended_session(
     reviews: &Reviews,
     store: &Store,
@@ -215,7 +206,6 @@ fn a_session_started_for_a_review_takes_it_before_the_review_of_no_agent_and_lea
     let store = store(&scratch);
     let reviews = engine(&scratch, store.clone());
     reviews.of_workspace(&workspace(), None).expect("read");
-    // The first session takes the workspace's review of no agent and ends.
     let (first, review) = review_of_an_ended_session(&reviews, &store, 1);
     reviews
         .save_draft(None, &review, &draft(1, "why one"))
@@ -230,8 +220,8 @@ fn a_session_started_for_a_review_takes_it_before_the_review_of_no_agent_and_lea
             }],
         )
         .expect("attach");
-    // Another review of no agent, which a session that starts with no terminal opened for a
-    // review would take first.
+    // A second review of no agent, which a session started with no terminal for a review
+    // would take first.
     let free = ReviewId::new(id(0xf00d));
     store
         .put_review(yaar_review_engine::Review::new(free.clone(), workspace(), None).record())
@@ -248,10 +238,8 @@ fn a_session_started_for_a_review_takes_it_before_the_review_of_no_agent_and_lea
         Some(third.id.as_str().to_owned())
     );
     assert_eq!(agent_of(&store, &free), None);
-    // What was attached stays attached: it rides with the new session's first message.
     assert_eq!(attached_in(&store, &review), Some(AttachedRecord::Review));
 
-    // Without the terminal's review, the same session takes the review of no agent.
     let fourth = session(&store, 4);
     store.set_ended(&third.id, EndedBy::Cli).expect("end");
     assert_eq!(reviews.session_started(&fourth).expect("start"), free);
@@ -295,7 +283,6 @@ fn a_session_started_for_a_review_that_cannot_be_taken_gets_its_own_as_any_sessi
     let reviews = engine(&scratch, store.clone());
     reviews.of_workspace(&workspace(), None).expect("read");
 
-    // Its session runs: not free to take.
     let (running_session, review) = {
         let held = session(&store, 1);
         let review = reviews.session_started(&held).expect("start");
@@ -312,7 +299,6 @@ fn a_session_started_for_a_review_that_cannot_be_taken_gets_its_own_as_any_sessi
     );
     assert_eq!(agent_of(&store, &given), Some(next.id.as_str().to_owned()));
 
-    // Its session ended, of another CLI: not taken by this one.
     store
         .set_ended(&running_session.id, EndedBy::Cli)
         .expect("end");
@@ -337,7 +323,6 @@ fn a_session_started_for_a_review_that_cannot_be_taken_gets_its_own_as_any_sessi
         Some(running_session.id.as_str().to_owned())
     );
 
-    // A review of another workspace is never taken.
     let elsewhere = WorkspaceId::new(id(0xbb));
     let there = session_in(&store, 4, elsewhere.clone());
     let there_review = reviews.session_started(&there).expect("start there");
@@ -384,7 +369,6 @@ fn a_session_that_holds_a_review_already_keeps_it_whatever_review_the_terminal_w
         .session_started_for(&held, &free)
         .expect("start for the review");
 
-    // One session never holds two reviews: `review_of_session` could name only one.
     assert_eq!(given, own);
     assert_eq!(
         agent_of(&store, &free),

@@ -1,8 +1,5 @@
-//! Component test: what the review pane shows of a change two sessions made. The pane lists
-//! a turn's end, and the offer it makes, through `CompareForReview` with the review of the
-//! turn's session, keeps the credits of the list beside it, and marks a file another session
-//! changed too, in that list and in the uncommitted changes. The test plays the Keeper on the
-//! other end of a socket pair, as the pane's other component tests do.
+//! Component test: the review pane over a change two sessions made. The test plays the Keeper on a
+//! socket pair.
 
 mod common;
 
@@ -20,18 +17,14 @@ use common::{
     reviews_of, rows, session, since_main, texts, wait_for_files, wait_until, workspace,
 };
 
-/// The id of a commit or a state that is this digit forty times.
 fn version(digit: char) -> String {
     digit.to_string().repeat(40)
 }
 
-/// The version the history of the tests starts at.
 fn start() -> String {
     COMMIT.to_owned()
 }
 
-/// The first commit of the history, the state the turn of the history recorded and the
-/// second commit.
 fn c1() -> String {
     version('1')
 }
@@ -44,7 +37,6 @@ fn c2() -> String {
     version('2')
 }
 
-/// The states the turn ends of the tests record.
 fn s2() -> String {
     version('6')
 }
@@ -53,7 +45,6 @@ fn s3() -> String {
     version('7')
 }
 
-/// The two sessions that share the worktree, and the review of each.
 fn session_s() -> SessionId {
     SessionId::new("5".repeat(32))
 }
@@ -70,12 +61,10 @@ fn review_t() -> ReviewId {
     ReviewId::new("b".repeat(32))
 }
 
-/// A review of no agent, which the Keeper holds as long as no session took it over.
 fn review_of_no_agent() -> ReviewId {
     ReviewId::new("c".repeat(32))
 }
 
-/// The history of the tests: a commit, a turn of `s` and a commit.
 fn history() -> History {
     History {
         workspace: id('1'),
@@ -99,8 +88,6 @@ fn credited(path: &str, by: Vec<SessionId>) -> CreditedFile {
     }
 }
 
-/// What a Keeper lists for the review of `s` after a turn of `s`: `b.txt` that `s` made,
-/// `h.txt` that no agent made and `s.txt` that `t` changed too.
 fn the_list_of_s() -> Vec<CreditedFile> {
     vec![
         credited("b.txt", vec![session_s()]),
@@ -109,9 +96,7 @@ fn the_list_of_s() -> Vec<CreditedFile> {
     ]
 }
 
-/// A window with the pane in it that shows `shown` of these reviews, `(id, agent)`, with
-/// `uncommitted` listed for it, and the history of the tests. The changes of the workspace
-/// are answered first: a pane whose changes are not yet here shows the last recorded turn.
+/// The workspace's changes are answered first: a pane without them shows the last recorded turn.
 fn open_with(
     reviews: Vec<(ReviewId, Option<SessionId>)>,
     shown: &ReviewId,
@@ -154,7 +139,6 @@ fn open_with(
     (stage, cx)
 }
 
-/// What the Keeper tells when a turn of `session` ends in workspace `1`.
 fn turn_ended(session: &SessionId, state: &str, since: &str) -> Fact {
     Fact::TurnEnded {
         workspace: id('1'),
@@ -165,7 +149,6 @@ fn turn_ended(session: &SessionId, state: &str, since: &str) -> Fact {
     }
 }
 
-/// The request a turn end of `review`'s session makes, for the change from `from` to `to`.
 fn compare_for(review: &ReviewId, from: String, to: String) -> Request {
     Request::CompareForReview {
         workspace: id('1'),
@@ -175,7 +158,6 @@ fn compare_for(review: &ReviewId, from: String, to: String) -> Request {
     }
 }
 
-/// Answers the next request, which has to be that of `compare_for`, with `files`.
 fn listed_for(
     stage: &mut Stage,
     review: &ReviewId,
@@ -192,8 +174,6 @@ fn listed_for(
         .reply(asked, Ok(Reply::ComparedForReview(files)));
 }
 
-/// Answers the reads of the files of a change, in the order the pane asks for them, each
-/// file's old text `before` and its new text `after`; then waits until the pane shows them.
 fn read_files(
     stage: &mut Stage,
     old: Option<&str>,
@@ -225,7 +205,6 @@ fn read_files(
     });
 }
 
-/// The paths of the files the pane lists, in order.
 fn paths(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
     rows(pane, cx)
         .into_iter()
@@ -236,7 +215,6 @@ fn paths(pane: &Entity<ReviewPane>, cx: &mut TestAppContext) -> Vec<String> {
         .collect()
 }
 
-/// The index of the row that is the heading of `path`.
 fn row_of(stage: &Stage, path: &str, cx: &mut VisualTestContext) -> usize {
     rows(&stage.pane, cx)
         .iter()
@@ -244,8 +222,8 @@ fn row_of(stage: &Stage, path: &str, cx: &mut VisualTestContext) -> usize {
         .unwrap_or_else(|| panic!("{path} has no heading among the rows"))
 }
 
-/// Whether the pane says of `path` that another agent changed it too, as its model does
-/// and as the heading draws it, which the test requires to agree.
+/// Whether the pane marks `path` as changed by another agent too; asserts that its model
+/// and the drawn heading agree.
 fn marked(stage: &Stage, path: &str, cx: &mut VisualTestContext) -> bool {
     let by_the_model = stage.pane.read_with(cx, |pane, _| {
         pane.changed_by_another_too(&PathBuf::from(path))
@@ -274,8 +252,8 @@ fn focus_the_rows(stage: &Stage, cx: &mut VisualTestContext) {
     cx.update(|window, cx| stage.focus.focus(window, cx));
 }
 
-/// Proves that nothing else was asked since the last request the test read: a click on
-/// the first commit of the tree is the next request the Window sends.
+/// Proves the Window asked nothing since the last request the test read: the request a click
+/// on the first commit sends must be the next one the Keeper hears.
 fn nothing_else_was_asked(stage: &mut Stage, cx: &mut VisualTestContext) {
     click("review-history-0", cx);
     let asked = stage.keeper.expect(
@@ -332,12 +310,9 @@ fn a_turn_end_lists_the_files_the_review_of_its_session_shows_and_marks_the_one_
             to: s2()
         }
     );
-    // The three files, the one no agent made among them, and only the one two sessions
-    // made carries the mark.
     assert!(marked(&stage, "s.txt", &mut cx));
     assert!(!marked(&stage, "b.txt", &mut cx));
     assert!(!marked(&stage, "h.txt", &mut cx));
-    // The file is shown whole: the lines of both sessions are among its rows.
     let at = row_of(&stage, "s.txt", &mut cx);
     let whole: Vec<String> = rows(&stage.pane, &mut cx)
         .iter()
@@ -373,8 +348,6 @@ fn the_offer_of_a_turn_end_is_listed_through_the_review_of_its_session_when_it_i
     wait_until(&mut cx, "the offer", |cx| {
         stage.pane.read_with(cx, |pane, _| pane.offer().is_some())
     });
-    // Nothing was asked for the offer: the next request is a click's, and the review
-    // shown is still that of the other session.
     nothing_else_was_asked(&mut stage, &mut cx);
     assert_eq!(
         stage
@@ -383,8 +356,6 @@ fn the_offer_of_a_turn_end_is_listed_through_the_review_of_its_session_when_it_i
         Some(session_t())
     );
 
-    // The offer, made again, is taken: the files are those the review of its session
-    // shows, with their credits.
     stage.keeper.tell(turn_ended(&session_s(), &s3(), &s2()));
     wait_until(&mut cx, "the offer", |cx| {
         stage.pane.read_with(cx, |pane, _| pane.offer().is_some())
@@ -424,7 +395,6 @@ fn the_offer_of_a_turn_end_is_listed_through_the_review_of_its_session_when_it_i
 fn a_turn_end_of_a_session_the_pane_holds_no_review_of_is_listed_with_no_credits(
     cx: &mut TestAppContext,
 ) {
-    // Only the review of no agent is held: the turn's session has no review to list for.
     let (mut stage, mut cx) = open_with(
         vec![(review_of_no_agent(), None)],
         &review_of_no_agent(),
@@ -540,9 +510,8 @@ fn a_change_listed_with_no_credits_after_one_listed_with_credits_carries_no_mark
     );
     assert!(marked(&stage, "s.txt", &mut cx));
 
-    // The turn of a session the pane holds no review of ends: its change is listed by
-    // `CompareVersions`, over the review that stays shown, and carries no credits. The
-    // credits of the list before it are not its credits.
+    // The turn of `t`, a session the pane holds no review of, ends: its change is listed by
+    // `CompareVersions` over the review that stays shown, so it carries no credits.
     stage.keeper.tell(turn_ended(&session_t(), &s3(), &s2()));
     let asked = stage.keeper.expect(
         Request::CompareVersions {
@@ -606,8 +575,6 @@ fn the_same_change_listed_for_another_session_s_review_is_asked_again_with_its_o
         &mut cx,
     );
 
-    // The turn of `t` ends at the same state, counted from the same one: the files its
-    // review shows are others.
     stage.keeper.tell(turn_ended(&session_t(), &s2(), &s1()));
     listed_for(
         &mut stage,
@@ -682,9 +649,8 @@ fn moving_to_another_review_takes_the_marks_of_a_list_made_for_the_review_before
     );
     assert!(marked(&stage, "s.txt", &mut cx));
 
-    // The reviewer moves to the review of `t`. The list stays, and its credits were made
-    // for the review of `s`: read as `t`'s, they would mark a file `s` also changed as one
-    // another agent changed, which no list made for `t` has said.
+    // The reviewer moves to `t`'s review. The list stays, but its credits were made for `s`'s
+    // review: read as `t`'s, they would mark a file `s` also changed, which no list for `t` says.
     click("review-session-1", &mut cx);
     assert_eq!(
         stage
@@ -706,8 +672,6 @@ fn the_uncommitted_changes_of_a_review_mark_the_file_another_session_changed_too
             credited("b.txt", vec![session_s()]),
             credited("h.txt", Vec::new()),
             credited("s.txt", vec![session_t(), session_s()]),
-            // A file only another session changed names no "too": it is none of this
-            // review's, and the Keeper does not list it.
             credited("t.txt", vec![session_t()]),
         ],
         cx,
@@ -729,7 +693,6 @@ fn the_uncommitted_changes_of_a_review_mark_the_file_another_session_changed_too
     assert!(marked(&stage, "s.txt", &mut cx));
     assert!(!marked(&stage, "b.txt", &mut cx));
     assert!(!marked(&stage, "t.txt", &mut cx));
-    // The change no agent made has its own mark and not this one.
     assert!(!marked(&stage, "h.txt", &mut cx));
     let h = row_of(&stage, "h.txt", &mut cx);
     assert!(drawn(&format!("review-no-agent-{h}"), &mut cx).is_some());
@@ -780,8 +743,6 @@ fn a_comparison_the_keeper_refuses_for_a_review_shows_no_file_and_no_mark_and_sa
     assert!(!stage.pane.read_with(&cx, |pane, _| {
         pane.changed_by_another_too(&PathBuf::from("s.txt"))
     }));
-    // The answer the pane needed is not the one it got: the same change, listed again for
-    // the same review, is asked for again and is shown.
     stage.keeper.tell(turn_ended(&session_s(), &s2(), &s1()));
     listed_for(
         &mut stage,
@@ -805,9 +766,6 @@ fn a_comparison_the_keeper_refuses_for_a_review_shows_no_file_and_no_mark_and_sa
     assert!(marked(&stage, "s.txt", &mut cx));
 }
 
-/// Opens the pane on the reviews of `s` and `t` with the sessions of both in the agents
-/// model, shows the change from `s1` to `s2` listed for the review of `s`, and returns
-/// with its files read.
 fn the_list_of_s_is_shown(cx: &mut TestAppContext) -> (Stage, VisualTestContext) {
     the_list_of_s_is_shown_among(
         vec![
@@ -819,8 +777,6 @@ fn the_list_of_s_is_shown(cx: &mut TestAppContext) -> (Stage, VisualTestContext)
     )
 }
 
-/// The same, with these reviews held, the first of which the pane shows before the turn end
-/// chooses the review of `s`.
 fn the_list_of_s_is_shown_among(
     reviews: Vec<(ReviewId, Option<SessionId>)>,
     first_shown: &ReviewId,
@@ -865,8 +821,6 @@ fn the_list_of_s_is_shown_among(
 fn moving_to_another_review_lists_the_change_shown_again_for_that_review(cx: &mut TestAppContext) {
     let (mut stage, mut cx) = the_list_of_s_is_shown(cx);
 
-    // The reviewer moves to the review of `t`: the change stays the one shown, and its
-    // files are those `t`'s review shows, not those of `s`'s list, with `t`'s credits.
     click("review-session-1", &mut cx);
     listed_for(
         &mut stage,
@@ -943,7 +897,6 @@ fn moving_to_the_review_of_no_agent_lists_the_change_shown_again_with_no_credits
         &mut cx,
     );
 
-    // The review of no agent shows every file, none of them credited.
     click("review-session-1", &mut cx);
     let asked = stage.keeper.expect(
         Request::CompareVersions {
@@ -982,9 +935,8 @@ fn a_turn_end_back_to_the_review_asked_for_before_is_asked_again_while_another_r
 ) {
     let (mut stage, mut cx) = the_list_of_s_is_shown(cx);
 
-    // The turn of `t` ends at the same state, counted from the same one, and its list is
-    // on its way when the turn of `s` ends there too: the list of `s` is what is wanted,
-    // and the answer for `t` that comes later is not shown.
+    // `t`'s list is still in flight when `s`'s turn ends: `s`'s list is shown, `t`'s late answer is
+    // not.
     stage.keeper.tell(turn_ended(&session_t(), &s2(), &s1()));
     let for_t = stage
         .keeper
@@ -1023,7 +975,6 @@ fn a_turn_end_back_to_the_review_asked_for_before_is_asked_again_while_another_r
     assert!(marked(&stage, "s.txt", &mut cx));
 }
 
-/// What a Keeper lists for the review of no agent: every file of the change, none credited.
 fn the_files_of_the_change() -> Vec<yaar_link::ChangedFile> {
     vec![
         file("b.txt", FileStatus::Modified),
@@ -1033,8 +984,6 @@ fn the_files_of_the_change() -> Vec<yaar_link::ChangedFile> {
     ]
 }
 
-/// The pane shows the list of `s`, then the review of no agent through the session bar's
-/// last entry, whose list is every file with no credit; returns with that list read.
 fn the_list_of_s_and_then_the_review_of_no_agent(
     cx: &mut TestAppContext,
 ) -> (Stage, VisualTestContext) {
@@ -1075,8 +1024,6 @@ fn the_list_of_s_and_then_the_review_of_no_agent(
     (stage, cx)
 }
 
-/// After a move through the review of no agent, the review of `s` lists its own files again,
-/// with the credits and the mark: what the pane asks for and shows.
 fn back_to_the_list_of_s(stage: &mut Stage, cx: &mut VisualTestContext) {
     listed_for(stage, &review_s(), &s1(), &s2(), the_list_of_s(), cx);
     read_files(
@@ -1116,7 +1063,6 @@ fn shift_a_back_from_the_review_of_no_agent_lists_the_change_again_for_the_sessi
 ) {
     let (mut stage, mut cx) = the_list_of_s_and_then_the_review_of_no_agent(cx);
 
-    // The next review after the last one is the first: the review of `s`.
     cx.simulate_keystrokes("shift-a");
     back_to_the_list_of_s(&mut stage, &mut cx);
 }
@@ -1183,8 +1129,8 @@ fn the_cycle_of_shift_a_through_every_review_ends_on_the_list_of_the_review_it_s
 fn reviews_that_arrive_after_a_turn_end_chose_a_session_s_review_list_the_change_for_it(
     cx: &mut TestAppContext,
 ) {
-    // The pane holds only the review of no agent when the turn of `s` ends: the agents
-    // model already names `s`'s review, the Keeper's list of reviews does not yet.
+    // When `s`'s turn ends the pane holds only the review of no agent: the agents model already
+    // names `s`'s review, the Keeper's list of reviews does not yet.
     let (mut stage, mut cx) = open_with(
         vec![(review_of_no_agent(), None)],
         &review_of_no_agent(),
@@ -1224,8 +1170,6 @@ fn reviews_that_arrive_after_a_turn_end_chose_a_session_s_review_list_the_change
         &mut cx,
     );
 
-    // The reviews are read again and still lack the review of `s`: the review of no agent
-    // is the one shown, so its list is every file with no credit.
     stage
         .keeper
         .tell(Fact::ReviewsChanged { workspace: id('1') });
@@ -1253,7 +1197,6 @@ fn reviews_that_arrive_after_a_turn_end_chose_a_session_s_review_list_the_change
         &mut cx,
     );
 
-    // The review of `s` arrives: it is the one the turn end chose, and its list is made.
     stage.keeper.set_reviews(reviews_of(vec![
         common::review_with(review_of_no_agent(), None, Some(s1())),
         common::review_with(review_s(), Some(session_s()), Some(s1())),

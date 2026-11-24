@@ -1,8 +1,3 @@
-//! What the tests of this crate share: a folder of their own, an environment in which git
-//! reads nothing of the user's, and git itself as the test runs it to make a repository
-//! and to ask what git says.
-
-// Each test program uses the helpers it needs, and none uses all of them.
 #![allow(dead_code)]
 
 use std::io::Write;
@@ -12,8 +7,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-/// The variables with which a process tells git which repository to use, whatever folder
-/// it runs in.
 const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -23,21 +16,16 @@ const REPOSITORY_VARIABLES: [&str; 6] = [
     "GIT_PREFIX",
 ];
 
-/// The variables with which a shell hands git settings that no file holds: a count of
-/// settings with their numbered keys and values (removing the count voids them), the
-/// settings of an outer git, and one file of configuration.
+/// Shell-given git settings no file holds: a count with numbered keys and values (removing
+/// the count voids them), the settings of an outer git, and a configuration file.
 const CONFIGURATION_VARIABLES: [&str; 3] =
     ["GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS", "GIT_CONFIG"];
 
-/// A folder of the test's own, removed when the test ends.
 pub struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, and an empty
-    /// home. It has to be the first statement of a test.
     pub fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -57,10 +45,8 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and the tests of this crate are run by `cargo nextest`, which gives each
-        // test a process of its own: no other thread exists yet.
+        // SAFETY: runs first in a test, and `cargo nextest` gives each test its own process:
+        // no other thread exists yet to read the environment.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -76,12 +62,10 @@ impl Scratch {
         Scratch { root }
     }
 
-    /// The folder itself, with every link in its path resolved.
     pub fn path(&self) -> &Path {
         &self.root
     }
 
-    /// A path inside the folder.
     pub fn join(&self, name: &str) -> PathBuf {
         self.root.join(name)
     }
@@ -93,8 +77,6 @@ impl Drop for Scratch {
     }
 }
 
-/// Runs git in `folder` and gives what it printed, as bytes. Fails the test when git
-/// fails.
 pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     let output = Command::new("git")
         .arg("-C")
@@ -111,7 +93,6 @@ pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
     output.stdout
 }
 
-/// Runs git in `folder` and gives what it printed, without the white space around it.
 pub fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8(git_bytes(folder, args))
         .expect("git printed text")
@@ -119,7 +100,6 @@ pub fn git(folder: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// Runs git in `folder` with `input` on its standard input, and gives what it printed.
 pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
     let mut child = Command::new("git")
         .arg("-C")
@@ -143,20 +123,17 @@ pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
         .to_owned()
 }
 
-/// Makes a repository at `folder` whose first branch is `main`.
 pub fn init(folder: &Path) {
     std::fs::create_dir_all(folder).expect("make the folder");
     git(folder, &["init", "--quiet", "-b", "main"]);
 }
 
-/// Writes a file of the worktree, making the folders above it.
 pub fn write(folder: &Path, path: &str, content: &str) {
     let file = folder.join(path);
     std::fs::create_dir_all(file.parent().expect("a folder above")).expect("make the folders");
     std::fs::write(file, content).expect("write the file");
 }
 
-/// Commits everything in the worktree and gives the id of the commit.
 pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["add", "--all"]);
     git(
@@ -166,7 +143,6 @@ pub fn commit_all(folder: &Path, message: &str) -> String {
     git(folder, &["rev-parse", "HEAD"])
 }
 
-/// Writes a program of the shell at `path`.
 pub fn program(path: &Path, script: &str) {
     use std::os::unix::fs::PermissionsExt;
     std::fs::create_dir_all(path.parent().expect("a folder above")).expect("make the folders");
@@ -174,8 +150,8 @@ pub fn program(path: &Path, script: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).expect("make it run");
 }
 
-/// Gives a file of the worktree another time of its last change and leaves its content
-/// alone, so that git has to read the file to learn that nothing changed.
+/// Changes the time of last change and leaves the content alone, so that git has to read the file
+/// to learn nothing changed.
 pub fn touch(folder: &Path, path: &str) {
     let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_500_000_000);
     std::fs::File::options()
@@ -186,8 +162,6 @@ pub fn touch(folder: &Path, path: &str) {
         .expect("set the time");
 }
 
-/// A git that writes down every start of it, one line each: its process id, then its
-/// arguments. Returns the program and the file it writes to.
 pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     let list = scratch.join("starts-of-git");
     let wrapper = scratch.join("bin/git-listed");
@@ -201,7 +175,7 @@ pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     (wrapper, list)
 }
 
-/// Whether a process with this id is there, running or waiting to be waited for.
+/// A zombie process counts as alive.
 pub fn is_alive(pid: &str) -> bool {
     Command::new("sh")
         .args(["-c", &format!("kill -0 {pid} 2>/dev/null")])
@@ -210,9 +184,6 @@ pub fn is_alive(pid: &str) -> bool {
         .success()
 }
 
-/// The Workspaces of a Keeper whose database lies in the scratch folder. Dropping it
-/// and making another is a Keeper that restarts: nothing but the database file and the
-/// repositories is carried over.
 pub fn workspaces(scratch: &Scratch) -> yaar_workspaces::Workspaces {
     workspaces_through(
         scratch,
@@ -220,7 +191,6 @@ pub fn workspaces(scratch: &Scratch) -> yaar_workspaces::Workspaces {
     )
 }
 
-/// The same, reading through the git program given.
 pub fn workspaces_through(
     scratch: &Scratch,
     git: yaar_recorder::Git,
@@ -230,10 +200,6 @@ pub fn workspaces_through(
     yaar_workspaces::Workspaces::new(git, store)
 }
 
-/// A repository with two commits on `main`, a bare copy of it to serve as the remote,
-/// and a clone of that in the folder `clone`, which the function returns. The clone is
-/// on `main`, which follows `origin/main`, and the remote's default branch is recorded
-/// as `main` whatever the git that made the clone does by itself.
 pub fn a_clone(scratch: &Scratch) -> PathBuf {
     let source = scratch.join("source");
     init(&source);
@@ -260,12 +226,8 @@ pub fn a_clone(scratch: &Scratch) -> PathBuf {
     clone
 }
 
-/// How long a test waits for a fact that has to come from outside it: the system's
-/// notice of a changed file.
 pub const DEADLINE: Duration = Duration::from_secs(10);
 
-/// Waits until `condition` holds, and fails the test when it does not within
-/// [`DEADLINE`].
 pub fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
     let deadline = Instant::now() + DEADLINE;
     while !condition() {
@@ -274,8 +236,6 @@ pub fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
     }
 }
 
-/// What a watched worktree told, counted: shared between the function given to
-/// `Workspaces::watch` and the test.
 #[derive(Clone, Default)]
 pub struct Heard {
     files: Arc<AtomicUsize>,
@@ -283,7 +243,6 @@ pub struct Heard {
 }
 
 impl Heard {
-    /// A function to give to `Workspaces::watch` that counts into this.
     pub fn told(&self) -> Box<dyn Fn(yaar_workspaces::Seen) + Send + Sync> {
         let heard = self.clone();
         Box::new(move |seen| {
@@ -295,24 +254,19 @@ impl Heard {
         })
     }
 
-    /// How many times the files were told changed.
     pub fn files(&self) -> usize {
         self.files.load(Ordering::SeqCst)
     }
 
-    /// How many times what is checked out was told changed.
     pub fn heads(&self) -> usize {
         self.heads.load(Ordering::SeqCst)
     }
 
-    /// How many holders of the function of [`Heard::told`] and of this there are: a
-    /// watcher that is gone has let its function go.
     pub fn holders(&self) -> usize {
         Arc::strong_count(&self.files)
     }
 }
 
-/// Moments of the test's own clock, before now, for commands that ran earlier.
 pub fn ago(seconds: u64) -> Instant {
     Instant::now()
         .checked_sub(Duration::from_secs(seconds))

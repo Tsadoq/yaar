@@ -1,19 +1,6 @@
-//! What the Store keeps of reviews: the records, and the calls that keep and find them.
-//!
-//! The records are plain data. What may be done to a review, and in which order, is the
-//! Review engine's to say; the Store keeps what it is given, each change in one
-//! transaction, and finds it again.
-//!
-//! Two ways of waiting for the drive:
-//! - [`Store::save_draft`] is the call made at every keystroke. It returns when the text
-//!   is in the database, where a killed Keeper finds it again, and does not wait for the
-//!   drive to empty its cache: that costs a few milliseconds, and the typing would feel
-//!   it. The writer empties it by itself, with one full flush, once no draft was saved
-//!   for [`FLUSH_AFTER`], and when the last clone of the Store is dropped.
-//! - Every other call that changes something returns when the change is on the drive. A
-//!   call that sends comments, [`Store::put_round`], also moves everything the
-//!   write-ahead file holds into the database file before it returns, so that a
-//!   write-ahead file damaged later costs at most the drafts typed since.
+//! `save_draft` skips the drive's cache flush, which costs milliseconds per keystroke; the writer
+//! flushes once no draft was saved for `FLUSH_AFTER` and when the last Store clone drops.
+//! `put_round` also checkpoints the write-ahead file.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,10 +10,8 @@ use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::{Failed, Store, StoreError, WorkspaceId, Writer, bytes, path};
 
-/// How long the writer waits after the last draft save before it flushes the drive.
 pub const FLUSH_AFTER: Duration = Duration::from_secs(1);
 
-/// Declares an id of a review's part: 32 lowercase hexadecimal digits.
 macro_rules! review_id {
     ($(#[$doc:meta])* $name:ident) => {
         $(#[$doc])*
@@ -34,12 +19,10 @@ macro_rules! review_id {
         pub struct $name(pub(crate) String);
 
         impl $name {
-            /// The id with this text.
             pub fn new(id: impl Into<String>) -> Self {
                 Self(id.into())
             }
 
-            /// The text of the id.
             pub fn as_str(&self) -> &str {
                 &self.0
             }
@@ -54,196 +37,123 @@ macro_rules! review_id {
 }
 
 review_id! {
-    /// Names one review: 32 lowercase hexadecimal digits, drawn when the review is made.
     ReviewId
 }
 
 review_id! {
-    /// Names one thread of a review: 32 lowercase hexadecimal digits.
     ThreadId
 }
 
 review_id! {
-    /// Names one comment of a thread: 32 lowercase hexadecimal digits.
     CommentId
 }
 
-/// The side of a diff a line is on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Side {
-    /// The version the change is compared with: a removed line is on it.
     Old,
-    /// The version the change made: an added or an unchanged line is on it.
     New,
 }
 
-/// Where a thread sits: lines of one version of one file, and their text.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
-    /// The version the lines are read in: the full id of a commit, a recorded state's or
-    /// one of the real repository's, as the Recorder names it; never the id of a git tree
-    /// object.
+    /// Full id of a commit, of a recorded state or of the real repository, as the Recorder names
+    /// it; never a git tree object id.
     pub tree: String,
-    /// The path of the file in that version, relative to the folder of the worktree: on
-    /// the old side of a renamed file its old path. Kept as its bytes.
+    /// Relative to the worktree folder; the old path on the old side of a rename. Kept as bytes.
     pub path: PathBuf,
-    /// The side of the diff the lines were on where the comment was written.
     pub side: Side,
-    /// The first line, counted from 1.
     pub first: u32,
-    /// The last line, counted from 1; at least `first`.
     pub last: u32,
-    /// The text of those lines as the reviewer saw them, joined by line feeds.
     pub text: String,
 }
 
-/// Who wrote a comment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Author {
-    /// The reviewer.
     Reviewer,
-    /// The agent the review belongs to.
     Agent,
 }
 
-/// One comment of a thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Comment {
-    /// Its id.
     pub id: CommentId,
-    /// Who wrote it.
     pub author: Author,
-    /// Its text.
     pub text: String,
-    /// The number of the round it was sent in; none while it is a draft. A draft is a
-    /// comment of the reviewer with no round: the calls that edit, delete and send drafts
-    /// touch no comment of the agent, whatever its round.
     pub round: Option<u32>,
 }
 
-/// One thread of a review, with its comments oldest first.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Thread {
-    /// Its id.
     pub id: ThreadId,
-    /// Where its first comment was written, in the version it was written in. It is not
-    /// moved when the code changes: where the thread sits now is worked out from it.
     pub anchor: Anchor,
-    /// Whether the reviewer resolved it.
     pub resolved: bool,
-    /// Whether the agent said it addressed it, in its last reply.
     pub addressed: bool,
-    /// Its comments, in the order they were first kept.
     pub comments: Vec<Comment>,
-    /// Where it sits now, in the newest state it was carried to; none while it sits where
-    /// its anchor says.
     pub now: Option<ThreadPlace>,
 }
 
-/// Where a thread sits now, after the code it was written on changed: kept by
-/// [`Store::set_places`], read back with the thread.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadPlace {
-    /// The version it sits in now: the full id of a recorded state.
     pub tree: String,
-    /// The path of the file in that version.
     pub path: PathBuf,
-    /// The side, as the anchor's.
     pub side: Side,
-    /// The first line, counted from 1.
     pub first: u32,
-    /// The last line.
     pub last: u32,
-    /// What became of the lines it was written on; none when they only moved.
     pub notice: Option<NoticeRecord>,
 }
 
-/// What became of the lines a thread was written on, as the Store keeps it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NoticeRecord {
-    /// They were rewritten.
     Changed,
-    /// They were deleted.
     Deleted,
 }
 
-/// What of a review is attached to the user's next message, as the Store keeps it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AttachedRecord {
-    /// The review.
     Review,
-    /// One thread alone.
     Thread(ThreadId),
 }
 
-/// Who is credited with one uncommitted path at a recorded state, as the Store keeps it
-/// with that state: see [`Store::put_credits`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreditRecord {
-    /// The path, relative to the folder of the worktree.
     pub path: PathBuf,
-    /// The sessions it is credited to, by their ids, in the order given; empty for a
-    /// change no agent made.
     pub sessions: Vec<String>,
 }
 
-/// How the comments of a round left the app.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SentBy {
-    /// Copied as text by the reviewer.
     Copied,
-    /// Delivered with a message of the user.
     Delivered,
 }
 
-/// One round of a review.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Round {
-    /// Its number, from 1.
     pub number: u32,
-    /// The full id of the state of the worktree recorded at the send; none until it is,
-    /// as for a round delivered with a message, whose state is recorded after the
-    /// message was handed to the agent ([`Store::set_round_state`]).
+    /// Full id of the worktree state recorded at the send; None until then, as for a round
+    /// delivered with a message (`Store::set_round_state`).
     pub state: Option<String>,
-    /// How the comments left.
     pub sent_by: SentBy,
-    /// Whether the agent reported an edit since the send ([`Store::set_round_edited`]).
     pub edited: bool,
 }
 
-/// One review, whole: what [`Store::reviews_of`] and [`Store::review`] give.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReviewRecord {
-    /// Its id.
     pub id: ReviewId,
-    /// The workspace it belongs to.
     pub workspace: WorkspaceId,
-    /// The agent session it belongs to, by the session's id; none for the review of no
-    /// agent.
+    /// The agent session's id; None for the review of no agent.
     pub agent: Option<String>,
-    /// The full id of the state last marked reviewed; none before the first mark.
     pub reviewed: Option<String>,
-    /// Its threads, in the order they were first kept.
     pub threads: Vec<Thread>,
-    /// Its rounds, by number.
     pub rounds: Vec<Round>,
-    /// What is attached to the user's next message; none while nothing is.
     pub attached: Option<AttachedRecord>,
 }
 
-/// A file marked viewed: the mark holds for the content it had.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewedRecord {
-    /// The path of the file, relative to the folder of the worktree. Kept as its bytes.
     pub path: PathBuf,
-    /// What the Review engine wrote down of the content when the file was marked: the
-    /// Store keeps it and compares nothing.
     pub content: String,
 }
 
 impl Store {
-    /// Every review of a workspace, whole, in the order they were first kept; none for a
-    /// workspace with no review.
     pub fn reviews_of(&self, workspace: &WorkspaceId) -> Result<Vec<ReviewRecord>, StoreError> {
         let workspace = workspace.0.clone();
         self.ask(move |connection| {
@@ -258,16 +168,12 @@ impl Store {
         })
     }
 
-    /// One review, whole; none when the Store holds no review by this id.
     pub fn review(&self, review: &ReviewId) -> Result<Option<ReviewRecord>, StoreError> {
         let review = review.0.clone();
         self.ask(move |connection| read_review(connection, &review))
     }
 
-    /// Keeps a new review, with no thread and no round: its id, its workspace, its agent
-    /// and its reviewed state are taken from `record`, and its threads and rounds must be
-    /// empty. An id the Store holds already is refused, and so is a second review of no
-    /// agent for one workspace. Returns when it is on the drive.
+    /// Threads and rounds must be empty; a second review of no agent in a workspace is refused.
     pub fn put_review(&self, record: &ReviewRecord) -> Result<(), StoreError> {
         if !record.threads.is_empty() || !record.rounds.is_empty() {
             return Err(refusal(format!(
@@ -306,9 +212,7 @@ impl Store {
         })
     }
 
-    /// Keeps a new thread of a review with its first comment, a draft of the reviewer.
-    /// `thread.comments` holds exactly that comment. Ids the Store holds already are
-    /// refused. Returns when it is on the drive.
+    /// `thread.comments` holds exactly its first comment, a draft of the reviewer.
     pub fn put_thread(&self, review: &ReviewId, thread: &Thread) -> Result<(), StoreError> {
         let anchor = &thread.anchor;
         if anchor.first < 1 || anchor.last < anchor.first {
@@ -370,9 +274,6 @@ impl Store {
         })
     }
 
-    /// Keeps a new comment at the end of a thread: a draft reply of the reviewer, or, in a
-    /// later slice, a reply of the agent, whose round that slice settles. An id the Store
-    /// holds already is refused. Returns when it is on the drive.
     pub fn put_comment(&self, thread: &ThreadId, comment: &Comment) -> Result<(), StoreError> {
         let (thread, comment) = (thread.0.clone(), comment.clone());
         self.try_ask(move |connection| {
@@ -392,10 +293,6 @@ impl Store {
         })
     }
 
-    /// Changes the text of a draft that is kept. Made at every keystroke: it returns when
-    /// the text is in the database and does not wait for the drive, which the writer
-    /// flushes once no draft was saved for [`FLUSH_AFTER`]. A comment that was sent, or
-    /// that is not kept, is left alone and refused.
     pub fn save_draft(&self, comment: &CommentId, text: &str) -> Result<(), StoreError> {
         let (comment, text) = (comment.0.clone(), text.to_owned());
         self.with_writer(move |writer| {
@@ -419,10 +316,6 @@ impl Store {
         })
     }
 
-    /// Deletes a draft; a thread left with no comment goes with it, and with it the
-    /// attachment of that thread alone. A comment that was
-    /// sent, or that is not kept, is left alone and refused. Returns when it is on the
-    /// drive.
     pub fn delete_draft(&self, comment: &CommentId) -> Result<(), StoreError> {
         let comment = comment.0.clone();
         self.try_ask(move |connection| {
@@ -437,7 +330,6 @@ impl Store {
             let Some(thread) = thread else {
                 return refused(not_a_draft(&deleting, &comment)?);
             };
-            // The comment first: the thread is what its row refers to.
             deleting.execute("DELETE FROM comment WHERE id = ?1", [&comment])?;
             if !exists(
                 &deleting,
@@ -445,7 +337,6 @@ impl Store {
                 &thread,
             )? {
                 deleting.execute("DELETE FROM thread WHERE id = ?1", [&thread])?;
-                // A thread attached alone has nothing left to attach.
                 deleting.execute(
                     "UPDATE review SET attached = NULL, attached_thread = NULL
                      WHERE attached_thread = ?1",
@@ -456,16 +347,9 @@ impl Store {
         })
     }
 
-    /// Keeps a new round of a review and marks these comments sent in it, in one
-    /// transaction: either all of it is kept or none. Every thread one of whose comments it
-    /// sends loses its addressed mark in the same transaction: the agent has a follow-up to
-    /// answer. A round may be kept with no state, which [`Store::set_round_state`] gives it
-    /// later. The round's number must be the next
-    /// of the review, and every comment a draft of the review. Returns when it is on the
-    /// drive and the write-ahead file has been moved into the database file. When that
-    /// move could not be made, because another connection reads the file, the call fails
-    /// though the round is kept: it is then in the write-ahead file only, which the writer
-    /// goes on trying to move.
+    /// The number must be the review's next and every comment a draft of it. A thread that gains a
+    /// sent comment loses its addressed mark. If another connection's read blocks the checkpoint,
+    /// the call fails though the round is kept in the write-ahead file only; the writer retries.
     pub fn put_round(
         &self,
         review: &ReviewId,
@@ -475,8 +359,7 @@ impl Store {
         self.send_round(review, round, comments, false)
     }
 
-    /// The one send behind [`Store::put_round`] and [`Store::put_round_detached`]: `detach`
-    /// takes the review's attachment away in the same transaction.
+    /// `detach` also clears the review's attachment in the same transaction.
     fn send_round(
         &self,
         review: &ReviewId,
@@ -539,14 +422,13 @@ impl Store {
                 )?;
             }
             sending.commit()?;
-            // The sent comments reach the database file before the call returns, so
-            // that a damaged write-ahead file costs no more than the drafts typed since.
+            // Moves the sent round into the database file before returning, so a write-ahead file
+            // damaged later costs only the drafts typed since.
             writer.flush()?;
             Ok(())
         })
     }
 
-    /// Sets whether a thread is resolved. Returns when it is on the drive.
     pub fn set_resolved(&self, thread: &ThreadId, resolved: bool) -> Result<(), StoreError> {
         let thread = thread.0.clone();
         self.try_ask(move |connection| {
@@ -561,8 +443,6 @@ impl Store {
         })
     }
 
-    /// Sets the state a review was last marked reviewed at. Returns when it is on the
-    /// drive.
     pub fn set_reviewed(&self, review: &ReviewId, state: &str) -> Result<(), StoreError> {
         let (review, state) = (review.0.clone(), state.to_owned());
         self.try_ask(move |connection| {
@@ -577,7 +457,6 @@ impl Store {
         })
     }
 
-    /// The files of a workspace marked viewed, ordered by the bytes of their paths.
     pub fn viewed(&self, workspace: &WorkspaceId) -> Result<Vec<ViewedRecord>, StoreError> {
         let workspace = workspace.0.clone();
         self.ask(move |connection| {
@@ -593,8 +472,6 @@ impl Store {
         })
     }
 
-    /// Marks a file of a workspace viewed, for the content `mark` says; with none, the
-    /// mark is taken away. Returns when it is on the drive.
     pub fn set_viewed(
         &self,
         workspace: &WorkspaceId,
@@ -619,12 +496,8 @@ impl Store {
         })
     }
 
-    /// The workspaces one of whose reviews holds a thread, in the order the workspaces
-    /// were first kept. A worktree that is gone stays listed while it is among them.
     pub fn workspaces_with_threads(&self) -> Result<Vec<WorkspaceId>, StoreError> {
         self.ask(|connection| {
-            // A workspace the table does not hold comes after those it does, by the
-            // first of its reviews.
             connection
                 .prepare(
                     "SELECT r.workspace FROM review r
@@ -638,11 +511,8 @@ impl Store {
         })
     }
 
-    /// Keeps a new round of a review as [`Store::put_round`] does, and takes away what of
-    /// the review is attached to the user's next message, all in the same transaction:
-    /// the send of what was attached. Either all of it is kept or none, so that a Keeper
-    /// killed in between never leaves a review attached whose comments were sent. Refused
-    /// as `put_round` is.
+    /// Sends a round as `put_round` does and clears the review's attachment in the same
+    /// transaction, so a killed Keeper never leaves attached a review whose comments were sent.
     pub fn put_round_detached(
         &self,
         review: &ReviewId,
@@ -652,9 +522,6 @@ impl Store {
         self.send_round(review, round, comments, true)
     }
 
-    /// Keeps what of a review is attached to the user's next message, in place of what
-    /// was; none takes the attachment away. Returns when it is on the drive. Refused for a
-    /// review that is not kept, and for a thread the review does not hold.
     pub fn set_attached(
         &self,
         review: &ReviewId,
@@ -687,11 +554,6 @@ impl Store {
         })
     }
 
-    /// Keeps a reply of the agent in a thread, and whether it marked the thread addressed,
-    /// in one transaction: either both are kept or neither. The comment's author is the
-    /// agent and its round the number given, which must be a round of the thread's
-    /// review. Returns when it is on the drive. Refused for a thread that is not kept, an
-    /// id that is taken, and a comment of the reviewer.
     pub fn put_reply(
         &self,
         thread: &ThreadId,
@@ -744,8 +606,6 @@ impl Store {
         })
     }
 
-    /// Resolves each of `threads`, in one transaction. Returns when it is on the drive.
-    /// Refused, with nothing changed, when one is not kept.
     pub fn resolve_threads(&self, threads: &[ThreadId]) -> Result<(), StoreError> {
         let threads: Vec<String> = threads.iter().map(|t| t.0.clone()).collect();
         self.try_ask(move |connection| {
@@ -761,8 +621,6 @@ impl Store {
         })
     }
 
-    /// Keeps the state recorded for a round that was kept with none. Returns when it is on
-    /// the drive. Refused for a round that is not kept, and one that has a state already.
     pub fn set_round_state(
         &self,
         review: &ReviewId,
@@ -786,8 +644,6 @@ impl Store {
         })
     }
 
-    /// Marks a round as one its agent has edited since. Returns when it is on the drive.
-    /// Refused for a round that is not kept.
     pub fn set_round_edited(&self, review: &ReviewId, round: u32) -> Result<(), StoreError> {
         let review = review.0.clone();
         self.try_ask(move |connection| {
@@ -802,11 +658,6 @@ impl Store {
         })
     }
 
-    /// Keeps where each thread of `places` sits now, in place of where it sat, in one
-    /// transaction: either all are kept or none. None puts a thread back on its anchor.
-    /// Following carries every thread of a workspace to each state it records, so one
-    /// write to the drive serves them all. Returns when it is on the drive. Refused, with
-    /// nothing kept, when one thread is not kept.
     pub fn set_places(&self, places: &[(ThreadId, Option<ThreadPlace>)]) -> Result<(), StoreError> {
         for (thread, place) in places {
             if let Some(place) = place
@@ -852,10 +703,6 @@ impl Store {
         })
     }
 
-    /// Keeps, with the recorded state `state` of `workspace`, who is credited with each
-    /// path of `credits`, in place of what was kept for that state: every uncommitted
-    /// change of the worktree, as Workspaces credited them when the state was recorded.
-    /// Returns when it is on the drive.
     pub fn put_credits(
         &self,
         workspace: &WorkspaceId,
@@ -902,8 +749,6 @@ impl Store {
         })
     }
 
-    /// Who is credited with each path kept with the recorded state `state` of `workspace`,
-    /// ordered by the bytes of the paths; empty for a state nothing was kept with.
     pub fn credits_of(
         &self,
         workspace: &WorkspaceId,
@@ -911,7 +756,6 @@ impl Store {
     ) -> Result<Vec<CreditRecord>, StoreError> {
         let (workspace, state) = (workspace.0.clone(), state.to_owned());
         self.ask(move |connection| {
-            // The sessions of a path come in the order they were kept.
             let rows = connection
                 .prepare(
                     "SELECT path, session FROM state_credit
@@ -942,11 +786,8 @@ impl Store {
         })
     }
 
-    /// Whether the credits of the recorded state `state` of `workspace` were kept with
-    /// [`Store::put_credits`], none among them: a state of a worktree with nothing
-    /// uncommitted is kept with no credit, and is told from a state nothing was kept with,
-    /// as one recorded at a send. Every call of `put_credits` keeps this mark in its own
-    /// transaction.
+    /// Whether `put_credits` was called for the state, even with no credits: a worktree with
+    /// nothing uncommitted keeps none, which differs from a state nothing was kept for.
     pub fn credits_were_kept(
         &self,
         workspace: &WorkspaceId,
@@ -960,9 +801,6 @@ impl Store {
         })
     }
 
-    /// Keeps that round `round` of `review` was sent in the turn `turn` of its session, in
-    /// place of what was kept before. Refused for a review or a round the Store does not
-    /// hold. Returns when it is on the drive.
     pub fn set_round_turn(
         &self,
         review: &ReviewId,
@@ -982,9 +820,6 @@ impl Store {
         })
     }
 
-    /// The turn each round of `review` was sent in, as [`Store::set_round_turn`] kept it, by
-    /// the number of the round, ordered by it; a round with none is left out. Empty for a
-    /// review the Store does not hold.
     pub fn round_turns(&self, review: &ReviewId) -> Result<Vec<(u32, String)>, StoreError> {
         let review = review.0.clone();
         self.ask(move |connection| {
@@ -998,38 +833,29 @@ impl Store {
         })
     }
 
-    /// Flushes the drive now: every draft saved so far is then on it. The writer does
-    /// this by itself after a pause in the typing, and when the last clone of the Store is
-    /// dropped, as when the Keeper stops and lets its parts go.
     pub fn flush(&self) -> Result<(), StoreError> {
         self.with_writer(Writer::flush)
     }
 }
 
-/// The refusal of a call, before any work is handed to the writer.
 pub(crate) fn refusal(sentence: String) -> StoreError {
     StoreError::Database(sentence)
 }
 
-/// The refusal of a piece of work, in a sentence.
 pub(crate) fn refused<T>(sentence: String) -> Result<T, Failed> {
     Err(Failed::Refused(sentence))
 }
 
-/// Whether a query that takes one id finds a row.
 pub(crate) fn exists(connection: &Connection, query: &str, id: &str) -> rusqlite::Result<bool> {
     connection.prepare(query)?.exists([id])
 }
 
-/// Whether a review holds a round of this number.
 fn exists_round(connection: &Connection, review: &str, round: u32) -> rusqlite::Result<bool> {
     connection
         .prepare("SELECT 1 FROM round WHERE review = ?1 AND number = ?2")?
         .exists(params![review, round])
 }
 
-/// What to say of a comment that is not a draft that is kept: that it is not kept, or
-/// that it was sent, or that it is not the reviewer's.
 fn not_a_draft(connection: &Connection, comment: &str) -> rusqlite::Result<String> {
     let found: Option<(i64, Option<u32>)> = connection
         .query_row(
@@ -1066,8 +892,6 @@ fn insert_comment(
         .map(drop)
 }
 
-/// Reads one review whole: its threads in the order they were first kept, each with its
-/// comments in the order they were first kept, and its rounds by number.
 fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<ReviewRecord>> {
     let head = connection
         .query_row(
@@ -1096,7 +920,6 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
              FROM thread WHERE review = ?1 ORDER BY seq",
         )?
         .query_map([id], |row| {
-            // A thread sits on its anchor while it has no place of its own.
             let now = match row.get::<_, Option<String>>(9)? {
                 None => None,
                 Some(tree) => Some(ThreadPlace {
@@ -1181,9 +1004,7 @@ fn read_review(connection: &Connection, id: &str) -> rusqlite::Result<Option<Rev
     }))
 }
 
-// Sides, authors and ways of sending are kept as the numbers `TABLES_2` says, and the
-// notice of a thread's place as `TABLES_5` says.
-
+// These numbers are what the database file holds: never renumber.
 fn side_number(side: Side) -> i64 {
     match side {
         Side::Old => 0,

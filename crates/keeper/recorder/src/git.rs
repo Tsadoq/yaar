@@ -1,5 +1,3 @@
-//! The one place that starts git.
-
 use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::io::{self, Write};
@@ -9,10 +7,8 @@ use std::process::{Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::Duration;
 
-/// The variables with which a process tells git which repository to use, whatever
-/// folder it runs in. A Keeper started from a shell that has one of them set would read
-/// that repository in place of the one it was asked about, so no run of git here
-/// inherits them.
+/// Variables that tell git which repository to use. A Keeper started from a shell that sets one
+/// would read that repository instead of the one asked about, so no run inherits them.
 const REPOSITORY_VARIABLES: [&str; 8] = [
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -24,51 +20,35 @@ const REPOSITORY_VARIABLES: [&str; 8] = [
     "GIT_PREFIX",
 ];
 
-/// The git program of the user, as the app runs it to read.
-///
-/// Cheap to clone: it holds only where the program is, the environment it runs in and what
-/// is known of its version.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
-    /// The environment every run gets: the process's own unless a take ended.
     environment: GitEnvironment,
-    /// Whether the program has the forms of [`NEWER`], read once from `git version` at the
-    /// first question and shared by every clone.
     has_newer_forms: Arc<OnceLock<bool>>,
 }
 
-/// The oldest git known to have every form the reads ask for first: `-z` after `worktree
-/// list`, the atom `ahead-behind` of `for-each-ref` and `-Z` after `cat-file --batch`.
-/// Ubuntu 22.04 ships git 2.34 and Debian 12 git 2.39, and each lacks at least one of the
-/// three; such a git is asked in forms that git 2.34 has. Ubuntu 24.04 ships 2.43. The
-/// forms of a git between the two were not checked, so it is asked the older way too.
+/// The oldest git known to have every form the reads ask for first: `-z` after `worktree list`, the
+/// atom `ahead-behind` of `for-each-ref`, `-Z` after `cat-file --batch`. Ubuntu 22.04 (2.34) and
+/// Debian 12 (2.39) each lack at least one; gits from 2.40 to 2.42 were not checked and are asked
+/// the older way too.
 const NEWER: (u32, u32) = (2, 43);
 
-/// Where a run of git looks for its repository.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Place<'a> {
-    /// In this folder, or above it, as git finds it.
     Folder(&'a Path),
-    /// In this git folder, named outright.
     GitDir(&'a Path),
 }
 
-/// What one run of git gave.
 #[derive(Debug)]
 pub(crate) struct Answer {
-    /// The command, as one would type it.
     command: String,
     /// Its exit code; none when a signal ended it.
     pub(crate) code: Option<i32>,
-    /// What it printed.
     pub(crate) stdout: Vec<u8>,
-    /// What it wrote to standard error.
     pub(crate) stderr: String,
 }
 
 impl Answer {
-    /// What git printed, when it ended well.
     pub(crate) fn printed(self) -> Result<Vec<u8>, GitError> {
         if self.code == Some(0) {
             Ok(self.stdout)
@@ -77,7 +57,6 @@ impl Answer {
         }
     }
 
-    /// The run as a failure of git.
     pub(crate) fn failed(self) -> GitError {
         GitError::Failed {
             command: self.command,
@@ -86,18 +65,15 @@ impl Answer {
         }
     }
 
-    /// The run as an answer that was not understood.
     pub(crate) fn unreadable(&self, what: impl Into<String>) -> GitError {
         unreadable(&self.command, what)
     }
 
-    /// The command, as one would type it.
     pub(crate) fn command(&self) -> &str {
         &self.command
     }
 }
 
-/// An answer of `command` that was not understood.
 pub(crate) fn unreadable(command: &str, what: impl Into<String>) -> GitError {
     GitError::Unreadable {
         command: command.to_owned(),
@@ -105,61 +81,32 @@ pub(crate) fn unreadable(command: &str, what: impl Into<String>) -> GitError {
     }
 }
 
-/// The environment the Keeper's runs of git get, once the Keeper has taken the user's login
-/// shell's (`yaar_link::login`).
-///
-/// A Keeper started by a Window that the Finder, the Dock or a desktop's menu started has the
-/// system's short search path, so the user's git would run the user's hooks, and filters such
-/// as `git-lfs`, without the programs of the user's login path. The Keeper therefore takes the
-/// login shell's environment once, at its start, on a thread of its own that never holds an
-/// answer to a Window, and hands what it got here. Until the take has ended every run of git
-/// gets the process's own environment, as before slice 10.
-///
-/// - A run that reads (`Git::command`) gets the taken environment when the take has ended
-///   with one, and the process's own otherwise; it never waits.
-/// - A run of the user's own git (`Git::plain`: the creation of a worktree, the commit
-///   control), which runs the user's hooks, first waits for the take to have ended, for at
-///   most the deadline [`GitEnvironment::waiting`] was given, and then gets the taken
-///   environment, or the process's own when the take failed or the wait ran out.
-/// - Either way the variables that name another repository stay removed, and the settings a
-///   read carries are set over the environment, as before.
-///
-/// Cheap to clone: every clone is the same environment. A `Git` made by [`Git::find`] or
-/// [`Git::at`] has [`GitEnvironment::own`], which never waits and is always the process's
-/// own, so that every test and every caller of slices 1 to 9 runs git as before.
+/// The environment of the Keeper's runs of git, set once the login shell's is taken: from the
+/// Finder the Keeper has a short search path, so hooks and filters such as `git-lfs` would miss the
+/// user's programs. Reads never wait for it; the user's own git waits up to a deadline.
 #[derive(Debug, Clone)]
 pub struct GitEnvironment {
     inner: Arc<Inner>,
 }
 
-/// What every clone of one [`GitEnvironment`] shares.
 #[derive(Debug)]
 struct Inner {
-    /// Where the take stands.
     take: Mutex<Take>,
-    /// Wakes the runs that wait, when the take ends.
     ended: Condvar,
-    /// How long a run of the user's own git waits for the take.
     deadline: Duration,
 }
 
-/// Where the take stands.
 #[derive(Debug)]
 enum Take {
-    /// Under way.
     UnderWay,
-    /// Ended: with the environment it gave, or with none.
     Ended(Option<Arc<Vec<(OsString, OsString)>>>),
 }
 
 impl GitEnvironment {
-    /// The process's own environment, for ever: no take was started.
     pub fn own() -> GitEnvironment {
         GitEnvironment::in_state(Take::Ended(None), Duration::ZERO)
     }
 
-    /// A take is under way. A run of the user's own git waits for it at most `deadline`
-    /// (the shell's own deadline, `yaar_link::login::SHELL_DEADLINE`, for the Keeper).
     pub fn waiting(deadline: Duration) -> GitEnvironment {
         GitEnvironment::in_state(Take::UnderWay, deadline)
     }
@@ -174,8 +121,6 @@ impl GitEnvironment {
         }
     }
 
-    /// The take has ended: with the merged environment it gave, or with none when it failed.
-    /// Wakes every run that waits. A second call changes nothing.
     pub fn ended(&self, environment: Option<Vec<(OsString, OsString)>>) {
         let mut take = self.lock();
         if matches!(*take, Take::UnderWay) {
@@ -185,13 +130,11 @@ impl GitEnvironment {
         }
     }
 
-    /// The environment a run gets now, without waiting: the taken one once the take ended
-    /// with one; none (the process's own) before that, or when it failed.
+    /// None means the process's own environment.
     pub fn now(&self) -> Option<Vec<(OsString, OsString)>> {
         self.taken().map(|taken| taken.as_ref().clone())
     }
 
-    /// [`GitEnvironment::now`], not copied.
     fn taken(&self) -> Option<Arc<Vec<(OsString, OsString)>>> {
         match &*self.lock() {
             Take::Ended(taken) => taken.clone(),
@@ -199,9 +142,6 @@ impl GitEnvironment {
         }
     }
 
-    /// What a run of the user's own git gets: waits for the take to end, for at most the
-    /// deadline, then as [`GitEnvironment::now`]. The take ends by itself within its own
-    /// deadline, so a run that comes late waits for what is left of it only.
     fn after_waiting(&self) -> Option<Arc<Vec<(OsString, OsString)>>> {
         let (take, _) = self
             .inner
@@ -225,7 +165,6 @@ impl GitEnvironment {
 }
 
 impl Git {
-    /// This git, whose runs get `environment` as the doc of [`GitEnvironment`] says.
     pub fn with_environment(self, environment: GitEnvironment) -> Git {
         Git {
             environment,
@@ -233,12 +172,10 @@ impl Git {
         }
     }
 
-    /// The `git` on the search path of this process.
     pub fn find() -> Result<Git, GitError> {
         let search = std::env::var_os("PATH").ok_or(GitError::NotFound)?;
         std::env::split_paths(&search)
-            // An entry that is not a full path means a folder under wherever this
-            // process happens to run: not a place to take a program from.
+            // An entry that is not a full path is relative to wherever this process runs.
             .filter(|folder| folder.is_absolute())
             .map(|folder| folder.join("git"))
             .find(|candidate| is_program(candidate))
@@ -246,7 +183,6 @@ impl Git {
             .ok_or(GitError::NotFound)
     }
 
-    /// The git program at this path.
     pub fn at(program: impl Into<PathBuf>) -> Git {
         Git {
             program: program.into(),
@@ -255,9 +191,7 @@ impl Git {
         }
     }
 
-    /// Whether this git has the newer forms of [`NEWER`], from its own answer to `git
-    /// version`, asked once. A version that cannot be read counts as new, as every git
-    /// did before this was asked: git then fails in its own words.
+    /// A version that cannot be read counts as new: git then fails in its own words.
     pub(crate) fn has_newer_forms(&self) -> bool {
         *self.has_newer_forms.get_or_init(|| {
             let mut command = self.command(Place::Folder(Path::new("/")), &[]);
@@ -269,15 +203,12 @@ impl Git {
         })
     }
 
-    /// Where the program is.
     pub fn program(&self) -> &Path {
         &self.program
     }
 
-    /// A run of git that reads, not yet started, with everything every read carries:
-    /// no hook of the hooks folder, no file-system monitor, each hook the configuration
-    /// defines turned off by its key in `hooks_off`, no lock that can be done without,
-    /// no question at a terminal, and git's own language.
+    /// A run that reads, not yet started; `hooks_off` holds the keys of the hooks the configuration
+    /// defines, each turned off.
     pub(crate) fn command(&self, place: Place<'_>, hooks_off: &[OsString]) -> Command {
         let taken = self.environment.taken();
         let mut command = self.start(taken.as_deref());
@@ -306,9 +237,8 @@ impl Git {
             .env("LC_ALL", "C")
             .stdin(Stdio::null());
 
-        // The name of a hook can hold any character, an equals sign too, which `-c`
-        // would cut at. Settings handed over in the environment are taken whole. They
-        // are numbered after those the environment of this process already holds.
+        // A hook name can hold an equals sign, which `-c` would cut at: the settings go in the
+        // environment, numbered after those the environment the run gets already holds.
         if !hooks_off.is_empty() {
             let before = match &taken {
                 Some(taken) => taken
@@ -329,10 +259,8 @@ impl Git {
         command
     }
 
-    /// A run of the user's own git, not yet started, as the user would start it in
-    /// `folder`: none of the settings every read carries, so that the user's hooks,
-    /// identity, signing and language apply. Only the variables that name another
-    /// repository are left out, and nothing is asked at a terminal.
+    /// The user's own git as the user would start it in `folder`: the user's hooks, identity,
+    /// signing and language apply. Only variables that name another repository are left out.
     pub(crate) fn plain(&self, folder: &Path) -> Command {
         let taken = self.environment.after_waiting();
         let mut command = self.start(taken.as_deref());
@@ -344,8 +272,6 @@ impl Git {
         command
     }
 
-    /// The program, not yet started, in `taken` when the take gave an environment, and in
-    /// the process's own otherwise.
     fn start(&self, taken: Option<&Vec<(OsString, OsString)>>) -> Command {
         let mut command = Command::new(&self.program);
         if let Some(taken) = taken {
@@ -356,7 +282,6 @@ impl Git {
         command
     }
 
-    /// Runs git to its end and gives what it answered, whatever its exit code.
     pub(crate) fn run<I, S>(
         &self,
         place: Place<'_>,
@@ -373,8 +298,6 @@ impl Git {
     }
 }
 
-/// Whether the git that printed `version` as its answer to `git version` has the forms of
-/// [`NEWER`]. An answer that is not understood counts as new.
 fn says_newer_forms(version: &str) -> bool {
     let mut numbers = version
         .strip_prefix("git version ")
@@ -387,7 +310,6 @@ fn says_newer_forms(version: &str) -> bool {
     }
 }
 
-/// Runs a prepared command to its end.
 pub(crate) fn finish(mut command: Command) -> Result<Answer, GitError> {
     let shown = shown(&command);
     let output = command.output().map_err(could_not_start)?;
@@ -399,7 +321,6 @@ pub(crate) fn finish(mut command: Command) -> Result<Answer, GitError> {
     })
 }
 
-/// Runs a prepared command to its end with `input` on its standard input.
 pub(crate) fn finish_with(mut command: Command, input: &[u8]) -> Result<Answer, GitError> {
     let shown = shown(&command);
     command
@@ -412,9 +333,8 @@ pub(crate) fn finish_with(mut command: Command, input: &[u8]) -> Result<Answer, 
         let _ = child.wait();
         return Err(io::Error::other("git was started without its input").into());
     };
-    // Written on a thread of its own, so that git can fill its output while it reads:
-    // a pipe that nobody empties would stop both. A write that fails means git ended
-    // before it read all, and its exit code says why.
+    // Written on a thread of its own so that git can fill its output while it reads: a pipe nobody
+    // empties would stop both. A failed write means git ended before it read all.
     let output = std::thread::scope(|scope| {
         scope.spawn(move || {
             let _ = asks.write_all(input);
@@ -429,7 +349,6 @@ pub(crate) fn finish_with(mut command: Command, input: &[u8]) -> Result<Answer, 
     })
 }
 
-/// Why git did not start.
 pub(crate) fn could_not_start(e: io::Error) -> GitError {
     if e.kind() == io::ErrorKind::NotFound {
         GitError::NotFound
@@ -438,8 +357,6 @@ pub(crate) fn could_not_start(e: io::Error) -> GitError {
     }
 }
 
-/// The command as one would type it: `git` and what was asked, without the settings
-/// every run carries.
 pub(crate) fn shown(command: &Command) -> String {
     let mut shown = String::from("git");
     let mut args = command.get_args();
@@ -459,27 +376,17 @@ fn is_program(path: &Path) -> bool {
         .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
 }
 
-/// Why git gave no answer.
 #[derive(Debug)]
 pub enum GitError {
-    /// There is no git program to run.
     NotFound,
-    /// git could not be started, or its output could not be read.
     Io(io::Error),
-    /// git ran and failed.
     Failed {
-        /// The command, as one would type it.
         command: String,
-        /// Its exit code; none when a signal ended it.
         code: Option<i32>,
-        /// What it wrote to standard error.
         stderr: String,
     },
-    /// git answered with something this crate does not understand.
     Unreadable {
-        /// The command, as one would type it.
         command: String,
-        /// What was not understood.
         what: String,
     },
 }
@@ -519,21 +426,14 @@ mod tests {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
 
-    /// How long a run that must not wait is given to answer: far more than it needs, far
-    /// less than the deadlines the tests hand to the environment.
     const ANSWERS_WITHIN: Duration = Duration::from_secs(5);
 
-    /// How long a run that never waits may take to be made: far more than making a command
-    /// takes, even on a loaded machine, and less than a short wait would last.
     const QUICKLY: Duration = Duration::from_secs(1);
 
-    /// How long a run that must wait is watched before the take ends: the one wait of these
-    /// tests that is not on a fact. A run that does not wait answers within microseconds,
-    /// so this is long enough on a loaded machine too, and a passing run cannot fail on it.
+    /// Long enough that a run that does not wait has answered even on a loaded machine.
     const WATCHED_FOR: Duration = Duration::from_millis(300);
 
-    /// How many reads a test makes in a row to tell a read that never waits from one that
-    /// waits a little each time.
+    /// Many reads in a row, so that even a short wait on each would add up past `QUICKLY`.
     const READS: usize = 20;
 
     fn variables(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
@@ -543,7 +443,6 @@ mod tests {
             .collect()
     }
 
-    /// What `command` sets and removes, by name: a removed variable is none.
     fn set_in(command: &Command) -> HashMap<OsString, Option<OsString>> {
         command
             .get_envs()
@@ -637,15 +536,11 @@ mod tests {
     fn a_read_gets_the_taken_environment_and_never_waits() {
         let waiting = GitEnvironment::waiting(Duration::from_secs(60));
         let git = Git::at("git").with_environment(waiting.clone());
-        // The take is under way and ends only after the read has answered: a read that
-        // waited for it would not.
+        // The take ends only after the read has answered: a read that waited for it would not.
         let (answer_tx, answer) = mpsc::channel();
         let reader = {
             let git = git.clone();
             std::thread::spawn(move || {
-                // Making a command takes microseconds, so a run of them in a row is far
-                // under `QUICKLY` however loaded the machine is; a read that waited even
-                // a short while for the take, on each run, would not be.
                 let started = Instant::now();
                 let mut command = git.command(Place::Folder(Path::new("/")), &[]);
                 for _ in 1..READS {
@@ -674,7 +569,6 @@ mod tests {
         ])));
         let after = set_in(&git.command(Place::Folder(Path::new("/")), &[]));
         assert_eq!(value(&after, "LOGIN_ONLY"), Some(OsString::from("yes")));
-        // What a read carries is set over what was taken.
         assert_eq!(value(&after, "LC_ALL"), Some(OsString::from("C")));
         assert_eq!(
             value(&after, "GIT_OPTIONAL_LOCKS"),
@@ -724,7 +618,6 @@ mod tests {
             value(&set, "GIT_CONFIG_VALUE_2"),
             Some(OsString::from("false"))
         );
-        // The settings the environment held are the environment's own, and stay.
         assert_eq!(value(&set, "GIT_CONFIG_KEY_1"), Some(OsString::from("c.d")));
     }
 
@@ -783,7 +676,6 @@ mod tests {
             Some(OsString::from("0"))
         );
 
-        // Later runs find the end at once.
         let (again_tx, again) = mpsc::channel();
         std::thread::spawn(move || {
             let _ = again_tx.send(set_in(&git.plain(Path::new("/"))));
@@ -795,13 +687,10 @@ mod tests {
 
     #[test]
     fn the_users_own_git_waits_no_longer_than_the_deadline_and_then_gets_the_process_own() {
-        // Long enough that a wait of twice the deadline, or of any multiple of it, is told
-        // from one of the deadline by more than a loaded machine's delay.
+        // Long enough that a wait of twice the deadline is told from one of the deadline.
         let deadline = Duration::from_secs(2);
         let waiting = GitEnvironment::waiting(deadline);
         let git = Git::at("git").with_environment(waiting.clone());
-        // The run is on a thread and is waited for with a bound of its own: one that waits
-        // for no deadline at all must fail here and not hang the test for ever.
         let (answer_tx, answer) = mpsc::channel();
         let started = Instant::now();
         let until = started + deadline + Duration::from_secs(1);
@@ -824,15 +713,12 @@ mod tests {
             "the run waited {waited:?} for a deadline of {deadline:?}"
         );
         assert_eq!(value(&set, "PATH"), None);
-        // A take that ends after the wait gave up is still the environment of later reads.
         waiting.ended(Some(variables(&[("PATH", "/late")])));
         assert_eq!(waiting.now(), Some(variables(&[("PATH", "/late")])));
     }
 
     #[test]
     fn a_git_made_by_find_or_at_runs_in_the_process_own_environment_and_never_waits() {
-        // Neither waits: each answers in less than the shortest wait an environment of the
-        // Keeper's kind would give, and not only before the longest.
         let (answer_tx, answer) = mpsc::channel();
         std::thread::spawn(move || {
             let found = Git::find().expect("git on the search path");

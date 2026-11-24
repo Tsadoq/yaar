@@ -1,100 +1,6 @@
-//! Themes: every colour the Window draws, as one definition each (NFR-017 to NFR-019).
-//!
-//! A theme is one [`ThemeDefinition`]: a name, whether it is a light or a dark one
-//! ([`Appearance`]), a colour for each role the Window draws with ([`Colors`]) and the
-//! colours of a terminal ([`TerminalColors`]). Adding a theme to the app is one more
-//! definition in this folder, listed in [`Themes::built_in`] and checked as [`Themes::with`]
-//! checks one; nothing that draws changes, since nothing that draws names a colour: the
-//! Frame and the panes read the toolkit's theme (`cx.theme()`), whose colours the applied
-//! definition sets ([`ThemeDefinition::onto`]), and the terminal pane reads
-//! [`TerminalColors`] of the applied definition ([`applied`], which `crate::Looks` sets).
-//!
-//! # The definitions the app is built with
-//!
-//! [`light`] and [`dark`], named [`LIGHT`] and [`DARK`]. Their colours are those the toolkit's
-//! own light and dark themes give each role, so that the app looks as it did before slice 9
-//! wherever the toolkit drew it: the package that writes them reads each role of
-//! `cx.theme()` after `Theme::change(ThemeMode::Light)`, then `ThemeMode::Dark`, in a scratch
-//! test of its own (not committed), and writes each as a literal with [`hex`] (or [`hexa`]
-//! where its alpha is below 1), rounding each channel to the nearest of 0 to 255. Then, for
-//! each pair of [`READABLE`], the text role must stand out from its ground by a contrast of
-//! at least 4.5 to 1 (WCAG 2's contrast ratio of their relative luminances, alpha composited
-//! over `background` first). Where a role falls short on a ground it is drawn on, it alone is
-//! changed: moved away from the lightness of that ground, by 5 points of lightness in HSL a
-//! step, to the first step that passes on every ground it is drawn on. Where no step that way
-//! can pass, the same steps are taken the other way. (The dark theme's `warning_foreground`,
-//! a dark text on a light yellow, can only pass darker.) A role that is also the ground of a
-//! pair is moved first, and the pair's text role then by the same rule from the toolkit's own
-//! colour. [`READABLE`] lists every pair of a text role and a ground the Frame, the terminal
-//! pane and the review pane draw, among them the quiet text of the sidebar on its own ground,
-//! on the selected row's and on the hovered row's. It also holds the quiet text on
-//! `secondary`, which no sidebar code draws: the selected row has the same value but is drawn
-//! on `sidebar_accent`.
-//!
-//! What moved from the toolkit's colour, in the light theme: `muted_foreground` #737373 to
-//! #666666; `danger` #ef4444 to #d41212 (it is drawn on `background` and `muted`);
-//! `success` #22c55e to #136e35 and `warning` #eab308 to #6f5504 (each drawn on `background`,
-//! `muted` and `secondary`); `warning_foreground` is the toolkit's own #fafafa again, which
-//! reads on the darker `warning`. In the dark theme only `warning_foreground` moved, #ca8a04
-//! to #664602. The light theme's `success` and `warning` are also the colours of the marks
-//! the panes draw as dots and tints, which turn darker with them. The line numbers of a
-//! diff lie on a tint of `danger` or `success` over `background`, which is no role and so
-//! no pair of [`READABLE`].
-//!
-//! The terminal's colours: `foreground` and `background` those of the theme, `cursor` the
-//! theme's `foreground`, `selection` the theme's `selection`, and the sixteen of `ansi` in
-//! xterm's order: 0 black `#000000`, 1 to 6 the theme's `red`, `green`, `yellow`, `blue`,
-//! `magenta`, `cyan`, 7 white `#e5e5e5`, 8 bright black `#7f7f7f`, 9 to 14 the theme's
-//! `red_light` to `cyan_light`, 15 bright white `#ffffff`: what the terminal pane drew before
-//! slice 9. The dark theme's palette is that. The light theme's is that with each of 1 to 15
-//! that reads under 3 to 1 on its white ground moved by the same steps, away from the ground's
-//! lightness, to the first that reads 3 to 1 and is no colour of the palette before it (with
-//! the dark theme's palette, white, bright white and yellow read 1.3 to 1.5 to 1 on white),
-//! but for the three greys: 8 bright black `#595959`, 7 white `#737373` and 15 bright white
-//! `#8c8c8c` are set by hand, in the order light terminal themes use (7.0, 4.7 and 3.4 to 1
-//! on white), so that bright black is darker than white and white darker than bright white,
-//! each 1.3 to 1 or more from the next. Colour 0 is as it was. The roles `red` to
-//! `cyan_light` stay as they are: they are marks as well as a palette.
-//!
-//! # What the definitions must hold
-//!
-//! [`Themes::with`] accepts a definition whose name is 1 to 64 characters, none a control
-//! character, and differs from every name it holds, case aside; else [`ThemeError`]. The
-//! unit tests of this module (THEME-03, proposed) hold each built-in definition to
-//! [`READABLE`] and to [`DISTINCT`]: no two roles of a pair of [`DISTINCT`] are the same
-//! colour, so that a selection, a hover or a mark never vanishes into its ground, and hold
-//! the light theme's colours 1 to 15 of the terminal to 3 to 1 on its ground.
-//!
-//! # Which definition is applied
-//!
-//! [`Themes::resolve`]: the user's choice (`yaar_link::ThemeChoice`), or, with
-//! `ThemeChoice::System` or a name no definition has, the built-in definition of the
-//! system's appearance. The model `crate::Looks` applies it and keeps it applied.
-//!
-//! # Where colours may be written
-//!
-//! In this folder only. The terminal pane picks the colour of a cell in one public function
-//! of its own (`yaar_terminal_pane::colour_of`): the definition's [`TerminalColors`] for the
-//! default foreground and background and the sixteen numbered colours, [`indexed`] for the
-//! numbers 16 to 255 and [`rgb24`] for a colour a program gives by value, which are xterm's,
-//! not the theme's. The terminal also answers a program that asks for its colours (OSC 4,
-//! 10, 11 and 12) from the applied definition's [`TerminalColors`].
-//!
-//! The test of colours in drawing code (THEME-02, proposed;
-//! `crates/window/window/tests/colours.rs`) reads every source of the Frame, the three panes
-//! and the Window program but this folder, and fails:
-//! - on any colour written there: `rgb(`, `rgba(`, `hsla(`, `hsl(`, `hex(`, `hexa(`,
-//!   `Hsla {`, `Rgba {`, `Rgb {`, `Rgb::new`, `opaque_grey(`, and the toolkit's named colours
-//!   `black()`, `white()`, `red()`, `green()`, `blue()`, `yellow()`, each matched as a whole
-//!   name (no letter, digit or `_` just before it), so that `transparent_black()` and
-//!   `transparent_white()`, which draw nothing, stay allowed;
-//! - on a role of the toolkit's theme read that is not one of [`Colors`]: every name read
-//!   as `theme.<name>`, `theme().<name>` or `Theme::global(..).<name>` is a role of
-//!   [`Colors::roles`] or one of the
-//!   toolkit theme's fields that are no colour (`mode`, `font_family`, `font_size`,
-//!   `mono_font_family`, `mono_font_size`, `radius`, `radius_lg`, `window_radius`,
-//!   `shadow`). A role the definition does not hold would keep the toolkit's colour of the
-//!   mode under any third theme.
+//! Every colour the Window draws is a role of a `ThemeDefinition` here. A role under 4.5 to 1 on
+//! its ground is moved away from the ground's lightness in 5-point steps. Light terminal greys 7, 8
+//! and 15 are set by hand: 8 darker than 7, 7 darker than 15.
 
 mod dark;
 mod light;
@@ -105,19 +11,14 @@ use gpui_kit::*;
 pub use dark::dark;
 pub use light::light;
 
-/// The name of the light theme the app is built with.
 pub const LIGHT: &str = "Light";
 
-/// The name of the dark theme the app is built with.
 pub const DARK: &str = "Dark";
 
-/// Whether a theme is a light or a dark one, and what the system's setting is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Appearance {
-    /// Dark text on a light ground. What the app shows where the system says nothing.
     #[default]
     Light,
-    /// Light text on a dark ground.
     Dark,
 }
 
@@ -130,22 +31,18 @@ impl From<WindowAppearance> for Appearance {
     }
 }
 
-/// A colour of `0xRRGGBB`, opaque.
 pub fn hex(value: u32) -> Hsla {
     rgb(value).into()
 }
 
-/// A colour of `0xRRGGBBAA`.
 pub fn hexa(value: u32) -> Hsla {
     rgba(value).into()
 }
 
-/// The colour xterm gives the numbered colours 16 to 255 a program asks for: the 6 by 6 by 6
-/// cube from 16 to 231 (each channel 0, or 55 plus 40 times its step), and 24 greys from 232
-/// (8 plus 10 times its step). Under 16 the theme decides ([`TerminalColors::ansi`]), and
-/// the terminal pane never asks this for those; it gives xterm's own sixteen there.
+/// xterm's colours: a 6 by 6 by 6 cube from 16 (a channel is 0, or 55 plus 40 a step), then 24
+/// greys from 232 (8 plus 10 a step). Under 16 this gives xterm's own sixteen; the terminal pane
+/// takes those from the theme.
 pub fn indexed(index: u8) -> Hsla {
-    /// xterm's own sixteen, which the doc says this gives under 16.
     const BASE: [u32; 16] = [
         0x000000, 0xcd0000, 0x00cd00, 0xcdcd00, 0x0000ee, 0xcd00cd, 0x00cdcd, 0xe5e5e5, 0x7f7f7f,
         0xff0000, 0x00ff00, 0xffff00, 0x5c5cff, 0xff00ff, 0x00ffff, 0xffffff,
@@ -164,36 +61,26 @@ pub fn indexed(index: u8) -> Hsla {
     }
 }
 
-/// The colour a program asks for by its value, red, green and blue.
 pub fn rgb24(red: u8, green: u8, blue: u8) -> Hsla {
     hex(u32::from(red) << 16 | u32::from(green) << 8 | u32::from(blue))
 }
 
-/// Declares the roles of [`Colors`] once: the struct, the copy onto the toolkit's colours,
-/// the copy from them and the list of the roles with their names.
 macro_rules! roles {
     ($( $(#[$doc:meta])* $role:ident, )+) => {
-        /// The colour of each role the Window draws with: the toolkit's roles the Frame,
-        /// the panes and the toolkit's field of text read. Each is the toolkit's role of
-        /// the same name.
         #[derive(Debug, Clone, Copy, PartialEq)]
         pub struct Colors {
             $( $(#[$doc])* pub $role: Hsla, )+
         }
 
         impl Colors {
-            /// Writes each role into the toolkit's colours of the same name; every other
-            /// role of the toolkit stays as it is.
             pub fn onto(&self, kit: &mut ThemeColor) {
                 $( kit.$role = self.$role; )+
             }
 
-            /// The roles as the toolkit's colours hold them.
             pub fn of(kit: &ThemeColor) -> Colors {
                 Colors { $( $role: kit.$role, )+ }
             }
 
-            /// Every role with its name, in the order of the struct.
             pub fn roles(&self) -> Vec<(&'static str, Hsla)> {
                 vec![ $( (stringify!($role), self.$role), )+ ]
             }
@@ -202,90 +89,48 @@ macro_rules! roles {
 }
 
 roles! {
-    /// The ground of the window.
     background,
-    /// Text.
     foreground,
-    /// Lines between parts, and the frame of a control.
     border,
-    /// The frame of a field of text.
     input,
-    /// The ring of a control with the focus.
     ring,
-    /// The caret of a field of text.
     caret,
-    /// Selected text.
     selection,
-    /// The colour of the main mark: the cursor's bar in a list, a chosen control.
     primary,
-    /// Text on `primary`.
     primary_foreground,
-    /// The ground of a selected row.
     secondary,
-    /// Text on `secondary`.
     secondary_foreground,
-    /// A quiet ground.
     muted,
-    /// Quiet text: what cannot be chosen, a note.
     muted_foreground,
-    /// The ground of a control under the pointer.
     accent,
-    /// Text on `accent`.
     accent_foreground,
-    /// A row under the pointer.
     list_hover,
-    /// What was added, what went well.
     success,
-    /// What waits, what to look at.
     warning,
-    /// Text on `warning`.
     warning_foreground,
-    /// What was removed, what failed.
     danger,
-    /// A plain mark.
     info,
-    /// The ground of the sidebar.
     sidebar,
-    /// Text of the sidebar.
     sidebar_foreground,
-    /// The line beside the sidebar.
     sidebar_border,
-    /// The ground of the selected workspace in the sidebar.
     sidebar_accent,
-    /// Its text.
     sidebar_accent_foreground,
-    /// Red, as a mark and as a terminal's colour 1.
+    /// Red, as a mark. `red` to `cyan_light` are also the dark theme's terminal colours 1 to 6 and
+    /// 9 to 14; the light theme replaces those that read under 3 to 1 on white.
     red,
-    /// Bright red, a terminal's colour 9.
     red_light,
-    /// Green, colour 2.
     green,
-    /// Bright green, colour 10.
     green_light,
-    /// Yellow, colour 3.
     yellow,
-    /// Bright yellow, colour 11.
     yellow_light,
-    /// Blue, colour 4.
     blue,
-    /// Bright blue, colour 12.
     blue_light,
-    /// Magenta, colour 5.
     magenta,
-    /// Bright magenta, colour 13.
     magenta_light,
-    /// Cyan, colour 6.
     cyan,
-    /// Bright cyan, colour 14.
     cyan_light,
 }
 
-/// The pairs of roles whose first is text drawn on the second, and must be readable there:
-/// a contrast of at least 4.5 to 1. Every pair of a text role and a ground that the Frame,
-/// the terminal pane and the review pane draw is listed: the sidebar draws quiet text on its
-/// own ground, on the selected row's and on the hovered row's, and its plain text on the
-/// hovered row's; the panes draw `danger`, `success` and `warning` as words on the window's
-/// ground, on `muted` and on `secondary`, and plain text on `muted`.
 pub const READABLE: &[(&str, &str)] = &[
     ("foreground", "background"),
     ("muted_foreground", "background"),
@@ -313,7 +158,6 @@ pub const READABLE: &[(&str, &str)] = &[
     ("warning", "secondary"),
 ];
 
-/// The pairs of roles that must never be the same colour.
 pub const DISTINCT: &[(&str, &str)] = &[
     ("background", "secondary"),
     ("background", "selection"),
@@ -328,66 +172,50 @@ pub const DISTINCT: &[(&str, &str)] = &[
     ("sidebar", "sidebar_accent"),
 ];
 
-/// The colours of a terminal.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TerminalColors {
-    /// The text a program writes with no colour of its own.
     pub foreground: Hsla,
-    /// The ground of a cell with no colour of its own.
     pub background: Hsla,
-    /// The cursor.
     pub cursor: Hsla,
-    /// Selected cells.
     pub selection: Hsla,
-    /// The sixteen colours a program asks for by the numbers 0 to 15, in xterm's order.
     pub ansi: [Hsla; 16],
 }
 
-/// One theme: everything the Window draws in it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ThemeDefinition {
-    /// Its name, as the settings show it and as the user's choice keeps it.
     pub name: String,
-    /// Whether it is light or dark: the toolkit's mode it is applied in, and the window's
-    /// own appearance on macOS while it is chosen.
+    /// The toolkit's mode it is applied in, and the window's own appearance on macOS while it is
+    /// chosen.
     pub appearance: Appearance,
-    /// The colour of each role.
     pub colors: Colors,
-    /// The colours of a terminal.
     pub terminal: TerminalColors,
 }
 
 impl ThemeDefinition {
-    /// Writes its colours into the toolkit's: [`Colors::onto`].
     pub fn onto(&self, kit: &mut ThemeColor) {
         self.colors.onto(kit);
     }
 }
 
-/// Why a definition was not accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ThemeError {
     /// Its name is empty, longer than 64 characters, or holds a control character.
     BadName(String),
-    /// A definition of that name, case aside, is there already.
     Taken(String),
 }
 
-/// The definitions the Window can apply: the two built in, and those added.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Themes {
     definitions: Vec<ThemeDefinition>,
 }
 
 impl Themes {
-    /// The two definitions the app is built with, [`light`] then [`dark`].
     pub fn built_in() -> Themes {
         Themes {
             definitions: vec![light(), dark()],
         }
     }
 
-    /// These themes and `definition` after them, when the module doc's rules accept it.
     pub fn with(mut self, definition: ThemeDefinition) -> Result<Themes, ThemeError> {
         let name = &definition.name;
         if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
@@ -400,12 +228,10 @@ impl Themes {
         Ok(self)
     }
 
-    /// Every definition, in the order they were added.
     pub fn all(&self) -> &[ThemeDefinition] {
         &self.definitions
     }
 
-    /// The definition of this name, case aside.
     pub fn named(&self, name: &str) -> Option<&ThemeDefinition> {
         let name = name.to_lowercase();
         self.definitions
@@ -413,16 +239,14 @@ impl Themes {
             .find(|definition| definition.name.to_lowercase() == name)
     }
 
-    /// The definition the Window applies for the user's `choice` while the system's
-    /// setting is `system`, as the module doc says.
     pub fn resolve(&self, choice: &yaar_link::ThemeChoice, system: Appearance) -> &ThemeDefinition {
         if let yaar_link::ThemeChoice::Named(name) = choice
             && let Some(definition) = self.named(name)
         {
             return definition;
         }
-        // `built_in` put the light one first and the dark one second, and `with` only
-        // adds after them, so these two places are the built-in definitions.
+        // Index 0 is the light theme and 1 the dark one: `built_in` puts them first and `with` only
+        // appends.
         match system {
             Appearance::Light => &self.definitions[0],
             Appearance::Dark => &self.definitions[1],
@@ -430,21 +254,16 @@ impl Themes {
     }
 }
 
-/// The definition applied, kept as a global of the app.
 struct Applied(ThemeDefinition);
 
 impl Global for Applied {}
 
-/// The definition applied now, as `crate::Looks` last applied it: [`light`] before it ever
-/// applied one. The terminal pane reads its [`TerminalColors`] here.
 pub fn applied(cx: &App) -> ThemeDefinition {
     cx.try_global::<Applied>()
         .map_or_else(light, |applied| applied.0.clone())
 }
 
-/// Keeps `definition` as the one [`applied`] gives. `crate::Looks` calls this as the third
-/// step of applying a definition; it writes nothing into the toolkit's colours. It is the
-/// crate's own: nothing outside the Frame may set the applied definition around `Looks`.
+/// Only `crate::Looks` may call this; it does not touch the toolkit's colours.
 pub(crate) fn set_applied(definition: ThemeDefinition, cx: &mut App) {
     cx.set_global(Applied(definition));
 }
@@ -461,7 +280,6 @@ mod tests {
     };
     use gpui_kit::Hsla;
 
-    /// A third theme, with every role and every terminal colour a value of its own.
     fn sepia() -> ThemeDefinition {
         ThemeDefinition {
             name: "Sepia".to_owned(),
@@ -547,7 +365,6 @@ mod tests {
             .1
     }
 
-    /// WCAG 2's relative luminance of an opaque colour.
     fn luminance(colour: Hsla) -> f32 {
         let rgba = colour.to_rgb();
         let linear = |c: f32| {
@@ -560,7 +377,6 @@ mod tests {
         0.2126 * linear(rgba.r) + 0.7152 * linear(rgba.g) + 0.0722 * linear(rgba.b)
     }
 
-    /// `colour` laid over the opaque `ground`.
     fn composited(colour: Hsla, ground: Hsla) -> Hsla {
         let (over, under) = (colour.to_rgb(), ground.to_rgb());
         let mix = |a: f32, b: f32| a * over.a + b * (1.0 - over.a);
@@ -573,7 +389,6 @@ mod tests {
         .into()
     }
 
-    /// The contrast ratio of `text` on `ground`, each laid over `backdrop` first.
     fn contrast(text: Hsla, ground: Hsla, backdrop: Hsla) -> f32 {
         let (a, b) = (
             luminance(composited(text, backdrop)),
@@ -583,17 +398,13 @@ mod tests {
         (lighter + 0.05) / (darker + 0.05)
     }
 
-    /// `colour` with each channel rounded to the nearest of 0 to 255, as a literal of this
-    /// folder writes it.
     fn rounded(colour: Hsla) -> Hsla {
         let [r, g, b, _] = channels(colour);
         hex(u32::from(r) << 16 | u32::from(g) << 8 | u32::from(b))
     }
 
-    /// The rule that makes a colour readable: `start` moved away from the lightness of
-    /// `ground` by 5 points of HSL lightness a step, to the first step (the colour itself
-    /// being step 0) that `passes`; and where no step that way passes before the lightness
-    /// runs out, the same steps the other way.
+    /// Moves `start` away from the lightness of `ground` by 5 points of HSL lightness a step, to
+    /// the first step that `passes`; the other way when none does.
     fn moved(start: Hsla, ground: Hsla, passes: impl Fn(Hsla) -> bool) -> Hsla {
         let away = if start.l > ground.l { 1.0 } else { -1.0 };
         for direction in [away, -away] {
@@ -633,13 +444,11 @@ mod tests {
                 "a chosen theme is drawn whatever the system says"
             );
         }
-        // Chosen by a name written another way, it is still found.
         assert_eq!(
             themes.resolve(&ThemeChoice::Named("SEPIA".to_owned()), Appearance::Dark),
             &sepia()
         );
 
-        // Applied: every role of the definition reaches the toolkit's colours, and no other.
         let mut kit = ThemeColor::default();
         kit.accordion = hex(0x010203);
         sepia().onto(&mut kit);
@@ -673,7 +482,6 @@ mod tests {
             Themes::built_in().with(named("dark")),
             Err(ThemeError::Taken("dark".to_owned()))
         );
-        // Every kind of control character, not only the newline.
         for bad in [
             String::new(),
             "x".repeat(65),
@@ -693,7 +501,7 @@ mod tests {
             .with(named(&longest))
             .expect("64 is fine");
         assert_eq!(longest.all().len(), 3);
-        // Characters, not bytes: 64 of two bytes each is a name.
+        // Characters, not bytes: 64 two-byte characters is a valid name.
         let wide = "é".repeat(64);
         assert!(Themes::built_in().with(named(&wide)).is_ok());
     }
@@ -708,7 +516,6 @@ mod tests {
             assert_eq!(themes.resolve(&choice, Appearance::Dark), &dark());
             assert_eq!(themes.resolve(&choice, Appearance::Light), &light());
         }
-        // The built-in themes by their own names, whatever the system says.
         assert_eq!(
             themes.resolve(&ThemeChoice::Named(DARK.to_owned()), Appearance::Light),
             &dark()
@@ -717,7 +524,6 @@ mod tests {
             themes.resolve(&ThemeChoice::Named(LIGHT.to_owned()), Appearance::Dark),
             &light()
         );
-        // A third theme of a dark appearance is not what "as the system" gives.
         let night = ThemeDefinition {
             name: "Night".to_owned(),
             appearance: Appearance::Dark,
@@ -779,14 +585,12 @@ mod tests {
         assert!((contrast(black, white, white) - 21.0).abs() < 0.01);
         assert!((contrast(white, black, white) - 21.0).abs() < 0.01);
         assert!((contrast(white, white, black) - 1.0).abs() < 0.001);
-        // Mid grey on white, as WCAG's own tables have it: 4.48 to 1 for #777777.
+        // WCAG's own tables give #777777 on white 4.48 to 1.
         assert!((contrast(hex(0x777777), white, white) - 4.48).abs() < 0.01);
-        // A ground with alpha is laid over the backdrop first: half black on white is
-        // mid grey, and white text on it reads 4.0 to 1.
+        // Half black over white is mid grey: white text on it reads 4.0 to 1.
         let half = hexa(0x00000080);
         assert!((contrast(white, half, white) - 4.0).abs() < 0.02);
-        // The kit's own pair that the built-in light theme had to leave: white text on its
-        // yellow.
+        // The toolkit's own white-on-yellow pair, which the light theme had to change.
         assert!(contrast(hex(0xfafafa), hex(0xeab308), white) < 4.5);
     }
 
@@ -855,8 +659,6 @@ mod tests {
                     continue;
                 }
                 assert_ne!(channels(own), channels(kits), "`{name}` was changed");
-                // A changed role is what the rule gives from the toolkit's colour: the
-                // first step that reads 4.5 to 1 on every ground it is drawn on.
                 let grounds: Vec<Hsla> = READABLE
                     .iter()
                     .filter(|(text, _)| *text == name)
@@ -887,9 +689,8 @@ mod tests {
         }
     }
 
-    /// The colour the terminal pane drew for each of the sixteen before slice 9: xterm's
-    /// own black, the theme's six and their bright ones, xterm's white, bright black and
-    /// bright white.
+    /// The default palette: xterm's own black, white, bright black and bright white, and the
+    /// theme's six and their bright ones.
     fn drawn_before(colors: &Colors) -> [Hsla; 16] {
         [
             hex(0x000000),
@@ -917,15 +718,12 @@ mod tests {
         assert_eq!(theme.terminal.ansi, drawn_before(&theme.colors));
     }
 
-    /// The numbers of the light terminal's greys, which are set by hand: 7 white, 8 bright
-    /// black and 15 bright white.
     const GREYS: [usize; 3] = [7, 8, 15];
 
     #[test]
     fn the_light_terminals_greys_are_set_by_hand_in_the_order_light_themes_use_and_apart() {
         let theme = light();
         let ansi = &theme.terminal.ansi;
-        // Bright black is darker than white, and white darker than bright white.
         assert_eq!(
             [channels(ansi[8]), channels(ansi[7]), channels(ansi[15])],
             [
@@ -945,7 +743,6 @@ mod tests {
             lightness(ansi[7]) < lightness(ansi[15]),
             "white darker than bright white"
         );
-        // Each differs from the next by 1.3 to 1 or more, and reads 3 to 1 on the ground.
         for (darker, lighter) in [(8, 7), (7, 15)] {
             let apart = contrast(ansi[darker], ansi[lighter], ground);
             assert!(
@@ -975,11 +772,9 @@ mod tests {
         for (number, (colour, wanted)) in terminal.ansi.iter().zip(&expected).enumerate().skip(1) {
             let ratio = contrast(*colour, terminal.background, terminal.background);
             assert!(ratio >= 3.0, "colour {number} reads {ratio:.2} to 1");
-            // The three greys are set by hand, as the next test holds them.
             if GREYS.contains(&number) {
                 continue;
             }
-            // Moved by the rule from the colour drawn before, and still not another's.
             assert_eq!(
                 channels(*colour),
                 channels(*wanted),
@@ -1007,9 +802,6 @@ mod tests {
     #[test]
     fn the_pairs_the_panes_and_the_settings_screen_draw_are_all_listed_as_readable() {
         for pair in [
-            // The terminal pane: its notice and quiet lines on the window's ground, its
-            // launchers' line, consent block and attachment line on `muted`, its buttons
-            // on `primary` and `secondary`, its waiting mark on `warning`.
             ("foreground", "background"),
             ("muted_foreground", "background"),
             ("danger", "background"),
@@ -1018,11 +810,6 @@ mod tests {
             ("primary_foreground", "primary"),
             ("secondary_foreground", "secondary"),
             ("warning_foreground", "warning"),
-            // The review pane: the comparison row's "Reviewed at" on `muted`, the file
-            // row's marks on `secondary`, the rounds' words, the thread states, the marks
-            // of a shared file and the attached review on the pane's own ground, the
-            // flow's entry of the reviewer on `muted`, the hover and the references on
-            // `secondary`.
             ("success", "background"),
             ("success", "muted"),
             ("success", "secondary"),
@@ -1031,8 +818,6 @@ mod tests {
             ("warning", "secondary"),
             ("muted_foreground", "secondary"),
             ("foreground", "secondary"),
-            // The settings screen: its notes on the window's ground, its cursor's row on
-            // the hovered row's ground, the control under the pointer on `accent`.
             ("foreground", "list_hover"),
             ("accent_foreground", "accent"),
         ] {
@@ -1042,20 +827,16 @@ mod tests {
 
     #[test]
     fn the_numbered_colours_above_the_sixteen_are_xterms_and_a_value_is_itself() {
-        // Corners of the cube: 16 is black, 21 full blue, 196 full red, 231 white.
         assert_eq!(indexed(16), hex(0x000000));
         assert_eq!(indexed(21), hex(0x0000ff));
         assert_eq!(indexed(196), hex(0xff0000));
         assert_eq!(indexed(231), hex(0xffffff));
-        // One step of each channel: 55, then 95 plus 40 for each step after it.
         assert_eq!(indexed(17), hex(0x00005f));
         assert_eq!(indexed(16 + 36), hex(0x5f0000));
         assert_eq!(indexed(16 + 6 * 2 + 3), hex(0x0087af));
-        // The greys: 8 plus 10 a step, 232 to 255.
         assert_eq!(indexed(232), hex(0x080808));
         assert_eq!(indexed(244), hex(0x808080));
         assert_eq!(indexed(255), hex(0xeeeeee));
-        // Under 16 it gives xterm's own sixteen, not the theme's.
         assert_eq!(indexed(1), hex(0xcd0000));
         assert_eq!(indexed(15), hex(0xffffff));
         assert_eq!(rgb24(0x12, 0x34, 0x56), hex(0x123456));

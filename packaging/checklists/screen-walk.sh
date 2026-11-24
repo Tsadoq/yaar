@@ -1,40 +1,15 @@
 #!/bin/bash
-# The checks of PERF's list that need eyes on a lit screen: STACK-02 (the newer frame
-# source), TERM-06 (the drawing of text), SCREEN-01 (a review round in the real window, in
-# the dark and the light theme), SCREEN-02 (dead keys and Pinyin on the real keyboard) and
-# SYS-04 (the whole test suite and this list, on macOS 27).
+# The checks that need eyes on a lit screen, and the whole test suite, on macOS 27.
 #
-#   packaging/checklists/screen-walk.sh [--dry-run]
+# packaging/checklists/screen-walk.sh [--dry-run]
 #
-# What it does: first runs SYS-04's suite part, `cargo nextest run --locked --workspace`, in
-# the repository this script lies in, with the output kept in screen-walk-nextest.log, and
-# records its result in the file's header (the suite is slow: it builds the workspace in
-# debug first). Then prints the five checks one at a time, with what to do and what to
-# expect, and asks "yes / no / note / skip" (the answers can come from a file, see lib.sh).
-# TERM-06 uses a test file of bold, italic, combined and box-drawing text that the script
-# writes beside its results. SYS-04's answer is yes when the suite passed above and the
-# rest of this walk is yes. STACK-02 stays by hand: "draws" needs eyes.
-#
-# It opens no window and posts no input: you start the app, look, and answer. The one program
-# that opens a window is the app, by you.
-#
-# --dry-run: runs no suite and no program of the system or of the app, and writes
-# screen-walk-dry-run.md instead of screen-walk.md.
-#
-# What it needs of the owner: macOS 27 on the reference Mac; the packaged app installed;
-# `cargo` and `cargo-nextest` on the path; YAAR_LANGUAGE_SERVERS naming the folder of real
-# language servers the four language-server tests read (without it they fail by design, and
-# so does the suite); Ghostty for TERM-06 and SCREEN-02; the stand-in agent of the system
-# tests for SCREEN-01 (`cargo build -p yaar-system-tests --bins` makes `standin-agent`; a
-# link to it named `claude` on the path of a terminal of the app makes it speak as Claude
-# Code).
-#
-# Where it writes: ~/yaar-checklists/<YYYY-MM-DD>/screen-walk.md (date, version, system,
-# the suite's result, one row a check, the sign-off), screen-walk-nextest.log and
-# term-06.txt.
-#
-# Exit codes: 0 the walk is written (whatever its answers); 1 it could not be walked or
-# written (a sentence says which); 2 usage error.
+# Runs `cargo nextest run --locked --workspace` first, then prints each check and asks "yes / no /
+# note / skip". Opens no window and posts no input. --dry-run runs nothing.
+# Needs the packaged app, cargo-nextest, YAAR_LANGUAGE_SERVERS naming a folder of real language
+# servers (the suite fails without it), Ghostty, and `standin-agent` of the system tests linked as
+# `claude`.
+# Writes ~/yaar-checklists/<YYYY-MM-DD>/screen-walk.md. Exit: 0 written, 1 not walked or not
+# written, 2 usage.
 set -euo pipefail
 
 CK_NAME=screen-walk.sh

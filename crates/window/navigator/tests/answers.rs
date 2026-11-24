@@ -1,13 +1,6 @@
-//! What a name in a diff is, answered with the stand-in language server: text match until a
-//! server is ready (LSP-03), the position of an unchanged line carried through a past change
-//! (OLD-07), a ready later candidate that answers while the question of an earlier one waits,
-//! a file outside the worktree, a file of a language no row knows, the files a reviewer
-//! opens through an answer, and what a server is told of changed files.
-//!
-//! Every wait is for something the Navigator tells or for a line of the stand-in's log, with
-//! a deadline. A clause that says nothing was asked of the server is read from the stand-in's
-//! log after a later request, through the same path, was logged: the stand-in handles its
-//! requests in order, so a request that was sent before it is in the log by then.
+//! Answers to a name in a diff, with the stand-in language server. Waits are for what the
+//! Navigator tells or a stand-in log line, with a deadline. The stand-in handles requests in
+//! order, so that nothing was asked of it is read from its log after a later request.
 
 mod support;
 
@@ -22,12 +15,10 @@ use yaar_navigator::{
     Answered, Ask, AskId, FileKind, Location, RepositoryConsent, State, Told, Tree,
 };
 
-/// `text` as a TOML string.
 fn q(text: impl AsRef<str>) -> String {
     serde_json::to_string(text.as_ref()).expect("a string")
 }
 
-/// Every line of a stand-in's log, as the JSON it is; none when the log is not there.
 fn log_of(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -36,7 +27,6 @@ fn log_of(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-/// How many requests of `method` the stand-in logged.
 fn requests(log: &Path, method: &str) -> usize {
     log_of(log)
         .iter()
@@ -44,7 +34,6 @@ fn requests(log: &Path, method: &str) -> usize {
         .count()
 }
 
-/// The lines of a stand-in's log whose `event` is `event`.
 fn events(log: &Path, event: &str) -> Vec<Value> {
     log_of(log)
         .into_iter()
@@ -52,7 +41,6 @@ fn events(log: &Path, event: &str) -> Vec<Value> {
         .collect()
 }
 
-/// How many notifications of `method` the stand-in logged.
 fn notifications(log: &Path, method: &str) -> usize {
     log_of(log)
         .iter()
@@ -60,8 +48,6 @@ fn notifications(log: &Path, method: &str) -> usize {
         .count()
 }
 
-/// The stand-in's row `standin`, ready by `notification`, that is ready once `go` exists,
-/// and logs to `log`.
 fn row_ready_when(go: &Path, log: &Path) -> String {
     standin_row(
         "standin",
@@ -78,7 +64,6 @@ fn row_ready_when(go: &Path, log: &Path) -> String {
     )
 }
 
-/// The stand-in's row `standin`, ready at once, logging to `log`.
 fn row_logging(log: &Path) -> String {
     standin_row(
         "standin",
@@ -88,8 +73,6 @@ fn row_logging(log: &Path) -> String {
     )
 }
 
-/// Waits until `look` gives something, looking again after a short pause, up to `DEADLINE`:
-/// a repeated look at one fact that stays true once it is.
 fn wait_for<T>(what: &str, mut look: impl FnMut() -> Option<T>) -> T {
     let until = Instant::now() + DEADLINE;
     loop {
@@ -101,7 +84,6 @@ fn wait_for<T>(what: &str, mut look: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// A location, as an answer holds it.
 fn at(path: &Path, line: u32, column: u32, text: &str) -> Location {
     Location {
         path: path.to_path_buf(),
@@ -110,10 +92,6 @@ fn at(path: &Path, line: u32, column: u32, text: &str) -> Location {
         text: text.to_owned(),
     }
 }
-
-// ---------------------------------------------------------------------------------------
-// LSP-03: before the server is ready, text match, marked.
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answered_by_text_match_and_marked()
@@ -131,8 +109,6 @@ fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answ
     let (ws, repository) = (workspace_id('1'), repository_id('1'));
     let mut running = Running::start(scratch.config(&row_ready_when(&go, &log)));
     running.show(&repo, &ws, &repository);
-    // The row's trial run is shown as Starting too, with no process of the server's: the
-    // asks wait until the server itself runs and has not met its rule of readiness.
     let held = running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Starting && state.pid.is_some()
     });
@@ -142,14 +118,10 @@ fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answ
     let lib = repo.root.join("lib.sil");
     let at_total = || place(&repo, &ws, Tree::Worktree, "main.sil", 2, "total", 0);
 
-    // A hover asked before the server is ready is answered by text match, and marked: the
-    // other lines that hold the name.
     let hover = running.hover(at_total(), DEADLINE);
     assert!(hover.guessed, "{hover:#?}");
     assert_eq!(hover.value.as_deref(), Some("lib.sil:1: def total"));
 
-    // So is a definition, and so is a list of references: every match, the file under the
-    // pointer first.
     let definition = running.definition(at_total(), DEADLINE);
     assert!(definition.guessed, "{definition:#?}");
     assert_eq!(
@@ -160,9 +132,6 @@ fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answ
     assert!(references.guessed, "{references:#?}");
     assert_eq!(references.value, definition.value);
 
-    // Once the server is ready the same asks are answered by it, unmarked. Each of them is
-    // logged, and the stand-in handles its requests in order: that none of the three asks
-    // before it reached the server is read from the log now, with one request of each kind.
     std::fs::write(&go, "").expect("let the stand-in be ready");
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
@@ -205,10 +174,6 @@ fn a_hover_a_definition_and_references_asked_before_the_server_is_ready_are_answ
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// OLD-07: the new side of a past change.
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_line_by_text_match() {
     let scratch = Scratch::new();
@@ -218,7 +183,6 @@ fn on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_li
         "project",
         &[("main.sil", past), ("other.sil", "def beta\n")],
     );
-    // The files on disk since: a line in front, `alpha` one line down, `beta` replaced.
     std::fs::write(
         repo.root.join("main.sil"),
         "use gamma\nuse alpha\nuse delta\n",
@@ -236,8 +200,7 @@ fn on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_li
         version: repo.base.clone(),
         text: Arc::from(past),
     };
-    // Unchanged since: line 1 of the past text is line 2 of the file now. Asked at line 1
-    // of the file on disk the server would say `gamma`.
+    // Line 1 of the past text is line 2 of the file now.
     let unchanged = running.hover(
         place(&repo, &ws, tree(), "main.sil", 1, "alpha", 0),
         DEADLINE,
@@ -249,7 +212,6 @@ fn on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_li
             guessed: false
         }
     );
-    // Changed since: no server is asked; the name is looked for by text match.
     let changed = running.hover(
         place(&repo, &ws, tree(), "main.sil", 2, "beta", 0),
         DEADLINE,
@@ -261,9 +223,6 @@ fn on_a_past_change_an_unchanged_line_is_answered_by_the_server_and_a_changed_li
             guessed: true
         }
     );
-    // A definition on a changed line is a text match too, and a line that moved is asked
-    // again after it: the request before the changed one and the one after it are the only
-    // two of the server's log.
     let definition = running.definition(
         place(&repo, &ws, tree(), "main.sil", 2, "beta", 0),
         DEADLINE,
@@ -295,7 +254,6 @@ fn on_a_past_change_a_file_gone_from_disk_is_answered_by_text_match() {
     running.wait_state(&ws, "standin", None, DEADLINE, |state| {
         state.state == State::Ready
     });
-    // `gone.sil` is in the past version only.
     let tree = Tree::Past {
         version: repo.base.clone(),
         text: Arc::from(past),
@@ -308,7 +266,6 @@ fn on_a_past_change_a_file_gone_from_disk_is_answered_by_text_match() {
             guessed: true
         }
     );
-    // The barrier: a later hover through the same path is the first request of the log.
     running.hover(
         place(&repo, &ws, Tree::Worktree, "other.sil", 1, "alpha", 0),
         DEADLINE,
@@ -317,17 +274,11 @@ fn on_a_past_change_a_file_gone_from_disk_is_answered_by_text_match() {
     running.end();
 }
 
-// ---------------------------------------------------------------------------------------
-// Of its own.
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn a_ready_later_candidate_answers_while_the_question_waits() {
     let scratch = Scratch::new();
     let repo = scratch.repository("project", &[("main.sil", "def alpha\nuse alpha\n")]);
     let log = scratch.root.join("standin.log");
-    // The project's own copy comes first and lies inside the repository: it is the
-    // question. The machine's copy comes after it and is ready meanwhile.
     scratch.put_recording(&repo.root.join("tools"), "standin-lsp");
     repo.git(&["add", "tools"]);
     repo.git(&["commit", "--quiet", "-m", "the project's own server"]);
@@ -346,7 +297,6 @@ fn a_ready_later_candidate_answers_while_the_question_waits() {
         matches!(state.state, State::Asking { .. })
     });
 
-    // Asked again, with a short pause, until the machine's copy answers.
     let answer = wait_for("the machine's copy to answer", || {
         let answer = running.hover(
             place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0),
@@ -356,7 +306,6 @@ fn a_ready_later_candidate_answers_while_the_question_waits() {
     });
     assert_eq!(answer.value.as_deref(), Some("standin: alpha"));
 
-    // The line still shows the question: the last list of servers told says so.
     let last = running
         .told
         .iter()
@@ -374,7 +323,6 @@ fn a_ready_later_candidate_answers_while_the_question_waits() {
     running.end();
 }
 
-/// Sends `signal` to `pid`, the process of a server this test's Navigator started.
 fn signal(pid: u32, signal: libc::c_int) {
     // SAFETY: kill sends a signal and touches nothing of ours; the process is a child of the
     // Navigator of this test, which holds it until the test ends.
@@ -382,7 +330,6 @@ fn signal(pid: u32, signal: libc::c_int) {
     assert_eq!(sent, 0, "signal {signal} to {pid}");
 }
 
-/// The id of the ask a thing told answers; none for anything else.
 fn answered_id(told: &Told) -> Option<AskId> {
     match told {
         Told::Hover { id, .. } | Told::Definition { id, .. } | Told::References { id, .. } => {
@@ -392,8 +339,6 @@ fn answered_id(told: &Told) -> Option<AskId> {
     }
 }
 
-/// What was told in answer to each of `ids`, in the order of `ids`: waits, as
-/// [`Running::wait_told`] does, for the ones not told yet.
 fn answers_to(running: &mut Running, ids: &[AskId]) -> Vec<Told> {
     for id in ids {
         if !running
@@ -436,8 +381,7 @@ fn requests_in_flight_at_once_to_one_server_are_each_answered_with_their_own_nam
     });
     let pid = ready.pid.expect("a ready server runs");
 
-    // The server is stopped, so that every request is on its way when the first answer
-    // comes: a hover at each name, and the references of the last.
+    // Stopped, so that every request is on its way when the first answer comes.
     signal(pid, libc::SIGSTOP);
     let mut ids = Vec::new();
     for (at, name) in names.iter().enumerate() {
@@ -459,8 +403,6 @@ fn requests_in_flight_at_once_to_one_server_are_each_answered_with_their_own_nam
         id: references,
         place: place(&repo, &ws, Tree::Worktree, "main.sil", 6, "zeta", 0),
     });
-    // The barrier: an ask about a file of no row is answered by text match, and is handled
-    // after every ask sent before it.
     running.hover(
         place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
         DEADLINE,
@@ -510,8 +452,6 @@ fn an_ask_left_waiting_when_its_server_was_stopped_is_answered_by_text_match_and
         .expect("a ready server runs");
     let at_alpha = || place(&repo, &ws, Tree::Worktree, "main.sil", 2, "alpha", 0);
 
-    // A hover the server does not answer, because it is stopped; then the workspace goes
-    // and the server with it, the stop waiting for the process to end.
     signal(first, libc::SIGSTOP);
     running.ask(Ask::Hover {
         id: AskId(1),
@@ -523,8 +463,6 @@ fn an_ask_left_waiting_when_its_server_was_stopped_is_answered_by_text_match_and
     });
     assert!(!is_alive(first), "the stopped server was not ended");
 
-    // The workspace is back, with a server of its own, the first request of which has the
-    // number the first request of the earlier one had.
     running.show(&repo, &ws, &repository);
     let second = running
         .wait_state(&ws, "standin", None, DEADLINE, |state| {
@@ -581,9 +519,6 @@ fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_ma
         .pid
         .expect("a ready server runs");
 
-    // A hover the server does not answer, because it is stopped. The barrier, an ask the
-    // Navigator answers by itself, is handled after the hover: when it is told, the hover
-    // was handled and nothing answered it.
     signal(pid, libc::SIGSTOP);
     running.ask(Ask::Hover {
         id: AskId(100),
@@ -602,8 +537,6 @@ fn an_ask_waiting_at_a_server_the_navigator_stops_is_answered_at_once_by_text_ma
         running.told
     );
 
-    // The workspace goes, and its server with it. No ask follows: the answer comes with the
-    // end of the server, and nothing else.
     running.ask(Ask::Workspaces(vec![]));
     let told = answers_to(&mut running, &[AskId(100)]).remove(0);
     let Told::Hover { answer, .. } = told else {
@@ -642,9 +575,6 @@ fn an_ask_waiting_at_a_stopped_server_when_the_port_is_dropped_leaves_the_naviga
         .pid
         .expect("a ready server runs");
 
-    // A hover the server does not answer, because it is stopped. The barrier, an ask the
-    // Navigator answers by itself, is handled after the hover: when it is told, the hover
-    // was handled and nothing answered it.
     signal(pid, libc::SIGSTOP);
     running.ask(Ask::Hover {
         id: AskId(100),
@@ -663,10 +593,6 @@ fn an_ask_waiting_at_a_stopped_server_when_the_port_is_dropped_leaves_the_naviga
         running.told
     );
 
-    // The port is dropped: the Navigator ends, which stops the server it could not get an
-    // answer from, and tells no answer on its way out. That it also starts no text search
-    // for the ask is not seen here: such a search would be answered by an event of a loop
-    // that has ended, so nothing differs at the port.
     let told = running.end_and_read();
     assert!(
         !told
@@ -688,8 +614,6 @@ fn an_ask_waiting_at_a_server_that_a_consent_makes_the_navigator_search_for_agai
             ("notes.txt", "milk\n"),
         ],
     );
-    // As in the test of a ready later candidate: the project's own copy is the question, the
-    // machine's copy after it runs ready meanwhile.
     scratch.put_recording(&repo.root.join("tools"), "standin-lsp");
     repo.git(&["add", "tools"]);
     repo.git(&["commit", "--quiet", "-m", "the project's own server"]);
@@ -731,9 +655,6 @@ fn an_ask_waiting_at_a_server_that_a_consent_makes_the_navigator_search_for_agai
         })
         .expect("the machine's copy runs");
 
-    // A hover the machine's copy does not answer, because it is stopped. The barrier, an ask
-    // the Navigator answers by itself, is handled after the hover: when it is told, the hover
-    // was handled and nothing answered it.
     signal(pid, libc::SIGSTOP);
     running.ask(Ask::Hover {
         id: AskId(100),
@@ -752,9 +673,6 @@ fn an_ask_waiting_at_a_server_that_a_consent_makes_the_navigator_search_for_agai
         running.told
     );
 
-    // The user says yes to the project's copy: the key searches again and the machine's copy
-    // is ended. No ask follows: the answer comes with the end of the process, and nothing
-    // else.
     running.ask(Ask::Consents(vec![RepositoryConsent {
         repository,
         allowed: true,
@@ -836,8 +754,6 @@ fn a_file_of_no_rows_extension_is_answered_by_text_match() {
             guessed: true
         }
     );
-    // No server is asked about a file of a language no row knows: the barrier is a later
-    // hover on a file of the row, the first request of the log.
     running.hover(
         place(&repo, &ws, Tree::Worktree, "main.sil", 1, "main", 0),
         DEADLINE,
@@ -864,8 +780,7 @@ fn a_hover_by_text_match_shows_a_line_once_when_the_line_holds_the_name_twice() 
         Running::start(scratch.config(&row_logging(&scratch.root.join("standin.log"))));
     running.show(&repo, &ws, &repository);
 
-    // The line with two matches is one line of the hover, the next line of its file and the
-    // line of the next file follow it: a line counts once, not a match.
+    // A line counts once, not a match.
     let hover = running.hover(
         place(&repo, &ws, Tree::Worktree, "notes.txt", 1, "milk", 0),
         DEADLINE,
@@ -887,7 +802,6 @@ fn a_hover_by_text_match_shows_a_line_once_when_the_line_holds_the_name_twice() 
 fn a_hover_on_a_file_of_no_row_in_a_workspace_with_no_file_of_a_row_starts_no_server() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // No file of the stand-in's row: neither its marker nor a file of its extension.
     let repo = scratch.repository(
         "project",
         &[
@@ -910,8 +824,6 @@ fn a_hover_on_a_file_of_no_row_in_a_workspace_with_no_file_of_a_row_starts_no_se
             guessed: true
         }
     );
-    // The barrier: the list the Navigator tells for the ask after the hover comes after
-    // everything the hover made it do.
     running.ask(Ask::OnScreen(Some(ws.clone())));
     running.wait_told("the list of servers told for the ask", DEADLINE, |told| {
         matches!(told, Told::Servers(_))
@@ -943,7 +855,6 @@ fn the_files_that_changed_are_told_to_a_ready_server_once_and_a_gone_one_does_no
         state.state == State::Ready
     });
 
-    // A path told twice, and one that no longer exists.
     running.ask(Ask::FilesChanged {
         workspace: ws.clone(),
         paths: vec![
@@ -955,13 +866,11 @@ fn the_files_that_changed_are_told_to_a_ready_server_once_and_a_gone_one_does_no
     wait_for("the notice to reach the server", || {
         (notifications(&log, "workspace/didChangeWatchedFiles") > 0).then_some(())
     });
-    // The Navigator went on: it answers.
     let hover = running.hover(
         place(&repo, &ws, Tree::Worktree, "main.sil", 1, "alpha", 0),
         DEADLINE,
     );
     assert_eq!(hover.value.as_deref(), Some("standin: alpha"));
-    // One notice for the one ask; nothing for a list with no path.
     running.ask(Ask::FilesChanged {
         workspace: ws.clone(),
         paths: Vec::new(),
@@ -990,9 +899,6 @@ fn the_files_that_changed_are_told_to_a_server_that_is_starting_and_reach_it_onc
         state.state == State::Starting && state.pid.is_some()
     });
 
-    // The server runs and its rule of readiness waits for `go`. The barrier, an ask the
-    // Navigator answers by itself, is handled after the notice of the change: when it is
-    // told, the notice was handled, and the server is still not ready.
     running.ask(Ask::FilesChanged {
         workspace: ws.clone(),
         paths: vec![PathBuf::from("main.sil")],
@@ -1078,13 +984,11 @@ fn a_file_opened_through_an_answer_is_told_with_what_it_is() {
             relative: PathBuf::from("src/inner.sil")
         }
     );
-    // Ignored by git, outside the worktree: neither is the worktree's file.
     let file = open(repo.root.join("vendor/ignored.sil")).expect("an ignored file");
     assert_eq!(file.kind, FileKind::Outside);
     let file = open(outside.join("far.sil")).expect("a file outside");
     assert_eq!(file.kind, FileKind::Outside);
     assert_eq!(file.text, "def far\n");
-    // A file that cannot be read is told as the reason.
     let reason = open(outside.join("binary.bin")).expect_err("not UTF-8");
     assert!(reason.contains("UTF-8"), "{reason}");
     let reason = open(outside.join("not-there.sil")).expect_err("not there");
@@ -1096,8 +1000,8 @@ fn a_file_opened_through_an_answer_is_told_with_what_it_is() {
 fn a_name_after_wide_characters_is_asked_at_its_utf16_column_and_answered_in_bytes() {
     let scratch = Scratch::new();
     scratch.put_standin(&scratch.root.join("bin"), "standin-lsp");
-    // Four characters of four bytes and two UTF-16 units each in front of the name: its
-    // byte column is 21 and its UTF-16 column 13, past the end of a line of 18 units.
+    // Four 4-byte characters of two UTF-16 units each before the name: byte column 21, UTF-16
+    // column 13, past the end of a line of 18 units.
     let repo = scratch.repository(
         "project",
         &[

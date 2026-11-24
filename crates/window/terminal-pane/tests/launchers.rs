@@ -1,12 +1,5 @@
-//! Component test: the launchers next to the shell and the controls that resume the
-//! sessions a restart cut off, on GPUI's test platform with no window on any screen. The
-//! test plays the Keeper on the other end of a socket pair: it names the agent CLIs, tells
-//! which sessions are resumable and answers what the pane asks. Keys, clicks and the
-//! wheel go in; the pane is read back through the model it shows and the elements it
-//! draws.
-//!
-//! A negative clause is read after a barrier: the next request the Keeper hears, caused
-//! through the same path after the key under test, shows that the key sent nothing.
+//! A negative clause is read after a barrier: the next request the Keeper hears, caused through the
+//! same path after the key under test, shows that the key sent nothing.
 
 mod common;
 
@@ -31,9 +24,8 @@ fn claude() -> AgentCli {
     }
 }
 
-/// Titles that differ from the names of the agents, and in length the other way round
-/// for the two CLIs: the launcher asks the Keeper for the agent's name, and the words on
-/// it are the title, which the widths of the two launchers tell apart.
+/// Titles differ from the agent names, and in length the other way round for the two CLIs, so
+/// the widths of the launchers tell the title from the name.
 fn pi() -> AgentCli {
     AgentCli {
         agent: "pi".to_owned(),
@@ -47,13 +39,11 @@ fn agent(name: &str) -> Program {
     }
 }
 
-/// A window whose Keeper names `clis` and lists one workspace, on screen. The Window asks
-/// for the CLIs when it connects, so they are set before.
+/// The Window asks for the CLIs when it connects, so they are set before.
 fn open_naming(cx: &mut TestAppContext, clis: Vec<AgentCli>) -> (Panes, VisualTestContext) {
     open_naming_in(cx, common::one_repository(), clis)
 }
 
-/// [`open_naming`] with the Keeper listing `repository`.
 fn open_naming_in(
     cx: &mut TestAppContext,
     repository: Repository,
@@ -67,8 +57,6 @@ fn open_naming_in(
     )
 }
 
-/// Waits until the pane offers `count` launchers, which the Keeper's answer to the
-/// question for its CLIs brings.
 fn wait_for_launchers(panes: &Panes, count: usize, cx: &mut VisualTestContext) {
     let pane = panes.pane.clone();
     wait_until(cx, "the launchers", move |cx| {
@@ -84,8 +72,6 @@ fn chosen(panes: &Panes, cx: &mut VisualTestContext) -> Option<AgentCli> {
     panes.pane.read_with(cx, |pane, cx| pane.chosen_cli(cx))
 }
 
-/// Waits until the mark of the chosen launcher is drawn over `agent` and over no other
-/// of `all`, and gives the bounds of the mark.
 fn wait_for_chosen_mark(all: &[&str], agent: &str, cx: &mut VisualTestContext) -> Bounds<Pixels> {
     let others: Vec<String> = all
         .iter()
@@ -99,7 +85,6 @@ fn wait_for_chosen_mark(all: &[&str], agent: &str, cx: &mut VisualTestContext) -
     bounds_of(&format!("terminal-launcher-chosen-{agent}"), cx)
 }
 
-/// Whether `inner` lies inside `outer`.
 fn within(inner: Bounds<Pixels>, outer: Bounds<Pixels>) -> bool {
     inner.left() >= outer.left()
         && inner.right() <= outer.right()
@@ -119,9 +104,6 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
         [claude(), pi()]
     );
 
-    // The shell's control and one for each CLI, left to right in the Keeper's order, in
-    // one row at the top of the pane that lies above the line that says how to open a
-    // terminal.
     wait_drawn(&mut cx, "the launchers", |cx| {
         drawn("terminal-launcher-pi", cx).is_some()
     });
@@ -132,8 +114,6 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
         bounds_of("terminal-launcher-pi", &mut cx),
     );
     assert!(shell.right() <= first.left() && first.right() <= second.left());
-    // Each launcher carries its CLI's title: pi's is longer than Claude Code's and its
-    // name is shorter.
     assert!(
         second.size.width > first.size.width,
         "{second:?} is not wider than {first:?}: the launcher does not carry the CLI's title"
@@ -143,16 +123,13 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     }
     let how_to_open = bounds_of("terminal-how-to-open", &mut cx);
     assert!(row.bottom() <= how_to_open.top());
-    // The row is the top of the pane: the pane beside it starts at the same height.
     assert_eq!(row.top(), bounds_of("elsewhere-pane", &mut cx).top());
 
-    // The first CLI is the chosen one, and only it carries the mark, over its launcher.
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     let mark = wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
     assert!(within(mark, first));
     assert!(drawn("terminal-launcher-chosen-shell", &mut cx).is_none());
 
-    // The row lies above the first terminal's slot, not over it.
     let first_terminal = terminal('a');
     panes.open_terminal(&first_terminal, &mut cx);
     wait_drawn(&mut cx, "the terminal's slot", |cx| {
@@ -164,13 +141,9 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     });
     let size = panes.grid(&first_terminal);
 
-    // A click on the launcher of Claude Code asks for a terminal that runs the agent by
-    // its name, not its title.
     click_in("terminal-launcher-claude", &mut cx);
     panes.answer_open(&terminal('x'), agent("claude"), &mut cx);
 
-    // A click on the launcher of pi asks for a terminal that runs pi, at the size the
-    // pane lays terminals out at; the answer is shown and has the focus.
     click_in("terminal-launcher-pi", &mut cx);
     let (workspace, asked) = panes.answer_open(&terminal('b'), agent("pi"), &mut cx);
     assert_eq!((workspace, asked), (one.clone(), size));
@@ -185,15 +158,11 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
         panes.pane.read_with(&cx, |pane, _| pane.shown()),
         [terminal('b')]
     );
-    // A click chooses nothing.
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
 
-    // New Agent Terminal opens the chosen one.
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('c'), agent("claude"), &mut cx);
 
-    // Next Agent CLI makes pi the chosen one, as the mark shows, and sends nothing; New
-    // Agent Terminal then opens pi.
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     assert_eq!(chosen(&panes, &mut cx), Some(pi()));
     let mark = wait_for_chosen_mark(&["claude", "pi"], "pi", &mut cx);
@@ -201,8 +170,6 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('d'), agent("pi"), &mut cx);
 
-    // After the last the first is chosen again, and twice more brings it back to the same
-    // place by way of pi.
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
@@ -213,7 +180,6 @@ fn next_to_the_shell_the_pane_offers_one_launcher_for_each_agent_cli_the_keeper_
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('e'), agent("claude"), &mut cx);
 
-    // The keys are kept on macOS, where they work with the focus in a terminal too.
     if cfg!(target_os = "macos") {
         panes.click_slot(0, &mut cx);
         assert_eq!(panes.focused_terminal(&mut cx), Some(terminal('e')));
@@ -243,8 +209,6 @@ fn the_chosen_launcher_is_the_choice_of_the_frames_model_which_another_part_may_
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
     wait_for_chosen_mark(&["claude", "pi"], "claude", &mut cx);
 
-    // The review pane, or the worktree with an agent, moves the choice in the model: the
-    // pane draws it, and New Agent Terminal opens it.
     panes
         .models
         .agents
@@ -254,7 +218,6 @@ fn the_chosen_launcher_is_the_choice_of_the_frames_model_which_another_part_may_
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     panes.answer_open(&terminal('a'), agent("pi"), &mut cx);
 
-    // The pane's own key moves the model's choice, the one the other panes read.
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     assert_eq!(model_choice(&panes, &mut cx), Some(claude()));
     assert_eq!(chosen(&panes, &mut cx), Some(claude()));
@@ -278,11 +241,8 @@ fn with_no_cli_named_the_pane_offers_only_the_shell_and_the_key_says_so(cx: &mut
     assert!(drawn("terminal-launcher-claude", &mut cx).is_none());
     assert!(drawn("terminal-launcher-pi", &mut cx).is_none());
 
-    // The key opens nothing and says why, and Next Agent CLI has nothing to move to. A key
-    // that fell back to a shell would ask for one in the workspace on screen, which is the
-    // one the barrier cannot be: the barrier is a shell asked for by New Terminal in the
-    // other workspace, so that the first request the Keeper hears is told from anything the
-    // two keys sent.
+    // A key that fell back to a shell would ask for one in the workspace on screen, so the barrier
+    // is a shell asked for in the other workspace.
     panes.press_in_the_app::<NextAgentCli>(&mut cx);
     panes.press_in_the_app::<NewAgentTerminal>(&mut cx);
     assert_eq!(
@@ -379,8 +339,6 @@ fn next_agent_cli_goes_through_every_cli_the_keeper_names_in_order_and_round(
     wait_for_chosen_mark(&["claude", "pi", "third"], "claude", &mut cx);
 }
 
-/// Fills the screen of a terminal with numbered lines, so that it has a history, and says
-/// the number on its first line.
 fn fill_with_lines(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) -> usize {
     let text: String = (0..200).map(|n| format!("line-{n}\r\n")).collect();
     panes.keeper.output(id, text.as_bytes());
@@ -424,9 +382,6 @@ fn the_wheel_over_the_launchers_scrolls_no_terminal_and_sends_its_program_nothin
     let over_the_row = bounds_of("terminal-launchers", &mut cx).center();
     let over_the_terminal = panes.cell_centre(&one, 0, 1, 1, &mut cx);
 
-    // A step up over the row moves nothing. A step up over the terminal after it, which
-    // is the same path, moves the history by one step of three lines and no more: the
-    // step over the row was not kept.
     wheel(over_the_row, 1., &mut cx);
     assert_eq!(top_line(&panes, &one, &mut cx), newest);
     wheel(over_the_terminal, 1., &mut cx);
@@ -434,9 +389,6 @@ fn the_wheel_over_the_launchers_scrolls_no_terminal_and_sends_its_program_nothin
     wheel(over_the_terminal, -1., &mut cx);
     assert_eq!(top_line(&panes, &one, &mut cx), newest);
 
-    // On the alternate screen a step of the wheel is an arrow key for the program: none
-    // goes for the one over the row, and the first the program gets is the one over the
-    // terminal.
     panes
         .keeper
         .output(&one, b"\x1b[?1049h\x1b[H\x1b[2Kfull-screen");
@@ -453,7 +405,6 @@ fn the_wheel_over_the_launchers_scrolls_no_terminal_and_sends_its_program_nothin
     assert_eq!(panes.keeper.input(&mut cx), (one, b"x".to_vec()));
 }
 
-/// A session of `agent` in `workspace` that no agent runs, resumable or not.
 fn session(name: char, agent: &str, workspace: &WorkspaceId, resumable: bool) -> Session {
     Session {
         id: SessionId::new(name.to_string().repeat(32)),
@@ -470,7 +421,6 @@ fn session(name: char, agent: &str, workspace: &WorkspaceId, resumable: bool) ->
     }
 }
 
-/// Tells the Window the sessions of one workspace, as the Keeper does when they change.
 fn tell_agents(panes: &Panes, workspace: &WorkspaceId, sessions: Vec<Session>) {
     let shown = sessions.iter().map(|session| session.state).min();
     panes.keeper.tell(Fact::AgentsChanged(WorkspaceAgents {
@@ -505,10 +455,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     assert!(drawn("terminal-resume", &mut cx).is_none());
     assert!(offered(&panes, &mut cx).is_empty());
 
-    // Two sessions of the workspace on screen are resumable, one that ended is not, and
-    // one of the other workspace is resumable there.
-    // The titles differ in length the other way round from the agents' names, which the
-    // widths of the controls below tell apart: the words are `Resume` and the title.
     let mut a = session('a', "claude", &one, true);
     a.title = "a".to_owned();
     let mut b = session('b', "pi", &one, true);
@@ -523,8 +469,8 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     assert_eq!(offered(&panes, &mut cx), [a.id.clone(), b.id.clone()]);
     assert!(drawn("terminal-resume-2", &mut cx).is_none());
 
-    // The line lies under the launchers and above the terminal, and takes its room: the
-    // terminal was resized to fewer rows, as when the window is made smaller.
+    // The resume line lies under the launchers and takes its room from the terminal, which is
+    // resized to fewer rows.
     let (launchers, line) = (
         bounds_of("terminal-launchers", &mut cx),
         bounds_of("terminal-resume", &mut cx),
@@ -552,8 +498,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     assert!(shorter.rows < whole.rows, "{shorter:?} and {whole:?}");
     assert!(line.bottom() <= bounds_of("terminal-slot-0", &mut cx).top());
 
-    // A click on the second control asks for a terminal that runs that session's resume,
-    // and the answer is shown and has the focus.
     click_in("terminal-resume-1", &mut cx);
     let (workspace, asked) = panes.answer_open(&terminal('b'), resume(&b), &mut cx);
     assert_eq!((workspace, asked), (one.clone(), shorter));
@@ -561,8 +505,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
         panes.focused_terminal(cx) == Some(terminal('b'))
     });
 
-    // Resume Agent takes the first session it has opened no resume for, and so the
-    // second press reaches no session twice; with none left it sends nothing and says so.
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
@@ -570,9 +512,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
         panes.pane.read_with(&cx, |pane, _| pane.notice()),
         Some("No session of this workspace is left to resume.".to_owned())
     );
-    // The barrier is a shell asked for in the other workspace, which is the next request
-    // the Keeper hears when the key sent nothing: a key that fell back to a shell would
-    // ask for one in the workspace on screen.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     wait_drawn(&mut cx, "the other workspace on screen", |cx| {
         panes
@@ -601,8 +540,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
             .read_with(cx, |list, _| list.selected() == Some(&one))
     });
 
-    // The resumed session reports: the Keeper tells it is no longer resumable, and its
-    // control goes while the other stays.
     let mut running = a.clone();
     (running.resumable, running.terminal, running.state) =
         (false, Some(terminal('c')), SessionState::Works);
@@ -613,7 +550,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     assert_eq!(offered(&panes, &mut cx), std::slice::from_ref(&b.id));
     assert!(drawn("terminal-resume-0", &mut cx).is_some());
 
-    // The other workspace on screen has its own line.
     let other = format!("sidebar-workspace-{two}");
     click_in(&other, &mut cx);
     wait_drawn(&mut cx, "the other workspace", |cx| {
@@ -624,22 +560,16 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
         offered(&panes, cx) == [b.id.clone()]
     });
 
-    // The last session goes: the line goes with it, and the terminals have their rows
-    // back.
     tell_agents(&panes, &one, Vec::new());
     wait_drawn(&mut cx, "the line gone", |cx| {
         drawn("terminal-resume", cx).is_none()
     });
     assert!(offered(&panes, &mut cx).is_empty());
-    // The terminal shown now was opened under the line and fits the whole room again
-    // (the notice of the key that found nothing to resume took rows from it before).
     let shown = terminal('c');
     wait_until(&mut cx, "the terminal made taller", |_| {
         panes.keeper.resizes(&shown).last() == Some(&whole)
     });
 
-    // A restart lists the session resumable again: what the pane remembered of its
-    // resume is gone, and Resume Agent opens it once more.
     tell_agents(&panes, &one, vec![b.clone()]);
     wait_drawn(&mut cx, "the offer again", |cx| {
         offered(&panes, cx) == [b.id.clone()]
@@ -647,7 +577,6 @@ fn a_session_listed_resumable_gets_a_resume_control_that_opens_its_resume_and_go
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('d'), resume(&b), &mut cx);
 
-    // The key is kept on macOS, where it works with the focus in a terminal too.
     if cfg!(target_os = "macos") {
         let next = session('e', "pi", &one, true);
         tell_agents(&panes, &one, vec![b.clone(), next.clone()]);
@@ -692,7 +621,6 @@ fn a_resume_the_keeper_refuses_is_the_notice_and_the_session_can_be_resumed_agai
             .read_with(&cx, |pane, _| pane.terminals().is_empty())
     );
 
-    // The refusal did not use up the session: the key takes it again.
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
 }
@@ -709,18 +637,15 @@ fn a_resume_asked_for_once_is_not_asked_for_again_while_the_session_is_listed_re
         drawn("terminal-resume-0", cx).is_some()
     });
 
-    // A second click before the Keeper has answered the first asks nothing: the Keeper
-    // refuses a session only once it runs, which is later than that.
+    // A second click before the answer asks nothing: the Keeper refuses a session only once it
+    // runs, which is too late. Nor do a click or Resume Agent while the session is listed
+    // resumable; the shell asked for in the other workspace is the barrier.
     click_in("terminal-resume-0", &mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
-    // Nor does a click after the answer, while the Keeper still lists the session as
-    // resumable, or Resume Agent.
     click_in("terminal-resume-0", &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
 
-    // The barrier is a shell asked for in the other workspace: it is the next request the
-    // Keeper hears when none of the above asked for a second resume.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     wait_drawn(&mut cx, "the other workspace on screen", |cx| {
         panes
@@ -743,7 +668,6 @@ fn a_resume_asked_for_once_is_not_asked_for_again_while_the_session_is_listed_re
     );
 }
 
-/// Waits until the view of `id` shows that its program ended.
 fn wait_for_ending(panes: &Panes, id: &TerminalId, cx: &mut VisualTestContext) {
     let view = panes
         .pane
@@ -766,9 +690,7 @@ fn a_resume_whose_terminal_ends_before_the_session_reports_can_be_asked_for_agai
         drawn("terminal-resume-0", cx).is_some()
     });
 
-    // The resumed program exits before it reports, as a CLI does that cannot find its
-    // session: the Keeper still lists the session resumable, and the pane, which holds
-    // no terminal for it that runs, asks again for a click and for the key.
+    // The resumed program exits before it reports, as a CLI does that cannot find its session.
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
     panes.keeper.tell(Fact::TerminalEnded {
@@ -800,10 +722,8 @@ fn a_resume_whose_terminal_ended_before_the_answer_was_taken_can_be_asked_for_ag
         drawn("terminal-resume-0", cx).is_some()
     });
 
-    // A program that fails at once can end before the pane takes the answer that named
-    // its terminal. The fact for the end is sent first, and a change of the agents
-    // behind it, which the pane shows only after it has heard the end, stands for the
-    // moment the pane took it; then the answer.
+    // A program that fails at once can end before the pane takes the answer that named its
+    // terminal: the end is sent first, then a change of the agents, then the answer.
     click_in("terminal-resume-0", &mut cx);
     let (id, request) = panes.keeper.request(&mut cx);
     assert!(
@@ -846,7 +766,6 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
 ) {
     let (mut panes, mut cx) = open_panes_listing(cx, &[two_workspaces()], |_, _| {});
     let (one, two) = (workspace_id('1'), workspace_id('2'));
-    // A shell of the workspace, which ends while the resume that follows is held.
     panes.press_in_the_app::<NewTerminal>(&mut cx);
     panes.answer_open(&terminal('s'), Program::Shell, &mut cx);
     let a = session('a', "claude", &one, true);
@@ -857,8 +776,8 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
     click_in("terminal-resume-0", &mut cx);
     panes.answer_open(&terminal('b'), resume(&a), &mut cx);
 
-    // The shell ends before the resumed CLI reports: the Keeper still lists the session
-    // resumable, and the resume is still held, so a click and the key ask for nothing.
+    // The shell ends before the resumed CLI reports: the resume is still held, so the click and
+    // the key ask for nothing, as the shell then asked for in the other workspace shows.
     panes.keeper.tell(Fact::TerminalEnded {
         terminal: terminal('s'),
         ending: Ending::Exited(0),
@@ -866,8 +785,6 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
     wait_for_ending(&panes, &terminal('s'), &mut cx);
     click_in("terminal-resume-0", &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
-    // The barrier is a shell asked for in the other workspace: the next request the
-    // Keeper hears when neither asked for a second resume.
     click_in(&format!("sidebar-workspace-{two}"), &mut cx);
     wait_drawn(&mut cx, "the other workspace on screen", |cx| {
         panes
@@ -889,7 +806,6 @@ fn a_resume_is_held_until_its_own_terminal_ends_and_the_end_of_another_terminal_
         "{request:?}"
     );
 
-    // The end of the resume's own terminal lets it go.
     click_in(&format!("sidebar-workspace-{one}"), &mut cx);
     wait_drawn(&mut cx, "the first workspace on screen", |cx| {
         panes
@@ -919,8 +835,6 @@ fn resume_agent_takes_the_first_session_offered_that_no_resume_was_opened_for(
         offered(&panes, cx) == [a.id.clone(), b.id.clone()]
     });
 
-    // With both offered and neither held, the key reaches the first; the next press, the
-    // second; and with none left it says so.
     panes.press_in_the_app::<ResumeAgent>(&mut cx);
     panes.answer_open(&terminal('c'), resume(&a), &mut cx);
     panes.press_in_the_app::<ResumeAgent>(&mut cx);

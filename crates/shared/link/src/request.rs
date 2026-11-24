@@ -1,8 +1,5 @@
-//! What a Window asks of the Keeper, what the Keeper answers, and what it tells unasked.
-//!
-//! A request carries an id the Window chose; the Keeper answers each request with one
-//! reply that carries the same id, either what was asked for or the reason it was refused.
-//! A fact is sent to every attached Window when something changed, whoever caused it.
+//! Each request carries an id the Window chose and is answered by one reply with that id, or a
+//! refusal. A fact goes to every attached Window when something changed.
 
 use std::fmt;
 use std::path::PathBuf;
@@ -32,57 +29,41 @@ use crate::workspace::{
     write_sides,
 };
 
-/// Pairs a reply with its request. The Window chooses it; within one connection no two
-/// requests that still wait for their reply share one.
+/// Unique among the requests of one connection still waiting for a reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RequestId(pub u32);
 
-/// Who starts a request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Origin {
-    /// The user, by a control of the Window. The Window has an action with a key for every
-    /// such request.
     User,
-    /// The Window itself, to have something to show.
     Window,
-    /// A piece of the app inside an agent CLI, as the hook program of Claude Code, to
-    /// report what the CLI does. Such a piece says hello, sends one request and leaves.
-    /// It is no Window, and nothing is told for it; a fact told to every connection may
-    /// still reach it before its reply, and it reads past it.
+    /// A piece of the app inside an agent CLI: hello, one request, leave. Nothing is told for it; a
+    /// fact may still reach it before its reply, and it reads past it.
     Agent,
 }
 
-/// Declares every kind of request in one table: its name, the number it travels by, who
-/// starts it, and the sentence that says what it is. [`RequestKind::ALL`] is built from
-/// the same table, so a kind cannot exist without its origin and cannot be missing from
-/// the list.
 macro_rules! request_kinds {
     ($( $(#[$doc:meta])* $name:ident = $code:literal, $origin:ident; )+) => {
-        /// The kinds of request, without their content. Every [`Request`] has one.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum RequestKind {
             $( $(#[$doc])* $name, )+
         }
 
         impl RequestKind {
-            /// Every kind of request there is.
             pub const ALL: &'static [RequestKind] = &[ $( RequestKind::$name, )+ ];
 
-            /// Who starts a request of this kind.
             pub const fn origin(self) -> Origin {
                 match self {
                     $( RequestKind::$name => Origin::$origin, )+
                 }
             }
 
-            /// The number this kind travels by.
             pub const fn code(self) -> u16 {
                 match self {
                     $( RequestKind::$name => $code, )+
                 }
             }
 
-            /// The kind that travels by this number.
             pub const fn from_code(code: u16) -> Option<RequestKind> {
                 match code {
                     $( $code => Some(RequestKind::$name), )+
@@ -90,7 +71,6 @@ macro_rules! request_kinds {
                 }
             }
 
-            /// The name of the kind, as written in the code.
             pub const fn name(self) -> &'static str {
                 match self {
                     $( RequestKind::$name => stringify!($name), )+
@@ -101,90 +81,49 @@ macro_rules! request_kinds {
 }
 
 request_kinds! {
-    /// See [`Request::ListWorkspaces`].
     ListWorkspaces = 1, Window;
-    /// See [`Request::OpenFolder`].
     OpenFolder = 2, User;
-    /// See [`Request::SetBase`].
     SetBase = 3, User;
-    /// See [`Request::GetChanges`].
     GetChanges = 4, Window;
-    /// See [`Request::ReadFile`].
     ReadFile = 5, Window;
-    /// See [`Request::OpenTerminal`].
     OpenTerminal = 6, User;
-    /// See [`Request::ResizeTerminal`].
     ResizeTerminal = 7, Window;
-    /// See [`Request::GetReviews`].
     GetReviews = 8, Window;
-    /// See [`Request::SaveDraft`].
     SaveDraft = 9, Window;
-    /// See [`Request::DeleteDraft`].
     DeleteDraft = 10, User;
-    /// See [`Request::CopyReview`].
     CopyReview = 11, User;
-    /// See [`Request::MarkReviewed`].
     MarkReviewed = 12, User;
-    /// See [`Request::SetViewed`].
     SetViewed = 13, User;
-    /// See [`Request::Commit`].
     Commit = 14, User;
-    /// See [`Request::Report`].
     Report = 15, Agent;
-    /// See [`Request::ListAgents`].
     ListAgents = 16, Window;
-    /// See [`Request::GetHistory`].
     GetHistory = 17, Window;
-    /// See [`Request::CompareVersions`].
     CompareVersions = 18, Window;
-    /// See [`Request::ReadVersions`].
     ReadVersions = 19, Window;
-    /// See [`Request::GetTurn`].
     GetTurn = 20, Window;
-    /// See [`Request::ShowWorkspace`].
     ShowWorkspace = 21, Window;
-    /// See [`Request::ListTerminals`].
     ListTerminals = 22, Window;
-    /// See [`Request::AttachTerminal`].
     AttachTerminal = 23, Window;
-    /// See [`Request::GetUncommitted`].
     GetUncommitted = 24, Window;
-    /// See [`Request::GetSettings`].
     GetSettings = 25, Window;
-    /// See [`Request::SetSetting`].
     SetSetting = 26, User;
-    /// See [`Request::AttachReview`].
     AttachReview = 27, User;
-    /// See [`Request::DetachReview`].
     DetachReview = 28, User;
-    /// See [`Request::ResolveThread`].
     ResolveThread = 29, User;
-    /// See [`Request::ReopenThread`].
     ReopenThread = 30, User;
-    /// See [`Request::ResolveAddressed`].
     ResolveAddressed = 31, User;
-    /// See [`Request::GetAttachment`].
     GetAttachment = 32, Window;
-    /// See [`Request::ListClis`].
     ListClis = 33, Window;
-    /// See [`Request::CompareForReview`].
     CompareForReview = 34, Window;
-    /// See [`Request::ListConsents`].
     ListConsents = 35, Window;
-    /// See [`Request::AnswerConsent`].
     AnswerConsent = 36, User;
-    /// See [`Request::ExportVersion`].
     ExportVersion = 37, Window;
-    /// See [`Request::CreateWorktree`].
     CreateWorktree = 38, User;
-    /// See [`Request::GetStateSizes`].
     GetStateSizes = 39, Window;
-    /// See [`Request::CleanUpStates`].
     CleanUpStates = 40, User;
 }
 
 impl RequestKind {
-    /// The kinds of request a user starts, in the order of [`RequestKind::ALL`].
     pub fn started_by_user() -> impl Iterator<Item = RequestKind> {
         Self::ALL
             .iter()
@@ -193,469 +132,206 @@ impl RequestKind {
     }
 }
 
-/// Something a Window asks of the Keeper.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Request {
-    /// Every repository the user opened, with its worktrees. Answered by
-    /// [`Reply::Workspaces`].
     ListWorkspaces,
-    /// Add the repository that holds this folder, and with it the workspace of the
-    /// worktree the folder lies in. Answered by [`Reply::Opened`], or refused when the
-    /// folder holds no repository and no worktree.
     OpenFolder {
-        /// The folder the user chose.
         path: PathBuf,
     },
-    /// Count the changes of a workspace from this branch or commit from now on. Answered
-    /// by [`Reply::Done`], or refused when git knows no such branch or commit.
-    ///
-    /// A branch is followed: the base moves when the branch does. Anything else the user
-    /// wrote is kept as the commit it names now, and stays that commit.
+    /// A branch is followed (the base moves when it does); anything else is kept as the commit it
+    /// names now.
     SetBase {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// A branch or a commit, as the user wrote it.
         base: String,
     },
-    /// The changes of a workspace as they are now. Answered by [`Reply::Changes`].
     GetChanges {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// The two versions of one changed file of a workspace. The Window names both, from
-    /// the [`Changes`] it holds: the old one by the commit the changes are counted from
-    /// and the path the file had there, the new one by its path in the worktree. The two
-    /// versions therefore belong to the list they were asked from, whatever happened to
-    /// the base or the branch since. Answered by [`Reply::File`]; refused when a path
-    /// leads out of the worktree or git knows no such commit.
+    /// Both versions are named by the Window from the [`Changes`] it holds, so they belong to the
+    /// list they were asked from, whatever happened to the base since.
     ReadFile {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The commit the old version is read in: [`Changes::counted_from`]. With none,
-        /// no old version is read and the reply holds none.
         since: Option<String>,
-        /// The path the file had in that commit, relative to the folder of the worktree:
-        /// its path now, or for a renamed file the path it had before.
         old_path: PathBuf,
-        /// The path of the file now, relative to the folder of the worktree.
         path: PathBuf,
     },
-    /// Open a new terminal for a workspace and start `program` in it, in the folder of
-    /// the worktree, at `size`. Answered by [`Reply::TerminalOpened`]; refused when the
-    /// Keeper knows no such workspace or the program cannot be started.
-    ///
-    /// From the reply on, what the program writes comes to the Window that asked, as
-    /// [`crate::Message::Output`] frames, and what the Window sends as
-    /// [`crate::Message::Input`] goes to the program. The reply reaches the Window before
-    /// the first output of the terminal, and no output is lost in between. When the
-    /// program ends, every Window is told [`Fact::TerminalEnded`], after the last output.
+    /// The reply reaches the Window before the first output and none is lost in between;
+    /// [`Fact::TerminalEnded`] follows the last output.
     OpenTerminal {
-        /// The workspace the terminal belongs to.
         workspace: WorkspaceId,
-        /// What to run in it.
         program: Program,
-        /// How large the Window will show it.
         size: TerminalSize,
     },
-    /// The Window shows a terminal at another size now: tell its program. Answered by
-    /// [`Reply::Done`]; refused with [`Refusal::UnknownTerminal`] when the Keeper holds no
-    /// such terminal, as after its program ended.
     ResizeTerminal {
-        /// The terminal.
         terminal: TerminalId,
-        /// Its new size.
         size: TerminalSize,
     },
-    /// The reviews of a workspace, with their threads, comments and rounds, and its files
-    /// marked viewed. Answered by [`Reply::Reviews`]; refused with
-    /// [`Refusal::UnknownWorkspace`] when the Keeper knows no such workspace.
-    ///
-    /// A workspace whose worktree is gone still has its reviews, and no file viewed. A
-    /// workspace with no review of an agent session has one review, of no agent, which the
-    /// Keeper makes when it is first asked for.
     GetReviews {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// Keep the text of a draft as it is now. The Window sends it whenever the text in a
-    /// comment box changes, with the whole text each time, and by itself: the user types,
-    /// and no control stands for the save. Answered by [`Reply::Done`] once the text is in
-    /// the Keeper's database, where a killed Keeper finds it again; the drive is flushed
-    /// after a pause in the typing, not at each save.
-    ///
-    /// The first save of a comment makes it, as a draft: the first comment of a new
-    /// thread, which sits where `on` says, or a reply in a thread that has a sent comment
-    /// and no draft. A later save of the same comment changes its text, also of a draft
-    /// that a reply made. Refused with [`Refusal::NotADraft`] when the comment was sent,
-    /// [`Refusal::UnknownReview`] or [`Refusal::UnknownThread`] for what the Keeper does
-    /// not hold, and [`Refusal::Failed`] when the ids contradict what is kept, as a
-    /// thread id taken by another thread or a reply in a thread with nothing sent.
-    ///
-    /// A save that made a comment is told to every Window as [`Fact::ReviewsChanged`]; a
-    /// save that only changed a text is told to nobody, so that typing does not make every
-    /// Window read the reviews again. The Window that typed puts each text it saves into
-    /// the reviews it shows itself.
+    /// Done once the text is in the Keeper's database; the drive is flushed after a pause in the
+    /// typing. Told as [`Fact::ReviewsChanged`] only when the save made a comment, so typing does
+    /// not make every Window read again.
     SaveDraft {
-        /// The review.
         review: ReviewId,
-        /// The thread: new, when `on` starts one.
+        /// New, when `on` starts one.
         thread: ThreadId,
-        /// The comment.
         comment: CommentId,
-        /// What the draft belongs to.
         on: DraftOn,
-        /// The whole text of the draft.
         text: String,
     },
-    /// Delete a draft. A thread left with no comment goes with it. Answered by
-    /// [`Reply::Done`]; refused with [`Refusal::NotADraft`] for a comment that was sent,
-    /// and [`Refusal::UnknownReview`] or [`Refusal::UnknownComment`] for what the Keeper
-    /// does not hold.
     DeleteDraft {
-        /// The review.
         review: ReviewId,
-        /// The draft.
         comment: CommentId,
     },
-    /// Copy a review as text, to paste by hand to an agent the app cannot deliver to.
-    /// Every unsent comment on an unresolved thread is rendered as text, with its path, its
-    /// lines and the code it sits on, and is then sent: the state of the worktree is
-    /// recorded and a new round starts, as when a message carries the review. Answered by
-    /// [`Reply::Copied`], which the Window puts on the clipboard; refused with
-    /// [`Refusal::NothingToSend`] when there is no such comment, and nothing is recorded.
+    /// Copy a review as text, to paste by hand to an agent the app cannot deliver to. Its unsent
+    /// comments on unresolved threads are then sent as a message would send them: the worktree's
+    /// state is recorded and a new round starts.
     CopyReview {
-        /// The review.
         review: ReviewId,
     },
-    /// Mark the change reviewed: the state of the worktree as it is now is recorded and
-    /// becomes the reviewed state of the review, from which the next review starts. No
-    /// commit is made. Answered by [`Reply::Done`].
+    /// Records the worktree's state now as the reviewed state, from which the next review counts.
+    /// No commit is made.
     MarkReviewed {
-        /// The review.
         review: ReviewId,
     },
-    /// Mark one file of a workspace viewed, or take the mark away. A mark holds for the
-    /// content the file has now: when the file changes, the mark is gone. Answered by
-    /// [`Reply::Done`]; refused when the path leads out of the worktree.
     SetViewed {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The file, relative to the folder of the worktree.
         path: PathBuf,
-        /// Whether it is to be marked viewed.
         viewed: bool,
     },
-    /// Make an ordinary git commit of every uncommitted change of the worktree, with this
-    /// message, as the user's own git makes it: with the user's hooks, identity and
-    /// signing. Nothing is marked reviewed, and what counts as changed since the last
-    /// review stays as it was. Answered by [`Reply::Committed`]; refused with
-    /// [`Refusal::NothingToCommit`] when nothing is uncommitted, and with
-    /// [`Refusal::Failed`] and git's own words when git refuses, as a hook may.
+    /// Made as the user's own git makes it: with the user's hooks, identity and signing. Nothing is
+    /// marked reviewed.
     Commit {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The message, as the user wrote it.
         message: String,
     },
-    /// What an agent CLI handed a piece of the app, passed on by that piece: the input of
-    /// one of Claude Code's hooks, or a call of the app's reply tool. Answered once the
-    /// agents' side of the Keeper has taken it, in the order reports and the marks of its
-    /// terminals came: with [`Reply::Answer`], what the piece hands its CLI back, where the
-    /// CLI's Adapter has something for it, else [`Reply::Done`]. Nothing the report leads
-    /// to beyond that is waited for, a recording least of all: the CLI waits for its
-    /// piece. Refused with [`Refusal::Failed`] only when the Keeper has no Adapter by the
-    /// report's name. A report the Adapter cannot read is answered [`Reply::Done`], and
-    /// written down by the Keeper.
-    ///
-    /// What the piece is answered with is never a decision on anything the CLI asks the
-    /// user, a permission prompt above all: an attached review that rides with a message
-    /// the user submitted; the allowing of a read of a review file the app wrote for that
-    /// session, and of a call of the app's own reply tool, both of which the user allowed
-    /// by installing the app; and what a reply to a thread became. What the report leads
-    /// to is told to every Window as facts: [`Fact::AgentsChanged`], [`Fact::Step`],
-    /// [`Fact::TurnEnded`] and [`Fact::ReviewsChanged`].
+    /// Answered in the order reports and terminal marks came, once the agents' side of the Keeper
+    /// has taken it: nothing the report leads to is waited for, since the CLI waits for its piece.
+    /// The answer never decides a permission prompt.
     Report {
-        /// What the CLI handed the piece.
         report: AgentReport,
     },
-    /// The agent sessions of every workspace, and the state each workspace shows. Answered
-    /// by [`Reply::Agents`], one entry for each workspace in which a session of a supported
-    /// agent CLI ever reported, in the order the workspaces were opened.
     ListAgents,
-    /// The history of a workspace: its commits and the turns that ended in it. Answered by
-    /// [`Reply::History`], from what the Keeper keeps and the commits, without asking git
-    /// what changed on disk; refused with [`Refusal::UnknownWorkspace`], also for a
-    /// workspace whose worktree is gone.
     GetHistory {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// The uncommitted changes of a workspace that a review lists, from the commit checked
-    /// out to the files on disk, each with who made it: every change no agent made, and
-    /// those credited to the review's session; for the review of no agent, or none named,
-    /// every change. Answered by [`Reply::Uncommitted`], ordered by path; refused with
-    /// [`Refusal::UnknownWorkspace`], and [`Refusal::UnknownReview`] for a review the
-    /// Keeper does not hold.
+    /// Each change with who made it: those no agent made and those credited to the review's
+    /// session; every change for the review of no agent, or none named.
     GetUncommitted {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The review whose list is asked for.
         review: Option<ReviewId>,
     },
-    /// The files that differ between two versions of a workspace: commits of the
-    /// repository or recorded states, named by their full ids, or the files on disk.
-    /// Answered by [`Reply::Compared`], the files ordered by path; refused with
-    /// [`Refusal::UnknownRevision`] for an id that is neither a commit nor a state of the
-    /// workspace.
     CompareVersions {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The version the change is counted from.
         from: String,
-        /// The version the change leads to; none for the files on disk.
+        /// None for the files on disk.
         to: Option<String>,
     },
-    /// The two versions of one file of a change between two versions of a workspace, as
-    /// [`Request::CompareVersions`] names them. Answered by [`Reply::File`]; refused as
-    /// [`Request::ReadFile`] and [`Request::CompareVersions`] are.
     ReadVersions {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The version the old side is read in; none reads no old side, and the reply
-        /// holds none.
+        /// None reads no old side.
         old: Option<String>,
-        /// The path of the file in that version, relative to the folder of the worktree.
         old_path: PathBuf,
-        /// The version the new side is read in; none for the file on disk.
+        /// None for the file on disk.
         new: Option<String>,
-        /// The path of the file in that version, relative to the folder of the worktree.
         path: PathBuf,
     },
-    /// One turn with its steps, as the Keeper kept them: also a turn that ended while no
-    /// Window was attached. Answered by [`Reply::Turn`]; refused with
-    /// [`Refusal::UnknownTurn`].
     GetTurn {
-        /// The turn.
         turn: TurnId,
     },
-    /// The Window shows this workspace now, or none. The Window tells it by itself
-    /// whenever the workspace on screen changes; the Keeper watches the worktrees that
-    /// some Window shows or an agent works in, and tells what changes in them as
-    /// [`Fact::ChangesChanged`] and [`Fact::Workspaces`]. Answered by [`Reply::Done`];
-    /// refused with [`Refusal::UnknownWorkspace`].
+    /// The Window tells it whenever the workspace on screen changes; the Keeper watches the
+    /// worktrees some Window shows or an agent works in.
     ShowWorkspace {
-        /// The workspace on screen.
         workspace: Option<WorkspaceId>,
     },
-    /// Every terminal the Keeper holds, whoever opened it, in the order they were opened.
-    /// Answered by [`Reply::Terminals`].
     ListTerminals,
-    /// Show a terminal the Keeper holds in this Window too, as one opened again after a
-    /// plain quit. Answered by [`Reply::Attached`]; refused with
-    /// [`Refusal::UnknownTerminal`].
-    ///
-    /// After the reply the Window is sent, as [`crate::Message::Output`] frames, the
-    /// newest output the Keeper kept of the terminal, up to its limit, and then what the
-    /// program writes from then on, with nothing lost or sent twice in between. The
-    /// program is told the size and asked to draw its screen again.
+    /// After the reply the Window gets the newest output the Keeper kept, then what the program
+    /// writes from then on, nothing lost or sent twice. The program is told the size and asked to
+    /// draw its screen again.
     AttachTerminal {
-        /// The terminal.
         terminal: TerminalId,
-        /// The size the Window shows it at.
         size: TerminalSize,
     },
-    /// Every setting the user set, as the Keeper keeps them. Answered by
-    /// [`Reply::Settings`]. The Window asks it when it connects, and holds the default of
-    /// every setting the answer does not list.
     GetSettings,
-    /// Keep a setting the user chose, in place of the one it is the same thing as. Answered
-    /// by [`Reply::Done`] once the Keeper's database holds it, where a Keeper started again
-    /// finds it; refused with [`Refusal::UnknownWorkspace`] for a setting of a workspace the
-    /// Keeper does not know, and with [`Refusal::Failed`] for one of a repository it does
-    /// not know, a time of 0 ([`Setting::StopAfter`], [`Setting::KeepStates`]), a theme
-    /// named by an empty name, and a folder for worktrees ([`Setting::WorktreesFolder`])
-    /// that is not absolute or lies inside a worktree or the git folder of its repository,
-    /// with the sentence that says which. Told to every Window as [`Fact::SettingChanged`].
-    ///
-    /// The user starts it by a control: switching the form of Flow keeps the form chosen
-    /// for the workspace on screen, and each control of the settings screen keeps what it
-    /// changes.
+    /// Told as [`Fact::SettingChanged`]. A value that makes no sense (a time of 0, an empty theme
+    /// name, a worktrees folder not absolute or inside its repository) is Failed.
     SetSetting {
-        /// The setting, with its value.
         setting: Setting,
     },
-    /// Attach the review, or one of its threads alone, to the user's next message to the
-    /// agent the review belongs to, in place of what was attached. The comments are not
-    /// sent now: the review rides with the next message the user submits to that agent,
-    /// and its unsent comments on unresolved threads are then sent, as they are at that
-    /// moment. While it is attached its drafts can be edited, and a new draft joins it,
-    /// except when one thread is attached alone. Answered by [`Reply::AttachedReview`],
-    /// which names the agent CLIs the Window offers to start with the review; refused with
-    /// [`Refusal::NothingToSend`] when what would be attached holds no unsent comment on
-    /// an unresolved thread, and [`Refusal::UnknownReview`], [`Refusal::UnknownThread`].
-    /// Told as [`Fact::ReviewsChanged`], and as [`Fact::AgentsChanged`] of the session the
-    /// review belongs to, whose terminal shows the attachment.
+    /// Attach the review, or one thread alone, to the user's next message to the review's agent.
+    /// Nothing is sent now: its unsent comments go as they are when that message is submitted.
+    /// Drafts stay editable and a new one joins, unless one thread is attached alone.
     AttachReview {
-        /// The review.
         review: ReviewId,
         /// One thread to attach alone; none attaches the review.
         thread: Option<ThreadId>,
     },
-    /// Take the attachment away: every comment it would have carried stays an unsent
-    /// draft, and the next message carries no review. Answered by [`Reply::Done`], also
-    /// when nothing was attached; refused with [`Refusal::UnknownReview`]. Told as
-    /// [`Request::AttachReview`] is.
     DetachReview {
-        /// The review.
         review: ReviewId,
     },
-    /// Resolve a thread: the reviewer's own decision, which nothing the agent sends can
-    /// take. A resolved thread is sent no more, an unsent comment on it included. Answered
-    /// by [`Reply::Done`]; refused with [`Refusal::UnknownReview`],
-    /// [`Refusal::UnknownThread`]. Told as [`Fact::ReviewsChanged`].
     ResolveThread {
-        /// The review.
         review: ReviewId,
-        /// The thread.
         thread: ThreadId,
     },
-    /// Reopen a resolved thread: it is sent again with the next message, its unsent
-    /// comments included. Answered and told as [`Request::ResolveThread`].
     ReopenThread {
-        /// The review.
         review: ReviewId,
-        /// The thread.
         thread: ThreadId,
     },
-    /// Resolve every thread of the review that the agent marked addressed and that is not
-    /// resolved, at once. Answered by [`Reply::Done`], also when there is none; refused
-    /// with [`Refusal::UnknownReview`]. Told as [`Fact::ReviewsChanged`] when a thread was
-    /// resolved.
     ResolveAddressed {
-        /// The review.
         review: ReviewId,
     },
-    /// What the user's next message would carry to the agent now, as the agent will
-    /// receive it: what the control that views the attachment shows. Answered by
-    /// [`Reply::Attachment`]; refused with [`Refusal::NothingToSend`] when nothing is
-    /// attached, when what is attached holds no unsent comment on an unresolved thread,
-    /// and for the review of no agent, which no agent receives until a session takes it;
-    /// and with [`Refusal::UnknownReview`].
+    /// What the next message would carry, as the agent will receive it. [`Refusal::NothingToSend`]
+    /// also for the review of no agent.
     GetAttachment {
-        /// The review.
         review: ReviewId,
     },
-    /// Every agent CLI the Keeper has an Adapter for, in the order of its Adapters: what
-    /// the terminal pane offers a launcher of, next to the shell. Answered by
-    /// [`Reply::Clis`]. The list does not change while a Keeper runs: a Window asks once
-    /// for each connection.
+    /// Every agent CLI the Keeper has an Adapter for, in the Adapters' order. Fixed while a Keeper
+    /// runs: a Window asks once per connection.
     ListClis,
-    /// What a review shows of the change between two versions of its workspace: the files
-    /// that differ from `from` to `to`, as [`Request::CompareVersions`] lists them, leaving
-    /// out each file whose credits name only sessions other than the review's own. A file
-    /// credited to the review's session, alone or with others, and a file credited to no
-    /// session, a change no agent made, are listed; each with who is credited with it, so
-    /// that a file two sessions changed is marked. For the review of no agent, every file. Who is credited with a file is what
-    /// the Keeper kept with the states recorded after `from` up to `to`. Answered by
-    /// [`Reply::ComparedForReview`], ordered by path; refused with
-    /// [`Refusal::UnknownWorkspace`], [`Refusal::UnknownReview`] and
-    /// [`Refusal::UnknownRevision`], as [`Request::CompareVersions`] is.
+    /// The files [`Request::CompareVersions`] lists, minus those credited only to sessions other
+    /// than the review's own (none left out for the review of no agent), each with who is credited.
+    /// Credits are those kept with the states recorded after `from`, up to `to`.
     CompareForReview {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The review whose files are asked for.
         review: ReviewId,
-        /// The version the change is counted from.
         from: String,
-        /// The recorded state the change leads to.
         to: String,
     },
-    /// Every Adapter that writes into the user's own settings of its CLI only with the
-    /// user's leave, whose CLI is installed, with its question and what the user said, in
-    /// the order of the Adapters. Answered by [`Reply::Consents`]; an empty list where no
-    /// Adapter needs leave.
     ListConsents,
-    /// The user's answer to an Adapter's question for leave: `Yes` writes the Adapter's
-    /// entry into the CLI's settings, `No` writes nothing and takes out an entry the app
-    /// wrote, `NotAsked` takes it out too and has the Window ask again. The answer is kept
-    /// across restarts. Answered by [`Reply::Consents`], every Adapter's as it now stands,
-    /// the one answered with its `problem` where its CLI's settings could not be changed;
-    /// refused with [`Refusal::Failed`] for an agent no listed Adapter has. Every Window is
-    /// told [`Fact::ConsentsChanged`] with the same list.
+    /// `NotAsked` removes the entry like `No` and has the Window ask again. Kept across restarts.
     AnswerConsent {
-        /// The Adapter, by its name.
         agent: String,
-        /// What the user said.
         answer: ConsentAnswer,
     },
-    /// Write the files of one version of a workspace, a commit of its repository or a
-    /// recorded state, into the folder `into`, as plain files: what a second language
-    /// server reads as the old side of the change on screen. `into` must not exist yet and
-    /// must lie inside the app's cache folder, [`crate::cache_dir`]; the Keeper makes it
-    /// and nothing else outside it. The folder is no repository, and the reviewed
-    /// repository gains nothing: no worktree, no ref, no file, no change of its list of
-    /// files. Answered by [`Reply::Done`] once every file is written; refused with
-    /// [`Refusal::UnknownWorkspace`], [`Refusal::UnknownRevision`] for a version that is
-    /// neither a full commit id of the repository nor a state of the workspace, and
-    /// [`Refusal::Failed`] for an `into` that exists or lies outside the cache folder, or a
-    /// write that failed, which leaves no folder behind. The Window removes the folder
-    /// itself when it no longer needs it.
+    /// Writes the files of one version (a commit or a recorded state) into `into`, which must not
+    /// exist yet and must lie inside [`crate::cache_dir`]; the reviewed repository gains nothing.
+    /// The Window removes the folder when it no longer needs it.
     ExportVersion {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The version, by its full id.
         version: String,
-        /// The folder to write it into.
         into: PathBuf,
     },
-    /// Make a new git worktree of `repository`, on a new branch `branch` made from the
-    /// branch `from`, and start the agent CLI `agent` in it, in one step: the user's own
-    /// git makes the worktree (`git worktree add -b`), in a folder named after the branch
-    /// (each `/` of the name made `-`), which lies in the folder the user named for the
-    /// repository's worktrees ([`crate::Setting::WorktreesFolder`]) when one is set, and
-    /// else beside the repository, where the repository keeps its worktrees. The new
-    /// workspace has `from` as its base. The agent runs in a new terminal of that
-    /// workspace, as [`crate::Program::Agent`] runs in [`Request::OpenTerminal`], at `size`.
-    ///
-    /// Answered by [`Reply::WorktreeCreated`]; from the reply on, what the agent writes
-    /// comes to the Window that asked, as for [`Request::OpenTerminal`], and every Window is
-    /// told [`Fact::Workspaces`] with the list that holds the new workspace. Refused, with
-    /// nothing made, with [`Refusal::Failed`] naming a repository the Keeper does not hold,
-    /// an agent no Adapter has, a branch `branch` that exists already or that git does not
-    /// take as the name of a branch, a folder that is there already, and a folder the user
-    /// named that is not absolute or lies inside the repository; [`Refusal::NoSuchFolder`]
-    /// for a folder the user named when something that is not a folder is at it, or when
-    /// nothing is at it and its parent folder is not a folder either (a named folder that
-    /// is not there is made, with the worktree, when its parent is a folder); and
-    /// [`Refusal::UnknownRevision`] for a `from` that names no branch. When the agent cannot
-    /// be started, the worktree and the branch the request made are removed again, and the
-    /// refusal says why.
+    /// One step: git makes the worktree (`git worktree add -b`) in a folder named after the branch
+    /// (each `/` made `-`), in [`crate::Setting::WorktreesFolder`] or else beside the repository,
+    /// then `agent` starts in a new terminal. A failure undoes it, or the refusal names what stays.
     CreateWorktree {
-        /// The repository.
         repository: RepositoryId,
-        /// The branch the worktree is made from, by its short name, local (`main`) or of a
-        /// remote (`origin/main`): the base of the new workspace.
+        /// The branch the worktree is made from, local (`main`) or of a remote (`origin/main`): the
+        /// base of the new workspace.
         from: String,
-        /// The name of the new branch, which the worktree has checked out.
         branch: String,
-        /// The Adapter of the agent CLI to start, by its name: `claude`.
         agent: String,
-        /// How large the Window will show the agent's terminal.
         size: TerminalSize,
     },
-    /// How much room the recorded states take on disk, for each workspace and in total.
-    /// Answered by [`Reply::StateSizes`].
     GetStateSizes,
-    /// Clean the recorded states up at once: delete every state of every workspace that no
-    /// thread, no round and no reviewed mark refers to, whatever its age, with what only
-    /// such states held, and the files of long reviews of agent sessions that no longer
-    /// run. Answered by [`Reply::StateSizes`], the sizes after; every Window is told
-    /// [`Fact::StatesDeleted`] of each workspace that lost a state.
+    /// Deletes every state that no thread, round or reviewed mark refers to, whatever its age, with
+    /// what only such states held and the files of long reviews of sessions that no longer run.
+    /// Answered with the sizes after.
     CleanUpStates,
 }
 
 impl Request {
-    /// The kind of this request.
     pub fn kind(&self) -> RequestKind {
         match self {
             Self::ListWorkspaces => RequestKind::ListWorkspaces,
@@ -702,192 +378,108 @@ impl Request {
     }
 }
 
-/// What the Keeper answers to a request it could fulfil.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Reply {
-    /// It is done, and there is nothing to send back.
     Done,
-    /// Every repository the user opened, in the order they were opened.
     Workspaces(Vec<Repository>),
-    /// The folder is now a workspace.
     Opened {
-        /// The repository that holds it.
         repository: RepositoryId,
-        /// The workspace of the worktree the folder lies in.
         workspace: WorkspaceId,
     },
-    /// The changes of the workspace asked about.
     Changes(Changes),
-    /// The two versions of the file asked about.
     File(FileSides),
-    /// The terminal is open and its program started.
     TerminalOpened {
-        /// The name of the new terminal.
         terminal: TerminalId,
     },
-    /// The reviews of the workspace asked about.
     Reviews(WorkspaceReviews),
-    /// The review as text, and the round its comments were sent in.
     Copied {
-        /// The text to put on the clipboard.
         text: String,
-        /// The number of the round that started.
         round: u32,
     },
-    /// The commit is made.
     Committed {
-        /// Its full id.
         commit: String,
     },
-    /// The agent sessions of every workspace in which one reported.
     Agents(Vec<WorkspaceAgents>),
-    /// The history of the workspace asked about.
     History(History),
-    /// The files that differ between the two versions asked about, ordered by path.
     Compared(Vec<ChangedFile>),
-    /// The turn asked about.
     Turn(Turn),
-    /// Every terminal the Keeper holds.
     Terminals(Vec<TerminalInfo>),
-    /// The terminal is shown in this Window too; its kept output follows.
     Attached {
-        /// Whether the program wrote more than the Keeper keeps: what came before the
-        /// kept output is gone, and the Window says so where the kept output starts.
+        /// Whether the program wrote more than the Keeper keeps: what came before is gone.
         cut: bool,
     },
-    /// The uncommitted changes a review lists, ordered by path, each with who made it.
     Uncommitted(Vec<CreditedFile>),
-    /// Every setting the user set, each once: those of the whole app first, then those of
-    /// each workspace, in the order the workspaces were first kept.
     Settings(Vec<Setting>),
-    /// What the piece of the app that sent a [`Request::Report`] hands its CLI back, byte
-    /// for byte, as the CLI's Adapter wrote it: for Claude Code's hook program what it
-    /// prints, for its reply tool's server the result of the call.
     Answer {
-        /// The bytes.
         bytes: Vec<u8>,
     },
-    /// The review is attached. The Window offers to start each CLI named here, with the
-    /// review attached to its first message: none while the agent the review belongs to
-    /// runs, the CLI of that agent when it does not, whether or not another agent runs in
-    /// the workspace, and every CLI the app supports for the review of no agent.
+    /// The CLIs the Window offers to start with the review attached: none while the review's agent
+    /// runs, that agent's CLI when it does not, every supported CLI for the review of no agent.
     AttachedReview {
-        /// The CLIs to offer.
         start: Vec<AgentCli>,
     },
-    /// What the next message would carry to the agent, as the agent will receive it: the
-    /// instruction on how to answer each thread, then the threads. A review delivered as a
-    /// file is this text in the file.
     Attachment {
-        /// The text.
         text: String,
     },
-    /// Every agent CLI the Keeper has an Adapter for, in the order of its Adapters.
     Clis(Vec<AgentCli>),
-    /// The files a review shows of the change between two versions, ordered by path, each
-    /// with the sessions credited with it.
     ComparedForReview(Vec<CreditedFile>),
-    /// Every Adapter that needs the user's leave to write into its CLI's settings, and how
-    /// that stands.
     Consents(Vec<Consent>),
-    /// The worktree is made and the agent started in it.
     WorktreeCreated {
-        /// The workspace of the new worktree.
         workspace: WorkspaceId,
-        /// The terminal the agent runs in.
         terminal: TerminalId,
     },
-    /// How much room the recorded states take on disk.
     StateSizes(StateSizes),
 }
 
-/// Why the Keeper did not do what a request asked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refusal {
-    /// There is no folder at this path, or it cannot be read.
     NoSuchFolder {
-        /// The path that was given.
         path: PathBuf,
     },
-    /// The folder holds no git repository and no worktree.
     NotARepository {
-        /// The folder that was given.
         path: PathBuf,
     },
-    /// The folder is a repository with no files checked out: one of its worktrees has to
-    /// be opened instead.
     BareRepository {
-        /// The folder that was given.
         path: PathBuf,
     },
-    /// The folder is a copy of a worktree and shares the original's git folder, so git
-    /// cannot tell the two apart. A worktree made by git has to be opened instead.
+    /// The folder shares the original worktree's git folder, so git cannot tell them apart.
     CopiedWorktree {
-        /// The folder that was given.
         path: PathBuf,
     },
-    /// The Keeper knows no workspace by this id.
     UnknownWorkspace {
-        /// The id that was given.
         workspace: WorkspaceId,
     },
-    /// git knows no branch and no commit by this name in the repository.
     UnknownRevision {
-        /// The name that was given.
         revision: String,
     },
-    /// The path leads out of the worktree.
     OutsideWorkspace {
-        /// The path that was given.
         path: PathBuf,
     },
-    /// The Keeper holds no terminal by this id: it never opened one, or its program has
-    /// ended.
     UnknownTerminal {
-        /// The id that was given.
         terminal: TerminalId,
     },
-    /// The Keeper holds no review by this id.
     UnknownReview {
-        /// The id that was given.
         review: ReviewId,
     },
-    /// The review holds no thread by this id.
     UnknownThread {
-        /// The id that was given.
         thread: ThreadId,
     },
-    /// The review holds no comment by this id.
     UnknownComment {
-        /// The id that was given.
         comment: CommentId,
     },
-    /// The comment was sent: it carries its round and cannot be changed or deleted. A
-    /// follow-up is a reply.
     NotADraft {
-        /// The comment.
         comment: CommentId,
     },
-    /// The review holds no unsent comment on an unresolved thread: there is nothing to
-    /// send.
     NothingToSend {
-        /// The review.
         review: ReviewId,
     },
-    /// The worktree holds no uncommitted change: there is nothing to commit.
     NothingToCommit {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// Something the user cannot mend from here went wrong: git is missing or failed, the
-    /// database could not be written, or a program could not be started.
     Failed {
-        /// What went wrong, as a sentence.
         reason: String,
     },
-    /// The Keeper holds no turn by this id.
     UnknownTurn {
-        /// The id that was given.
         turn: TurnId,
     },
 }
@@ -947,89 +539,50 @@ impl fmt::Display for Refusal {
 
 impl std::error::Error for Refusal {}
 
-/// Something the Keeper tells every attached Window, unasked.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Fact {
-    /// The list of repositories and workspaces is now this. Told when a folder was opened,
-    /// and when the watcher of a worktree saw what is checked out in it change.
-    ///
-    /// Only the worktrees that a Window shows or an agent works in are watched: a worktree
-    /// made or removed outside the app, or a branch switched in a worktree nobody shows,
-    /// is in the list the next time it is read.
+    /// Told when a folder was opened and when a worktree's watcher saw its checkout change. Only
+    /// worktrees a Window shows or an agent works in are watched.
     Workspaces(Vec<Repository>),
-    /// The changes of this workspace are no longer what the Keeper last answered: its
-    /// base was set, its commits changed, or the watcher saw its files change. A Window
-    /// that shows them asks again. While files keep changing, as when an agent writes,
-    /// the fact is told at most a few times a second.
     ChangesChanged {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// The program of this terminal has ended, and the Keeper holds the terminal no more.
     /// Told after the last [`crate::Message::Output`] of the terminal.
     TerminalEnded {
-        /// The terminal.
         terminal: TerminalId,
-        /// How its program ended.
         ending: Ending,
     },
-    /// The reviews of this workspace, or its files marked viewed, are no longer what the
-    /// Keeper last answered: a thread or a comment was made or deleted, a round started,
-    /// the change was marked reviewed, or a file was marked viewed or unmarked. A Window
-    /// that shows them asks again. A save that only changed the text of a draft is not
-    /// told.
     ReviewsChanged {
-        /// The workspace.
         workspace: WorkspaceId,
     },
-    /// The agent sessions of this workspace, or the state it shows, are now these: a
-    /// session started, ended or was taken by a review, or its state changed.
     AgentsChanged(WorkspaceAgents),
-    /// A turn of an agent ended, and the state of the worktree was recorded. Told after the
-    /// [`Fact::AgentsChanged`] that shows the session's new state.
+    /// Told after the [`Fact::AgentsChanged`] that shows the session's new state.
     TurnEnded {
-        /// The workspace.
         workspace: WorkspaceId,
-        /// The session.
         session: SessionId,
-        /// The turn.
         turn: TurnId,
-        /// The state recorded at its end, by its full id; none when the recording failed.
+        /// Full id of the state recorded at the turn's end; None when the recording failed.
         state: Option<String>,
-        /// The state the reviewer last marked reviewed in the session's review, by its
-        /// full id: what changed since the last review counts from it. None before the
-        /// first mark: it then counts from the start of the history.
+        /// Full id of the state last marked reviewed in the session's review, from which what
+        /// changed since then counts; None before the first mark, when it counts from the history's
+        /// start.
         since: Option<String>,
     },
-    /// An agent took one more step in a turn. Steps are told in the order they happened,
-    /// each with its number in the turn, and after the [`Fact::AgentsChanged`] that shows
-    /// the turn running. Each step is kept before it is told, so that
-    /// [`Request::GetTurn`] gives every step told so far.
+    /// Told in order after the [`Fact::AgentsChanged`] that shows the turn running. Each is kept
+    /// before it is told, so [`Request::GetTurn`] gives every step told so far.
     Step {
-        /// The workspace the session works in.
         workspace: WorkspaceId,
-        /// The session.
         session: SessionId,
-        /// The turn.
         turn: TurnId,
-        /// The number of the step in the turn, from 1.
+        /// The step's number in the turn, from 1.
         number: u32,
-        /// The step.
         step: Step,
     },
-    /// A Window set a setting: every Window is told it, the one that set it included, in
-    /// the order the settings were kept.
     SettingChanged(Setting),
-    /// How the Adapters that need the user's leave stand now: told to every Window after
-    /// an answer, and to one Window alone at its first request, before that request is
-    /// answered, when a question waits for an answer or a CLI's settings could not be
-    /// changed. A Window that is told none then has nothing to ask.
+    /// Told to every Window after an answer, and to one Window alone at its first request, before
+    /// it is answered, when a question waits or a CLI's settings could not be changed.
     ConsentsChanged(Vec<Consent>),
-    /// Recorded states of this workspace were deleted: by the clean-up the user asked for,
-    /// or because the set time passed. Turns of its history may be expired now, and the
-    /// sizes of the states are smaller. A Window that shows either asks again.
     StatesDeleted {
-        /// The workspace.
         workspace: WorkspaceId,
     },
 }

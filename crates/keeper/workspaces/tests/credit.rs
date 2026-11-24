@@ -1,6 +1,3 @@
-//! Component tests: who is credited with a change, through the calls the Keeper makes, in
-//! real repositories the tests make, with the real watcher on them and a real database.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -15,8 +12,6 @@ use yaar_agent::{Adapter, Event, Phase, Report};
 use yaar_system_tests::recorded::{self, HookRecord};
 use yaar_workspaces::{Change, CreditedPath, Refusal, WorkspaceError, WorkspaceId, Workspaces};
 
-/// A repository with the files given committed, opened and watched. The scratch folder
-/// stays where the test can see it.
 struct Watched {
     workspaces: Workspaces,
     workspace: WorkspaceId,
@@ -24,7 +19,6 @@ struct Watched {
     heard: Heard,
 }
 
-/// A repository with `edited.txt` and `kept.txt` committed, opened and watched.
 fn watched(scratch: &Scratch) -> Watched {
     watched_with(scratch, &[("edited.txt", "one\n"), ("kept.txt", "kept\n")])
 }
@@ -55,7 +49,6 @@ impl Watched {
         self.workspaces.credits(&self.workspace).expect("credits")
     }
 
-    /// The sessions the change of `path` is credited to, none where it is not listed.
     fn by(&self, path: &str) -> Option<Vec<String>> {
         self.credits()
             .into_iter()
@@ -63,8 +56,6 @@ impl Watched {
             .map(|one| one.by)
     }
 
-    /// Waits until the watcher has told of a change of files after this call, the way a
-    /// test learns that the ledger has noted a write it made before.
     fn wait_for_a_notice_of_files(&self, since: usize) {
         wait_until("the watcher told of the files", || {
             self.heard.files() > since
@@ -81,14 +72,10 @@ fn a_file_changed_by_an_editor_outside_the_app_shows_as_a_change_no_agent_made()
     let scratch = Scratch::new();
     let w = watched(&scratch);
 
-    // A file an agent's tool named, in the same worktree, to show that the rule tells the
-    // two apart.
     write(&w.root, "agent.txt", "from the agent\n");
     w.workspaces
         .agent_wrote(&w.workspace, "agent-session", &w.root.join("agent.txt"));
 
-    // An editor: a program of the user that is no supported agent CLI. First one that
-    // writes the file itself, then a child process that writes through its shell.
     let before = w.heard.files();
     std::fs::write(w.root.join("edited.txt"), "two, by hand\n").expect("edit the file");
     w.wait_for_a_notice_of_files(before);
@@ -148,7 +135,6 @@ fn a_write_named_outside_the_worktree_is_not_noted() {
     for outside in [
         scratch.join("elsewhere/x.txt"),
         PathBuf::from("../elsewhere/x.txt"),
-        // A sibling whose name starts like the worktree's own folder.
         scratch.join("repo-two/x.txt"),
     ] {
         w.workspaces.agent_wrote(&w.workspace, "a", &outside);
@@ -212,7 +198,6 @@ fn a_path_leaves_the_ledger_when_it_is_committed_and_a_later_change_of_it_is_new
     commit_all(&w.root, "the agent's change, committed");
     assert_eq!(w.by("x.txt"), None, "committed: no change to list");
 
-    // The same path edited again, by hand: nothing of the first credit is left.
     write(&w.root, "x.txt", "by hand\n");
     assert_eq!(w.by("x.txt"), Some(Vec::new()));
 }
@@ -234,7 +219,6 @@ fn a_change_seen_while_one_session_runs_a_shell_command_is_credited_to_that_sess
 fn a_change_seen_after_a_shell_command_ended_is_no_agents() {
     let scratch = Scratch::new();
     let w = watched(&scratch);
-    // The command ran, and its end was reported, long before the change.
     w.workspaces.command_began(&w.workspace, "a", ago(2));
     w.workspaces.command_ended(&w.workspace, "a", ago(1));
     let before = w.heard.files();
@@ -262,8 +246,8 @@ fn a_file_written_in_a_folder_made_by_a_command_is_credited_to_its_session() {
     let scratch = Scratch::new();
     let w = watched(&scratch);
     w.workspaces.command_began(&w.workspace, "a", ago(1));
-    // The folder and the file come at once, as a command makes them: the system may not
-    // be watching the folder yet when the file is written.
+    // File and folder come at once, as from a command: the system may not be watching the folder
+    // yet when the file is written.
     let before = w.heard.files();
     let status = Command::new("sh")
         .args(["-c", "mkdir -p out/deep && echo x > out/deep/f.txt"])
@@ -284,7 +268,6 @@ fn a_folder_with_files_moved_into_the_worktree_is_credited_to_the_session_whose_
     write(scratch.path(), "outside/moved/inner/f.txt", "x\n");
     write(scratch.path(), "outside/moved-by-hand/f.txt", "x\n");
 
-    // Nobody's command runs: a folder moved in by hand is no agent's.
     let before = w.heard.files();
     std::fs::rename(
         scratch.join("outside/moved-by-hand"),
@@ -297,7 +280,6 @@ fn a_folder_with_files_moved_into_the_worktree_is_credited_to_the_session_whose_
     });
     assert_eq!(w.by("moved-by-hand/f.txt"), Some(Vec::new()));
 
-    // A command of a session, begun since, moves one in: what it brings is its change.
     w.workspaces
         .command_began(&w.workspace, "a", Instant::now());
     let before = w.heard.files();
@@ -313,7 +295,6 @@ fn a_folder_with_files_moved_into_the_worktree_is_credited_to_the_session_whose_
 fn a_file_written_while_the_worktree_was_not_watched_is_no_agents_in_a_folder_a_command_made() {
     let scratch = Scratch::new();
     let w = watched(&scratch);
-    // A command of a session makes a folder, and ends.
     w.workspaces
         .command_began(&w.workspace, "a", Instant::now());
     let before = w.heard.files();
@@ -322,8 +303,6 @@ fn a_file_written_while_the_worktree_was_not_watched_is_no_agents_in_a_folder_a_
     w.workspaces
         .command_ended(&w.workspace, "a", Instant::now());
 
-    // Nothing watches while the user writes a file in it by hand: nothing saw it written,
-    // and the folder's credit is not the file's.
     w.workspaces.unwatch(&w.workspace);
     write(&w.root, "out/by-hand.txt", "x\n");
     assert_eq!(w.by("out/by-hand.txt"), Some(Vec::new()));
@@ -344,8 +323,8 @@ fn a_write_noted_while_git_reads_the_files_is_credited_though_the_list_git_gave_
             (".gitattributes", "slow.txt filter=hold\n"),
         ],
     );
-    // A filter that makes git wait over `slow.txt`, which it reads after `a.txt`, until
-    // the test lets it go.
+    // A filter that makes git wait over `slow.txt`, which it reads after `a.txt`, until the test
+    // lets it go.
     let started = scratch.join("started");
     let go = scratch.join("go");
     let filter = scratch.join("bin/hold");
@@ -361,22 +340,17 @@ fn a_write_noted_while_git_reads_the_files_is_credited_though_the_list_git_gave_
         &w.root,
         &["config", "filter.hold.clean", &filter.to_string_lossy()],
     );
-    // Its time of change is not the list's, so git has to read it, through the filter.
     touch(&w.root, "slow.txt");
 
     let first = std::thread::scope(|scope| {
         let asking = scope.spawn(|| w.workspaces.credits(&w.workspace));
         wait_until("git is reading the files", || started.exists());
-        // `a.txt` is written, and named by the agent's tool, after git looked at it.
         write(&w.root, "a.txt", "a, written while git reads\n");
         w.workspaces
             .agent_wrote(&w.workspace, "agent-session", Path::new("a.txt"));
         std::fs::write(&go, "").expect("let git go on");
         asking.join().expect("credits ran").expect("credits")
     });
-    // The premise of the test: the list git gave while it read has no entry for the file,
-    // on every git, so that the credit of the second call is the one thing that shows the
-    // write was noted.
     assert!(
         first.iter().all(|one| one.path != Path::new("a.txt")),
         "the first list already holds a.txt: {first:?}"
@@ -425,23 +399,15 @@ fn the_credits_of_a_workspace_the_store_does_not_hold_are_refused() {
     }
 }
 
-// ---- Two sessions in one worktree, replayed from what Claude Code reported ----
-
-/// The longest gap of the recording that a replay keeps: a longer one is a command that
-/// slept, and the replay does not.
+/// / The longest gap of the recording a replay keeps: a longer one is a command that slept,
+/// / and the replay does not sleep.
 const LONGEST_GAP: Duration = Duration::from_secs(1);
 
-/// The sessions of the recordings, by the names the test gives them: the one that
-/// reported from the terminal `term-A`, and the one from `term-B`.
 const A: &str = "session-a";
 const B: &str = "session-b";
 
-/// What the recordings were made with: the first of them has `README.md` read and then
-/// edited, and the second's first line is this one.
 const README: &str = "# fixture\n\nA scratch repository for delivery experiments.\n";
 
-/// A recording of two sessions, replayed through the real Adapter into a watched
-/// worktree, the way the Keeper hands what the Adapter says to Workspaces.
 struct Replay<'a> {
     w: &'a Watched,
     adapter: ClaudeCode,
@@ -450,7 +416,6 @@ struct Replay<'a> {
 }
 
 impl<'a> Replay<'a> {
-    /// The recording `name`, every line of it moved into the worktree of `w`.
     fn new(w: &'a Watched, name: &str) -> Replay<'a> {
         Replay {
             w,
@@ -467,9 +432,6 @@ impl<'a> Replay<'a> {
         self.records.len()
     }
 
-    /// Lets pass the gap the recording has before line `line`, up to a bound, counted from
-    /// when the line before was fed: what the test did since is part of it. This is the
-    /// input's own timing, not a wait for a fact.
     fn pace(&self, line: usize) {
         if let (Some(fed), Some(before)) = (self.fed, line.checked_sub(1)) {
             let gap = Duration::from_nanos(
@@ -484,12 +446,8 @@ impl<'a> Replay<'a> {
         }
     }
 
-    /// Feeds line `line` of the recording to the Adapter, and gives what the Adapter said
-    /// to Workspaces: a file written is named, a command begins or ends for the session
-    /// that reported it. The test paces the lines itself, with [`Replay::pace`].
     fn give(&mut self, line: usize) {
         let record = &self.records[line];
-        // The moment the report reached the Keeper, before the Adapter read it.
         let at = Instant::now();
         let reported = self
             .adapter
@@ -533,10 +491,6 @@ impl<'a> Replay<'a> {
         }
     }
 
-    /// Does in the worktree what the tool of line `line`, a `PreToolUse` of the write tool
-    /// or the edit tool, does before its `PostToolUse`: the write tool writes its content
-    /// and the edit tool replaces one text by another. A line that is no such tool's start
-    /// does nothing.
     fn the_file_tool_acts(&self, line: usize) {
         let record = &self.records[line];
         if record.event != "PreToolUse" {
@@ -566,11 +520,8 @@ impl<'a> Replay<'a> {
         }
     }
 
-    /// Runs, when line `line` is the `PostToolUse` of a shell command, that command in the
-    /// worktree: a command writes when it runs, which is after the hook that told of its
-    /// beginning has returned and the shell has started, so the test runs it at the end
-    /// of the interval the recording has between the two, not at once. Returns whether it
-    /// ran one.
+    /// A command writes after the hook that told of its beginning has returned, so it runs at the
+    /// end of the interval the recording has between the two reports.
     fn the_command_runs(&self, line: usize) -> bool {
         let record = &self.records[line];
         if record.event != "PostToolUse" || record.input["tool_name"] != "Bash" {
@@ -590,7 +541,6 @@ impl<'a> Replay<'a> {
 }
 
 impl Watched {
-    /// Waits until `path` is listed as credited to `session`, among others or alone.
     fn wait_credited_to(&self, path: &str, session: &str) {
         wait_until(&format!("{path} is credited to {session}"), || {
             self.by(path)
@@ -599,7 +549,6 @@ impl Watched {
     }
 }
 
-/// What `credits` says, as the path of each change and its sessions.
 fn credited(w: &Watched) -> Vec<(String, Vec<String>)> {
     w.credits()
         .into_iter()
@@ -623,11 +572,6 @@ fn two_sessions_in_one_worktree_editing_different_files_have_each_write_credited
 
     for line in 0..replay.lines() {
         replay.pace(line);
-        // A shell command writes through the shell, which no tool named: the write is seen
-        // by the watcher and credited by whose command is open. It falls at the end of the
-        // interval between the command's two reports, as a real command's does, and the
-        // report of its end is not given before the write is credited, so that the command
-        // is still the one that is open.
         if replay.the_command_runs(line) {
             match line {
                 16 => w.wait_credited_to("a3.txt", A),
@@ -644,8 +588,6 @@ fn two_sessions_in_one_worktree_editing_different_files_have_each_write_credited
         replay.the_file_tool_acts(line);
     }
 
-    // Every change is somebody's, and the one file two sessions wrote with a command each,
-    // alone, is both's, in the order they wrote.
     assert_eq!(
         credited(&w),
         [
@@ -673,11 +615,8 @@ fn two_sessions_running_overlapping_shell_commands_leave_the_files_written_as_ch
 
     for line in 0..replay.lines() {
         replay.pace(line);
-        // Line 6 begins B's command, which runs alone and writes nothing yet, and line 7
-        // begins A's, while B's runs. Both commands write after their sleep, which falls
-        // before either ends: the test writes what they would, in the order of their
-        // files, when the interval the recording has before line 8 has passed, both
-        // commands having run since line 7.
+        // B's command (line 6) runs alone, then A's begins (line 7) while B's runs; both write
+        // after their sleep, before either ends.
         if line == 8 {
             let before = w.heard.files();
             write(&w.root, "overlap_b.txt", "B\n");
@@ -698,10 +637,6 @@ fn two_sessions_running_overlapping_shell_commands_leave_the_files_written_as_ch
         "written while two commands ran: no agent's"
     );
 
-    // The limit: with exactly one command running, a hand edit is credited to its
-    // session, because nothing tells the two apart. A's command begins again, alone, and
-    // runs for the interval the recording has before its end: far longer than the settle
-    // time, which a command that has not ended does not wait out.
     replay.give(7);
     replay.pace(8);
     write(&w.root, "README.md", &format!("{README}by hand\n"));

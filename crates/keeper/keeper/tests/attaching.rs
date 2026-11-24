@@ -1,11 +1,4 @@
-//! Component tests: a terminal shown to more than one Window, the list of the terminals
-//! the Keeper holds, and the environment every shell of the app finds, through the
-//! surface a Window uses, with a real shell on a real pseudo-terminal beneath.
-//!
-//! The Keeper starts programs with the environment of its process. Each test therefore
-//! sets that environment as its first statement, with the shell `/bin/sh` and a home of
-//! its own, and these tests are run by `cargo nextest`, which gives each test a process
-//! of its own. A test ends its programs before it returns.
+//! Each test sets the process environment first, so each needs a process of its own (nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -20,7 +13,6 @@ use yaar_link::{
     TerminalInfo, TerminalSize, WorkspaceId, handshake, read_message, write_message,
 };
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const SIZE: TerminalSize = TerminalSize {
@@ -28,14 +20,9 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 24,
 };
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and sets the environment of this process for git and for the
-    /// shell of a terminal: no configuration of the user or of the system, a fixed
-    /// author, the shell `/bin/sh`, an empty home. It has to be the first statement of a
-    /// test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -58,10 +45,8 @@ impl Scratch {
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
             ("SHELL", "/bin/sh"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
@@ -88,7 +73,6 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -102,7 +86,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -124,7 +107,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -157,7 +139,6 @@ fn git(folder: &Path, args: &[&str]) {
     );
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
@@ -171,12 +152,10 @@ impl Window {
         id
     }
 
-    /// The next frame the Keeper sent, whatever it is. Fails the test at the deadline.
     fn next(&mut self) -> Message {
         read_message(&mut self.stream).expect("a frame from the Keeper")
     }
 
-    /// Sends a request and expects its reply as the very next frame.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         match self.next() {
@@ -185,8 +164,6 @@ impl Window {
         }
     }
 
-    /// Sends a request and waits for its reply, passing over the output of a program that
-    /// is still writing and the facts: those may come between the request and the reply.
     fn ask_amid_output(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = self.send(request);
         loop {
@@ -198,7 +175,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder as a workspace and reads the fact that tells the list.
     fn open(&mut self, folder: &Path) -> WorkspaceId {
         let opened = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -210,8 +186,6 @@ impl Window {
         workspace
     }
 
-    /// Opens a terminal with a shell in it. The output of a terminal opened before may come
-    /// first, and the reply to this one is followed by its own.
     fn open_terminal(&mut self, workspace: &WorkspaceId, size: TerminalSize) -> TerminalId {
         let opened = self.ask_amid_output(Request::OpenTerminal {
             workspace: workspace.clone(),
@@ -235,9 +209,6 @@ impl Window {
         .expect("send the bytes");
     }
 
-    /// Reads what the program of `terminal` writes, after what `heard` holds already,
-    /// until `wanted` accepts all of it, and returns it. Frames of other kinds, or of
-    /// another terminal, fail the test.
     fn output_until(&mut self, terminal: &TerminalId, wanted: impl Fn(&[u8]) -> bool) -> Vec<u8> {
         let mut heard = Vec::new();
         self.hear_until(terminal, &mut heard, wanted);
@@ -264,8 +235,6 @@ impl Window {
         }
     }
 
-    /// Shows the terminal to this Window too, and expects the reply as the very next frame:
-    /// the kept output follows it.
     fn attach(&mut self, terminal: &TerminalId, size: TerminalSize) -> Result<Reply, Refusal> {
         self.ask(Request::AttachTerminal {
             terminal: terminal.clone(),
@@ -273,8 +242,6 @@ impl Window {
         })
     }
 
-    /// Reads until the fact that the program of `terminal` ended, passing over the output
-    /// of the terminals and the other facts.
     fn until_ended(&mut self, terminal: &TerminalId) {
         loop {
             match self.next() {
@@ -306,20 +273,18 @@ fn contains(bytes: &[u8], text: &str) -> bool {
     String::from_utf8_lossy(bytes).contains(text)
 }
 
-/// Whether the end of `bytes`, a few hundred bytes of it, holds `text`: a wait for what a
-/// program prints last, in output of megabytes, reads none of it again at each frame.
+/// Whether the last 256 bytes hold `text`: a wait on megabytes of output reads none of it again
+/// at each frame.
 fn tail_holds(bytes: &[u8], text: &str) -> bool {
     contains(&bytes[bytes.len().saturating_sub(256)..], text)
 }
 
-/// How many times `text` stands in `bytes`.
 fn count(bytes: &[u8], text: &str) -> usize {
     String::from_utf8_lossy(bytes).matches(text).count()
 }
 
-/// The numbers `heard` holds, one on each line, but for the first line, which may be cut
-/// by where the kept output starts, and the last, which may be cut by where the reading
-/// stopped: a line with no line end after it is not a number yet.
+/// The first line may be cut where the kept output starts and the last where the reading stopped: a
+/// line with no line end is not a number yet.
 fn numbers_in(heard: &[u8]) -> Vec<u32> {
     let text = String::from_utf8_lossy(heard);
     let mut lines: Vec<&str> = text.split('\n').skip(1).collect();
@@ -338,14 +303,11 @@ fn a_window_that_attaches_is_sent_the_reply_then_the_kept_output_then_what_the_p
     let mut opener = scratch.window();
     let workspace = opener.open(&repo);
     let terminal = opener.open_terminal(&workspace, SIZE);
-    // Connected after the list of workspaces was told: no fact stands in front of a reply.
     let mut second = scratch.window();
 
     opener.type_into(&terminal, b"echo yaar-$((40 + 2))\r");
     opener.output_until(&terminal, |heard| contains(heard, "yaar-42"));
 
-    // The reply is the very next frame, though the shell is writing; after it comes what
-    // the program had written, the line the opener read among it.
     assert_eq!(
         second.attach(&terminal, SIZE),
         Ok(Reply::Attached { cut: false })
@@ -358,13 +320,11 @@ fn a_window_that_attaches_is_sent_the_reply_then_the_kept_output_then_what_the_p
         String::from_utf8_lossy(&kept)
     );
 
-    // What the program writes from then on reaches both, though only one typed.
     second.type_into(&terminal, b"echo yaar-$((50 + 5))\r");
     let live = second.output_until(&terminal, |heard| contains(heard, "yaar-55"));
     assert_eq!(count(&live, "yaar-42"), 0, "the kept output came twice");
     opener.output_until(&terminal, |heard| contains(heard, "yaar-55"));
 
-    // The end of the program is told to both, after what it wrote.
     opener.type_into(&terminal, b"exit 3\r");
     for window in [&mut opener, &mut second] {
         loop {
@@ -390,13 +350,11 @@ fn a_window_that_attaches_in_the_middle_of_a_flood_hears_one_unbroken_run_with_n
     let mut opener = scratch.window();
     let workspace = opener.open(&repo);
     let terminal = opener.open_terminal(&workspace, SIZE);
-    // Connected after the list of workspaces was told: no fact stands in front of a reply.
     let mut second = scratch.window();
 
-    // About 2.6 MB, more than the Keeper keeps, in a loop that takes about a second, so
-    // that the second Window attaches long before the end. The line is typed before the
-    // shell has written its prompt, so the prompt can land right where the run starts: the
-    // first thing the line writes is a line end, which leaves the 1 alone on its line.
+    // About 2.6 MB, more than the Keeper keeps, in about a second, so that the second Window
+    // attaches long before the end. Typed before the shell writes its prompt, which can land where
+    // the run starts, so the line begins with a line end.
     opener.type_into(
         &terminal,
         b"echo; i=0; while [ $i -lt 400 ]; do seq $((i * 1000 + 1)) $((i * 1000 + 1000)); i=$((i + 1)); done\r",
@@ -405,8 +363,7 @@ fn a_window_that_attaches_in_the_middle_of_a_flood_hears_one_unbroken_run_with_n
     opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
         contains(heard, "\r\n500\r\n")
     });
-    // Both Windows read at once, as Windows do: one that reads nothing for five seconds is
-    // let go.
+    // Both read at once, as Windows do: one that reads nothing for five seconds is let go.
     let reading = {
         let terminal = terminal.clone();
         std::thread::spawn(move || {
@@ -429,15 +386,12 @@ fn a_window_that_attaches_in_the_middle_of_a_flood_hears_one_unbroken_run_with_n
     );
     assert_eq!(numbers.last(), Some(&400_000));
 
-    // What the Window that opened it heard is the whole run too.
     let (opener, heard_by_opener) = reading.join().expect("the Window that opened it");
     assert_eq!(
         numbers_in(&heard_by_opener),
         (1..=400_000).collect::<Vec<u32>>()
     );
 
-    // A Window that comes when the run is over is given the newest of it, and told that
-    // more came before: the Keeper keeps a megabyte, and the run is more.
     let mut late = scratch.window();
     assert_eq!(
         late.attach(&terminal, SIZE),
@@ -471,7 +425,6 @@ fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_r
     opener.hear_until(&terminal, &mut heard_by_opener, |heard| {
         contains(heard, "\r\n500\r\n")
     });
-    // The Window that opened it keeps reading, as a Window does.
     let reading = {
         let terminal = terminal.clone();
         std::thread::spawn(move || {
@@ -482,16 +435,12 @@ fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_r
         })
     };
 
-    // Windows that come one after the other, each hearing the kept output and then some
-    // of what the program writes live, as many as the flood leaves time for: the places
-    // where the kept output ends and the live output begins differ at each.
     let mut joins = 0;
     for _ in 0..25 {
         let mut window = scratch.window();
         let Ok(Reply::Attached { .. }) = window.attach(&terminal, SIZE) else {
             panic!("not attached");
         };
-        // More than the Keeper keeps, so that some of it came live, unless the run ended.
         let mut heard = Vec::new();
         window.hear_until(&terminal, &mut heard, |heard| {
             heard.len() > (1 << 20) + 50_000 || tail_holds(heard, "\r\n400000\r\n")
@@ -503,13 +452,10 @@ fn window_after_window_that_attaches_and_goes_during_a_flood_hears_an_unbroken_r
         );
         let ended = tail_holds(&heard, "\r\n400000\r\n");
         joins += usize::from(!ended);
-        // Gone with no goodbye, and the program writes on.
         drop(window);
-        // The loop ends with the first Window that hears the end of the run. Once the run is
-        // over, every attach has the shell draw its prompt again behind the last number, some
-        // 40 bytes each time; after a few such Windows the last 256 bytes of the kept output no
-        // longer hold the last number, and a Window would wait for output that never comes.
-        // Nothing is lost: the subject here is a Window that joins while the program writes.
+        // The loop ends with the first Window that hears the end: every later attach has the shell
+        // draw its prompt again, and after a few the last 256 bytes of the kept output no longer
+        // hold the last number.
         if ended {
             break;
         }
@@ -560,8 +506,6 @@ fn a_window_that_attaches_to_a_terminal_it_opened_is_sent_its_kept_output_once_m
     window.type_into(&terminal, b"echo yaar-$((40 + 2))\r");
     window.output_until(&terminal, |heard| contains(heard, "yaar-42"));
 
-    // Output sent before the reply is what the Window has; after it, the kept output
-    // starts again, and then what is new, once.
     let id = window.send(Request::AttachTerminal {
         terminal: terminal.clone(),
         size: SIZE,
@@ -592,11 +536,10 @@ fn a_terminal_is_given_the_size_of_the_window_that_attaches_and_asked_to_draw_it
     let mut opener = scratch.window();
     let workspace = opener.open(&repo);
     let terminal = opener.open_terminal(&workspace, SIZE);
-    // Connected after the list of workspaces was told: no fact stands in front of a reply.
     let mut second = scratch.window();
 
-    // A program that draws what it holds when its terminal changes: it is told by the
-    // signal, which the Keeper sends at an attach also when the size is the same.
+    // The program redraws on a signal, which the Keeper sends at an attach also when the size is
+    // the same.
     opener.type_into(
         &terminal,
         b"sh -c 'trap \"echo drawn-$((20 + 2))\" WINCH; echo ready-$((1 + 1)); while :; do sleep 0.05; done'\r",
@@ -606,11 +549,10 @@ fn a_terminal_is_given_the_size_of_the_window_that_attaches_and_asked_to_draw_it
         second.attach(&terminal, SIZE),
         Ok(Reply::Attached { cut: false })
     );
-    // The whole line: its line end may come in a frame of its own after the digits, and
-    // would then stand in front of the reply to the next request.
+    // The whole line: its line end may come in a frame of its own and would then stand in front of
+    // the reply to the next request.
     second.output_until(&terminal, |heard| contains(heard, "drawn-22\r\n"));
 
-    // A size of its own: the terminal has it afterwards.
     let wide = TerminalSize {
         columns: 100,
         rows: 30,
@@ -642,7 +584,6 @@ fn the_terminals_are_listed_in_the_order_they_were_opened_with_their_workspace_a
     let second = window.open_terminal(&second_workspace, SIZE);
     let third = window.open_terminal(&first_workspace, SIZE);
 
-    // Whoever opened them: a Window that opened none lists all.
     let expected = |terminals: &[(&TerminalId, &WorkspaceId)]| -> Vec<TerminalInfo> {
         terminals
             .iter()
@@ -661,8 +602,6 @@ fn the_terminals_are_listed_in_the_order_they_were_opened_with_their_workspace_a
     assert_eq!(window.terminals(), all);
     assert_eq!(other.terminals(), all);
 
-    // One whose program ended is no longer there, and the list says so as soon as the end
-    // is told.
     window.type_into(&second, b"exit 0\r");
     window.until_ended(&second);
     assert_eq!(
@@ -681,7 +620,6 @@ fn every_shell_of_the_app_is_told_the_socket_it_was_asked_for_and_the_id_of_its_
     let workspace = window.open(&repo);
     let terminal = window.open_terminal(&workspace, SIZE);
 
-    // The typed line holds the names, the answer the values.
     window.type_into(
         &terminal,
         b"printf 'socket-%s\\n' \"$YAAR_SOCKET\"; printf 'terminal-%s\\n' \"$YAAR_TERMINAL\"\r",
@@ -698,7 +636,6 @@ fn every_shell_of_the_app_is_told_the_socket_it_was_asked_for_and_the_id_of_its_
         String::from_utf8_lossy(&heard)
     );
 
-    // Another terminal has its own id.
     let other = window.open_terminal(&workspace, SIZE);
     assert_ne!(other, terminal);
     window.type_into(&other, b"printf 'terminal-%s\\n' \"$YAAR_TERMINAL\"\r");
@@ -722,8 +659,6 @@ fn a_window_that_goes_while_a_terminal_writes_takes_nothing_from_the_one_that_st
         Ok(Reply::Attached { cut: false })
     );
 
-    // The Window that goes reads nothing and is dropped with no goodbye, while the
-    // program writes.
     stays.type_into(&terminal, b"seq 1 100000\r");
     drop(goes);
     let heard = stays.output_until(&terminal, |heard| tail_holds(heard, "\r\n100000\r\n"));

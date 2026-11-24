@@ -1,7 +1,3 @@
-//! Component tests: where a worktree is, what is checked out in it, the branches around
-//! it and its commits, read through the surface the rest of the Keeper uses, in real
-//! repositories the tests make.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -43,8 +39,6 @@ fn of_origin(name: &str, ahead: u32) -> RemoteBranch {
     }
 }
 
-/// A repository with two commits on `main` and a branch `topic`, a bare copy of it to
-/// serve as the remote, and a clone of that. Returns the clone.
 fn a_clone(scratch: &Scratch) -> PathBuf {
     let source = scratch.join("source");
     init(&source);
@@ -63,8 +57,7 @@ fn a_clone(scratch: &Scratch) -> PathBuf {
         scratch.path(),
         &["clone", "--quiet", remote.to_str().unwrap(), "clone"],
     );
-    // A clone does not take the identity of the repository it came from, and the tests
-    // commit in it.
+    // A clone does not take the identity of its source, and the tests commit in it.
     git(&clone, &["config", "user.name", "A Test"]);
     git(&clone, &["config", "user.email", "test@example.invalid"]);
     clone
@@ -88,12 +81,10 @@ fn a_folder_opens_as_the_worktree_it_lies_in_with_its_links_resolved() {
     assert_eq!(main.git_dir(), repo.join(".git"));
     assert_eq!(main.common_dir(), repo.join(".git"));
 
-    // Any folder inside is the worktree, and a link to it is the folder it points at.
     assert_eq!(open(&repo.join("src/deep")).root(), repo);
     assert_eq!(open(&scratch.join("a-link")).root(), repo);
     assert_eq!(open(&scratch.join("a-link/src")).root(), repo);
 
-    // A linked worktree has a git folder of its own inside the one all share.
     let linked = open(&scratch.join("linked"));
     assert_eq!(linked.root(), scratch.join("linked"));
     assert_eq!(linked.git_dir(), repo.join(".git/worktrees/linked"));
@@ -130,7 +121,6 @@ fn what_is_no_worktree_is_refused_with_the_reason() {
         refusal(&scratch.join("bare.git")),
         OpenError::Bare
     ));
-    // Inside the git folder there are no files of the user.
     assert!(matches!(
         refusal(&repo.join(".git")),
         OpenError::NotARepository
@@ -198,7 +188,6 @@ fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_foll
     commit_all(&clone, "third");
     write(&clone, "b.txt", "bb\n");
     commit_all(&clone, "fourth");
-    // A second remote that was never fetched from has a name and nothing else.
     git(&clone, &["remote", "add", "other", "/nowhere/other.git"]);
 
     let worktree = open(&clone);
@@ -207,7 +196,6 @@ fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_foll
         Refs {
             remotes: vec!["origin".to_owned(), "other".to_owned()],
             remote_defaults: vec!["origin/main".to_owned()],
-            // What is checked out is two commits ahead of every other branch.
             local: vec![
                 local("feat", 0, None),
                 local("follower", 2, Some("origin/topic")),
@@ -218,8 +206,8 @@ fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_foll
         }
     );
 
-    // The remote's default is moved to a branch, and then that branch goes: the default
-    // is still listed as recorded, and the branch that followed it follows nothing.
+    // The remote's default is moved to a branch and that branch goes: the default is still listed
+    // as recorded.
     git(&clone, &["remote", "set-head", "origin", "topic"]);
     git(&clone, &["update-ref", "-d", "refs/remotes/origin/topic"]);
     assert_eq!(
@@ -236,7 +224,6 @@ fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_foll
         }
     );
 
-    // With the default deleted, the remote has recorded none.
     git(&clone, &["remote", "set-head", "origin", "-d"]);
     assert_eq!(
         worktree.refs().expect("refs").remote_defaults,
@@ -277,7 +264,6 @@ fn a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_
     write(&repo, "c.txt", "c\n");
     commit_all(&repo, "on main");
 
-    // On `main`, one commit that `feat` lacks; `feat` has three that `main` lacks.
     assert_eq!(
         open(&repo).refs().expect("refs").local,
         vec![local("feat", 1, None), local("main", 0, None)]
@@ -382,8 +368,7 @@ fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on
         git_dir: repo.join(".git/worktrees/detached"),
     };
 
-    // Asked from any of them, and asked of the git folder they share, the list is the
-    // same. The order of the linked ones is git's, which this test does not fix.
+    // The order of the linked ones is git's, which this test does not fix.
     let by_path = |mut list: Vec<Listed>| {
         list[1..].sort_by(|a, b| a.path.cmp(&b.path));
         list
@@ -399,7 +384,6 @@ fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on
         expected
     );
 
-    // Each listed git folder is the one the worktree itself reports.
     for listed in &expected {
         assert_eq!(open(&listed.path).git_dir(), listed.git_dir);
     }
@@ -566,7 +550,6 @@ fn a_name_resolves_to_the_commit_it_names_and_to_nothing_when_git_knows_none() {
     for name in ["v1", "HEAD~1", "main^"] {
         assert_eq!(resolve(name), Some(CommitId::new(&first)), "{name}");
     }
-    // Unknown names, a name that is no commit, and text git would take for an option.
     for name in ["nope", "", "HEAD^{tree}", "--all", "-h", "a\0b", "HEAD~7"] {
         assert_eq!(resolve(name), None, "{name:?}");
     }
@@ -605,7 +588,6 @@ fn the_commits_of_a_branch_are_listed_newest_first_with_the_first_line_of_their_
             .expect("commits"),
         of_the_branch
     );
-    // With no remote, no commit is on a branch of one.
     let mut all = of_the_branch.clone();
     all.push(commit(&first, "start"));
     assert_eq!(
@@ -614,7 +596,6 @@ fn the_commits_of_a_branch_are_listed_newest_first_with_the_first_line_of_their_
             .expect("commits"),
         all
     );
-    // A branch git does not know is a failure, not an empty list.
     assert!(matches!(
         worktree.commits(Commits::NotOn(Branch::Local("no-such-branch"))),
         Err(GitError::Failed { .. })
@@ -629,25 +610,21 @@ fn a_branch_is_read_as_the_branch_where_a_tag_has_its_name() {
     let first = git(&clone, &["rev-parse", "HEAD~1"]);
     write(&clone, "a.txt", "three\n");
     let third = commit_all(&clone, "third, not pushed");
-    // Three tags on the first commit: two named like a branch, one like nothing else.
     for tag in ["main", "origin/main", "v1"] {
         git(&clone, &["tag", tag, &first]);
     }
     let worktree = open(&clone);
     let commit = |id: &str| Some(CommitId::new(id));
 
-    // Written as the user writes it, each name is the tag: that is how git reads it.
     assert_eq!(worktree.resolve("main").expect("resolve"), commit(&first));
     assert_eq!(
         worktree.resolve("origin/main").expect("resolve"),
         commit(&first)
     );
-    // Asked for as a branch, it is the branch.
     let commit_of = |branch| worktree.commit_of(branch).expect("the commit of a branch");
     assert_eq!(commit_of(Branch::Local("main")), commit(&third));
     assert_eq!(commit_of(Branch::Remote("origin/main")), commit(&second));
     assert_eq!(commit_of(Branch::Remote("origin/topic")), commit(&second));
-    // What is no branch of that kind is none, whatever else has the name.
     for none in [
         Branch::Local("origin/main"),
         Branch::Remote("main"),
@@ -659,7 +636,6 @@ fn a_branch_is_read_as_the_branch_where_a_tag_has_its_name() {
         assert_eq!(commit_of(none), None, "{none:?}");
     }
 
-    // The same when a branch is what the commits are not to be on.
     let ids = |which| -> Vec<String> {
         let commits = worktree.commits(which).expect("commits");
         commits.iter().map(|commit| commit.id.to_string()).collect()
@@ -753,7 +729,6 @@ fn git_is_found_on_the_search_path_and_its_absence_is_told() {
     search(&[&first]);
     assert!(matches!(Git::find(), Err(GitError::NotFound)));
 
-    // A program that is not there is told when it is first run.
     let missing = Git::at(scratch.join("nowhere/git"));
     assert_eq!(missing.program(), scratch.join("nowhere/git"));
     assert!(matches!(

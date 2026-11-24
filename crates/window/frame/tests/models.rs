@@ -1,6 +1,4 @@
-//! Component test: the shared models of the Window, through what a pane uses of them.
-//! The test plays the Keeper on the other end of a socket pair: it answers what the
-//! models ask and tells them facts, and reads back through the models.
+//! Component test: the Window's shared models, with the test playing the Keeper on a socket pair.
 
 mod common;
 
@@ -17,7 +15,6 @@ use yaar_link::{
 
 use common::{KeeperEnd, answer, id, repository, wait_until, workspace};
 
-/// The full id of a commit, as the Link carries it.
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn file(path: &str, status: FileStatus) -> ChangedFile {
@@ -48,12 +45,10 @@ fn get_changes(workspace: char) -> Request {
     }
 }
 
-/// A list of workspaces fed by a Keeper the test plays, which has answered the first
-/// question for the list with `listed`.
 fn listing(listed: &[Repository], cx: &mut TestAppContext) -> (Entity<WorkspaceList>, KeeperEnd) {
     let link = cx.new(|_| KeeperLink::new());
     let mut keeper = KeeperEnd::attach(&link, cx);
-    // Made when the Keeper is reached already: it asks at once.
+    // The Keeper is reached already, so the list asks at once.
     let list = cx.new(|cx| WorkspaceList::new(link, cx));
     let asked = keeper.expect(Request::ListWorkspaces, cx);
     keeper.reply(asked, Ok(Reply::Workspaces(listed.to_vec())));
@@ -61,8 +56,6 @@ fn listing(listed: &[Repository], cx: &mut TestAppContext) -> (Entity<WorkspaceL
     (list, keeper)
 }
 
-/// The models of a window whose Keeper the test plays, which has answered the first
-/// question for the list with `listed`.
 fn models_listing(listed: &[Repository], cx: &mut TestAppContext) -> (Models, KeeperEnd) {
     let link = cx.new(|_| KeeperLink::new());
     let models = cx.update(|cx| Models::new(link.clone(), cx));
@@ -89,8 +82,6 @@ fn wait_for_changes(model: &Entity<WorkspaceChanges>, wanted: &Changes, cx: &mut
     });
 }
 
-/// What an observer of a model sees of it, each time the model says it changed: the way
-/// a pane follows a model.
 fn watch<T: 'static, Seen: 'static>(
     model: &Entity<T>,
     cx: &mut TestAppContext,
@@ -126,13 +117,11 @@ fn the_list_is_asked_for_once_the_keeper_is_reached_and_follows_what_it_tells(
     keeper.reply(asked, Ok(Reply::Workspaces(one.clone())));
     wait_for_list(&list, &one, cx);
     list.read_with(cx, |list, _| {
-        // The first of the list is on screen until the user selects another.
         assert_eq!(list.selected(), Some(&id('1')));
         assert_eq!(list.workspace(&id('2')), Some(&one[0].workspaces[1]));
         assert_eq!(list.workspace(&id('9')), None);
     });
 
-    // A list told unasked takes the place of the one before.
     let two = vec![
         one[0].clone(),
         repository('b', vec![workspace('3', "main")]),
@@ -141,7 +130,6 @@ fn the_list_is_asked_for_once_the_keeper_is_reached_and_follows_what_it_tells(
     wait_for_list(&list, &two, cx);
     assert_eq!(on_screen(&list, cx), Some(id('1')));
 
-    // The workspace on screen leaves the list: the first of the list takes its place.
     let rest = vec![two[1].clone()];
     keeper.tell(Fact::Workspaces(rest.clone()));
     wait_for_list(&list, &rest, cx);
@@ -155,7 +143,7 @@ fn the_list_is_asked_for_once_the_keeper_is_reached_and_follows_what_it_tells(
     keeper.expect(Request::ListWorkspaces, cx);
 }
 
-// Many times over: the app runs what is ready in an order of its own each time.
+// Repeated: the app runs what is ready in an order of its own each time.
 #[gpui_kit::test(iterations = 20)]
 fn a_list_asked_for_before_a_newer_one_was_told_does_not_replace_it(cx: &mut TestAppContext) {
     let link = cx.new(|_| KeeperLink::new());
@@ -163,8 +151,8 @@ fn a_list_asked_for_before_a_newer_one_was_told_does_not_replace_it(cx: &mut Tes
     let mut keeper = KeeperEnd::attach(&link, cx);
     let asked = keeper.expect(Request::ListWorkspaces, cx);
 
-    // What a Keeper sends when a folder is opened while a list is on its way: the answer
-    // it made before the folder was opened, then the list with the folder in it.
+    // What a Keeper sends when a folder opens while a list is on its way: the older answer, then
+    // the list with the folder.
     let older = vec![repository('a', vec![workspace('1', "main")])];
     let newer = vec![
         older[0].clone(),
@@ -174,7 +162,7 @@ fn a_list_asked_for_before_a_newer_one_was_told_does_not_replace_it(cx: &mut Tes
     keeper.tell(Fact::Workspaces(newer.clone()));
 
     wait_for_list(&list, &newer, cx);
-    // The answer was read before the fact, so whatever it still had to do is done now.
+    // The answer was read before the fact, so what it still had to do is done now.
     cx.run_until_parked();
     list.read_with(cx, |list, _| assert_eq!(list.repositories(), newer));
 }
@@ -223,7 +211,6 @@ fn the_workspace_on_screen_moves_through_the_list_in_its_order_and_wraps(cx: &mu
 fn an_opened_folder_comes_on_screen_when_the_list_that_holds_it_arrives(cx: &mut TestAppContext) {
     let before = vec![repository('a', vec![workspace('1', "main")])];
     let (list, mut keeper) = listing(&before, cx);
-    // At every change, whether the workspace on screen is one of the list.
     let (seen, _watching) = watch(&list, cx, |list| {
         list.selected()
             .is_none_or(|selected| list.workspace(selected).is_some())
@@ -303,7 +290,6 @@ fn a_refusal_says_why_until_the_user_asks_again(cx: &mut TestAppContext) {
     wait_for_refusal(&not_a_repository, cx);
     assert_eq!(on_screen(&list, cx), Some(id('1')));
 
-    // Asking again takes the old reason away at once, before any answer.
     list.update(cx, |list, cx| {
         list.set_base("no-such-branch".to_owned(), cx)
     });
@@ -321,7 +307,6 @@ fn a_refusal_says_why_until_the_user_asks_again(cx: &mut TestAppContext) {
     keeper.reply(asked, Err(unknown.clone()));
     wait_for_refusal(&unknown, cx);
 
-    // An answer of another kind than was asked for is a failure the user is told of.
     list.update(cx, |list, cx| list.set_base("main".to_owned(), cx));
     assert_eq!(refusal(cx), None);
     let asked = keeper.expect(
@@ -374,8 +359,8 @@ fn the_changes_of_the_workspace_on_screen_are_asked_for_and_kept_until_newer_one
     wait_for_changes(&model, &first, cx);
     model.read_with(cx, |model, _| assert!(!model.is_loading()));
 
-    // The changes of a workspace that is not on screen are not asked for: a request
-    // for them would come before the one for the workspace that is.
+    // The changes of a workspace not on screen are not asked for: a request for them would come
+    // before the one for the workspace on screen.
     keeper.tell(Fact::ChangesChanged { workspace: id('2') });
     keeper.tell(Fact::ChangesChanged { workspace: id('1') });
     let asked = keeper.expect(get_changes('1'), cx);
@@ -408,15 +393,13 @@ fn another_workspace_on_screen_never_shows_the_changes_of_the_one_before(cx: &mu
     keeper.reply(asked, Ok(Reply::Changes(of_first.clone())));
     wait_for_changes(&model, &of_first, cx);
 
-    // At every change, whether the changes shown are those of the workspace on screen.
     let (seen, _watching) = watch(&model, cx, |model| {
         model
             .changes()
             .is_none_or(|changes| Some(&changes.workspace) == model.workspace())
     });
 
-    // An answer for the first workspace is still on its way when the second comes on
-    // screen.
+    // An answer for the first workspace is still on its way when the second comes on screen.
     model.update(cx, |model, cx| model.refresh(cx));
     let late = keeper.expect(get_changes('1'), cx);
     models
@@ -487,8 +470,8 @@ fn a_file_is_asked_for_in_the_commit_its_changes_are_counted_from(cx: &mut TestA
         new: Content::Text(b"now\n".to_vec()),
     };
 
-    // Before the changes are here there is no file of them to ask for, and nothing is
-    // sent: such a request would be the next the Keeper reads below.
+    // Before the changes arrive there is no file to ask for: the ask is refused and nothing is
+    // sent, or that request would be the next one the Keeper reads below.
     let asked = keeper.expect(get_changes('1'), cx);
     let early = ask(&file("early.rs", FileStatus::Modified), cx);
     assert!(matches!(answer(early, cx), Err(AskError::Refused(_))));
@@ -515,7 +498,6 @@ fn a_file_is_asked_for_in_the_commit_its_changes_are_counted_from(cx: &mut TestA
     keeper.reply(asked, Ok(Reply::Changes(shown.clone())));
     wait_for_changes(&model, &shown, cx);
 
-    // A new file has no old version, and none is asked for.
     let of_added = ask(&added, cx);
     let asked = keeper.expect(read_file(None, "src/new.rs", "src/new.rs"), cx);
     let only_new = FileSides {
@@ -530,7 +512,6 @@ fn a_file_is_asked_for_in_the_commit_its_changes_are_counted_from(cx: &mut TestA
     keeper.reply(asked, Ok(Reply::File(sides.clone())));
     assert_eq!(answer(of_modified, cx), Ok(sides));
 
-    // A refusal comes back as the Keeper worded it.
     let of_deleted = ask(&deleted, cx);
     let asked = keeper.expect(read_file(Some(COMMIT), "src/old.rs", "src/old.rs"), cx);
     let refusal = Refusal::UnknownRevision {
@@ -539,8 +520,7 @@ fn a_file_is_asked_for_in_the_commit_its_changes_are_counted_from(cx: &mut TestA
     keeper.reply(asked, Err(refusal.clone()));
     assert_eq!(answer(of_deleted, cx), Err(AskError::Refused(refusal)));
 
-    // A renamed file is read at the path it had. And an answer of another kind than a
-    // file is not passed on as one.
+    // A renamed file is read at the path it had.
     let of_renamed = ask(&renamed, cx);
     let asked = keeper.expect(
         read_file(Some(COMMIT), "src/was here.rs", "src/moved.rs"),
@@ -549,8 +529,7 @@ fn a_file_is_asked_for_in_the_commit_its_changes_are_counted_from(cx: &mut TestA
     keeper.reply(asked, Ok(Reply::Done));
     assert_eq!(answer(of_renamed, cx), Err(AskError::Unexpected));
 
-    // Where nothing is committed yet, the changes are counted from no commit and no
-    // old version is asked for, whatever happened to the file.
+    // Where nothing is committed yet, no old version is asked for, whatever happened to the file.
     keeper.tell(Fact::ChangesChanged { workspace: id('1') });
     let asked = keeper.expect(get_changes('1'), cx);
     let uncommitted = changes('1', None, vec![modified.clone()]);

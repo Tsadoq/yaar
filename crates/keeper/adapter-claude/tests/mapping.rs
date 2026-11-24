@@ -1,6 +1,3 @@
-//! The mapping of Claude Code's hooks to the app's events, read off the recorded sessions
-//! with tools, a sub-agent, a resume and an interrupt.
-
 mod support;
 
 use std::ops::RangeInclusive;
@@ -14,7 +11,6 @@ use yaar_system_tests::recorded::{self, HookRecord};
 const TOOLS: &str = "claude/turn-tools.jsonl";
 const RESUME: &str = "claude/interrupt-resume.jsonl";
 
-/// The Adapter after the lines `0..=last` of the recording `name`, and its records.
 fn replay_to(name: &str, last: usize) -> (ClaudeCode, Vec<HookRecord>) {
     let records = recorded::hook_events(name);
     let mut adapter = ClaudeCode::new();
@@ -96,8 +92,6 @@ fn a_turn_with_reads_edits_writes_and_shell_commands_gives_each_its_event() {
 fn hooks_that_name_no_step_of_the_agent_give_nothing() {
     let (_, _, by_line) = replay(TOOLS);
 
-    // Instructions loaded, the pre-hook of a read, the end of a batch, the pre-hooks of an
-    // edit and a write, a sub-agent, the end of one.
     for line in [0, 3, 5, 6, 8, 9, 11, 12, 14, 17, 20, 21, 22, 23, 24, 31] {
         assert_eq!(by_line[line], [], "line {line}");
     }
@@ -209,8 +203,8 @@ fn a_resumed_session_starts_resumed_under_the_name_it_had() {
 
 #[test]
 fn a_new_prompt_while_a_turn_is_open_is_told_as_it_comes() {
-    // Line 3 is a shell command that Esc interrupted, line 4 the next message typed: the
-    // CLI ran no hook between them, and the Switchboard is the one that ends the turn.
+    // Line 3 is a shell command that Esc interrupted, line 4 the next message typed: the CLI
+    // ran no hook between them, and the Switchboard ends the turn.
     let (_, records, by_line) = replay(RESUME);
 
     assert_eq!(
@@ -228,7 +222,6 @@ fn a_new_prompt_while_a_turn_is_open_is_told_as_it_comes() {
 
 #[test]
 fn the_mark_after_an_interrupted_shell_command_ends_the_turn_without_a_permission() {
-    // After line 3 a turn is open and a command begun, and Esc ran no hook.
     let (mut adapter, records) = replay_to(RESUME, 3);
     let terminal = records[3].terminal().expect("a terminal");
 
@@ -245,7 +238,6 @@ fn the_mark_after_an_interrupted_shell_command_ends_the_turn_without_a_permissio
 
 #[test]
 fn the_mark_of_a_session_that_has_ended_means_nothing() {
-    // Line 7 is the end of the session of terminal A.
     let (mut adapter, records) = replay_to(RESUME, 7);
     let terminal = records[3].terminal().expect("a terminal");
 

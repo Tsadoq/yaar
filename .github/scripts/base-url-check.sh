@@ -1,47 +1,7 @@
 #!/bin/sh
-# The step "The texts name the one base address" of the job assemble: the site's base
-# address is one line, packaging/site/base-url, and a text that has to show it holds a copy
-# this step holds to that line, so that moving the site to a domain is that line and the
-# copies this step then names.
-#
-#   .github/scripts/base-url-check.sh
-#
-# Reads the base, B, as the first line of packaging/site/base-url (`head -n 1`). In
-# README.md, packaging/README.md and packaging/release-day.md, every address that ends in
-# "/install.sh" or "/apt" (followed by a space, a quote, a backquote, the end of the line or
-# "/"), and every line "URIs: <address>" of an apt source shown there, is either an address
-# on 127.0.0.1 or localhost, or starts with B, or is the placeholder @BASE_URL@ itself. Any
-# other fails, with its file, line number and the address. Also fails when a file of the
-# three is missing, or when B is not https:// followed by a host, with no "/" at its end.
-#
-# Exit codes: 0 holds; 1 a text names another address (each named); 2 usage error.
-#
-# Beyond the header's list: an address is read the way curl and a reader read it, so none
-# of these hides one.
-#   - What may follow "/install.sh" or "/apt" is also "?" or "#". A quote or a backquote
-#     right before a "/" ends no address ("https://x"/install.sh is https://x/install.sh);
-#     any other quote or backquote ends what it follows (["https://x/install.sh","y"] holds
-#     https://x/install.sh). An address of a text is read up to a space, a tab, a CR (a
-#     text with CR LF line ends), a bracket of any kind, a pipe, an ampersand or a
-#     semicolon ("${U:-https://x/install.sh}" and https://x/install.sh&&y hold
-#     https://x/install.sh). Markdown emphasis (*, _ and ~) around an address is no part of
-#     it, and neither is a trailing full stop, comma, semicolon or colon.
-#   - A scheme is read in any case (HTTPS://) and compared in lower case, so
-#     HTTPS://tsadoq.github.io/yaar/install.sh is a copy of the base. An address may have no
-#     scheme at all when it starts with a host that has a dot (tsadoq.example.org/install.sh)
-#     or is localhost. A path of the repository (packaging/apt/..., .github/scripts/...) has
-#     no dot in its first part and is not an address.
-#   - "URIs:" is the field of an apt source wherever it stands in a line (at its start, in a
-#     quote block, inside a command that writes the source), in any case ("uris:" is the
-#     same field to apt). Its value is a list: the first address and every one after it that
-#     starts with a scheme or is the placeholder are held to the base; the first word that
-#     is none ends the list (the command that goes on after a source it writes).
-#   - A loopback host is the whole host 127.0.0.1 or localhost with or without a port: a
-#     host that only starts like it (127.0.0.1.example.org, localhost@example.org) is
-#     another address. A copy of the base is B itself or B followed by "/":
-#     https://tsadoq.github.io/yaarx/apt is not one.
-#   - Run with an argument it prints its usage and exits 2. It reads the files of the
-#     repository it lies in, whatever the folder it is run from.
+# Fails when README.md, docs/development.md or docs/releasing.md shows an address ending in
+# /install.sh or /apt, or an apt `URIs:` value, not on the base address (packaging/site/base-url),
+# 127.0.0.1, localhost or @BASE_URL@. Exit codes: 0 holds; 1 a text or file is wrong; 2 usage.
 set -eu
 
 NAME=base-url-check.sh
@@ -76,15 +36,13 @@ case $B in
 esac
 
 FAILED=0
-for f in README.md packaging/README.md packaging/release-day.md; do
+for f in README.md docs/development.md docs/releasing.md; do
   if [ ! -f "$f" ]; then
     echo "$NAME: $ROOT/$f is missing: a text that shows the base address must be there to be held to it" >&2
     FAILED=1
     continue
   fi
-  # One line of output for each address that is not allowed: "<line> <address>".
   BAD=$(awk -v base="$B" '
-    # The scheme of an address in lower case, whatever case the text wrote it in.
     function lower_scheme(a,   s) {
       if (match(a, /^[A-Za-z][A-Za-z]*:\/\//)) {
         s = substr(a, 1, RLENGTH)
@@ -108,15 +66,11 @@ for f in README.md packaging/README.md packaging/release-day.md; do
       if (substr(a, 1, 10) == "@BASE_URL@") return 1
       return 0
     }
-    # A piece of text without what a sentence or Markdown puts around an address: full
-    # stops, commas, semicolons and colons at its end, and emphasis (*, _ and ~) at either end.
     function trimmed(p) {
       while (p ~ /^[*_~]/) p = substr(p, 2)
       while (p ~ /[.,;:*_~]$/) p = substr(p, 1, length(p) - 1)
       return p
     }
-    # The address a piece of text holds, if it holds one: the piece up to the first
-    # "/install.sh" or "/apt" that is followed by "/", "?", "#" or the end of the piece.
     function address_of(tok,   best, k, suf, pos, i, st, en, nxt, sufs) {
       best = ""
       split("/install.sh /apt", sufs, " ")
@@ -136,10 +90,6 @@ for f in README.md packaging/README.md packaging/release-day.md; do
       }
       return best
     }
-    # Where an address starts in a piece of text, or 0: a scheme (any case) followed by
-    # "://", the placeholder, or a bare host with a dot (or localhost) before its first "/",
-    # which curl accepts as an address too. A path of the repository (packaging/apt/...,
-    # .github/...) has no dot in its first part and is not one.
     function start_of(piece,   low) {
       low = tolower(piece)
       if (match(low, /https?:\/\//)) return RSTART
@@ -150,22 +100,10 @@ for f in README.md packaging/README.md packaging/release-day.md; do
     }
     {
       line = $0
-      # A text saved with CR LF line ends keeps the CR at the end of its line: it is no part
-      # of an address, and an address that ends the line must still end there.
       gsub(/\r/, " ", line)
-      # A quote or a backquote that stands right before a "/" joins what is before it to
-      # what follows: "https://host"/install.sh is the address https://host/install.sh. Any
-      # other quote or backquote ends what it follows, so that ["https://x/install.sh","y"]
-      # holds the address https://x/install.sh and not https://x/install.sh,y.
       gsub(/["\047`]\//, "/", line)
       gsub(/["\047`]/, " ", line)
       gsub(/[<>()|\[\]{}&;]/, " ", line)
-      # An apt source shown anywhere in a line (opening it, after "> ", or in a command that
-      # writes it) names the address after "URIs:".
-      # The field name is read in any case, as apt reads it, and its value is a list: every
-      # address that follows the first, as long as each starts with a scheme or is the
-      # placeholder, is held as the first is (a command that writes the source goes on with
-      # words that are no address, and those are not).
       if (match(tolower(line), /uris:[ \t]*/)) {
         rest = substr(line, RSTART + RLENGTH)
         m = split(rest, uris, /[ \t]+/)
@@ -198,4 +136,4 @@ for f in README.md packaging/README.md packaging/release-day.md; do
   fi
 done
 [ "$FAILED" -eq 0 ] || exit 1
-echo "$NAME: README.md, packaging/README.md and packaging/release-day.md name the base address $B"
+echo "$NAME: README.md, docs/development.md and docs/releasing.md name the base address $B"

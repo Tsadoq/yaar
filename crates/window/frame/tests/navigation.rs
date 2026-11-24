@@ -1,12 +1,5 @@
-//! Component test: the shared model of code intelligence, through what the panes use of
-//! it. The test plays the Keeper on a socket pair and the Navigator at the other end of the
-//! model's port, with data: it reads the asks the model really makes and tells it what a
-//! Navigator would tell, and computes nothing a Navigator computes.
-//!
-//! A negative clause ("tells nothing", "sends no cancel") is read after a barrier: the ask
-//! the test makes next through the same port, which arrives after everything the model
-//! sent before it. The model's asks all leave through one channel, in the order they are
-//! made.
+//! A negative assertion is read after a barrier: the next ask through the same port arrives after
+//! everything the model sent before it.
 
 mod common;
 
@@ -30,7 +23,6 @@ use yaar_navigator::{
 
 use common::{DEADLINE, KeeperEnd, id, repository, wait_until, workspace};
 
-/// The full id of a commit, as the Link carries it.
 const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
 fn hello() -> Hello {
@@ -138,16 +130,12 @@ fn hovered(text: &str, guessed: bool) -> Answered<Option<String>> {
     }
 }
 
-/// The Navigator, played by the test at the other end of the model's port.
 struct Navigator {
-    /// The asks, moved by a thread of this end's own from the port onto a channel the test
-    /// waits on while the app runs.
     asks: Receiver<Ask>,
     told: async_channel::Sender<Told>,
 }
 
 impl Navigator {
-    /// Connects a new port to the model and keeps the Navigator's end.
     fn connect(models: &Models, cx: &mut TestAppContext) -> Navigator {
         // The asks are read by a real thread, which the test executor cannot see.
         cx.executor().allow_parking();
@@ -171,7 +159,6 @@ impl Navigator {
         }
     }
 
-    /// The next ask of the model, waited for with the app running.
     fn ask(&mut self, cx: &mut TestAppContext) -> Ask {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -187,15 +174,10 @@ impl Navigator {
         }
     }
 
-    /// The next ask, which has to be this one. A fact that nothing was told in between is
-    /// read this way, with the expected ask as the barrier.
     fn expect(&mut self, wanted: Ask, cx: &mut TestAppContext) {
         assert_eq!(self.ask(cx), wanted);
     }
 
-    /// Nothing reaches this Navigator any more: the model let its port go, and everything
-    /// it had sent was read first, so an ask that was still on its way would be read here.
-    /// This is the barrier of a negative clause about a Navigator that is replaced.
     fn ends_with_nothing_more(&mut self, cx: &mut TestAppContext) {
         let deadline = Instant::now() + DEADLINE;
         loop {
@@ -212,8 +194,6 @@ impl Navigator {
         }
     }
 
-    /// The first telling: the workspaces, the one on screen and the answers on
-    /// repositories, which the test reads whatever they hold.
     fn first_telling(
         &mut self,
         cx: &mut TestAppContext,
@@ -234,7 +214,6 @@ impl Navigator {
         (roots, on_screen, consents)
     }
 
-    /// Tells the model `told`, as the Navigator would, and lets the app take it.
     fn tell(&self, told: Told, cx: &mut TestAppContext) {
         self.told
             .try_send(told)
@@ -242,15 +221,12 @@ impl Navigator {
         cx.run_until_parked();
     }
 
-    /// The Navigator ends: nothing is told any more.
     fn end(self, cx: &mut TestAppContext) {
         drop(self.told);
         cx.run_until_parked();
     }
 }
 
-/// What a pane keeps of an ask while it waits: where its answer will be, and the task that
-/// holds the ask (dropping the task is what a pane does when the reviewer moves on).
 type Slot<T> = Rc<RefCell<Option<Result<T, NavError>>>>;
 
 fn pending<T: Unpin + 'static>(asking: Asking<T>, cx: &mut TestAppContext) -> (Slot<T>, Task<()>) {
@@ -280,9 +256,6 @@ fn hover(
         .update(cx, |navigation, cx| navigation.hover(place, cx))
 }
 
-/// The models of a window whose Keeper the test plays: `settings` are what the Keeper holds
-/// when the Window reaches it, `listed` the answer to the first question for the list. Every
-/// model has taken its answer, and no Navigator is connected yet.
 fn window(
     settings: Vec<Setting>,
     listed: &[Repository],
@@ -306,13 +279,10 @@ fn window(
     (models, keeper)
 }
 
-/// One repository with its main worktree, on screen.
 fn one_workspace() -> Vec<Repository> {
     vec![repository('a', vec![workspace('1', "main")])]
 }
 
-/// The next request of the Window that is this kind of request, the others left
-/// unanswered.
 fn request_of(
     keeper: &mut KeeperEnd,
     cx: &mut TestAppContext,
@@ -385,8 +355,7 @@ fn another_workspace_coming_on_screen_is_told_and_a_list_that_keeps_it_there_doe
         .update(cx, |list, cx| list.select(&id('2'), cx));
     navigator.expect(Ask::OnScreen(Some(id('2'))), cx);
 
-    // A workspace comes and the one on screen stays: the list is told whole and the
-    // workspace on screen is not, so the next ask is the barrier.
+    // The list is told whole and the workspace on screen is not, so the next ask is the barrier.
     let after = vec![repository(
         'a',
         vec![
@@ -447,7 +416,6 @@ fn a_new_list_of_workspaces_is_told_whole_and_a_workspace_that_left_is_told_by_i
         }]),
         cx,
     );
-    // The workspace on screen left the list; the first of it took its place.
     navigator.expect(Ask::OnScreen(Some(id('1'))), cx);
 }
 
@@ -462,8 +430,6 @@ fn an_answer_on_a_repository_is_told_whole_and_another_setting_is_not(cx: &mut T
         form: FlowForm::LiveDiff,
     }));
     keeper.tell(Fact::SettingChanged(allowed('b', false)));
-    // The setting that is no answer on a repository was heard first: had it told anything,
-    // that would come before this.
     navigator.expect(
         Ask::Consents(vec![consent('a', true), consent('b', false)]),
         cx,
@@ -491,8 +457,8 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs", "b.rs"]))));
     navigator.expect(told(&["a.rs", "b.rs"]), cx);
 
-    // While the answer is awaited the model shows the last list again, which is no news:
-    // the barrier comes first.
+    // While the new answer is awaited the model shows the last list again, which is no news: the
+    // barrier comes first.
     keeper.tell(Fact::ChangesChanged { workspace: id('1') });
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     models
@@ -504,18 +470,14 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
         },
         cx,
     );
-    // `a.rs` was put back: it left the list, and the Navigator hears that it changed.
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["b.rs"]))));
     navigator.expect(told(&["a.rs", "b.rs"]), cx);
 
-    // The same list again is told: `b.rs` may have changed again with its path in it.
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["b.rs"]))));
     navigator.expect(told(&["b.rs"]), cx);
 
-    // A refused question leaves the model showing the last list again, which is no news:
-    // the barrier comes first.
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(
@@ -539,7 +501,6 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
         cx,
     );
 
-    // Nothing changed and nothing is listed: no paths, nothing told. The barrier follows.
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &[]))));
@@ -563,8 +524,6 @@ fn the_changed_files_are_told_each_time_the_keeper_answers_with_those_that_left_
     );
 }
 
-/// The changes of workspace 1 asked for again and answered as `list`, and waited for until
-/// the model has taken the answer.
 fn answer_again(models: &Models, keeper: &mut KeeperEnd, list: Changes, cx: &mut TestAppContext) {
     models.changes.update(cx, |changes, cx| changes.refresh(cx));
     let (asked, _) = request_of(keeper, cx, |r| *r == get_changes('1'));
@@ -589,9 +548,7 @@ fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it_and_hol
             .read_with(cx, |changes, _| changes.changes().is_some())
     });
 
-    // A server starts from the files on disk, so a Navigator that connects now has no stale
-    // state to be told of: the three first tellings come, and the Download after them is the
-    // barrier for a `FilesChanged` that was on its way.
+    // A server starts from the files on disk, so a new Navigator has no stale state to be told of.
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
     models
@@ -604,8 +561,8 @@ fn a_connect_tells_no_changed_files_though_the_keeper_answered_before_it_and_hol
         cx,
     );
 
-    // But the list the model held is the last answer: `a.rs` was put back since, and the
-    // server that started from the disk may have read it as it was a moment before.
+    // The list the model held counts as the last answer: `a.rs` was put back since, and a server
+    // that started from the disk may have read it as it was a moment before.
     answer_again(&models, &mut keeper, changes('1', &[]), cx);
     models
         .navigation
@@ -673,8 +630,8 @@ fn a_list_the_model_still_shows_after_a_refusal_is_held_as_the_last_answer_at_a_
     let (models, mut keeper) = window(Vec::new(), &one_workspace(), cx);
     let (asked, _) = request_of(&mut keeper, cx, |r| *r == get_changes('1'));
     keeper.reply(asked, Ok(Reply::Changes(changes('1', &["a.rs"]))));
-    // The answer is waited for: a new question drops one the model has not taken yet, and
-    // the model would then hold no list when the refusal comes.
+    // The answer is waited for: a new question drops one the model has not taken yet, and the
+    // model would then hold no list when the refusal comes.
     wait_until(cx, "the answer to be taken", |cx| {
         models.changes.read_with(cx, |changes, _| {
             changes.changes().is_some() && !changes.is_loading()
@@ -693,8 +650,6 @@ fn a_list_the_model_still_shows_after_a_refusal_is_held_as_the_last_answer_at_a_
             !changes.is_loading() && changes.refusal().is_some()
         })
     });
-    // The model still shows the list it held, which a connect takes as the last answer of the
-    // Keeper: a refusal brought no newer one.
     models.changes.read_with(cx, |changes, _| {
         let shown = changes.changes().expect("the list is still shown");
         assert_eq!(
@@ -709,8 +664,6 @@ fn a_list_the_model_still_shows_after_a_refusal_is_held_as_the_last_answer_at_a_
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
 
-    // The list was seeded, so `a.rs`, put back since, is told changed when the Keeper
-    // answers an empty list; the update after it is the barrier.
     answer_again(&models, &mut keeper, changes('1', &[]), cx);
     models
         .navigation
@@ -736,7 +689,7 @@ fn a_renamed_file_is_told_changed_at_both_of_its_paths(cx: &mut TestAppContext) 
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
 
-    // The old path is gone from the disk, and a server still holds its symbols.
+    // The old path is gone from disk, and a server still holds its symbols.
     let mut renamed = changes('1', &["kept.rs"]);
     renamed.files.push(ChangedFile {
         path: PathBuf::from("new.rs"),
@@ -787,8 +740,8 @@ fn a_hover_is_asked_with_a_fresh_id_and_resolves_with_the_answer_of_that_id_only
     let (first, _first_task) = pending(first, cx);
     let (second, _second_task) = pending(second, cx);
 
-    // An answer of an id nobody asked with resolves neither; the answers of the two that
-    // were asked come crossed, and each resolves its own.
+    // An answer of an id nobody asked resolves neither; the two asked come crossed and each
+    // resolves its own.
     navigator.tell(
         Told::Hover {
             id: AskId(second_id.0 + 100),
@@ -980,7 +933,6 @@ fn an_ask_dropped_before_its_answer_cancels_it_and_one_answered_does_not(cx: &mu
     let mut navigator = Navigator::connect(&models, cx);
     navigator.first_telling(cx);
 
-    // A pane that moves on drops the task that holds its ask.
     let moved_on = hover(&models, place("src/a.rs", "alpha"), cx);
     let moved_on_id = moved_on.id();
     let answered = hover(&models, place("src/b.rs", "beta"), cx);
@@ -1002,7 +954,6 @@ fn an_ask_dropped_before_its_answer_cancels_it_and_one_answered_does_not(cx: &mu
     drop(moved_on_task);
     cx.run_until_parked();
     assert!(moved_on.borrow().is_none());
-    // The barrier follows both drops: a cancel of the answered ask would come before it.
     models
         .navigation
         .update(cx, |navigation, _| navigation.download("rust"));
@@ -1018,7 +969,6 @@ fn an_ask_dropped_before_its_answer_cancels_it_and_one_answered_does_not(cx: &mu
         cx,
     );
 
-    // An answer that comes for an ask cancelled is read and goes nowhere.
     navigator.tell(
         Told::Hover {
             id: moved_on_id,
@@ -1199,7 +1149,6 @@ fn an_export_the_navigator_wants_is_asked_of_the_keeper_and_how_it_went_is_told_
     );
     assert!(refusal.to_string().contains("the folder exists"));
 
-    // A Keeper that answers something else than was asked is told as a failure too.
     navigator.tell(Told::ExportWanted(wanted(3)), cx);
     let (asked, _) = request_of(&mut keeper, cx, |r| {
         matches!(r, Request::ExportVersion { .. })
@@ -1272,7 +1221,6 @@ fn with_no_navigator_connected_every_ask_resolves_to_not_connected_at_once(
     let (slot, _task) = pending(opened, cx);
     assert_eq!(resolved(&slot, cx), Err(NavError::NotConnected));
 
-    // What the user does meanwhile is lost, not stored: nothing waits for a connect.
     models.navigation.update(cx, |navigation, _| {
         navigation.download("rust");
         navigation.update("rust");
@@ -1338,9 +1286,9 @@ fn the_user_s_wishes_reach_the_navigator_as_the_asks_that_name_them(cx: &mut Tes
 fn the_answer_on_a_repository_is_sent_as_its_setting_and_read_back_once_told(
     cx: &mut TestAppContext,
 ) {
-    // A setting that is no answer on a repository is held by the Keeper, so that `window`
-    // returns only once the answer to the first question for the settings was taken: an
-    // answer that landed after the test's own would take the user's answer off the list.
+    // The Keeper holds a setting that is no answer on a repository, so `window` returns once the
+    // first answer for the settings was taken: a later answer would take the user's answer off the
+    // list.
     let (models, keeper) = window(
         vec![Setting::FlowForm {
             workspace: id('1'),
@@ -1412,9 +1360,8 @@ fn a_second_connect_replaces_the_first_and_what_waited_on_it_is_gone(cx: &mut Te
         );
     });
 
-    // The ask that was waiting is dropped: it asks the new Navigator nothing, and the old
-    // one hears nothing more. The barrier is an ask of the new one; the old port is read
-    // to its end, which comes once every sender of it is gone.
+    // Dropping the waiting ask asks the new Navigator nothing, and the old one hears nothing more:
+    // its port is read to its end, which comes once every sender of it is gone.
     drop(task);
     models
         .navigation
@@ -1427,7 +1374,6 @@ fn a_second_connect_replaces_the_first_and_what_waited_on_it_is_gone(cx: &mut Te
     );
     first.ends_with_nothing_more(cx);
 
-    // The model reads nothing more from the first Navigator: its channel is let go.
     wait_until(
         cx,
         "the model to let the first Navigator's channel go",
@@ -1444,7 +1390,6 @@ fn a_second_connect_replaces_the_first_and_what_waited_on_it_is_gone(cx: &mut Te
     );
 }
 
-/// The first Navigator tells a server, so that a replacement has something to forget.
 fn navigator_servers(navigator: &Navigator, cx: &mut TestAppContext) {
     navigator.tell(
         Told::Servers(vec![server('1', "rust", None, State::Ready)]),
@@ -1480,7 +1425,6 @@ fn a_navigator_that_ends_resolves_what_waits_to_gone_and_leaves_the_model_unconn
     assert_eq!(resolved(&slot, cx), Err(NavError::NotConnected));
 }
 
-/// Lets go of the Navigator, as a quit of the app does.
 fn disconnect(models: &Models, cx: &mut TestAppContext) {
     models
         .navigation
@@ -1500,8 +1444,6 @@ fn disconnected_what_waits_resolves_to_gone_and_the_model_shows_no_navigator(
     let asking = hover(&models, place("src/a.rs", "alpha"), cx);
     navigator.ask(cx);
     let (waiting, _task) = pending(asking, cx);
-    // A second hover that nothing polls yet holds a way to the Navigator, as a pane's ask
-    // does while its task has not run.
     let unpolled = hover(&models, place("src/a.rs", "beta"), cx);
     navigator.ask(cx);
 
@@ -1515,7 +1457,6 @@ fn disconnected_what_waits_resolves_to_gone_and_the_model_shows_no_navigator(
             "what the Navigator told is no longer true"
         );
     });
-    // The Navigator is let go: it reads the end of its asks, with nothing more sent.
     navigator.ends_with_nothing_more(cx);
     let (late, _late_task) = pending(unpolled, cx);
     assert_eq!(resolved(&late, cx), Err(NavError::Gone));
@@ -1537,17 +1478,13 @@ fn an_export_on_its_way_does_not_hold_the_navigator_once_the_model_is_disconnect
         into: PathBuf::from("/cache/navigator/1-1/old/1"),
     };
     navigator.tell(Told::ExportWanted(wanted.clone()), cx);
-    // The Keeper has the request and has not answered it: the model's task for it waits,
-    // holding a way to the Navigator.
     let (asked, _) = request_of(&mut keeper, cx, |request| {
         matches!(request, Request::ExportVersion { .. })
     });
 
     disconnect(&models, cx);
 
-    // The Navigator reads the end of its asks while the export is still on its way.
     navigator.ends_with_nothing_more(cx);
-    // The Keeper answers at last: nobody is left to be told, and nothing breaks.
     keeper.reply(asked, Ok(Reply::Done));
     cx.run_until_parked();
     models
@@ -1560,8 +1497,8 @@ fn whether_a_navigator_is_connected_notifies_when_it_changes_at_a_connect_and_at
     cx: &mut TestAppContext,
 ) {
     let (models, _keeper) = window(Vec::new(), &one_workspace(), cx);
-    // No server and no language is ever told, so nothing else gives the observers a reason
-    // to look: only the change of the answer to `is_connected` does.
+    // No server and no language is ever told, so only the change of the answer to `is_connected`
+    // gives the observers a reason to look.
     let seen = Rc::new(RefCell::new(Vec::<bool>::new()));
     let _watching = cx.update(|cx| {
         let seen = seen.clone();
@@ -1602,8 +1539,8 @@ fn a_navigator_that_no_longer_reads_its_asks_resolves_a_new_ask_to_gone(cx: &mut
         .update(cx, |navigation, cx| navigation.connect(port, cx));
     cx.run_until_parked();
 
-    // What the model told by itself at the connect went nowhere, and the ask is told so
-    // rather than left to wait for an answer that cannot come. `end.told` is open still.
+    // The ask is told it cannot be answered rather than left to wait, though `end.told` is still
+    // open.
     let asking = hover(&models, place("src/a.rs", "alpha"), cx);
     let (slot, _task) = pending(asking, cx);
     assert_eq!(resolved(&slot, cx), Err(NavError::Gone));

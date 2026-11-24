@@ -1,53 +1,3 @@
-//! Downloads and updates, as the Navigator runs them: only when the user accepted an offer
-//! or asked for an update (FR-057, FR-058, FR-063, FR-073). The download itself, its digest
-//! and its folder are `download.rs`'s; which servers run is `lifecycle.rs`'s.
-//!
-//! # A download
-//!
-//! [`download`] ([`crate::Ask::Download`] of a row): the keys of that row whose state is
-//! missing with an offer (`lifecycle::offering`) are shown as
-//! [`crate::State::Downloading`] with that offer (`lifecycle::downloading`), and one
-//! download of the offer's server, the row's `download` for this machine (`Row::download`),
-//! is fetched by [`crate::download::Downloader::fetch`] into
-//! [`crate::NavigatorConfig::servers`], on a thread of its own, which sends
-//! [`crate::navigator::Event::Downloaded`]. A row with no key offering, a registered row,
-//! a row with no download for this machine, and a row whose download is on its way
-//! already, download nothing: the ask does nothing at all, and nothing is told.
-//!
-//! # An update
-//!
-//! [`update`] ([`crate::Ask::Update`] of a row): the keys of that row whose state shows an
-//! update (`lifecycle::updating`) keep running as they are while the newer version is
-//! fetched, the same way; nothing else is shown meanwhile. Nothing but this ask ever
-//! downloads a newer version (FR-063).
-//!
-//! # When it ends
-//!
-//! [`downloaded`]: on success, every key that was downloading or updating for the row is
-//! searched again (`lifecycle::search_again`), which stops the server it ran and finds the
-//! version now installed as its downloaded candidate (`search::look` reads
-//! `download::installed`). On failure, the reason is written to the standard error as one
-//! line. The keys of a download are searched again, and show missing with its offer again;
-//! the keys of an update are left alone: the server that ran is the same process, still
-//! ready, and still offers the newer version, so that nothing it was asked is lost. The same
-//! holds when the update's thread cannot be started.
-//!
-//! The [`crate::download::Downloader`] is made once, by the thread of the first download
-//! ([`crate::download::Downloader::new`] reads the system's certificates, and the
-//! Navigator's thread waits for nothing); when it cannot be made, the download fails with
-//! its sentence as the reason, and so does every later one: a downloader that could not be
-//! made stays failed for the Navigator's life.
-//!
-//! A download that ends well also searches again the keys of the row that are not on the
-//! waiting list but need it. A workspace shown while the download was on its way found
-//! nothing and shows the offer, or found the version that was installed then and tries,
-//! starts or runs it: the first would otherwise offer what is installed, the second would
-//! keep a program whose folder the download removed (it fails its start and shows missing
-//! with an offer of the version already installed, or runs from a folder that is gone) and
-//! then offer the version it just installed. Every key of the row that tries, starts or runs
-//! a downloaded copy of another version than the one installed is searched again
-//! (`lifecycle::on_an_older_copy`).
-
 use std::collections::BTreeMap;
 use std::sync::{Arc, OnceLock};
 
@@ -56,35 +6,24 @@ use crate::lifecycle;
 use crate::navigator::{Core, Event, ServerKey};
 use crate::registry::Download;
 
-/// What this module keeps in [`Core::fetch`]: the downloader once made, and the rows whose
-/// download is on its way, with the keys waiting for each.
 #[derive(Default)]
 pub(crate) struct Fetches {
-    /// The downloader, made once by the first download's own thread (reading the system's
-    /// certificates takes a while, and the Navigator's thread waits for nothing), or the
-    /// sentence of why it could not be made. A downloader that could not be made is kept as
-    /// the failure: every later download of this Navigator fails with the same sentence, and
-    /// only a new Navigator tries again. Handed to each thread behind an `Arc`.
+    /// Made once by the first download's own thread (reading the system's certificates is slow); a
+    /// failure is kept and fails every later download.
     downloader: Arc<OnceLock<Result<Downloader, String>>>,
-    /// The rows with a download on its way, each with the keys that were shown for it when it
-    /// began. A key that is forgotten meanwhile stays in the list, and is left alone when the
-    /// download ends, since `lifecycle::search_again` leaves a key it does not know alone.
+    /// Rows with a download on its way, each with the keys shown for it when it began. A key
+    /// forgotten meanwhile stays listed: `lifecycle::search_again` leaves an unknown key alone.
     on_its_way: BTreeMap<String, Waiting>,
 }
 
-/// The download of one row that is on its way.
 #[derive(Default)]
 struct Waiting {
-    /// The name of the server being fetched.
     server: String,
-    /// The keys that were shown for the download when it began.
     keys: Vec<ServerKey>,
-    /// Whether it is an update: its keys run a server meanwhile, and one that fails leaves
-    /// them as they are.
+    /// An update's keys keep running their server, and a failure leaves them as they are.
     update: bool,
 }
 
-/// [`crate::Ask::Download`]: downloads the row's server for every key whose state offers it.
 pub(crate) fn download(core: &mut Core, language: &str) {
     if core.fetch.on_its_way.contains_key(language) {
         return;
@@ -104,8 +43,6 @@ pub(crate) fn download(core: &mut Core, language: &str) {
     begin(core, language, keys, server, download, false);
 }
 
-/// [`crate::Ask::Update`]: downloads the version the row pins now, for the keys whose state
-/// shows an update, and starts it in the place of the one that runs.
 pub(crate) fn update(core: &mut Core, language: &str) {
     if core.fetch.on_its_way.contains_key(language) {
         return;
@@ -126,8 +63,6 @@ pub(crate) fn update(core: &mut Core, language: &str) {
     begin(core, language, keys, server, download, true);
 }
 
-/// A download ended: the keys that waited for it are searched again, but for the keys of an
-/// update that failed.
 pub(crate) fn downloaded(
     core: &mut Core,
     language: String,
@@ -140,10 +75,9 @@ pub(crate) fn downloaded(
     } = core.fetch.on_its_way.remove(&language).unwrap_or_default();
     match outcome {
         Ok(installed) => {
-            // A key made while the download was on its way found nothing, and shows the
-            // offer: it finds what is installed now. A key that found the version installed
-            // then, trying it, starting it or running it, has a copy whose folder the
-            // download removed: it starts the new one.
+            // A key made while the download was on its way shows the offer and finds what is
+            // installed now; one that tried, started or ran the version installed then has a copy
+            // whose folder the download removed.
             let late = lifecycle::offering(core, &language)
                 .into_iter()
                 .map(|(key, _)| key)
@@ -158,8 +92,8 @@ pub(crate) fn downloaded(
         }
         Err(error) => {
             eprintln!("yaar-navigator: the download for {language} failed: {error}");
-            // An update's keys run the version that ran before, and nothing is gained by
-            // stopping a server and starting it again: its pending answers would be lost.
+            // An update's keys run the version that ran before; restarting would lose its pending
+            // answers.
             if update {
                 return;
             }
@@ -170,8 +104,6 @@ pub(crate) fn downloaded(
     }
 }
 
-/// The server of the row `language` named `server`, and its download for this machine, when
-/// the row is one the app downloads for: not the user's, and with a download for the machine.
 fn pinned(core: &Core, language: &str, server: &str) -> Option<(String, Download)> {
     let platform = core.config.platform?;
     let row = core.registry.row(language).filter(|row| !row.registered)?;
@@ -182,9 +114,6 @@ fn pinned(core: &Core, language: &str, server: &str) -> Option<(String, Download
     Some((server.name.clone(), server.download(platform)?.clone()))
 }
 
-/// Starts the one download of `download` for the row `language`, on a thread of its own,
-/// which sends [`Event::Downloaded`], and notes the `keys` that wait for it; `update` says
-/// whether the download is an update's.
 fn begin(
     core: &mut Core,
     language: &str,

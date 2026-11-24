@@ -1,12 +1,5 @@
-//! `yaar-keeper`: the Keeper behind a command line.
-//!
-//! ```text
-//! yaar-keeper [--socket <path>]    serve until asked to stop or until idle
-//! yaar-keeper --version
-//! ```
-//!
-//! `YAAR_KEEPER_LINGER_MS` sets how long it stays with no Window attached. It runs the user's
-//! login shell once (`yaar_link::user_shell`) for the environment of its runs of git.
+//! `yaar-keeper [--socket <path>] | --version`: serves until asked to stop or until idle.
+//! `YAAR_KEEPER_LINGER_MS` sets how long it stays with no Window attached.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

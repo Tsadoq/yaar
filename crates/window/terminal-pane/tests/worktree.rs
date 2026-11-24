@@ -1,12 +1,3 @@
-//! Component test: a worktree made with an agent in it, as the terminal pane carries out
-//! what the Frame wants (`Wanted::Worktree`), on GPUI's test platform with no window on any
-//! screen. The test plays the Keeper on the other end of a socket pair, as it plays it for
-//! every terminal the pane opens: it hears the request, tells the list of workspaces that
-//! holds the new worktree, and answers.
-//!
-//! The Keeper tells the list before it answers, and the Frame's model puts a workspace on
-//! screen even when its reply comes first; both orders are played.
-
 mod common;
 
 use gpui_kit::{TestAppContext, VisualTestContext};
@@ -28,7 +19,6 @@ fn wanted() -> Wanted {
     }
 }
 
-/// Has the Frame want a worktree, and gives the Keeper's end of the request.
 fn want(panes: &mut Panes, cx: &mut VisualTestContext) -> (RequestId, Request) {
     panes
         .models
@@ -49,7 +39,6 @@ fn on_screen(panes: &Panes, cx: &mut VisualTestContext) -> Option<WorkspaceId> {
         .read_with(cx, |list, _| list.selected().cloned())
 }
 
-/// The terminals the shared list of the window holds.
 fn listed(panes: &Panes, cx: &mut VisualTestContext) -> Vec<TerminalInfo> {
     panes
         .models
@@ -57,8 +46,6 @@ fn listed(panes: &Panes, cx: &mut VisualTestContext) -> Vec<TerminalInfo> {
         .read_with(cx, |list, _| list.terminals().to_vec())
 }
 
-/// A window with a terminal open in the workspace on screen whose grid the painter fitted,
-/// so that the size the pane lays terminals out at is not the one it starts with.
 fn fitted(cx: &mut TestAppContext) -> (Panes, VisualTestContext, TerminalId) {
     let (mut panes, mut cx) = open_panes(cx);
     let first = terminal('a');
@@ -93,15 +80,12 @@ fn a_worktree_wanted_is_asked_for_at_the_panes_size_and_its_agent_shows_in_the_n
             size,
         }
     );
-    // While the answer is awaited the notice says what is being made.
     assert_eq!(
         notice(&panes, &mut cx),
         Some(format!("{WORKTREE_BEING_MADE} feature-x"))
     );
     assert_eq!(on_screen(&panes, &mut cx), Some(workspace_id('1')));
 
-    // The Keeper tells the list that holds the new workspace, then answers; what the agent
-    // writes follows the answer at once.
     let second = terminal('b');
     panes.keeper.tell(Fact::Workspaces(vec![two_workspaces()]));
     panes.keeper.reply(
@@ -113,8 +97,6 @@ fn a_worktree_wanted_is_asked_for_at_the_panes_size_and_its_agent_shows_in_the_n
     );
     panes.keeper.output(&second, b"agent says hello");
 
-    // The new workspace is on screen, with the agent's terminal shown in it and the keys
-    // going to it.
     let pane = panes.pane.clone();
     wait_until(&mut cx, "the agent's terminal in the pane", |cx| {
         pane.read_with(cx, |pane, _| pane.terminals().contains(&second))
@@ -137,7 +119,6 @@ fn a_worktree_wanted_is_asked_for_at_the_panes_size_and_its_agent_shows_in_the_n
         lines(&pane, &second, cx).first().map(String::as_str) == Some("agent says hello")
     });
     assert_eq!(notice(&panes, &mut cx), None);
-    // The shared list holds it as the agent's terminal, which no pane attaches to again.
     assert!(listed(&panes, &mut cx).contains(&TerminalInfo {
         id: second.clone(),
         workspace: workspace_id('2'),
@@ -145,7 +126,6 @@ fn a_worktree_wanted_is_asked_for_at_the_panes_size_and_its_agent_shows_in_the_n
             agent: "claude".to_owned()
         },
     }));
-    // What is typed now reaches the agent.
     cx.simulate_input("x");
     assert_eq!(panes.keeper.input(&mut cx), (second, b"x".to_vec()));
 }
@@ -171,7 +151,6 @@ fn a_reply_that_comes_before_the_list_puts_the_new_workspace_on_screen_once_it_i
     wait_until(&mut cx, "the agent's terminal in the pane", |cx| {
         pane.read_with(cx, |pane, _| pane.terminals().contains(&second))
     });
-    // The workspace is not listed yet: the one on screen stays.
     assert_eq!(on_screen(&panes, &mut cx), Some(workspace_id('1')));
 
     panes.keeper.tell(Fact::Workspaces(vec![two_workspaces()]));
@@ -210,9 +189,8 @@ fn a_worktree_the_keeper_refuses_opens_nothing_and_the_reason_is_the_notice(
         notice(&panes, &mut cx),
         Some("the branch feature-x exists already".to_owned())
     );
-    // Nothing was opened or shown, and the workspace on screen is the same. A terminal
-    // asked for after it, through the same path, is the barrier for what a refusal might
-    // have set off late.
+    // A terminal asked for afterwards through the same path is the barrier for anything a refusal
+    // sets off late.
     panes.open_terminal(&terminal('c'), &mut cx);
     assert_eq!(
         panes.pane.read_with(&cx, |pane, _| pane.terminals()),

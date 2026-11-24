@@ -1,50 +1,11 @@
-//! The read-only file view: a file reached through go to definition or a reference, shown
-//! whole in the place of the rows, with a control that brings the reviewer back to the
-//! place in the diff they left (FR-052, FR-053), and comments on any of its lines (FR-075).
+//! Read-only view of a file reached by go to definition or a reference. A comment on a line anchors
+//! by file kind:
 //!
-//! # Opening and going back
-//!
-//! A location is opened with `Navigation::open`, which reads its file. The pane then shows
-//! the file view ([`FileShown`]) in the place of the rows and of Flow, under the selector
-//! `review-file-view`, the reviewer on the location's line: each line under
-//! `review-file-line-<n>`, `n` from 1, its text under `review-file-text-<n>:<text>`, the
-//! reviewer's line marked `review-file-at`; its path above the lines under
-//! `review-file-path:<path>`, relative to the worktree where the file lies in it; and the
-//! control [`BACK`] under `review-file-back`, with the text selector
-//! `review-file-back:<the label>`. The file view offers no way to edit (FR-053): the keys that
-//! work on the lines of the diff it hides do nothing while it is open.
-//!
-//! The place left is kept when the first file view opens from the diff: the view (Changes
-//! or Flow), the reviewer's position and the name; the scroll of the rows stays in their own
-//! scroll handle, which the file view does not use. [`crate::GoBack`]
-//! (`escape`) and a click on the control close the file view, put that place back as it
-//! was, and drop it. A definition or a reference followed from inside a file view opens
-//! the next file view and keeps the place left in the diff: going back always returns to
-//! the diff.
-//!
-//! In the file view `j`, `k` and the arrows move the reviewer's line within the file, the
-//! name keys and the three asks work on its lines as on the diff's, the place asked being
-//! the file's (`Tree::Worktree` and the relative path for [`yaar_navigator::FileKind::Worktree`],
-//! `Tree::Version` for [`yaar_navigator::FileKind::Version`]; a file outside is asked
-//! about with `Tree::Worktree` and its absolute path, which the Navigator answers by the
-//! server of its language, or by text match).
-//!
-//! # Comments on its lines
-//!
-//! [`crate::Comment`] (`c`) on a line of the file view opens the comment box for a new
-//! thread on that line, whether or not the line is in the diff (FR-075), with the anchor:
-//!
-//! | The file | `Anchor::tree` | `Anchor::path` | `Anchor::side` |
+//! | File | `Anchor::tree` | `Anchor::path` | `Anchor::side` |
 //! | --- | --- | --- | --- |
-//! | in the worktree (`FileKind::Worktree`) | none: the files on disk | the relative path | new |
-//! | in an export (`FileKind::Version`) | the version | the relative path | old |
-//! | outside, or ignored by git (`FileKind::Outside`) | none | the absolute path | new |
-//!
-//! one line, its text the line's. The draft is saved as every draft is. A thread of the
-//! review whose anchor names this file (by its relative path in the same version, or for a
-//! file outside by its absolute path) is drawn on its line while that line's text is still
-//! the anchor's text, as a thread is in the diff, under `review-thread-<id>`; else it stays
-//! among the threads elsewhere, with its notice.
+//! | worktree | none | relative | new |
+//! | export (`Version`) | the version | relative | old |
+//! | outside or git-ignored | none | absolute | new |
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -62,28 +23,21 @@ use crate::saves::new_id;
 use crate::threads::{Place, place_of};
 use crate::{CommentBox, Position, ReviewPane};
 
-/// The label of the control that goes back to the diff.
 pub const BACK: &str = "Back to the diff";
 
-/// The file view the pane shows.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileShown {
-    /// The file.
     pub file: OpenedFile,
-    /// The line the reviewer is on, from 1.
+    /// From 1.
     pub line: u32,
 }
 
-/// One row of the file view's list: a line of the file, a thread of the review that sits on
-/// it, or one comment of that thread.
 enum FileItem {
     Line(u32),
     Thread(ThreadId),
     Comment(ThreadId, CommentId),
 }
 
-/// Where each line of `text` lies, its line end not included; a text with no line has one
-/// empty line.
 fn line_ranges(text: &str) -> Vec<Range<usize>> {
     let mut ranges = Vec::new();
     let mut start = 0;
@@ -101,12 +55,10 @@ fn line_ranges(text: &str) -> Vec<Range<usize>> {
 }
 
 impl ReviewPane {
-    /// The file view shown; none while the diff is.
     pub fn file_view(&self) -> Option<&FileShown> {
         self.navigate.file.as_ref()
     }
 
-    /// The text of the line `line`, from 1, of the file the file view shows.
     pub(crate) fn file_line(&self, line: u32) -> Option<&str> {
         let file = self.navigate.file.as_ref()?;
         let range = self
@@ -116,7 +68,6 @@ impl ReviewPane {
         file.file.text.get(range.clone())
     }
 
-    /// Asks the Navigator for the file of `location`, and shows it at the location's line.
     pub(crate) fn open_location(
         &mut self,
         location: Location,
@@ -139,9 +90,7 @@ impl ReviewPane {
         }));
     }
 
-    /// Shows `file` in the place of the rows, the reviewer on `line`. The place left in the
-    /// diff is kept when the diff is what is shown now: a file opened from a file view
-    /// leaves the diff's place as it was.
+    /// The place left in the diff is kept only when the diff is what is shown.
     fn show_file(
         &mut self,
         file: OpenedFile,
@@ -160,7 +109,6 @@ impl ReviewPane {
         let line = line.clamp(1, self.navigate.file_lines.len() as u32);
         self.navigate.file = Some(FileShown { file, line });
         self.navigate.name = None;
-        // The list that led here closes, and the keys are the rows' again.
         self.close_list(window, cx);
         self.focus.focus(window, cx);
         self.navigate
@@ -174,7 +122,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// Scrolls the file view so that the line is in view.
     fn scroll_file_to(&self, line: u32, strategy: ScrollStrategy) {
         let items = self.file_items();
         let item = items
@@ -184,8 +131,6 @@ impl ReviewPane {
         self.navigate.file_scroll.scroll_to_item(item, strategy);
     }
 
-    /// What [`crate::GoBack`] does: takes a hover away if one is shown, else closes the file
-    /// view and puts the diff back as it was left; with neither it does nothing.
     pub(crate) fn go_back(
         &mut self,
         _: &crate::GoBack,
@@ -201,10 +146,7 @@ impl ReviewPane {
         self.leave_file_view(window, cx);
     }
 
-    /// Closes the file view, and puts back the view and the name of the diff that were left.
-    /// The scroll of the rows is not put back: their scroll handle keeps its offset while the
-    /// file view has its own, and rebuilding the rows under the reviewer moves it as it
-    /// moves it for a diff on screen, so that the row the reviewer left is where it was.
+    /// The scroll of the rows is not restored: their scroll handle keeps its offset.
     fn leave_file_view(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.navigate.file.take().is_none() {
             return;
@@ -220,8 +162,6 @@ impl ReviewPane {
         cx.notify();
     }
 
-    /// The rows of the file view's list: the lines, and under each the threads of the review
-    /// that sit on it.
     fn file_items(&self) -> Vec<FileItem> {
         let Some(shown) = &self.navigate.file else {
             return Vec::new();
@@ -243,8 +183,6 @@ impl ReviewPane {
         items
     }
 
-    /// The threads of the review that name this file, by the last line each sits on: those
-    /// whose lines still hold the text the thread was written on.
     fn threads_in_file(&self, shown: &FileShown) -> BTreeMap<u32, Vec<&Thread>> {
         let mut by_line: BTreeMap<u32, Vec<&Thread>> = BTreeMap::new();
         let Some(review) = self.review() else {
@@ -258,8 +196,8 @@ impl ReviewPane {
             FileKind::Outside => (&shown.file.path, LinkSide::New, None),
         };
         for thread in &review.threads {
-            // A thread of a version is on the lines of that version only; the others sit
-            // where the Keeper carried them to in the files on disk.
+            // A thread of a version is on the lines of that version only; the others sit where the
+            // Keeper carried them to in the files on disk.
             if version.is_some_and(|version| thread.anchor.tree.as_deref() != Some(version)) {
                 continue;
             }
@@ -286,9 +224,6 @@ impl ReviewPane {
         by_line
     }
 
-    /// What [`crate::Comment`] does on a line of the file view: opens the comment box for
-    /// a new thread there, with the anchor the module doc's table gives. True when the file
-    /// view took the key.
     pub(crate) fn comment_in_file_view(
         &mut self,
         window: &mut Window,
@@ -345,7 +280,6 @@ impl ReviewPane {
         true
     }
 
-    /// A click on the text of a line of the file view.
     fn clicked_line(
         &mut self,
         line: u32,
@@ -360,7 +294,6 @@ impl ReviewPane {
         self.clicked(Spot::File(line), layout, event, window, cx);
     }
 
-    /// The file view, drawn in the place of the rows; none while the diff is shown.
     pub(crate) fn render_file_view(
         &self,
         window: &mut Window,
@@ -439,7 +372,6 @@ impl ReviewPane {
         )
     }
 
-    /// Builds one row of the file view's list.
     fn draw_file_item(&self, item: &FileItem, cx: &Context<Self>) -> Div {
         let theme = cx.theme();
         let row = div()
@@ -509,8 +441,6 @@ impl ReviewPane {
         }
     }
 
-    /// [`crate::LineDown`] or [`crate::LineUp`] in the file view, `by` lines; true when
-    /// the file view took it.
     pub(crate) fn file_view_step(&mut self, by: i64, cx: &mut Context<Self>) -> bool {
         let count = self.navigate.file_lines.len() as i64;
         let Some(shown) = &mut self.navigate.file else {

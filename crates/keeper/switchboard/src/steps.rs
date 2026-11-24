@@ -1,9 +1,5 @@
-//! Unit tests of the steps of a turn as the Switchboard keeps and tells them: in order,
-//! each with its session and its kind, and an edit with its path and lines (row SWB-04).
-//! They go through [`crate::Switchboard::take`] and [`crate::Switchboard::session`], as
-//! the Keeper does.
-//!
-//! Written by the Switchboard's package of slice 5.
+//! Tests of the steps of a turn, through [`crate::Switchboard::take`] and
+//! [`crate::Switchboard::session`].
 
 use std::path::PathBuf;
 
@@ -13,7 +9,6 @@ use super::{Change, Known, SessionId, Switchboard, TurnId};
 
 const AGENT: &str = "claude";
 
-/// A Switchboard with a `draw` that counts, as the Keeper's draws ids.
 struct Desk {
     board: Switchboard,
     draws: u32,
@@ -27,7 +22,6 @@ impl Desk {
         }
     }
 
-    /// One event of the CLI session `cli`, run by the process `pid`.
     fn hear(&mut self, cli: &str, pid: u32, event: Event) -> Vec<Change> {
         let draws = &mut self.draws;
         let reported = Reported {
@@ -52,7 +46,6 @@ impl Desk {
             .unwrap_or_else(|| panic!("no session {cli}"))
     }
 
-    /// The session `cli`, started and in a turn, and the turn.
     fn in_a_turn(&mut self, cli: &str, pid: u32) -> (SessionId, TurnId) {
         self.hear(cli, pid, Event::SessionStarted { how: Start::New });
         self.hear(cli, pid, Event::TurnStarted);
@@ -83,7 +76,6 @@ fn make(phase: Phase) -> Event {
     }
 }
 
-/// The step `number` of `turn` of `session`, which is `event`.
 fn step(session: &SessionId, turn: &TurnId, number: u32, event: Event) -> Change {
     Change::Step {
         session: session.clone(),
@@ -122,9 +114,7 @@ fn the_steps_of_a_turn_are_kept_in_order_each_with_its_session_its_kind_and_an_e
         .flat_map(|(cli, pid, event)| desk.hear(cli, *pid, event.clone()))
         .collect();
 
-    // In the order taken, each session counting its own steps; the end of the command is
-    // no step. Each step names its own session and turn and is the event fed, unchanged:
-    // the edit with its path as the CLI named it and its lines, the write with none.
+    // The end of the command is no step.
     let expected = [
         step(&a, &a_turn, 1, read("a.txt")),
         step(&b, &b_turn, 1, wrote("b.txt", WriteTool::Write, None)),
@@ -141,7 +131,6 @@ fn the_steps_of_a_turn_are_kept_in_order_each_with_its_session_its_kind_and_an_e
     ];
     assert_eq!(told, expected);
 
-    // What the Switchboard holds agrees with what it told: the number of the last step.
     assert_eq!(desk.board.session(&a).expect("a").turn, Some((a_turn, 4)));
     assert_eq!(desk.board.session(&b).expect("b").turn, Some((b_turn, 2)));
 }
@@ -160,7 +149,6 @@ fn the_steps_of_the_next_turn_number_from_1_again_and_a_step_between_two_turns_i
         },
     );
 
-    // Between the turns no step is told, and none is counted into the next turn.
     assert_eq!(desk.hear("a", 10, read("between.txt")), []);
     assert_eq!(desk.known("a").turn, None);
 

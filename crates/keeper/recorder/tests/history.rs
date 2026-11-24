@@ -1,6 +1,3 @@
-//! Component tests: the history of a worktree, its commits and its recorded states, read
-//! through the surface the rest of the Keeper uses, in real repositories the tests make.
-
 mod support;
 
 use std::path::Path;
@@ -16,7 +13,6 @@ fn open(folder: &Path) -> Worktree {
     Worktree::open(&found(), folder).expect("open")
 }
 
-/// A store in the scratch folder, outside every repository, as the app's folder is.
 fn store(scratch: &Scratch) -> StateStore {
     StateStore::open(&found(), &scratch.join("app/states/one.git")).expect("open the store")
 }
@@ -25,8 +21,6 @@ fn id(commit: &str) -> CommitId {
     CommitId::new(commit)
 }
 
-/// What an entry is, as one word the test can compare: a commit by its id, a state by
-/// its id.
 fn named(entries: &[HistoryEntry]) -> Vec<String> {
     entries
         .iter()
@@ -37,14 +31,12 @@ fn named(entries: &[HistoryEntry]) -> Vec<String> {
         .collect()
 }
 
-/// Changes a file, so that the next state differs from the one before.
 fn change(repo: &Path, path: &str, content: &str) {
     write(repo, path, content);
 }
 
-/// A repository whose history is the commits C1, C2 and C3 over a base C0 and the states
-/// S1 and S2 on C1 and S3 on C2, in the order `C0 C1 S1 S2 C2 S3 C3`, every commit made in
-/// the same second. A branch the test left, with a state of its own, lies beside them.
+/// History `C0 C1 S1 S2 C2 S3 C3` (C commits, S states), every commit made in the same second. A
+/// branch the test left, with a state of its own, lies beside them.
 struct Lived {
     repo: std::path::PathBuf,
     base: String,
@@ -60,7 +52,6 @@ fn lived(scratch: &Scratch, store: &StateStore) -> Lived {
     let base = commit_all(&repo, "base");
     let worktree = open(&repo);
 
-    // A branch the user worked on and switched away from: its state is never listed.
     git(&repo, &["checkout", "--quiet", "-b", "left"]);
     change(&repo, "left.txt", "left\n");
     commit_all(&repo, "on the branch left");
@@ -87,8 +78,8 @@ fn lived(scratch: &Scratch, store: &StateStore) -> Lived {
     }
 }
 
-// REC-01. Every commit is made in the second the scratch folder fixes, so that only git's
-// own order and the numbers of the states can tell what came first.
+// Every commit is made in the second the scratch folder fixes, so only git's order and the state
+// numbers can tell what came first.
 #[test]
 fn the_history_lists_the_commits_and_the_states_in_the_order_they_happened() {
     let scratch = Scratch::new();
@@ -122,7 +113,6 @@ fn the_history_lists_the_commits_and_the_states_in_the_order_they_happened() {
         ],
         "C1, then the states taken on it, C2, its state, and C3 with nothing after"
     );
-    // Each entry says what it is, not only which id it has.
     assert_eq!(
         entries[1],
         HistoryEntry::State(s1.clone()),
@@ -212,7 +202,6 @@ fn a_worktree_with_no_commit_has_the_states_taken_before_any_alone() {
         [first.id.as_str(), second.id.as_str()]
     );
 
-    // The same states come first when the first commit is made later.
     let committed = commit_all(&repo, "first");
     assert_eq!(
         named(&history(&worktree, &store, None).expect("the history")),
@@ -220,9 +209,9 @@ fn a_worktree_with_no_commit_has_the_states_taken_before_any_alone() {
     );
 }
 
-// The commit a review counts from is reached through the second parent of a merge when the
-// branch took in its base: a walk along first parents alone would never meet it, and list
-// what lies before it.
+// The review's base is reached through the second parent of a merge when the branch took
+// in its base: a walk along first parents alone never meets it, and would list what lies
+// before it.
 #[test]
 fn the_history_follows_first_parents_and_leaves_out_what_lies_before_since() {
     let scratch = Scratch::new();
@@ -248,7 +237,6 @@ fn the_history_follows_first_parents_and_leaves_out_what_lies_before_since() {
     write(&repo, "f.txt", "feature two\n");
     let feature_two = commit_all(&repo, "feature two");
     let worktree = open(&repo);
-    // The commit the branch left main at, now main's own tip.
     let counted_from = worktree
         .fork_point(&id(&main_two))
         .expect("fork point")
@@ -263,8 +251,8 @@ fn the_history_follows_first_parents_and_leaves_out_what_lies_before_since() {
         "the branch's own commits and the merge: the commits of main it took in are not \
          listed, nor the root before the commit the history counts from"
     );
-    // Counted from the root, more commits come after it than the first parents hold: those
-    // of main the merge took in. They are not listed, and the walk stops at the root.
+    // More commits come after the root than first parents hold (those of main the merge took in);
+    // they are not listed.
     let from_the_root = history(&worktree, &store, Some(&id(&root))).expect("the history");
     assert_eq!(
         named(&from_the_root),

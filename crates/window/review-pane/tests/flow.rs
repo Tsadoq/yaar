@@ -1,11 +1,6 @@
-//! Component test: Flow and its timeline, on GPUI's test platform. Keys, clicks and the wheel
-//! go in; the pane is read back through the model it shows. The test plays the Keeper on the
-//! other end of a socket pair: it sets the agents, the turns and the settings the Keeper would
-//! hold, tells the facts the Keeper tells, and reads what the Window asks.
-//!
-//! A negative clause ("is not added", "asks nothing") is read after a barrier: something the
-//! test causes after it, through the same path, whose arrival shows that everything before
-//! it arrived.
+//! Component test: Flow and its timeline, with the Keeper played by the test.
+//! A negative clause is read after a barrier: a later message through the same path, whose arrival
+//! shows that everything before it arrived.
 
 mod common;
 
@@ -24,12 +19,10 @@ use common::{
     wait_until, working_on, workspace,
 };
 
-/// The state the turn counts from.
 fn s0() -> String {
     "5".repeat(40)
 }
 
-/// The state recorded at the end of the turn.
 fn s1() -> String {
     "6".repeat(40)
 }
@@ -56,7 +49,6 @@ fn command(command: &str) -> Step {
     }
 }
 
-/// Session `a`, which works on `turn`, as the agents model shows it.
 fn session_a_on(turn: &TurnId) -> Session {
     working_on(
         session('a', "Claude Code 1", SessionState::Works, None),
@@ -77,7 +69,6 @@ fn press(keys: &str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// A click on the bar, away from every control of it: the pane has the focus afterwards.
 fn focus_by_the_bar(stage: &Stage, cx: &mut VisualTestContext) {
     click("review-bar", cx);
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
@@ -95,8 +86,6 @@ fn form(stage: &Stage, cx: &mut VisualTestContext) -> FlowForm {
     stage.pane.read_with(cx, |pane, _| pane.flow_form())
 }
 
-/// Keeps the app running until the timeline is `wanted`. Fails at the deadline, with the
-/// timeline it held.
 fn wait_for_timeline(stage: &Stage, wanted: &[TimelineEntry], cx: &mut VisualTestContext) {
     let deadline = Instant::now() + DEADLINE;
     loop {
@@ -136,7 +125,6 @@ fn end(turn: &TurnId, how: Option<TurnEnd>) -> TimelineEntry {
     }
 }
 
-/// How often the Window asked the Keeper for `turn`.
 fn asked_for(stage: &Stage, turn: &TurnId) -> usize {
     stage
         .keeper
@@ -146,15 +134,13 @@ fn asked_for(stage: &Stage, turn: &TurnId) -> usize {
         .count()
 }
 
-/// Shows the changes of one file of workspace `1`, so that what the Window asks first has
-/// been answered and the requests that come after are Flow's and the turn end's.
+/// Answers what the Window asks first, so that the later requests are Flow's and the turn end's.
 fn show_changes(stage: &mut Stage, cx: &mut VisualTestContext) {
     let changes = since_main(Vec::new(), vec![file("a.rs", FileStatus::Modified)]);
     stage.keeper.show(&changes, |_| texts("a\n", "b\n"), cx);
     wait_for_files(&stage.pane, cx);
 }
 
-/// Turns the wheel over the rows of Changes, `by` pixels (negative: down the list).
 fn wheel(stage: &Stage, by: f32, cx: &mut VisualTestContext) {
     let in_view = stage.pane.read_with(cx, |pane, _| pane.rows_in_view());
     let over_the_rows = bounds_of_row(in_view.start + 2, cx).center();
@@ -166,7 +152,6 @@ fn wheel(stage: &Stage, by: f32, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// What the reviewer reads in Changes: the rows in view and the line they are on.
 fn reading(
     stage: &Stage,
     cx: &mut VisualTestContext,
@@ -185,13 +170,11 @@ fn the_pane_offers_flow_and_changes_and_switches_between_them(cx: &mut TestAppCo
     stage.keeper.show(&changes, |_| texts("", &lines), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
 
-    // The pane offers both views, and opens on Changes.
     assert_eq!(view(&stage, &mut cx), View::Changes);
     for selector in ["review-bar", "review-view-changes", "review-view-flow"] {
         assert!(drawn(selector, &mut cx).is_some(), "{selector} is drawn");
     }
 
-    // The reviewer is on a line that is not the first, a little way into the list.
     click("review-row-2", &mut cx);
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
     for _ in 0..3 {
@@ -204,20 +187,16 @@ fn the_pane_offers_flow_and_changes_and_switches_between_them(cx: &mut TestAppCo
         .read_with(&cx, |pane, _| pane.position().cloned());
     assert_ne!(first_line.as_ref().map(|position| position.line), Some(0));
 
-    // `f` shows Flow, which has no turn to show and takes the place of Changes.
     press("f", &mut cx);
     assert_eq!(view(&stage, &mut cx), View::Flow);
     assert!(drawn("flow-empty", &mut cx).is_some());
     assert!(drawn("review-row-0", &mut cx).is_none());
-    // `f` again shows Changes as the reviewer left it.
     press("f", &mut cx);
     assert_eq!(view(&stage, &mut cx), View::Changes);
     assert!(drawn("review-row-0", &mut cx).is_some());
     assert!(drawn("flow-empty", &mut cx).is_none());
     assert_eq!(reading(&stage, &mut cx), before);
 
-    // Far down the list, where the first row is out of view, the clicks on the two names
-    // switch as well, and the list comes back to the row it was at.
     for _ in 0..30 {
         press("j", &mut cx);
     }
@@ -232,7 +211,6 @@ fn the_pane_offers_flow_and_changes_and_switches_between_them(cx: &mut TestAppCo
     assert_eq!(view(&stage, &mut cx), View::Changes);
     assert_eq!(reading(&stage, &mut cx), (in_view.clone(), position));
     assert!(drawn(&format!("review-row-{}", in_view.start), &mut cx).is_some());
-    // A click on the name of the view on screen leaves it there.
     click("review-view-changes", &mut cx);
     assert_eq!(view(&stage, &mut cx), View::Changes);
 }
@@ -258,7 +236,6 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
 
-    // The turn the pane met running is read, and listed with the steps so far.
     let so_far = [
         heading(&t, 'a', "Claude Code 1"),
         step_entry(&t, 1, read("notes.txt")),
@@ -281,7 +258,6 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
         );
     }
 
-    // The steps that come as facts follow in order; one told twice is held once.
     let s = session_id('a');
     stage
         .keeper
@@ -305,8 +281,7 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
     wait_for_timeline(&stage, &four, &mut cx);
     assert_eq!(asked_for(&stage, &t), 1);
 
-    // A step with one missing before it has the turn read again, and the answer fills the
-    // gap, so that the timeline holds the steps in order.
+    // A step with one missing before it has the turn read again, and the answer fills the gap.
     let steps = vec![
         read("notes.txt"),
         edit("src/a.rs", 3, 4),
@@ -335,8 +310,8 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
     wait_for_timeline(&stage, &all, &mut cx);
     assert_eq!(asked_for(&stage, &t), 2);
 
-    // A step of another workspace is no step of this one: told first, it would take the
-    // place of the step of this workspace with the same number.
+    // A step of another workspace is no step of this one: told first, it would take the place of
+    // the step of this workspace with the same number.
     let mut other = step_fact(s.clone(), t.clone(), 7, read("elsewhere.txt"));
     if let Fact::Step { workspace, .. } = &mut other {
         *workspace = id('2');
@@ -348,8 +323,6 @@ fn the_timeline_lists_each_edit_read_and_command_of_the_turn_in_order(cx: &mut T
     all.push(step_entry(&t, 7, command("later")));
     wait_for_timeline(&stage, &all, &mut cx);
 
-    // The end of the turn comes last; the turn end's own question for Changes is the next
-    // request, answered with no file.
     stage.keeper.tell(Fact::TurnEnded {
         workspace: id('1'),
         session: s,
@@ -387,8 +360,8 @@ fn a_pane_opened_where_no_turn_runs_lists_the_newest_turn_of_the_history_and_the
                 workspace: id('1'),
                 start: Some(COMMIT.to_owned()),
                 entries: vec![
-                    // Turns with no state kept: Changes has none to select, which would be
-                    // the first request of the Window.
+                    // Turns with no state kept: Changes has none to select, which would be the
+                    // first request.
                     HistoryEntry::Turn {
                         turn: turn_id('9'),
                         session: session_id('a'),
@@ -419,8 +392,6 @@ fn a_pane_opened_where_no_turn_runs_lists_the_newest_turn_of_the_history_and_the
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
 
-    // The history's newest turn is read, with its steps and how it ended; the older turn
-    // is not.
     let first = vec![
         heading(&t0, 'a', "Claude Code 1"),
         step_entry(&t0, 1, read("old.txt")),
@@ -430,7 +401,6 @@ fn a_pane_opened_where_no_turn_runs_lists_the_newest_turn_of_the_history_and_the
     wait_for_timeline(&stage, &first, &mut cx);
     assert_eq!(stage.keeper.turns_asked(), std::slice::from_ref(&t0));
 
-    // A turn that starts is listed after it, in the order they started.
     stage.keeper.set_turn(running_turn(
         t.clone(),
         session_id('a'),
@@ -472,7 +442,6 @@ fn a_turn_whose_recording_expired_is_not_the_turn_flow_lists_when_it_opens(
                         session: session_id('a'),
                         state: None,
                     },
-                    // Newer, and its recording is gone: it has no live diff to show.
                     HistoryEntry::ExpiredTurn {
                         turn: turn_id('9'),
                         session: session_id('a'),
@@ -505,15 +474,12 @@ fn a_turn_whose_recording_expired_is_not_the_turn_flow_lists_when_it_opens(
         ],
         &mut cx,
     );
-    // The turn before it was read, and the expired one never asked for: the Keeper heard
-    // each question before it answered the one that filled the timeline.
     assert_eq!(stage.keeper.turns_asked(), std::slice::from_ref(&t0));
 }
 
 #[gpui_kit::test]
 fn a_turn_the_keeper_does_not_hold_keeps_its_heading_and_says_nothing(cx: &mut TestAppContext) {
     let t = turn_id('t');
-    // The Keeper holds no turn T: it refuses the question with `UnknownTurn`.
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| keeper.set_agents(vec![agents_of(vec![session_a_on(&turn_id('t'))])]),
@@ -527,7 +493,6 @@ fn a_turn_the_keeper_does_not_hold_keeps_its_heading_and_says_nothing(cx: &mut T
         asked_for(&stage, &t) == 1
     });
 
-    // The steps that come as facts are listed all the same, and nothing is said.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 1, read("x.txt")));
@@ -586,8 +551,6 @@ fn j_and_k_move_the_reviewer_through_the_entries_and_stay_at_the_first_and_the_l
     press("k", &mut cx);
     assert_eq!(cursor(&stage, &mut cx), Some(0), "it stays at the first");
 
-    // A step that comes in below keeps the reviewer on the entry they were on, and a
-    // click on an entry puts them there.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 3, read("c.txt")));
@@ -605,7 +568,6 @@ fn j_and_k_move_the_reviewer_through_the_entries_and_stay_at_the_first_and_the_l
 fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_across_the_views(
     cx: &mut TestAppContext,
 ) {
-    // More entries than the window holds rows.
     let steps: Vec<Step> = (0..40)
         .map(|number| read(&format!("file-{number}.txt")))
         .collect();
@@ -641,7 +603,6 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
     assert!(drawn("flow-entry-0", &mut cx).is_some());
     assert!(drawn("flow-entry-40", &mut cx).is_none());
 
-    // Walking down takes the list along: the entry the reviewer is on is in view.
     for _ in 0..35 {
         press("j", &mut cx);
     }
@@ -654,7 +615,6 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
     assert!(drawn(&format!("flow-entry-{cursor}"), &mut cx).is_some());
     assert!(drawn("flow-entry-0", &mut cx).is_none());
 
-    // Changes and back leaves the list where it was.
     let there = in_view(&stage, &mut cx);
     press("f", &mut cx);
     press("f", &mut cx);
@@ -662,8 +622,6 @@ fn the_list_of_a_long_timeline_scrolls_with_the_reviewer_and_keeps_its_place_acr
     for _ in 0..40 {
         press("k", &mut cx);
     }
-    // The turn runs, so the first `j` paused follow, and the line that offers to resume
-    // takes one row of the list: the list is back at the top, one row shorter.
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.following()),
         Following::Paused { missed: 0 }
@@ -719,8 +677,6 @@ fn a_turn_that_started_before_its_start_was_kept_is_read_again_at_a_turn_end_and
         stage.keeper.turns_asked().len() == 3
     });
 
-    // Its start is kept, and the turn before it ends: the Window reads turn 2 again, and
-    // turns 1 (which ended) and 3 (which has a start) are left as they are.
     stage.keeper.set_turn(running_turn(
         t2.clone(),
         session_id('b'),
@@ -735,9 +691,8 @@ fn a_turn_that_started_before_its_start_was_kept_is_read_again_at_a_turn_end_and
         state: None,
         since: None,
     });
-    // The barrier: the Window sends this after everything it sent for the turn end, on the
-    // one connection, so that when the Keeper has it, any other question for a turn it was
-    // going to send has arrived too.
+    // The barrier is the form `shift-l` sets: the Window sends it after everything it sent for the
+    // turn end, on the one connection.
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
     press("shift-l", &mut cx);
@@ -823,14 +778,12 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     stage.keeper.show(&first, |_| texts("a\n", "b\n"), &mut cx);
     wait_for_files(&stage.pane, &mut cx);
 
-    // The first time, Flow is the timeline, and with no turn it says there is none.
     focus_by_the_bar(&stage, &mut cx);
     press("f", &mut cx);
     assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
     assert!(drawn("flow-empty", &mut cx).is_some());
     assert!(drawn("flow-live", &mut cx).is_none());
 
-    // `shift-l` shows the live diff and has the Keeper keep the form of this workspace.
     press("shift-l", &mut cx);
     assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     let live = Setting::FlowForm {
@@ -843,7 +796,6 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     assert!(drawn("flow-live", &mut cx).is_some());
     assert!(drawn("flow-entry-0", &mut cx).is_none());
 
-    // Afterwards Flow opens in the form chosen last, in each workspace by itself.
     press("f", &mut cx);
     press("f", &mut cx);
     assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
@@ -876,7 +828,6 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     press("shift-l", &mut cx);
     assert_eq!(form(&stage, &mut cx), FlowForm::Timeline);
 
-    // In the middle of a turn the forms switch as well, and what came meanwhile is listed.
     stage.keeper.set_turn(running_turn(
         t.clone(),
         session_id('a'),
@@ -895,8 +846,6 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     assert!(drawn("flow-live", &mut cx).is_some());
     assert!(drawn("flow-entry-0", &mut cx).is_none());
-    // A step told while the live diff is on screen is taken then: it is in the timeline
-    // before the form goes back to it.
     stage
         .keeper
         .tell(step_fact(session_id('a'), t.clone(), 3, write("new.txt")));
@@ -917,7 +866,6 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
     wait_until(&mut cx, "the last form to reach the Keeper", |_| {
         stage.keeper.settings_set().last() == Some(&timeline_form)
     });
-    // A click on a form in the bar chooses it, and a click on the one shown leaves it.
     click("flow-form-live", &mut cx);
     assert_eq!(form(&stage, &mut cx), FlowForm::LiveDiff);
     click("flow-form-live", &mut cx);
@@ -928,7 +876,6 @@ fn flow_opens_as_the_timeline_the_first_time_and_the_two_forms_switch_at_any_tim
 
 #[gpui_kit::test]
 fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAppContext) {
-    // The Keeper holds the form chosen last in workspace 1: a window opened now meets it.
     let (mut stage, mut cx) = open_staged(
         vec![workspace('1', "feature")],
         |keeper| {
@@ -950,7 +897,6 @@ fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAp
     assert!(drawn("flow-live", &mut cx).is_some());
     assert!(drawn("flow-entry-0", &mut cx).is_none());
 
-    // Another window's choice, told as a fact, changes the form here.
     stage.keeper.tell(Fact::SettingChanged(Setting::FlowForm {
         workspace: id('1'),
         form: FlowForm::Timeline,
@@ -961,8 +907,8 @@ fn afterwards_flow_opens_in_the_form_chosen_last_in_a_new_window(cx: &mut TestAp
             .read_with(cx, |pane, _| pane.flow_form() == FlowForm::Timeline)
     });
     assert!(drawn("flow-live", &mut cx).is_none());
-    // That is no choice of this window's: nothing was sent. The barrier is this window's own
-    // choice, which reaches the Keeper after anything the told form could have sent.
+    // The form another window chose is no choice of this window's, so nothing was sent. The barrier
+    // is this window's own choice, which reaches the Keeper after anything the told form sent.
     press("shift-l", &mut cx);
     let own = Setting::FlowForm {
         workspace: id('1'),

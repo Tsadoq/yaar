@@ -1,7 +1,4 @@
-//! The downloader, through `yaar_navigator::download`: what a request carries, where it may
-//! go, what is written, and what is refused. Every address is a `Loopback` of the test's
-//! own, so that nothing leaves the machine; the thing downloaded is the stand-in, packed by
-//! the test. LSP-05 is the first test.
+//! Downloader tests. Every address is a `Loopback` of the test's own; nothing leaves the machine.
 
 mod support;
 
@@ -20,22 +17,17 @@ use yaar_navigator::download::{
 };
 use yaar_navigator::registry::{Archive, Download};
 
-/// Where the stand-in lies in the archives these tests pack: one folder above the program,
-/// which `strip = 1` drops.
+/// The stand-in lies one folder above the program, which `strip = 1` drops.
 const IN_ARCHIVE: &str = "standin/standin-lsp";
 
-/// The stand-in's bytes.
 fn standin_bytes() -> Vec<u8> {
     std::fs::read(standin()).expect("read the stand-in")
 }
 
-/// The stand-in packed as a `tar.gz` at [`IN_ARCHIVE`], mode 0755.
 fn standin_archive() -> Vec<u8> {
     tar_gz(&[(IN_ARCHIVE, &standin_bytes(), 0o755)])
 }
 
-/// What a row of the registry would pin for `bytes` served at `url`: a `tar.gz`, strip 1,
-/// the program `standin-lsp`, the size and the digest of `bytes`.
 fn pinned(url: String, bytes: &[u8], version: &str) -> Download {
     Download {
         platform: Platform::LinuxX64,
@@ -49,7 +41,6 @@ fn pinned(url: String, bytes: &[u8], version: &str) -> Download {
     }
 }
 
-/// Every path under `folder`, relative to it, folders and files alike.
 fn tree(folder: &Path) -> BTreeSet<PathBuf> {
     fn walk(root: &Path, folder: &Path, found: &mut BTreeSet<PathBuf>) {
         let Ok(entries) = std::fs::read_dir(folder) else {
@@ -68,7 +59,6 @@ fn tree(folder: &Path) -> BTreeSet<PathBuf> {
     found
 }
 
-/// The entries of `servers` and of `servers/standin` that are a partial file or folder.
 fn partials(servers: &Path) -> Vec<PathBuf> {
     [servers.to_path_buf(), servers.join("standin")]
         .iter()
@@ -80,7 +70,6 @@ fn partials(servers: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-/// The version folders `servers/standin` holds: its entries but `installed.toml`.
 fn versions(servers: &Path) -> Vec<String> {
     let mut found: Vec<String> = std::fs::read_dir(servers.join("standin"))
         .into_iter()
@@ -93,9 +82,8 @@ fn versions(servers: &Path) -> Vec<String> {
     found
 }
 
-/// Sets the modification time of `folder` to a fixed time long past, and gives it. A folder
-/// is touched whenever an entry is made or removed in it, so a time that is still this one
-/// after a call shows that the call made nothing in the folder, however fast the clock.
+/// Sets the folder's mtime far in the past. A folder is touched whenever an entry is made or
+/// removed in it, so an unchanged time after a call shows it made nothing there.
 fn set_modified_long_ago(folder: &Path) -> std::time::SystemTime {
     let long_ago = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
     std::fs::File::open(folder)
@@ -105,14 +93,12 @@ fn set_modified_long_ago(folder: &Path) -> std::time::SystemTime {
     long_ago
 }
 
-/// The modification time of `folder`.
 fn modified(folder: &Path) -> std::time::SystemTime {
     std::fs::metadata(folder)
         .and_then(|data| data.modified())
         .expect("read the folder's modification time")
 }
 
-/// The three strings of `installed.toml` of the server `standin`.
 fn installed_file(servers: &Path) -> (String, String, String) {
     let text = std::fs::read_to_string(servers.join("standin").join(INSTALLED_FILE))
         .expect("read installed.toml");
@@ -126,9 +112,8 @@ fn installed_file(servers: &Path) -> (String, String, String) {
     (get("version"), get("sha256"), get("program"))
 }
 
-/// A listener that answers every request with `response`, written as given, and closes. For
-/// the answers `Loopback` does not give: no `Location`, a body cut short, a body with no
-/// length. Runs until the test process ends.
+/// Answers every request with `response` verbatim, then closes: for answers `Loopback` does
+/// not give, such as no `Location`, a truncated body or no length.
 fn raw_server(response: Vec<u8>) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listen on the loopback address");
     let port = listener.local_addr().expect("its address").port();
@@ -137,7 +122,6 @@ fn raw_server(response: Vec<u8>) -> String {
             let Ok(mut stream) = stream else { continue };
             let response = response.clone();
             std::thread::spawn(move || {
-                // The request ends with an empty line.
                 let mut seen = Vec::new();
                 let mut byte = [0_u8; 1];
                 while !seen.ends_with(b"\r\n\r\n") {
@@ -154,7 +138,6 @@ fn raw_server(response: Vec<u8>) -> String {
     format!("http://127.0.0.1:{port}/served")
 }
 
-/// A `tar.gz` of `entries` (path, kind, bytes), each path written as given.
 fn tar_gz_of(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
     let mut builder = tar::Builder::new(flate2::write::GzEncoder::new(
         Vec::new(),
@@ -182,8 +165,6 @@ fn tar_gz_of(entries: &[(&str, tar::EntryType, &[u8])]) -> Vec<u8> {
         .expect("finish the compression")
 }
 
-/// A registry of one row a server, each row's server pinned as `(name, version, url,
-/// digest, size)` for [`Platform::LinuxX64`].
 fn registry_of(servers: &[(&str, &str, String, String, u64)]) -> Registry {
     let mut text = String::new();
     for (name, version, url, digest, size) in servers {
@@ -210,10 +191,6 @@ fn registry_of(servers: &[(&str, &str, String, String, u64)]) -> Registry {
     registry
 }
 
-// ---------------------------------------------------------------------------------------
-// LSP-05
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn a_download_whose_digest_differs_from_its_row_is_refused() {
     let scratch = Scratch::new();
@@ -222,7 +199,6 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
     let loopback = Loopback::serve(vec![("standin.tar.gz".to_owned(), bytes.clone())]);
     let downloader = Downloader::new().expect("a downloader");
 
-    // The row pins the digest of other bytes.
     let download = Download {
         sha256: sha256(b"other"),
         ..pinned(loopback.url("standin.tar.gz"), &bytes, "1")
@@ -234,14 +210,12 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
             found: sha256(&bytes),
         })
     );
-    // The bytes did arrive: the refusal is the digest's, not the network's.
     assert_eq!(loopback.heard().len(), 1);
     assert_eq!(versions(&servers), Vec::<String>::new());
     assert_eq!(installed(&servers, "standin"), None);
     assert!(!servers.join("standin").join(INSTALLED_FILE).exists());
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 
-    // With version 1 installed, a version 2 with a wrong digest changes nothing.
     let first = pinned(loopback.url("standin.tar.gz"), &bytes, "1");
     let kept = downloader
         .fetch("standin", &first, &servers)
@@ -250,9 +224,8 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
         sha256: sha256(b"other"),
         ..pinned(loopback.url("standin.tar.gz"), &bytes, "2")
     };
-    // Unpacking makes and removes a partial folder inside the server's folder, which moves
-    // that folder's modification time and leaves nothing else to see. The time is set to
-    // one long past, so that a change of it, whatever the clock says, shows an unpack.
+    // Unpacking makes and removes a partial folder in the server's folder, moving its mtime.
+    // With that time set long past, any change of it shows an unpack.
     let own = servers.join("standin");
     let long_ago = set_modified_long_ago(&own);
     assert_eq!(
@@ -277,9 +250,8 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
     );
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 
-    // Nothing is unpacked before the digest has matched: archives that unpacking itself
-    // would refuse, under a wrong digest, still give the digest's error and write nothing,
-    // where a downloader that unpacked first would give `Unpack`.
+    // Nothing is unpacked before the digest matches: archives the unpacking would refuse still give
+    // the digest's error under a wrong digest.
     use tar::EntryType::{Fifo, Regular};
     let program = (IN_ARCHIVE, Regular, &b"ok"[..]);
     let refused_by_unpacking: [Vec<(&str, tar::EntryType, &[u8])>; 3] = [
@@ -329,10 +301,6 @@ fn a_download_whose_digest_differs_from_its_row_is_refused() {
     );
 }
 
-// ---------------------------------------------------------------------------------------
-// What is installed
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn a_tar_gz_installs_the_program_executable_and_installed_toml_names_it() {
     let scratch = Scratch::new();
@@ -361,7 +329,6 @@ fn a_tar_gz_installs_the_program_executable_and_installed_toml_names_it() {
     assert_eq!(std::fs::read(&program).unwrap(), standin_bytes());
     let mode = std::os::unix::fs::PermissionsExt::mode(&program.metadata().unwrap().permissions());
     assert_eq!(mode & 0o111, 0o111, "the program is executable");
-    // The path above `strip` is gone and the rest kept.
     assert_eq!(
         std::fs::read(servers.join("standin/1/lib/data.txt")).unwrap(),
         b"data"
@@ -374,7 +341,6 @@ fn a_tar_gz_installs_the_program_executable_and_installed_toml_names_it() {
     assert_eq!(installed(&servers, "standin"), Some(done));
     assert_eq!(installed(&servers, "another"), None);
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
-    // The stand-in the download holds runs: the unpacked program is the one served.
     let output = Command::new(&program).arg("--version").output().unwrap();
     assert!(output.status.success());
 }
@@ -384,7 +350,7 @@ fn folders_a_long_name_and_a_pax_note_of_the_archive_unpack_as_they_should() {
     use tar::EntryType::{Directory, Regular, XGlobalHeader};
     let scratch = Scratch::new();
     let servers = scratch.root.join("servers");
-    // A name longer than a tar header holds goes through the long-name entry of GNU tar.
+    // A name longer than a tar header holds goes through GNU tar's long-name entry.
     let long = format!("standin/lib/{}/file.txt", "d".repeat(110));
     let bytes = tar_gz(&[(long.as_str(), b"long", 0o644)]);
     let long_download = Loopback::serve(vec![("long.tar.gz".to_owned(), bytes.clone())]);
@@ -399,8 +365,6 @@ fn folders_a_long_name_and_a_pax_note_of_the_archive_unpack_as_they_should() {
     let pax = Loopback::serve(vec![("pax.tar.gz".to_owned(), program.clone())]);
     let downloader = Downloader::new().expect("a downloader");
 
-    // The row names the long-named file as its program, so that it is what the unpacking
-    // is checked by.
     let with_program = Download {
         program: "lib".to_owned() + "/" + &"d".repeat(110) + "/file.txt",
         ..pinned(long_download.url("long.tar.gz"), &bytes, "1")
@@ -410,8 +374,6 @@ fn folders_a_long_name_and_a_pax_note_of_the_archive_unpack_as_they_should() {
         .expect("the long name unpacks");
     assert_eq!(std::fs::read(&done.program).unwrap(), b"long");
 
-    // The note is read past, the folders made, a file with nothing left after the strip
-    // passed over.
     let done = downloader
         .fetch(
             "standin",
@@ -521,8 +483,8 @@ fn installed_toml_is_replaced_by_a_rename_not_written_in_place() {
         )
         .unwrap();
 
-    // A second name for the file the first install wrote: a write in place would reach it,
-    // a rename of a new file over `installed.toml` leaves it as it was.
+    // A second name for the file: a write in place would reach it, a rename of a new file over
+    // `installed.toml` leaves it as it was.
     let file = servers.join("standin").join(INSTALLED_FILE);
     let held = scratch.root.join("held-installed.toml");
     std::fs::hard_link(&file, &held).unwrap();
@@ -549,7 +511,7 @@ fn a_version_folder_another_process_wrote_is_kept_and_a_damaged_one_is_replaced(
     let loopback = Loopback::serve(vec![("standin.tar.gz".to_owned(), bytes.clone())]);
     let downloader = Downloader::new().expect("a downloader");
 
-    // Another process unpacked version 1 first; its program is what stays.
+    // Another process unpacked version 1 first; its program stays.
     let there = servers.join("standin/1/standin-lsp");
     std::fs::create_dir_all(there.parent().unwrap()).unwrap();
     std::fs::write(&there, b"written by another process").unwrap();
@@ -568,7 +530,6 @@ fn a_version_folder_another_process_wrote_is_kept_and_a_damaged_one_is_replaced(
     assert_eq!(installed(&servers, "standin"), Some(done));
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 
-    // A folder of version 2 with no program in it is no install: the download replaces it.
     std::fs::create_dir_all(servers.join("standin/2/lib")).unwrap();
     let done = downloader
         .fetch(
@@ -597,7 +558,6 @@ fn installed_reads_installed_toml_as_the_module_documents_it() {
         program
     };
 
-    // The file as it is written in the folder of real servers: a program under a folder.
     let tsc = program("tsgo", "7.0.2/lib/tsc");
     write(
         "tsgo",
@@ -612,7 +572,6 @@ fn installed_reads_installed_toml_as_the_module_documents_it() {
         })
     );
 
-    // Nothing there, or a file that is no record: none.
     assert_eq!(installed(&servers, "nothing"), None);
     for (server, text) in [
         ("not-toml", "version = "),
@@ -624,10 +583,8 @@ fn installed_reads_installed_toml_as_the_module_documents_it() {
         write(server, text);
         assert_eq!(installed(&servers, server), None, "{server}");
     }
-    // A record whose program is not in the folder: the server is not there.
     write("gone", "version = \"1\"\nsha256 = \"x\"\nprogram = \"p\"\n");
     assert_eq!(installed(&servers, "gone"), None);
-    // A record that names a place outside the server's folder: never followed.
     std::fs::write(scratch.root.join("outside"), b"x").unwrap();
     for (version, program_name) in [
         ("../..", "outside"),
@@ -647,14 +604,9 @@ fn installed_reads_installed_toml_as_the_module_documents_it() {
             "{version} {program_name}"
         );
     }
-    // A server named by a path is no server.
     assert_eq!(installed(&servers, "../servers/tsgo"), None);
     assert_eq!(installed(&servers, ""), None);
 }
-
-// ---------------------------------------------------------------------------------------
-// What a request carries, and where it may go
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn the_request_carries_exactly_host_user_agent_and_accept() {
@@ -799,7 +751,6 @@ fn at_most_five_redirects_are_followed() {
     let loopback = Loopback::serve(vec![("file".to_owned(), bytes.clone())]);
     let downloader = Downloader::new().expect("a downloader");
 
-    // Six redirects: `r1` to `r6`, and `r6` to the file.
     for n in 1..=5 {
         loopback.redirect(&format!("r{n}"), &format!("/r{}", n + 1));
     }
@@ -821,7 +772,6 @@ fn at_most_five_redirects_are_followed() {
     );
     assert_eq!(versions(&servers), Vec::<String>::new());
 
-    // Five: `r1` to `r5`, and `r5` to the file.
     loopback.redirect("r5", "/file");
     downloader
         .fetch(
@@ -863,7 +813,6 @@ fn a_redirect_with_no_location_or_with_one_that_is_no_address_is_a_network_failu
 fn a_proxy_named_in_the_environment_is_not_used() {
     let this_test = "a_proxy_named_in_the_environment_is_not_used";
     if std::env::var_os("YAAR_PROXY_CHILD").is_some() {
-        // The child process, started with every proxy variable set to the would-be proxy.
         let scratch = Scratch::new();
         let bytes = standin_archive();
         let loopback = Loopback::serve(vec![("standin.tar.gz".to_owned(), bytes.clone())]);
@@ -876,7 +825,6 @@ fn a_proxy_named_in_the_environment_is_not_used() {
         return;
     }
 
-    // The would-be proxy serves nothing: an answer through it would be a 404.
     let proxy = Loopback::serve(Vec::new());
     let address = proxy.url("").trim_end_matches('/').to_owned();
     let mut child = Command::new(std::env::current_exe().unwrap());
@@ -929,10 +877,6 @@ fn an_https_address_is_tried_and_a_refused_connection_is_a_network_failure() {
     assert_eq!(versions(&servers), Vec::<String>::new());
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 }
-
-// ---------------------------------------------------------------------------------------
-// What stops a download
-// ---------------------------------------------------------------------------------------
 
 #[test]
 fn more_bytes_than_the_rows_size_stop_the_download_and_leave_nothing() {
@@ -987,9 +931,8 @@ fn bytes_that_stream_with_no_length_are_counted_and_stop_at_the_size() {
     assert_eq!(versions(&servers), Vec::<String>::new());
 }
 
-/// A listener that answers its one request with `response`, written as given, and then keeps
-/// the connection open, without ending the answer, until `held` is released or dropped. Gives
-/// the address and the thread to join once it is released.
+/// Answers its one request with `response`, then holds the connection open until `held` is
+/// released or dropped. Gives the address and the thread to join.
 fn held_server(
     response: Vec<u8>,
     held: std::sync::mpsc::Receiver<()>,
@@ -1007,8 +950,8 @@ fn held_server(
             }
         }
         let _ = stream.write_all(&response);
-        // Until the test has its answer the answer is not over: only a download that stops
-        // by itself, at the count, can end before then.
+        // The answer is not over until the test has its result: only a download that stops by
+        // itself at the count can end before then.
         let _ = held.recv();
     });
     (format!("http://127.0.0.1:{port}/served"), thread)
@@ -1021,9 +964,8 @@ fn a_download_stops_at_the_byte_past_the_size_without_waiting_for_the_end_of_the
     let scratch = Scratch::new();
     let servers = scratch.root.join("servers");
     let size = 10_000_u64;
-    // Exactly one byte more than the row's size, in a chunk, and then no more: no length was
-    // announced and the answer never ends. A count made only at the end, or one that leaves
-    // room above the size, would wait here for the read to time out instead.
+    // One byte more than the row's size in a chunk, then nothing: no length is announced and the
+    // answer never ends. A count made only at the end would wait for the read to time out.
     let body = vec![7_u8; size as usize + 1];
     let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
     response.extend_from_slice(format!("{:x}\r\n", body.len()).as_bytes());
@@ -1093,19 +1035,14 @@ fn a_status_that_is_not_ok_is_its_own_error_and_installs_nothing() {
     assert_eq!(partials(&servers), Vec::<PathBuf>::new());
 }
 
-// ---------------------------------------------------------------------------------------
-// What is refused in an archive
-// ---------------------------------------------------------------------------------------
-
-/// Fetches an archive of `entries` whose digest the row pins, so that it reaches the unpacking,
-/// and checks that it was refused with [`DownloadError::Unpack`], that nothing was written
-/// anywhere in the scratch but the server's own folder, and that nothing is installed.
+/// Fetches an archive of `entries` whose digest the row pins, and checks it is refused with
+/// `DownloadError::Unpack`, that nothing was written outside the server's folder, and that nothing
+/// is installed.
 fn assert_unpack_refuses(
     scratch: &Scratch,
     strip: u32,
     entries: &[(&str, tar::EntryType, &[u8])],
 ) -> String {
-    // A folder of its own for each call, so that one test can try several archives.
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let servers = scratch.root.join(format!("refused-{n}"));
@@ -1140,7 +1077,6 @@ fn assert_unpack_refuses(
     reason
 }
 
-/// One entry of an archive: its path as written, its kind, its bytes.
 fn entry<'a>(
     path: &'a str,
     kind: tar::EntryType,
@@ -1246,10 +1182,6 @@ fn a_program_that_names_a_path_outside_the_folder_is_refused() {
     assert!(!Path::new("/yaar-escape-test").exists());
 }
 
-// ---------------------------------------------------------------------------------------
-// fill and missing
-// ---------------------------------------------------------------------------------------
-
 #[test]
 fn fill_fetches_what_the_folder_lacks_and_a_second_fill_fetches_nothing() {
     let scratch = Scratch::new();
@@ -1310,7 +1242,6 @@ fn fill_fetches_what_the_folder_lacks_and_a_second_fill_fetches_nothing() {
         Vec::<String>::new()
     );
 
-    // The folder holds the pinned versions: nothing is fetched, and each line says so.
     let mut again = Vec::new();
     fill(&registry, Platform::LinuxX64, &servers, &mut |line| {
         again.push(line.to_owned())
@@ -1324,7 +1255,6 @@ fn fill_fetches_what_the_folder_lacks_and_a_second_fill_fetches_nothing() {
         "{again:?}"
     );
 
-    // No other platform's row is touched.
     let mut none = Vec::new();
     fill(&registry, Platform::DarwinArm64, &servers, &mut |line| {
         none.push(line.to_owned())
@@ -1388,7 +1318,6 @@ fn missing_names_a_server_whose_installed_toml_names_another_version_or_digest()
         Vec::<String>::new()
     );
 
-    // The row now names version 2, then version 1 with another digest.
     let version_two = registry_of(&[(
         "standin",
         "2",
@@ -1412,13 +1341,11 @@ fn missing_names_a_server_whose_installed_toml_names_another_version_or_digest()
         ["standin"]
     );
 
-    // A server whose program is gone from the folder is missing too.
     std::fs::remove_file(servers.join("standin/1/standin-lsp")).unwrap();
     assert_eq!(
         missing(&version_one, Platform::LinuxX64, &servers),
         ["standin"]
     );
-    // A row with no download for the platform is nobody's to fill.
     assert_eq!(
         missing(&version_one, Platform::DarwinArm64, &servers),
         Vec::<String>::new()
@@ -1427,7 +1354,6 @@ fn missing_names_a_server_whose_installed_toml_names_another_version_or_digest()
 
 #[test]
 fn the_built_in_table_names_a_download_for_each_platform_the_downloader_knows() {
-    // What `cargo xtask language-servers` fills: three servers, each with all four.
     let (registry, errors) = Registry::read(yaar_navigator::BUILTIN, None);
     assert!(errors.is_empty(), "{errors:?}");
     let scratch = Scratch::new();
@@ -1445,7 +1371,6 @@ fn the_built_in_table_names_a_download_for_each_platform_the_downloader_knows() 
             "{}",
             platform.name()
         );
-        // An empty folder lacks each, in the table's order.
         assert_eq!(
             missing(&registry, platform, &scratch.root.join("servers")),
             ["tsgo", "ty", "rust-analyzer"]

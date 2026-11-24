@@ -1,10 +1,5 @@
-//! System tests of a worktree made with an agent in one request: the built Keeper and Dock,
-//! the stand-in agent started by the launcher the Keeper opens in the new worktree, read
-//! through the Link as a Window reads it and through the files the stand-in leaves.
-//!
-//! The stand-in runs as Claude Code and, in the second function of the row, as pi, through
-//! the same body with the same assertions. It is started from a launcher (the CLI's name
-//! typed into a shell of the app), so it follows the world's script named `default`.
+//! System tests of a worktree made with an agent in one request, run with the stand-in as Claude
+//! Code and as pi.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -27,32 +22,23 @@ const SIZE: TerminalSize = TerminalSize {
     rows: 30,
 };
 
-/// The file the stand-in's one step writes, in the folder it works in.
 const MARKER_FILE: &str = "agent-was-here";
 
-/// A world whose stand-in follows a script of one step: it writes [`MARKER_FILE`] into its
-/// working folder. Pi is installed and allowed in both runs, so that a Keeper that started
-/// the other CLI than the one the request names fails at the sentence that says which
-/// started, and not at a wait that runs out.
+/// Pi is installed and allowed in both runs, so a Keeper that started the other CLI fails at the
+/// sentence that says which started.
 fn world_for() -> (World, Repo) {
     let script = Script(vec![Step::Write(PathBuf::from(MARKER_FILE), "yes".into())]);
     World::with_standin_and_pi("default", &script)
 }
 
-/// One request sent on a connection of its own and read as that Window reads it: every fact
-/// that came before the reply, in order, and the reply.
 struct Asked {
     facts: Vec<Fact>,
     reply: Result<Reply, Refusal>,
 }
 
-/// A connection to the Keeper that reads its frames in the order they come, which a
-/// `Client` does not show: it keeps the facts that came while a reply was waited for, but
-/// not whether a later fact came before or after the reply.
-///
-/// A thread of its own reads the frames and hands each one over a channel, so that the wait
-/// for a reply is a `recv_timeout` against one deadline and no option is set on a socket
-/// whose Keeper may have gone.
+/// A connection that shows facts and replies in the order they came, which a `Client` hides.
+/// A reader thread hands frames over a channel, so a reply is waited for with `recv_timeout`
+/// and no option is set on a socket whose Keeper may have gone.
 struct Window {
     stream: UnixStream,
     frames: Receiver<Result<Message, LinkError>>,
@@ -68,7 +54,6 @@ impl Window {
             loop {
                 let frame = read_message(&mut reading);
                 let ended = frame.is_err();
-                // The thread ends with the stream, or when the Window is gone.
                 if hand_over.send(frame).is_err() || ended {
                     break;
                 }
@@ -81,8 +66,6 @@ impl Window {
         }
     }
 
-    /// Sends `request` and reads until its reply. Panics, naming the request, when the reply
-    /// does not come within one deadline for the whole wait, however many frames come first.
     fn ask(&mut self, request: Request) -> Asked {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -96,7 +79,6 @@ impl Window {
             match self.frames.recv_timeout(left) {
                 Ok(Ok(Message::Reply { to, reply })) if to == id => return Asked { facts, reply },
                 Ok(Ok(Message::Fact(fact))) => facts.push(fact),
-                // What the program of a terminal writes comes to the Window that asked.
                 Ok(Ok(Message::Output { .. })) => {}
                 Ok(Ok(other)) => {
                     panic!("waiting for the reply to {kind:?}, the Keeper sent {other:?}")
@@ -110,8 +92,6 @@ impl Window {
     }
 }
 
-/// Runs git in `folder` as a reader of a repository does: with no optional lock, so that
-/// reading never rewrites the index, and with nothing of the user's configuration.
 fn read_git(world: &World, folder: &Path, args: &[&str]) -> Vec<u8> {
     let mut git = Command::new("git");
     git.env_clear();
@@ -150,8 +130,6 @@ fn read_git_text(world: &World, folder: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// What `git worktree list --porcelain` of `repo` says about the worktree at `folder`: its
-/// commit and the branch it has checked out, none when it is not listed.
 fn listed(world: &World, repo: &Repo, folder: &Path) -> Option<(String, Option<String>)> {
     let listing = read_git_text(world, repo.path(), &["worktree", "list", "--porcelain"]);
     listing.split("\n\n").find_map(|record| {
@@ -171,7 +149,6 @@ fn listed(world: &World, repo: &Repo, folder: &Path) -> Option<(String, Option<S
     })
 }
 
-/// Every name under `folder`, recursively, with whether it is a folder, a link or a file.
 fn listing(folder: &Path) -> BTreeSet<(PathBuf, char)> {
     fn walk(root: &Path, folder: &Path, into: &mut BTreeSet<(PathBuf, char)>) {
         for entry in fs::read_dir(folder).expect("read the folder") {
@@ -195,8 +172,6 @@ fn listing(folder: &Path) -> BTreeSet<(PathBuf, char)> {
     found
 }
 
-/// What a reader of the repository sees, and every name in the folder the repository lies
-/// in: the user's repository, which a refused request leaves as it was.
 #[derive(Debug, PartialEq, Eq)]
 struct Reads {
     git: Vec<Bytes>,
@@ -204,7 +179,6 @@ struct Reads {
     around: BTreeSet<(PathBuf, char)>,
 }
 
-/// What a read gave, compared byte for byte and shown as text when two differ.
 #[derive(PartialEq, Eq)]
 struct Bytes(Vec<u8>);
 
@@ -253,8 +227,6 @@ fn reads(world: &World, repo: &Repo) -> Reads {
     }
 }
 
-/// Two objects no ref reaches, planted before the first read: a blob and a dangling commit.
-/// Gives their ids.
 fn plant(world: &World, repo: &Repo) -> Vec<String> {
     let file = world.home().join("planted.txt");
     fs::write(&file, "a blob nothing refers to\n").expect("write the blob's file");
@@ -266,9 +238,8 @@ fn plant(world: &World, repo: &Repo) -> Vec<String> {
     vec![blob, dangling]
 }
 
-/// A file that exists once git checks anything out or moves a ref in the repository, which
-/// the user's own hooks tell. It lies in the world's home, outside the repository and the
-/// folder beside it. Written after `plant`, whose own checkout would run the hook.
+/// Installs repository hooks that write a file once git checks anything out or moves a ref,
+/// and gives that file. Call it after `plant`, whose own checkout would run the hooks.
 fn witness_of_any_checkout(world: &World, repo: &Repo) -> PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -287,8 +258,7 @@ fn witness_of_any_checkout(world: &World, repo: &Repo) -> PathBuf {
 
 fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
     let (world, repo) = world_for();
-    // The workspace on screen is on another branch, one commit ahead of `main`: the worktree
-    // is made from the branch the request names and not from what is checked out.
+    // The worktree is made from the branch the request names, not from what is checked out.
     let main_commit = repo.git(&["rev-parse", "main"]);
     repo.git(&["checkout", "--quiet", "-b", "other"]);
     repo.write("other.txt", "ahead of main\n");
@@ -306,7 +276,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
     let folder = parent.join("app.worktrees").join("agent-task");
     assert!(!folder.exists(), "nothing lies there before the request");
 
-    // One request, from a Window of its own, which reads the frames in the order they come.
     let mut window = Window::attach(&world);
     let asked = window.ask(Request::CreateWorktree {
         repository: repository.clone(),
@@ -323,8 +292,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
         panic!("the Keeper answered {:?}", asked.reply);
     };
 
-    // A worktree from a branch name: git lists it at the folder beside the repository, on the
-    // new branch, made at the commit `main` is at.
     let folder = folder
         .canonicalize()
         .expect("the worktree's folder is there");
@@ -339,7 +306,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
         repo.git(&["rev-parse", "refs/heads/agent-task"]),
         main_commit
     );
-    // The Window was told the list that holds the workspace, before the reply.
     assert!(
         asked
             .facts
@@ -349,8 +315,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
         asked.facts
     );
 
-    // And the agent starts in it: a session of the CLI, in the new workspace, on the
-    // terminal the reply names.
     let agents = watcher.wait_for_agents(&workspace, DEADLINE, |agents| {
         agents
             .sessions
@@ -365,7 +329,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
     assert_eq!(session.agent, dialect.name());
     assert_eq!(session.workspace, workspace);
 
-    // The stand-in wrote its file where it works, which is the new worktree.
     let written = folder.join(MARKER_FILE);
     assert!(
         wait_until(DEADLINE, || written.exists()),
@@ -374,7 +337,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
         world.agent_log("default")
     );
     assert_eq!(fs::read_to_string(&written).expect("read it"), "yes");
-    // Its one step is done, so it cannot write the file anywhere else now.
     assert!(
         wait_until(DEADLINE, || world
             .agent_log("default")
@@ -390,7 +352,6 @@ fn a_worktree_is_made_with_an_agent_in_one_request(dialect: Dialect) {
     );
 }
 
-/// Whether `fact` lists `workspace` of `repository` at `folder` on the branch `agent-task`.
 fn names_the_worktree(
     fact: &Fact,
     repository: &RepositoryId,
@@ -441,7 +402,6 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
         agent: agent.to_owned(),
         size: SIZE,
     };
-    // An agent no Adapter has, a branch that exists, and a branch to start from that is none.
     let no_agent = client.request(create("main", "task", "otheragent"));
     let taken = client.request(create("main", "main", Dialect::ClaudeCode.name()));
     let no_base = client.request(create("nowhere", "task", Dialect::ClaudeCode.name()));
@@ -450,7 +410,6 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
             if reason == "there is no agent CLI named otheragent"),
         "{no_agent:?}"
     );
-    // The Keeper's own check says it, not git's failure after it.
     assert!(
         matches!(&taken, Err(Refusal::Failed { reason })
             if reason == "a branch named main exists already"),
@@ -461,8 +420,7 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
         "{no_base:?}"
     );
 
-    // The barrier: the Keeper answered each, and then a list; whatever it made it made by
-    // now. Nothing is listed, no terminal opened, and the repository is as it was.
+    // The barrier: the Keeper answered each, then a list, so whatever it made it made by now.
     assert_eq!(client.workspaces(), workspaces);
     assert_eq!(client.terminals(), terminals);
     assert_eq!(reads(&world, &repo), before);
@@ -477,8 +435,6 @@ fn a_refused_request_makes_nothing_and_leaves_the_repository_as_it_was() {
             .join("app.worktrees")
             .exists()
     );
-    // A worktree made and taken away again would leave the same reads; the user's own hooks
-    // run when it is made, and neither ran.
     assert!(
         !witness.exists(),
         "git made something and took it away again: {}",

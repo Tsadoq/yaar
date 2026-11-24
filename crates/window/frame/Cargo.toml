@@ -11,8 +11,7 @@ yaar-link.workspace = true
 gpui-kit.workspace = true
 libc.workspace = true
 async-channel.workspace = true
-# The vocabulary of code intelligence, which the Frame's model hands to the Navigator and
-# back; the Window program starts the Navigator itself.
+# The Frame's model hands code-intelligence types to the Navigator and back.
 yaar-navigator.workspace = true
 
 [dev-dependencies]

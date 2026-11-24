@@ -1,12 +1,6 @@
-//! Component test: comments drafted in Flow, on a line of the live diff, on GPUI's test
-//! platform. Keys, clicks and the wheel go in; the pane is read back through the model it
-//! shows. The test plays the Keeper on the other end of a socket pair: it sets the agents,
-//! the turns and the settings the Keeper would hold, tells the facts the Keeper tells, and
-//! answers what the live diff and Changes ask.
-//!
-//! A negative clause ("nothing is saved") is read after a barrier: something the test
-//! causes after it, through the same path, whose arrival shows that everything before it
-//! arrived.
+//! Component test: comments drafted in Flow on a line of the live diff.
+//! A negative clause is read after a barrier: a later message through the same path, whose arrival
+//! shows that everything before it arrived.
 
 mod common;
 
@@ -25,17 +19,14 @@ use common::{
     since_main, step_fact, texts, turn_id, wait_for_files, wait_until, working_on, workspace,
 };
 
-/// The state the turn counts from.
 fn s0() -> String {
     "5".repeat(40)
 }
 
-/// The state recorded at the end of the turn.
 fn s1() -> String {
     "6".repeat(40)
 }
 
-/// Session `a`, which works on `turn`, as the agents model shows it.
 fn session_a_on(turn: &TurnId) -> Session {
     working_on(
         session('a', "Claude Code 1", SessionState::Works, None),
@@ -60,7 +51,6 @@ fn press(keys: &str, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-/// A click on the bar, away from every control of it: the pane has the focus afterwards.
 fn focus_by_the_bar(stage: &Stage, cx: &mut VisualTestContext) {
     click("review-bar", cx);
     cx.update(|window, _| assert!(stage.focus.is_focused(window)));
@@ -84,7 +74,6 @@ fn notice(stage: &Stage, cx: &mut VisualTestContext) -> Option<String> {
     stage.pane.read_with(cx, |pane, _| pane.notice())
 }
 
-/// The index, among `rows`, of the row of the diff of `path` that shows `wanted`.
 fn index_of(rows: &[PaneRow], path: &str, wanted: Row) -> usize {
     rows.iter()
         .position(|row| {
@@ -93,8 +82,6 @@ fn index_of(rows: &[PaneRow], path: &str, wanted: Row) -> usize {
         .unwrap_or_else(|| panic!("no row {wanted:?} of {path} in {rows:#?}"))
 }
 
-/// Keeps the app running until every file of the live diff shows its lines and the files
-/// are `wanted`, in order.
 fn wait_for_live(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     wait_until(cx, "the live diff's files", |cx| {
         stage.pane.read_with(cx, |pane, _| {
@@ -114,8 +101,6 @@ fn wait_for_live(stage: &Stage, wanted: &[&str], cx: &mut VisualTestContext) {
     });
 }
 
-/// Answers the next request, which has to list the files of the change from `from` to
-/// `to`, with `files`.
 fn compared(
     stage: &mut Stage,
     from: &str,
@@ -134,8 +119,6 @@ fn compared(
     stage.keeper.reply(asked, Ok(Reply::Compared(files)));
 }
 
-/// Answers the next request, which has to read the two versions of `path` (`old_path` in
-/// the old one) from `old` to `new`, with `before` and `after`.
 fn read_of(
     stage: &mut Stage,
     (old, new): (&str, Option<&str>),
@@ -158,9 +141,6 @@ fn read_of(
         .reply(asked, texts(before, after).map(Reply::File));
 }
 
-/// A pane on workspace `1`, session `a` idle and no turn, whose Changes hold
-/// `changes`, answered with `sides`, in the form of Flow `form`, with the focus in the pane
-/// and Changes on screen.
 fn open_in(
     form: FlowForm,
     changes: Vec<ChangedFile>,
@@ -191,7 +171,6 @@ fn open_in(
     (stage, cx)
 }
 
-/// Starts turn `turn` of session `a`, counted from `start`, in the workspace on screen.
 fn start_turn(stage: &mut Stage, turn: &TurnId, start: &str, cx: &mut VisualTestContext) {
     stage.keeper.set_turn(running_turn(
         turn.clone(),
@@ -206,8 +185,6 @@ fn start_turn(stage: &mut Stage, turn: &TurnId, start: &str, cx: &mut VisualTest
     cx.run_until_parked();
 }
 
-/// Types `text` into the open box, one key at a time, and answers every save the keys
-/// make. Gives the request of the last: what the Keeper was handed for the whole text.
 fn type_and_save(text: &str, stage: &mut Stage, cx: &mut VisualTestContext) -> Request {
     let mut last = None;
     let mut so_far = String::new();
@@ -226,7 +203,6 @@ fn type_and_save(text: &str, stage: &mut Stage, cx: &mut VisualTestContext) -> R
     last.expect("some text was typed")
 }
 
-/// The anchor and the ids of a save of a new thread.
 fn new_thread(request: &Request) -> (Anchor, ThreadId, yaar_link::CommentId) {
     let Request::SaveDraft {
         review,
@@ -242,7 +218,6 @@ fn new_thread(request: &Request) -> (Anchor, ThreadId, yaar_link::CommentId) {
     (anchor.clone(), thread.clone(), comment.clone())
 }
 
-/// Presses `j` until the reviewer, in Changes, is on `wanted`.
 fn walk_to(wanted: &Position, stage: &Stage, cx: &mut VisualTestContext) {
     for _ in 0..50 {
         if stage
@@ -269,7 +244,6 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
         ("one\n", "one\ntwo\n"),
         cx,
     );
-    // Flow, in the live form, shows the running turn's change: `two` added to `a.txt`.
     click("review-view-flow", &mut cx);
     start_turn(&mut stage, &t, &s0(), &mut cx);
     compared(
@@ -292,9 +266,6 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
         FlowForm::LiveDiff
     );
 
-    // A comment drafted on a line in Flow: the reviewer goes to `two` by a click, `c`
-    // opens the box, and the text is saved, key by key, as the draft of a new thread
-    // anchored on that line in the files on disk, since the turn runs.
     let two = index_of(&live_rows(&stage, &mut cx), "a.txt", Row::Added { new: 1 });
     click(&format!("flow-text-{two}-new:two"), &mut cx);
     assert_eq!(
@@ -327,7 +298,6 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
     };
     assert_eq!(text, "why?");
 
-    // The thread shows in the live diff under that line.
     let rows = live_rows(&stage, &mut cx);
     let two = index_of(&rows, "a.txt", Row::Added { new: 1 });
     assert_eq!(
@@ -347,8 +317,6 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
     assert!(drawn(&format!("flow-thread-{thread}"), &mut cx).is_some());
     assert!(drawn(&format!("flow-comment-{comment}:draft"), &mut cx).is_some());
 
-    // It shows on that line in Changes: the row of new line 2, then the thread and its
-    // draft, drawn as one.
     click("review-view-changes", &mut cx);
     let rows = changes_rows(&stage, &mut cx);
     let two = index_of(&rows, "a.txt", Row::Added { new: 1 });
@@ -366,8 +334,6 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
     );
     assert!(drawn(&format!("review-comment-{comment}:draft"), &mut cx).is_some());
 
-    // The same whether written in Flow or in Changes: the reviewer on that line in
-    // Changes drafts a comment, and the anchor it names is the one Flow named.
     walk_to(
         &Position {
             path: "a.txt".into(),
@@ -384,9 +350,8 @@ fn a_comment_drafted_on_a_line_in_flow_shows_on_that_line_in_changes_and_is_anch
     assert_ne!(second_thread, thread);
     press("escape", &mut cx);
 
-    // The turn ends with a state recorded (`shift-t`, so that Changes asks nothing at the
-    // turn's end). The live diff counts to that state, and a draft in Flow names it as
-    // the tree of the new side, as the same line in Changes' comparison of the turn does.
+    // `shift-t` keeps the selection, so Changes asks nothing when the turn ends with a state.
+    // A draft in Flow then names that state as the tree of the new side.
     click("review-view-flow", &mut cx);
     press("shift-t", &mut cx);
     stage.keeper.tell(Fact::TurnEnded {
@@ -449,7 +414,6 @@ fn a_comment_on_a_removed_line_in_flow_is_anchored_in_the_version_the_turn_start
     );
     wait_for_live(&stage, &["new name.txt"], &mut cx);
 
-    // On the removed line the anchor is in the old version, under the old name.
     let rows = live_rows(&stage, &mut cx);
     let removed = index_of(&rows, "new name.txt", Row::Removed { old: 1 });
     click(&format!("flow-text-{removed}-old:two"), &mut cx);
@@ -467,7 +431,6 @@ fn a_comment_on_a_removed_line_in_flow_is_anchored_in_the_version_the_turn_start
     );
     press("escape", &mut cx);
 
-    // On the added line it is in the files on disk, under the new name.
     let rows = live_rows(&stage, &mut cx);
     let added = index_of(&rows, "new name.txt", Row::Added { new: 1 });
     click(&format!("flow-text-{added}-new:TWO"), &mut cx);
@@ -490,8 +453,8 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     cx: &mut TestAppContext,
 ) {
     let t = turn_id('t');
-    // Changes holds a file with a line to stand on, so that a comment written from where
-    // Changes has the reviewer, in place of the live diff's line, would open a box.
+    // Changes holds a file with a line to stand on, so a box opened from where Changes has the
+    // reviewer would show.
     let (mut stage, mut cx) = open_in(
         FlowForm::Timeline,
         vec![file("a.txt", FileStatus::Modified)],
@@ -507,7 +470,6 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     click("review-view-flow", &mut cx);
     start_turn(&mut stage, &t, &s0(), &mut cx);
 
-    // In the timeline the pane says where a comment is written.
     press("c", &mut cx);
     assert_eq!(
         notice(&stage, &mut cx).as_deref(),
@@ -515,8 +477,6 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     );
     assert_eq!(comment_box(&stage, &mut cx), None);
 
-    // In the live diff of a turn that has changed no file and read one, there is no line:
-    // the file read is a row the reviewer cannot stand on.
     press("shift-l", &mut cx);
     assert_eq!(
         stage.pane.read_with(&cx, |pane, _| pane.flow_form()),
@@ -545,8 +505,8 @@ fn c_in_flow_writes_nothing_where_there_is_no_line_of_the_live_diff_to_write_on(
     );
     assert_eq!(comment_box(&stage, &mut cx), None);
 
-    // The barrier confirms that nothing else was sent: a draft is saved only on typed
-    // text, so the absence of a box above is what shows that no comment was begun.
+    // The barrier: a draft is saved only on typed text, so the missing box asserted above is what
+    // shows that no comment was begun.
     stage
         .keeper
         .tell(Fact::ChangesChanged { workspace: id('1') });

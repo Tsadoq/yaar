@@ -1,6 +1,3 @@
-//! A turn that ends, through the engine with the real Store and the real Recorder beneath,
-//! on a repository the test makes.
-
 mod support;
 
 use std::path::PathBuf;
@@ -25,7 +22,6 @@ fn modified(path: &str) -> ChangedPath {
     }
 }
 
-// REV-19
 #[test]
 fn at_a_turn_end_what_changed_is_the_diff_from_the_state_last_marked_reviewed_to_the_new_state() {
     let scratch = Scratch::new();
@@ -41,7 +37,6 @@ fn at_a_turn_end_what_changed_is_the_diff_from_the_state_last_marked_reviewed_to
     let started = session(&store, 1);
     let review = reviews.session_started(&started).expect("start");
 
-    // The reviewer marks the change reviewed; then the agent edits a.txt and adds b.txt.
     let s1 = reviews.mark_reviewed(&worktree, &review).expect("mark");
     write(&repo, "a.txt", "one, then another change\n");
     write(&repo, "b.txt", "new\n");
@@ -51,7 +46,6 @@ fn at_a_turn_end_what_changed_is_the_diff_from_the_state_last_marked_reviewed_to
         .turn_ended(&worktree, &started.id, None)
         .expect("the turn ended");
 
-    // "At a turn end" a state is recorded: the newest, holding the files as they are.
     let states = reviews.states_of(&w).expect("the state store");
     let listed = states.states().expect("list the states");
     assert_eq!(listed.len(), 2);
@@ -68,11 +62,8 @@ fn at_a_turn_end_what_changed_is_the_diff_from_the_state_last_marked_reviewed_to
             Some(content.clone())
         );
     }
-    // Without a commit of the user's.
     assert_eq!(git(&repo, &["rev-parse", "HEAD"]), head);
 
-    // What changed since the last review is the diff from the state marked reviewed to the
-    // new state, and it is exactly the two paths.
     assert_eq!(ended.since.as_deref(), Some(s1.as_str()));
     let diff = states
         .changed_paths(s1.as_str(), ended.state.as_str())
@@ -132,7 +123,6 @@ fn a_mark_wins_over_the_start_and_a_turn_that_changed_nothing_has_an_empty_chang
         .turn_ended(&worktree, &started.id, Some(&start))
         .expect("a turn ended");
 
-    // The start counts only before the first mark, though a.txt differs from it.
     assert_eq!(ended.since.as_deref(), Some(marked.as_str()));
     assert_eq!(ended.state, marked);
     assert_eq!(ended.changed, Some(vec![]));
@@ -204,7 +194,7 @@ fn a_session_with_no_review_is_refused_and_records_nothing() {
     let worktree = open(&repo);
     let store = store(&scratch);
     let reviews = engine(&scratch, store.clone());
-    // Kept in the Store, but never told to the engine as started.
+    // Kept in the Store, never told to the engine as started.
     let unheard = session(&store, 1);
     let unknown = SessionId::new(support::id(99));
 

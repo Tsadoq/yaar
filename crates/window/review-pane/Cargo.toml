@@ -11,13 +11,10 @@ yaar-frame.workspace = true
 yaar-link.workspace = true
 yaar-diff.workspace = true
 gpui-kit.workspace = true
-# The vocabulary of code intelligence: what the pane asks the Frame's model and gets back.
 yaar-navigator.workspace = true
 
 [dev-dependencies]
-# GPUI's test platform, for tests only: the programs users get are built without it.
 gpui-kit = { workspace = true, features = ["test-support"] }
-# The Navigator's end of the port, which a test of the pane plays.
 async-channel.workspace = true
 
 [lints]

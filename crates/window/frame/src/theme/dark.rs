@@ -1,8 +1,5 @@
-//! The dark theme the app is built with. Its values: see the module doc of `theme`.
-
 use super::{Appearance, Colors, TerminalColors, ThemeDefinition, hex, hexa};
 
-/// The dark theme, named [`super::DARK`].
 pub fn dark() -> ThemeDefinition {
     let colors = Colors {
         background: hex(0x0a0a0a),
@@ -23,9 +20,8 @@ pub fn dark() -> ThemeDefinition {
         list_hover: hexa(0x26262699),
         success: hex(0x4ade80),
         warning: hex(0xfacc15),
-        // The toolkit's #ca8a04 reads 1.92 to 1 on `warning`. It lies darker than that light
-        // yellow, so the steps away from the yellow's lightness are darker ones, and the first
-        // that reads 4.5 to 1 is this.
+        // The toolkit's #ca8a04 reads 1.92 to 1 on `warning`: the first darker step that reads 4.5
+        // to 1.
         warning_foreground: hex(0x664602),
         danger: hex(0xf87171),
         info: hex(0x22d3ee),

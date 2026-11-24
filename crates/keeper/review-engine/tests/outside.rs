@@ -1,7 +1,6 @@
 //! A thread on a file outside the worktree, or one inside it that git ignores, reached
-//! through go to definition: kept with its path, lines and text and no version, with no
-//! state recorded for it, and never carried through a diff. Through the engine with the real
-//! Store and the real Recorder beneath, on repositories the test makes.
+//! through go to definition: kept with its path, lines and text and no version, with no state
+//! recorded for it, and never carried through a diff.
 
 mod support;
 
@@ -15,9 +14,6 @@ use yaar_review_engine::{
 };
 use yaar_store::Store;
 
-/// What the tests share: a repository whose `a.txt` holds ten lines, a file `lib/x.rs` of
-/// five lines in a folder beside it (outside every worktree), the review of the workspace
-/// and the engine.
 struct World {
     scratch: Scratch,
     store: Store,
@@ -54,12 +50,10 @@ impl World {
         }
     }
 
-    /// The file of the folder beside the worktree.
     fn outside(&self) -> PathBuf {
         self.scratch.join("lib/x.rs")
     }
 
-    /// How many states the state store of the workspace holds.
     fn states(&self) -> usize {
         self.reviews
             .states_of(&workspace())
@@ -69,7 +63,6 @@ impl World {
             .len()
     }
 
-    /// Records a state of the files as they are, without the engine, and follows it.
     fn record_and_follow(&self) -> (StateId, Vec<ThreadId>) {
         let state = self
             .reviews
@@ -85,7 +78,6 @@ impl World {
         (state, moved)
     }
 
-    /// One thread of the review as the Store keeps it, read by a second engine.
     fn thread(&self, n: u128) -> Thread {
         engine(&self.scratch, self.store.clone())
             .review(&self.review)
@@ -96,13 +88,10 @@ impl World {
     }
 }
 
-/// The lines `<word> 1` to `<word> n`.
 fn numbered(word: &str, n: u32) -> String {
     (1..=n).map(|i| format!("{word} {i}\n")).collect()
 }
 
-/// The save that starts thread `n` on lines `first` to `last` of `path` as `side`, with
-/// `tree` and the code the lines hold.
 fn save_on(
     n: u128,
     tree: Option<&str>,
@@ -126,7 +115,6 @@ fn save_on(
     }
 }
 
-/// The save of thread `n` on line 3 of the file outside the worktree.
 fn outside_save(world: &World, n: u128) -> DraftSave {
     save_on(n, None, &world.outside(), Side::New, (3, 3), "fn 3")
 }
@@ -164,7 +152,6 @@ fn a_thread_on_a_file_outside_the_worktree_is_kept_on_the_new_side_whatever_the_
     write(&world.repo, "ignored.log", "one\ntwo\n");
     for (n, path, line, code) in [
         (1, world.outside(), 3, "fn 3"),
-        // The same for a file of the worktree that the Window names by its absolute path.
         (2, world.repo.join("ignored.log"), 2, "two"),
     ] {
         world
@@ -207,8 +194,7 @@ fn a_new_thread_on_a_file_outside_the_worktree_needs_no_worktree() {
     assert_eq!(saved, Saved::Made);
     assert_eq!(world.thread(1).anchor.path, world.outside());
     assert_eq!(world.states(), 0);
-    // The rule of slice 3 stands for a relative path: lines of the files on disk need the
-    // worktree.
+    // A relative path still needs the worktree: its lines are read from the files in it.
     let relative = new_thread(2, "a.txt", 1, "line 1", "x");
     assert!(matches!(
         world.reviews.save_draft(None, &world.review, &relative),
@@ -276,8 +262,6 @@ fn a_state_the_engine_takes_does_not_fail_the_following_of_a_thread_outside_the_
         .mark_reviewed(&world.worktree, &world.review)
         .expect("mark reviewed");
 
-    // Asked directly, the following gives no failure, as it would for a thread whose tree
-    // the store cannot read.
     assert_eq!(
         world.reviews.follow(&workspace(), &state).expect("follow"),
         vec![]
@@ -287,7 +271,6 @@ fn a_state_the_engine_takes_does_not_fail_the_following_of_a_thread_outside_the_
 
 #[test]
 fn a_place_outside_the_worktree_is_left_where_it_is_when_carried_between_two_trees() {
-    // Nothing is read for it: the two trees are ones the state store never held.
     let world = World::new();
     let placed = Placed {
         at: Place {
@@ -361,13 +344,9 @@ fn the_lines_of_a_thread_outside_the_worktree_are_checked_as_those_of_any_anchor
     let world = World::new();
     let outside = world.outside();
     let wrong = [
-        // The first line is 0.
         save_on(1, None, &outside, Side::New, (0, 1), "fn 1"),
-        // The last line is before the first.
         save_on(2, None, &outside, Side::New, (4, 3), "fn 4"),
-        // Two lines, one line of text.
         save_on(3, None, &outside, Side::New, (3, 4), "fn 3"),
-        // One line, two lines of text.
         save_on(4, None, &outside, Side::New, (3, 3), "fn 3\nfn 4"),
     ];
     for save in &wrong {
@@ -389,7 +368,6 @@ fn the_lines_of_a_thread_outside_the_worktree_are_checked_as_those_of_any_anchor
             .is_empty(),
         "nothing was kept"
     );
-    // A range of several lines is kept.
     world
         .reviews
         .save_draft(
@@ -410,7 +388,6 @@ fn a_thread_outside_the_worktree_takes_replies_and_edits_as_any_thread() {
         .save_draft(None, &world.review, &save)
         .expect("start");
 
-    // The same comment again: its text changes, which is the save of each keystroke.
     let edited = DraftSave {
         text: "edited".to_owned(),
         ..save.clone()
@@ -425,7 +402,6 @@ fn a_thread_outside_the_worktree_takes_replies_and_edits_as_any_thread() {
     assert_eq!(world.thread(1).comments[0].text, "edited");
     assert_eq!(world.thread(1).anchor.tree, "");
 
-    // Once the comment is sent, the thread takes a reply.
     world
         .reviews
         .copy_as_text(&world.worktree, &world.review)

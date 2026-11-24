@@ -1,5 +1,5 @@
-//! Any two versions of a worktree compared, and a file read in any of them: states of
-//! the store, commits of the real repository, and the files on disk.
+//! Comparing any two versions of a worktree (states, commits, files on disk) and reading a file in
+//! any.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -9,20 +9,9 @@ use crate::states::{RecordError, StateStore, not_a_commit};
 use crate::worktree::{ChangedPath, Commit, CommitId, Worktree, is_full_id, name_status};
 
 impl StateStore {
-    /// The paths that differ between two versions of the worktree, ordered by path, renames
-    /// paired as for [`StateStore::changed_paths`]: `from` and `to` are each the full id of
-    /// a state of this store or of a commit of the real repository, and `to` none is the
-    /// files on disk. A commit of the real repository the store does not hold is copied
-    /// into it first, as [`StateStore::keep_commit`] does, through `worktree`; with no
-    /// worktree, as when it is gone, only what the store holds can be compared. What is
-    /// given equals what `git diff` of the two trees names.
-    ///
-    /// A comparison with the files on disk reads them as a recording would, on a copy of
-    /// the worktree's list of files, and records no state.
-    ///
-    /// A version that is not a full id, that neither the store nor the real repository
-    /// holds, or that the store lacks when there is no worktree, is an error and changes
-    /// nothing in the store.
+    /// The paths that differ between `from` and `to`, each the full id of a state or of a commit of
+    /// the real repository; `to` none is the files on disk, read on a copy of the index. A commit
+    /// the store lacks is copied in through `worktree`.
     pub fn compare(
         &self,
         worktree: Option<&Worktree>,
@@ -33,7 +22,6 @@ impl StateStore {
         self.compare_held(worktree, from, to)
     }
 
-    /// [`StateStore::compare`] for a caller that holds the guard of the clean-up.
     pub(crate) fn compare_held(
         &self,
         worktree: Option<&Worktree>,
@@ -45,11 +33,7 @@ impl StateStore {
             None => self.hold(worktree, &[from])?,
         }
         let changes = match to {
-            Some(to) => {
-                // The objects of the real repository are not needed: a version the store
-                // holds is whole in it.
-                self.run(None, diff_tree_args(from, to))?
-            }
+            Some(to) => self.run(None, diff_tree_args(from, to))?,
             None => {
                 let Some(worktree) = worktree else {
                     return Err(RecordError::Store {
@@ -60,8 +44,8 @@ impl StateStore {
                     });
                 };
                 let (tree, _) = self.tree_on_disk(worktree)?;
-                // A blob of the files on disk that the real repository holds already was
-                // not written into the store: git reads it from there to pair a rename.
+                // A blob of the files on disk that the real repository holds already was not
+                // written into the store: git reads it from there to pair a rename.
                 let real_objects = worktree.common_dir().join("objects");
                 self.run(Some(&real_objects), diff_tree_args(from, &tree))?
             }
@@ -76,9 +60,7 @@ impl StateStore {
             .collect())
     }
 
-    /// The content of the file at `path` in `version`, the full id of a state of this
-    /// store or of a commit of the real repository, copied into the store first as for
-    /// [`StateStore::compare`]; none when the version holds no file at that path.
+    /// None when the version holds no file at `path`.
     pub fn content_in(
         &self,
         worktree: Option<&Worktree>,
@@ -90,19 +72,16 @@ impl StateStore {
         Ok(self.content(version, path)?)
     }
 
-    /// Makes the store hold each of `versions`, states or commits, so that they read with
-    /// the real repository gone: a commit the store has not got is copied from the
-    /// repository of `worktree`. Every version is checked before any is copied, so that a
-    /// call with one that is refused leaves the store as it was. The caller holds the guard
-    /// of the clean-up.
+    /// Every version is checked before any is copied, so a refusal leaves the store as it was. The
+    /// caller holds the clean-up guard.
     fn hold(&self, worktree: Option<&Worktree>, versions: &[&str]) -> Result<(), RecordError> {
         let mut to_keep = Vec::new();
         for version in versions {
             if !is_full_id(version) {
                 return Err(not_a_commit(version).into());
             }
-            // A state is held, so is the commit a state was taken on and a commit kept
-            // before: those need nothing of the real repository, which may be gone by now.
+            // A state, the commit it was taken on and a kept commit need nothing of the real
+            // repository, which may be gone.
             let spec = format!("{version}^{{commit}}");
             if self.run(None, ["cat-file", "-e", &spec])?.code == Some(0) {
                 continue;
@@ -135,14 +114,9 @@ impl StateStore {
         Ok(())
     }
 
-    /// The commits of the branch checked out in `worktree` that come after `since`, in the
-    /// order they happened, oldest first, following first parents; none where nothing is
-    /// committed. With `since` none, from the first commit.
-    ///
-    /// A walk along first parents alone cannot be told where to stop: when the branch took
-    /// in a commit its base had gained, `since` is reached through a second parent, and
-    /// the walk would go on to the root. So the commits that come after `since` are named
-    /// first, whatever way they are reached, and the walk along first parents keeps those.
+    /// A first-parent walk cannot tell where to stop: when the branch took in a commit its base had
+    /// gained, `since` is reached through a second parent. So the commits after `since` are named
+    /// first, by any route, and the walk keeps those.
     pub(crate) fn first_parent_commits(
         &self,
         worktree: &Worktree,
@@ -151,8 +125,6 @@ impl StateStore {
         if worktree.head_commit()?.is_none() {
             return Ok(Vec::new());
         }
-        // Plumbing that reads, and runs no hook: nothing of the configuration's is to be
-        // turned off.
         let read = |args: &[&str]| {
             self.git
                 .run(Place::Folder(worktree.root()), &[], args)?
@@ -208,8 +180,6 @@ impl StateStore {
     }
 }
 
-/// The arguments of git's tree diff as `compare` runs it: the paths that differ, with
-/// what happened to each, renames paired.
 fn diff_tree_args<'a>(from: &'a str, to: &'a str) -> [&'a str; 7] {
     ["diff-tree", "-r", "-z", "-M", "--name-status", from, to]
 }

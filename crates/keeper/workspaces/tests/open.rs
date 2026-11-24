@@ -1,7 +1,3 @@
-//! Component tests: opening folders and listing the repositories with their worktrees,
-//! through the calls the Keeper makes, in real repositories the tests make and with a
-//! real database.
-
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -11,7 +7,6 @@ use yaar_workspaces::{
     Head, ID_FILE, Opened, Refusal, Repository, Workspace, WorkspaceError, Workspaces,
 };
 
-/// What a listed worktree with this branch checked out has as its head.
 fn branch(name: &str, commit: &str) -> Option<Head> {
     Some(Head::Branch {
         name: name.to_owned(),
@@ -26,9 +21,6 @@ fn refused(result: Result<impl std::fmt::Debug, WorkspaceError>) -> Refusal {
     }
 }
 
-/// A repository in the folder `repo` with one commit on `main`, and a second worktree
-/// of it in the folder `linked`, on the branch `feat`. Returns the two folders and the
-/// commit.
 fn a_repository_with_two_worktrees(scratch: &Scratch) -> (PathBuf, PathBuf, String) {
     let repo = scratch.join("repo");
     init(&repo);
@@ -41,15 +33,12 @@ fn a_repository_with_two_worktrees(scratch: &Scratch) -> (PathBuf, PathBuf, Stri
     (repo, scratch.join("linked"), first)
 }
 
-/// The one repository that is listed.
 fn the_repository(workspaces: &Workspaces) -> Repository {
     let mut all = workspaces.repositories().expect("repositories");
     assert_eq!(all.len(), 1, "{all:?}");
     all.remove(0)
 }
 
-/// The id in the id file of a git folder: 32 lowercase hexadecimal digits and a line
-/// feed, checked here.
 fn id_in(git_dir: &Path) -> String {
     let content = std::fs::read_to_string(git_dir.join(ID_FILE)).expect("the id file");
     let id = content.strip_suffix('\n').expect("a line feed at the end");
@@ -62,7 +51,6 @@ fn id_in(git_dir: &Path) -> String {
     id.to_owned()
 }
 
-// WS-07.
 #[test]
 fn the_scratch_folder_drops_the_configuration_a_shell_hands_git_in_its_environment() {
     // SAFETY: changing the environment is sound only while no other thread reads it.
@@ -88,7 +76,6 @@ fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch(
     let workspaces = workspaces(&scratch);
     assert_eq!(workspaces.repositories().expect("repositories"), vec![]);
 
-    // One of the two is opened; the other is listed because git lists it.
     let opened = workspaces.open_folder(&repo).expect("open the folder");
     let repository = the_repository(&workspaces);
     assert_eq!(repository.id, opened.repository);
@@ -108,8 +95,6 @@ fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch(
     assert_eq!((&feat.path, &feat.head), (&linked, &branch("feat", &first)));
     assert_ne!(feat.id, main.id);
 
-    // Opening the second gives the workspace that was listed, in the same repository,
-    // and the list is what it was.
     assert_eq!(
         workspaces.open_folder(&linked).expect("open the folder"),
         Opened {
@@ -119,7 +104,6 @@ fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch(
     );
     assert_eq!(the_repository(&workspaces), repository);
 
-    // A branch switched outside the app shows at the next listing.
     git(&linked, &["switch", "--quiet", "-c", "feature/login"]);
     assert_eq!(
         the_repository(&workspaces).workspaces[1].head,
@@ -127,7 +111,6 @@ fn two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch(
     );
 }
 
-// WS-08.
 #[test]
 fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_other_is_refused_with_the_reason()
  {
@@ -136,9 +119,8 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
     let plain = scratch.join("plain/folder");
     std::fs::create_dir_all(&plain).expect("a plain folder");
     let workspaces = workspaces(&scratch);
-    // The opening alone has to make the workspace. Its changes are therefore asked for
-    // before anything lists the repository: a listing keeps every worktree it finds, and
-    // after one a folder that was never kept would answer all the same.
+    // The opening alone has to make the workspace: ask for its changes before anything lists the
+    // repository, since a listing keeps every worktree it finds.
     let counted_from = |opened: &Opened| {
         workspaces
             .changes(&opened.workspace)
@@ -147,7 +129,6 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
     };
     let the_commit = Some(yaar_workspaces::CommitId::new(&first));
 
-    // Refused, with the reason, and nothing comes of it.
     let refusal = refused(workspaces.open_folder(&plain));
     assert_eq!(refusal, Refusal::NotARepository(plain.clone()));
     assert_eq!(
@@ -159,15 +140,12 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
     );
     assert_eq!(workspaces.repositories().expect("repositories"), vec![]);
 
-    // A folder that holds a repository.
     let of_the_repository = workspaces.open_folder(&repo).expect("open the folder");
     assert_eq!(counted_from(&of_the_repository), the_commit);
-    // A folder that holds a worktree of it.
     let of_the_worktree = workspaces.open_folder(&linked).expect("open the folder");
     assert_eq!(counted_from(&of_the_worktree), the_commit);
     assert_eq!(of_the_worktree.repository, of_the_repository.repository);
     assert_ne!(of_the_worktree.workspace, of_the_repository.workspace);
-    // A folder inside one is the worktree it lies in.
     assert_eq!(
         workspaces
             .open_folder(&repo.join("src/deep"))
@@ -175,7 +153,6 @@ fn a_folder_that_holds_a_repository_or_a_worktree_becomes_a_workspace_and_any_ot
         of_the_repository
     );
 
-    // Each is listed at its folder, and answers after the listing as it did before.
     let listed = the_repository(&workspaces).workspaces;
     let at = |id| {
         let found: &Workspace = listed.iter().find(|w| &w.id == id).expect("listed");
@@ -222,13 +199,11 @@ fn the_id_of_a_workspace_is_written_once_into_the_git_folder_of_its_worktree_and
     let opened = workspaces.open_folder(&repo).expect("open the folder");
     let listed = the_repository(&workspaces).workspaces;
 
-    // Each worktree has its own, in its own git folder.
     assert_eq!(id_in(&repo.join(".git")), opened.workspace.as_str());
     assert_eq!(
         id_in(&repo.join(".git/worktrees/linked")),
         listed[1].id.as_str()
     );
-    // Nothing else was left beside them, and nothing that git reports.
     for git_dir in [repo.join(".git"), repo.join(".git/worktrees/linked")] {
         let left: Vec<_> = std::fs::read_dir(&git_dir)
             .expect("read the git folder")
@@ -241,8 +216,6 @@ fn the_id_of_a_workspace_is_written_once_into_the_git_folder_of_its_worktree_and
         assert_eq!(git(folder, &["status", "--porcelain", "--ignored"]), "");
     }
 
-    // Opening and listing again, also by a Keeper that restarted, gives the same ids
-    // and writes nothing.
     let written = std::fs::metadata(repo.join(".git").join(ID_FILE))
         .expect("the id file")
         .modified()
@@ -282,8 +255,6 @@ fn a_worktree_made_or_removed_outside_the_app_shows_at_the_next_listing() {
         Some(Head::Detached(yaar_workspaces::CommitId::new(&first)))
     );
 
-    // One removed through git, one whose folder was deleted: neither is listed, and
-    // neither can be asked for its changes any more.
     git(&repo, &["worktree", "remove", "../third"]);
     std::fs::remove_dir_all(&linked).expect("delete the folder");
     assert_eq!(
@@ -319,8 +290,8 @@ fn a_repository_that_cannot_be_read_is_listed_with_no_worktree_and_the_others_wh
     let worktrees: Vec<usize> = whole.iter().map(|r| r.workspaces.len()).collect();
     assert_eq!(worktrees, [1, 2, 1]);
 
-    // In the first, git fails on a configuration it cannot read. In the last, the id of
-    // the worktree can be neither read nor written: a folder lies where the file was.
+    // The first has a configuration git cannot read. The last has a folder where the id file was,
+    // so its id can be neither read nor written.
     let config = unreadable.join(".git/config");
     let sound = std::fs::read(&config).expect("read the configuration");
     std::fs::write(&config, "[core\n").expect("break the configuration");
@@ -328,8 +299,6 @@ fn a_repository_that_cannot_be_read_is_listed_with_no_worktree_and_the_others_wh
     std::fs::remove_file(&id_file).expect("remove the id file");
     std::fs::create_dir(&id_file).expect("a folder in its place");
 
-    // Each of the two is still listed, with no worktree; the one between them is listed
-    // as it was.
     let without = |repository: &Repository| Repository {
         workspaces: vec![],
         ..repository.clone()
@@ -338,7 +307,6 @@ fn a_repository_that_cannot_be_read_is_listed_with_no_worktree_and_the_others_wh
         workspaces.repositories().expect("repositories"),
         [without(&whole[0]), whole[1].clone(), without(&whole[2])]
     );
-    // Asked for by itself, a workspace of such a repository says what is wrong.
     let failure = workspaces
         .changes(&whole[0].workspaces[0].id)
         .expect_err("git fails there");
@@ -347,7 +315,6 @@ fn a_repository_that_cannot_be_read_is_listed_with_no_worktree_and_the_others_wh
         "{failure}"
     );
 
-    // Mended, the repository is listed as it was before.
     std::fs::write(&config, sound).expect("mend the configuration");
     assert_eq!(
         workspaces.repositories().expect("repositories")[..2],
@@ -385,7 +352,6 @@ fn a_repository_that_was_moved_is_the_same_repository_with_the_same_workspaces_a
     let moved = scratch.join("moved/elsewhere");
     std::fs::create_dir_all(moved.parent().unwrap()).expect("make the folder");
     std::fs::rename(&repo, &moved).expect("move the repository");
-    // Until it is opened where it is now, the repository is listed with no worktree.
     let gone = the_repository(&workspaces);
     assert_eq!(
         (gone.id.clone(), gone.workspaces),
@@ -421,15 +387,12 @@ fn a_linked_worktree_that_was_moved_is_the_same_workspace_with_or_without_gits_k
     let workspaces = workspaces(&scratch);
     let opened = workspaces.open_folder(&linked).expect("open the folder");
 
-    // Moved by git: the next listing has it at its new folder.
     git(&repo, &["worktree", "move", "../linked", "../moved-by-git"]);
     let listed = the_repository(&workspaces).workspaces;
     assert_eq!(listed[1].id, opened.workspace);
     assert_eq!(listed[1].path, scratch.join("moved-by-git"));
     workspaces.changes(&opened.workspace).expect("changes");
 
-    // Moved by hand: git still lists the old folder, as one it would forget. Opened
-    // where it is, it is the same workspace, and it is listed there.
     let by_hand = scratch.join("moved-by-hand");
     std::fs::rename(scratch.join("moved-by-git"), &by_hand).expect("move the worktree");
     assert_eq!(the_repository(&workspaces).workspaces.len(), 1);
@@ -454,7 +417,6 @@ fn a_copy_of_a_whole_repository_is_another_repository_with_an_id_of_its_own() {
     let workspaces = workspaces(&scratch);
     let original = workspaces.open_folder(&repo).expect("open the folder");
 
-    // A copy of the folder takes the id file along.
     let copy = scratch.join("copy");
     let copied = std::process::Command::new("cp")
         .arg("-R")
@@ -467,7 +429,6 @@ fn a_copy_of_a_whole_repository_is_another_repository_with_an_id_of_its_own() {
     let of_the_copy = workspaces.open_folder(&copy).expect("open the folder");
     assert_ne!(of_the_copy.workspace, original.workspace);
     assert_ne!(of_the_copy.repository, original.repository);
-    // The new id is written over the copied one; the original keeps its own.
     assert_eq!(id_in(&copy.join(".git")), of_the_copy.workspace.as_str());
     assert_eq!(id_in(&repo.join(".git")), original.workspace.as_str());
     assert_eq!(workspaces.open_folder(&repo).expect("open again"), original);
@@ -502,7 +463,6 @@ fn a_copy_of_one_linked_worktree_is_refused_because_it_shares_the_git_folder_of_
         .expect("start cp");
     assert!(copied.success());
 
-    // Refused whether or not the original was opened before.
     let workspaces = workspaces(&scratch);
     assert_eq!(
         refused(workspaces.open_folder(&copy)),
@@ -515,7 +475,6 @@ fn a_copy_of_one_linked_worktree_is_refused_because_it_shares_the_git_folder_of_
         Refusal::CopiedWorktree(copy.clone())
     );
 
-    // The original is untouched by the attempts.
     assert_eq!(
         id_in(&repo.join(".git/worktrees/linked")),
         original.workspace.as_str()

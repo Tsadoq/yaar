@@ -1,100 +1,11 @@
 #!/bin/sh
-# Row LIC-02: each package holds a notices file with one entry for every linked dependency of
-# the lock file, and a dependency with no licence text to reproduce fails.
+# Checks that each package's notices file has one entry for every linked dependency of the
+# lock file, each with its licence text.
 #
-#   packaging/notices-count.sh <packages-dir>
+# packaging/notices-count.sh <packages-dir>
 #
-# <packages-dir> holds some or all of the six release files as the jobs make them (names in
-# packaging/release/assemble.sh): yaar-review_<V>_amd64.deb, yaar-review_<V>_arm64.deb,
-# yaar-review-<V>-linux-x86_64.tar.gz, yaar-review-<V>-linux-aarch64.tar.gz,
-# yaar-review-<V>-macos-universal.zip and .dmg. Each of the first five that is there is
-# counted (the .dmg holds the same app as the .zip: macos-bundle-check.sh compares the two
-# byte for byte); a folder with none of them fails. That every file is there is
-# release-files-check.sh's to say. For each: take the notices file out of the package (.deb:
-# usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz, gunzipped; archive:
-# yaar-review/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt; .zip:
-# YAAR.app/Contents/Resources/THIRD-PARTY-NOTICES.txt), and its targets (amd64/x86_64:
-# x86_64-unknown-linux-gnu; arm64/aarch64: aarch64-unknown-linux-gnu; macos-universal: both
-# aarch64-apple-darwin and x86_64-apple-darwin, the union).
-#
-# For each of the three parts of the notices (packaging/notices.sh writes them: PART 1 the
-# Window yaar-review; PART 2 the Keeper yaar-keeper and pi's reporting program
-# yaar-pi-report; PART 3 Claude Code's hook program yaar-claude-hook and tool server
-# yaar-claude-tools):
-#
-# THE WANTED SET is every crate that
-#   cargo tree --locked --offline -e normal --target <triple> -p <package>... --prefix none --format '{p}'
-# prints, for the part's packages (PART 1: yaar-window; PART 2: yaar-keeper and
-# yaar-adapter-pi; PART 3: yaar-companion-claude), over each target of the package,
-# deduplicated, each line read as follows:
-#   - a trailing " (*)" (a repeat) and a trailing " (proc-macro)" are stripped, in either
-#     order; a proc-macro crate is counted like any other;
-#   - a trailing " (<path>)" that remains is stripped too: a crate from a path prints its
-#     folder there, and that alone never decides whether it is counted;
-#   - "name vX.Y.Z" becomes "name X.Y.Z" (the "v" removed).
-# Cargo works out the dependencies of a proc-macro crate (and of a build script) for the
-# machine it runs on, not for --target, so a plain `cargo tree --target aarch64-unknown-linux-gnu`
-# on an x86-64 machine also prints a crate that only an x86-64 machine would compile into a
-# proc-macro (core_detect 1.0.0, behind rust-i18n's proc-macro): a crate that no aarch64
-# program links and that the notices rightly lack. So the count asks cargo as if it ran on
-# the triple it counts: RUSTC names a stand-in that reports <triple> as the host and answers
-# nothing but cargo's questions (its version, its cfg, its file names; it refuses all else,
-# so it compiles nothing). CARGO_TARGET_DIR is a folder of the count's own, one for each
-# triple: the cargo of today writes nothing there for `cargo tree`, and the folder is named
-# so that a cargo that one day keeps the rustc's answers there keeps them apart from the
-# repository's build folder and from the next triple's. Every edge, a proc-macro's
-# own dependencies included, is then worked out for the package's target whatever machine
-# runs the count, as cargo-about does for the notices. This is exact for the Linux packages,
-# which the jobs build on their own target; for the .zip it is the union over both Mac targets.
-# THE WORKSPACE'S OWN CRATES are left out, and only they: the names of
-# `cargo metadata --locked --offline --no-deps --format-version 1` (`.packages[].name`, read
-# with jq). gpui-pre-apple, the toolkit's Apple crate that Cargo.toml patches in from
-# vendor/gpui-pre-apple-0.3.12, is not a member (the workspace excludes vendor/): it prints a
-# path and is counted, as the third-party code it is.
-#
-# THE FOUND SET is every "name version" of the part's "Used by:" lines, minus the names of
-# the workspace's own crates (cargo-about lists them as users of the licence they carry).
-#
-# THE BUILD: the wanted set of a part is what Cargo links when that part's packages are built
-# together and alone, so .github/scripts/release-build.sh (or the file RELEASE_BUILD_SH
-# names, which the control uses) must build the programs the same way. The file is read once,
-# before any package, and read closed: every line that is not a comment and holds `cargo` as
-# a word (a word of the shell: `X=1 cargo`, `command cargo`, `cd d; cargo` and `exec cargo`
-# hold it; so does a path or a variable that ends in cargo: `/usr/bin/cargo`,
-# `$HOME/.cargo/bin/cargo`, `$CARGO`, `${CARGO:-cargo}`; `$HOME/.cargo` and `--prefix=/cargo`
-# do not) must be exactly `cargo build` followed by --release,
-# --locked, -p <package> and "$@", and nothing else; any other such line is unreadable and
-# fails, named whole, since it may build what the notices do not hold. `exec` is refused with
-# the rest. A line that changes the arguments the cargo lines pass on, `set --`, `set` with
-# an operand, or `shift`, fails too, named whole, since "$@" is then not the caller's and the
-# cargo lines build something else than they read as; `set -eu` and `set -o pipefail` do not.
-# Quotes are taken out of a line before it is read, so `ca""rgo` is cargo. The packages of
-# the readable lines must be exactly the three sets above, one line for each. One line for
-# several parts would let Cargo merge the features that their packages ask of a shared
-# dependency, and a program would link crates that its part does not list. This reader
-# catches a slip in that script, in the forms listed here; it does not stop an author who
-# sets out to get around it (a sourced file, an eval of a variable), so any change
-# to release-build.sh is read in review.
-#
-# It fails, naming the package, the part and each crate, when:
-#   - a wanted crate is not found (a linked dependency with no entry);
-#   - a found crate is not wanted (an entry for something not linked: the count is wrong);
-#   - a licence block of the part that names a crate has no text after its "Used by:" lines
-#     (a dependency with no licence text to reproduce);
-#   - a package holds no notices file, or two packages of one system and processor hold
-#     different ones;
-#   - release-build.sh does not build the three parts one by one, as THE BUILD says, or holds a
-#     line that runs cargo and cannot be read, or that changes the arguments of the cargo
-#     lines (said once, whatever the folder holds).
-# Prints one line per package: "<file>: <n> crates in <m> licences, each with its text".
-#
-# Needs cargo (the fetched crates of the lock file; nothing is compiled, and the rustc on the
-# path or RUSTC names answers cargo's questions as it would on each counted triple), jq, gzip, tar,
-# unzip, and dpkg-deb to read a .deb (it fails when a .deb is there and dpkg-deb is not). The
-# variable RELEASE_BUILD_SH, when set, names the build script to read instead of
-# .github/scripts/release-build.sh.
-# Exit codes: 0 every package counts; 1 a package fails (sentences on standard error);
-# 2 a usage error.
+# Counts each .deb, .tar.gz and macOS .zip in <packages-dir>. Needs cargo (nothing is compiled), jq,
+# gzip, tar, unzip, dpkg-deb. Exit: 0 every package counts, 1 a package fails, 2 usage.
 set -eu
 
 NAME=notices-count.sh
@@ -119,12 +30,10 @@ done
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# Where the notices lie in each kind of package (the header says so).
 DEB_MEMBER=usr/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt.gz
 ARCHIVE_MEMBER=yaar-review/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt
 ZIP_MEMBER=YAAR.app/Contents/Resources/THIRD-PARTY-NOTICES.txt
 
-# The packages of each part of the notices, by the number of the part.
 part_packages() {
   case "$1" in
     1) echo "yaar-window" ;;
@@ -140,7 +49,6 @@ part_title() {
   esac
 }
 
-# The workspace's own crates: the names of the members, which are no third-party code.
 (cd "$ROOT" && cargo metadata --locked --offline --no-deps --format-version 1) \
   > "$TMP/metadata.json" 2> "$TMP/metadata.err" \
   || { cat "$TMP/metadata.err" >&2; fail "cargo metadata of $ROOT failed"; }
@@ -149,12 +57,10 @@ jq -r '.packages[].name' "$TMP/metadata.json" > "$TMP/workspace.unsorted" \
 LC_ALL=C sort -u "$TMP/workspace.unsorted" > "$TMP/workspace"
 [ -s "$TMP/workspace" ] || fail "cargo metadata of $ROOT names no workspace crate"
 
-# The rustc that cargo tree is given (THE WANTED SET says why): it answers the questions
-# cargo asks of a compiler as the machine $NOTICES_HOST would, through the real one
-# ($NOTICES_REAL_RUSTC, the caller's RUSTC or the rustc on the path), and refuses everything
-# else, so that it can never compile. Its version question gets the real answer with the
-# host line changed; a question about cfg, file names or the sysroot gets the target put on
-# it when it has none.
+# Cargo resolves proc-macro and build-script dependencies for the host, not for --target: on x86-64
+# `cargo tree --target aarch64-...` also prints crates only an x86-64 proc-macro compiles
+# (core_detect, behind rust-i18n). So RUSTC is a stand-in reporting <triple> as the host and
+# answering only cargo's questions; CARGO_TARGET_DIR is per triple so cached answers never mix.
 REAL_RUSTC=${RUSTC:-rustc}
 RUSTC_AS=$TMP/rustc-as-the-triple
 cat > "$RUSTC_AS" << 'STAND_IN'
@@ -169,8 +75,9 @@ exit 3
 STAND_IN
 chmod +x "$RUSTC_AS"
 
-# The crates cargo links into a part for one target, as lines "name version", sorted and
-# deduplicated, in $TMP/wanted.<part>.<triple>; made once, then kept.
+# The crates cargo links into a part for one target, as sorted "name version" lines in
+# $TMP/wanted.<part>.<triple>, made once. A crate printed with a path (vendor/gpui-pre-apple)
+# counts.
 wanted() {
   part=$1 triple=$2
   out=$TMP/wanted.$part.$triple
@@ -183,8 +90,7 @@ wanted() {
     cargo tree --locked --offline -e normal --target "$triple" $args \
     --prefix none --format '{p}') > "$TMP/tree" 2> "$TMP/tree.err" \
     || { cat "$TMP/tree.err" >&2; fail "cargo tree for $triple failed"; }
-  # A line is "name vX.Y.Z", then maybe " (proc-macro)", " (*)" and " (<path>)" in some
-  # order; only the first two words say which crate it is.
+  # A line is "name vX.Y.Z", then maybe " (proc-macro)", " (*)" and " (<path>)" in any order.
   awk '
     NF == 0 { next }
     $2 !~ /^v[0-9]/ { print "BAD " $0; next }
@@ -197,11 +103,9 @@ wanted() {
 }
 
 # What the notices file at $1 says, as tagged lines in $2:
-#   P <n>                        a part opens
-#   C <n> <name> <version>       a "Used by:" line of part n
-#   B<TAB><n><TAB><lines of text><TAB><licence><TAB><first crate>
-#                                a licence block of part n that names crates; the last block
-#                                of the file is closed by the end of the file, as no rule follows it
+# P <n>                  a part opens
+# C <n> <name> <version>   a "Used by:" line of part n
+# B <n> <lines> <licence> <first crate>   tab-separated: a licence block of part n that names crates
 parse_notices() {
   awk '
     function finish() {
@@ -229,14 +133,12 @@ parse_notices() {
     END { finish() }' "$1" > "$2"
 }
 
-# The member of an archive listing $1 (one name a line) that is the path $2, with or
-# without a leading "./"; prints it exactly as the listing has it.
+# Prints the entry of listing $1 that is the path $2, with or without a leading "./", as the
+# listing has it.
 find_member() {
   awk -v want="$2" '{ n = $0; sub(/^\.\//, "", n); if (n == want) { print $0; exit } }' "$1"
 }
 
-# Puts the notices of the package $1 into $2. Prints nothing; says what is wrong on
-# standard error and returns 1.
 take_notices() {
   pkg=$1 out=$2
   base=$(basename "$pkg")
@@ -267,8 +169,10 @@ take_notices() {
   [ -s "$out" ] || { echo "$NAME: $base: its notices file is empty" >&2; return 1; }
 }
 
-# The build script the count reads, and the check that it builds the programs part by part.
 RELEASE_BUILD=${RELEASE_BUILD_SH:-$ROOT/.github/scripts/release-build.sh}
+# The wanted set assumes each part is built alone: release-build.sh must hold one `cargo build
+# --release --locked -p <package> "$@"` line per part (one line for several parts would merge
+# features of shared dependencies) and nothing may change "$@". Catches a slip, not an evader.
 check_release_build() {
   [ -f "$RELEASE_BUILD" ] || { echo "$NAME: $RELEASE_BUILD is not a file, so how the programs are built cannot be read" >&2; return 1; }
   awk -v q="'" -v parts="$(part_packages 1)|$(part_packages 2)|$(part_packages 3)" '
@@ -284,19 +188,13 @@ check_release_build() {
     {
       line = $0
       sub(/^[ \t]+/, "", line)
-      # Quotes are taken out of the line, as the shell takes them out of a word, so that
-      # `ca""rgo` and `"cargo"` are the word cargo; then the separators and assignments of the
-      # shell are blanks, and the line is split into words.
       t = line
       gsub(/"/, "", t)
       gsub(q, "", t)
       gsub(/[;&|(){}`=!\\<>]/, " ", t)
       nt = split(t, tok, /[ \t]+/)
-      # Does the line change the arguments that "$@" stands for on the cargo lines? `shift`,
-      # and `set` followed by anything but options (`set -- "$@" --workspace`, `set x`), or by
-      # a `--` later (`set -eu -- x`), do, and so does `eval set -- ...`, which holds the same
-      # words. `set -eu` and `set -o pipefail` do not. A line that does is named whole: the
-      # cargo lines then build something else than they read as.
+      # Does the line change what "$@" stands for? `shift`, `set` followed by anything but
+      # options or by a later `--`, and `eval set -- ...` do; `set -eu` does not.
       for (i = 1; i <= nt; i++) {
         if (tok[i] == "shift") changes = 1
         if (tok[i] != "set") continue
@@ -304,16 +202,11 @@ check_release_build() {
         for (j = i + 1; j <= nt; j++) if (tok[j] == "--") changes = 1
       }
       if (changes) { print "args\t" line; changes = 0; next }
-      # Does the line hold cargo as a word? `X=1 cargo`, `command cargo`, `cd d; cargo`,
-      # `(cargo` and `if a; then cargo` all do. So does a word that ends in cargo after a
-      # slash, a `$`, a `:` or a `-` (`/usr/bin/cargo`, `$HOME/.cargo/bin/cargo`, `$CARGO`,
-      # `${CARGO:-cargo}`), in any case, while `$HOME/.cargo` and `--prefix=/cargo` do not.
+      # Does the line hold cargo as a word? `X=1 cargo`, `command cargo`, `${CARGO:-cargo}` do;
+      # `$HOME/.cargo` and `--prefix=/cargo` do not.
       holds = 0
       for (i = 1; i <= nt; i++) if (tolower(tok[i]) ~ /(^|[^.]\/|[$:-])cargo$/) holds = 1
       if (!holds) next
-      # Only a line that is exactly `cargo build` and allowed words is read; any other line
-      # that runs cargo (an env assignment, `command`, `exec`, a second command, a flag
-      # before `build`) is unreadable, since it may build what the notices do not hold.
       if (line !~ /^cargo[ \t]+build([ \t]|$)/) { print "line\t" line; next }
       n = split(line, w, /[ \t]+/)
       pkgs = ""; bad = 0
@@ -404,13 +297,11 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       OK=0
       continue
     fi
-    # What the part says it holds, without the workspace's own crates.
     awk -v part="$part" '$1 == "C" && $2 == part { print $3, $4 }' "$TMP/parsed.$IDX" > "$TMP/found.raw" \
       || fail "$base: its notices cannot be read for PART $part"
     LC_ALL=C sort -u "$TMP/found.raw" > "$TMP/found.all"
     awk 'NR == FNR { ws[$1] = 1; next } !($1 in ws)' "$TMP/workspace" "$TMP/found.all" > "$TMP/found" \
       || fail "$base: the crates of PART $part cannot be read"
-    # What cargo links into it, for every target of the package.
     : > "$TMP/want.all"
     for triple in $TARGETS; do
       wanted "$part" "$triple"
@@ -434,7 +325,6 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
       done < "$TMP/extra"
       OK=0
     fi
-    # Every licence block that names a crate carries its text.
     awk -F '\t' -v part="$part" '$1 == "B" && $2 == part && $3 == 0 { print $5 "\t" $4 }' "$TMP/parsed.$IDX" > "$TMP/notext" \
       || fail "$base: the licence blocks of PART $part cannot be read"
     if [ -s "$TMP/notext" ]; then

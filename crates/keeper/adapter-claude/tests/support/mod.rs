@@ -1,6 +1,3 @@
-//! What the tests of this crate share: the recorded hooks given to the Adapter as the
-//! Keeper hands them over, and a folder of a test's own.
-
 // Each test program uses the helpers it needs, and none uses all of them.
 #![allow(dead_code)]
 
@@ -11,7 +8,6 @@ use yaar_adapter_claude::ClaudeCode;
 use yaar_agent::{Adapter, Asked, CliSession, Event, Report, Reported};
 use yaar_system_tests::recorded::{self, HookRecord};
 
-/// Gives the hook of `record` to the Adapter as the Keeper would hand it.
 pub fn feed(adapter: &mut ClaudeCode, record: &HookRecord) -> Vec<Reported> {
     adapter
         .report(&Report {
@@ -22,9 +18,6 @@ pub fn feed(adapter: &mut ClaudeCode, record: &HookRecord) -> Vec<Reported> {
         .expect("a recorded hook is a report")
 }
 
-/// Gives the hook of `record` to the Adapter as the Keeper does: the report first, then the
-/// question of what it waits for, with the Adapter's own `folder`. Returns the answer to
-/// the question.
 pub fn feed_asked(adapter: &mut ClaudeCode, folder: &Path, record: &HookRecord) -> Option<Asked> {
     feed(adapter, record);
     adapter
@@ -39,8 +32,6 @@ pub fn feed_asked(adapter: &mut ClaudeCode, folder: &Path, record: &HookRecord) 
         .expect("a recorded hook can be asked about")
 }
 
-/// The events of every line of the recording `name`, fed in order to one Adapter, with the
-/// records and the Adapter, which has heard them all.
 pub fn replay(name: &str) -> (ClaudeCode, Vec<HookRecord>, Vec<Vec<Reported>>) {
     let records = recorded::hook_events(name);
     let mut adapter = ClaudeCode::new();
@@ -51,8 +42,6 @@ pub fn replay(name: &str) -> (ClaudeCode, Vec<HookRecord>, Vec<Vec<Reported>>) {
     (adapter, records, by_line)
 }
 
-/// The event as the Adapter should tell it for `record`: in its session, terminal and
-/// process, and the project folder the recordings were made in.
 pub fn told(record: &HookRecord, event: Event) -> Reported {
     Reported {
         session: CliSession(record.session().to_owned()),
@@ -64,12 +53,10 @@ pub fn told(record: &HookRecord, event: Event) -> Reported {
     }
 }
 
-/// A file of the project the recordings were made in.
 pub fn in_project(relative: &str) -> PathBuf {
     Path::new(recorded::PROJECT).join(relative)
 }
 
-/// The text of the shell command a hook's input names.
 pub fn command_of(record: &HookRecord) -> String {
     record.input["tool_input"]["command"]
         .as_str()
@@ -77,13 +64,11 @@ pub fn command_of(record: &HookRecord) -> String {
         .to_owned()
 }
 
-/// A folder of the test's own, removed when the test ends.
 pub struct Scratch {
     root: PathBuf,
 }
 
 impl Scratch {
-    /// Makes the folder.
     pub fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);

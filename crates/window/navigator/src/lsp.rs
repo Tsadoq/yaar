@@ -1,37 +1,25 @@
-//! The Language Server Protocol's frames, addresses and positions, and the shapes of the
-//! three answers the Navigator reads; nothing of any one server.
-//!
-//! A frame is a header of `Content-Length: <n>`, any other header lines, an empty line, all
-//! ended by `\r\n`, then `n` bytes of one JSON value. Positions are counted the protocol's
-//! default way, lines from 0 and characters in UTF-16 code units; the Navigator's own
-//! [`crate::Place`] and [`crate::Location`] count lines from 1 and columns in bytes of the
-//! line's UTF-8 text. The driver converts nothing and sends and reads positions as a server
-//! counts them: the answers module converts, with [`utf16_column`] when it asks and with
-//! [`byte_column`] when it reads a server's answer.
+//! LSP frames, addresses and positions. Positions are as a server counts them (lines from 0, UTF-16
+//! units); the answers module converts to the Navigator's 1-based lines and byte columns.
 
 use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
-/// The longest header line a frame may have: a line of any length is not a header.
 const HEADER_LINE_LIMIT: u64 = 8 * 1024;
 
-/// Writes `message` as one frame, and flushes.
 pub fn write_frame(out: &mut impl Write, message: &Value) -> io::Result<()> {
     let body = serde_json::to_vec(message).map_err(io::Error::other)?;
-    // One write for the whole frame, so that a writer shared by two threads that each hold
-    // its lock for one call never has the header of one frame and the body of another
-    // side by side.
+    // One write for the whole frame, so that a writer shared by two threads, each holding its lock
+    // for one call, never puts the header of one frame beside the body of another.
     let mut frame = format!("Content-Length: {}\r\n\r\n", body.len()).into_bytes();
     frame.extend_from_slice(&body);
     out.write_all(&frame)?;
     out.flush()
 }
 
-/// Reads one frame. None at the end of the stream before a frame began; an error for a
-/// header with no `Content-Length`, a body that is not JSON, or a stream that ends inside
-/// a frame.
+/// None at the end of the stream before a frame began; an error for a missing `Content-Length`,
+/// a body that is not JSON, or a stream that ends inside a frame.
 pub fn read_frame(input: &mut impl BufRead) -> io::Result<Option<Value>> {
     let mut length: Option<u64> = None;
     let mut first = true;
@@ -84,8 +72,8 @@ pub fn read_frame(input: &mut impl BufRead) -> io::Result<Option<Value>> {
             "a frame's header has no Content-Length",
         ));
     };
-    // Read what the stream has, up to the length, instead of reserving the length: a
-    // length no stream will ever fill costs nothing.
+    // Read what the stream has, up to the length, instead of reserving it: a length no stream will
+    // fill costs nothing.
     let mut body = Vec::new();
     input.by_ref().take(length).read_to_end(&mut body)?;
     if (body.len() as u64) < length {
@@ -99,27 +87,20 @@ pub fn read_frame(input: &mut impl BufRead) -> io::Result<Option<Value>> {
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
-/// The `file://` address of an absolute path, every byte that an address cannot hold as
-/// it is written with `%`. A path that is not absolute is a mistake of the caller: it
-/// panics.
+/// Panics when `path` is not absolute.
 pub fn file_uri(path: &Path) -> String {
     url::Url::from_file_path(path)
         .unwrap_or_else(|()| panic!("{path:?} is not an absolute path"))
         .into()
 }
 
-/// The absolute path of a `file://` address; none for another scheme or an address that is
-/// not one.
 pub fn path_of_uri(uri: &str) -> Option<PathBuf> {
     url::Url::parse(uri).ok()?.to_file_path().ok()
 }
 
-/// The column, in UTF-16 code units, of the byte offset `byte` in `line`; past the end of
-/// the line, its length.
 pub fn utf16_column(line: &str, byte: u32) -> u32 {
     let mut units = 0;
     for (start, character) in line.char_indices() {
-        // A character the offset falls inside is not counted: its column is where it starts.
         if start + character.len_utf8() > byte as usize {
             break;
         }
@@ -128,8 +109,8 @@ pub fn utf16_column(line: &str, byte: u32) -> u32 {
     units
 }
 
-/// The byte offset of the UTF-16 column `utf16` in `line`; past the end of the line, its
-/// length; inside a character, that character's first byte.
+/// The byte offset of UTF-16 column `utf16` in `line`: past the end, the line's length;
+/// inside a character, that character's first byte.
 pub fn byte_column(line: &str, utf16: u32) -> u32 {
     let mut units = 0;
     for (start, character) in line.char_indices() {
@@ -141,9 +122,7 @@ pub fn byte_column(line: &str, utf16: u32) -> u32 {
     line.len() as u32
 }
 
-/// The text of a `textDocument/hover` result: the value of a `MarkupContent`, a marked
-/// string, or each of an array of them joined by an empty line; none for null or empty.
-/// Kept as the server wrote it, Markdown fences and all.
+/// Kept as the server wrote it, Markdown fences included.
 pub fn hover_text(result: &Value) -> Option<String> {
     fn part(value: &Value) -> Option<&str> {
         match value {
@@ -164,20 +143,15 @@ pub fn hover_text(result: &Value) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join("\n\n"))
 }
 
-/// One place of a `textDocument/definition` or `textDocument/references` result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Spot {
-    /// The file.
     pub path: PathBuf,
-    /// The line, from 0.
     pub line: u32,
-    /// The character, in UTF-16 code units, from 0.
     pub character: u32,
 }
 
-/// The places of a definition or references result: a `Location`, an array of them, or an
-/// array of `LocationLink`s (their `targetUri` and `targetSelectionRange`), in the server's
-/// order; empty for null. A place whose address is not a file is left out.
+/// A `Location`, an array of them, or `LocationLink`s; places whose address is not a file are
+/// dropped.
 pub fn spots(result: &Value) -> Vec<Spot> {
     fn spot(value: &Value) -> Option<Spot> {
         let (uri, range) = match value.get("targetUri") {
@@ -390,11 +364,9 @@ mod tests {
     #[test]
     fn a_column_inside_a_character_is_where_that_character_starts() {
         let line = "αβ𝄞x";
-        // Inside β (byte 3) and inside 𝄞 (bytes 5 to 7): the column of the character.
         assert_eq!(utf16_column(line, 3), 1);
         assert_eq!(utf16_column(line, 5), 2);
         assert_eq!(utf16_column(line, 7), 2);
-        // The middle of the surrogate pair: unit 3.
         assert_eq!(byte_column(line, 3), 4);
     }
 

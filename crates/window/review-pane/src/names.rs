@@ -1,19 +1,13 @@
-//! The names of a line of code, as the reviewer moves from one to the next and as the
-//! pane asks the Navigator about them. No language is known here: a name is a run of
-//! letters, digits, `_` and `$` that does not start with a digit, where a letter or a digit
-//! is any of Unicode's (`char::is_alphanumeric`).
-//!
-//! A run that starts with a digit (`0xff`, `1e9`, `2nd`) is a number and no name at all:
-//! its tail is not one either.
+//! The names of a line of code: runs of Unicode letters and digits, `_` and `$` that do not
+//! start with a digit. A run that starts with a digit (`0xff`, `2nd`) is a number, and no
+//! part of it is a name.
 
 use std::ops::Range;
 
-/// Whether `c` may be part of a name.
 fn is_name_char(c: char) -> bool {
     c.is_alphanumeric() || c == '_' || c == '$'
 }
 
-/// The names of `line`, as ranges of its bytes, in the order they stand.
 pub(crate) fn names_of(line: &str) -> Vec<Range<usize>> {
     let mut names = Vec::new();
     let mut run: Option<usize> = None;
@@ -37,9 +31,8 @@ pub(crate) fn names_of(line: &str) -> Vec<Range<usize>> {
     names
 }
 
-/// The index, in [`names_of`]'s list, of the name whose characters hold the byte `at`; none
-/// where no name does, the byte right after a name's last character included. A pointer is
-/// on the character it is over, so the character after a name is not part of it.
+/// The index in `names_of`'s list of the name whose characters hold byte `at`. The byte
+/// right after a name is not in it: a pointer is on the character it is over.
 pub(crate) fn name_at(line: &str, at: usize) -> Option<usize> {
     names_of(line)
         .iter()
@@ -73,7 +66,6 @@ mod tests {
     #[test]
     fn letters_and_digits_are_those_of_any_script() {
         assert_eq!(read("naïve = größe + 日本語"), ["naïve", "größe", "日本語"]);
-        // An Arabic-Indic digit starts a number as an ASCII one does.
         assert_eq!(read("x = ٣abc"), ["x"]);
     }
 
@@ -102,21 +94,17 @@ mod tests {
         let line = "ab  cd";
         assert_eq!(name_at(line, 0), Some(0));
         assert_eq!(name_at(line, 1), Some(0));
-        // The byte after `ab` is no part of it.
         assert_eq!(name_at(line, 2), None);
         assert_eq!(name_at(line, 3), None);
         assert_eq!(name_at(line, 4), Some(1));
         assert_eq!(name_at(line, 5), Some(1));
-        // The end of the line.
         assert_eq!(name_at(line, 6), None);
         assert_eq!(name_at(line, 7), None);
         assert_eq!(name_at("", 0), None);
-        // A name's characters may be several bytes: all of them hold it.
         assert_eq!(name_at("é(x", 0), Some(0));
         assert_eq!(name_at("é(x", 1), Some(0));
         assert_eq!(name_at("é(x", 2), None);
         assert_eq!(name_at("é(x", 3), Some(1));
-        // A name next to a symbol, as in `a.b`: the dot belongs to neither.
         assert_eq!(name_at("a.b", 1), None);
     }
 }

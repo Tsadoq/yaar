@@ -1,28 +1,7 @@
 #!/bin/bash
-# Row PKG-06: a later version arrives with apt-get upgrade.
-#
-#   .github/scripts/linux-upgrade.sh <user> <site-later-dir> <later-version>
-#
-# Run after the install line installed <version> from the site served on port 8000.
-#   1. Before: `dpkg-query -W -f='${Version}' yaar-review` is not <later-version>, and
-#      `apt-cache madison yaar-review` lists one version.
-#   2. serve-site.sh switch <site-later-dir> 8000: the same address now serves the
-#      repository with both versions, signed by the same key (a new deployment of the site).
-#   3. As <user>, with sudo: `apt-get update`, then `apt-get upgrade -y` (not install).
-#   4. After: the installed version is <later-version>; `apt-cache madison yaar-review` lists
-#      both versions from 127.0.0.1:8000 (the first was not unsigned by adding the second);
-#      `apt-get update` printed no "W:" and no "E:" line; /usr/bin/yaar-review is still the
-#      program of the package (`dpkg -S /usr/bin/yaar-review`).
-# The server stays on <site-later-dir>: the steps after this one run on the newest site, as a
-# user's system does after a release (the second run of the install line then meets the
-# version it has installed as the newest, which is the state a first run leaves).
-#
-# Exit codes: 0 holds; 1 does not; 2 usage error.
-#
-# What the header leaves: `apt-get update` is the plain one (every source), so that a
-# warning about the repository under test cannot hide behind a narrowed source list; its
-# output and exit status are both read; a command that stops the script without a sentence
-# of its own is named in one, and the exit code is 1.
+# A later version arrives with apt-get upgrade, after the install line installed the first one.
+# .github/scripts/linux-upgrade.sh <user> <site-later-dir> <later-version>
+# The server stays on <site-later-dir>: later steps run on the newest site.
 set -euo pipefail
 
 NAME=linux-upgrade.sh
@@ -51,8 +30,6 @@ id -u "$USER_NAME" > /dev/null 2>&1 || {
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-upgrade.XXXXXX")
-# A command that set -e stopped on says so in a sentence, with the code this script's header
-# names, instead of leaving the failing tool's own status.
 cleanup() {
   local status=$1 cmd=$2
   if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
@@ -64,7 +41,6 @@ cleanup() {
 }
 trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
-# 1. Before.
 FIRST=$(dpkg-query -W -f='${Version}' yaar-review) || fail "yaar-review is not installed: the install line has not run"
 echo "$NAME: installed before: $FIRST"
 [ "$FIRST" != "$LATER" ] || fail "the installed version is already $LATER, the later one: the step proves nothing"
@@ -73,10 +49,8 @@ cat "$SCRATCH/madison-before"
 LINES=$(wc -l < "$SCRATCH/madison-before" | tr -d ' ')
 [ "$LINES" -eq 1 ] || fail "apt-cache madison lists $LINES versions of yaar-review before the later site is served, not one"
 
-# 2. The same address serves the later site.
 "$HERE/serve-site.sh" switch "$SITE_LATER" 8000
 
-# 3. update, then upgrade (not install), as the user with sudo.
 STATUS=0
 # shellcheck disable=SC2024 # the redirect is this script's own, for its scratch folder
 sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update > "$SCRATCH/update" 2>&1 || STATUS=$?
@@ -91,7 +65,6 @@ sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get upgra
 cat "$SCRATCH/upgrade"
 [ "$STATUS" -eq 0 ] || fail "apt-get upgrade -y exited with $STATUS"
 
-# 4. After.
 NOW=$(dpkg-query -W -f='${Version}' yaar-review) || fail "yaar-review is not installed after the upgrade"
 echo "$NAME: installed after: $NOW"
 [ "$NOW" = "$LATER" ] || fail "the installed version is $NOW after apt-get upgrade, not $LATER"

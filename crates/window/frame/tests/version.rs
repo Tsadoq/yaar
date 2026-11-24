@@ -1,5 +1,5 @@
-//! Component test: a Window that meets a running Keeper of an older version says so.
-//! Older means a lower protocol, or the same protocol and a lower version of the app.
+//! A Keeper is older than this Window when it speaks a lower protocol, or the same protocol
+//! with a lower app version.
 
 mod common;
 
@@ -18,7 +18,7 @@ const WINDOW: Size<Pixels> = Size {
     height: px(800.),
 };
 
-/// The version of the app this Window is: the one every crate of the workspace has.
+/// Every crate of the workspace has this version.
 const OWN_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 struct Blank {
@@ -53,7 +53,6 @@ fn hello(protocol: u16, app_version: &str) -> Hello {
     }
 }
 
-/// A composed Frame whose Keeper says this hello.
 fn meeting(keeper: Hello, cx: &mut TestAppContext) -> (Shown, VisualTestContext) {
     let (shown, cx) = open_frame_with_keeper(keeper, WINDOW, vec![blank()], cx);
     cx.run_until_parked();
@@ -71,8 +70,6 @@ fn status(shown: &Shown, cx: &mut VisualTestContext) -> LinkStatus {
         .read_with(cx, |link, _| link.status().clone())
 }
 
-/// The note is drawn exactly where it is given: it is in the window's frame with the
-/// sentence of the model.
 fn assert_no_note(shown: &Shown, cx: &mut VisualTestContext) {
     assert_eq!(note(shown, cx), None);
     assert_eq!(drawn("frame-keeper-note", cx), None, "no note is drawn");
@@ -110,8 +107,7 @@ fn a_keeper_of_a_lower_protocol_is_said_to_be_older_and_nothing_is_asked_of_it(
         "the note is drawn"
     );
 
-    // Nothing is asked: the connection goes as the link lets any go, and what the Keeper's
-    // end reads up to its end is no frame.
+    // Nothing is asked: the Keeper's end reads no frame before it closes.
     let Shown { models, keeper, .. } = shown;
     models.link.update(&mut cx, |link, cx| {
         link.attached(Err("gone".to_owned()), cx)
@@ -144,13 +140,11 @@ fn a_keeper_of_the_same_protocol_and_a_lower_version_is_said_to_be_older_and_is_
         "the note is drawn"
     );
 
-    // The list is asked for as usual.
     shown.keeper.list(&[], &mut cx);
 }
 
 #[gpui_kit::test]
 fn a_keeper_of_a_newer_version_or_of_this_one_is_no_reason_for_a_note(cx: &mut TestAppContext) {
-    // The versions of a Keeper that is not older, each in a window of its own.
     let keepers = [
         ("a newer version", hello(PROTOCOL_VERSION, "9.9.9")),
         ("this version", hello(PROTOCOL_VERSION, OWN_VERSION)),
@@ -163,7 +157,6 @@ fn a_keeper_of_a_newer_version_or_of_this_one_is_no_reason_for_a_note(cx: &mut T
     for (which, keeper) in keepers {
         let (shown, mut cx) = meeting(keeper, cx);
         assert_no_note(&shown, &mut cx);
-        // The window still says how it stands, whatever the note.
         assert!(
             !shown
                 .frame
@@ -179,7 +172,6 @@ fn the_note_goes_with_the_connection_that_ends_or_changes(cx: &mut TestAppContex
     let (shown, mut cx) = meeting(hello(PROTOCOL_VERSION, "0.0.1"), cx);
     assert!(note(&shown, &mut cx).is_some());
 
-    // Another Keeper, of this version: the note of the first is not kept.
     KeeperEnd::attach_saying(
         hello(PROTOCOL_VERSION, OWN_VERSION),
         &shown.models.link,
@@ -188,7 +180,6 @@ fn the_note_goes_with_the_connection_that_ends_or_changes(cx: &mut TestAppContex
     cx.run_until_parked();
     assert_no_note(&shown, &mut cx);
 
-    // None reached: no Keeper, no note.
     shown.models.link.update(&mut cx, |link, cx| {
         link.attached(Err("none".to_owned()), cx)
     });

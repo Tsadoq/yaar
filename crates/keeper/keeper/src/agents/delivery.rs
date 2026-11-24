@@ -1,40 +1,5 @@
-//! What a report of a CLI's piece waits for, and the app's answer to it: the review that
-//! rides with a message of the user, the allowing of the read of a review file and of a
-//! call of the app's reply tool, and the agent's reply to a thread. Built by the Keeper's
-//! package "delivery" of slice 6.
-//!
-//! Called on this side's thread, under the Keeper's turn, once the report's events were
-//! given to the Switchboard, for a report whose Adapter says it waits for something
-//! (`yaar_agent::Adapter::asked`). What it gives is the piece's answer, sent at once;
-//! `Fact::ReviewsChanged` is told through `Told::reviews_changed`, and the state of a
-//! delivered round is recorded after, off the agent's way, through `Told::round_to_record`.
-//!
-//! - `Asks::Message`: the report's CLI session is mapped to the app's session
-//!   (`Store::session_of_cli`), that session to its review (`Reviews::review_of_session`);
-//!   when the review has something attached, `Reviews::send_attached` hands it out through
-//!   the Adapter's delivery (`yaar_agent::Adapter::delivery`, with the Adapter's folder
-//!   and the report's `Asked`), and the bytes it gives are the answer,
-//!   `Reply::Answer`. The review's workspace's reviews changed, and the round is to be
-//!   recorded. A report that reached the Keeper more than `DELIVER_BY` (1.5 s) before this
-//!   runs is sent nothing and answered `Reply::Done`, its attachment kept, and a line on
-//!   standard error says how long it waited: the hook program gives up at 2 s, and a review
-//!   marked sent that no agent received would be lost.
-//! - `Asks::ReadOwnFile`, `Asks::OwnTool`: `Adapter::answer` with `Answer::Allow`.
-//! - `Asks::Reply`: `Reviews::agent_replied` for the session, answered with
-//!   `Answer::Replied` (the thread, the mark, the reply's length in characters) or, when
-//!   refused, `Answer::Refused` with the engine's reason; the reviews changed when kept.
-//!
-//! The session a report names. The reply tool's server reads the CLI's session id from its
-//! environment once, when Claude Code starts it, and Claude Code keeps the server across
-//! `/clear`, which gives the session a new id: the server's reports then name the session
-//! `/clear` ended. So when the named CLI session does not run, or has no review, and a
-//! running session of the same CLI has the report's process (`AgentReport::pid`, the CLI
-//! itself, whose process a `/clear` keeps), that running session is the one the report is
-//! of. Every other report is of the session it names. Each condition has its own case: a
-//! session that ended without a `/clear` keeps its review while another session of its
-//! process runs, and a running session whose review is of no agent (the app gives every
-//! session that starts a review, so that state is one the Store allows and the app does not
-//! yet make).
+//! What a report waits for and the app's answer: the review riding with the user's message,
+//! review-file reads, reply-tool calls and the agent's reply to a thread.
 
 use std::time::{Duration, Instant};
 
@@ -48,29 +13,20 @@ use super::{Core, Told};
 use crate::lock;
 use crate::wiring::Kept;
 
-/// The longest a report may have waited, from the moment it reached the Keeper, for a review
-/// still to be sent with it. The hook program gives up at 2 s, and what it prints after that
-/// goes nowhere; the comments are marked sent only here, so a send that late could mark
-/// comments the agent never received. Half a second is left for the answer to reach the hook
-/// program once the send is kept, which is a few writes to the drive.
+/// The hook program gives up at 2 s and what it prints after goes nowhere: a later send would mark
+/// comments sent that the agent never received.
 const DELIVER_BY: Duration = Duration::from_millis(1500);
 
-/// Whether a report that reached the Keeper at `at` is too old at `now` to be sent a review.
 fn late(at: Instant, now: Instant) -> bool {
     now.saturating_duration_since(at) > DELIVER_BY
 }
 
-/// How long a report that reached the Keeper at `at` has waited, when that is too long for
-/// it to be sent a review; none otherwise. The one place that reads the clock for `late`, so
-/// that its two instants are never given in the wrong order at the call.
 fn waited_too_long(at: Instant) -> Option<Duration> {
     let now = Instant::now();
     late(at, now).then(|| now.saturating_duration_since(at))
 }
 
 impl Core {
-    /// Answers what `report` waits for, `asked` as its Adapter read it: see this module's
-    /// doc. `at` is the moment the report reached the Keeper.
     pub(super) fn answer_asked(
         &self,
         kept: &Kept,
@@ -122,8 +78,6 @@ impl Core {
         }
     }
 
-    /// What the Adapter of `report` hands its piece for `answer`, as `Reply::Answer`; `Done`
-    /// for an Adapter the Keeper does not have.
     fn answer(&self, report: &AgentReport, asked: &Asked, answer: &Answer<'_>) -> Reply {
         let adapters = lock(&self.adapters);
         match adapters
@@ -137,9 +91,6 @@ impl Core {
         }
     }
 
-    /// The user's message: sends what is attached to the review of its session, and answers
-    /// with what the Adapter's delivery made of it; `Done` when there is nothing to carry, or
-    /// when the report is too old to be answered in time.
     fn deliver(
         &self,
         kept: &Kept,
@@ -159,8 +110,8 @@ impl Core {
                 return Reply::Done;
             }
         };
-        // One lock of the Adapters for the delivery and the send: the engine calls the
-        // delivery while it holds its own turn.
+        // One lock of the Adapters for the delivery and the send: the engine calls the delivery
+        // while it holds its own turn.
         let adapters = lock(&self.adapters);
         let Some(adapter) = adapters
             .iter()
@@ -188,12 +139,10 @@ impl Core {
             Ok(Some((bytes, sent))) => {
                 self.round_sent_in(kept, &review, sent.round.number, &session);
                 told.reviews_changed(&session.workspace);
-                // The state of the worktree is recorded after, off the agent's way.
                 told.round_to_record(&session.workspace, &review, sent.round.number);
                 Reply::Answer { bytes }
             }
             Ok(None) => Reply::Done,
-            // Nothing was sent: the comments stay attached and the message goes as it is.
             Err(e) => {
                 eprintln!("yaar-keeper: {}: {e}", report.agent);
                 Reply::Done
@@ -201,12 +150,6 @@ impl Core {
         }
     }
 
-    /// Round `round` of `review` was just sent with a message of `session`: the turn of
-    /// that session that runs now, the one the message started or, for a message the CLI
-    /// took while it works, the one that ran, is kept as the round's
-    /// (`Store::set_round_turn`), so that the Window can tell whether that turn has ended.
-    /// Nothing is kept for a session with no turn open, which the Window then counts as
-    /// it counts a copy.
     pub(crate) fn round_sent_in(
         &self,
         kept: &Kept,
@@ -225,10 +168,9 @@ impl Core {
         }
     }
 
-    /// The session `report` is of: the one the report's CLI names, except where that one
-    /// does not run or has no review and a session of the same CLI that runs has the
-    /// report's process, which is a CLI whose session id changed under a tool server that
-    /// kept the old one.
+    /// The reply tool's server reads the CLI session id once and Claude Code keeps it across
+    /// `/clear`, so a report can name a stale session: when the named one does not run or has no
+    /// review, the running session of the same CLI with the report's process (`pid`) is meant.
     fn session_of(
         &self,
         kept: &Kept,
@@ -305,7 +247,6 @@ mod tests {
         assert!(!late(now + Duration::from_secs(1), now));
     }
 
-    /// A folder of the test's own, removed when it ends.
     struct Scratch(PathBuf);
 
     impl Drop for Scratch {
@@ -332,9 +273,8 @@ mod tests {
             .expect("the temporary folder")
             .join(format!("yaar-keeper-late-{}", std::process::id()));
         let _scratch = Scratch(root.clone());
-        // SAFETY: changing the environment is sound only while no other thread reads it.
-        // This is the first statement that reads it, and the tests of this crate are run by
-        // `cargo nextest`, which gives each test a process of its own.
+        // SAFETY: nothing before this reads the environment, and nextest runs each test in a
+        // process of its own, so no other thread can read it.
         unsafe {
             for (name, value) in [
                 ("GIT_CONFIG_GLOBAL", "/dev/null"),
@@ -368,7 +308,6 @@ mod tests {
         git(&repo, &["add", "--all"]);
         git(&repo, &["commit", "--quiet", "-m", "first"]);
 
-        // The parts as the Keeper starts them, with the Adapter of Claude Code.
         let options = Options {
             socket: root.join("k.sock"),
             linger: Duration::from_secs(60),
@@ -402,7 +341,6 @@ mod tests {
             .expect("open the folder")
             .workspace;
 
-        // A session starts in the folder, and its review holds an attached draft.
         let events = recorded::hook_events("claude/review-file-read.jsonl");
         let report = |record: &recorded::HookRecord| AgentReport {
             agent: yaar_adapter_claude::NAME.to_owned(),
@@ -458,7 +396,6 @@ mod tests {
             )
             .expect("attach the review");
 
-        // The user's message reaches the Keeper's side too late to be answered in time.
         let message = report(&events[2]);
         let late_by = Instant::now()
             .checked_sub(DELIVER_BY * 2)
@@ -478,8 +415,8 @@ mod tests {
             Some(None)
         );
 
-        // The same message, on time, is sent the review: what was kept was whole. Its time
-        // is ahead of the clock, so that no machine is slow enough to make it late.
+        // The same message on time is sent the review. Its time is ahead of the clock, so no
+        // machine is slow enough to make it late.
         let mut told = Told::default();
         let answer = core.report_taken(&kept, &message, Instant::now() + DELIVER_BY, &mut told);
         assert!(matches!(answer, Reply::Answer { .. }), "{answer:?}");
@@ -490,8 +427,6 @@ mod tests {
 
     #[test]
     fn the_limit_leaves_the_hook_program_time_to_print_what_it_is_answered() {
-        // The hook program gives up at 2 s; a send kept at the limit is answered within the
-        // half second that is left, which is a few writes to the drive and a local socket.
         assert!(DELIVER_BY + Duration::from_millis(500) <= Duration::from_secs(2));
     }
 }

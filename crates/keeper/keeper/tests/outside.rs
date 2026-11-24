@@ -1,11 +1,4 @@
-//! Component tests: a thread on a file outside the worktree, or one inside it that git
-//! ignores, through the surface a Window uses, with a real repository the tests make and a
-//! real database beneath. The thread is saved with no version and an absolute path, and the
-//! Keeper gives it back with no version and the same path.
-//!
-//! The Keeper runs git as its user does, with the environment of its process. Each test
-//! therefore cleans that environment as its first statement, and these tests are run by
-//! `cargo nextest`, which gives each test a process of its own.
+//! Each test cleans the process environment first, so each needs a process of its own (nextest).
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
@@ -21,19 +14,13 @@ use yaar_link::{
     write_message,
 };
 
-/// What the one file of a new repository holds.
 const FIVE_LINES: &str = "one\ntwo\nthree\nfour\nfive\n";
 
-/// How long a test waits for the Keeper before it fails.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-/// A folder of the test's own with a short path, removed when the test ends.
 struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Makes the folder and cleans the environment of this process for git: no
-    /// configuration of the user or of the system, a fixed author and date, an empty
-    /// home. It has to be the first statement of a test.
     fn new() -> Scratch {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -55,17 +42,14 @@ impl Scratch {
             ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
             ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
         ];
-        // SAFETY: changing the environment is sound only while no other thread reads it,
-        // as a thread that starts a process does. This runs as the first statement of a
-        // test, and these tests are run by `cargo nextest`, which gives each test a
-        // process of its own: no other thread exists yet.
+        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
+        // so no other thread exists.
         unsafe {
             for (name, value) in settings {
                 std::env::set_var(name, value);
             }
             std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's lists of files go: a folder that goes
-            // with the test.
+            // Where the Keeper's copies of git's file lists go.
             std::env::set_var("TMPDIR", root.join("tmp"));
             for name in [
                 "GIT_DIR",
@@ -85,7 +69,6 @@ impl Scratch {
         self.0.join("k.sock")
     }
 
-    /// Starts the Keeper's library on a thread of this test.
     fn keeper(&self) -> JoinHandle<std::io::Result<Exit>> {
         let options = Options {
             socket: self.socket(),
@@ -99,7 +82,6 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         assert_eq!(mine.protocol, PROTOCOL_VERSION);
@@ -122,7 +104,6 @@ impl Scratch {
         }
     }
 
-    /// A repository in the folder `name` with one commit on `main`, and its file `a.txt`.
     fn repository(&self, name: &str) -> PathBuf {
         let folder = self.0.join(name);
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -134,7 +115,6 @@ impl Scratch {
         folder
     }
 
-    /// A file in a folder of the scratch that no repository holds, five lines of `fn N`.
     fn library_file(&self) -> PathBuf {
         let folder = self.0.join("lib");
         std::fs::create_dir_all(&folder).expect("make the folder");
@@ -155,7 +135,6 @@ fn git(folder: &Path, args: &[&str]) {
     git_prints(folder, args);
 }
 
-/// What git prints on its standard output, without the line end.
 fn git_prints(folder: &Path, args: &[&str]) -> String {
     let output = Command::new("git")
         .arg("-C")
@@ -175,19 +154,16 @@ fn git_prints(folder: &Path, args: &[&str]) -> String {
         .to_owned()
 }
 
-/// One end of the Link, as a Window holds it.
 struct Window {
     stream: UnixStream,
     next_id: u32,
 }
 
 impl Window {
-    /// The next frame the Keeper sent, whatever it is. Fails the test at the deadline.
     fn next(&mut self) -> Message {
         read_message(&mut self.stream).expect("a frame from the Keeper")
     }
 
-    /// Sends a request and expects its reply as the very next frame.
     fn ask(&mut self, request: Request) -> Result<Reply, Refusal> {
         let id = RequestId(self.next_id);
         self.next_id += 1;
@@ -198,7 +174,6 @@ impl Window {
         }
     }
 
-    /// Expects a fact as the very next frame.
     fn fact(&mut self) -> Fact {
         match self.next() {
             Message::Fact(fact) => fact,
@@ -206,8 +181,6 @@ impl Window {
         }
     }
 
-    /// Opens the folder, takes the list of workspaces that follows, and gives the
-    /// workspace with the id of its review, of no agent.
     fn open(&mut self, folder: &Path) -> (WorkspaceId, ReviewId) {
         let Ok(Reply::Opened { workspace, .. }) = self.ask(Request::OpenFolder {
             path: folder.to_owned(),
@@ -219,7 +192,6 @@ impl Window {
         (workspace, review)
     }
 
-    /// The review of the workspace, of no agent, and its threads.
     fn threads(&mut self, workspace: &WorkspaceId) -> (ReviewId, Vec<Thread>) {
         match self.ask(Request::GetReviews {
             workspace: workspace.clone(),
@@ -234,7 +206,6 @@ impl Window {
         }
     }
 
-    /// One thread, by its id.
     fn thread(&mut self, workspace: &WorkspaceId, thread: &ThreadId) -> Thread {
         self.threads(workspace)
             .1
@@ -243,8 +214,8 @@ impl Window {
             .expect("the thread is kept")
     }
 
-    /// Saves the first comment of thread `n` on `lines` of `path`, as the Window sends it,
-    /// and, when that is done, takes the fact that the reviews changed.
+    /// Saves the first comment of thread `n` and, when that succeeds, takes the fact that the
+    /// reviews changed.
     fn start(&mut self, review: &ReviewId, n: u8, anchor: Anchor) -> Result<Reply, Refusal> {
         let (thread, comment) = ids(n);
         let saved = self.ask(Request::SaveDraft {
@@ -266,8 +237,6 @@ impl Window {
     }
 }
 
-/// The ids of a thread and of its comment that the tests draw: 32 digits each, and no two
-/// alike.
 fn ids(n: u8) -> (ThreadId, CommentId) {
     (
         ThreadId::new(format!("{n:02x}").repeat(16)),
@@ -275,8 +244,6 @@ fn ids(n: u8) -> (ThreadId, CommentId) {
     )
 }
 
-/// Where a new thread sits when the Window saves it: line `line` of `path` on the new
-/// side, with `code` as the text of the line.
 fn anchor_on(tree: Option<&str>, path: &Path, line: u32, code: &str) -> Anchor {
     Anchor {
         tree: tree.map(str::to_owned),
@@ -370,11 +337,8 @@ fn a_thread_on_a_file_of_the_worktree_still_records_a_state_and_is_carried_while
         "a state of the files on disk, not the commit"
     );
 
-    // The files change and a third thread of the worktree records a second state, to which
-    // the engine carries the threads that have a version. The inside thread moving shows
-    // that the carrying ran. That the outside thread is never a candidate for it is shown
-    // by the engine's own tests: a carrying that failed on it would leave it with no place
-    // as well, and only a line on the Keeper's standard error would tell.
+    // The inside thread moving shows the carrying ran; only the engine's own tests show the outside
+    // one is never a candidate.
     std::fs::write(repo.join("a.txt"), format!("zero\n{FIVE_LINES}")).expect("change the file");
     assert_eq!(
         window.start(&review, 3, anchor_on(None, Path::new("a.txt"), 1, "zero")),
@@ -416,7 +380,6 @@ fn a_thread_outside_the_worktree_is_kept_when_the_worktree_is_gone() {
         window.start(&review, 1, anchor_on(None, &library, 2, "fn 2")),
         Ok(Reply::Done)
     );
-    // Lines of the files on disk need the worktree, as in slice 3.
     let refused = window.start(&review, 2, anchor_on(None, Path::new("a.txt"), 1, "one"));
     assert!(
         matches!(&refused, Err(Refusal::Failed { reason }) if reason.contains("worktree is gone")),
@@ -436,8 +399,8 @@ fn a_thread_outside_the_worktree_is_saved_though_the_worktree_cannot_be_looked_u
     let keeper = scratch.keeper();
     let mut window = scratch.window();
     let (workspace, review) = window.open(&repo);
-    // The file that holds the worktree's id becomes a folder: the lookup of the worktree
-    // fails with an error of its own, and the worktree is not gone.
+    // The id file becomes a folder: the worktree lookup fails with an error of its own, and the
+    // worktree is not gone.
     let id_file = repo.join(".git").join(yaar_workspaces::ID_FILE);
     let id = std::fs::read(&id_file).expect("read the id");
     std::fs::remove_file(&id_file).expect("remove the id file");
@@ -448,8 +411,7 @@ fn a_thread_outside_the_worktree_is_saved_though_the_worktree_cannot_be_looked_u
         Ok(Reply::Done),
         "no lookup is made for a file outside the worktree"
     );
-    // The control: a thread of the files on disk does look the worktree up, and is refused
-    // with that error, so the first save did not pass for want of a lookup that fails.
+    // Control: a thread of the files on disk looks the worktree up and is refused with that error.
     let refused = window.start(&review, 2, anchor_on(None, Path::new("a.txt"), 1, "one"));
     assert!(
         matches!(&refused, Err(Refusal::Failed { reason }) if !reason.contains("worktree is gone")),

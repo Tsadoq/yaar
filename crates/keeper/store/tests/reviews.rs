@@ -1,6 +1,3 @@
-//! Component tests: the calls of the Store that keep and find reviews, on a real
-//! database file.
-
 mod support;
 
 use std::ffi::OsStr;
@@ -14,7 +11,6 @@ use yaar_store::{
     SentBy, Side, Store, StoreError, Thread, ThreadId, ViewedRecord, WorkspaceId,
 };
 
-/// An id of 32 hexadecimal digits, from a number.
 fn id(n: u128) -> String {
     format!("{n:032x}")
 }
@@ -55,7 +51,6 @@ fn comment(n: u128, author: Author, text: &str, round: Option<u32>) -> Comment {
     }
 }
 
-/// A thread with one draft of the reviewer.
 fn thread(n: u128, first_comment: u128, text: &str) -> Thread {
     Thread {
         id: ThreadId::new(id(n)),
@@ -88,7 +83,6 @@ fn rid(n: u128) -> ReviewId {
     ReviewId::new(id(n))
 }
 
-/// A review, `1` of workspace `1`, with a thread `10` holding a draft `100`.
 fn with_one_draft(store: &Store) {
     store
         .put_review(&review_record(1, 1, None))
@@ -112,14 +106,12 @@ fn refusal_of<T: std::fmt::Debug>(result: Result<T, StoreError>) -> String {
     }
 }
 
-/// How many bytes the write-ahead file holds; none when it is not there.
 fn wal_len(scratch: &Scratch) -> u64 {
     std::fs::metadata(scratch.0.join("store.db-wal")).map_or(0, |m| m.len())
 }
 
-/// Shows that a save has not been flushed yet. A runner that stalls for longer than the
-/// writer waits has the writer flush on its own, and that is no fault: the check is
-/// made only while the writer's pause has not run out.
+/// A runner that stalls longer than the writer waits has the writer flush on its own, so check only
+/// while the writer's pause has not run out.
 fn assert_not_flushed_yet(scratch: &Scratch, saved_at: Instant) {
     let held = wal_len(scratch);
     if saved_at.elapsed() < FLUSH_AFTER {
@@ -161,7 +153,6 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
         store
             .put_thread(&rid(5), &thread(40, 400, "of the agent's review"))
             .expect("put thread");
-        // Comments of two threads, kept in turn: each thread finds its own, in order.
         store
             .put_comment(
                 &tid(20),
@@ -236,13 +227,11 @@ fn every_call_keeps_what_it_is_given_and_a_store_opened_later_finds_it_again() {
     }
 
     for _ in 0..2 {
-        // A second Store on the same file, as after a restart; the first one is gone.
         let store = Store::open(&scratch.file()).expect("open again");
         let kept = store.reviews_of(&workspace(1)).expect("reviews");
         assert_eq!(kept, expected);
         assert_eq!(review_of(&store, 9), expected[0]);
         assert_eq!(review_of(&store, 5), expected[1]);
-        // The reviews of another workspace stay out of it, and are whole themselves.
         assert_eq!(
             store.reviews_of(&workspace(2)).expect("reviews"),
             vec![review_record(7, 2, None)]
@@ -267,8 +256,6 @@ fn a_second_review_of_no_agent_for_a_workspace_is_refused_and_the_first_is_uncha
     assert_eq!(review_of(&store, 1), before);
     assert_eq!(store.review(&rid(2)).expect("review"), None);
 
-    // A review of an agent beside it is kept, and so is one of no agent in another
-    // workspace; two of one agent are no concern of this rule.
     store
         .put_review(&review_record(3, 1, Some("session")))
         .expect("a review of an agent");
@@ -289,7 +276,6 @@ fn a_review_whose_id_is_taken_or_which_comes_with_threads_is_refused_and_nothing
     with_one_draft(&store);
     let before = review_of(&store, 1);
 
-    // The id is taken, in another workspace and as a review of an agent.
     let mut taken = review_record(1, 2, Some("session"));
     taken.reviewed = Some("e".repeat(40));
     let sentence = refusal_of(store.put_review(&taken));
@@ -316,22 +302,17 @@ fn a_thread_or_a_comment_that_the_store_cannot_take_is_refused_and_nothing_chang
         .expect("put review");
     let before = (review_of(&store, 1), review_of(&store, 2));
 
-    // A thread of a review the Store does not hold.
     let sentence = refusal_of(store.put_thread(&rid(99), &thread(11, 101, "x")));
     assert!(sentence.contains(&id(99)), "{sentence}");
-    // A thread id that is taken, in the same review and in another one.
     refusal_of(store.put_thread(&rid(1), &thread(10, 101, "x")));
     refusal_of(store.put_thread(&rid(2), &thread(10, 101, "x")));
-    // A comment id that is taken, by the first comment of another thread.
     refusal_of(store.put_thread(&rid(1), &thread(11, 100, "x")));
-    // Lines that count from 0, or end before they start.
     let mut from_zero = thread(11, 101, "x");
     from_zero.anchor.first = 0;
     refusal_of(store.put_thread(&rid(1), &from_zero));
     let mut backwards = thread(11, 101, "x");
     (backwards.anchor.first, backwards.anchor.last) = (5, 4);
     refusal_of(store.put_thread(&rid(1), &backwards));
-    // Not one draft of the reviewer: none, two, a sent one, the agent's.
     let mut none = thread(11, 101, "x");
     none.comments.clear();
     refusal_of(store.put_thread(&rid(1), &none));
@@ -345,7 +326,6 @@ fn a_thread_or_a_comment_that_the_store_cannot_take_is_refused_and_nothing_chang
     agent.comments[0].author = Author::Agent;
     refusal_of(store.put_thread(&rid(1), &agent));
 
-    // A reply to a thread that is not kept, and a comment id that is taken.
     let sentence =
         refusal_of(store.put_comment(&tid(99), &comment(101, Author::Reviewer, "x", None)));
     assert!(sentence.contains(&id(99)), "{sentence}");
@@ -362,7 +342,6 @@ fn a_draft_is_saved_whole_each_time_and_only_a_draft_of_the_reviewer_is() {
     store
         .put_comment(&tid(10), &comment(101, Author::Reviewer, "reply", None))
         .expect("put comment");
-    // An agent's reply with no round, as slice 6 may leave it: not a draft.
     store
         .put_comment(&tid(10), &comment(102, Author::Agent, "agent's", None))
         .expect("put comment");
@@ -378,7 +357,6 @@ fn a_draft_is_saved_whole_each_time_and_only_a_draft_of_the_reviewer_is() {
     }
     let before = review_of(&store, 1);
 
-    // Sent, the agent's with no round, and one the Store does not hold.
     let sentence = refusal_of(store.save_draft(&cid(100), "late"));
     assert!(
         sentence.contains(&id(100)) && sentence.contains("round 1"),
@@ -389,7 +367,6 @@ fn a_draft_is_saved_whole_each_time_and_only_a_draft_of_the_reviewer_is() {
     let sentence = refusal_of(store.save_draft(&cid(999), "nowhere"));
     assert!(sentence.contains("not kept"), "{sentence}");
     assert_eq!(review_of(&store, 1), before);
-    // The refusals left the store working as it did.
     store
         .save_draft(&cid(101), "after the refusals")
         .expect("save draft");
@@ -414,28 +391,24 @@ fn deleting_a_draft_takes_its_thread_with_it_only_when_it_was_the_last_comment()
         .expect("put thread");
     let before = review_of(&store, 1);
 
-    // Refused: sent, the agent's with no round, not kept. Nothing changes.
     refusal_of(store.delete_draft(&cid(100)));
     refusal_of(store.delete_draft(&cid(102)));
     let sentence = refusal_of(store.delete_draft(&cid(999)));
     assert!(sentence.contains("not kept"), "{sentence}");
     assert_eq!(review_of(&store, 1), before);
 
-    // A draft reply goes and its thread stays, with the others.
     store.delete_draft(&cid(101)).expect("delete the reply");
     let kept = review_of(&store, 1);
     let ids: Vec<&CommentId> = kept.threads[0].comments.iter().map(|c| &c.id).collect();
     assert_eq!(ids, [&cid(100), &cid(102)]);
     assert_eq!(kept.threads.len(), 2);
 
-    // The only comment of a thread goes and takes the thread.
     store
         .delete_draft(&cid(110))
         .expect("delete the only draft");
     let kept = review_of(&store, 1);
     assert_eq!(kept.threads.len(), 1);
     assert_eq!(kept.threads[0].id, tid(10));
-    // And what was deleted is not there to save, or to delete again.
     refusal_of(store.save_draft(&cid(110), "back"));
     refusal_of(store.delete_draft(&cid(110)));
 }
@@ -463,22 +436,18 @@ fn a_round_that_is_not_the_next_or_names_a_comment_that_is_not_a_draft_of_the_re
         assert_eq!((review_of(store, 1), review_of(store, 2)), before);
     };
 
-    // A number that is not 1: 0 and 2.
     for number in [0, 2] {
         let sentence = refusal_of(store.put_round(&rid(1), &round(number), &[cid(100)]));
         assert!(sentence.contains("next"), "{sentence}");
         unchanged(&store);
     }
-    // A review that is not kept.
     refusal_of(store.put_round(&rid(99), &round(1), &[cid(100)]));
-    // A comment of another review, one that is not kept, the agent's with no round,
-    // and a comment named twice; each after a good one, which must not stay sent.
+    // Each bad comment comes after a good one, which must not stay sent.
     for bad in [cid(200), cid(999), cid(111), cid(100)] {
         refusal_of(store.put_round(&rid(1), &round(1), &[cid(100), bad]));
         unchanged(&store);
     }
 
-    // The same round is kept once it is right, and then the next number is 2.
     store
         .put_round(&rid(1), &round(1), &[cid(100)])
         .expect("put round");
@@ -540,14 +509,12 @@ fn the_files_marked_viewed_are_kept_for_each_workspace_by_the_bytes_of_their_pat
         store
             .set_viewed(&workspace(2), Path::new("b.rs"), Some("of another"))
             .expect("mark");
-        // Marked again, the content is the new one; and a mark taken away is gone.
         store
             .set_viewed(&workspace(1), Path::new("b.rs"), Some("two"))
             .expect("mark again");
         store
             .set_viewed(&workspace(1), Path::new("a/z.rs"), None)
             .expect("take away");
-        // Taking away what is not marked is no failure.
         store
             .set_viewed(&workspace(1), Path::new("never.rs"), None)
             .expect("take away nothing");
@@ -582,8 +549,8 @@ fn the_workspaces_with_threads_come_in_the_order_the_workspaces_were_kept() {
             git_dir: PathBuf::from("/r/.git"),
         })
         .expect("put repository");
-    // Workspaces kept as 3, 1, 2; the reviews are put in another order, and a workspace
-    // that the table does not hold has its reviews among them.
+    // Workspaces kept as 3, 1, 2, reviews put in another order; workspaces 4, 7 and 8 have
+    // reviews but are not in the table.
     for n in [3, 1, 2] {
         store
             .put_workspace(&workspace(n), &RepositoryId::new("r"), Path::new("/r"))
@@ -602,14 +569,12 @@ fn the_workspaces_with_threads_come_in_the_order_the_workspaces_were_kept() {
             .put_review(&review_record(review, of, agent))
             .expect("put review");
     }
-    // Reviews of 4 holds no thread; the others hold one each, workspace 3 in two reviews.
     for (review, n) in [(15, 0), (10, 1), (14, 2), (13, 3), (12, 4), (11, 5)] {
         store
             .put_thread(&rid(review), &thread(100 + n, 1000 + n, "x"))
             .expect("put thread");
     }
 
-    // 8's review was put before 7's, and neither workspace is in the table.
     assert_eq!(
         store.workspaces_with_threads().expect("listed"),
         vec![
@@ -621,8 +586,6 @@ fn the_workspaces_with_threads_come_in_the_order_the_workspaces_were_kept() {
         ]
     );
 
-    // The last draft deleted takes the thread, and the workspace leaves the list; the
-    // other of a workspace's reviews still holds one.
     store.delete_draft(&cid(1001)).expect("delete");
     store.delete_draft(&cid(1002)).expect("delete");
     assert_eq!(
@@ -648,7 +611,6 @@ fn a_flush_moves_the_saved_drafts_out_of_the_write_ahead_file_at_once() {
     store.flush().expect("flush");
     assert_eq!(wal_len(&scratch), 0);
     assert_eq!(review_of(&store, 1).threads[0].comments[0].text, "typed");
-    // A flush with nothing to do is no failure.
     store.flush().expect("flush again");
 }
 
@@ -661,13 +623,12 @@ fn the_writer_flushes_by_itself_once_the_typing_pauses() {
     store.save_draft(&cid(100), "typed").expect("save draft");
     assert_not_flushed_yet(&scratch, saved_at);
 
-    // Waiting for a fact, with a deadline far past the pause the writer allows itself.
+    // Deadline far past the pause the writer allows itself.
     let deadline = Instant::now() + Duration::from_secs(30);
     while wal_len(&scratch) > 0 {
         assert!(Instant::now() < deadline, "the writer never flushed");
         std::thread::sleep(Duration::from_millis(20));
     }
-    // It goes on working after a flush of its own.
     store
         .save_draft(&cid(100), "typed more")
         .expect("save draft");
@@ -710,8 +671,7 @@ fn a_send_is_in_the_database_file_itself_before_the_call_returns() {
         .expect("put round");
     assert_eq!(wal_len(&scratch), 0);
 
-    // The file alone, copied while the Store is open and without its write-ahead file,
-    // holds the sent comment: a write-ahead file damaged later costs nothing sent.
+    // The file alone, copied without its write-ahead file, holds the sent comment.
     let elsewhere = Scratch::new();
     std::fs::copy(scratch.file(), elsewhere.file()).expect("copy the file");
     let copy = Store::open(&elsewhere.file()).expect("open the copy");

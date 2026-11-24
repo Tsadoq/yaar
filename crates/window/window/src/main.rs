@@ -1,11 +1,5 @@
 //! `yaar-review`: the Window program behind a command line.
-//!
-//! ```text
-//! yaar-review                   open the window
-//! yaar-review --version
-//! yaar-review --keeper-status   find or start the Keeper as the window would, say who
-//!                               answered, and leave without opening a window
-//! ```
+//! `--keeper-status` finds or starts the Keeper, says who answered, and opens no window.
 
 use std::process::ExitCode;
 

@@ -1,71 +1,12 @@
 #!/bin/bash
-# Row PKG-05M: the install line installs the app on macOS and the uninstall removes it.
-#
-#   .github/scripts/macos-install.sh install
-#   .github/scripts/macos-install.sh uninstall
-#
-# The site and the release files are served on port 8000 (serve-site.sh). The rehearsal's app
-# is signed ad hoc and not notarised, so both runs set YAAR_ALLOW_UNNOTARIZED=1, which the
-# install script takes, and only from a loopback address, to skip its checks of the
-# notarisation and of the team; it still verifies the signature. No other variable changes
-# the routes: YAAR_BASE_URL=http://127.0.0.1:8000,
-# YAAR_DOWNLOAD_URL=http://127.0.0.1:8000/download; the app goes to its default place,
-# /Applications, which every assertion below means by /Applications: YAAR_INSTALL_DIR, when
-# set (a builder on the owner's Mac sets it to a scratch folder, and HOME and TMPDIR too),
-# replaces it. Port: YAAR_TEST_PORT when set (a builder picks a free one), else 8000.
-# install:
-#   1. The door stays shut away from a loopback address: the install line with
-#      YAAR_ALLOW_UNNOTARIZED=1 and YAAR_DOWNLOAD_URL=https://example.invalid/download exits
-#      1, says that the variable is taken only from 127.0.0.1 or localhost, downloads
-#      nothing (it says so before any download) and leaves no YAAR.app in /Applications.
-#   2. `curl -fsSL $YAAR_BASE_URL/install.sh | bash`, exit 0, and its output says the route
-#      is macos and that the SHA-256 matched SHA256SUMS;
-#   3. /Applications/YAAR.app exists, `codesign --verify --deep --strict` passes on it, its
-#      CFBundleShortVersionString is $VERSION, no file of it carries com.apple.quarantine
-#      (`xattr -r`), and /Applications holds no `.YAAR.app.new.*` and no `.yaar-review-old.*`;
-#   4. the same line run a second time exits 0, says the version is already installed, and
-#      leaves the bundle's files as they were (a listing with sizes and modification times of
-#      every file, before and after, equal).
-# uninstall:
-#   1. `curl -fsSL $YAAR_BASE_URL/install.sh | bash -s -- --uninstall`, exit 0;
-#   2. /Applications/YAAR.app is gone; no process runs whose program is
-#      /Applications/YAAR.app/Contents/MacOS/yaar-review or
-#      /Applications/YAAR.app/Contents/Helpers/yaar-keeper (matched by the full path, as the
-#      install script's own uninstall matches them: `ps -axo pid=,comm=`; a Keeper of a build
-#      folder, another agent's on the owner's Mac among them, is not the app's); the user's
-#      lock file of the Keeper is gone
-#      (~/Library/Application Support/yaar-review/keeper.sock.lock). What stays (the
-#      reviews) is user-files.sh's to judge.
-#
-# Exit codes: 0 holds; 1 does not; 2 usage error.
-#
-# What the header leaves, decided here: (1) install 1 also needs $dest to hold no YAAR.app
-# when it starts, or "leaves no YAAR.app" could not fail; (2) VERSION is read from the
-# environment (the job's) and the step fails when it is unset; (3) "no file carries
-# com.apple.quarantine" is read off `xattr -rl`; (4) the listing of install 4 holds, for
-# every path of the bundle, its kind, size, modification time, inode and mode: a bundle that
-# was taken apart and put back whole could show the same sizes and times, not the same inodes; (5) the
-# uninstall's step 2 also asserts that $dest holds no `.YAAR.app.new.*` and no
-# `.yaar-review-old.*`; (6) the install line is run through `bash -s --`, which is `bash`
-# with no arguments; (7) a command that stops the script without a sentence of its own is
-# named in one, and the exit code is 1; (8) install 1 reads "downloads nothing" from three
-# places: the door's output (it ends on its refusal and names the address once), a curl and
-# a wget of the step's own, first on the search path of the door's run, which record each call
-# in a file and fail like a machine with no network, so a door that fetches in silence leaves
-# its call there, and the site's own log: the door's run is given http_proxy, https_proxy,
-# HTTPS_PROXY, ALL_PROXY and all_proxy naming the served site, with no_proxy and NO_PROXY
-# unset, so that a fetch which passes no stand-in (an absolute /usr/bin/curl) reaches no DNS
-# and leaves a proxied request line in the log of the site (a CONNECT, or a request line
-# holding a whole address, whatever the address), served-<port>/log under $RUNNER_TEMP (else
-# $TMPDIR, else /tmp), which the step counts before and after the run.
+# The install line installs the app on macOS and the uninstall removes it, from the site on 8000.
+# .github/scripts/macos-install.sh install | uninstall   (VERSION must be set)
+# Not notarised: YAAR_ALLOW_UNNOTARIZED=1. YAAR_INSTALL_DIR, YAAR_TEST_PORT override defaults.
 set -euo pipefail
-# -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
 
 NAME=macos-install.sh
 
-# One sentence on standard error, and exit 1. The marker file tells the trap that a sentence
-# was said, also when fail ran in a subshell and could set no variable of the step's.
 scratch=""
 fail() {
     echo "$NAME: $*" >&2
@@ -75,8 +16,7 @@ fail() {
     exit 1
 }
 
-# Set by usage: only it may leave with status 2, so any other command that fails with 2
-# (grep, cmp or diff on an error) is still named in a sentence and ends the step with 1.
+# Only usage leaves with status 2, so a grep, cmp or diff that fails with 2 is still named.
 usage_said=no
 usage() {
     usage_said=yes
@@ -85,9 +25,6 @@ usage() {
     exit 2
 }
 
-# What the step was doing when a command that nobody guarded failed: set -e ends the step with
-# that command's own status and words, and the exit trap puts one sentence of the step's own
-# in front of them and exits 1, the code the header names.
 last_command=""
 trap 'last_command=$BASH_COMMAND' ERR
 
@@ -127,8 +64,6 @@ esac
 base="http://127.0.0.1:$port"
 download="$base/download"
 
-# Where the app goes. The install script puts it in YAAR_INSTALL_DIR when that is set and in
-# /Applications otherwise; every path below means that place.
 dest=${YAAR_INSTALL_DIR:-/Applications}
 dest=${dest%/}
 app="$dest/YAAR.app"
@@ -138,14 +73,9 @@ lock="$HOME/Library/Application Support/yaar-review/keeper.sock.lock"
 
 scratch=$(mktemp -d) || fail "no scratch folder could be made"
 
-# The install line, `curl -fsSL <base>/install.sh | bash -s -- <arguments>`, with the two
-# addresses of the served site and the test variable, as the header says. Its whole output is
-# written to the log named by $1 and shown; the exit code is left in $line_status.
-# $1: the log, $2: the download address, then the install script's arguments. When
-# $line_path is set it goes first on the search path of the install script only (the step's
-# own curl of install.sh, on the left of the pipe, keeps the real one). When $line_proxy is
-# set, every proxy variable of the install script's run names it and no_proxy is unset, so
-# that any fetch of that run, by name or by path, goes to that address.
+# The install line, `curl -fsSL <base>/install.sh | bash -s -- <arguments>`: $1 the log, $2 the
+# download address. $line_path goes first on the install script's search path; $line_proxy, when
+# set, is every proxy of that run with no_proxy unset, so any fetch goes to it.
 line_status=0
 line_path=""
 line_proxy=""
@@ -167,20 +97,17 @@ install_line() {
     sed 's/^/    | /' "$log"
 }
 
-# Every file of the bundle with its kind, size, modification time, inode and mode, sorted.
-# The inode is there because a bundle that was taken apart and put back whole, with the times
-# of its files kept by ditto, would show the same sizes and the same times.
+# The inode is listed because a bundle taken apart and put back with times kept by ditto shows
+# the same sizes and times.
 listing_of() {
     find -P "$1" -exec stat -f '%N %HT %z %m %i %Lp' {} + | LC_ALL=C sort
 }
 
-# What stands in $dest of an interrupted install, one per line.
 leftovers() {
     find "$dest" -maxdepth 1 \( -name '.YAAR.app.new.*' -o -name '.yaar-review-old.*' \)
 }
 
-# The processes whose program is the file $1, as "<pid>" lines. macOS's ps gives the full
-# path of the program in comm, so a Keeper of a build folder, another agent's, is not matched.
+# macOS's ps gives the full program path in comm, so another build folder's Keeper is not matched.
 processes_of() {
     ps -axo pid=,comm= | awk -v want="$1" '
         {
@@ -191,22 +118,19 @@ processes_of() {
 }
 
 if [ "$action" = install ]; then
-    # --- 1. The door stays shut away from a loopback address.
     [ ! -e "$app" ] || fail "$app is there before the install line ran: a step before this one left it"
     echo "install 1: the test variable with a download from a remote address"
-    # A curl and a wget that record each call and fail like a machine with no network, first
-    # on the search path of the door's run: a door that fetches silently before it refuses
-    # prints nothing, and leaves its call here.
+    # A curl and a wget that record each call and fail like a machine with no network, first on the
+    # door's search path.
     mkdir "$scratch/door-bin" || fail "the folder $scratch/door-bin could not be made"
     for fetcher in curl wget; do
         printf '%s\n' '#!/bin/sh' "echo \"$fetcher \$*\" >> \"$scratch/door-fetches\"" 'exit 6' > "$scratch/door-bin/$fetcher" \
             || fail "the stand-in $fetcher could not be written in $scratch/door-bin"
         chmod 755 "$scratch/door-bin/$fetcher" || fail "the stand-in $fetcher could not be made executable"
     done
-    # The served site's log, which a fetch that went to the proxy leaves a line in: a CONNECT,
-    # or a request line that holds a whole address (the step's own fetch of install.sh reaches
-    # the site directly and logs `GET /install.sh`, which is neither). The proxied lines before
-    # the run are the baseline, and any address counts, not only the one the door was given.
+    # A fetch through the proxy leaves a CONNECT, or a request line with a whole address, in the
+    # site's log (the step's own `GET /install.sh` is neither); the count before the run is the
+    # baseline.
     served_log="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/served-$port/log"
     [ -f "$served_log" ] || fail "$served_log, the log of the site served on port $port, is not there: the step before this one did not serve it with serve-site.sh"
     proxied_before=$(awk '/"CONNECT |"[A-Z]+ [A-Za-z][A-Za-z0-9+.-]*:\/\// { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
@@ -230,10 +154,8 @@ if [ "$action" = install ]; then
     if grep -q 'downloading' "$scratch/door.log"; then
         fail "the install line with a download from https://example.invalid began a download"
     fi
-    # "Downloads nothing" is shown by what the door's output holds besides its sentence: a
-    # door that said the sentence and then fetched SHA256SUMS (which the script announces
-    # with no "downloading" line) would leave the address in a curl line and end on that
-    # fetch's error, not on the refusal.
+    # A door that said its sentence and then fetched SHA256SUMS (announced with no "downloading"
+    # line) would end on that fetch's error, not on the refusal.
     last=$(grep -v '^[[:space:]]*$' "$scratch/door.log" | tail -n 1) || fail "the output of the install line with a download from https://example.invalid could not be read"
     case "$last" in
         *'Nothing was downloaded'*) ;;
@@ -247,7 +169,6 @@ if [ "$action" = install ]; then
     [ ! -e "$app" ] || fail "the install line with a download from https://example.invalid left $app"
     echo "install 1: refused, exit 1, nothing downloaded, no $app"
 
-    # --- 2. The install line, from the served site.
     echo "install 2: the install line from $base/install.sh"
     install_line "$scratch/install.log" "$download"
     [ "$line_status" -eq 0 ] || fail "the install line exited $line_status and not 0"
@@ -255,7 +176,6 @@ if [ "$action" = install ]; then
     grep -q 'SHA-256 matches SHA256SUMS' "$scratch/install.log" || fail "the install line's output does not say that the SHA-256 matched SHA256SUMS"
     echo "install 2: exit 0, route macOS, the SHA-256 matched SHA256SUMS"
 
-    # --- 3. The app is there, whole, and not quarantined.
     [ -d "$app" ] || fail "$app is not there after the install line"
     codesign --verify --deep --strict "$app" || fail "codesign --verify --deep --strict does not pass on $app"
     found=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$app/Contents/Info.plist") \
@@ -269,7 +189,6 @@ if [ "$action" = install ]; then
     [ -z "$left" ] || fail "$dest holds what an interrupted install leaves: $(printf '%s' "$left" | tr '\n' ' ')"
     echo "install 3: $app is version $found, its signature verifies, no file is quarantined, $dest holds no leftover"
 
-    # --- 4. A second run changes nothing.
     listing_of "$app" > "$scratch/before"
     [ -s "$scratch/before" ] || fail "the listing of $app is empty"
     echo "install 4: the install line a second time"
@@ -284,13 +203,11 @@ if [ "$action" = install ]; then
     [ -z "$left" ] || fail "the second run left $(printf '%s' "$left" | tr '\n' ' ') in $dest"
     echo "install 4: exit 0, already installed, $(wc -l < "$scratch/before" | tr -d ' ') entries of the bundle as they were"
 else
-    # --- 1. The uninstall, from the served site.
     echo "uninstall 1: the install line with --uninstall from $base/install.sh"
     install_line "$scratch/uninstall.log" "$download" --uninstall
     [ "$line_status" -eq 0 ] || fail "the install line with --uninstall exited $line_status and not 0"
     echo "uninstall 1: exit 0"
 
-    # --- 2. The app and the Keeper's lock are gone, and nothing of the app runs.
     if [ -e "$app" ] || [ -L "$app" ]; then
         fail "$app is still there after the uninstall"
     fi
