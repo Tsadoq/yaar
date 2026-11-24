@@ -311,7 +311,7 @@ as_user test -x "$programs/yaar-script" || fail "$user cannot run $programs/yaar
 case ":$SYSTEM_PATH:" in
     *":$only/bin:"*) fail "the search path of the app, $SYSTEM_PATH, holds $only/bin" ;;
 esac
-plain=$(as_user sh -c 'echo "$PATH"')
+plain=$(sudo -u "$user" env -C "$home" -i HOME="$home" sh -c 'echo "$PATH"') || fail "a plain shell of $user could not be asked for its search path"
 case ":$plain:" in
     *":$only/bin:"*) fail "the search path of a plain shell of $user holds $only/bin: $plain" ;;
 esac
