@@ -62,6 +62,8 @@
 #   <home>/yaar-login-repo, the display :99) is not removed: the step fails and says so.
 # - Xvfb is started with access control off (-ac) and no TCP socket: the app runs as <user>
 #   and the server as root.
+# The scripts handed to `sh -c` are single-quoted on purpose: the user's shell expands them.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 PROGRAM=linux-login-path.sh
@@ -259,7 +261,6 @@ if [ -e "$startup" ]; then
     cp "$startup" "$scratch/startup.original"
 fi
 startup_changed=yes
-# shellcheck disable=SC2016 # the line is written as it is: $HOME and $PATH are the user's shell's
 as_user sh -c 'printf "\nexport PATH=\"\$HOME/yaar-login-only/bin:\$PATH\"\n" >> "$1"' sh "$startup"
 found=$(as_user "$shell" -l -c 'command -v yaar-hook-witness' 2> /dev/null || true)
 [ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work"
@@ -276,6 +277,15 @@ printf '#!/bin/sh\nexec yaar-hook-witness\n' | as_user sh -c 'cat > "$1" && chmo
 echo "step 2: $repository on main with a post-checkout hook that runs yaar-hook-witness"
 
 # --- 3. The app, started as a desktop's menu starts it.
+# A Keeper of an earlier step that has not left yet would answer with the environment it took
+# then, and the Window would not start another: it must be gone first.
+no_keeper_runs() {
+    keepers=$(pids_of "$KEEPER" | tr '\n' ' ')
+    seen="a Keeper runs as $user: ${keepers:-none}"
+    [ -z "$keepers" ]
+}
+keepers=""
+wait_until 20 "a Keeper of an earlier step did not leave before the app was started" no_keeper_runs
 setsid Xvfb "$DISPLAY_NAME" -screen 0 1280x800x24 -ac -nolisten tcp \
     < /dev/null > "$scratch/xvfb.log" 2>&1 &
 xvfb_pid=$!
@@ -299,7 +309,6 @@ as_user_on_display "${launch[@]}" < /dev/null > "$scratch/app.log" 2>&1 \
     || fail "gio launch of $ENTRY failed: $(cat "$scratch/app.log")"
 
 windows=""
-keepers=""
 both_run() {
     windows=$(pids_of "$WINDOW" | tr '\n' ' ')
     keepers=$(pids_of "$KEEPER" | tr '\n' ' ')
