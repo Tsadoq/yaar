@@ -192,6 +192,18 @@ echo "$NAME: 2. $DESKTOP: Terminal=false, Type=Application, Exec=$EXEC, valid, r
 # ------------------------------------------------------------------------------ 3. the start
 STEP=3
 apt-get install -y --no-install-recommends xvfb xauth x11-utils libglib2.0-bin > "$SCRATCH/apt-x" 2>&1 || fail "installing xvfb, xauth, x11-utils and libglib2.0-bin failed: $(tail -3 "$SCRATCH/apt-x")"
+# A Keeper that an earlier step started lingers after its last Window; the one this start is
+# about must be the app's own, so the old one is waited for first (5 s of linger, 20 s here).
+DEADLINE=$(($(date +%s) + 20))
+while :; do
+  pids=$(pids_of "$KEEPER_EXE")
+  [ -n "$pids" ] || break
+  if [ "$(date +%s)" -ge "$DEADLINE" ]; then
+    echo "$NAME: 3. a Keeper of $USER_NAME from before still runs after 20 s (pid ${pids%%$'\n'*}): the start below will meet it"
+    break
+  fi
+  sleep 0.2
+done
 [ ! -e /tmp/.X11-unix/X99 ] || fail "/tmp/.X11-unix/X99 is there already: the display :99 is not free"
 # Detached from the step, as serve-site.sh detaches its server.
 if command -v setsid > /dev/null 2>&1; then

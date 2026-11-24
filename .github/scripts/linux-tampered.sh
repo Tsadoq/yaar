@@ -42,7 +42,9 @@
 # that cannot be made fails the step before anything is served; `apt-get update` runs
 # with DEBIAN_FRONTEND=noninteractive; the key and the source of the test's own are removed
 # whatever happened (the trap), and so are apt's lists of ports 8000 to 8003 that this step
-# made; the install line is run with `set -o pipefail`, so that a site that does not answer
+# made; apt 3 (Debian 13) words a changed signed text as "Message has been manipulated" and
+# "OpenPGP signature verification failed", which the list of the signed copy takes in beside
+# the header's three; the install line is run with `set -o pipefail`, so that a site that does not answer
 # fails the line instead of handing bash an empty script.
 set -euo pipefail
 
@@ -162,7 +164,7 @@ refused_by_install_line() {
 }
 
 refused_by_install_line index 8001 "File_has_unexpected_size Hash_Sum_mismatch"
-refused_by_install_line signed 8002 "NOSPLIT BADSIG signatures_were_invalid"
+refused_by_install_line signed 8002 "NOSPLIT BADSIG signatures_were_invalid Message_has_been_manipulated OpenPGP_signature_verification_failed"
 refused_by_install_line package 8003 "Hash_Sum_mismatch"
 
 # ----------------------------------------------------------------- apt's own refusal, alone
