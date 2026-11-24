@@ -11,15 +11,71 @@
   app, universal, as a `.zip` and a `.dmg`.
 - `SHA256SUMS`, one line for each package, and `SHA256SUMS.asc`, its signature by the
   project's key.
-- On the site, which GitHub Pages serves: `index.html`, `install.sh` and the apt
+- On the site, which GitHub Pages serves: a short `index.html`, `install.sh` and the apt
   repository under `apt/`.
 
-A release is the workflow `ci` run by hand on a version tag with the input `publish` on.
-Every other run is a rehearsal and publishes nothing. A run that publishes signs the Mac
-app with the Developer ID, has Apple notarise it, signs the apt repository and
-`SHA256SUMS` with the project's key, and waits for the owner's approval. Once approved, it
+## How a release happens
+
+A release happens by itself. After a push to `main` whose every job passed, the job `release`
+of the workflow `ci` reads the commit messages since the newest tag `v<x.y.z>` that the commit
+reaches, and decides the next version:
+
+| Commit since the tag | Raises |
+| --- | --- |
+| A breaking change: a `!` before the colon, or a footer `BREAKING CHANGE:` or `BREAKING-CHANGE:` | The minor number while the major number is 0, the major number after |
+| `feat` | The minor number |
+| `fix`, `perf`, `revert` | The patch number |
+| Anything else | Nothing: no release |
+
+The commit `chore(release): …` and merge commits are not counted. With no tag yet, the first
+release is the version of `Cargo.toml` as it stands.
+
+When there is something to release and the repository variable `RELEASES` is `on`, the job runs
+`packaging/release/release.sh`, which:
+
+1. raises the version in `Cargo.toml` and `Cargo.lock` (not for the first release, whose
+   version stands), and commits it as `chore(release): v<version>` by `github-actions[bot]`;
+2. tags the commit `v<version>` (the first release is tagged on the present commit);
+3. pushes the commit and the tag to `main` in one push;
+4. starts the publishing run: `gh workflow run ci.yml --ref v<version> -f publish=true`.
+
+If `main` moved meanwhile, the push fails, the job fails with a sentence, and the next run
+on `main` releases. A tag that exists already is a failure with a sentence. With `RELEASES` not
+`on`, the job pushes nothing and says what the next version would be.
+
+The push goes straight to `main`, with the workflow's token. A rule on `main` that requires a
+pull request, or required status checks, refuses it, so no such rule can stand on `main` while
+releases are automatic.
+
+The publishing run is the workflow on a tag with the input `publish` on. Every other run is a
+rehearsal and publishes nothing. A publishing run signs the Mac app with the Developer ID,
+has Apple notarise it, signs the apt repository and `SHA256SUMS` with the project's key,
 makes a draft release with the eight files, deploys the site, and publishes the release as
-the latest. A published version is never changed.
+the latest. The notes of the release are the changes of the tag, from its commit messages
+(`packaging/release/next-version.sh --notes v<version>`), followed by the text of
+`packaging/release/notes.md.in`. They list the subjects, without their type and with the scope
+in bold, under Breaking changes, New (`feat`), Fixed (`fix`), Faster (`perf`) and Reverted
+(`revert`). A published version is never changed.
+
+All publishing runs wait in one queue, whatever their tag, and none cancels another that runs.
+GitHub keeps one waiting run, though: when a newer publishing run queues while another waits,
+the waiting one is cancelled without starting. Its tag stays, its version is not published,
+and the notes of the next release list only what came after that tag. Start that version's
+run again by hand ([below](#starting-a-publishing-run-by-hand)), or let the newer version
+stand in for it.
+
+A publishing run also asks the repository's releases. If a published release (a draft does not
+count) has a greater version, the run publishes its own release without making it the latest,
+does not deploy the site, and says so; an older version that finishes late never becomes the
+latest or puts an older apt index on the site.
+
+To switch automatic releases off:
+
+```sh
+gh variable set RELEASES --body off --repo Tsadoq/yaar
+```
+
+The last step of [Before the first release, once](#before-the-first-release-once) switches them on.
 
 The base address of the site is the one line of `packaging/site/base-url`. The site's
 `install.sh` and `index.html` and the release notes take it from there. A text that shows
@@ -51,7 +107,7 @@ that trusts the old key stops receiving updates.
 Each command reads a value from a file, the pasteboard or a prompt; none puts a secret on a
 command line or into a log. `gh` must be logged in as the owner of `Tsadoq/yaar`. Every file
 a step makes goes into one temporary folder, which macOS keeps under `/private/var/folders`,
-outside the Desktop and Documents that iCloud may sync, and which the last step deletes:
+outside the Desktop and Documents that iCloud may sync, and which step 6 deletes:
 
 ```sh
 D="$(mktemp -d)"; echo "$D"; open "$D"
@@ -64,14 +120,14 @@ D="$(mktemp -d)"; echo "$D"; open "$D"
    ```
 
 2. The environment `release`, for the tags `v*` only; the same rule on the environment
-   `github-pages` that step 1 made, and the owner's approval before it deploys:
+   `github-pages` that step 1 made, with no required reviewer:
 
    ```sh
    echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
      | gh api -X PUT repos/Tsadoq/yaar/environments/release --input -
    gh api -X POST repos/Tsadoq/yaar/environments/release/deployment-branch-policies -f name='v*' -f type=tag
-   printf '{"reviewers":[{"type":"User","id":%s}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
-     "$(gh api user --jq .id)" | gh api -X PUT repos/Tsadoq/yaar/environments/github-pages --input -
+   echo '{"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+     | gh api -X PUT repos/Tsadoq/yaar/environments/github-pages --input -
    gh api -X POST repos/Tsadoq/yaar/environments/github-pages/deployment-branch-policies -f name='v*' -f type=tag
    ```
 
@@ -116,104 +172,102 @@ D="$(mktemp -d)"; echo "$D"; open "$D"
 
    Copy `yaar-apt-key.asc.gpg`, the key under that passphrase, to where you keep keys
    offline. Add the Team ID of step 3 as the last line of `packaging/macos/team-id`, and
-   commit both files through a pull request.
+   commit both files through a pull request, whose commits follow the form of
+   [development.md](development.md#commit-messages).
 
-6. Optional: only the owner may push a tag `v*`:
-
-   ```sh
-   echo '{"name":"release tags","target":"tag","enforcement":"active","conditions":{"ref_name":{"include":["refs/tags/v*"],"exclude":[]}},"rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],"bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}' \
-     | gh api -X POST repos/Tsadoq/yaar/rulesets --input -
-   ```
-
-7. Delete the folder and everything in it:
+6. Delete the folder and everything in it:
 
    ```sh
    rm -rf "$D"; unset D
    ```
 
-## The day of a release
-
-1. Raise the version in `Cargo.toml` (`[workspace.package]`) in a pull request, and merge
-   it. For the first release, the same pull request copies the section
-   [Install](#install) below into `README.md` as its section "Install", after "What works
-   today", with every `@BASE_URL@` replaced by the line of `packaging/site/base-url`, and
-   takes out the line that says no release is published yet.
-
-2. From the merged commit, tag and start the publishing run:
+7. Allow merge commits only: a squash merge makes the pull request's title the subject, which
+   nothing checks, and a rebase merge rewrites the commits the check read.
 
    ```sh
-   git tag v<version> && git push origin v<version>        # a rehearsal runs on the tag
-   gh workflow run ci.yml --repo Tsadoq/yaar --ref v<version> -f publish=true
+   gh api -X PATCH repos/Tsadoq/yaar -F allow_squash_merge=false -F allow_rebase_merge=false
    ```
 
-   The run refuses a tag that is not `v` and the version of `Cargo.toml`, and a tag whose
-   commit is not on `main`. When every job before `publish` is green, the run waits for
-   the approval.
-
-3. Meanwhile, walk the checklists on the files the run made. Download them and serve them
-   on this machine:
+8. Once that pull request is merged, switch automatic releases on. The next green run on
+   `main` releases:
 
    ```sh
-   gh run download <run id> --repo Tsadoq/yaar -n release-final -D ~/yaar-release-<version>
-   packaging/checklists/serve-release.sh ~/yaar-release-<version>
+   gh variable set RELEASES --body on --repo Tsadoq/yaar
    ```
 
-   It needs `python3` and `curl`. It checks the files against `SHA256SUMS`, serves them on 127.0.0.1
-   only, and prints the install and the uninstall lines; run those in another terminal. On a
-   Linux machine, run it there, on a copy of the same folder. Then each item, with the
-   scripts of `packaging/checklists/`:
+   Switched on before steps 3 to 5 are done, it makes the first tag and starts its publishing
+   run, which fails before anything is signed or published. Each later run on `main` with
+   something to release makes another tag whose run fails the same way. When the secrets
+   and the two public files are there, start the publishing run of the newest tag by hand.
 
-   | Item | Command |
-   | --- | --- |
-   | The platform's conventions, macOS | `conventions.sh macos` |
-   | The platform's conventions, Linux | `conventions.sh linux` |
-   | Cold start to the diff, 0.3 s | `start-time.sh` |
-   | The same in the Linux virtual machine | `start-time.sh --linux` |
-   | Memory, 200 MB | `memory.sh` |
-   | Typing, at most 10 ms behind Ghostty | `typing.sh` |
-   | Scrolling a diff of 2,200 lines | `scroll.sh` |
-   | A flood of 200,000 lines | `flood.sh` |
-   | The test suite, which needs `YAAR_LANGUAGE_SERVERS`, and the looks of the screen | `screen-walk.sh` |
-   | The real Claude Code and pi | `real-clis.sh` |
-   | Linux on real hardware | `linux-hardware.sh --server http://127.0.0.1:<port>` |
+## Starting a publishing run by hand
 
-   Every script prints its usage with `--help` and writes its results into
-   `~/yaar-checklists/<YYYY-MM-DD>/`. The scripts that walk a list read their answers from
-   the terminal or from a file (`conventions.sh macos < answers.txt`; the format is at the
-   top of `lib.sh`). `typing.sh`, `scroll.sh` and `flood.sh` ask for the word `go` before
-   they post any input; `typing.sh` needs Accessibility and Screen Recording.
+On a tag that exists, whose name is `v` and the version of `Cargo.toml` at that commit, and whose
+commit is on `main`:
 
-   `typing.sh`, `scroll.sh`, `flood.sh` and `start-time.sh --linux` need the owner's
-   measuring tools and a Linux virtual machine of his, which are not in the repository.
-   The three tools are found under `tools/` of the folder `YAAR_KIT` names, or one by one
-   through `YAAR_FAKEINPUT`, `YAAR_ADECAP` and `YAAR_STREAM`; the program that drives the
-   virtual machine is named in `YAAR_VM`. A script that lacks one says which variable to
-   set.
+```sh
+gh workflow run ci.yml --repo Tsadoq/yaar --ref v<version> -f publish=true
+```
 
-   To check the scripts themselves without opening a window or posting input:
+The run refuses any other tag. A tag pushed by hand starts a rehearsal alone, which publishes
+nothing. A publishing run that failed before the release was published is started the same way:
+the draft release it left is taken up again.
 
-   ```sh
-   packaging/checklists/self-test.sh
-   ```
+## Checks by hand
 
-   It runs the walkers on files of answers and with `--dry-run`, `serve-release.sh` on a
-   made-up folder, and the analysis of made-up logs. It needs `curl`, `lsof`, `awk`, `cmp`
-   and `python3`.
+The scripts of `packaging/checklists/` are what the owner may walk on the files of a release.
+Download the files of a run and serve them on this machine:
 
-4. Approve on the run's page (Review deployments), or:
+```sh
+gh run download <run id> --repo Tsadoq/yaar -n release-final -D ~/yaar-release-<version>
+packaging/checklists/serve-release.sh ~/yaar-release-<version>
+```
 
-   ```sh
-   gh api -X POST repos/Tsadoq/yaar/actions/runs/<run id>/pending_deployments \
-     -F "environment_ids[]=$(gh api repos/Tsadoq/yaar/environments/github-pages --jq .id)" \
-     -f state=approved -f comment='checklists walked'
-   ```
+It needs `python3` and `curl`. It checks the files against `SHA256SUMS`, serves them on 127.0.0.1
+only, and prints the install and the uninstall lines; run those in another terminal. On a
+Linux machine, run it there, on a copy of the same folder. Then each item:
 
-A run left waiting is not published; rejecting it ends it with nothing published.
+| Item | Command |
+| --- | --- |
+| The platform's conventions, macOS | `conventions.sh macos` |
+| The platform's conventions, Linux | `conventions.sh linux` |
+| Cold start to the diff, 0.3 s | `start-time.sh` |
+| The same in the Linux virtual machine | `start-time.sh --linux` |
+| Memory, 200 MB | `memory.sh` |
+| Typing, at most 10 ms behind Ghostty | `typing.sh` |
+| Scrolling a diff of 2,200 lines | `scroll.sh` |
+| A flood of 200,000 lines | `flood.sh` |
+| The test suite, which needs `YAAR_LANGUAGE_SERVERS`, and the looks of the screen | `screen-walk.sh` |
+| The real Claude Code and pi | `real-clis.sh` |
+| Linux on real hardware | `linux-hardware.sh --server http://127.0.0.1:<port>` |
+
+Every script prints its usage with `--help` and writes its results into
+`~/yaar-checklists/<YYYY-MM-DD>/`. The scripts that walk a list read their answers from
+the terminal or from a file (`conventions.sh macos < answers.txt`; the format is at the
+top of `lib.sh`). `typing.sh`, `scroll.sh` and `flood.sh` ask for the word `go` before
+they post any input; `typing.sh` needs Accessibility and Screen Recording.
+
+`typing.sh`, `scroll.sh`, `flood.sh` and `start-time.sh --linux` need the owner's
+measuring tools and a Linux virtual machine of his, which are not in the repository.
+The three tools are found under `tools/` of the folder `YAAR_KIT` names, or one by one
+through `YAAR_FAKEINPUT`, `YAAR_ADECAP` and `YAAR_STREAM`; the program that drives the
+virtual machine is named in `YAAR_VM`. A script that lacks one says which variable to
+set.
+
+To check the scripts themselves without opening a window or posting input:
+
+```sh
+packaging/checklists/self-test.sh
+```
+
+It runs the walkers on files of answers and with `--dry-run`, `serve-release.sh` on a
+made-up folder, and the analysis of made-up logs. It needs `curl`, `lsof`, `awk`, `cmp`
+and `python3`.
 
 ## Taking a release back
 
-A version that apt users have installed stays installed: a fixed version `V+1`, by the same
-steps, is the remedy. To stop new installs of a bad version `V` at once:
+A version that apt users have installed stays installed: a fix on `main`, which releases
+`V+1`, is the remedy. To stop new installs of a bad version `V` at once:
 
 1. `gh release edit v<V> --draft=true --repo Tsadoq/yaar`: the macOS route, the archive route
    and `latest/download` go back to the release before it.
@@ -224,12 +278,16 @@ steps, is the remedy. To stop new installs of a bad version `V` at once:
    step 2: `V+1` is the only way to take `V` out of the apt repository.
 
 A tag that was pushed but never published is deleted with `git push --delete origin v<V>`;
-nothing else exists for it.
+nothing else exists for it. The commit `chore(release): v<V>` stays on `main`, and the next run
+of the job `release` makes the same version again, from the same commits. Delete a tag only to
+have that version released again.
 
 ## The README's install section
 
 The text below is the section "Install" of `README.md` once a release is published, with
-`@BASE_URL@` in place of the base address.
+`@BASE_URL@` in place of the base address. A pull request copies it into `README.md` after "What
+works today", with every `@BASE_URL@` replaced by the line of `packaging/site/base-url`, and takes
+out the line that says no release is published yet.
 
 ### Install
 
