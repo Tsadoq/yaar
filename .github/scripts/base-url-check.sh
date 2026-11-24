@@ -154,13 +154,20 @@ for f in README.md packaging/README.md packaging/release-day.md; do
       gsub(/[<>()|\[\]]/, " ", line)
       # An apt source shown anywhere in a line (opening it, after "> ", or in a command that
       # writes it) names the address after "URIs:".
-      if (match(line, /URIs:[ \t]*/)) {
+      # The field name is read in any case, as apt reads it, and its value is a list: every
+      # address that follows the first, as long as each starts with a scheme or is the
+      # placeholder, is held as the first is (a command that writes the source goes on with
+      # words that are no address, and those are not).
+      if (match(tolower(line), /uris:[ \t]*/)) {
         rest = substr(line, RSTART + RLENGTH)
-        sub(/[ \t].*$/, "", rest)
-        rest = trimmed(rest)
-        if (rest != "" && !allowed(rest) && !((NR SUBSEP rest) in shown)) {
-          shown[NR, rest] = 1
-          print NR, rest
+        m = split(rest, uris, /[ \t]+/)
+        for (u = 1; u <= m; u++) {
+          uri = trimmed(uris[u])
+          if (u > 1 && uri !~ /^([A-Za-z][A-Za-z0-9+.-]*:|@BASE_URL@)/) break
+          if (uri != "" && !allowed(uri) && !((NR SUBSEP uri) in shown)) {
+            shown[NR, uri] = 1
+            print NR, uri
+          }
         }
       }
       n = split(line, pieces, /[ \t]+/)
