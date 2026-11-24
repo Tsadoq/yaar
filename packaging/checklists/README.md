@@ -40,7 +40,7 @@ there, on a copy of the same folder.
 | PERF-01, cold start to the diff, 0.3 s | `start-time.sh` | After a restart, a login and two minutes: `first_diff` of the first start against 300 ms. Posts no input |
 | PERF-02, the same in the virtual machine | `start-time.sh --linux` | From the Mac, in the project's machine after its own restart with the `.deb` installed: `first_diff` against 300 ms |
 | PERF-03, memory, 200 MB | `memory.sh` | The sum of the Window and the Keeper after 60 s idle, against 200 MB. Posts no input |
-| PERF-04, typing, 10 ms behind Ghostty | `typing.sh` | Median and 95th percentile of key to screen, in the terminal pane idle, while output streams, and in a comment box, against Ghostty: the difference at most 10 ms. Needs the word `go`, Accessibility and Screen Recording |
+| PERF-04, typing, 10 ms behind Ghostty | `typing.sh` | Median and 95th percentile of key to screen, in the terminal pane idle, while output streams, and in a comment box, against Ghostty: the difference at most 10 ms. Needs the word `go`, Accessibility and Screen Recording. The Ghostty it starts is the one new process of `/Applications/Ghostty.app/Contents/MacOS/ghostty` (or of `YAAR_REFERENCE_PROGRAM`); one you had open is not touched |
 | PERF-05, scrolling, a diff of 2,200 lines | `scroll.sh` | Frames a second against the refresh rate and the share of gaps over two refresh intervals, unified and split: at most 1%. Needs the word `go` |
 | PERF-06, a flood of 200,000 lines | `flood.sh` | The generator's time in the terminal pane over its time alone: at most 1.5. Types a command into the pane; needs the word `go` |
 | STACK-02, TERM-06, SCREEN-01, SCREEN-02, SYS-04 | `screen-walk.sh` | Runs the test suite first (SYS-04) and records it; then the four looks, with the test file of text written for TERM-06 |
@@ -56,7 +56,7 @@ jobs. HW-01 on Ubuntu 22.04 and Debian 12 with a software driver is a known empt
 packaging/checklists/self-test.sh
 ```
 
-runs `conventions.sh` with files of answers and `--dry-run`, and `serve-release.sh` on a
+runs `conventions.sh` and the three other walkers with files of answers and `--dry-run`, and `serve-release.sh` on a
 folder it lays out as `release-final` in its own scratch, on a free port, then stops it by
 its pid. It also reads made-up logs through the analysis of `typing.sh`, `scroll.sh` and
 `start-time.sh`. It opens no window, posts no input, and writes nothing outside its scratch.

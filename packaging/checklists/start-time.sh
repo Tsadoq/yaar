@@ -50,7 +50,9 @@
 # standard error), starts.tsv (run, main_ms, first_frame_ms, first_diff_ms) and verdict.txt.
 #
 # Exit codes: 0 the first start's first_diff is within 300 ms; 1 it is over, or a mark is
-# missing, or a start failed (a sentence says which); 2 usage error.
+# missing, or a start failed (a sentence says which); 2 usage error. With --linux on the
+# Mac, the run in the machine ends 0 or 1 as above; any other status of it (ssh failing is
+# 255) is said in a sentence and becomes 1.
 set -euo pipefail
 
 CK_NAME=start-time.sh
@@ -129,7 +131,8 @@ if [ "$LINUX" -eq 1 ] && [ "$(ck_os)" = Darwin ]; then
   # shellcheck disable=SC2016 # the remote shell expands $HOME
   "$VM" ssh 'rm -rf "$HOME/yaar-checklists-kit"' || ck_die "could not clear yaar-checklists-kit in the virtual machine"
   "$VM" scp-to "$HERE" yaar-checklists-kit > /dev/null || ck_die "could not copy $HERE to the virtual machine"
-  REMOTE_LOG="$(ck_tmpdir)/remote.log"
+  ck_tmpdir
+  REMOTE_LOG="$CK_TMPDIR/remote.log"
   # The session words are quoted for the remote shell with single quotes.
   SESSION=${YAAR_SESSION_ENV:-}
   case $SESSION in
@@ -141,6 +144,11 @@ if [ "$LINUX" -eq 1 ] && [ "$(ck_os)" = Darwin ]; then
     REMOTE_STATUS=$?
   fi
   REMOTE_DIR=$(sed -n 's/^start-time.sh: results in //p' "$REMOTE_LOG" | tail -n 1)
+  case $REMOTE_STATUS in
+    0 | 1) ;;
+    *) printf '%s: the run in the virtual machine ended with status %s, which this script does not use (255 is ssh failing): its output is above\n' "$CK_NAME" "$REMOTE_STATUS" >&2
+       REMOTE_STATUS=1 ;;
+  esac
   [ -n "$REMOTE_DIR" ] || ck_die "the virtual machine's run said nothing of where it wrote its results (status $REMOTE_STATUS, its output is above)"
   LOCAL=$(ck_results_dir)
   "$VM" scp-from "$REMOTE_DIR" "$LOCAL/vm-${REMOTE_DIR##*/}" > /dev/null || ck_die "could not copy $REMOTE_DIR back from the virtual machine"

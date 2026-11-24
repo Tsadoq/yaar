@@ -52,12 +52,14 @@ ck_cleanup() {
 }
 trap ck_cleanup EXIT
 
-# ck_tmpdir: this script's scratch folder, made on first use, under `mktemp -d`.
+# ck_tmpdir: makes this script's scratch folder under `mktemp -d` on first use and leaves its
+# name in CK_TMPDIR. It prints nothing and is never called inside `$(...)` or a pipeline:
+# the variable would be set in a subshell, whose exit does not run the trap, and the folder
+# would be left behind.
 ck_tmpdir() {
   if [ -z "$CK_TMPDIR" ]; then
     CK_TMPDIR=$(mktemp -d "${TMPDIR:-/tmp}/yaar-checklist.XXXXXX") || ck_die "cannot make a scratch folder under ${TMPDIR:-/tmp}"
   fi
-  printf '%s\n' "$CK_TMPDIR"
 }
 
 ck_die() {
@@ -137,6 +139,20 @@ ck_pids_of() {
       fi
     done
   fi
+}
+
+# ck_new_pids_of <program path> <pids known before>: the pids ck_pids_of finds for the program
+# that are not among the known ones (words, or lines): what a script that starts a program
+# it may not tell from a copy already running by its path alone uses to find its own.
+ck_new_pids_of() {
+  local known pid
+  known=" $(printf '%s' "$2" | tr '\n' ' ') "
+  for pid in $(ck_pids_of "$1"); do
+    case $known in
+      *" $pid "*) ;;
+      *) printf '%s\n' "$pid" ;;
+    esac
+  done
 }
 
 # The two programs of the app that make up "the app's own processes", by system.
@@ -429,8 +445,14 @@ ck_lit_preflight() {
     *"CGSSessionScreenIsLocked</key><true/>"*) ck_die "the screen is locked, and a locked screen shows no frames and takes no input" ;;
   esac
   info=$("$fakein" info) || ck_die "$fakein info failed"
-  printf '%s\n' "$info" | grep -q '^post_event_access=true$' \
-    || ck_die "this terminal may not post events: turn on Accessibility for it in System Settings, Privacy and Security"
+  case "
+$info
+" in
+    *"
+post_event_access=true
+"*) ;;
+    *) ck_die "this terminal may not post events: turn on Accessibility for it in System Settings, Privacy and Security" ;;
+  esac
   printf '%s\n' "$info"
 }
 
@@ -464,20 +486,23 @@ ck_cap_stop() {
   ck_wait_until 15 capture_ended "$1" || ck_die "adecap did not end in 15 s ($1)"
 }
 
+# ck_display_times <capture log>: the display time of every changed frame, in nanoseconds,
+# one a line, smallest first. A frame whose display time is missing (0) is given the time
+# the capture saw it.
+ck_display_times() {
+  awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$1" | sort -n
+}
+
 # ck_key_latencies <input log> <capture log>: one number a line, the milliseconds from each
 # posted key to the first captured frame that changed after it. A key with no changed frame
 # before the next key (plus 20 ms) or within 400 ms is counted as missed; a frame sooner than
 # 12 ms after the post is not this key's (the system cannot show one so soon) and is counted
 # as early. "missed=<n> early=<n>" goes to standard error.
 ck_key_latencies() {
-  local sorted
-  sorted="$(ck_tmpdir)/caps.$$.$RANDOM"
-  awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
-  awk -v caps="$sorted" '
-    BEGIN {
-      nc = 0
-      while ((getline line < caps) > 0) { D[nc++] = line + 0 }
-    }
+  # The display times, sorted, come first as a file of their own (a pipe to this awk), so
+  # that nothing is left on the disk to remove.
+  awk '
+    FILENAME == ARGV[1] { D[nc++] = $1 + 0; next }
     $1 == "post" { P[np++] = $2 + 0 }
     END {
       j = 0; missed = 0; early = 0
@@ -493,8 +518,7 @@ ck_key_latencies() {
         printf "%.3f\n", ms
       }
       printf "missed=%d early=%d\n", missed, early > "/dev/stderr"
-    }' "$1"
-  rm -f "$sorted"
+    }' <(ck_display_times "$2") "$1"
 }
 
 # ck_frame_stats <input log> <capture log> <refresh Hz>: for each scroll phase of the input
@@ -502,15 +526,9 @@ ck_key_latencies() {
 # and in total: "frames=<n> seconds=<s> fps=<f> long=<n> long_pct=<p>", where long counts
 # the gaps between consecutive frames longer than two refresh intervals.
 ck_frame_stats() {
-  local sorted
-  sorted="$(ck_tmpdir)/caps.$$.$RANDOM"
-  awk '$1 == "cap" { v = ($2 + 0 > 0) ? $2 : $3; print v }' "$2" | sort -n > "$sorted"
-  awk -v caps="$sorted" -v hz="$3" '
-    BEGIN {
-      nc = 0
-      while ((getline line < caps) > 0) { D[nc++] = line + 0 }
-      limit = 2 * 1000000000 / hz
-    }
+  awk -v hz="$3" '
+    BEGIN { limit = 2 * 1000000000 / hz }
+    FILENAME == ARGV[1] { D[nc++] = $1 + 0; next }
     $1 == "sstart" { start = $2 + 0; open = 1; next }
     $1 == "send" && open {
       end = $2 + 0; open = 0
@@ -527,6 +545,5 @@ ck_frame_stats() {
     }
     END {
       printf "total: frames=%d seconds=%.2f fps=%.1f long=%d long_pct=%.2f\n", tf, ts, (ts > 0 ? tf / ts : 0), tl, (tf > ph ? 100 * tl / (tf - ph) : 0)
-    }' "$1"
-  rm -f "$sorted"
+    }' <(ck_display_times "$2") "$1"
 }

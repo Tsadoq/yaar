@@ -31,7 +31,10 @@
 # Ghostty installed. The measuring tools are the phase 4 kit's, read and never rebuilt:
 # fakeinput, adecap.app and tools/stream.pl in YAAR_KIT (default
 # ~/ade-phase4-2026-11-12/gpui-measure), or YAAR_FAKEINPUT and YAAR_ADECAP outright.
-# YAAR_REFERENCE_APP names the application to compare with (default Ghostty).
+# YAAR_REFERENCE_APP names the application to compare with (default Ghostty), and
+# YAAR_REFERENCE_PROGRAM the full path of its program (default Ghostty's, in /Applications).
+# The reference it starts is found as the one new process of that program, by its full path,
+# and ended by that pid: a Ghostty of yours that was already open is never touched.
 #
 # --analyse reads the logs of an earlier case (fakeinput's `--log` and adecap's `--log`
 # files) and prints the number of keys, the median and the 95th percentile of the key to
@@ -96,6 +99,14 @@ case $APP_PIDS in
   *[[:space:]]*) ck_die "more than one Window of the app is running ($(echo "$APP_PIDS" | tr '\n' ' ')): quit the others" ;;
 esac
 APP_PID=$APP_PIDS
+if [ -n "${YAAR_REFERENCE_PROGRAM:-}" ]; then
+  REF_PROGRAM=$YAAR_REFERENCE_PROGRAM
+elif [ -z "${YAAR_REFERENCE_APP:-}" ]; then
+  REF_PROGRAM=/Applications/Ghostty.app/Contents/MacOS/ghostty
+else
+  ck_die "YAAR_REFERENCE_APP names $REFERENCE, so the full path of its program is needed too: name it in YAAR_REFERENCE_PROGRAM"
+fi
+[ -x "$REF_PROGRAM" ] || ck_die "no reference program at $REF_PROGRAM: install $REFERENCE, or name its program in YAAR_REFERENCE_PROGRAM"
 
 RESULTS=$(ck_results_dir)
 OUT="$RESULTS/typing-$(date +%H%M%S)"
@@ -131,21 +142,23 @@ type_into() {
 }
 
 # reference <name> <command>: a second instance of the reference terminal running the command,
-# typed into and closed again by its pid.
+# typed into and closed again by its pid. Its pid is the one new process of REF_PROGRAM, by
+# full path, that appears after the start: whichever application is in front says nothing of
+# which process is ours.
 reference() {
-  local name=$1 command=$2 pid="" before
-  before=$(ck_front_pid)
+  local name=$1 command=$2 pid="" known
+  known=$(ck_pids_of "$REF_PROGRAM")
   open -n -a "$REFERENCE" --args "--command=$command" --window-save-state=never --confirm-close-surface=false --quit-after-last-window-closed=true
-  newest_front() {
-    local front comm
-    front=$(ck_front_pid)
-    [ "$front" != "$before" ] || return 1
-    [ "$front" != "$APP_PID" ] || return 1
-    comm=$(ps -p "$front" -o comm=) || return 1
-    printf '%s\n' "$comm" | grep -qi "$REFERENCE"
+  new_reference() {
+    local found
+    found=$(ck_new_pids_of "$REF_PROGRAM" "$known")
+    [ -n "$found" ] || return 1
+    pid=$found
   }
-  ck_wait_until 15 newest_front || ck_die "a second $REFERENCE did not come to the front in 15 s"
-  pid=$(ck_front_pid)
+  ck_wait_until 15 new_reference || ck_die "no new process of $REF_PROGRAM appeared in 15 s after the start of a second $REFERENCE"
+  case $pid in
+    *[[:space:]]*) ck_die "more than one new process of $REF_PROGRAM appeared ($(echo "$pid" | tr '\n' ' ')): none was ended, close the one you do not know yourself" ;;
+  esac
   # The reference is ready for keys when its terminal has started the command: a child of it.
   has_child() {
     ps -axo pid=,ppid= | awk -v p="$pid" '$2 == p { found = 1 } END { exit !found }'

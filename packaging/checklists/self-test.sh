@@ -1,8 +1,10 @@
 #!/bin/bash
-# Proves the two scripts of this folder that open nothing: conventions.sh (with a file of
+# Proves the scripts of this folder that open nothing: conventions.sh (with a file of
 # answers, and with --dry-run) and serve-release.sh (on a hand-made folder laid out as the
-# artifact release-final, on a free port, stopped by its pid). The other scripts open the
-# app's window or post input and are not run by anything but the owner's word.
+# artifact release-final, on a free port, stopped by its pid); the dry runs of the three
+# other walkers; and what the measuring scripts only read (the logs of an earlier run, made
+# up here). The scripts that open the app's window or post input are not run by anything but
+# the owner's word.
 #
 #   packaging/checklists/self-test.sh
 #
@@ -13,15 +15,32 @@
 #                    sign-off unsigned and names the items; all yes asks for the signature;
 #                    answers that end early stop it with a sentence and write no file; a
 #                    wrong command line is exit 2; --dry-run calls no program of the system
-#                    and the app, and writes its own file; nothing is written to the real
-#                    home (HOME, TMPDIR and PATH of the runs are in this script's scratch).
+#                    and the app (stand-ins for them record every call), and writes its
+#                    own file; items 11 and 16 print their light theme steps; a pipe in a
+#                    note stays in its cell; a walker that does not end in 20 s is stopped
+#                    by its pid and fails the test; nothing named yaar-checklists* is made
+#                    or changed in the real home (HOME, TMPDIR and PATH of the runs are in
+#                    this script's scratch).
 #   serve-release.sh the install and uninstall lines are printed with the server's own
 #                    address and no test variable; the site is served at / and the release
 #                    files at /download/, byte for byte; the server listens on 127.0.0.1
 #                    only; a second server on the same port, a folder that is not laid out
 #                    as release-final and a file that disagrees with SHA256SUMS are
-#                    refused with a sentence; stopped by the pid it printed, the script and
-#                    its server are gone, the port refuses, and no scratch is left.
+#                    refused with a sentence, as are a listed file that is missing and a
+#                    SHA256SUMS that lists nothing; stopped by the pid it printed, the
+#                    script and its server are gone, the port refuses, and no scratch is
+#                    left.
+#   the walkers      screen-walk.sh, real-clis.sh and linux-hardware.sh print their items
+#                    once each in a dry run and call no program of the system.
+#   the measures     typing.sh, scroll.sh and start-time.sh read made-up logs: key to
+#                    screen times (early, 13 ms, 399 ms, 401 ms, the median of an even and
+#                    of an odd count, the 95th percentile below the largest), frames a
+#                    second and long gaps, the marks of a start; none leaves anything in
+#                    TMPDIR; start-time.sh --linux gives 1 for any status but 0 and 1 of
+#                    the machine's run (a stand-in for the machine's script, on the Mac).
+#   programs         a program is found by its full path, not its name; a new copy among
+#                    known ones is found; a process of another user is not this user's
+#                    (launchd's on the Mac; a copy run as nobody, by root, on Linux).
 #
 # Needs of the machine: curl, lsof, awk, cmp. Touches nothing outside its scratch folder
 # (`mktemp -d`, removed at the end); the only network is 127.0.0.1.
@@ -95,12 +114,21 @@ refuse() {
   fi
 }
 
+# Everything in the real home whose name starts with yaar-checklists (the results folder is
+# the one place these scripts write to, and a script that took the real home by another name
+# would show here), with the checksum of each file: a file made, changed or removed shows. The
+# rest of the real home is other work's and is not looked at.
 real_state() {
-  if [ -e "$REAL_HOME/yaar-checklists" ]; then
-    find "$REAL_HOME/yaar-checklists" | sort | cksum
-  else
+  local found
+  found=$(find "$REAL_HOME" -maxdepth 1 -name 'yaar-checklists*' 2> /dev/null | sort)
+  if [ -z "$found" ]; then
     echo none
+    return 0
   fi
+  printf '%s\n' "$found" | while IFS= read -r top; do
+    find "$top"
+    find "$top" -type f -exec cksum {} +
+  done | sort | cksum
 }
 real_state_before=$(real_state)
 
@@ -122,6 +150,48 @@ echo called >> "$S/calls"
 echo "yaar-review 9.9.9"
 EOF
 chmod 755 "$S/bin/sw_vers" "$S/bin/yaar-review"
+# The other programs a dry run could reach for. Each only records that it was called, with
+# its arguments, in the file `calls`, and does nothing else.
+for spy in uname lspci cargo curl sudo apt apt-get dpkg foot open gio ssh; do
+  printf '#!/bin/sh\necho "%s $*" >> "%s/calls"\n' "$spy" "$S" > "$S/bin/$spy"
+  chmod 755 "$S/bin/$spy"
+done
+
+# no_calls <what>: no stand-in was called by the run just made.
+no_calls() {
+  [ ! -e "$S/calls" ] || fail "$1 called a program of the system or of the app (calls: $(tr '\n' ';' < "$S/calls"))"
+}
+
+# tmp_clean <what>: the run just made left nothing in TMPDIR, which is this test's own.
+tmp_clean() {
+  local left
+  left=$(find "$TMPDIR" -mindepth 1 -maxdepth 1 | head -n 1)
+  [ -z "$left" ] || fail "$1 left $left in its TMPDIR: its scratch is not removed when it ends"
+}
+
+# run_walker <what> <out file> <err file> <answers file> <command...>: runs a script with
+# its answers from a file and waits for it to end by itself; one that is still running after
+# 20 s is stopped by its pid and the test fails with the end of what it said. A walker that
+# loops on a line it cannot take would otherwise hang the test and fill the disk, so it may
+# not write a file of more than 40 MB. The status is left in WALK_STATUS.
+run_walker() {
+  local what=$1 out=$2 err=$3 answers=$4
+  shift 4
+  ( ulimit -f 40960; exec "$@" ) < "$answers" > "$out" 2> "$err" &
+  local pid=$!
+  SERVERS="$SERVERS $pid"
+  walker_ended() { ! kill -0 "$pid" 2> /dev/null; }
+  if ! wait_for walker_ended; then
+    kill "$pid" 2> /dev/null || true
+    wait "$pid" 2> /dev/null || true
+    fail "$what did not end in 20 s, it waits or loops (its last words: $(tail -c 300 "$err" | tr '\n' ' '))"
+  fi
+  if wait "$pid"; then
+    WALK_STATUS=0
+  else
+    WALK_STATUS=$?
+  fi
+}
 
 lines() {
   local n=$1 word=$2 i=0
@@ -139,9 +209,9 @@ conv() {
   # conv <list> <answers file> <output file> [more arguments]: the status in $CONV_STATUS.
   local list=$1 answers=$2 out=$3
   shift 3
-  CONV_STATUS=0
-  PATH="$S/bin:$PATH" YAAR_REVIEW="$S/bin/yaar-review" \
-    "$HERE/conventions.sh" "$list" "$@" < "$answers" > "$out" 2> "$out.err" || CONV_STATUS=$?
+  run_walker "conventions.sh $list" "$out" "$out.err" "$answers" \
+    env PATH="$S/bin:$PATH" YAAR_REVIEW="$S/bin/yaar-review" "$HERE/conventions.sh" "$list" "$@"
+  CONV_STATUS=$WALK_STATUS
 }
 
 # macOS, 17 items: 1 yes, 2 note then yes, 3 no with a reason, 4 to 8 yes, 9 skip with a
@@ -169,10 +239,21 @@ done
 [ "$(grep -c '^Item ' "$S/out-mixed.txt")" -eq 17 ] || fail "conventions.sh macos printed other than 17 items"
 pass "conventions.sh macos prints its 17 items once each, with their place"
 
-grep -q 'Light' "$S/out-mixed.txt" || fail "conventions.sh macos does not print the light steps of item 11"
-grep -q 'as the system' "$S/out-mixed.txt" || fail "conventions.sh macos does not print the follow-the-system step of item 11"
-awk '/^Item 16 of 17/ { on = 1 } on && /ground/ { found = 1 } END { exit !found }' "$S/out-mixed.txt" \
-  || fail "conventions.sh macos does not print the light theme steps of item 16"
+# item_block <output file> <n> <list size>: the lines of item <n>, up to the next item.
+item_block() {
+  awk -v from="^Item $2 of $3: " '$0 ~ from { on = 1; next } on && /^Item / { exit } on { print }' "$1"
+}
+item_block "$S/out-mixed.txt" 11 17 > "$S/item11.txt"
+item_block "$S/out-mixed.txt" 16 17 > "$S/item16.txt"
+for step in 'choose Light while the system is light' 'choose "as the system"' 'switch the system to dark' \
+  'Dark chosen while the system is dark' 'a theme name that no theme has' 'set the system to dark, start the app' \
+  'first frame is already dark'; do
+  grep -qF "$step" "$S/item11.txt" || fail "item 11 of conventions.sh macos does not print the step '$step'"
+done
+for step in 'With the light theme on' 'added row, a removed row and a changed word' 'the sixteen colours' \
+  'empty cells and at the space right of its last column' 'its empty cells and the space right of the last column show the terminal'; do
+  grep -qF "$step" "$S/item16.txt" || fail "item 16 of conventions.sh macos does not print the step '$step'"
+done
 pass "items 11 and 16 carry the light theme steps"
 
 OUT="$RESULTS/conventions-macos-dry-run.md"
@@ -239,8 +320,10 @@ conv macos "$S/answers-empty.txt" "$S/out-empty.txt" --dry-run
 grep -q '^| 1 | .* | no | the reason, after an empty line |$' "$OUT" || fail "an empty line was taken as the reason of a no"
 pass "an empty reason is asked again"
 
-# Linux: 11 items.
+# Linux: 11 items, a note with a pipe in it on the first: the pipe must not split its cell.
 {
+  echo note
+  echo "left | right"
   lines 11 yes
   echo yes
 } > "$S/answers-linux.txt"
@@ -249,7 +332,10 @@ conv linux "$S/answers-linux.txt" "$S/out-linux.txt" --dry-run
 [ "$(grep -c '^Item [0-9]* of 11: ' "$S/out-linux.txt")" -eq 11 ] || fail "conventions.sh linux did not print its 11 items"
 [ "$(grep -c '^| [0-9]* |' "$RESULTS/conventions-linux-dry-run.md")" -eq 11 ] \
   || fail "conventions-linux-dry-run.md does not hold 11 rows"
-pass "conventions.sh linux prints and records its 11 items"
+grep -q '^| 1 | .* | yes | left \\| right |$' "$RESULTS/conventions-linux-dry-run.md" \
+  || fail "a pipe in a note was not escaped in its table cell (the row: $(grep '^| 1 |' "$RESULTS/conventions-linux-dry-run.md"))"
+no_calls "conventions.sh linux --dry-run"
+pass "conventions.sh linux prints and records its 11 items, a pipe in a note staying in its cell"
 
 # Not a dry run: the version and the system are asked, through the stand-ins, and the real
 # file name is used.
@@ -317,6 +403,20 @@ serve_status=$REFUSAL_STATUS
 [ "$serve_status" -eq 1 ] || fail "serve-release.sh on a changed file gave exit $serve_status, not 1"
 grep -q 'yaar-review_0.1.0_amd64.deb' "$S/serve-sums.err" || fail "the refusal of a changed file does not name the file"
 pass "a file that disagrees with SHA256SUMS is refused, by name"
+
+# A listed file that is not in the folder is refused by name, and so is a SHA256SUMS that
+# lists nothing.
+cp -R "$F" "$S/release-missing"
+rm "$S/release-missing/release/yaar-review_0.1.0_amd64.deb"
+refuse "a listed file that is missing" "$S/serve-missing.out" "$S/serve-missing.err" "$S/release-missing"
+[ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a folder missing a listed file gave exit $REFUSAL_STATUS, not 1"
+grep -q 'yaar-review_0.1.0_amd64.deb, which is not in' "$S/serve-missing.err" || fail "the refusal of a missing file does not name it (it said: $(cat "$S/serve-missing.err"))"
+cp -R "$F" "$S/release-empty-sums"
+: > "$S/release-empty-sums/release/SHA256SUMS"
+refuse "a SHA256SUMS that lists nothing" "$S/serve-empty.out" "$S/serve-empty.err" "$S/release-empty-sums"
+[ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a SHA256SUMS that lists nothing gave exit $REFUSAL_STATUS, not 1"
+grep -q '^serve-release.sh: .*SHA256SUMS' "$S/serve-empty.err" || fail "the refusal of an empty SHA256SUMS does not name serve-release.sh and the file"
+pass "a listed file that is missing, and a SHA256SUMS that lists nothing, are refused by name"
 
 # Start it, detached, on a free port.
 : > "$S/serve.out"
@@ -404,13 +504,16 @@ walk_count() {
   # walk_count <script> <items> <dry-run file name>: all yes, then the signature.
   local script=$1 items=$2 file=$3
   { lines "$items" yes; echo yes; } > "$S/answers-count.txt"
-  CONV_STATUS=0
-  "$HERE/$script" --dry-run < "$S/answers-count.txt" > "$S/out-count.txt" 2> "$S/out-count.txt.err" || CONV_STATUS=$?
+  rm -f "$S/calls"
+  run_walker "$script --dry-run" "$S/out-count.txt" "$S/out-count.txt.err" "$S/answers-count.txt" \
+    env PATH="$S/bin:$PATH" YAAR_REVIEW="$S/bin/yaar-review" "$HERE/$script" --dry-run
+  CONV_STATUS=$WALK_STATUS
   [ "$CONV_STATUS" -eq 0 ] || fail "$script --dry-run with $items answers did not exit 0 (it said: $(cat "$S/out-count.txt.err"))"
   [ "$(grep -c "^Item [0-9]* of $items: " "$S/out-count.txt")" -eq "$items" ] \
     || fail "$script did not print its $items items, each once"
   [ "$(( $(grep -c '^| ' "$RESULTS/$file") - 2 ))" -eq "$items" ] || fail "$RESULTS/$file does not hold $items rows"
   grep -q '^Signed: ' "$RESULTS/$file" || fail "$RESULTS/$file is not signed after all yes"
+  no_calls "$script --dry-run"
 }
 walk_count screen-walk.sh 5 screen-walk-dry-run.md
 [ -s "$RESULTS/term-06.txt" ] || fail "screen-walk.sh wrote no test file of text for TERM-06"
@@ -445,7 +548,7 @@ BASE_NS=1000000000000
     case $i in
       1) echo "cap 0 $((t + 40000000)) rows=0-9" ;;          # no display time: the time it was seen
       2) echo "cap $((t + 50000000)) $((t + 51000000)) rows=0-9" ;;
-      28) echo "cap $((t + 250000000)) $((t + 251000000)) rows=0-9" ;;   # later than the next key plus 20 ms: not its own
+      28) echo "cap $((t + 280000000)) $((t + 281000000)) rows=0-9" ;;   # later than the next key plus 20 ms: not its own, but the last key's, 80 ms after it
       *) echo "cap $((t + 30000000)) $((t + 31000000)) rows=0-9" ;;
     esac
     i=$((i + 1))
@@ -453,9 +556,44 @@ BASE_NS=1000000000000
   echo "end"
 } > "$S/keys.cap"
 got=$("$HERE/typing.sh" --analyse "$S/keys.input" "$S/keys.cap" 2> "$S/keys.err")
+# The times are 16 of 30 ms, then 40, 50 and 80: the 95th percentile is the value at rank 17
+# (50), which is not the largest (80).
 [ "$got" = "n=19 median=30.00 p95=50.00" ] || fail "typing.sh --analyse gave '$got', not 'n=19 median=30.00 p95=50.00' for 19 matched keys (stderr: $(cat "$S/keys.err"))"
 grep -qx 'missed=1 early=10' "$S/keys.err" || fail "typing.sh --analyse did not count 1 missed and 10 early keys (stderr: $(cat "$S/keys.err"))"
-pass "typing.sh reads key to screen times: the first changed frame after each post, early and missed keys counted, a missing display time falling back to the time seen"
+tmp_clean "typing.sh --analyse"
+pass "typing.sh reads key to screen times: the first changed frame after each post, early and missed keys counted, a missing display time falling back to the time seen, the 95th percentile below the largest"
+
+# The edges, one key a second so that the next key never bounds a key: a frame 11 ms after a
+# post is too soon to be the key's (early), one 13 ms after is its own; one 399 ms after is
+# its own and one 401 ms after is not (missed); the last key is bounded by the 400 ms too.
+# Six keys are matched, so the median is the mean of the two in the middle.
+{
+  echo "post $((BASE_NS)) 0 a"
+  echo "post $((BASE_NS + 1000000000)) 1 a"
+  echo "post $((BASE_NS + 2000000000)) 2 a"
+  echo "post $((BASE_NS + 3000000000)) 3 a"
+  echo "post $((BASE_NS + 4000000000)) 4 a"
+  echo "post $((BASE_NS + 5000000000)) 5 a"
+  echo "post $((BASE_NS + 6000000000)) 6 a"
+  echo "post $((BASE_NS + 7000000000)) 7 a"
+} > "$S/edges.input"
+{
+  echo "start"
+  echo "cap $((BASE_NS + 11000000)) $((BASE_NS + 11000000)) rows=0-9"
+  echo "cap $((BASE_NS + 1013000000)) $((BASE_NS + 1013000000)) rows=0-9"
+  echo "cap $((BASE_NS + 2020000000)) $((BASE_NS + 2020000000)) rows=0-9"
+  echo "cap $((BASE_NS + 3030000000)) $((BASE_NS + 3030000000)) rows=0-9"
+  echo "cap $((BASE_NS + 4040000000)) $((BASE_NS + 4040000000)) rows=0-9"
+  echo "cap $((BASE_NS + 5399000000)) $((BASE_NS + 5399000000)) rows=0-9"
+  echo "cap $((BASE_NS + 6401000000)) $((BASE_NS + 6401000000)) rows=0-9"
+  echo "cap $((BASE_NS + 7025000000)) $((BASE_NS + 7025000000)) rows=0-9"
+  echo "end"
+} > "$S/edges.cap"
+got=$("$HERE/typing.sh" --analyse "$S/edges.input" "$S/edges.cap" 2> "$S/edges.err")
+[ "$got" = "n=6 median=27.50 p95=399.00" ] || fail "typing.sh --analyse gave '$got', not 'n=6 median=27.50 p95=399.00' for the times 13, 20, 25, 30, 40 and 399 ms (stderr: $(cat "$S/edges.err"))"
+grep -qx 'missed=1 early=1' "$S/edges.err" || fail "typing.sh --analyse did not count 1 missed (401 ms) and 1 early (11 ms) key (stderr: $(cat "$S/edges.err"))"
+tmp_clean "typing.sh --analyse"
+pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 399 ms as its own and 401 ms as missed, and takes the mean of the two in the middle for an even count"
 
 T1=2000000000000
 {
@@ -486,6 +624,7 @@ grep -qx 'phase 2: frames=50 seconds=0.50 fps=100.0 long=0 long_pct=0.00' "$S/sc
   || fail "scroll.sh --analyse did not read phase 2 as 50 frames and no long gap (got: $(cat "$S/scroll.got"))"
 grep -qx 'total: frames=148 seconds=1.50 fps=98.7 long=1 long_pct=0.68' "$S/scroll.got" \
   || fail "scroll.sh --analyse did not total 148 frames and 1 long gap (got: $(cat "$S/scroll.got"))"
+tmp_clean "scroll.sh --analyse"
 pass "scroll.sh reads frames a second and gaps longer than two refresh intervals, phase by phase"
 
 {
@@ -501,7 +640,45 @@ got=$("$HERE/start-time.sh" --read "$S/marks.err" 1000000 | tail -n 1)
 grep -v 'first_diff' "$S/marks.err" > "$S/marks-nodiff.err"
 got=$("$HERE/start-time.sh" --read "$S/marks-nodiff.err" 1000000 | tail -n 1)
 [ "$got" = "100 180 none" ] || fail "start-time.sh --read gave '$got', not '100 180 none' with no first_diff mark"
+tmp_clean "start-time.sh --read"
 pass "start-time.sh reads the marks main, first_frame and first_diff, the first of each, and says none for one that is not there"
+
+# --linux on the Mac runs in the virtual machine through its script. Here that script is a
+# stand-in that answers with a status of the test's choosing, and nothing is started.
+if [ "$(uname -s)" = Darwin ]; then
+  cat > "$S/fakevm.sh" << 'FAKE'
+#!/bin/sh
+case "$1" in
+  status) echo running ;;
+  ssh)
+    case "$2" in
+      *start-time.sh*)
+        echo "start-time.sh: results in /remote/results/start-time-linux-000000"
+        exit "$FAKE_VM_STATUS"
+        ;;
+    esac
+    ;;
+  scp-to | scp-from) ;;
+  *)
+    echo "unexpected call: $*" >&2
+    exit 9
+    ;;
+esac
+FAKE
+  chmod 755 "$S/fakevm.sh"
+  for pair in 0:0 1:1 2:1 255:1; do
+    remote=${pair%:*}
+    want=${pair#*:}
+    run_walker "start-time.sh --linux" "$S/vm.out" "$S/vm.err" /dev/null \
+      env YAAR_VM="$S/fakevm.sh" FAKE_VM_STATUS="$remote" "$HERE/start-time.sh" --linux
+    [ "$WALK_STATUS" -eq "$want" ] || fail "start-time.sh --linux, with the machine's run ending $remote, exited $WALK_STATUS, not $want (it said: $(cat "$S/vm.err"))"
+    if [ "$remote" -gt 1 ]; then
+      grep -q "^start-time.sh: .*status $remote" "$S/vm.err" || fail "start-time.sh --linux said nothing of the machine's status $remote (it said: $(cat "$S/vm.err"))"
+    fi
+  done
+  tmp_clean "start-time.sh --linux"
+  pass "start-time.sh --linux passes the machine's 0 and 1 on, and any other status becomes 1 with a sentence that names it"
+fi
 
 # The programs of the app are found by their full path: two copies of one program at two
 # paths are two programs.
@@ -529,13 +706,63 @@ wait_for found_a || fail "a process started from $S/a/yaar-review was not found 
 [ "$(pids_of "$S/b/yaar-review")" = "$PID_B" ] \
   || fail "a process started from $S/b/yaar-review was not found by that path alone"
 [ -z "$(pids_of "$S/c/yaar-review")" ] || fail "a path nothing runs from found a process"
-kill "$PID_A" "$PID_B"
-if wait "$PID_A" "$PID_B" 2> /dev/null; then :; fi
 pass "a program is found by its full path, not by its name"
+
+# A copy started after the first one is the one new process of its path (what typing.sh
+# ends as its reference, and nothing else).
+"$S/a/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
+PID_A2=$!
+SERVERS="$SERVERS $PID_A2"
+new_pids_of() {
+  bash -c '. "$1"; ck_new_pids_of "$2" "$3"' _ "$HERE/lib.sh" "$1" "$2"
+}
+found_new() {
+  [ "$(new_pids_of "$S/a/yaar-review" "$PID_A")" = "$PID_A2" ]
+}
+wait_for found_new || fail "the new copy (pid $PID_A2) of $S/a/yaar-review was not the one new process of that path (found: $(new_pids_of "$S/a/yaar-review" "$PID_A"))"
+[ -z "$(new_pids_of "$S/a/yaar-review" "$PID_A $PID_A2")" ] || fail "a process that was known was found as new"
+[ -z "$(new_pids_of "$S/b/yaar-review" "$PID_B")" ] || fail "the program at another path was found as new"
+kill "$PID_A" "$PID_A2" "$PID_B"
+if wait "$PID_A" "$PID_A2" "$PID_B" 2> /dev/null; then :; fi
+pass "the one new process of a program is found by its full path, whichever application is in front"
+
+# A process of another user is not this user's: the summed memory and the signals of the
+# scripts reach this user's copies alone.
+if [ "$(uname -s)" = Darwin ] && [ "$(id -u)" -ne 0 ]; then
+  # launchd, pid 1, is root's: the one program of another user every Mac runs.
+  LAUNCHD=$(ps -o comm= -p 1)
+  [ -n "$LAUNCHD" ] || fail "ps shows no program for pid 1"
+  [ -z "$(pids_of "$LAUNCHD")" ] || fail "ck_pids_of found $LAUNCHD, which root runs, as a process of $(id -un)"
+  pass "a program another user runs is not found (launchd, root's, on the Mac)"
+elif [ "$(uname -s)" = Linux ] && [ "$(id -u)" -eq 0 ] && command -v setpriv > /dev/null; then
+  chmod 755 "$S"
+  mkdir -p "$S/o"
+  cp /bin/sleep "$S/o/yaar-review"
+  chmod 755 "$S/o" "$S/o/yaar-review"
+  setpriv --reuid=65534 --regid=65534 --clear-groups "$S/o/yaar-review" 60 < /dev/null > /dev/null 2>&1 &
+  PID_O=$!
+  SERVERS="$SERVERS $PID_O"
+  runs_as_nobody() {
+    local d
+    for d in /proc/[0-9]*; do
+      if [ "$(readlink "$d/exe" 2> /dev/null)" = "$S/o/yaar-review" ] && [ "$(stat -c %u "$d")" -eq 65534 ]; then
+        return 0
+      fi
+    done
+    return 1
+  }
+  wait_for runs_as_nobody || fail "the copy of $S/o/yaar-review did not start as the user nobody"
+  [ -z "$(pids_of "$S/o/yaar-review")" ] || fail "ck_pids_of found a process of the user nobody as a process of root"
+  kill "$PID_O"
+  if wait "$PID_O" 2> /dev/null; then :; fi
+  pass "a program another user runs is not found (a copy run as nobody, by root)"
+else
+  printf '%s: not shown here: a process of another user needs the Mac as a user, or Linux as root with setpriv\n' "$CK_NAME"
+fi
 
 # ---------------------------------------------------------------------------------------
 
 real_state_after=$(real_state)
-[ "$real_state_before" = "$real_state_after" ] || fail "the real $REAL_HOME/yaar-checklists changed during the run"
-pass "nothing was written to the real home"
+[ "$real_state_before" = "$real_state_after" ] || fail "something named yaar-checklists* in the real $REAL_HOME changed during the run"
+pass "nothing named yaar-checklists* was made or changed in the real home"
 echo "$CK_NAME: all checks hold"
