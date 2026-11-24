@@ -164,6 +164,15 @@ The release job calls these scripts of `.github/scripts/`, each by its step:
 run by hand on what `assemble.sh` wrote. `fetch-published-debs.sh`, `publish.sh` and
 `project-key.sh` need GitHub or the project's key and run in the job only.
 
+Once the owner has approved the run, the job `publish` makes the draft release with the eight
+files and the notes of `release/notes.md.in` (`publish.sh draft`), deploys the site, makes the
+release the latest and waits until `releases/latest/download/SHA256SUMS` answers with the new
+checksum file (`publish.sh publish`), and then checks that the tag on the public repository is
+the commit of the run, that the source archive GitHub made for the tag holds `LICENSE`, and
+that the site answers with the new `install.sh`, `InRelease` and key (`publish.sh check`,
+which waits about ten minutes in all for Pages' cache). A published release of that tag with
+other files is refused: a published version is never changed.
+
 ### The base address
 
 The base address is the one line of `site/base-url`. `assemble.sh` writes it into the site's
@@ -171,7 +180,8 @@ The base address is the one line of `site/base-url`. `assemble.sh` writes it int
 The two texts that must show it as it is, `README.md` (once the release's pull request has
 copied `release-day.md` into it) and this file, hold copies, and the step "The texts name the
 one base address" (`.github/scripts/base-url-check.sh`) fails on any address that ends in
-`/install.sh` or `/apt` and is neither on the loopback address nor the placeholder
+`/install.sh` or `/apt` and does not start with the line of `site/base-url` (the line itself,
+or the line followed by `/`), is not on `127.0.0.1` or `localhost`, and is not the placeholder
 `@BASE_URL@`, naming its file, line and address. `release-day.md` holds the placeholder, so that the
 release's pull request puts the line in.
 
@@ -389,15 +399,6 @@ gh api -X POST repos/Tsadoq/yaar/actions/runs/<run id>/pending_deployments \
 ```
 
 A run left waiting is not published; rejecting it ends it with nothing published.
-
-Once approved, the job `publish` makes the draft release with the eight files and the notes of
-`release/notes.md.in` (`publish.sh draft`), deploys the site, makes the release the latest and
-waits until `releases/latest/download/SHA256SUMS` answers with the new checksum file
-(`publish.sh publish`), and then checks that the tag on the public repository is the commit of
-the run, that the source archive GitHub made for the tag holds `LICENSE`, and that the site
-answers with the new `install.sh`, `InRelease` and key (`publish.sh check`, which waits up to
-ten minutes in all for Pages' cache). A published release of that tag with other files is refused: a
-published version is never changed.
 
 ### Taking a release back
 

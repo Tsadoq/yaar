@@ -26,7 +26,7 @@
 # check: the release's tag points at this run's commit (GITHUB_SHA); the source archive
 #   GitHub made for the tag holds LICENSE with the bytes of the repository's (row PKG-11);
 #   the site answers https://<base>/install.sh and https://<base>/apt/dists/stable/InRelease
-#   with the bytes of final/site (the Pages cache may lag: up to 10 minutes of retries in
+#   with the bytes of final/site (the Pages cache may lag: about 10 minutes of retries in
 #   all, one deadline for the whole check, see below).
 #
 # Exit codes: 0 done; 1 refused or failed (a sentence says which step); 2 usage error.
@@ -41,17 +41,21 @@
 #   - publish and check wait for what they check: the first 5 s every 0.2 s, then every 2 s,
 #     for YAAR_PUBLISH_WAIT seconds (default 60) and YAAR_CHECK_WAIT seconds (default 600).
 #     The workflow sets neither: they are there so that the refusal can be seen in seconds.
-#     Each is a whole number of seconds, else it refuses with exit 2 before any gh call,
-#     whatever the action (a value that is not a number would make a wait that never ends).
+#     Each is a whole number of seconds with no leading zero (the shell reads 08 as an
+#     error and 010 as 8), else it refuses with exit 2 before any gh call, whatever the
+#     action (a value that is not a number would make a wait that never ends); a wait also
+#     refuses to start on a deadline that is no number;
 #     Past the deadline the sentence says what the last look found;
 #   - check has one deadline, YAAR_CHECK_WAIT seconds from its first look, for its four waits
 #     together (the archive's licence, install.sh, InRelease, the key): each wait gets what is
 #     left, and a wait that finds none left still looks once. So check ends within the
 #     seconds it names, plus the time of its last look, and well inside the job's 20 minutes
 #     with the 60 s of publish and the deployment;
-#   - check asks GitHub for the tag with `git ls-remote` and the source archive with curl,
-#     both anonymously: the repository is public, and the row is about what the public sees;
-#     GITHUB_SHA must be set for it. It also compares the site's apt/yaar-review.asc;
+#   - check asks GitHub for the tag with `git ls-remote` (given 60 s, or what is left of
+#     the check's deadline if that is less but at least 10 s, then stopped by its pid and
+#     named) and the source archive with curl, both anonymously: the repository is public,
+#     and the row is about what the public sees; GITHUB_SHA must be set for it. It also
+#     compares the site's apt/yaar-review.asc;
 #   - the site is <release-dir>/../site, as the job lays the artifact out.
 # No token reaches a command line or an output: gh reads GH_TOKEN from the environment, and
 # curl and git are given none.
@@ -80,12 +84,13 @@ case $VERSION in
     exit 2
     ;;
 esac
-# Both waits are whole numbers of seconds: anything else would end no wait.
+# Both waits are whole numbers of seconds, written without a leading zero (the shell reads
+# 08 as a bad octal number and 010 as 8): anything else would end no wait.
 for var in YAAR_PUBLISH_WAIT YAAR_CHECK_WAIT; do
   if [ -n "${!var+set}" ]; then
     case ${!var} in
-      '' | *[!0-9]*)
-        echo "$NAME: $var must be a whole number of seconds, not: ${!var}" >&2
+      '' | *[!0-9]* | 0?*)
+        echo "$NAME: $var must be a whole number of seconds with no leading zero, not: ${!var}" >&2
         exit 2
         ;;
     esac
@@ -170,6 +175,13 @@ SEEN=
 poll() {
   local deadline=$1 start=$SECONDS elapsed
   shift
+  # A deadline that is no whole number can never be reached: a wait must not start on one.
+  case $deadline in
+    '' | *[!0-9]*)
+      SEEN="the deadline given to the wait is not a whole number of seconds: ${deadline:-nothing}"
+      return 1
+      ;;
+  esac
   while :; do
     if "$@"; then return 0; fi
     elapsed=$((SECONDS - start))
@@ -273,8 +285,27 @@ case $ACTION in
 
     # The tag, on the public repository, at this run's commit. An annotated tag lists its
     # commit on the line "^{}".
-    refs=$(GIT_TERMINAL_PROMPT=0 git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}") \
-      || fail "git could not ask https://github.com/$REPO.git for the tag $TAG"
+    # git gets a deadline of its own, 60 s or what is left of the check's if that is less,
+    # but never under 10 s so that it looks once whatever is left: a connection that stalls
+    # would otherwise hold the step until the job's timeout, saying nothing of what it waited
+    # for. It runs in the background as a pid this script started.
+    git_limit=60
+    [ "$(left)" -ge "$git_limit" ] || git_limit=$(left)
+    [ "$git_limit" -ge 10 ] || git_limit=10
+    GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=30 \
+      git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}" \
+      > "$SCRATCH/refs" 2> "$SCRATCH/git.err" < /dev/null &
+    git_pid=$!
+    git_start=$SECONDS
+    while kill -0 "$git_pid" 2> /dev/null; do
+      if [ $((SECONDS - git_start)) -ge "$git_limit" ]; then
+        if kill "$git_pid" 2> /dev/null; then wait "$git_pid" 2> /dev/null || :; fi
+        fail "git did not answer within $git_limit s when asked https://github.com/$REPO.git for the tag $TAG"
+      fi
+      sleep 0.2
+    done
+    wait "$git_pid" || fail "git could not ask https://github.com/$REPO.git for the tag $TAG: $(head -n 1 "$SCRATCH/git.err")"
+    refs=$(cat "$SCRATCH/refs")
     peeled=$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG^{}" '$2 == r { print $1; exit }')
     plain=$(printf '%s\n' "$refs" | awk -v r="refs/tags/$TAG" '$2 == r { print $1; exit }')
     tagged=${peeled:-$plain}
