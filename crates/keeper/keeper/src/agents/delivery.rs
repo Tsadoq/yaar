@@ -376,6 +376,7 @@ mod tests {
             data_dir: root.join("data"),
             companions: Some(root.join("companions")),
             home: root.join("home"),
+            login_shell: None,
         };
         let git_found = yaar_recorder::Git::find().expect("git is installed");
         let store = yaar_store::Store::open(&{
