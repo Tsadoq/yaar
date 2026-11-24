@@ -21,6 +21,10 @@
 #
 # Needs: apt-ftparchive (package apt-utils), dpkg-deb (dpkg), gpg (gnupg), gzip.
 #
+# Exit codes: 0 written; 1 refused or failed (a sentence says why; whatever fails without a
+# sentence of its own, such as gzip or gpg, ends it with 1 and the line, never with the
+# tool's own code, gpg's 2 reading as a usage error); 2 usage error (no <repo-dir>).
+#
 # Environment:
 #   YAAR_APT_KEY   fingerprint or id of the signing key; its secret half is in GNUPGHOME
 #   GNUPGHOME      the keyring folder gpg reads
@@ -28,6 +32,10 @@
 #   ORIGIN, LABEL  default YAAR
 set -euo pipefail
 umask 022
+# Whatever fails without a sentence of its own ends the script with 1, never with the failing
+# tool's own code (gpg's 2 would read as a usage error).
+set -E
+trap 'echo "make-apt-repo.sh: line $LINENO: a command failed" >&2; exit 1' ERR
 [ $# -ge 1 ] || { sed -n '2,4p' "$0" >&2; exit 2; }
 : "${YAAR_APT_KEY:?set YAAR_APT_KEY to the fingerprint of the signing key}"
 : "${GNUPGHOME:?set GNUPGHOME to the folder that holds the signing key}"
