@@ -62,7 +62,7 @@
 
 <h2>Install</h2>
 <pre><code>curl -fsSL @BASE_URL@/install.sh | bash</code></pre>
-<p>On macOS it installs the notarised app into <code>/Applications</code>. On Debian and Ubuntu it installs the package from the signed apt repository at <code>@BASE_URL@/apt</code>, which stays among apt's sources. On another Linux it unpacks the plain archive under <code>~/.local</code>. Add <code>--dry-run</code> to see what it would do and change nothing.</p>
+<p>On macOS it installs the notarised app into <code>/Applications</code>, or into <code>~/Applications</code> when that is not writable. On Debian and Ubuntu it installs the package from the signed apt repository at <code>@BASE_URL@/apt</code>, which stays among apt's sources. On another Linux it unpacks the plain archive under <code>~/.local</code>. Add <code>--dry-run</code> to see what it would do and change nothing.</p>
 
 <h2>Systems</h2>
 <ul>

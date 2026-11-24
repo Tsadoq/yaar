@@ -9,6 +9,8 @@
 #     <version>, SHA256SUMS and SHA256SUMS.asc;
 #   - SHA256SUMS lists anything but those six, or one of them twice, or a sum that
 #     `sha256sum -c` does not confirm;
+#   - SHA256SUMS is not sorted by name (assemble.sh writes it so; the order is part of what a
+#     reader may rely on);
 #   - SHA256SUMS.asc does not verify against SHA256SUMS with the key beside <release-dir>
 #     (<release-dir>/../key.asc, with gpgv and a keyring made from it in a temporary folder).
 #
@@ -101,6 +103,9 @@ if [ -f "$SUMS" ] && [ ! -L "$SUMS" ]; then
     fi
     printf '%s\n' "$name" >> "$TMP/listed"
   done < "$SUMS"
+  if ! LC_ALL=C sort -c "$TMP/listed" 2> /dev/null; then
+    fault "$SUMS is not sorted by name, as assemble.sh writes it"
+  fi
   LC_ALL=C sort "$TMP/listed" > "$TMP/listed.sorted"
   LC_ALL=C uniq -d "$TMP/listed.sorted" > "$TMP/twice"
   while IFS= read -r f; do

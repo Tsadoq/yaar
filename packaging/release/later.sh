@@ -9,7 +9,8 @@
 # Copies <out-dir>/site to <out-dir>/site-later; for each .deb of <out-dir>/release runs
 # packaging/apt/repack-version.sh into a temporary folder; adds the results with
 # make-apt-repo.sh to site-later/apt. The pool then holds both versions of each processor,
-# and the first version's .deb keeps its bytes (the check: cmp against release/).
+# and the first version's .deb keeps its bytes (the check: cmp against release/). Each repacked
+# file is also looked up in the pool, where it must hold the later version.
 #
 # The later index is signed in a later second than the first: apt keeps its copy of InRelease
 # when the server's copy is not newer to the second, so a machine that updated from the first
@@ -89,9 +90,25 @@ while IFS= read -r deb; do
   [ -n "$pooled" ] || fail "$name is not in the pool of $OUTDIR/site-later/apt"
   cmp -s "$deb" "$pooled" || fail "$pooled is not the .deb of $OUTDIR/release/$name: a published version must keep its bytes"
 done <<< "$DEBS"
+# The later version: each repacked file is in the pool under its name with the bytes it was
+# made with, and holds the later version (a repack named for the old version would meet the
+# first version's file under the same name, which a name alone would take for its own). The
+# pool then has a file of the later version for every processor of the release.
 for later in "${REPACKED[@]}"; do
   name=$(basename "$later")
   pooled=$(find "$OUTDIR/site-later/apt/pool" -type f -name "$name")
   [ -n "$pooled" ] || fail "$name is not in the pool of $OUTDIR/site-later/apt"
+  have=$(dpkg-deb -f "$pooled" Version)
+  [ "$have" = "$LATER" ] || fail "$pooled holds version $have, not the later version $LATER"
+  cmp -s "$later" "$pooled" || fail "$pooled is not the repacked $name"
 done
+while IFS= read -r deb; do
+  arch=$(dpkg-deb -f "$deb" Architecture)
+  found=0
+  while IFS= read -r pooled; do
+    [ -n "$pooled" ] || continue
+    if [ "$(dpkg-deb -f "$pooled" Version)" = "$LATER" ] && [ "$(dpkg-deb -f "$pooled" Architecture)" = "$arch" ]; then found=1; fi
+  done < <(find "$OUTDIR/site-later/apt/pool" -type f -name '*.deb')
+  [ "$found" -eq 1 ] || fail "the pool of $OUTDIR/site-later/apt holds no $arch package of version $LATER"
+done <<< "$DEBS"
 echo "$NAME: wrote $OUTDIR/site-later: the pool holds both versions of each processor, $LATER the later"

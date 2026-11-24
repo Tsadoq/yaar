@@ -45,10 +45,13 @@ for deb in "$@"; do
 done
 cd "$REPO"
 # A file in pool/ that dpkg-deb cannot read would be left out of the index without a word.
+POOL_DEBS=$(find pool -name '*.deb') \
+  || { echo "make-apt-repo.sh: cannot list the .deb files under $REPO/pool: a folder in it cannot be read" >&2; exit 1; }
 while IFS= read -r deb; do
+  [ -n "$deb" ] || continue
   dpkg-deb -f "$deb" Architecture > /dev/null 2>&1 \
     || { echo "make-apt-repo.sh: $REPO/$deb is not a .deb that dpkg-deb can read" >&2; exit 1; }
-done < <(find pool -name '*.deb')
+done <<< "$POOL_DEBS"
 ARCHS=$(find pool -name '*.deb' -exec dpkg-deb -f {} Architecture \; | sort -u | grep -v '^all$' | tr '\n' ' ')
 ARCHS=${ARCHS% }
 [ -n "$ARCHS" ] || { echo "make-apt-repo.sh: no package in $REPO/pool" >&2; exit 1; }

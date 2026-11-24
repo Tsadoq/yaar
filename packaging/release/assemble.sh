@@ -167,19 +167,22 @@ for pair in "$DEB_AMD64 amd64" "$DEB_ARM64 arm64"; do
   [ "$have_arch" = "$arch" ] || fail "$PKGDIR/$deb is named for $arch but holds a package for $have_arch"
 done
 
-# The .deb files of earlier releases.
-PREVIOUS_DEBS=
+# The .deb files of earlier releases. The list is read where a failure of find stops the
+# script: a folder of PREVIOUS that cannot be read must not drop a published version from the
+# repository without a word.
+PREVIOUS_DEBS=()
 if [ -n "${PREVIOUS:-}" ]; then
   [ -d "$PREVIOUS" ] || fail "PREVIOUS names $PREVIOUS, which is not a folder"
+  PREVIOUS_LIST=$(find "$PREVIOUS" -type f -name '*.deb' | LC_ALL=C sort) \
+    || fail "cannot list the .deb files under PREVIOUS, $PREVIOUS: a folder in it cannot be read"
   while IFS= read -r old; do
     [ -n "$old" ] || continue
     old_name=$(basename "$old")
     case $old_name in
       "$DEB_AMD64" | "$DEB_ARM64") fail "$old has the name of a new package: version $VERSION is published already" ;;
     esac
-    PREVIOUS_DEBS="$PREVIOUS_DEBS
-$old"
-  done < <(find "$PREVIOUS" -type f -name '*.deb' | LC_ALL=C sort)
+    PREVIOUS_DEBS+=("$old")
+  done <<< "$PREVIOUS_LIST"
 fi
 
 gpg --batch --list-secret-keys "$YAAR_APT_KEY" > /dev/null 2>&1 \
@@ -214,8 +217,9 @@ gpg --batch --yes --local-user "$YAAR_APT_KEY" --digest-algo SHA512 --armor --de
 
 # site/: the apt repository first, so that the page can name the key the repository serves.
 mkdir "$OUT/site"
-# shellcheck disable=SC2086 # one word to a .deb, no space in a name
-"$ROOT/packaging/apt/make-apt-repo.sh" "$OUT/site/apt" "$PKGDIR/$DEB_AMD64" "$PKGDIR/$DEB_ARM64" $PREVIOUS_DEBS
+# (the expansion of an empty array is spelled so that bash 3.2 under set -u accepts it)
+"$ROOT/packaging/apt/make-apt-repo.sh" "$OUT/site/apt" "$PKGDIR/$DEB_AMD64" "$PKGDIR/$DEB_ARM64" \
+  ${PREVIOUS_DEBS[@]+"${PREVIOUS_DEBS[@]}"}
 cp "$OUT/site/apt/yaar-review.asc" "$OUT/key.asc"
 FPR=$(gpg --batch --show-keys --with-colons "$OUT/key.asc" | awk -F: '$1 == "fpr" { print $10; exit }')
 [ -n "$FPR" ] || fail "no fingerprint in the public key $OUT/site/apt/yaar-review.asc"
@@ -235,6 +239,10 @@ cp "$PAGE_IN" "$SCRATCH/index.html"
 replace "$SCRATCH/index.html" '@BASE_URL@' "$BASE_URL"
 replace "$SCRATCH/index.html" '@VERSION@' "$VERSION"
 replace "$SCRATCH/index.html" '@FINGERPRINT@' "$FPR_GROUPED"
+# A placeholder the replacements above missed would be published as it stands.
+if LEFT=$(grep -o -m1 '@[A-Z_][A-Z_]*@' "$SCRATCH/index.html"); then
+  fail "$PAGE_IN still holds the placeholder $LEFT after the replacements: the page must not go out with it"
+fi
 cp "$SCRATCH/index.html" "$OUT/site/index.html"
 
 # install.sh: its two lines, whole, and nothing else of it.
