@@ -147,9 +147,9 @@ render_notes() {
   [ -f "$in" ] || fail "$in is missing"
   b=$(base_url)
   sed -e "s|@VERSION@|$VERSION|g" -e "s|@BASE_URL@|$b|g" "$in" > "$SCRATCH/notes.md" || fail "the notes could not be written"
-  # A placeholder is a name in capitals between two '@'. Any other '@' (a contact address, a
-  # mention) is the text's own.
-  if LEFT=$(grep -o -m1 '@[A-Z][A-Z0-9_]*@' "$SCRATCH/notes.md"); then
+  # A placeholder is a name of letters, digits and '_' between two '@', in any case. Any other
+  # '@' (a contact address, a mention) is the text's own.
+  if LEFT=$(grep -o -m1 '@[A-Za-z_][A-Za-z0-9_]*@' "$SCRATCH/notes.md"); then
     fail "$in still holds the placeholder $LEFT after the replacements: the notes must not go out with it"
   fi
 }
