@@ -60,6 +60,14 @@
 #   by a trap, so that a step that failed in the middle leaves the user's home as it found
 #   it. A folder or a screen a former run left (<home>/yaar-login-only,
 #   <home>/yaar-login-repo, the display :99) is not removed: the step fails and says so.
+# - What "started by the system and not through a shell" rests on: after step 3, the PATH in
+#   /proc/<pid>/environ of the Window and of the Keeper, read as <user>, does not hold
+#   <home>/yaar-login-only/bin. That is the environment each began with, which a later
+#   setenv does not change; an entry that started the app through the login shell would
+#   put the folder there, and the step fails and says so.
+# - Before the app is started the step waits (20 s) until no Keeper of <user> runs: one that
+#   an earlier step left would answer with the environment it took then.
+# - The folders are removed by the trap only when this run made them.
 # - Xvfb is started with access control off (-ac) and no TCP socket: the app runs as <user>
 #   and the server as root.
 # The scripts handed to `sh -c` are single-quoted on purpose: the user's shell expands them.
@@ -119,6 +127,11 @@ standin_pids=""
 startup=""
 startup_changed=no
 startup_existed=no
+# Which of the three folders this run made: a folder a former run left is not this run's to
+# remove, so the trap takes out only what is flagged.
+made_only=no
+made_repository=no
+made_worktrees=no
 
 # As <user>, in the environment of a program that no shell started, and in the user's home.
 as_user() {
@@ -212,7 +225,9 @@ cleanup() {
             as_user rm -f "$startup"
         fi
     fi
-    rm -rf "$only" "$repository" "$worktrees"
+    [ "$made_only" = no ] || rm -rf "$only"
+    [ "$made_repository" = no ] || rm -rf "$repository"
+    [ "$made_worktrees" = no ] || rm -rf "$worktrees"
     rm -rf "$scratch"
     exit "$status"
 }
@@ -224,6 +239,10 @@ trap cleanup EXIT
 [ ! -e "$worktrees" ] || fail "$worktrees is there already: a former run did not end"
 [ ! -e "/tmp/.X11-unix/X${DISPLAY_NAME#:}" ] || fail "the display $DISPLAY_NAME is there already"
 
+# Each folder was absent a line ago, so whatever is there from now on is this run's.
+made_only=yes
+made_repository=yes
+made_worktrees=yes
 mkdir -p "$only/bin"
 cat > "$only/bin/yaar-hook-witness" << EOF
 #!/bin/sh
@@ -280,7 +299,11 @@ echo "step 2: $repository on main with a post-checkout hook that runs yaar-hook-
 # A Keeper of an earlier step that has not left yet would answer with the environment it took
 # then, and the Window would not start another: it must be gone first.
 no_keeper_runs() {
-    keepers=$(pids_of "$KEEPER" | tr '\n' ' ')
+    # Called from `if`, where set -e is off: a listing that failed must fail the step, and
+    # not read as "no Keeper runs".
+    local listed
+    listed=$(pids_of "$KEEPER") || fail "the processes of $user could not be listed"
+    keepers=$(printf '%s' "$listed" | tr '\n' ' ')
     seen="a Keeper runs as $user: ${keepers:-none}"
     [ -z "$keepers" ]
 }
@@ -310,8 +333,11 @@ as_user_on_display "${launch[@]}" < /dev/null > "$scratch/app.log" 2>&1 \
 
 windows=""
 both_run() {
-    windows=$(pids_of "$WINDOW" | tr '\n' ' ')
-    keepers=$(pids_of "$KEEPER" | tr '\n' ' ')
+    local listed
+    listed=$(pids_of "$WINDOW") || fail "the processes of $user could not be listed"
+    windows=$(printf '%s' "$listed" | tr '\n' ' ')
+    listed=$(pids_of "$KEEPER") || fail "the processes of $user could not be listed"
+    keepers=$(printf '%s' "$listed" | tr '\n' ' ')
     seen="windows: ${windows:-none}; keepers: ${keepers:-none}"
     [ -n "$windows" ] && [ -n "$keepers" ]
 }
@@ -324,7 +350,20 @@ window_pid=$1
 set -- $keepers
 [ "$#" -eq 1 ] || fail "$# Keepers run as $user and not one: $keepers"
 keeper_pid=$1
-echo "step 3: the Window $window_pid and the Keeper $keeper_pid run, started by gio launch of $ENTRY"
+# The app was started by the system and not through a shell if neither program was handed
+# the login-only folder: the environment a process starts with is in /proc/<pid>/environ,
+# which a later setenv does not change. A start through the user's login shell would put
+# the folder there, and the hook would find its program with no take by the Keeper.
+for started in "$window_pid" "$keeper_pid"; do
+    environment=$(as_user sh -c 'tr "\\0" "\\n" < "/proc/$1/environ"' sh "$started") \
+        || fail "the environment of the process $started, which the system started, could not be read"
+    started_path=$(printf '%s\n' "$environment" | sed -n 's/^PATH=//p')
+    [ -n "$started_path" ] || fail "the environment of the process $started holds no PATH: $environment"
+    case ":$started_path:" in
+        *":$only/bin:"*) fail "the process $started was started with the path $started_path, which holds $only/bin: the app was not started by the system alone but through a login shell" ;;
+    esac
+done
+echo "step 3: the Window $window_pid and the Keeper $keeper_pid run, started by gio launch of $ENTRY, and neither was handed $only/bin"
 
 # --- 4. A worktree with an agent, asked of that Keeper.
 if ! as_user "$programs/yaar-script" worktree-with-agent --repository "$repository" \
@@ -371,10 +410,15 @@ case ":$witness_path:" in
     *) fail "the hook ran with the path $witness_path, which lacks $only/bin" ;;
 esac
 listed=$(as_user_git -C "$repository" worktree list)
-case "$listed" in
-    *"$worktree "*"[$BRANCH]"*) ;;
-    *) fail "git does not list $worktree on branch $BRANCH: $listed" ;;
-esac
+# One line of the listing: the folder, a commit, and the branch in brackets at its end. A
+# pattern over the whole text could join the main line's folder to the next line's branch.
+on_branch=no
+while IFS= read -r entry_line; do
+    case "$entry_line" in
+        "$worktree "*"[$BRANCH]") on_branch=yes ;;
+    esac
+done <<< "$listed"
+[ "$on_branch" = yes ] || fail "git does not list $worktree on branch $BRANCH: $listed"
 echo "step 5: the Keeper is still $keeper_pid; the hook ran once in $witness_folder with the login path; git lists the worktree on $BRANCH"
 
 # --- 6. The end: the Window, then the Keeper and its agent, then the screen.
@@ -401,4 +445,7 @@ else
 fi
 startup_changed=no
 rm -rf "$only" "$repository" "$worktrees"
+made_only=no
+made_repository=no
+made_worktrees=no
 echo "step 6: the app, its Keeper and the agent are gone, $startup is as it was, and $only, $repository and $worktrees are removed"

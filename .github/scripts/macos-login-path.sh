@@ -57,6 +57,11 @@
 #   by a trap, so that a step that failed in the middle leaves the runner's home as it found
 #   it. A folder a former run left ($HOME/yaar-login-only, $HOME/yaar-login-repo) is not
 #   removed: the step fails and says so.
+# - Before the app is started the step waits (20 s) until no Keeper of the bundle runs: one
+#   that an earlier step left would answer with the environment it took then.
+# - The folders are removed by the trap only when this run made them.
+# - The environment of the started Keeper is not read: `ps -E` shows none on a recent macOS,
+#   so what shows that no shell started the app is the Window's parent, launchd (step 3).
 # - The stand-in is found as the process named claude among the descendants of the Keeper
 #   of step 3, since the program the shell starts for that name is a link.
 # - The login shell of step 1 is also asked, with nothing else in its environment, to find
@@ -115,6 +120,11 @@ standin_pids=""
 startup=""
 startup_changed=no
 startup_existed=no
+# Which of the three folders this run made: a folder a former run left is not this run's to
+# remove, so the trap takes out only what is flagged.
+made_only=no
+made_repository=no
+made_worktrees=no
 
 # git as the runner's own, with none of its configuration.
 plain_git() {
@@ -209,7 +219,9 @@ cleanup() {
             rm -f "$startup"
         fi
     fi
-    rm -rf "$only" "$repository" "$worktrees"
+    [ "$made_only" = no ] || rm -rf "$only"
+    [ "$made_repository" = no ] || rm -rf "$repository"
+    [ "$made_worktrees" = no ] || rm -rf "$worktrees"
     rm -rf "$scratch"
     exit "$status"
 }
@@ -220,6 +232,10 @@ trap cleanup EXIT
 [ ! -e "$repository" ] || fail "$repository is there already: a former run did not end"
 [ ! -e "$worktrees" ] || fail "$worktrees is there already: a former run did not end"
 
+# Each folder was absent a line ago, so whatever is there from now on is this run's.
+made_only=yes
+made_repository=yes
+made_worktrees=yes
 mkdir -p "$only/bin"
 cat > "$only/bin/yaar-hook-witness" << EOF
 #!/bin/sh
@@ -263,12 +279,27 @@ chmod +x "$repository/.git/hooks/post-checkout"
 echo "step 2: $repository on main with a post-checkout hook that runs yaar-hook-witness"
 
 # --- 3. The app, started by the system.
+# A Keeper of an earlier step that has not left yet would answer with the environment it took
+# then, and the Window would not start another: it must be gone first. The functions below
+# run from `if`, where set -e is off, so a listing that failed fails the step by hand and
+# does not read as "nothing runs".
+no_keeper_runs() {
+    local listed
+    listed=$(processes_of "$KEEPER") || fail "the processes of $user could not be listed"
+    keepers=$(printf '%s' "$listed" | tr '\n' ';')
+    seen="a Keeper runs as $user (pid, parent): ${keepers:-none}"
+    [ -z "$keepers" ]
+}
+keepers=""
+wait_until 20 "a Keeper of an earlier step did not leave before the app was started" no_keeper_runs
 open -a "$APP"
 windows=""
-keepers=""
 both_run() {
-    windows=$(processes_of "$WINDOW" | tr '\n' ';')
-    keepers=$(processes_of "$KEEPER" | tr '\n' ';')
+    local listed
+    listed=$(processes_of "$WINDOW") || fail "the processes of $user could not be listed"
+    windows=$(printf '%s' "$listed" | tr '\n' ';')
+    listed=$(processes_of "$KEEPER") || fail "the processes of $user could not be listed"
+    keepers=$(printf '%s' "$listed" | tr '\n' ';')
     seen="windows (pid, parent): ${windows:-none}; keepers: ${keepers:-none}"
     [ -n "$windows" ] && [ -n "$keepers" ]
 }
@@ -316,10 +347,15 @@ case ":$witness_path:" in
     *) fail "the hook ran with the path $witness_path, which lacks $only/bin" ;;
 esac
 listed=$(plain_git -C "$repository" worktree list)
-case "$listed" in
-    *"$worktree "*"[$BRANCH]"*) ;;
-    *) fail "git does not list $worktree on branch $BRANCH: $listed" ;;
-esac
+# One line of the listing: the folder, a commit, and the branch in brackets at its end. A
+# pattern over the whole text could join the main line's folder to the next line's branch.
+on_branch=no
+while IFS= read -r entry_line; do
+    case "$entry_line" in
+        "$worktree "*"[$BRANCH]") on_branch=yes ;;
+    esac
+done <<< "$listed"
+[ "$on_branch" = yes ] || fail "git does not list $worktree on branch $BRANCH: $listed"
 echo "step 5: the Keeper is still $keeper_pid; the hook ran once in $witness_folder with the login path; git lists the worktree on $BRANCH"
 
 # --- 6. The end: the Window, then the Keeper and its agent.
@@ -344,4 +380,7 @@ else
 fi
 startup_changed=no
 rm -rf "$only" "$repository" "$worktrees"
+made_only=no
+made_repository=no
+made_worktrees=no
 echo "step 6: the app, its Keeper and the agent are gone, $startup is as it was, and $only, $repository and $worktrees are removed"

@@ -174,7 +174,28 @@ fn main() -> ExitCode {
     // The scripted client panics with what it saw when a wait runs out; `waiting` turns that
     // into a sentence, so the panic's own report would only say it twice.
     std::panic::set_hook(Box::new(|_| {}));
-    let done = match command {
+    // A panic outside `waiting` is still one sentence and a status of this program's own.
+    let done = catch_unwind(AssertUnwindSafe(|| run(command))).unwrap_or_else(|payload| {
+        Err(Failure::unmet(format!(
+            "the scripted client failed: {}",
+            said(&*payload)
+        )))
+    });
+    match done {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(failure) => {
+            eprintln!("yaar-script: {}", failure.sentence);
+            ExitCode::from(failure.status)
+        }
+    }
+}
+
+/// Runs the command the command line asked for.
+fn run(command: Command) -> Result<String, Failure> {
+    match command {
         Command::WorktreeWithAgent {
             repository,
             branch,
@@ -190,16 +211,6 @@ fn main() -> ExitCode {
         ),
         Command::Stop { socket, deadline } => {
             stop(&socket.unwrap_or_else(yaar_link::socket_path), deadline)
-        }
-    };
-    match done {
-        Ok(line) => {
-            println!("{line}");
-            ExitCode::SUCCESS
-        }
-        Err(failure) => {
-            eprintln!("yaar-script: {}", failure.sentence);
-            ExitCode::from(failure.status)
         }
     }
 }
@@ -242,9 +253,13 @@ fn ask(
     request: Request,
     deadline: Duration,
 ) -> Result<Reply, Failure> {
-    let id = client.send(request);
-    waiting(what, || client.wait_for_reply(id, deadline))?
-        .map_err(|refusal| Failure::unmet(format!("the Keeper refused: {refusal}")))
+    // The send is guarded too: it panics when the Keeper has closed the connection, as one
+    // that is leaving does between two requests.
+    waiting(what, || {
+        let id = client.send(request);
+        client.wait_for_reply(id, deadline)
+    })?
+    .map_err(|refusal| Failure::unmet(format!("the Keeper refused: {refusal}")))
 }
 
 /// The repository, and the workspace in it, at `folder`, among those the Keeper lists.
@@ -484,5 +499,49 @@ mod tests {
         ] {
             assert!(parse(&line(wrong)).is_err(), "{wrong:?} was taken");
         }
+    }
+
+    /// A Keeper's socket that says hello to whoever comes and then closes the connection, as
+    /// a Keeper that is leaving does between two requests. Returns once it has closed.
+    fn leaving_keeper(socket: &Path) -> std::thread::JoinHandle<()> {
+        let listener = std::os::unix::net::UnixListener::bind(socket).expect("bind");
+        std::thread::spawn(move || {
+            let mine = yaar_link::Hello::for_this_process("a-keeper-that-leaves");
+            // The first connection is the probe that asks whether a Keeper listens at all
+            // and says nothing; the one that follows is the Window's.
+            for stream in listener.incoming() {
+                let mut stream = stream.expect("accept");
+                if yaar_link::handshake(&mut stream, &mine).is_ok() {
+                    return;
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_keeper_that_closes_between_two_requests_is_a_refusal_with_a_sentence_not_a_panic() {
+        let folder =
+            std::env::temp_dir().join(format!("yaar-script-leaving-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("scratch folder");
+        let socket = folder.join("keeper.sock");
+        let keeper = leaving_keeper(&socket);
+        let mut client = attach(&socket).unwrap_or_else(|f| panic!("attach: {}", f.sentence));
+        keeper.join().expect("the Keeper's thread");
+
+        let asked = ask(
+            &mut client,
+            "the list of workspaces",
+            Request::ListWorkspaces,
+            Duration::from_secs(2),
+        );
+
+        std::fs::remove_dir_all(&folder).expect("remove scratch");
+        let failure = asked.expect_err("a closed Keeper answered");
+        assert_eq!(failure.status, 1);
+        assert!(
+            failure.sentence.contains("the list of workspaces"),
+            "the sentence does not name the request: {}",
+            failure.sentence
+        );
     }
 }
