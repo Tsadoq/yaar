@@ -224,7 +224,12 @@ ask_the_login_shell() {
     : > "$out"
     (
         cd "$home" || exit 1
-        exec env -i HOME="$home" PATH="${launchd_path:-/usr/bin:/bin:/usr/sbin:/sbin}" "$shell" -l -i -c \
+        # The Keeper hands the shell its own environment, which launchd gave it: beside HOME
+        # and PATH that holds the user's name, the shell and the temporary folder, and a
+        # start-up file may read them.
+        me=$(id -un)
+        exec env -i HOME="$home" PATH="${launchd_path:-/usr/bin:/bin:/usr/sbin:/sbin}" \
+            USER="$me" LOGNAME="$me" SHELL="$shell" TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" "$shell" -l -i -c \
             'printf "yaar-probe-follows:"; command -v yaar-hook-witness' < /dev/null > "$out" 2> /dev/null
     ) &
     pid=$!
