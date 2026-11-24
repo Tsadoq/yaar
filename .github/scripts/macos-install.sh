@@ -55,8 +55,9 @@
 # its call there, and the site's own log: the door's run is given http_proxy, https_proxy,
 # HTTPS_PROXY, ALL_PROXY and all_proxy naming the served site, with no_proxy and NO_PROXY
 # unset, so that a fetch which passes no stand-in (an absolute /usr/bin/curl) reaches no DNS
-# and leaves a line naming example.invalid in the log of the site, served-<port>/log under
-# $RUNNER_TEMP (else $TMPDIR, else /tmp), which the step reads before and after the run.
+# and leaves a proxied request line in the log of the site (a CONNECT, or a request line
+# holding a whole address, whatever the address), served-<port>/log under $RUNNER_TEMP (else
+# $TMPDIR, else /tmp), which the step counts before and after the run.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -202,19 +203,21 @@ if [ "$action" = install ]; then
             || fail "the stand-in $fetcher could not be written in $scratch/door-bin"
         chmod 755 "$scratch/door-bin/$fetcher" || fail "the stand-in $fetcher could not be made executable"
     done
-    # The served site's log, which a fetch that went to the proxy leaves a line in; the lines
-    # naming the address before the run are the baseline.
+    # The served site's log, which a fetch that went to the proxy leaves a line in: a CONNECT,
+    # or a request line that holds a whole address (the step's own fetch of install.sh reaches
+    # the site directly and logs `GET /install.sh`, which is neither). The proxied lines before
+    # the run are the baseline, and any address counts, not only the one the door was given.
     served_log="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/served-$port/log"
     [ -f "$served_log" ] || fail "$served_log, the log of the site served on port $port, is not there: the step before this one did not serve it with serve-site.sh"
-    named_before=$(awk '/example\.invalid/ { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
+    proxied_before=$(awk '/"CONNECT |"[A-Z]+ [A-Za-z][A-Za-z0-9+.-]*:\/\// { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
     line_path="$scratch/door-bin"
     line_proxy="$base"
     install_line "$scratch/door.log" https://example.invalid/download
     line_path=""
     line_proxy=""
-    named_after=$(awk '/example\.invalid/ { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
-    if [ "$named_after" -ne "$named_before" ]; then
-        fail "the install line with a download from https://example.invalid tried to reach it through a proxy before it refused: the log of the served site gained $(grep 'example\.invalid' "$served_log" | tail -n 2 | tr '\n' ';')"
+    proxied_after=$(awk '/"CONNECT |"[A-Z]+ [A-Za-z][A-Za-z0-9+.-]*:\/\// { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
+    if [ "$proxied_after" -ne "$proxied_before" ]; then
+        fail "the install line with a download from https://example.invalid tried to reach an address through a proxy before it refused: the log of the served site gained $(grep -E '"CONNECT |"[A-Z]+ [A-Za-z][A-Za-z0-9+.-]*://' "$served_log" | tail -n 2 | tr '\n' ';')"
     fi
     if [ -e "$scratch/door-fetches" ]; then
         fail "the install line with a download from https://example.invalid tried to download before it refused: $(head -n 2 "$scratch/door-fetches" | tr '\n' ';')"
