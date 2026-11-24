@@ -298,7 +298,11 @@ driver = "workflow"
 runs = "ci"
 proves = []
 slice = 10
-note = "The notices are generated today; the count against the lock file is not checked yet."
+built = [
+    ".github/workflows/ci.yml::The notices count every linked dependency of the lock file",
+    ".github/workflows/ci.yml::The count of the notices can fail",
+]
+note = "The control of a block with no licence text empties the text after the notices were made: it tests the count, not cargo-about, which takes the SPDX text of a licence when a crate ships no file of its own. The count also reads the build script: the programs are built one cargo invocation for each part of the notices, so that each links what its part's notices name."
 
 [[test]]
 id = "PKG-02"
@@ -325,6 +329,7 @@ runs = "ci"
 proves = ["NFR-028"]
 built = [
     ".github/workflows/ci.yml::Signature and processors",
+    ".github/workflows/ci.yml::The packaged Window program starts the packaged Keeper, which outlives it",
 ]
 
 [[test]]
@@ -361,6 +366,10 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-028"]
+built = [
+    ".github/workflows/ci.yml::The install line installs the app on macOS",
+    ".github/workflows/ci.yml::The uninstall removes the app",
+]
 
 [[test]]
 id = "PKG-06"
@@ -371,6 +380,10 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-028"]
+built = [
+    ".github/workflows/ci.yml::A later version arrives with apt-get upgrade",
+]
+note = "The later version is the same programs repacked, so the row shows apt's upgrade, not a program that differs. A later version that adds a dependency would be kept back by `apt-get upgrade` (it installs no new package); the release that does so says `apt-get install yaar-review` in its notes."
 
 [[test]]
 id = "PKG-07"
@@ -381,6 +394,10 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-028"]
+built = [
+    ".github/workflows/ci.yml::apt refuses the repository when its index or a package was changed after signing",
+]
+note = "Three copies: the index changed under its signature (apt refuses by hash), the signed text changed (apt refuses the signature), a package changed (apt refuses by hash)."
 
 [[test]]
 id = "PKG-08"
@@ -391,6 +408,11 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-024"]
+built = [
+    ".github/workflows/ci.yml::The app starts from the app menu with no terminal",
+    ".github/workflows/ci.yml::The app starts from the Dock with no terminal",
+    ".github/workflows/ci.yml::What the Mac bundle holds",
+]
 note = "On macOS LaunchServices starts the installed bundle (`open -a`), as the Dock and the Finder do; on Linux GLib's launcher starts the installed desktop entry (`gio launch`) in a display the job makes, as a desktop's menu does, and the window it maps is asserted."
 
 [[test]]
@@ -402,7 +424,12 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "ci"
 proves = ["NFR-028"]
-note = "Found while the skeleton was built: a lock file stays in the user's folder after an uninstall."
+built = [
+    ".github/workflows/ci.yml::The user's own files, before anything of the app",
+    ".github/workflows/ci.yml::The app's own files are there before the uninstall",
+    ".github/workflows/ci.yml::No file of the app is left in the user's folders",
+]
+note = "The reviews' states (the folder `states`, with at least one path) are held to stay too: the step of PKG-12 makes a worktree with an agent through the installed app, which leaves the folder, and the step before the uninstall demands it."
 
 [[test]]
 id = "PKG-10"
@@ -435,7 +462,33 @@ driver = "workflow"
 runs = "ci"
 proves = ["FR-014", "NFR-024"]
 slice = 10
-note = "The stand-in agent speaks as Claude Code. On macOS LaunchServices starts the installed bundle (`open -a`); on Linux GLib's launcher starts the installed desktop entry (`gio launch`) with the environment `env -i` leaves, in a display the job makes, as a desktop's menu does. The same step name in install-macos and install-linux."
+built = [
+    ".github/workflows/ci.yml::From the app the system started, a worktree is made with an agent, and its hook finds a program of the login path",
+    "system-tests/src/bin/yaar-script.rs::a_worktree_command_takes_its_four_flags_and_the_default_deadline",
+    "system-tests/src/bin/yaar-script.rs::a_stop_command_takes_a_socket_and_a_deadline_of_its_own",
+    "system-tests/src/bin/yaar-script.rs::what_the_command_line_does_not_say_or_says_wrongly_is_refused",
+    "system-tests/src/bin/yaar-script.rs::a_keeper_that_closes_between_two_requests_is_a_refusal_with_a_sentence_not_a_panic",
+]
+note = "The stand-in agent speaks as Claude Code. On macOS LaunchServices starts the installed bundle (`open -a`); on Linux GLib's launcher starts the installed desktop entry (`gio launch`) with the environment `env -i` leaves, in a display the job makes, as a desktop's menu does. The same step name in install-macos and install-linux. On macOS \"started by the system\" rests on the Window's parent being launchd and on no program of the bundle being a script: the environment of the started programs is not read there."
+
+[[test]]
+id = "KEEP-02"
+what = "The Keeper takes the environment of the user's login shell once, after it listens, and hands it to the git it runs: the hook of a worktree it makes finds a program only the login shell's search path holds. A shell that fails, or that outlasts its deadline, is said in one line on standard error and holds a creation no longer than the deadline; a read never waits for the shell; a shell started after the Keeper was told to leave is killed at its start."
+level = "component"
+part = "keeper"
+through = "the Link, as the Window speaks it, with a login shell the test writes"
+driver = "client"
+runs = "ci"
+proves = ["FR-014"]
+slice = 10
+built = [
+    "crates/keeper/keeper/tests/login_environment.rs::the_hook_of_a_worktree_finds_a_program_only_the_login_shells_search_path_holds",
+    "crates/keeper/keeper/tests/login_environment.rs::a_shell_that_fails_still_lets_the_creation_answer_runs_no_witness_and_is_said_on_standard_error",
+    "crates/keeper/keeper/tests/login_environment.rs::a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it",
+    "crates/keeper/keeper/tests/login_environment.rs::a_shell_held_past_the_deadline_the_program_hands_is_given_up_and_the_creation_answers_then",
+    "crates/shared/link/tests/login.rs::a_shell_started_after_the_group_has_ended_is_killed_at_its_start",
+]
+note = "Added in slice 10: PKG-12 shows it once through the installed app on GitHub's machines; this row holds the Keeper's own behaviour, the failures and the deadline, where a test can make them. That the take starts after the listener is bound is read in the code: no test can tell the two orders apart."
 
 [[test]]
 id = "SYS-01"
@@ -3785,6 +3838,28 @@ driver = "lit-screen"
 runs = "release"
 checklist = "lit-screen"
 proves = ["NFR-014"]
+
+[[test]]
+id = "PERF-07"
+what = "The mark of the first diff, which the timing of a cold start reads, is taken on the frame after a pane first drew a diff, once for the life of the process, and not by a pane that drew no change, commits only, or Flow."
+level = "component"
+part = "review-pane"
+through = "frames of the test platform; the mark read through the Frame's own record of what was marked, and its one printed line through a child of the test"
+driver = "test-platform"
+runs = "ci"
+proves = []
+slice = 10
+built = [
+    "crates/window/review-pane/tests/first_diff.rs::a_pane_that_drew_a_diff_took_the_mark_of_the_first_diff",
+    "crates/window/review-pane/tests/first_diff.rs::a_pane_that_drew_no_change_did_not_take_the_mark_of_the_first_diff",
+    "crates/window/review-pane/tests/first_diff.rs::a_pane_that_drew_commits_and_no_diff_did_not_take_the_mark_of_the_first_diff",
+    "crates/window/review-pane/tests/first_diff.rs::a_pane_that_drew_a_diff_marks_it_on_the_next_frame_and_not_before",
+    "crates/window/review-pane/tests/first_diff.rs::a_pane_in_flow_that_held_a_diff_did_not_take_the_mark_of_the_first_diff",
+    "crates/window/frame/src/trace.rs::a_new_name_is_first_and_then_it_is_not",
+    "crates/window/frame/src/trace.rs::a_mark_taken_once_is_taken_for_good",
+    "crates/window/frame/tests/trace_once.rs::a_mark_asked_for_twice_is_printed_once",
+]
+note = "Added in slice 10: PERF-01 times a cold start on a lit screen at the release and reads this mark; this row holds that the mark means the first diff. It proves no requirement by itself: the limit of the cold start is PERF-01's, by hand."
 
 [[test]]
 id = "STACK-02"
