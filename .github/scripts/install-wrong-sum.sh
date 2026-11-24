@@ -95,7 +95,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage "a folder of the rehearsal is needed, and on Linux a user"
+case "$#" in
+    1 | 2) ;;
+    *) usage "a folder of the rehearsal is needed, and on Linux a user" ;;
+esac
 rehearsal=$1
 user=${2:-}
 [ -d "$rehearsal/site" ] || usage "$rehearsal/site is not a folder"
@@ -179,11 +182,15 @@ else
     into=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wrong-sum-apps.XXXXXX") || fail "no folder to install into could be made"
 fi
 status=0
+# The log is the root shell's file on purpose, which sudo does not need to touch; the shell that
+# runs the install line expands its variables, not this one.
 if [ "$system" = Linux ]; then
+    # shellcheck disable=SC2016,SC2024
     sudo -u "$user" env YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$base/download" \
         YAAR_METHOD=archive YAAR_PREFIX="$into" \
         bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash' > "$scratch/install.log" 2>&1 || status=$?
 else
+    # shellcheck disable=SC2016
     env YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$base/download" \
         YAAR_ALLOW_UNNOTARIZED=1 YAAR_INSTALL_DIR="$into" \
         bash -c 'curl -fsSL "$YAAR_BASE_URL/install.sh" | bash' > "$scratch/install.log" 2>&1 || status=$?
