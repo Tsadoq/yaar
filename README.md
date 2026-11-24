@@ -45,8 +45,9 @@ program does, and the app writes nothing of pi's and does not hear it.
   refuses, a branch to start from that is no branch and a folder that is already there are
   refused with the reason, and nothing is made. While git makes the worktree the rest of the
   app goes on, and the terminal pane says which branch is being made. Your own git makes it,
-  as `git worktree add -b`, with your hooks; when the agent's terminal cannot be opened, the
-  worktree and its branch are taken away again.
+  as `git worktree add -b`, with your hooks, which find the programs of your login path
+  also when the Finder or the Dock started the app (see Known limits); when the agent's
+  terminal cannot be opened, the worktree and its branch are taken away again.
 - **Has a settings screen.** Cmd-comma (Ctrl-comma on Linux), or YAAR > Settings… in the menu
   bar on macOS, shows it in the place of the panes, the sidebar beside it; the same key or
   Escape closes it. It opens no dialog and no window. `j` and `k` move between its rows, `l`
@@ -421,9 +422,6 @@ program does, and the app writes nothing of pi's and does not hear it.
   counts from the state the worktree was in when that turn started.
 - The live diff finds its files with one `git status` for each question, one question at a
   time, so on a large repository it can lag behind the writes by about a second.
-- The pieces of the CLIs are not packaged: the Mac app and the `.deb` hold the Window and
-  the Keeper only. Build the workspace, which puts `yaar-claude-hook`, `yaar-claude-tools`
-  and `yaar-pi-report`, pi's reporting program, beside `yaar-keeper`.
 - The state of a session that waits for permission stays on until the tool ends: after you
   approve a long command at its dialog, the mark stays until the command finishes.
 - A workspace with one idle session and one that ended shows "not running" while the
@@ -440,10 +438,17 @@ Known limits of what is there:
   holds every later creation of a worktree until the Keeper ends; one that takes minutes, an
   install of packages, holds them for as long. A `post-checkout` hook
   that exits 1 leaves the worktree and the branch git made, and the app takes them away.
-- The Keeper runs your git, the creation of a worktree and the commit control, with the
-  search path it was started with. Started from the Finder or the Dock on macOS that is the
-  system's short one, so a hook that needs a program found only on your login path,
-  `git-lfs` of Homebrew or a signing `gpg`, fails there and passes under `cargo run`.
+- The Keeper takes your login shell's environment once, at its start, on a thread of its
+  own (`-l -i -c`, for at most 10 seconds), and runs your git, the creation of a worktree and
+  the commit control, with it: a hook that needs a program found only on your login path,
+  `git-lfs` of Homebrew or a signing `gpg`, finds it when the app is started from the
+  Finder or the Dock too. A read of the repository never waits for the take and runs with the
+  Keeper's own environment until it has ended; a worktree or a commit asked for while it is
+  still running waits for it, for at most those 10 seconds. A shell that cannot be started,
+  fails, prints no environment or runs past the 10 seconds leaves the Keeper with its own
+  environment, which on macOS, when the Finder or the Dock started the app, is the system's
+  short search path: a hook that needs the login path then fails, and one line goes to the
+  Keeper's standard error. A start-up file that prompts or hangs costs the 10 seconds.
 - The Window's environment for its servers comes from running your start-up files: one that
   prompts or hangs costs the 10 seconds and leaves the Window's own environment.
 - `RUSTUP_AUTO_INSTALL=0`, which keeps rustup's rust-analyzer from installing a toolchain, is
@@ -726,6 +731,45 @@ On Debian and Ubuntu the build also needs
 cargo build --locked --workspace
 ```
 
+### Packages
+
+Every run of CI on GitHub keeps what it built and tested as the artifact `rehearsal` of the
+run: the six packages (the `.deb` and the plain archive for each processor, the Mac `.zip`
+and `.dmg`), `SHA256SUMS` and its signature, and the site with `install.sh` and the apt
+repository. They are for testing: the repository is signed with a key made for that run and
+thrown away, and the Mac app is signed ad hoc, which macOS refuses once a browser has marked
+the download.
+
+Each package holds the Window and the Keeper and, beside the Keeper, the programs the agent
+CLIs run: Claude Code's hook program and tool server and pi's reporting program, so that
+Claude Code and pi are heard from the installed app as from a build.
+
+By hand, on a Mac, signed ad hoc and for this Mac only:
+
+```sh
+.github/scripts/release-build.sh --target aarch64-apple-darwin
+packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt aarch64-apple-darwin
+NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$(packaging/version.sh)" dist target/aarch64-apple-darwin/release
+open dist/YAAR.app
+```
+
+On Ubuntu 22.04, the system the releases are built on, since a program built on a newer
+system does not start on an older one:
+
+```sh
+.github/scripts/release-build.sh
+packaging/notices.sh dist/THIRD-PARTY-NOTICES.txt "$(uname -m)-unknown-linux-gnu"
+NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-linux.sh target/release "$(packaging/version.sh)" dist
+sudo apt-get install ./dist/yaar-review_*.deb
+```
+
+YAAR is then in the app menu. The install script, `packaging/install.sh`, also uninstalls:
+`--uninstall` removes the app, whether apt, the archive route or the script installed it, and
+the files the app keeps for itself in your cache, runtime and data folders, and keeps your
+reviews and pi's extension; with `--purge` those go too. While the app runs the uninstall
+stops and says so, because agents may run in its terminals; `--stop-agents` ends the app and
+them. `packaging/README.md` says how to run it.
+
 ## Start
 
 ```sh
@@ -786,18 +830,20 @@ closed window. The **Window** (`yaar-review`) draws. They talk over the **Link**
 | `patches`, `vendor` | The one patched file of GPUI and the script that reapplies the patch |
 | `packaging` | The Mac app, the `.deb`, the archive, the apt repository, the install script |
 
-What the crates hold: the Link and the diff; in the Keeper, the reading of git, the recording,
-deleting and packing of states, the commit and the making of worktrees, the database, the
-workspaces with their watcher, the review engine (threads, rounds, the send, the follower that
-moves threads, the clean-up of states), the terminals (the Dock), the Switchboard that follows
-each agent session with the steps it takes, and the adapters of Claude Code and of pi, with the
-companion of Claude Code (its hook program and its tool server), the extension of pi and its
-reporting program; in the Window, the Navigator, which finds, starts and asks the language
-servers, with the registry of servers, the downloader, the old side of a diff, the search by
-text match and the login shell's environment, the frame with its sidebar, its settings screen
-and its two themes, the review pane with Changes and Flow and the file view, and the terminal
-pane with the launchers, the resume line, the question about pi's extension and the
-attachment at the agent's terminal; and the Window program, which binds the keys and the menus.
+What the crates hold: the Link and the diff, with the login shell's environment, which the
+Window takes for its language servers and the Keeper for the git it runs; in the Keeper, the
+reading of git, the recording, deleting and packing of states, the commit and the making of
+worktrees, the database, the workspaces with their watcher, the review engine (threads,
+rounds, the send, the follower that moves threads, the clean-up of states), the terminals (the
+Dock), the Switchboard that follows each agent session with the steps it takes, and the
+adapters of Claude Code and of pi, with the companion of Claude Code (its hook program and its
+tool server), the extension of pi and its reporting program; in the Window, the Navigator,
+which finds, starts and asks the language servers, with the registry of servers, the
+downloader, the old side of a diff and the search by text match, the frame with its sidebar,
+its settings screen and its two themes, the review pane with Changes and Flow and the file
+view, and the terminal pane with the launchers, the resume line, the question about pi's
+extension and the attachment at the agent's terminal; and the Window program, which binds the
+keys and the menus.
 
 Tests come at three levels. Unit tests sit in a crate's source. Component tests sit in its
 `tests/` folder and use only what other crates may use; those of the Window run on GPUI's
