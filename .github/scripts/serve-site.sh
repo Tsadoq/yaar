@@ -32,15 +32,28 @@
 # is the server's whatever wrapper started it; the files of <release-dir> are linked into
 # root-download, not copied (a release holds hundreds of megabytes); a stopped server whose
 # process is a zombie that nobody reaped (a container's first process may not reap) counts
-# as ended.
+# as ended; a command that stops the script without a sentence of its own is named in one,
+# and the exit code is 1.
 set -eu
 
 NAME=serve-site.sh
+# SAID is 1 once a sentence of this script's own has been printed; the trap below speaks for
+# a command that set -e stopped on, so that no failure ends the script without one.
+SAID=0
+on_exit() {
+  if [ "$1" -ne 0 ] && [ "$SAID" -eq 0 ]; then
+    echo "$NAME: a command failed with status $1" >&2
+    exit 1
+  fi
+}
+trap 'on_exit "$?"' EXIT
 fail() {
+  SAID=1
   echo "$NAME: $*" >&2
   exit 1
 }
 usage() {
+  SAID=1
   echo "usage: $NAME start <site-dir> <release-dir> <port> | switch <site-dir> <port> | stop <port>" >&2
   exit 2
 }
@@ -48,11 +61,13 @@ usage() {
 check_port() {
   case $1 in
     '' | *[!0-9]*)
+      SAID=1
       echo "$NAME: the port is a number, not: $1" >&2
       exit 2
       ;;
   esac
   if [ "$1" -lt 1 ] || [ "$1" -gt 65535 ]; then
+    SAID=1
     echo "$NAME: the port is between 1 and 65535, not: $1" >&2
     exit 2
   fi
@@ -127,24 +142,24 @@ start() {
   check_dir "$2"
   command -v python3 > /dev/null 2>&1 || fail "python3 is not installed"
   command -v curl > /dev/null 2>&1 || fail "curl is not installed"
-  site=$(cd -P "$1" && pwd)
-  release=$(cd -P "$2" && pwd)
+  site=$(cd -P "$1" && pwd) || fail "cannot enter $1"
+  release=$(cd -P "$2" && pwd) || fail "cannot enter $2"
   port=$3
   dir=$(served_dir "$port")
   if [ -f "$dir/pid" ]; then
-    old=$(cat "$dir/pid")
+    old=$(cat "$dir/pid") || fail "cannot read $dir/pid"
     if alive "$old"; then
       fail "a server of this script already runs on port $port, pid $old: stop it first"
     fi
   fi
-  rm -rf "$dir"
-  mkdir -p "$dir/root-download"
-  ln -s "$site" "$dir/root"
+  rm -rf "$dir" || fail "cannot remove $dir"
+  mkdir -p "$dir/root-download" || fail "cannot make $dir/root-download"
+  ln -s "$site" "$dir/root" || fail "cannot link $site as $dir/root"
   for f in "$release"/*; do
     [ -e "$f" ] || continue
-    ln -s "$f" "$dir/root-download/$(basename "$f")"
+    ln -s "$f" "$dir/root-download/$(basename "$f")" || fail "cannot link $f into $dir/root-download"
   done
-  write_handler "$dir/serve.py"
+  write_handler "$dir/serve.py" || fail "cannot write $dir/serve.py"
   if command -v setsid > /dev/null 2>&1; then
     setsid python3 "$dir/serve.py" "$port" "$dir" < /dev/null > "$dir/log" 2>&1 &
   else
@@ -167,17 +182,17 @@ start() {
     fi
     sleep 0.2
   done
-  echo "$NAME: serving $site and $release on http://127.0.0.1:$port, pid $(cat "$dir/pid")"
+  echo "$NAME: serving $site and $release on http://127.0.0.1:$port, pid $(cat "$dir/pid" || echo unknown)"
 }
 
 switch() {
   [ $# -eq 2 ] || usage
   check_port "$2"
   check_dir "$1"
-  site=$(cd -P "$1" && pwd)
+  site=$(cd -P "$1" && pwd) || fail "cannot enter $1"
   dir=$(served_dir "$2")
   [ -L "$dir/root" ] || fail "no server of this script on port $2: $dir/root is missing"
-  ln -sfn "$site" "$dir/root"
+  ln -sfn "$site" "$dir/root" || fail "cannot point $dir/root at $site"
   echo "$NAME: port $2 now serves $site"
 }
 
@@ -186,7 +201,7 @@ stop() {
   check_port "$1"
   dir=$(served_dir "$1")
   [ -f "$dir/pid" ] || fail "no server of this script on port $1: $dir/pid is missing"
-  pid=$(cat "$dir/pid")
+  pid=$(cat "$dir/pid") || fail "cannot read $dir/pid"
   if alive "$pid"; then
     kill "$pid" 2> /dev/null || fail "cannot signal the server of port $1, pid $pid"
     deadline=$(($(date +%s) + 10))

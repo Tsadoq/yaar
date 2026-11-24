@@ -90,11 +90,16 @@
 # macOS a user other than the one running the script is refused (the header says the runner's
 # user is the user), and the home is $HOME; (5) the walk of point 1 and 3 goes on after a
 # failed point, so that one run names everything, and the purge of point 2 runs whatever
-# point 1 found.
+# point 1 found; (6) the home is resolved with `cd -P` before the data folder and the planted
+# places are derived from it, so that a home behind a link (a scratch HOME under macOS's
+# $TMPDIR) is compared with the resolved paths of the walk; (7) a command that stops the
+# script without a sentence of its own is named in one, and the exit code is 1.
 set -euo pipefail
 
 NAME=user-files.sh
+SAID=0
 fail() {
+  SAID=1
   echo "$NAME: $*" >&2
   exit 1
 }
@@ -126,15 +131,16 @@ case $(uname -s) in
   *) fail "this system is neither Linux nor macOS: $(uname -s)" ;;
 esac
 
+# The home is resolved first, with `cd -P`, because every path the walk prints is resolved
+# and the folders derived from the home are compared with those paths: a home that lies behind
+# a link (a scratch HOME under macOS's $TMPDIR, which is under /var, a link to /private/var)
+# would otherwise never match.
 if [ "$OS" = linux ]; then
   USER_UID=$(id -u "$USER_NAME" 2> /dev/null) || {
     echo "$NAME: no user $USER_NAME on this system" >&2
     exit 2
   }
-  HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6)
-  DATA_DIR=$HOME_DIR/.local/share/yaar-review
-  NOTES_DIR=$HOME_DIR/.local/share/yaar-review-notes
-  REPO_DIR=$HOME_DIR/projects/mine
+  HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6) || fail "getent cannot read the home of $USER_NAME"
 else
   [ "$USER_NAME" = "$(id -un)" ] || {
     echo "$NAME: on macOS the script runs as the user, $USER_NAME is not $(id -un)" >&2
@@ -142,12 +148,18 @@ else
   }
   USER_UID=$(id -u)
   HOME_DIR=$HOME
+fi
+if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then fail "the home of $USER_NAME, '$HOME_DIR', is not a folder"; fi
+HOME_DIR=$(cd -P "$HOME_DIR" && pwd -P) || fail "the home of $USER_NAME, '$HOME_DIR', cannot be entered"
+if [ "$OS" = linux ]; then
+  DATA_DIR=$HOME_DIR/.local/share/yaar-review
+  NOTES_DIR=$HOME_DIR/.local/share/yaar-review-notes
+  REPO_DIR=$HOME_DIR/projects/mine
+else
   DATA_DIR="$HOME_DIR/Library/Application Support/yaar-review"
   NOTES_DIR="$HOME_DIR/Library/Application Support/yaar-review-notes"
   REPO_DIR=$HOME_DIR/yaar-review-user-repo
 fi
-if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then fail "the home of $USER_NAME, '$HOME_DIR', is not a folder"; fi
-HOME_DIR=$(cd -P "$HOME_DIR" && pwd -P)
 
 # Runs a command as the user, with the one variable it needs; the rest of the environment is
 # sudo's own, which is what a user's shell is given.
@@ -160,27 +172,38 @@ run_as() {
 }
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-user-files.XXXXXX")
-trap 'rm -rf "$SCRATCH"' EXIT
+# A command that set -e stopped on says so in a sentence, with the code this script's header
+# names, instead of leaving the failing tool's own status.
+cleanup() {
+  local status=$1 cmd=$2
+  if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
+    echo "$NAME: '$cmd' failed with status $status" >&2
+    status=1
+  fi
+  rm -rf "$SCRATCH"
+  exit "$status"
+}
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 # ---------------------------------------------------------------------------------- plant
 
 plant() {
   [ ! -e "$NOTES_DIR" ] || fail "$NOTES_DIR is there already: plant runs once, on a fresh home"
   [ ! -e "$REPO_DIR" ] || fail "$REPO_DIR is there already: plant runs once, on a fresh home"
-  run_as mkdir -p "$NOTES_DIR"
+  run_as mkdir -p "$NOTES_DIR" || fail "cannot make $NOTES_DIR as $USER_NAME"
   # shellcheck disable=SC2016 # the shell that runs it expands $1, not this one
-  run_as sh -c 'printf "%s\n" "My own notes. No uninstall of the app may touch this file." > "$1"' sh "$NOTES_DIR/notes.txt"
-  run_as mkdir -p "$REPO_DIR"
+  run_as sh -c 'printf "%s\n" "My own notes. No uninstall of the app may touch this file." > "$1"' sh "$NOTES_DIR/notes.txt" || fail "cannot write $NOTES_DIR/notes.txt as $USER_NAME"
+  run_as mkdir -p "$REPO_DIR" || fail "cannot make $REPO_DIR as $USER_NAME"
   git_as() {
     run_as env GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C "$REPO_DIR" "$@"
   }
-  git_as init -q -b main
-  git_as config user.name "A User"
-  git_as config user.email "user@example.invalid"
+  git_as init -q -b main || fail "git init of $REPO_DIR failed"
+  git_as config user.name "A User" || fail "git config in $REPO_DIR failed"
+  git_as config user.email "user@example.invalid" || fail "git config in $REPO_DIR failed"
   # shellcheck disable=SC2016 # the shell that runs it expands $1, not this one
-  run_as sh -c 'printf "%s\n" "a file of the user" > "$1"' sh "$REPO_DIR/README"
-  git_as add README
-  git_as commit -q -m "The user's own commit"
+  run_as sh -c 'printf "%s\n" "a file of the user" > "$1"' sh "$REPO_DIR/README" || fail "cannot write $REPO_DIR/README as $USER_NAME"
+  git_as add README || fail "git add in $REPO_DIR failed"
+  git_as commit -q -m "The user's own commit" || fail "git commit in $REPO_DIR failed"
   echo "$NAME: planted $NOTES_DIR/notes.txt and the repository $REPO_DIR"
 }
 
@@ -270,9 +293,7 @@ take_snapshot() {
     # A path that vanished while the walk ran, or a folder the user cannot enter, holds
     # nothing to judge; every other message fails the walk.
     if grep -v -e 'No such file or directory' -e 'Permission denied' "$SCRATCH/walk.err" > "$SCRATCH/walk.bad"; [ -s "$SCRATCH/walk.bad" ]; then
-      echo "$NAME: walking $root failed:" >&2
-      sed 's/^/  /' "$SCRATCH/walk.bad" >&2
-      exit 1
+      fail "walking $root failed: $(tr '\n' ' ' < "$SCRATCH/walk.bad")"
     fi
     if [ "$status" -ne 0 ] && [ ! -s "$SCRATCH/walk.err" ]; then
       fail "walking $root failed with status $status and no message"
@@ -302,7 +323,7 @@ present() {
       echo "$NAME: there: $DATA_DIR/$f"
     fi
   done
-  [ "$bad" -eq 0 ] || exit 1
+  [ "$bad" -eq 0 ] || fail "the files of the app named above are missing"
 }
 
 # ----------------------------------------------------------------------------------- check
@@ -461,8 +482,7 @@ check() {
   leftovers "$FILE" "$SCRATCH/after-purge" none "after --purge"
   still_there "$FILE" "after --purge"
   if [ "$FAILED" -ne 0 ]; then
-    echo "$NAME: files of the app remain, or files of the user's are gone: see above" >&2
-    exit 1
+    fail "files of the app remain, or files of the user's are gone: see above"
   fi
   echo "$NAME: no file of the app is left, and none of the user's is gone"
 }

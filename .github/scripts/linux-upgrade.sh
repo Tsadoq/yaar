@@ -21,11 +21,14 @@
 #
 # What the header leaves: `apt-get update` is the plain one (every source), so that a
 # warning about the repository under test cannot hide behind a narrowed source list; its
-# output and exit status are both read.
+# output and exit status are both read; a command that stops the script without a sentence
+# of its own is named in one, and the exit code is 1.
 set -euo pipefail
 
 NAME=linux-upgrade.sh
+SAID=0
 fail() {
+  SAID=1
   echo "$NAME: $*" >&2
   exit 1
 }
@@ -48,7 +51,18 @@ id -u "$USER_NAME" > /dev/null 2>&1 || {
 HERE=$(cd "$(dirname "$0")" && pwd)
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-upgrade.XXXXXX")
-trap 'rm -rf "$SCRATCH"' EXIT
+# A command that set -e stopped on says so in a sentence, with the code this script's header
+# names, instead of leaving the failing tool's own status.
+cleanup() {
+  local status=$1 cmd=$2
+  if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
+    echo "$NAME: '$cmd' failed with status $status" >&2
+    status=1
+  fi
+  rm -rf "$SCRATCH"
+  exit "$status"
+}
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 # 1. Before.
 FIRST=$(dpkg-query -W -f='${Version}' yaar-review) || fail "yaar-review is not installed: the install line has not run"
@@ -69,9 +83,7 @@ sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get updat
 cat "$SCRATCH/update"
 [ "$STATUS" -eq 0 ] || fail "apt-get update exited with $STATUS"
 if grep -E '^(W|E):' "$SCRATCH/update" > "$SCRATCH/update-bad"; then
-  echo "$NAME: apt-get update printed a warning or an error, so the later site is not trusted as the first was:" >&2
-  sed 's/^/  /' "$SCRATCH/update-bad" >&2
-  exit 1
+  fail "apt-get update printed a warning or an error, so the later site is not trusted as the first was: $(tr '\n' ' ' < "$SCRATCH/update-bad")"
 fi
 STATUS=0
 # shellcheck disable=SC2024 # the redirect is this script's own, for its scratch folder

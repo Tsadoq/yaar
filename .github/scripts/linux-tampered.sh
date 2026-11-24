@@ -45,11 +45,14 @@
 # made; apt 3 (Debian 13) words a changed signed text as "Message has been manipulated" and
 # "OpenPGP signature verification failed", which the list of the signed copy takes in beside
 # the header's three; the install line is run with `set -o pipefail`, so that a site that does not answer
-# fails the line instead of handing bash an empty script.
+# fails the line instead of handing bash an empty script; a command that stops the script
+# without a sentence of its own is named in one, and the exit code is 1.
 set -euo pipefail
 
 NAME=linux-tampered.sh
+SAID=0
 fail() {
+  SAID=1
   echo "$NAME: $*" >&2
   exit 1
 }
@@ -72,20 +75,26 @@ SOURCE=/etc/apt/sources.list.d/yaar-review.sources
 export DEBIAN_FRONTEND=noninteractive
 
 SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-tampered.XXXXXX")
-SERVING=""
+SERVING=()
+# A command that set -e stopped on says so in a sentence, with the code this script's header
+# names, instead of leaving the failing tool's own status.
 cleanup() {
-  local status=$? port
+  local status=$1 cmd=$2 port
+  if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
+    echo "$NAME: '$cmd' failed with status $status" >&2
+    status=1
+  fi
   rm -f "$TESTKEY" "$TESTSOURCE"
   for port in 8000 8001 8002 8003; do
     rm -rf /var/lib/apt/lists/127.0.0.1:"$port"_apt_*
   done
-  for port in $SERVING; do
+  for port in ${SERVING[@]+"${SERVING[@]}"}; do
     "$HERE/serve-site.sh" stop "$port" || echo "$NAME: the server of port $port could not be stopped" >&2
   done
   rm -rf "$SCRATCH"
   exit "$status"
 }
-trap cleanup EXIT
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 if dpkg-query -W yaar-review > /dev/null 2>&1; then
   fail "yaar-review is installed already: this step runs on a client that has nothing of the app"
@@ -134,7 +143,7 @@ for pair in index:8001 signed:8002 package:8003; do
   copy=${pair%%:*}
   port=${pair##*:}
   "$HERE/serve-site.sh" start "$SCRATCH/$copy" "$REHEARSAL/release" "$port"
-  SERVING="$SERVING $port"
+  SERVING+=("$port")
 done
 
 # ------------------------------------------------------------------------ the install line
@@ -147,25 +156,26 @@ install_line() {
 
 # The install line against one copy, refused with one of the sentences apt says.
 refused_by_install_line() {
-  local copy=$1 port=$2 expect=$3 status=0 saw=""
+  local copy=$1 port=$2 status=0 saw="" want
+  shift 2
   install_line tester "$port" > "$SCRATCH/$copy.out" 2>&1 || status=$?
   sed "s|^|$NAME: [$copy] |" "$SCRATCH/$copy.out"
   [ "$status" -ne 0 ] || fail "the install line succeeded against the $copy copy: apt accepted a repository that was changed after signing"
-  for want in $expect; do
-    if grep -q -e "$(printf '%s' "$want" | tr '_' ' ')" "$SCRATCH/$copy.out"; then saw=$want; fi
+  for want in "$@"; do
+    if grep -q -F -e "$want" "$SCRATCH/$copy.out"; then saw=$want; fi
   done
-  [ -n "$saw" ] || fail "the install line failed against the $copy copy (status $status) but its output holds none of: $expect"
+  [ -n "$saw" ] || fail "the install line failed against the $copy copy (status $status) but its output holds none of: $*"
   if dpkg-query -W yaar-review > /dev/null 2>&1; then
     fail "yaar-review is installed after the install line was refused on the $copy copy"
   fi
   [ ! -e "$KEY" ] || fail "$KEY is left after the install line was refused on the $copy copy"
   [ ! -e "$SOURCE" ] || fail "$SOURCE is left after the install line was refused on the $copy copy"
-  echo "$NAME: the $copy copy was refused (status $status, '$(printf '%s' "$saw" | tr '_' ' ')'), and nothing was left"
+  echo "$NAME: the $copy copy was refused (status $status, '$saw'), and nothing was left"
 }
 
-refused_by_install_line index 8001 "File_has_unexpected_size Hash_Sum_mismatch"
-refused_by_install_line signed 8002 "NOSPLIT BADSIG signatures_were_invalid Message_has_been_manipulated OpenPGP_signature_verification_failed"
-refused_by_install_line package 8003 "Hash_Sum_mismatch"
+refused_by_install_line index 8001 "File has unexpected size" "Hash Sum mismatch"
+refused_by_install_line signed 8002 "NOSPLIT" "BADSIG" "signatures were invalid" "Message has been manipulated" "OpenPGP signature verification failed"
+refused_by_install_line package 8003 "Hash Sum mismatch"
 
 # ----------------------------------------------------------------- apt's own refusal, alone
 
@@ -220,5 +230,5 @@ echo "$NAME: the unchanged site updated with no W: and no E:"
 for port in 8001 8002 8003; do
   "$HERE/serve-site.sh" stop "$port"
 done
-SERVING=""
+SERVING=()
 echo "$NAME: every copy was refused, the control passed"

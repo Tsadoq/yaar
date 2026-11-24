@@ -49,7 +49,12 @@
 # nobody reaped counts as gone; `gio launch` is tried plain
 # first and, when it fails, under dbus-run-session, which the step then says (it installs
 # the package dbus only in that case, so that linux-login-path.sh finds the program
-# dbus-run-session exactly when the start needed it).
+# dbus-run-session exactly when the start needed it); step 2 also fails on a line NoDisplay=true
+# or Hidden=true, which hide the app from the menu that "from the app menu" is about; step 3
+# fails, naming its pid, when a Keeper of <user> from an earlier step still runs after the
+# 20 s it waits for it to leave, because the Keeper that step 4 then names could be that one
+# and not the one the app's own start made; a command that stops the script without a sentence
+# of its own is named in one, and the exit code is 1.
 set -euo pipefail
 
 NAME=linux-launch.sh
@@ -66,7 +71,13 @@ HOME_DIR=$(getent passwd "$USER_NAME" | cut -d: -f6)
 export DEBIAN_FRONTEND=noninteractive
 
 DESKTOP=/usr/share/applications/io.github.tsadoq.yaar.desktop
-PROGRAMS="/usr/bin/yaar-review /usr/libexec/yaar-review/yaar-keeper /usr/libexec/yaar-review/yaar-claude-hook /usr/libexec/yaar-review/yaar-claude-tools /usr/libexec/yaar-review/yaar-pi-report"
+PROGRAMS=(
+  /usr/bin/yaar-review
+  /usr/libexec/yaar-review/yaar-keeper
+  /usr/libexec/yaar-review/yaar-claude-hook
+  /usr/libexec/yaar-review/yaar-claude-tools
+  /usr/libexec/yaar-review/yaar-pi-report
+)
 WINDOW_EXE=/usr/bin/yaar-review
 KEEPER_EXE=/usr/libexec/yaar-review/yaar-keeper
 MENU_PATH=/usr/local/bin:/usr/bin:/bin
@@ -77,12 +88,13 @@ XVFB_PID=""
 WINDOW_PID=""
 KEEPER_PID=""
 STEP=0
+SAID=0
 
 # True while the process is there and is not a zombie.
 alive() {
   local state
   [ -n "$1" ] && [ -r "/proc/$1/stat" ] || return 1
-  state=$(sed -n 's/^[0-9]* (.*) \(.\) .*/\1/p' "/proc/$1/stat") || return 1
+  state=$(sed -n 's/^[0-9]* (.*) \(.\) .*/\1/p' "/proc/$1/stat" 2> /dev/null) || return 1
   case $state in
     '' | Z | X) return 1 ;;
   esac
@@ -117,21 +129,29 @@ diagnose() {
 }
 
 fail() {
+  SAID=1
   echo "$NAME: step $STEP: $*" >&2
   diagnose
   exit 1
 }
 
+# A command that set -e stopped on says so in a sentence, with the code this script's header
+# names, instead of leaving the failing tool's own status.
 cleanup() {
-  local status=$? pid
-  for pid in $WINDOW_PID $KEEPER_PID; do
+  local status=$1 cmd=$2 pid
+  if [ "$status" -ne 0 ] && [ "$SAID" -eq 0 ]; then
+    echo "$NAME: step $STEP: '$cmd' failed with status $status" >&2
+    diagnose
+    status=1
+  fi
+  for pid in "$WINDOW_PID" "$KEEPER_PID"; do
     if alive "$pid" && [ "$status" -ne 0 ]; then kill "$pid" 2> /dev/null || true; fi
   done
   if [ -n "$XVFB_PID" ] && alive "$XVFB_PID"; then kill "$XVFB_PID" 2> /dev/null || true; fi
   rm -rf "$SCRATCH"
   exit "$status"
 }
-trap cleanup EXIT
+trap 'cleanup "$?" "$BASH_COMMAND"' EXIT
 
 # Runs a command as the user with the environment a desktop's menu gives and nothing else.
 as_menu() {
@@ -140,7 +160,7 @@ as_menu() {
 
 # ------------------------------------------------------------------------------ 1. libraries
 STEP=1
-for prog in $PROGRAMS; do
+for prog in "${PROGRAMS[@]}"; do
   [ -x "$prog" ] || fail "$prog is not installed or not executable"
   ldd "$prog" > "$SCRATCH/ldd" 2>&1 || fail "ldd $prog failed: $(cat "$SCRATCH/ldd")"
   if grep -q 'not found' "$SCRATCH/ldd"; then
@@ -178,6 +198,10 @@ apt-get install -y --no-install-recommends desktop-file-utils > "$SCRATCH/apt-df
 for line in Terminal=false Type=Application Exec=yaar-review; do
   grep -qx "$line" "$DESKTOP" || fail "$DESKTOP holds no line '$line': $(grep -E '^(Terminal|Type|Exec)=' "$DESKTOP" | tr '\n' ' ')"
 done
+# An entry the menu hides starts from `gio launch` all the same: the menu is what the row is about.
+for line in NoDisplay=true Hidden=true; do
+  if grep -qx "$line" "$DESKTOP"; then fail "$DESKTOP holds the line '$line': the app menu would not show the app"; fi
+done
 STATUS=0
 desktop-file-validate "$DESKTOP" > "$SCRATCH/validate" 2>&1 || STATUS=$?
 if [ "$STATUS" -ne 0 ] || [ -s "$SCRATCH/validate" ]; then
@@ -188,20 +212,20 @@ EXEC=${EXEC%% *}
 # shellcheck disable=SC2016 # the shell that runs it expands $1
 RESOLVED=$(env -i PATH="$MENU_PATH" sh -c 'command -v "$1"' sh "$EXEC") || fail "Exec=$EXEC does not resolve on PATH=$MENU_PATH"
 [ "$RESOLVED" = /usr/bin/yaar-review ] || fail "Exec=$EXEC resolves to $RESOLVED on PATH=$MENU_PATH, not to /usr/bin/yaar-review"
-echo "$NAME: 2. $DESKTOP: Terminal=false, Type=Application, Exec=$EXEC, valid, resolves to $RESOLVED"
+echo "$NAME: 2. $DESKTOP: Terminal=false, Type=Application, Exec=$EXEC, not hidden, valid, resolves to $RESOLVED"
 
 # ------------------------------------------------------------------------------ 3. the start
 STEP=3
 apt-get install -y --no-install-recommends xvfb xauth x11-utils libglib2.0-bin > "$SCRATCH/apt-x" 2>&1 || fail "installing xvfb, xauth, x11-utils and libglib2.0-bin failed: $(tail -3 "$SCRATCH/apt-x")"
 # A Keeper that an earlier step started lingers after its last Window; the one this start is
-# about must be the app's own, so the old one is waited for first (5 s of linger, 20 s here).
+# about must be the app's own, so the old one is waited for first (5 s of linger, 20 s here)
+# and one that stays fails the step.
 DEADLINE=$(($(date +%s) + 20))
 while :; do
   pids=$(pids_of "$KEEPER_EXE")
   [ -n "$pids" ] || break
   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
-    echo "$NAME: 3. a Keeper of $USER_NAME from before still runs after 20 s (pid ${pids%%$'\n'*}): the start below will meet it"
-    break
+    fail "a Keeper of $USER_NAME from an earlier step still runs after 20 s (pid ${pids%%$'\n'*}): the Keeper this start meets would not be the app's own"
   fi
   sleep 0.2
 done
@@ -252,7 +276,7 @@ find_window() {
   local id
   DISPLAY=:99 xwininfo -root -children 2> /dev/null | sed -n 's/^ *\(0x[0-9a-f][0-9a-f]*\) .*/\1/p' > "$SCRATCH/ids" || return 1
   while IFS= read -r id; do
-    if DISPLAY=:99 xprop -id "$id" WM_CLASS 2> /dev/null | grep "$CLASS" > /dev/null; then
+    if DISPLAY=:99 xprop -id "$id" WM_CLASS 2> /dev/null | grep -F "\"$CLASS\"" > /dev/null; then
       if DISPLAY=:99 xwininfo -id "$id" 2> /dev/null | grep 'Map State: IsViewable' > /dev/null; then
         echo "$id"
         return 0
