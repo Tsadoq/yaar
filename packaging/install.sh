@@ -100,9 +100,10 @@
 #      bash 3.2 and under bash 5); the Link's test vector is the check: the path its test
 #      `the_address_of_a_path_too_long_keeps_its_value` names gives ad4c554483ec5ddb). Only
 #      that one folder, under /private/tmp on macOS (/tmp is a link there) and /tmp on Linux,
-#      and only when it is a folder (`find <tmp> -maxdepth 1 -name <it> -type d -user <uid>`,
-#      never through a link): the short folders of other Keepers of the same user, a build's
-#      or a test's, are not the app's.
+#      and only when it is a folder of the user's own and not a link (looked at as the one path
+#      <tmp>/<it>, never by walking <tmp>: a walk of a folder that other programs change
+#      can fail half way): the short folders of other Keepers of the same user, a build's or a
+#      test's, are not the app's.
 #   4. keeps the user's reviews, the data folder's store.db (with -wal and -shm) and states/,
 #      and pi's extension, agents/pi/ (pi's own settings may name its file; removing it
 #      would leave pi pointing at a file that is gone), and says where they are and that
@@ -515,8 +516,8 @@ mac_verify() { # <app>
     say "Gatekeeper accepts the app"
     # stapler comes with the developer tools; where they are not installed, Gatekeeper's
     # verdict above stands alone (xcrun would open a dialog asking for them).
-    if xcode-select -p > /dev/null 2>&1 && xcrun --find stapler > /dev/null 2>&1; then
-      xcrun stapler validate "$app" || die "the notarisation ticket is not stapled to the app (stapler validate failed). Nothing was installed."
+    if /usr/bin/xcode-select -p > /dev/null 2>&1 && /usr/bin/xcrun --find stapler > /dev/null 2>&1; then
+      /usr/bin/xcrun stapler validate "$app" || die "the notarisation ticket is not stapled to the app (stapler validate failed). Nothing was installed."
       say "the notarisation ticket is stapled"
     else
       warn "stapler is not installed on this Mac (no developer tools): the stapled ticket was not checked"
@@ -705,30 +706,35 @@ $exe
 }
 
 # Waits up to <seconds> for the app to have no process, polling every 0.2 s.
+# The list is read into a variable first: a failure of app_processes inside a test or a
+# here-document would end only its own subshell and read as "no process".
 wait_until_stopped() { # <seconds>
-  local i=0 limit=$(( $1 * 5 ))
+  local i=0 limit=$(( $1 * 5 )) list
   while [ "$i" -lt "$limit" ]; do
-    [ -n "$(app_processes)" ] || return 0
+    list=$(app_processes) || exit 1
+    [ -n "$list" ] || return 0
     sleep 0.2
     i=$((i + 1))
   done
-  [ -z "$(app_processes)" ]
+  list=$(app_processes) || exit 1
+  [ -z "$list" ]
 }
 
 signal_app() { # <TERM|KILL>
-  local pid kind
+  local pid kind list
+  list=$(app_processes) || exit 1
   while read -r pid kind; do
     [ -n "$pid" ] || continue
     if ! kill "-$1" "$pid" 2> /dev/null; then say "process $pid had already left"; fi
   done <<EOF
-$(app_processes)
+$list
 EOF
 }
 
 # Part 1 of the uninstall: the app must have stopped.
 ensure_app_stopped() {
   local running
-  running=$(app_processes)
+  running=$(app_processes) || exit 1
   say "step 1, the app must have stopped: its programs are matched by their full path"
   if [ -z "$running" ]; then say "the app is not running"; return 0; fi
   if [ "$DRY_RUN" != 0 ]; then
@@ -825,8 +831,8 @@ remove_user_files() {
     # Only a folder of that very name, of the user's own, and not a link: the short folders
     # of other Keepers (a build's, a test's) are not the app's.
     if [ "$OS" = Darwin ]; then tmp=/private/tmp; else tmp=/tmp; fi
-    found=$(find "$tmp" -maxdepth 1 -name "$name" -type d -user "$(id -u)")
-    if [ -n "$found" ]; then rm -rf "${found:?}"; say "removed $found"; fi
+    found="$tmp/$name"
+    if [ -d "$found" ] && [ ! -L "$found" ] && [ -O "$found" ]; then rm -rf "${found:?}"; say "removed $found"; fi
   fi
 }
 
