@@ -39,7 +39,7 @@ for tool in gh sha256sum awk; do
   command -v "$tool" > /dev/null 2>&1 || fail "$tool is not installed"
 done
 if [ -e "$OUT" ] || [ -L "$OUT" ]; then
-  [ -d "$OUT" ] && [ ! -L "$OUT" ] || fail "$OUT exists and is not a folder"
+  if [ ! -d "$OUT" ] || [ -L "$OUT" ]; then fail "$OUT exists and is not a folder"; fi
   [ -z "$(ls -A "$OUT")" ] || fail "$OUT holds files already: the .deb files of the published releases go into an empty folder"
 fi
 
