@@ -213,12 +213,13 @@ sha256_of() { # <file>
 }
 
 # Picks from SHA256SUMS the one file whose name ends with <suffix>, downloads it and checks it.
-# Sets ARCHIVE to the local path.
+# Sets ARCHIVE to the local path. A name is letters, digits and . _ + ~ - only (the _ is the
+# one of x86_64).
 fetch_checked() { # <suffix>
   local suffix="$1" name want got
   fetch "$DOWNLOAD_URL/SHA256SUMS" "$TMP/SHA256SUMS"
   name=$(awk -v s="$suffix" '{ f = $2; sub(/^\*/, "", f); n = length(f) - length(s) + 1;
-           if (n > 0 && substr(f, n) == s && f ~ /^yaar-review-[0-9A-Za-z.+~-]+$/) print f }' "$TMP/SHA256SUMS" | sort | tail -n 1)
+           if (n > 0 && substr(f, n) == s && f ~ /^yaar-review-[0-9A-Za-z._+~-]+$/) print f }' "$TMP/SHA256SUMS" | sort | tail -n 1)
   [ -n "$name" ] || die "SHA256SUMS at $DOWNLOAD_URL names no file ending in $suffix (no build for this system?)"
   want=$(awk -v n="$name" '{ f = $2; sub(/^\*/, "", f); if (f == n) print $1 }' "$TMP/SHA256SUMS" | head -n 1)
   say "downloading $DOWNLOAD_URL/$name"
