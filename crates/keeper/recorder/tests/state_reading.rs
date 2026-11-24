@@ -8,7 +8,9 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Duration;
 
-use support::{Scratch, commit_all, git_that_keeps_a_list, init, is_alive, program, write};
+use support::{
+    Scratch, an_older_git, commit_all, git_that_keeps_a_list, init, is_alive, program, write,
+};
 use yaar_recorder::{CommitId, Git, RecordedState, StateStore, Worktree};
 
 /// How long a test waits for a fact that is not in the test's hands.
@@ -20,7 +22,8 @@ fn content_processes(list: &Path) -> Vec<String> {
     std::fs::read_to_string(list)
         .unwrap_or_default()
         .lines()
-        .filter(|line| line.contains("cat-file --batch -Z"))
+        // Of a git that has `-Z` and of one that has not; `--batch-check` is another process.
+        .filter(|line| line.ends_with("cat-file --batch -Z") || line.ends_with("cat-file --batch"))
         .map(|line| line.split(' ').next().expect("a process id").to_owned())
         .collect()
 }
@@ -75,13 +78,26 @@ fn is_dead(pid: &str) -> bool {
 
 #[test]
 fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store() {
+    forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store_with(&Scratch::new());
+}
+
+#[test]
+fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store_on_an_older_git()
+ {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store_with(&scratch);
+}
+
+fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store_with(
+    scratch: &Scratch,
+) {
     let Repository {
         worktree,
         first,
         second,
-    } = repository(&scratch);
-    let (store, list) = listed_store(&scratch);
+    } = repository(scratch);
+    let (store, list) = listed_store(scratch);
     let state_one = store.record(&worktree).expect("record");
     write(
         worktree.root(),
@@ -145,9 +161,19 @@ fn forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_
 
 #[test]
 fn a_process_for_contents_that_died_is_started_again() {
+    a_process_for_contents_that_died_is_started_again_with(&Scratch::new());
+}
+
+#[test]
+fn a_process_for_contents_that_died_is_started_again_on_an_older_git() {
     let scratch = Scratch::new();
-    let repository = repository(&scratch);
-    let (store, list) = listed_store(&scratch);
+    an_older_git(&scratch);
+    a_process_for_contents_that_died_is_started_again_with(&scratch);
+}
+
+fn a_process_for_contents_that_died_is_started_again_with(scratch: &Scratch) {
+    let repository = repository(scratch);
+    let (store, list) = listed_store(scratch);
     let state = store.record(&repository.worktree).expect("record");
     let read = || {
         store
@@ -214,13 +240,30 @@ fn several_threads_read_through_one_store() {
 
 #[test]
 fn what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process() {
+    what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process_on_an_older_git()
+ {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process_with(
+        &scratch,
+    );
+}
+
+fn what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process_with(
+    scratch: &Scratch,
+) {
     let Repository {
         worktree,
         first,
         second: _,
-    } = repository(&scratch);
-    let (store, list) = listed_store(&scratch);
+    } = repository(scratch);
+    let (store, list) = listed_store(scratch);
     let state_one = store.record(&worktree).expect("record");
     let file_0 = Path::new("file-0.txt");
 

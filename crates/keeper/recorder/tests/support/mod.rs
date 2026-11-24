@@ -203,6 +203,48 @@ pub fn git_that_keeps_a_list(scratch: &Scratch) -> (PathBuf, PathBuf) {
     (wrapper, list)
 }
 
+/// Makes the `git` that the tests find on the search path one of the age of git 2.34, the
+/// one of Ubuntu 22.04: it says so when asked its version, and it refuses, in the words
+/// git 2.34 uses, the three forms that git does not know: `-z` after `worktree list`, `-Z`
+/// after `cat-file` and the atom `ahead-behind` of `for-each-ref`. Whatever else it is
+/// asked, it hands to the git it found. It has to come right after [`Scratch::new`], before
+/// the test starts a thread.
+pub fn an_older_git(scratch: &Scratch) {
+    let search = std::env::var_os("PATH").expect("a search path");
+    let real = std::env::split_paths(&search)
+        .map(|folder| folder.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("git on the search path");
+    let folder = scratch.join("older-git");
+    program(
+        &folder.join("git"),
+        &format!(
+            "worktree=no\ncat_file=no\nz=no\nbig_z=no\nlast=\n\
+             for argument in \"$@\"; do\n  last=$argument\n  case $argument in\n    \
+             worktree) worktree=yes ;;\n    cat-file) cat_file=yes ;;\n    -z) z=yes ;;\n    \
+             -Z) big_z=yes ;;\n    *'%(ahead-behind'*)\n      \
+             echo 'fatal: unknown field name: ahead-behind:HEAD' >&2\n      exit 128 ;;\n  \
+             esac\ndone\n\
+             if [ \"$last\" = version ]; then\n  echo 'git version 2.34.1'\n  exit 0\nfi\n\
+             if [ $worktree = yes ] && [ $z = yes ]; then\n  \
+             echo \"error: unknown switch \\`z'\" >&2\n  exit 129\nfi\n\
+             if [ $cat_file = yes ] && [ $big_z = yes ]; then\n  \
+             echo \"error: unknown switch \\`Z'\" >&2\n  exit 129\nfi\n\
+             exec '{}' \"$@\"",
+            real.display()
+        ),
+    );
+    let mut folders = vec![folder];
+    folders.extend(std::env::split_paths(&search));
+    // SAFETY: as in `Scratch::new`: the first statements of a test, in a process of its own.
+    unsafe {
+        std::env::set_var(
+            "PATH",
+            std::env::join_paths(folders).expect("a search path"),
+        );
+    }
+}
+
 /// Whether a process with this id is there, running or waiting to be waited for.
 pub fn is_alive(pid: &str) -> bool {
     Command::new("sh")

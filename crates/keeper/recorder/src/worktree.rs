@@ -14,7 +14,7 @@ use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 use std::sync::Mutex;
 
-use crate::contents::{Contents, Read, read_kept, stop_kept};
+use crate::contents::{Contents, Read, asked, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::{IndexBackup, IndexCopy};
 
@@ -387,8 +387,8 @@ impl Worktree {
     /// the main one first, then in git's order. A repository with no files checked out
     /// is not a worktree and is not listed; nor is a worktree whose folder is gone.
     pub fn list(&self) -> Result<Vec<Listed>, GitError> {
-        let answer = self.run(["worktree", "list", "--porcelain", "-z"])?;
-        Ok(listed(&answer.printed()?, &self.common_dir))
+        let printed = list_printed(&self.git, |args| self.run(args))?;
+        Ok(listed(&printed, &self.common_dir))
     }
 
     /// Every worktree of the repository whose shared git folder is `common_dir`, as
@@ -408,8 +408,8 @@ impl Worktree {
             };
         }
         let hooks_off = hooks_off(git, place)?;
-        let answer = git.run(place, &hooks_off, ["worktree", "list", "--porcelain", "-z"])?;
-        Ok(listed(&answer.printed()?, &common_dir))
+        let printed = list_printed(git, |args| git.run(place, &hooks_off, args))?;
+        Ok(listed(&printed, &common_dir))
     }
 
     /// The branches around this worktree, each with its distance from what is checked
@@ -438,17 +438,27 @@ impl Worktree {
 
         // The distance is counted from what is checked out, so it can only be asked
         // for where something is committed.
+        let has_newer_forms = self.git.has_newer_forms();
         const WITH_DISTANCE: &str = "--format=%(refname)%00%(upstream)%00%(ahead-behind:HEAD)";
         const WITHOUT: &str = "--format=%(refname)%00%(upstream)%00";
+        // A git without the atom is given the commit of each branch instead, and counts
+        // from it with a run of its own.
+        const WITH_COMMIT: &str = "--format=%(refname)%00%(upstream)%00%(objectname)";
         let list = |format: &str| self.run(["for-each-ref", format, "refs/heads", "refs/remotes"]);
-        let mut answer = list(WITH_DISTANCE)?;
-        if answer.code != Some(0) && self.head_commit()?.is_none() {
+        let mut answer = list(if has_newer_forms {
+            WITH_DISTANCE
+        } else {
+            WITH_COMMIT
+        })?;
+        if has_newer_forms && answer.code != Some(0) && self.head_commit()?.is_none() {
             answer = list(WITHOUT)?;
         }
         let command = answer.command().to_owned();
         let printed = text(&answer.printed()?);
         let unreadable = |what: String| unreadable(&command, what);
 
+        let nothing_committed = !has_newer_forms && self.head_commit()?.is_none();
+        let mut counted: BTreeMap<&str, u32> = BTreeMap::new();
         let mut rows = Vec::new();
         for line in printed.lines() {
             let mut fields = line.split('\0');
@@ -457,13 +467,30 @@ impl Worktree {
             else {
                 return Err(unreadable(format!("the line {line:?}")));
             };
-            // git prints the side of the branch first and that of what is checked out
-            // second: the second number is how far ahead the checked-out commit is.
-            let ahead = match distance.split_once(' ') {
-                Some((_, ahead)) => ahead
+            let ahead = if has_newer_forms {
+                // git prints the side of the branch first and that of what is checked out
+                // second: the second number is how far ahead the checked-out commit is.
+                match distance.split_once(' ') {
+                    Some((_, ahead)) => ahead
+                        .parse::<u32>()
+                        .map_err(|_| unreadable(format!("the distance {distance:?}")))?,
+                    None => 0,
+                }
+            } else if nothing_committed {
+                0
+            } else if let Some(ahead) = counted.get(distance) {
+                *ahead
+            } else {
+                // Here `distance` is the commit of the branch: what `HEAD` reaches and it
+                // does not is the second number of the atom.
+                let range = format!("{distance}..HEAD");
+                let answer = self.run(["rev-list", "--count", "--end-of-options", &range])?;
+                let printed = text(&answer.printed()?);
+                let ahead = printed
                     .parse::<u32>()
-                    .map_err(|_| unreadable(format!("the distance {distance:?}")))?,
-                None => 0,
+                    .map_err(|_| unreadable(format!("the count {printed:?}")))?;
+                counted.insert(distance, ahead);
+                ahead
             };
             rows.push((name, upstream, ahead));
         }
@@ -689,6 +716,9 @@ impl Worktree {
         let mut name = commit.as_str().as_bytes().to_vec();
         name.push(b':');
         name.extend_from_slice(path.as_os_str().as_bytes());
+        let Some(name) = asked(self.git.has_newer_forms(), name, |args| self.run(args))? else {
+            return Ok(None);
+        };
 
         let start = || Contents::start(&self.git, &self.root, &self.hooks_off);
         match read_kept(&self.contents, start, &name)? {
@@ -917,6 +947,66 @@ pub(crate) fn hooks_off(git: &Git, place: Place<'_>) -> Result<Vec<OsString>, Gi
         Some(1) => Ok(Vec::new()),
         _ => Err(answer.failed()),
     }
+}
+
+/// What `git worktree list --porcelain -z` prints, for a git that has `-z` or has not: a
+/// git without it prints each field on a line and a blank line after each record, and
+/// [`zero_ended`] makes the one of the other.
+fn list_printed(
+    git: &Git,
+    run: impl FnOnce(&[&str]) -> Result<Answer, GitError>,
+) -> Result<Vec<u8>, GitError> {
+    if git.has_newer_forms() {
+        run(&["worktree", "list", "--porcelain", "-z"])?.printed()
+    } else {
+        Ok(zero_ended(
+            &run(&["worktree", "list", "--porcelain"])?.printed()?,
+        ))
+    }
+}
+
+/// The list of an older git, `--porcelain` without `-z`, in the form `-z` gives. Such a git
+/// prints a path as it is, with no quoting, so a line that starts with no field's name is
+/// the rest of the field before it: a path or a reason that holds a line feed. What it
+/// cannot tell is a path whose second line looks like a field, or two line feeds in a row:
+/// such a folder is read as another path, which is no worktree of the repository and is
+/// left out by [`listed`], and never taken for one.
+fn zero_ended(printed: &[u8]) -> Vec<u8> {
+    const NAMES: [&[u8]; 7] = [
+        b"worktree",
+        b"HEAD",
+        b"branch",
+        b"detached",
+        b"bare",
+        b"locked",
+        b"prunable",
+    ];
+    let named = |line: &[u8]| {
+        NAMES.iter().any(|name| {
+            line.strip_prefix(*name)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(b" "))
+        })
+    };
+    let mut fields: Vec<Vec<u8>> = Vec::new();
+    for line in printed
+        .strip_suffix(b"\n")
+        .unwrap_or(printed)
+        .split(|byte| *byte == b'\n')
+    {
+        match fields.last_mut() {
+            Some(last) if !line.is_empty() && !named(line) && !last.is_empty() => {
+                last.push(b'\n');
+                last.extend_from_slice(line);
+            }
+            _ => fields.push(line.to_vec()),
+        }
+    }
+    let mut zero_ended = Vec::new();
+    for field in fields {
+        zero_ended.extend_from_slice(&field);
+        zero_ended.push(0);
+    }
+    zero_ended
 }
 
 /// Reads git's list of worktrees: records that end with an empty field, each a run of

@@ -7,8 +7,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use support::{
-    Scratch, commit_all, git, git_bytes, git_that_keeps_a_list, git_with_input, init, is_alive,
-    program, touch, write,
+    Scratch, an_older_git, commit_all, git, git_bytes, git_that_keeps_a_list, git_with_input, init,
+    is_alive, program, touch, write,
 };
 use yaar_recorder::{Change, ChangedPath, CommitId, Git, Worktree};
 
@@ -483,7 +483,17 @@ fn a_repository_inside_the_worktree_is_one_path_and_is_not_looked_into() {
 
 #[test]
 fn a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is() {
+    a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_with(&Scratch::new());
+}
+
+#[test]
+fn a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_on_an_older_git() {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_with(&scratch);
+}
+
+fn a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_with(scratch: &Scratch) {
     let repo = scratch.join("repo");
     init(&repo);
     let odd = "an \"odd\" name\nwith a second line.txt";
@@ -522,8 +532,63 @@ fn a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is() {
 }
 
 #[test]
-fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content() {
+fn a_path_that_ends_in_a_carriage_return_is_read_as_it_is() {
+    a_path_that_ends_in_a_carriage_return_is_read_as_it_is_with(&Scratch::new());
+}
+
+#[test]
+fn a_path_that_ends_in_a_carriage_return_is_read_as_it_is_on_an_older_git() {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_path_that_ends_in_a_carriage_return_is_read_as_it_is_with(&scratch);
+}
+
+fn a_path_that_ends_in_a_carriage_return_is_read_as_it_is_with(scratch: &Scratch) {
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "ends\r", "with a return\n");
+    write(&repo, "ends", "without\n");
+    let head = CommitId::new(commit_all(&repo, "start"));
+
+    let worktree = open(&repo);
+    assert_eq!(
+        worktree
+            .content_at(&head, Path::new("ends\r"))
+            .expect("with"),
+        Some(b"with a return\n".to_vec())
+    );
+    assert_eq!(
+        worktree
+            .content_at(&head, Path::new("ends"))
+            .expect("without"),
+        Some(b"without\n".to_vec())
+    );
+    // A name that is not there is told apart from the one that is, with the return too.
+    assert_eq!(
+        worktree
+            .content_at(&head, Path::new("nothing\r"))
+            .expect("none"),
+        None
+    );
+}
+
+#[test]
+fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content() {
+    a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_on_an_older_git() {
+    let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_with(&scratch);
+}
+
+fn a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_with(
+    scratch: &Scratch,
+) {
     let repo = scratch.join("repo");
     init(&repo);
     write(&repo, "a.txt", "a\n");
@@ -574,7 +639,19 @@ fn content_processes(list: &Path) -> Vec<String> {
 
 #[test]
 fn many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree() {
+    many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree_with(&Scratch::new());
+}
+
+#[test]
+fn many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree_on_an_older_git() {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree_with(&scratch);
+}
+
+fn many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree_with(
+    scratch: &Scratch,
+) {
     let repo = scratch.join("repo");
     init(&repo);
     for n in 0..20 {
@@ -584,7 +661,7 @@ fn many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree() {
     write(&repo, "file-0.txt", "content 0, changed\n");
     let second = CommitId::new(commit_all(&repo, "a change"));
 
-    let (program, list) = git_that_keeps_a_list(&scratch);
+    let (program, list) = git_that_keeps_a_list(scratch);
     let worktree = Worktree::open(&Git::at(program), &repo).expect("open");
     assert_eq!(
         content_processes(&list),
