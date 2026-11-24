@@ -47,6 +47,7 @@ const SIZE: TerminalSize = TerminalSize {
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const HOUR: Duration = Duration::from_secs(60 * 60);
+const MINUTE: Duration = Duration::from_secs(60);
 
 /// The recording `claude/turn-tools.jsonl`: the lines that begin a session and a turn, the
 /// one that ends the turn, the prompt Claude Code started itself sixteen milliseconds after
@@ -61,11 +62,14 @@ const STOP_AGAIN: usize = 34;
 /// is not `clear`.
 const REVIEW_FILE: &str = "claude/review-file-read.jsonl";
 
-/// A clock of the test's own: a base taken once, and an offset the test moves.
+/// A clock of the test's own: a base taken once, and an offset the test moves, and one the
+/// clock moves itself at each read once the test asks for it.
 #[derive(Debug)]
 struct TestClock {
     base: SystemTime,
     offset: Mutex<Duration>,
+    /// How far each read moves the offset on after it: none until `step_at_each_read`.
+    step: Mutex<Duration>,
 }
 
 impl TestClock {
@@ -74,12 +78,19 @@ impl TestClock {
         Arc::new(TestClock {
             base: UNIX_EPOCH + Duration::from_secs(1_767_225_600),
             offset: Mutex::new(Duration::ZERO),
+            step: Mutex::new(Duration::ZERO),
         })
     }
 
     /// Moves the clock `by` forward.
     fn move_on(&self, by: Duration) {
         *self.offset.lock().unwrap_or_else(PoisonError::into_inner) += by;
+    }
+
+    /// From now on, every read gives the time and then moves the clock `by` forward, as a
+    /// clock does that runs while the program reads it.
+    fn step_at_each_read(&self, by: Duration) {
+        *self.step.lock().unwrap_or_else(PoisonError::into_inner) = by;
     }
 
     /// Sets the clock to the base and `offset`.
@@ -90,7 +101,10 @@ impl TestClock {
 
 impl Clock for TestClock {
     fn now(&self) -> SystemTime {
-        self.base + *self.offset.lock().unwrap_or_else(PoisonError::into_inner)
+        let mut offset = self.offset.lock().unwrap_or_else(PoisonError::into_inner);
+        let now = self.base + *offset;
+        *offset += *self.step.lock().unwrap_or_else(PoisonError::into_inner);
+        now
     }
 }
 
@@ -1584,6 +1598,9 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     // is the barrier every assertion below rests on, for no surface of the Keeper holds a
     // sweep between the two. A Keeper that told first would be caught here only if the
     // removal lost the race against the round trip of `GetHistory`.
+    // The sweep that tells the fact also judged the files and the states by one time, the one
+    // it read when it began, so a clock that moves while it runs cannot leave a file behind
+    // for a state that went (a_sweep_judges_a_file_and_a_state_by_one_time_...).
     let history = world.window.history(&work.workspace);
     assert!(is_expired(&history, &one.turn), "{history:?}");
     // A session's files go by their age and by the set time, not by the sweep's own time:
@@ -1604,5 +1621,47 @@ fn a_sweep_removes_a_review_file_of_an_ended_session_by_its_age_and_never_one_of
     assert_eq!(fs::read(&old_of_running).expect("read it"), running_bytes);
     assert_eq!(reads(&work.repo), repo_before);
     still_there(&work.repo, &work.planted);
+    let _ = world.finish();
+}
+
+#[test]
+fn a_sweep_judges_a_file_and_a_state_by_one_time_however_the_clock_moves_while_it_runs() {
+    let mut world = World::new();
+    let mut work = world.work("repo");
+    let [one, two] = world.two_turns(&mut work);
+
+    // The states are dated at the base, so the first goes once the clock reads the set time
+    // and the hour past it: `edge`. A file of an ended session, written a second short of an
+    // hour after the base, goes once the clock reads at least an hour past the base and the
+    // set time, a moment before `edge`'s own hour. A sweep that counts the file by the time
+    // it began and the state by a later one, at the clock's own pace, would hold the file for
+    // a state that is gone.
+    let base = world.clock.now();
+    let edge = 30 * DAY + HOUR;
+    let file = review_file(
+        &world.scratch,
+        "an-ended-session",
+        "written just under an hour after the base\n",
+        base + HOUR - Duration::from_secs(1),
+    );
+
+    // The Keeper starts ten minutes short of `edge`, and its clock moves 40 minutes on at each
+    // read after the first request. The sweep that is due at once reads ten minutes short of
+    // `edge`: the state is young and the file is inside the set time, so nothing goes, and
+    // no fact is told. The sweep runs every hour (`SWEEP_EVERY`): the read 40 minutes on is not
+    // yet an hour past, so it is not due, and the next one, 80 minutes on, is due and goes by
+    // that one time: both go.
+    world.restart_at(edge - 10 * MINUTE);
+    world.clock.step_at_each_read(40 * MINUTE);
+    world.window.barrier();
+    world.window.states_deleted(&work.workspace);
+
+    let history = world.window.history(&work.workspace);
+    assert!(is_expired(&history, &one.turn), "{history:?}");
+    assert_eq!(state_in(&history, &two.turn), Some(two.state));
+    assert!(
+        !file.exists(),
+        "a state was deleted by a time at which the file stayed"
+    );
     let _ = world.finish();
 }

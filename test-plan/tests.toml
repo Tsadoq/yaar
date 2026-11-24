@@ -1605,6 +1605,7 @@ built = [
     "crates/keeper/review-engine/tests/expiry.rs::the_newest_state_of_a_worktree_that_is_there_is_kept_however_old_and_one_of_a_gone_worktree_is_not",
     "crates/keeper/review-engine/tests/expiry.rs::a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_taken_with_the_old_one",
     "crates/keeper/review-engine/tests/expiry.rs::the_turn_that_is_running_keeps_the_state_its_change_counts_from_until_it_ends",
+    "crates/keeper/review-engine/tests/expiry.rs::a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not_from_the_clock_of_the_engine",
 ]
 note = "A running turn's start, the newest state of a worktree that is there, and a state recorded within the last hour are kept too; the set time is counted with that hour added, so no state goes before the set time has passed since its turn. The newest state of a worktree that is there stays however old: the owner decided it on 21 November 2026 (FR-125 as of v1.6 of the requirements)."
 
@@ -1623,6 +1624,7 @@ built = [
     "crates/keeper/keeper/tests/cleaning.rs::while_it_runs_the_keeper_deletes_the_states_nothing_refers_to_once_the_clock_passes_the_set_time",
     "crates/keeper/keeper/tests/cleaning.rs::a_shortened_time_is_in_force_at_once",
     "crates/keeper/keeper/tests/cleaning.rs::at_its_start_the_first_sweep_waits_until_the_keeper_has_queued_its_first_reply",
+    "crates/keeper/keeper/tests/cleaning.rs::a_sweep_judges_a_file_and_a_state_by_one_time_however_the_clock_moves_while_it_runs",
 ]
 note = "Added in slice 9: STATE-09 is the engine's; this row shows the Keeper's own clean-up and the history's mark through the Link. The Keeper's clock is handed in by the test."
 

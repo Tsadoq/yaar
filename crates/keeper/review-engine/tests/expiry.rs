@@ -546,6 +546,43 @@ fn a_turn_that_changed_nothing_names_a_state_as_young_as_the_turn_and_is_not_tak
     run.watched.assert_unchanged();
 }
 
+// STATE-09 (a time the caller read)
+#[test]
+fn a_sweep_with_the_time_its_caller_read_counts_every_age_from_that_time_and_not_from_the_clock_of_the_engine()
+ {
+    let mut run = Setup::new();
+    let (t1, s1) = run.end_turn(1);
+    let (t2, s2) = run.end_turn(2);
+    let w = workspace();
+    let at = |offset: Duration| UNIX_EPOCH + Duration::from_secs(BASE) + offset;
+
+    // The engine's clock stays at B, where the states were recorded. A second short of the
+    // set time and the hour, as the caller read it, nothing goes.
+    let short = run
+        .reviews
+        .expire_at(
+            &w,
+            KEEP_STATES,
+            at(KEEP_STATES + HOUR - SECOND),
+            Presence::Present,
+        )
+        .expect("expire");
+    assert_eq!(short.states, Vec::<String>::new());
+    assert_eq!(run.held(), set(&[&s1, &s2]));
+
+    // At that time the first state goes and the newest stays, though the engine's own clock
+    // reads B.
+    let expired = run
+        .reviews
+        .expire_at(&w, KEEP_STATES, at(KEEP_STATES + HOUR), Presence::Present)
+        .expect("expire");
+    assert_eq!(deleted(&expired), set(&[&s1]));
+    let marks = run.marks();
+    assert_eq!(marks[&t1], TurnMark::Expired);
+    assert_eq!(marks[&t2], TurnMark::Held);
+    run.watched.assert_unchanged();
+}
+
 // STATE-09 (a worktree that is gone)
 #[test]
 fn the_store_of_a_gone_worktree_goes_as_one_once_its_newest_state_is_old_enough_and_opens_anew_empty()
