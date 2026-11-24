@@ -6,6 +6,9 @@
 # Each .deb named is copied into pool/main/<first letter>/<package>/ (a file of the same
 # name that is already there is never overwritten); then the index is rebuilt from
 # everything in pool/ and signed again. Give the .deb of both processors to publish both.
+# Refuses, naming the file, when apt-ftparchive complains of a file of the pool (it would
+# otherwise leave it out of the index and exit 0) or when a .deb of the pool is not in the
+# Packages file of its processor.
 #
 # Result, all under <repo-dir>:
 #   pool/main/y/yaar-review/*.deb
@@ -36,21 +39,54 @@ gpg --batch --list-secret-keys "$YAAR_APT_KEY" > /dev/null 2>&1 \
 
 mkdir -p "$REPO/pool/$COMP"
 for deb in "$@"; do
-  pkg=$(dpkg-deb -f "$deb" Package)
+  [ -f "$deb" ] || { echo "make-apt-repo.sh: $deb is not a file" >&2; exit 1; }
+  pkg=$(dpkg-deb -f "$deb" Package 2> /dev/null) \
+    || { echo "make-apt-repo.sh: $deb is not a .deb that dpkg-deb can read" >&2; exit 1; }
+  [ -n "$pkg" ] || { echo "make-apt-repo.sh: $deb has no Package field" >&2; exit 1; }
   d="$REPO/pool/$COMP/$(printf %.1s "$pkg")/$pkg"; mkdir -p "$d"
   [ -e "$d/$(basename "$deb")" ] || cp "$deb" "$d/"
 done
 cd "$REPO"
+# A file in pool/ that dpkg-deb cannot read would be left out of the index without a word.
+POOL_DEBS=$(find pool -name '*.deb') \
+  || { echo "make-apt-repo.sh: cannot list the .deb files under $REPO/pool: a folder in it cannot be read" >&2; exit 1; }
+while IFS= read -r deb; do
+  [ -n "$deb" ] || continue
+  dpkg-deb -f "$deb" Architecture > /dev/null 2>&1 \
+    || { echo "make-apt-repo.sh: $REPO/$deb is not a .deb that dpkg-deb can read" >&2; exit 1; }
+done <<< "$POOL_DEBS"
 ARCHS=$(find pool -name '*.deb' -exec dpkg-deb -f {} Architecture \; | sort -u | grep -v '^all$' | tr '\n' ' ')
 ARCHS=${ARCHS% }
 [ -n "$ARCHS" ] || { echo "make-apt-repo.sh: no package in $REPO/pool" >&2; exit 1; }
+# apt-ftparchive can refuse a file of the pool, say so on standard error ("E: Errors apply to
+# file ...") and still exit 0, leaving the file out of the index. Its standard error goes to a
+# file, and anything in it ends this script: a published version must stay installable by its
+# number.
+ERRS=$(mktemp -d "${TMPDIR:-/tmp}/yaar-apt-repo.XXXXXX")
+trap 'rm -rf "$ERRS"' EXIT
+ftparchive() {
+  apt-ftparchive "$@" 2> "$ERRS/stderr" \
+    || { echo "make-apt-repo.sh: apt-ftparchive failed: $(cat "$ERRS/stderr")" >&2; return 1; }
+  if [ -s "$ERRS/stderr" ]; then
+    echo "make-apt-repo.sh: apt-ftparchive refused part of $REPO/pool and would leave it out of the index: $(tr '\n' ' ' < "$ERRS/stderr")" >&2
+    return 1
+  fi
+}
 rm -rf "dists/$SUITE"
 for a in $ARCHS; do
   b="dists/$SUITE/$COMP/binary-$a"; mkdir -p "$b"
-  apt-ftparchive --arch "$a" packages "pool/$COMP" > "$b/Packages"
+  ftparchive --arch "$a" packages "pool/$COMP" > "$b/Packages"
   gzip -n -9 -k "$b/Packages"
 done
-apt-ftparchive \
+# Every file of the pool is in the index of its processor, whatever the indexer said.
+while IFS= read -r deb; do
+  [ -n "$deb" ] || continue
+  arch=$(dpkg-deb -f "$deb" Architecture)
+  [ "$arch" != all ] || continue
+  grep -qxF "Filename: $deb" "dists/$SUITE/$COMP/binary-$arch/Packages" \
+    || { echo "make-apt-repo.sh: $REPO/$deb is in the pool but not in dists/$SUITE/$COMP/binary-$arch/Packages" >&2; exit 1; }
+done <<< "$POOL_DEBS"
+ftparchive \
   -o "APT::FTPArchive::Release::Origin=$ORIGIN" -o "APT::FTPArchive::Release::Label=$LABEL" \
   -o "APT::FTPArchive::Release::Suite=$SUITE" -o "APT::FTPArchive::Release::Codename=$SUITE" \
   -o "APT::FTPArchive::Release::Architectures=$ARCHS" -o "APT::FTPArchive::Release::Components=$COMP" \

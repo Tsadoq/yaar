@@ -11,8 +11,58 @@
 #
 # Exit codes: 0 written; 1 refused or failed; 2 usage error.
 #
-# Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
-# package fills the body.
-set -eu
-echo "repack-version.sh: not built yet" >&2
-exit 99
+# Needs: dpkg-deb and dpkg (package dpkg).
+set -euo pipefail
+umask 022
+# Whatever fails without a sentence of its own ends the script with 1, never with the failing
+# tool's own code (gpg's 2 would read as a usage error).
+set -E
+trap 'echo "$NAME: line $LINENO: a command failed" >&2; exit 1' ERR
+NAME=repack-version.sh
+if [ $# -ne 3 ]; then
+  sed -n '5p' "$0" >&2
+  exit 2
+fi
+IN=$1
+NEW=$2
+OUT=$3
+fail() {
+  echo "$NAME: $*" >&2
+  exit 1
+}
+
+[ -f "$IN" ] || fail "$IN is not a file"
+case $NEW in
+  *-*) fail "the version $NEW holds a '-', which apt would order wrongly: use '+' to say more" ;;
+  '' | [!0-9]* | *[!0-9A-Za-z.+~]*) fail "a version starts with a digit and holds only letters, digits, '.', '+' and '~', not: $NEW" ;;
+esac
+for tool in dpkg-deb dpkg; do
+  command -v "$tool" > /dev/null 2>&1 || fail "$tool is not installed"
+done
+PKG=$(dpkg-deb -f "$IN" Package) || fail "$IN is not a .deb that dpkg-deb can read"
+OLD=$(dpkg-deb -f "$IN" Version)
+ARCH=$(dpkg-deb -f "$IN" Architecture)
+if [ -z "$PKG" ] || [ -z "$OLD" ] || [ -z "$ARCH" ]; then fail "$IN has no Package, Version or Architecture field"; fi
+dpkg --compare-versions "$NEW" gt "$OLD" || fail "the version $NEW does not sort after $OLD, the version of $IN"
+
+mkdir -p "$OUT"
+TARGET=$OUT/${PKG}_${NEW}_${ARCH}.deb
+[ ! -e "$TARGET" ] || fail "$TARGET exists already"
+
+TMP=$(mktemp -d "${TMPDIR:-/tmp}/yaar-repack.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT
+dpkg-deb -R "$IN" "$TMP/tree"
+CONTROL=$TMP/tree/DEBIAN/control
+[ "$(grep -c '^Version:' "$CONTROL")" -eq 1 ] || fail "$IN has not exactly one Version line in its control file"
+awk -v new="$NEW" '/^Version:/ { print "Version: " new; next } { print }' "$CONTROL" > "$TMP/control"
+# The time the package was built at is kept: SOURCE_DATE_EPOCH from the environment when it is
+# set, else the time of the input's control file (package-linux.sh gave it SOURCE_DATE_EPOCH),
+# so that two repacks of one .deb are the same bytes.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH=$(stat -c %Y "$CONTROL") || fail "cannot read the time of the control file of $IN"
+fi
+export SOURCE_DATE_EPOCH
+cat "$TMP/control" > "$CONTROL"
+touch -d "@$SOURCE_DATE_EPOCH" "$CONTROL"
+dpkg-deb --root-owner-group -Zxz --build "$TMP/tree" "$TARGET" >&2
+printf '%s\n' "$TARGET"
