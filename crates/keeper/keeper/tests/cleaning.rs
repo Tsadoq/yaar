@@ -1648,8 +1648,9 @@ fn a_sweep_judges_a_file_and_a_state_by_one_time_however_the_clock_moves_while_i
     // The Keeper starts ten minutes short of `edge`, and its clock moves 40 minutes on at each
     // read after the first request. The sweep that is due at once reads ten minutes short of
     // `edge`: the state is young and the file is inside the set time, so nothing goes, and
-    // no fact is told. The next sweep is due 40 minutes later at the earliest, one hour
-    // later of the clock by the time it comes, and goes by that one time: both go.
+    // no fact is told. The sweep runs every hour (`SWEEP_EVERY`): the read 40 minutes on is not
+    // yet an hour past, so it is not due, and the next one, 80 minutes on, is due and goes by
+    // that one time: both go.
     world.restart_at(edge - 10 * MINUTE);
     world.clock.step_at_each_read(40 * MINUTE);
     world.window.barrier();

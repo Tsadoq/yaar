@@ -36,9 +36,10 @@
 //! The set time is `Setting::KeepStates` of the Store's settings, in days, or
 //! `yaar_review_engine::KEEP_STATES` when the user set none. A sweep:
 //!
-//! 1. for every workspace the Store holds, calls `Reviews::expire` with that time,
-//!    `Presence::Gone` or `Present` as `Workspaces::worktree` finds it, under the Keeper's
-//!    parts read for that one workspace (`shared.parts.read()`, let go before the next: a
+//! 1. for every workspace the Store holds, calls `Reviews::expire_at` with the set time and
+//!    the clock's now, read once at the start of the sweep (the same now step 2 uses for the
+//!    files), `Presence::Gone` or `Present` as `Workspaces::worktree` finds it, under the
+//!    Keeper's parts read for that one workspace (`shared.parts.read()`, let go before the next: a
 //!    request that waits for the parts to be written, as the Keeper's end, waits for one
 //!    workspace's sweep at the most; the parts may be gone, and the sweep then ends);
 //! 2. has the Adapters remove the files of sessions that do not run and whose files were
