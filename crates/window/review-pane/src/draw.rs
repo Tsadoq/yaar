@@ -216,6 +216,19 @@ impl Render for ReviewPane {
                     .children(commit_field),
             );
         }
+        // The frame that draws the first line of a diff is the first diff on screen, which
+        // the owner's start timing reads as the mark `first_diff`. The mark is taken here
+        // and not in `window.on_next_frame`, as the Frame does for `first_frame`: GPUI's
+        // test platform never runs that callback, so a test could not see the mark.
+        if !self.first_diff_marked
+            && self
+                .rows
+                .iter()
+                .any(|row| matches!(row, PaneRow::Diff { .. }))
+        {
+            self.first_diff_marked = true;
+            yaar_frame::trace::mark_once("first_diff");
+        }
         // The rows stay while the Keeper refuses to read the changes again, and may
         // then be out of date: the reviewer is told.
         let refused = self.models.changes.read(cx).refusal().map(|refusal| {

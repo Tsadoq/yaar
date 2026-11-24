@@ -929,6 +929,9 @@ pub struct ReviewPane {
     /// What code intelligence keeps: the name the reviewer is on, the asks on their way, the
     /// hover, the list of references, the file view and the place left in the diff.
     navigate: navigate::Navigate,
+    /// Whether the pane asked for the mark of the first diff: set on the first draw of a
+    /// diff with rows, so that the mark is asked for once and not on every frame.
+    first_diff_marked: bool,
 }
 
 impl ReviewPane {
@@ -1002,6 +1005,7 @@ impl ReviewPane {
             attaching: attaching::Attaching::new(models.agents.read(cx).chosen_cli().cloned()),
             moved: moved::Moved::default(),
             navigate: navigate::Navigate::default(),
+            first_diff_marked: false,
         };
         pane.sessions_changed(cx);
         pane.follow_history(window, cx);
