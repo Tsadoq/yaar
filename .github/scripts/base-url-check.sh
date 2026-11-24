@@ -151,7 +151,7 @@ for f in README.md packaging/README.md packaging/release-day.md; do
       # holds the address https://x/install.sh and not https://x/install.sh,y.
       gsub(/["\047`]\//, "/", line)
       gsub(/["\047`]/, " ", line)
-      gsub(/[<>()|\[\]]/, " ", line)
+      gsub(/[<>()|\[\]{}&;]/, " ", line)
       # An apt source shown anywhere in a line (opening it, after "> ", or in a command that
       # writes it) names the address after "URIs:".
       # The field name is read in any case, as apt reads it, and its value is a list: every
