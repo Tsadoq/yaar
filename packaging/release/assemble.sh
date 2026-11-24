@@ -46,13 +46,14 @@
 # nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, when
 # a .deb's Version or Architecture does not match its name (the new ones and every file of
 # PREVIOUS, which must be named <Package>_<Version>_<Architecture>.deb by what it holds), when
-# a file of PREVIOUS is a package other than yaar-review, or when a file of PREVIOUS holds the
-# version being released (equal by `dpkg --compare-versions`, so 0.1.00 is 0.1.0); each
-# sentence names the file and what it holds. Refuses, after writing, when site/ holds more
-# than 900 MB (`du -sk --apparent-size`): a Pages site may hold 1 GB, and the pool grows by
-# two .deb files a release; the sentence names the versions in the pool, oldest first, and says that the
-# oldest must leave the pool (a later decision of the owner's: they stay on the releases
-# page).
+# a file of PREVIOUS is a package other than yaar-review, when a file of PREVIOUS holds the
+# version being released (equal by `dpkg --compare-versions`, so 0.1.00 is 0.1.0), or when two
+# files of PREVIOUS hold one version for one processor (equal by `dpkg --compare-versions`, so
+# 0.0.9 and 0.0.09); each sentence names the file and what it holds, the last one both files.
+# Refuses, after writing, when site/ holds more than 900 MB (`du -sk --apparent-size`): a
+# Pages site may hold 1 GB, and the pool grows by two .deb files a release; the sentence names
+# the versions in the pool, oldest first, and says that the oldest must leave the pool (a
+# later decision of the owner's: they stay on the releases page).
 #
 # Exit codes: 0 written; 1 refused or failed (a sentence says why); 2 usage error.
 #
@@ -178,6 +179,10 @@ done
 # script: a folder of PREVIOUS that cannot be read must not drop a published version from the
 # repository without a word.
 PREVIOUS_DEBS=()
+# What each file accepted so far holds, side by side (three arrays: bash 3.2 has no maps).
+SEEN_ARCH=()
+SEEN_VERSION=()
+SEEN_PATH=()
 PREVIOUS_LIST=
 if [ -n "${PREVIOUS:-}" ]; then
   [ -d "$PREVIOUS" ] || fail "PREVIOUS names $PREVIOUS, which is not a folder"
@@ -203,6 +208,17 @@ if [ -n "${PREVIOUS:-}" ]; then
     if dpkg --compare-versions "$old_version" eq "$VERSION"; then
       fail "$old holds version $old_version, which apt takes for $VERSION, the version being released, under the name $old_name: version $VERSION is published already"
     fi
+    # Two files of PREVIOUS for one processor must not hold one version either, in two
+    # spellings such as 0.0.9 and 0.0.09: apt takes them for one version, the index would
+    # offer both stanzas, and apt would pick which file a user gets.
+    for ((j = 0; j < ${#SEEN_PATH[@]}; j++)); do
+      if [ "${SEEN_ARCH[j]}" = "$old_arch" ] && dpkg --compare-versions "$old_version" eq "${SEEN_VERSION[j]}"; then
+        fail "$old holds version $old_version for $old_arch, which apt takes for version ${SEEN_VERSION[j]} of ${SEEN_PATH[j]}, also in PREVIOUS: two files for one version"
+      fi
+    done
+    SEEN_ARCH+=("$old_arch")
+    SEEN_VERSION+=("$old_version")
+    SEEN_PATH+=("$old")
     PREVIOUS_DEBS+=("$old")
   done <<< "$PREVIOUS_LIST"
 fi
