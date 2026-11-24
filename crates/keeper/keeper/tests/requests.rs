@@ -98,9 +98,16 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
+    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
+    /// serves this Window: a fact told before that is told to a Window that is not there
+    /// yet, and the first reply is the proof that it is.
     fn window(&self) -> Window {
-        self.window_speaking(PROTOCOL_VERSION)
+        let mut window = self.window_speaking(PROTOCOL_VERSION);
+        // The Keeper tells a fact to the Windows it serves: its first reply comes after the
+        // Window is one of them. `ListClis` tells no fact and keeps no state. A Keeper that
+        // finds no git refuses it, which proves the same.
+        let _ = window.ask(Request::ListClis);
+        window
     }
 
     fn window_speaking(&self, protocol: u16) -> Window {
