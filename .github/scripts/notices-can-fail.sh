@@ -25,9 +25,18 @@
 #   7. from the same archive, the licence text of the last block of the file (the last of
 #      PART 3) emptied: must fail, naming PART 3 and "no licence text" (a count that
 #      forgets the block that no rule closes passes this one).
+# Last, on the archive unchanged, the count reads a broken copy of .github/scripts/release-build.sh
+# (through RELEASE_BUILD_SH), which builds the programs the way the notices must not be made
+# for:
+#   8. the three cargo invocations made one that builds all four packages, so that Cargo
+#      merges their features: must fail, naming "one cargo invocation";
+#   9. the invocation of yaar-companion-claude taken out: must fail, naming
+#      "no cargo invocation of its own builds yaar-companion-claude";
+#  10. the invocation of yaar-window made "cargo build --release --locked --workspace": must
+#      fail, naming --workspace, which the count cannot read.
 # Each check prints what it did and what the count said.
 #
-# Exit codes: 0 all seven as above; 1 one of them not (a sentence says which); 2 usage error.
+# Exit codes: 0 all ten as above; 1 one of them not (a sentence says which); 2 usage error.
 #
 # Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
 # package fills the body.
@@ -142,6 +151,20 @@ without_last_text() { # file crate-version (unused)
     }
     FNR <= end { print }' "$1" "$1"
 }
+# release-build.sh with its three cargo invocations made one, which builds the four packages.
+merged_build() { # file
+  awk '
+    /^[ \t]*cargo build / { if (!done) { done = 1; print "cargo build --release --locked -p yaar-window -p yaar-keeper -p yaar-adapter-pi -p yaar-companion-claude \"$@\"" } ; next }
+    { print }' "$1"
+}
+# release-build.sh without the invocation that names yaar-companion-claude.
+build_without_companion() { # file
+  awk '/^[ \t]*cargo build / && /yaar-companion-claude/ { next } { print }' "$1"
+}
+# release-build.sh with the invocation of yaar-window made one that names no package.
+build_of_workspace() { # file
+  awk '/^[ \t]*cargo build / && /yaar-window/ { print "cargo build --release --locked --workspace \"$@\""; next } { print }' "$1"
+}
 # The notices file with a "Used by:" line for a crate the lock file does not hold added to
 # the first block of PART 1.
 with_planted() { # file
@@ -155,11 +178,15 @@ without_toolkit_apple() { # file
   awk '!/^  gpui-pre-apple /' "$1"
 }
 
+# The build script the count reads: the repository's, or the broken copy a check sets.
+BUILD=$ROOT/.github/scripts/release-build.sh
+[ -f "$BUILD" ] || fail "$BUILD is not a file"
+
 # Runs the count on the folder $1 and keeps what it said in $TMP/said and its exit code in
 # $RC.
 count() {
   RC=0
-  "$COUNT" "$1" > "$TMP/said" 2>&1 || RC=$?
+  env "RELEASE_BUILD_SH=$BUILD" "$COUNT" "$1" > "$TMP/said" 2>&1 || RC=$?
 }
 show() { # what was done
   echo "$NAME: $1"
@@ -249,4 +276,21 @@ must_pass "6. $(basename "$ZIP") unchanged"
 break_archive seven without_last_text
 must_fail "7. the licence text of the last block of the file emptied in $(basename "$ARCHIVE")" "PART 3" "no licence text"
 
-echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked and when the toolkit's Apple crate is missing, and passes on both packages as built"
+# The count of the unchanged archive, with a build script that is not as it must be.
+break_build() { # number description transform words...
+  num=$1 desc=$2 transform=$3; shift 3
+  "$transform" "$ROOT/.github/scripts/release-build.sh" > "$TMP/build.$num" \
+    || fail "$transform cannot break .github/scripts/release-build.sh"
+  changed "$TMP/build.$num" "$ROOT/.github/scripts/release-build.sh" \
+    "the break of $transform changed nothing in .github/scripts/release-build.sh"
+  BUILD=$TMP/build.$num
+  count "$TMP/four"
+  BUILD=$ROOT/.github/scripts/release-build.sh
+  must_fail "$num. $desc" "$@"
+}
+
+break_build 8 "release-build.sh builds the four packages in one cargo invocation" merged_build "one cargo invocation"
+break_build 9 "release-build.sh does not build yaar-companion-claude" build_without_companion "no cargo invocation of its own builds yaar-companion-claude"
+break_build 10 "release-build.sh builds the workspace for the Window" build_of_workspace "--workspace"
+
+echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked, when the toolkit's Apple crate is missing and when the programs are not built part by part, and passes on both packages as built"

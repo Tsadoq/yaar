@@ -7,6 +7,14 @@
 #
 #   release-build.sh [cargo arguments, such as --target aarch64-apple-darwin]
 #
+# Each part of the notices is built in a cargo invocation of its own (the Window; the Keeper
+# with pi's reporting program; Claude Code's two programs). One invocation for all four
+# would let Cargo merge the features that each package asks of a shared dependency, so a
+# program would link crates that the notices of its part, which are made and counted per
+# part, do not hold: the Window's tree turns on serde_json's preserve_order, and the Companion
+# would then link indexmap, hashbrown, foldhash and equivalent. packaging/notices-count.sh
+# reads the invocations below and fails when they are not these three.
+#
 # Two builds of one commit give the same programs: the paths of the build machine are
 # mapped away, and the one random seed in the dependency tree is fixed.
 set -eu
@@ -22,4 +30,6 @@ if [ "$(uname -s)" = Darwin ]; then
   export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-12.0}"
 fi
 cd "$ROOT"
-exec cargo build --release --locked -p yaar-window -p yaar-keeper -p yaar-companion-claude -p yaar-adapter-pi "$@"
+cargo build --release --locked -p yaar-window "$@"
+cargo build --release --locked -p yaar-keeper -p yaar-adapter-pi "$@"
+cargo build --release --locked -p yaar-companion-claude "$@"

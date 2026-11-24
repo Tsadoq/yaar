@@ -41,17 +41,29 @@
 # THE FOUND SET is every "name version" of the part's "Used by:" lines, minus the names of
 # the workspace's own crates (cargo-about lists them as users of the licence they carry).
 #
+# THE BUILD: the wanted set of a part is what Cargo links when that part's packages are built
+# together and alone, so .github/scripts/release-build.sh (or the file RELEASE_BUILD_SH
+# names, which the control uses) must build the programs the same way. Its `cargo build`
+# lines are read once, before any package: each may hold only --release, --locked,
+# -p <package> and "$@", and the packages of the lines must be exactly the three sets above,
+# one line for each. One line for several parts would let Cargo merge the features that
+# their packages ask of a shared dependency, and a program would link crates that its part
+# does not list.
+#
 # It fails, naming the package, the part and each crate, when:
 #   - a wanted crate is not found (a linked dependency with no entry);
 #   - a found crate is not wanted (an entry for something not linked: the count is wrong);
 #   - a licence block of the part that names a crate has no text after its "Used by:" lines
 #     (a dependency with no licence text to reproduce);
 #   - a package holds no notices file, or two packages of one system and processor hold
-#     different ones.
+#     different ones;
+#   - release-build.sh does not build the three parts one by one, as THE BUILD says (said
+#     once, whatever the folder holds).
 # Prints one line per package: "<file>: <n> crates in <m> licences, each with its text".
 #
 # Needs cargo (the fetched crates of the lock file; nothing is compiled), jq, gzip, tar,
-# unzip.
+# unzip. The variable RELEASE_BUILD_SH, when set, names the build script to read instead of
+# .github/scripts/release-build.sh.
 # Exit codes: 0 every package counts; 1 a package fails (sentences on standard error);
 # 2 a usage error.
 #
@@ -207,8 +219,60 @@ take_notices() {
   [ -s "$out" ] || { echo "$NAME: $base: its notices file is empty" >&2; return 1; }
 }
 
+# The build script the count reads, and the check that it builds the programs part by part.
+RELEASE_BUILD=${RELEASE_BUILD_SH:-$ROOT/.github/scripts/release-build.sh}
+check_release_build() {
+  [ -f "$RELEASE_BUILD" ] || { echo "$NAME: $RELEASE_BUILD is not a file, so how the programs are built cannot be read" >&2; return 1; }
+  awk -v parts="$(part_packages 1)|$(part_packages 2)|$(part_packages 3)" '
+    function sorted(s,   a, n, i, j, t, out) {
+      n = split(s, a, " ")
+      for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
+      out = a[1]
+      for (i = 2; i <= n; i++) out = out " " a[i]
+      return out
+    }
+    BEGIN { np = split(parts, p, "|"); for (i = 1; i <= np; i++) want[sorted(p[i])] = 1 }
+    /^[ \t]*#/ { next }
+    {
+      line = $0
+      sub(/^[ \t]+/, "", line)
+      sub(/^exec[ \t]+/, "", line)
+      if (line !~ /^cargo[ \t]+build([ \t]|$)/) next
+      n = split(line, w, /[ \t]+/)
+      pkgs = ""; bad = 0
+      for (i = 3; i <= n; i++) {
+        if (w[i] == "--release" || w[i] == "--locked" || w[i] == "\"$@\"") continue
+        if (w[i] == "-p" && i < n) { i++; pkgs = pkgs " " w[i]; continue }
+        print "bad\t" w[i]; bad = 1
+      }
+      if (bad) next
+      invocations++
+      got[sorted(substr(pkgs, 2))]++
+    }
+    END {
+      if (invocations == 0) print "none"
+      for (k in got) {
+        if (!(k in want)) print "extra\t" k
+        else if (got[k] > 1) print "twice\t" k
+      }
+      for (k in want) if (!(k in got)) print "missing\t" k
+    }' "$RELEASE_BUILD" > "$TMP/build.read" || fail "$RELEASE_BUILD cannot be read"
+  [ -s "$TMP/build.read" ] || return 0
+  while IFS=$TAB read -r what rest; do
+    case "$what" in
+      none) echo "$NAME: $RELEASE_BUILD holds no cargo build line, so what the notices are for is not built there" >&2 ;;
+      bad) echo "$NAME: $RELEASE_BUILD: a cargo build line holds '$rest', which the count cannot read (it reads --release, --locked, -p <package> and \"\$@\")" >&2 ;;
+      extra) echo "$NAME: $RELEASE_BUILD: one cargo invocation builds $rest, which is not one part of the notices: Cargo merges the features of the packages of one invocation, so a program would link crates that the notices of its part do not hold" >&2 ;;
+      twice) echo "$NAME: $RELEASE_BUILD: $rest is built by more than one cargo invocation" >&2 ;;
+      missing) echo "$NAME: $RELEASE_BUILD: no cargo invocation of its own builds $rest, a part of the notices" >&2 ;;
+    esac
+  done < "$TMP/build.read"
+  return 1
+}
+
 TAB=$(printf '\t')
 STATUS=0
+check_release_build || STATUS=1
 COUNTED=0
 IDX=0
 for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
@@ -302,7 +366,9 @@ for pkg in "$DIR"/yaar-review_*_amd64.deb "$DIR"/yaar-review_*_arm64.deb \
     awk -F '\t' -v part="$part" '$1 == "B" && $2 == part { n++ } END { print n + 0 }' "$TMP/parsed.$IDX" > "$TMP/blocks" \
       || fail "$base: the licence blocks of PART $part cannot be counted"
     read -r blocks < "$TMP/blocks"
-    CRATES=$((CRATES + $(wc -l < "$TMP/found")))
+    awk 'END { print NR }' "$TMP/found" > "$TMP/n" || fail "$base: the crates of PART $part cannot be counted"
+    read -r n < "$TMP/n"
+    CRATES=$((CRATES + n))
     LICENCES=$((LICENCES + blocks))
   done
   if [ "$OK" = 1 ]; then
