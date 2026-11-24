@@ -19,8 +19,81 @@
 #
 # Exit codes: 0 holds; 1 does not; 2 usage error.
 #
-# Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
-# package fills the body.
-set -eu
-echo "linux-upgrade.sh: not built yet" >&2
-exit 99
+# What the header leaves: `apt-get update` is the plain one (every source), so that a
+# warning about the repository under test cannot hide behind a narrowed source list; its
+# output and exit status are both read.
+set -euo pipefail
+
+NAME=linux-upgrade.sh
+fail() {
+  echo "$NAME: $*" >&2
+  exit 1
+}
+
+if [ $# -ne 3 ]; then
+  echo "usage: $NAME <user> <site-later-dir> <later-version>" >&2
+  exit 2
+fi
+USER_NAME=$1
+SITE_LATER=$2
+LATER=$3
+id -u "$USER_NAME" > /dev/null 2>&1 || {
+  echo "$NAME: no user $USER_NAME on this system" >&2
+  exit 2
+}
+[ -d "$SITE_LATER" ] || {
+  echo "$NAME: $SITE_LATER is not a folder" >&2
+  exit 2
+}
+HERE=$(cd "$(dirname "$0")" && pwd)
+
+SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/yaar-upgrade.XXXXXX")
+trap 'rm -rf "$SCRATCH"' EXIT
+
+# 1. Before.
+FIRST=$(dpkg-query -W -f='${Version}' yaar-review) || fail "yaar-review is not installed: the install line has not run"
+echo "$NAME: installed before: $FIRST"
+[ "$FIRST" != "$LATER" ] || fail "the installed version is already $LATER, the later one: the step proves nothing"
+apt-cache madison yaar-review > "$SCRATCH/madison-before"
+cat "$SCRATCH/madison-before"
+LINES=$(wc -l < "$SCRATCH/madison-before" | tr -d ' ')
+[ "$LINES" -eq 1 ] || fail "apt-cache madison lists $LINES versions of yaar-review before the later site is served, not one"
+
+# 2. The same address serves the later site.
+"$HERE/serve-site.sh" switch "$SITE_LATER" 8000
+
+# 3. update, then upgrade (not install), as the user with sudo.
+STATUS=0
+sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update > "$SCRATCH/update" 2>&1 || STATUS=$?
+cat "$SCRATCH/update"
+[ "$STATUS" -eq 0 ] || fail "apt-get update exited with $STATUS"
+if grep -E '^(W|E):' "$SCRATCH/update" > "$SCRATCH/update-bad"; then
+  echo "$NAME: apt-get update printed a warning or an error, so the later site is not trusted as the first was:" >&2
+  sed 's/^/  /' "$SCRATCH/update-bad" >&2
+  exit 1
+fi
+STATUS=0
+sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y > "$SCRATCH/upgrade" 2>&1 || STATUS=$?
+cat "$SCRATCH/upgrade"
+[ "$STATUS" -eq 0 ] || fail "apt-get upgrade -y exited with $STATUS"
+
+# 4. After.
+NOW=$(dpkg-query -W -f='${Version}' yaar-review) || fail "yaar-review is not installed after the upgrade"
+echo "$NAME: installed after: $NOW"
+[ "$NOW" = "$LATER" ] || fail "the installed version is $NOW after apt-get upgrade, not $LATER"
+apt-cache madison yaar-review > "$SCRATCH/madison-after"
+cat "$SCRATCH/madison-after"
+for v in "$FIRST" "$LATER"; do
+  line=$(awk -F'|' -v v="$v" '{ gsub(/ /, "", $2); if ($2 == v) print }' "$SCRATCH/madison-after")
+  [ -n "$line" ] || fail "apt-cache madison does not list yaar-review $v after the upgrade"
+  case $line in
+    *127.0.0.1:8000*) ;;
+    *) fail "apt-cache madison lists yaar-review $v, but not from 127.0.0.1:8000: $line" ;;
+  esac
+done
+OWNER=$(dpkg -S /usr/bin/yaar-review) || fail "no package owns /usr/bin/yaar-review after the upgrade"
+case $OWNER in
+  "yaar-review: /usr/bin/yaar-review") ;;
+  *) fail "/usr/bin/yaar-review is not the program of the package yaar-review: $OWNER" ;;
+esac
+echo "$NAME: yaar-review $FIRST became $LATER by apt-get upgrade, both versions are listed from 127.0.0.1:8000"
