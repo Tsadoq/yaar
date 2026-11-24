@@ -146,12 +146,13 @@ pub(crate) fn clean_up_now(
     }
 }
 
-/// The states of `workspace` that nothing refers to, deleted by the set time `keep_for`, or
-/// at once when there is none; whether any state went.
+/// The states of `workspace` that nothing refers to, deleted by the set time `keep_for` as
+/// the clock reads `now`, or at once when there is none; whether any state went. The sweep
+/// hands the time it reads once, so that its states and its files go by the same one.
 fn clean(
     kept: &Kept,
     workspace: &yaar_store::WorkspaceId,
-    keep_for: Option<Duration>,
+    by_time: Option<(Duration, SystemTime)>,
 ) -> Result<bool, String> {
     let _alone = CLEANING.lock().unwrap_or_else(PoisonError::into_inner);
     let presence = match kept.workspaces.worktree(workspace) {
@@ -159,8 +160,8 @@ fn clean(
         Ok(None) => Presence::Gone,
         Err(error) => return Err(error.to_string()),
     };
-    let expired = match keep_for {
-        Some(keep_for) => kept.reviews.expire(workspace, keep_for, presence),
+    let expired = match by_time {
+        Some((keep_for, now)) => kept.reviews.expire_at(workspace, keep_for, now, presence),
         None => kept.reviews.clean_up(workspace, presence),
     }
     .map_err(|error| error.to_string())?;
@@ -313,7 +314,9 @@ fn sweep(shared: &Shared, keep_for: Duration, now: SystemTime, stopped: &Receive
         if !matches!(stopped.try_recv(), Err(TryRecvError::Empty)) {
             return;
         }
-        match with_kept(shared, |_, kept| clean(kept, &record.id, Some(keep_for))) {
+        match with_kept(shared, |_, kept| {
+            clean(kept, &record.id, Some((keep_for, now)))
+        }) {
             None => return,
             Some(Ok(true)) => facts.push(Fact::StatesDeleted {
                 workspace: WorkspaceId::new(record.id.as_str()),

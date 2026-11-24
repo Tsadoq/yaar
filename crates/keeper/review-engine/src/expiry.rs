@@ -203,7 +203,20 @@ impl Reviews {
         keep_for: Duration,
         presence: Presence,
     ) -> Result<Expired, EngineError> {
-        self.clean(workspace, Rule::SetTime(keep_for), presence)
+        self.clean(workspace, Rule::SetTime(keep_for), None, presence)
+    }
+
+    /// [`Reviews::expire`] counting every age from `now`, as a caller read it, instead of
+    /// reading the engine's clock: a sweep that also judges something else by the time it
+    /// began, such as the files of ended sessions, judges the states by that same time.
+    pub fn expire_at(
+        &self,
+        workspace: &WorkspaceId,
+        keep_for: Duration,
+        now: SystemTime,
+        presence: Presence,
+    ) -> Result<Expired, EngineError> {
+        self.clean(workspace, Rule::SetTime(keep_for), Some(now), presence)
     }
 
     /// Deletes at once every state and kept commit of `workspace` that no one refers to,
@@ -214,7 +227,7 @@ impl Reviews {
         workspace: &WorkspaceId,
         presence: Presence,
     ) -> Result<Expired, EngineError> {
-        self.clean(workspace, Rule::AtOnce, presence)
+        self.clean(workspace, Rule::AtOnce, None, presence)
     }
 
     /// How each turn of `workspace` stands with its recorded state, by the turn's id: every
@@ -299,6 +312,7 @@ impl Reviews {
         &self,
         workspace: &WorkspaceId,
         rule: Rule,
+        at: Option<SystemTime>,
         presence: Presence,
     ) -> Result<Expired, EngineError> {
         let folder = self.store_folder(workspace);
@@ -335,7 +349,7 @@ impl Reviews {
         } else {
             Vec::new()
         };
-        let now = self.clock.now();
+        let now = at.unwrap_or_else(|| self.clock.now());
 
         // A gone worktree's store goes as one once its newest state is old enough.
         let store_is_old = matches!(rule, Rule::SetTime(_))
