@@ -440,7 +440,7 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "release"
 proves = ["NFR-028"]
-note = "Found while the skeleton was built: there is no single checksum file for all packages yet."
+note = "Every run rehearses it with a key made in the run and thrown away: the step \"One checksum file lists every package of the release\" shows the first clause, and \"The install line refuses a download that does not match SHA256SUMS\", in both install jobs, the second. The row is written as built after a run that publishes."
 
 [[test]]
 id = "PKG-11"
