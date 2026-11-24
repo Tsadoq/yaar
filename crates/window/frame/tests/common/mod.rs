@@ -5,7 +5,7 @@
 #![allow(dead_code)]
 
 use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -21,9 +21,9 @@ use gpui_kit::{
 use yaar_frame::keeper::Attached;
 use yaar_frame::{BuildPane, Frame, KeeperLink, Models, Sidebar, bind, controls};
 use yaar_link::{
-    CreditedFile, Fact, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply,
-    Repository, RepositoryId, Request, RequestId, ReviewId, Setting, TerminalId, TerminalInfo,
-    Workspace, WorkspaceAgents, WorkspaceId, read_message, write_message,
+    Fact, Head, Hello, Message, PROTOCOL_VERSION, Refusal, Reply, Repository, RepositoryId,
+    Request, RequestId, Setting, TerminalId, TerminalInfo, Workspace, WorkspaceAgents, WorkspaceId,
+    read_message, write_message,
 };
 
 pub const DEADLINE: Duration = Duration::from_secs(10);
@@ -80,13 +80,10 @@ struct Inner {
     agents: Vec<WorkspaceAgents>,
     clis: Vec<yaar_link::AgentCli>,
     terminals: Vec<TerminalInfo>,
-    histories: HashMap<WorkspaceId, History>,
-    uncommitted: Vec<CreditedFile>,
     settings: Vec<Setting>,
     settings_set: Vec<Setting>,
     setting_refusal: Option<Refusal>,
     shown: Vec<Option<WorkspaceId>>,
-    uncommitted_review: Option<ReviewId>,
     show_refusal: Option<Refusal>,
     asked: Asked,
     agents_held: Held,
@@ -100,8 +97,6 @@ struct Inner {
 struct Asked {
     agents: usize,
     terminals: usize,
-    history: usize,
-    uncommitted: usize,
     settings: usize,
 }
 
@@ -158,20 +153,6 @@ impl Standing {
                     Some(refusal) => Err(refusal),
                     None => Ok(Reply::Done),
                 })
-            }
-            Request::GetHistory { workspace } => {
-                inner.asked.history += 1;
-                let history = inner.histories.get(workspace).cloned();
-                Heard::Answer(Ok(Reply::History(history.unwrap_or_else(|| History {
-                    workspace: workspace.clone(),
-                    start: None,
-                    entries: Vec::new(),
-                }))))
-            }
-            Request::GetUncommitted { review, .. } => {
-                inner.asked.uncommitted += 1;
-                inner.uncommitted_review = review.clone();
-                Heard::Answer(Ok(Reply::Uncommitted(inner.uncommitted.clone())))
             }
             Request::GetSettings => {
                 inner.asked.settings += 1;
@@ -409,15 +390,6 @@ impl KeeperEnd {
         self.standing.lock().terminals = terminals;
     }
 
-    pub fn set_history(&self, history: History) {
-        let mut inner = self.standing.lock();
-        inner.histories.insert(history.workspace.clone(), history);
-    }
-
-    pub fn set_uncommitted(&self, uncommitted: Vec<CreditedFile>) {
-        self.standing.lock().uncommitted = uncommitted;
-    }
-
     pub fn refuse_show(&self, refusal: Option<Refusal>) {
         self.standing.lock().show_refusal = refusal;
     }
@@ -428,10 +400,6 @@ impl KeeperEnd {
 
     pub fn shown_workspace(&self) -> Option<WorkspaceId> {
         self.standing.lock().shown.last().cloned().flatten()
-    }
-
-    pub fn uncommitted_review(&self) -> Option<ReviewId> {
-        self.standing.lock().uncommitted_review.clone()
     }
 
     pub fn set_settings(&self, settings: Vec<Setting>) {
@@ -456,14 +424,6 @@ impl KeeperEnd {
 
     pub fn terminals_asked(&self) -> usize {
         self.standing.lock().asked.terminals
-    }
-
-    pub fn history_asked(&self) -> usize {
-        self.standing.lock().asked.history
-    }
-
-    pub fn uncommitted_asked(&self) -> usize {
-        self.standing.lock().asked.uncommitted
     }
 
     pub fn hold_agents(&self) {

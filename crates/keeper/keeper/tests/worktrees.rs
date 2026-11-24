@@ -7,7 +7,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -15,20 +14,19 @@ use std::time::{Duration, Instant};
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
     Base, BaseSource, Comparison, Fact, Head, Hello, Message, Program, Refusal, Reply, Repository,
-    RepositoryId, Request, RequestId, Setting, TerminalId, TerminalInfo, TerminalSize, WorkspaceId,
-    handshake, read_message, write_message,
+    RepositoryId, Request, RequestId, Setting, TerminalId, TerminalInfo, WorkspaceId, handshake,
+    read_message, write_message,
 };
+
+mod support;
+
+use support::{Environment, SIZE, Scratch};
 
 const DEADLINE: Duration = Duration::from_secs(20);
 
 /// A Keeper that ought to be waiting is given this long to show it is not; a slower one is missed,
 /// never wrongly blamed.
 const SETTLE: Duration = Duration::from_secs(3);
-
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Shell {
@@ -39,22 +37,12 @@ enum Shell {
 
 /// A folder of the test's own, holding `home`, `tmp`, `data`, `fake` (the stand-ins),
 /// `lair/repo` (alone, as its worktrees' folder is made beside it) and the Keeper's socket.
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets the process environment for git and the shell. Must be the first statement of a test.
     fn new(shell: Shell) -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and git and the Keeper name a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-worktrees-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp", "fake", "lair"] {
-            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
+        let scratch = Scratch::in_tmp("worktrees", Environment::Full);
+        for folder in ["fake", "lair"] {
+            std::fs::create_dir_all(scratch.0.join(folder)).expect("make the test's folder");
         }
-        let scratch = Scratch(root);
         for agent in ["claude", "pi"] {
             scratch.program(
                 &scratch.0.join("fake").join(agent),
@@ -86,39 +74,7 @@ impl Scratch {
                 broken
             }
         };
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-        ];
-        // SAFETY: this runs as the first statement of a test, and nextest gives each test
-        // a process of its own, so no other thread exists yet.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("SHELL", &shell);
-            std::env::set_var("HOME", scratch.home());
-            // Where the Keeper's copies of git's file lists and a terminal's programs go.
-            std::env::set_var("TMPDIR", scratch.0.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
+        scratch.set_env("SHELL", &shell);
         scratch
     }
 
@@ -205,12 +161,6 @@ impl Scratch {
         git(&folder, &["commit", "--quiet", "-m", "first"]);
         git(&folder, &["branch", "other"]);
         folder
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 

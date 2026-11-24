@@ -214,8 +214,6 @@ pub struct Vars {
     pub env: Option<Vec<(OsString, OsString)>>,
 }
 
-pub const VARIABLES: [&str; 5] = ["root", "worktree", "target", "platform", "servers"];
-
 /// `{{` and `}}` stand for `{` and `}`.
 pub fn expand(text: &str, vars: &Vars) -> Result<String, String> {
     let mut out = String::with_capacity(text.len());

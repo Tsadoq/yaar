@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::fmt::Display;
 use std::path::{Component, Path};
 use std::sync::Arc;
 
@@ -12,7 +11,7 @@ use yaar_review_engine::{Credited, EngineError, uncommitted_of};
 use yaar_store::{StepRecord, TurnEndRecord, TurnRecord};
 
 use super::Agents;
-use crate::wiring::{Kept, refusal};
+use crate::wiring::{Kept, failed, refusal};
 
 /// How many of its first bytes say whether a file is text: git's own number, as for
 /// `Request::ReadFile`.
@@ -398,12 +397,6 @@ pub(super) fn versions_refusal(
 
 fn worktree_is_gone() -> Refusal {
     failed(EngineError::NoWorktree)
-}
-
-pub(super) fn failed(error: impl Display) -> Refusal {
-    Refusal::Failed {
-        reason: error.to_string(),
-    }
 }
 
 fn leads_out(path: &Path) -> bool {

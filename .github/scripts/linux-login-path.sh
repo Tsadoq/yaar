@@ -6,6 +6,7 @@
 set -euo pipefail
 set -E
 
+HERE=$(cd "$(dirname "$0")" && pwd)
 PROGRAM=linux-login-path.sh
 SYSTEM_PATH=/usr/local/bin:/usr/bin:/bin
 ENTRY=/usr/share/applications/io.github.tsadoq.yaar.desktop
@@ -102,16 +103,8 @@ end_process() {
 }
 
 seen=""
-wait_until() {
-    local limit=$((SECONDS + $1))
-    while :; do
-        if "$3"; then
-            return 0
-        fi
-        [ "$SECONDS" -lt "$limit" ] || fail "$2 within $1 s: $seen"
-        sleep 0.2
-    done
-}
+# shellcheck source=wait-until.sh
+. "$HERE/wait-until.sh"
 
 diagnose() {
     {

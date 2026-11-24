@@ -106,10 +106,6 @@ opt-level = 3
 [profile.dev.package.memchr]
 opt-level = 3
 
-[profile.release]
-opt-level = 3
-debug = false
-
 # The vendored GPUI is patched so that the older frame source is the default on macOS
 # (patches/README.md).
 [patch.crates-io]

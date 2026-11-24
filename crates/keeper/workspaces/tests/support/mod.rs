@@ -1,6 +1,5 @@
 #![allow(dead_code)]
 
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -95,29 +94,6 @@ pub fn git_bytes(folder: &Path, args: &[&str]) -> Vec<u8> {
 
 pub fn git(folder: &Path, args: &[&str]) -> String {
     String::from_utf8(git_bytes(folder, args))
-        .expect("git printed text")
-        .trim()
-        .to_owned()
-}
-
-pub fn git_with_input(folder: &Path, args: &[&str], input: &[u8]) -> String {
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .expect("start git");
-    child
-        .stdin
-        .take()
-        .expect("a pipe to git")
-        .write_all(input)
-        .expect("write to git");
-    let output = child.wait_with_output().expect("wait for git");
-    assert!(output.status.success(), "git {args:?} failed");
-    String::from_utf8(output.stdout)
         .expect("git printed text")
         .trim()
         .to_owned()

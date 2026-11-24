@@ -5,8 +5,8 @@ use std::path::{Component, Path, PathBuf};
 use yaar_link::{Refusal, Reply, WorkspaceId};
 
 use crate::agents::Agents;
-use crate::agents::reading::{failed, states_of, versions_refusal};
-use crate::wiring::{Kept, refusal};
+use crate::agents::reading::{states_of, versions_refusal};
+use crate::wiring::{Kept, failed, refusal};
 
 impl Agents {
     /// `into` must be absolute, inside `yaar_link::cache_dir()` with its parts resolved but the

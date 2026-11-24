@@ -29,6 +29,10 @@ impl Out {
         self.0.extend_from_slice(&value.to_le_bytes());
     }
 
+    pub(crate) fn flag(&mut self, value: bool) {
+        self.u8(u8::from(value));
+    }
+
     pub(crate) fn bytes(&mut self, value: &[u8]) {
         // A run longer than a u32 can count is longer than any frame; the whole-frame length check
         // refuses it.
@@ -103,6 +107,14 @@ impl<'a> In<'a> {
         let mut value = [0u8; 8];
         value.copy_from_slice(bytes);
         Ok(u64::from_le_bytes(value))
+    }
+
+    pub(crate) fn flag(&mut self) -> Result<bool, LinkError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => Err(LinkError::Malformed("a flag is neither 0 nor 1")),
+        }
     }
 
     pub(crate) fn bytes(&mut self) -> Result<Vec<u8>, LinkError> {

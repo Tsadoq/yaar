@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use notify::event::{CreateKind, ModifyKind};
@@ -9,6 +9,7 @@ use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use yaar_store::WorkspaceId;
 
 use crate::credit::Ledger;
+use crate::lock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Seen {
@@ -246,12 +247,6 @@ impl Watching {
         let mut ledger = lock(&ledger);
         f(&mut ledger)
     }
-}
-
-/// Takes a lock also after a panic of its holder: the ledger and the list are only added to or
-/// taken from, whole.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

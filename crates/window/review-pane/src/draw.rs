@@ -19,18 +19,18 @@ pub(crate) const ROW_HEIGHT: Pixels = px(20.);
 
 pub(crate) const NUMBER_WIDTH: Pixels = px(56.);
 
-const SIGN_WIDTH: Pixels = px(20.);
+pub(crate) const SIGN_WIDTH: Pixels = px(20.);
 
 /// A line is never wrapped and the overflow is cut off, so the rest of a megabyte line would be
 /// shaped for nothing in every frame.
-const DRAWN_BYTES: usize = 1024;
+pub(crate) const DRAWN_BYTES: usize = 1024;
 
 impl ShownDiff {
     pub(crate) fn text(&self, side: Side, line: u32) -> Cow<'_, str> {
         String::from_utf8_lossy(self.diff.line(side, line))
     }
 
-    fn marks(&self, side: Side, line: u32) -> Vec<Range<usize>> {
+    pub(crate) fn marks(&self, side: Side, line: u32) -> Vec<Range<usize>> {
         let lines = |hunk: &Hunk| match side {
             Side::Old => hunk.old.clone(),
             Side::New => hunk.new.clone(),
@@ -52,7 +52,7 @@ impl ShownDiff {
     }
 }
 
-struct InView(Rc<RefCell<Range<usize>>>);
+pub(crate) struct InView(pub(crate) Rc<RefCell<Range<usize>>>);
 
 impl UniformListDecoration for InView {
     fn compute(
@@ -80,12 +80,12 @@ impl Render for ReviewPane {
         let offer = self.offer_bar(cx);
         let start = self.render_offer_to_start(cx);
         let rounds = self.render_rounds(cx);
-        let bar = self.render_bar(window, cx);
+        let bar = self.render_bar(cx);
         let servers = self.render_servers(cx);
         let hover = self.render_hover(cx);
         let references = self.render_references(cx);
-        let file_view = self.render_file_view(window, cx);
-        let flow = (self.view == View::Flow).then(|| self.render_flow(window, cx));
+        let file_view = self.render_file_view(cx);
+        let flow = (self.view == View::Flow).then(|| self.render_flow(cx));
         let theme = cx.theme();
         let pane = div()
             .size_full()
@@ -308,23 +308,23 @@ impl ReviewPane {
 
     fn toggle_flow_form_in_flow(
         &mut self,
-        action: &crate::ToggleFlowForm,
-        window: &mut Window,
+        _: &crate::ToggleFlowForm,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.view == View::Flow {
-            self.toggle_flow_form(action, window, cx);
+            self.toggle_flow_form(cx);
         }
     }
 
     fn resume_follow_in_flow(
         &mut self,
-        action: &crate::ResumeFollow,
-        window: &mut Window,
+        _: &crate::ResumeFollow,
+        _: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if self.view == View::Flow {
-            self.resume_follow(action, window, cx);
+            self.resume_follow(cx);
         }
     }
 
@@ -440,7 +440,9 @@ impl ReviewPane {
                 .child(unshown_sentence(*why)),
             PaneRow::Diff { path, row: shown } => self.draw_diff(row, index, path, shown, cx),
             PaneRow::Thread { thread } => self.draw_thread(row, thread, cx),
-            PaneRow::Comment { thread, comment } => self.draw_comment(row, thread, comment),
+            PaneRow::Comment { thread, comment } => {
+                self.draw_comment(row, thread, comment, "review")
+            }
             PaneRow::ThreadsElsewhere => row
                 .px_2()
                 .bg(theme.secondary)
@@ -493,7 +495,13 @@ impl ReviewPane {
             .children(moved)
     }
 
-    pub(crate) fn draw_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
+    pub(crate) fn draw_comment(
+        &self,
+        row: Div,
+        thread: &ThreadId,
+        comment: &CommentId,
+        selector_prefix: &str,
+    ) -> Div {
         let Some(comment) = self
             .review()
             .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
@@ -516,7 +524,7 @@ impl ReviewPane {
         let id = comment.id.clone();
         row.pl_10().pr_2().child(
             div()
-                .debug_selector(|| format!("review-comment-{id}:{state}"))
+                .debug_selector(|| format!("{selector_prefix}-comment-{id}:{state}"))
                 .child(format!("{who}: {first}{more}")),
         )
     }
@@ -652,7 +660,7 @@ impl ReviewPane {
     }
 }
 
-fn side_name(side: Side) -> &'static str {
+pub(crate) fn side_name(side: Side) -> &'static str {
     match side {
         Side::Old => "old",
         Side::New => "new",
@@ -802,7 +810,7 @@ fn comparison_sentence(comparison: &Comparison) -> String {
     }
 }
 
-fn status_words(status: &FileStatus) -> String {
+pub(crate) fn status_words(status: &FileStatus) -> String {
     match status {
         FileStatus::Added => "new".to_owned(),
         FileStatus::Modified => "changed".to_owned(),
@@ -811,7 +819,7 @@ fn status_words(status: &FileStatus) -> String {
     }
 }
 
-fn unshown_sentence(why: Unshown) -> &'static str {
+pub(crate) fn unshown_sentence(why: Unshown) -> &'static str {
     match why {
         Unshown::Loading => "Reading the file",
         Unshown::Binary => "Not text: its lines are not shown",

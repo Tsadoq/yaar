@@ -4,6 +4,7 @@
 
 mod agent;
 pub mod login;
+mod reporter;
 mod request;
 mod review;
 mod setting;
@@ -24,6 +25,7 @@ pub use agent::{
     AgentCli, AgentReport, Consent, ConsentAnswer, CreditedFile, History, HistoryEntry, Session,
     SessionState, Step, TerminalInfo, Turn, TurnEnd, WorkspaceAgents,
 };
+pub use reporter::{Answered, ReportPlace, Reporter, Unanswered, report_to_keeper};
 pub use request::{Fact, Origin, Refusal, Reply, Request, RequestId, RequestKind};
 pub use review::{
     Anchor, Attachment, Author, Comment, CommentId, DraftOn, Lines, Notice, Placed, Review,

@@ -25,8 +25,8 @@ use yaar_link::{
     Base, BaseSource, ChangedFile, Changes, Commit, Comparison, Content, CreditedFile, Fact,
     FileSides, FileStatus, Head, Hello, History, Message, PROTOCOL_VERSION, Refusal, Reply,
     Repository, RepositoryId, Request, RequestId, Review, ReviewId, Session, SessionId,
-    SessionState, Setting, Step, TerminalId, TerminalInfo, Turn, TurnId, Workspace,
-    WorkspaceAgents, WorkspaceId, WorkspaceReviews, read_message, write_message,
+    SessionState, Setting, Step, Turn, TurnId, Workspace, WorkspaceAgents, WorkspaceId,
+    WorkspaceReviews, read_message, write_message,
 };
 use yaar_review_pane::{PaneRow, ReviewPane, Unshown};
 
@@ -90,7 +90,6 @@ struct Standing {
 struct Inner {
     agents: Vec<WorkspaceAgents>,
     clis: Vec<yaar_link::AgentCli>,
-    terminals: Vec<TerminalInfo>,
     /// By workspace; with none set, a history with no entry that starts where the last answered
     /// changes are counted from.
     histories: HashMap<WorkspaceId, History>,
@@ -102,23 +101,15 @@ struct Inner {
     /// A turn with none set is refused as unknown.
     turns: HashMap<TurnId, Turn>,
     turns_asked: Vec<TurnId>,
-    shown: Vec<Option<WorkspaceId>>,
     uncommitted_review: Option<ReviewId>,
-    show_refusal: Option<Refusal>,
     asked: Asked,
     agents_held: Held,
-    terminals_held: Held,
-    inputs: Vec<(TerminalId, Vec<u8>)>,
-    stops: usize,
 }
 
 #[derive(Default, Clone, Copy)]
 struct Asked {
-    agents: usize,
-    terminals: usize,
     history: usize,
     uncommitted: usize,
-    settings: usize,
 }
 
 /// Answers a test keeps back, as a slow Keeper would: made when heard, sent when released.
@@ -159,23 +150,12 @@ impl Standing {
         let mut inner = self.lock();
         match request {
             Request::ListAgents => {
-                inner.asked.agents += 1;
                 let reply = Reply::Agents(inner.agents.clone());
                 inner.agents_held.offer(id, reply)
             }
             Request::ListClis => Heard::Answer(Ok(Reply::Clis(inner.clis.clone()))),
-            Request::ListTerminals => {
-                inner.asked.terminals += 1;
-                let reply = Reply::Terminals(inner.terminals.clone());
-                inner.terminals_held.offer(id, reply)
-            }
-            Request::ShowWorkspace { workspace } => {
-                inner.shown.push(workspace.clone());
-                Heard::Answer(match inner.show_refusal.clone() {
-                    Some(refusal) => Err(refusal),
-                    None => Ok(Reply::Done),
-                })
-            }
+            Request::ListTerminals => Heard::Answer(Ok(Reply::Terminals(Vec::new()))),
+            Request::ShowWorkspace { .. } => Heard::Answer(Ok(Reply::Done)),
             Request::GetHistory { workspace } => {
                 inner.asked.history += 1;
                 let history = inner.histories.get(workspace).cloned();
@@ -191,10 +171,7 @@ impl Standing {
                 inner.uncommitted_review = review.clone();
                 Heard::Answer(Ok(Reply::Uncommitted(inner.uncommitted.clone())))
             }
-            Request::GetSettings => {
-                inner.asked.settings += 1;
-                Heard::Answer(Ok(Reply::Settings(inner.settings.clone())))
-            }
+            Request::GetSettings => Heard::Answer(Ok(Reply::Settings(inner.settings.clone()))),
             Request::SetSetting { setting } => {
                 inner.settings_set.push(setting.clone());
                 match inner
@@ -229,12 +206,8 @@ pub struct KeeperEnd {
 }
 
 impl KeeperEnd {
-    pub fn attach(link: &Entity<KeeperLink>, cx: &mut TestAppContext) -> Self {
-        Self::attach_staged(link, cx, |_| {})
-    }
-
-    /// Like [`KeeperEnd::attach`], but runs `stage` first: the Window asks for the agents and the
-    /// settings as soon as it is linked, so they have to be set before.
+    /// Runs `stage` before the link is made: the Window asks for the agents and the settings as
+    /// soon as it is linked, so they have to be set before.
     pub fn attach_staged(
         link: &Entity<KeeperLink>,
         cx: &mut TestAppContext,
@@ -290,15 +263,6 @@ impl KeeperEnd {
                             Heard::Kept => {}
                         },
                         message => {
-                            // Counted before the test can read the frame.
-                            match &message {
-                                Message::Input { terminal, bytes } => standing
-                                    .lock()
-                                    .inputs
-                                    .push((terminal.clone(), bytes.clone())),
-                                Message::Shutdown => standing.lock().stops += 1,
-                                _ => {}
-                            }
                             if tell.send(message).is_err() {
                                 break;
                             }
@@ -384,10 +348,6 @@ impl KeeperEnd {
         self.tell(Fact::AgentsChanged(agents));
     }
 
-    pub fn set_terminals(&self, terminals: Vec<TerminalInfo>) {
-        self.standing.lock().terminals = terminals;
-    }
-
     pub fn set_history(&self, history: History) {
         let mut inner = self.standing.lock();
         inner.histories.insert(history.workspace.clone(), history);
@@ -395,18 +355,6 @@ impl KeeperEnd {
 
     pub fn set_uncommitted(&self, uncommitted: Vec<CreditedFile>) {
         self.standing.lock().uncommitted = uncommitted;
-    }
-
-    pub fn refuse_show(&self, refusal: Option<Refusal>) {
-        self.standing.lock().show_refusal = refusal;
-    }
-
-    pub fn shown_told(&self) -> Vec<Option<WorkspaceId>> {
-        self.standing.lock().shown.clone()
-    }
-
-    pub fn shown_workspace(&self) -> Option<WorkspaceId> {
-        self.standing.lock().shown.last().cloned().flatten()
     }
 
     pub fn uncommitted_review(&self) -> Option<ReviewId> {
@@ -422,24 +370,12 @@ impl KeeperEnd {
         self.standing.lock().settings_set.clone()
     }
 
-    pub fn settings_asked(&self) -> usize {
-        self.standing.lock().asked.settings
-    }
-
     pub fn set_turn(&self, turn: Turn) {
         self.standing.lock().turns.insert(turn.id.clone(), turn);
     }
 
     pub fn turns_asked(&self) -> Vec<TurnId> {
         self.standing.lock().turns_asked.clone()
-    }
-
-    pub fn agents_asked(&self) -> usize {
-        self.standing.lock().asked.agents
-    }
-
-    pub fn terminals_asked(&self) -> usize {
-        self.standing.lock().asked.terminals
     }
 
     pub fn history_asked(&self) -> usize {
@@ -463,19 +399,6 @@ impl KeeperEnd {
         self.send_replies(released);
     }
 
-    pub fn hold_terminals(&self) {
-        self.standing.lock().terminals_held.holding = true;
-    }
-
-    pub fn held_terminals(&self) -> usize {
-        self.standing.lock().terminals_held.held.len()
-    }
-
-    pub fn release_terminals(&self, count: usize) {
-        let released = self.standing.lock().terminals_held.release(count);
-        self.send_replies(released);
-    }
-
     fn send_replies(&self, replies: Vec<(RequestId, Reply)>) {
         for (to, reply) in replies {
             write(
@@ -486,37 +409,6 @@ impl KeeperEnd {
                 },
             );
         }
-    }
-
-    /// A frame is counted before the test can read it: a count of none is read after a barrier.
-    pub fn stops_heard(&self) -> usize {
-        self.standing.lock().stops
-    }
-
-    pub fn shutdown(&mut self, cx: &mut TestAppContext) {
-        let deadline = Instant::now() + DEADLINE;
-        loop {
-            cx.run_until_parked();
-            match self.heard.recv_timeout(PAUSE) {
-                Ok(Message::Shutdown) => return,
-                Ok(other) => panic!("the Window sent {other:?}, and the stop frame was expected"),
-                Err(RecvTimeoutError::Disconnected) => {
-                    panic!("the Window closed the connection, and the stop frame was expected")
-                }
-                Err(RecvTimeoutError::Timeout) => {}
-            }
-            assert!(Instant::now() < deadline, "the Window sent no stop frame");
-        }
-    }
-
-    pub fn inputs(&self, terminal: &TerminalId) -> Vec<Vec<u8>> {
-        self.standing
-            .lock()
-            .inputs
-            .iter()
-            .filter(|(from, _)| from == terminal)
-            .map(|(_, bytes)| bytes.clone())
-            .collect()
     }
 
     /// Tells the Window nothing: a test that wants it to read them tells `Fact::ReviewsChanged`.

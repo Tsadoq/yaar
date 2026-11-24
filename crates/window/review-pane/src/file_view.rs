@@ -294,12 +294,7 @@ impl ReviewPane {
         self.clicked(Spot::File(line), layout, event, window, cx);
     }
 
-    pub(crate) fn render_file_view(
-        &self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Div> {
-        let _ = window;
+    pub(crate) fn render_file_view(&self, cx: &mut Context<Self>) -> Option<Div> {
         let shown = self.navigate.file.as_ref()?;
         let theme = cx.theme();
         let path = match &shown.file.kind {
@@ -383,7 +378,7 @@ impl ReviewPane {
             .whitespace_nowrap();
         match item {
             FileItem::Thread(thread) => self.draw_thread(row, thread, cx),
-            FileItem::Comment(thread, comment) => self.draw_comment(row, thread, comment),
+            FileItem::Comment(thread, comment) => self.draw_comment(row, thread, comment, "review"),
             FileItem::Line(line) => {
                 let line = *line;
                 let here = self

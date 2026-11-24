@@ -228,7 +228,7 @@ fn patch_lines(response: &Value) -> Option<Vec<RangeInclusive<u32>>> {
         .collect()
 }
 
-fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
+pub(crate) fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
     object.get(key)?.as_str()
 }
 

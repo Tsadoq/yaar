@@ -1,23 +1,22 @@
 #!/bin/bash
 # The app as it ships and the .zip and .dmg users download: Info.plist, programs, signatures.
-# .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices> [<packages-dir>]
-# YAAR_EXPECT_ARCHS (default "x86_64 arm64") is what `lipo -archs` must give.
+# .github/scripts/macos-bundle-check.sh <YAAR.app> <version> <notices> <packages-dir>
 set -euo pipefail
 
 SELF=$(basename "$0")
 HERE=$(cd "$(dirname "$0")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
 
-usage() { echo "usage: $SELF <YAAR.app> <version> <notices> [<packages-dir>]" >&2; exit 2; }
-[ $# -eq 3 ] || [ $# -eq 4 ] || usage
-APP=$1; VER=$2; NOTICES=$3; PKGS=${4:-}
+usage() { echo "usage: $SELF <YAAR.app> <version> <notices> <packages-dir>" >&2; exit 2; }
+[ $# -eq 4 ] || usage
+APP=$1; VER=$2; NOTICES=$3; PKGS=$4
 
 fail() { echo "$SELF: $*" >&2; exit 1; }
 trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
 
 [ -d "$APP" ] || fail "$APP is not a folder: no app to check"
 [ -f "$NOTICES" ] || fail "$NOTICES is not a file: no notices to compare the app's with"
-[ -z "$PKGS" ] || [ -d "$PKGS" ] || fail "$PKGS is not a folder: no .zip and .dmg to check"
+[ -d "$PKGS" ] || fail "$PKGS is not a folder: no .zip and .dmg to check"
 APP=$(cd "$APP" && pwd -P)
 
 WORK=$(mktemp -d)
@@ -74,7 +73,7 @@ want="yaar-claude-hook yaar-claude-tools yaar-keeper yaar-pi-report"
 [ "$got" = "$want" ] || fail "Contents/Helpers holds \"$got\", not \"$want\""
 
 sorted_words() { printf '%s\n' "$1" | tr -s ' ' '\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
-EXPECT_ARCHS=${YAAR_EXPECT_ARCHS:-x86_64 arm64}
+EXPECT_ARCHS="x86_64 arm64"
 WANT_ARCHS=$(sorted_words "$EXPECT_ARCHS")
 read -ra ARCH_LIST <<< "$WANT_ARCHS"
 
@@ -120,11 +119,6 @@ cmp -s "$NOTICES" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt" ||
 cmp -s "$REPO/LICENSE" "$APP/Contents/Resources/LICENSE" ||
   fail "Contents/Resources/LICENSE is missing or is not the LICENSE of the repository"
 
-if [ -z "$PKGS" ]; then
-  echo "$SELF: the app holds what it should"
-  exit 0
-fi
-
 modes_in() { (cd "$1" && find . -type f -exec stat -f '%Lp %N' {} + | LC_ALL=C sort); }
 APP_MODES=$(modes_in "$APP") || fail "the modes of the files of $APP could not be read"
 
@@ -148,10 +142,8 @@ same_app() { # <the file's name> <the app in it>
   fi
 }
 
-SUFFIX=universal
-case "$WANT_ARCHS" in *" "*) ;; *) SUFFIX=$WANT_ARCHS ;; esac
-ZIP="$PKGS/yaar-review-$VER-macos-$SUFFIX.zip"
-DMG="$PKGS/yaar-review-$VER-macos-$SUFFIX.dmg"
+ZIP="$PKGS/yaar-review-$VER-macos-universal.zip"
+DMG="$PKGS/yaar-review-$VER-macos-universal.dmg"
 [ -f "$ZIP" ] || fail "$ZIP is missing"
 [ -f "$DMG" ] || fail "$DMG is missing"
 

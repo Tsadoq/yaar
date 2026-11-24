@@ -6,7 +6,7 @@ use yaar_link::{
     Fact, FlowForm, OptionKey, Refusal, Reply, Setting, TerminalPlace, ThemeChoice, TurnEndSelects,
 };
 
-use crate::wiring::Kept;
+use crate::wiring::{Kept, failed};
 
 pub(crate) fn get(kept: &Kept) -> Result<Reply, Refusal> {
     let kept = kept.store.settings().map_err(failed)?;
@@ -175,12 +175,6 @@ fn store_form(form: FlowForm) -> yaar_store::FlowForm {
     match form {
         FlowForm::Timeline => yaar_store::FlowForm::Timeline,
         FlowForm::LiveDiff => yaar_store::FlowForm::LiveDiff,
-    }
-}
-
-fn failed(error: impl std::fmt::Display) -> Refusal {
-    Refusal::Failed {
-        reason: error.to_string(),
     }
 }
 

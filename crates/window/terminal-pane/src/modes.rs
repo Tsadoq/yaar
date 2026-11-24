@@ -7,9 +7,6 @@ impl KeyboardFlags {
     pub const NONE: KeyboardFlags = KeyboardFlags(0);
     pub const DISAMBIGUATE: KeyboardFlags = KeyboardFlags(1);
     pub const REPORT_EVENT_TYPES: KeyboardFlags = KeyboardFlags(2);
-    pub const REPORT_ALTERNATE_KEYS: KeyboardFlags = KeyboardFlags(4);
-    pub const REPORT_ALL_KEYS: KeyboardFlags = KeyboardFlags(8);
-    pub const REPORT_TEXT: KeyboardFlags = KeyboardFlags(16);
 
     pub fn contains(self, other: KeyboardFlags) -> bool {
         self.0 & other.0 == other.0

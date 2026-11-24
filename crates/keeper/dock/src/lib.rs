@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use terminal::Terminal;
+use yaar_link::user_shell;
 
 pub const STOP_STEP: Duration = Duration::from_secs(1);
 
@@ -222,10 +223,6 @@ fn held_value(
         .or_else(|| keeper(name))
         .unwrap_or_default()
 }
-
-/// `SHELL` when an absolute path to a runnable file; else the user's entry in the user list; else
-/// `/bin/sh`.
-pub use yaar_link::user_shell;
 
 #[derive(Debug)]
 pub enum DockError {

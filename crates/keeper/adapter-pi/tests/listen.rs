@@ -10,7 +10,7 @@ use yaar_agent::{
 };
 use yaar_system_tests::recorded::{self, PiRecord};
 
-use support::{Scratch, feed, in_project, told};
+use support::{Scratch, feed, told};
 
 /// pi's four tools, one prompt each, in five runs, then a new session, a reload, a resume and a
 /// quit.
@@ -126,7 +126,7 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         (
             16,
             Event::FileRead {
-                path: in_project(&project, "src/calc.py"),
+                path: project.join("src/calc.py"),
             },
         ),
         (28, finished()),
@@ -134,7 +134,7 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         (
             40,
             Event::FileWritten {
-                path: in_project(&project, "src/calc.py"),
+                path: project.join("src/calc.py"),
                 tool: WriteTool::Edit,
                 lines: Some(vec![RangeInclusive::new(1, 9)]),
             },
@@ -144,7 +144,7 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         (
             64,
             Event::FileWritten {
-                path: in_project(&project, "new_file.txt"),
+                path: project.join("new_file.txt"),
                 tool: WriteTool::Write,
                 lines: None,
             },
@@ -222,10 +222,7 @@ fn recorded_pi_runs_with_a_read_an_edit_a_new_file_and_a_shell_write_give_the_sa
         .collect();
     assert_eq!(
         writes,
-        [
-            in_project(&project, "src/calc.py"),
-            in_project(&project, "new_file.txt")
-        ]
+        [project.join("src/calc.py"), project.join("new_file.txt")]
     );
 }
 

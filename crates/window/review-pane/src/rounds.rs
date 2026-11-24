@@ -7,6 +7,7 @@ use gpui_kit::*;
 use yaar_link::{HistoryEntry, TurnId};
 
 use crate::draw::ROW_HEIGHT;
+use crate::tree::version_of;
 use crate::{ChangeShown, ReviewPane, SinceRound, View};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -24,14 +25,7 @@ enum Counted {
 }
 
 fn versions(entries: &[HistoryEntry]) -> Vec<&str> {
-    entries
-        .iter()
-        .filter_map(|entry| match entry {
-            HistoryEntry::Commit(commit) => Some(commit.id.as_str()),
-            HistoryEntry::Turn { state, .. } => state.as_deref(),
-            HistoryEntry::ExpiredTurn { .. } => None,
-        })
-        .collect()
+    entries.iter().filter_map(version_of).collect()
 }
 
 fn ended(entries: &[HistoryEntry], turn: &TurnId) -> bool {

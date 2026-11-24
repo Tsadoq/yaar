@@ -9,7 +9,7 @@ use gpui_kit::*;
 use yaar_link::{Fact, FlowForm, TurnId, WorkspaceAgents, WorkspaceId};
 
 use crate::draw::ROW_HEIGHT;
-use crate::{ChangeShown, FlowAt, Following, ResumeFollow, ReviewPane, ToggleFollow, View};
+use crate::{ChangeShown, FlowAt, Following, ReviewPane, ToggleFollow, View};
 
 pub(crate) struct Follow {
     workspace: Option<WorkspaceId>,
@@ -54,13 +54,7 @@ impl ReviewPane {
         cx.notify();
     }
 
-    pub(crate) fn resume_follow(
-        &mut self,
-        _: &ResumeFollow,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = window;
+    pub(crate) fn resume_follow(&mut self, cx: &mut Context<Self>) {
         self.steered(cx);
         match self.following {
             Following::Paused { .. } => {
@@ -202,8 +196,8 @@ impl ReviewPane {
                             .debug_selector(|| "flow-follow-resume".to_owned())
                             .on_mouse_down(
                                 MouseButton::Left,
-                                cx.listener(|pane, _: &MouseDownEvent, window, cx| {
-                                    pane.resume_follow(&ResumeFollow, window, cx);
+                                cx.listener(|pane, _: &MouseDownEvent, _, cx| {
+                                    pane.resume_follow(cx);
                                 }),
                             ),
                     ),

@@ -102,7 +102,7 @@ impl Tree {
     }
 }
 
-fn version_of(entry: &HistoryEntry) -> Option<&str> {
+pub(crate) fn version_of(entry: &HistoryEntry) -> Option<&str> {
     match entry {
         HistoryEntry::Commit(commit) => Some(&commit.id),
         HistoryEntry::Turn { state, .. } => state.as_deref(),

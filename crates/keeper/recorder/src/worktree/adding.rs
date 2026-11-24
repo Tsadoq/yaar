@@ -246,7 +246,7 @@ fn hold() -> MutexGuard<'static, ()> {
 }
 
 /// `path` with its links resolved as far as it exists; the part below that is kept as it is.
-fn resolved(path: &Path) -> PathBuf {
+pub fn resolved(path: &Path) -> PathBuf {
     let mut rest = Vec::new();
     let mut at = path;
     loop {

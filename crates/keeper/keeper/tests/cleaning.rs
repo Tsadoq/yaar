@@ -7,7 +7,6 @@ use std::os::unix::fs::MetadataExt as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -15,20 +14,19 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use yaar_keeper::{Exit, Options, run_with_clock};
 use yaar_link::{
     Fact, Hello, HistoryEntry, Message, Program, Refusal, Reply, Request, RequestId,
-    SOCKET_VARIABLE, Setting, StateSizes, TERMINAL_VARIABLE, TerminalId, TerminalSize, TurnId,
-    WorkspaceId, handshake, read_message, write_message,
+    SOCKET_VARIABLE, Setting, StateSizes, TERMINAL_VARIABLE, TerminalId, TurnId, WorkspaceId,
+    handshake, read_message, write_message,
 };
 use yaar_recorder::Clock;
 use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
-const DEADLINE: Duration = Duration::from_secs(20);
+mod support;
 
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
+use support::{Environment, SIZE, Scratch};
+
+const DEADLINE: Duration = Duration::from_secs(20);
 
 const DAY: Duration = Duration::from_secs(24 * 60 * 60);
 const HOUR: Duration = Duration::from_secs(60 * 60);
@@ -81,54 +79,9 @@ impl Clock for TestClock {
     }
 }
 
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-cleaning-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp"] {
-            fs::create_dir_all(root.join(folder)).expect("make the test's folder");
-        }
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-            ("SHELL", "/bin/sh"),
-        ];
-        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
-        // so no other thread exists.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("HOME", root.join("home"));
-            std::env::set_var("TMPDIR", root.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
-        Scratch(root)
+        Scratch::in_tmp("cleaning", Environment::Full)
     }
 
     fn socket(&self) -> PathBuf {
@@ -261,12 +214,6 @@ impl Scratch {
             .expect("hand it the hook's input");
         let output = child.wait_with_output().expect("wait for the hook program");
         assert!(output.status.success(), "the hook program failed");
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
     }
 }
 

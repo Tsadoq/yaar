@@ -13,7 +13,7 @@ use yaar_link::{
     Fact, FlowForm, Reply, Request, SessionId, Setting, Step, TurnEnd, TurnId, WorkspaceId,
 };
 
-use crate::{FlowAt, Following, ReviewPane, TimelineEntry, ToggleFlowForm, ToggleView, View};
+use crate::{FlowAt, Following, ReviewPane, TimelineEntry, ToggleView, View};
 
 const UNKNOWN_SESSION: &str = "Agent session";
 
@@ -59,8 +59,7 @@ pub(crate) struct Timeline {
 }
 
 impl Timeline {
-    pub(crate) fn new(cx: &mut Context<ReviewPane>) -> Self {
-        let _ = cx;
+    pub(crate) fn new() -> Self {
         Self {
             workspace: None,
             turns: Vec::new(),
@@ -189,13 +188,7 @@ impl ReviewPane {
         self.show_view(other, cx);
     }
 
-    pub(crate) fn toggle_flow_form(
-        &mut self,
-        _: &ToggleFlowForm,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let _ = window;
+    pub(crate) fn toggle_flow_form(&mut self, cx: &mut Context<Self>) {
         self.steered(cx);
         let other = match self.form {
             FlowForm::Timeline => FlowForm::LiveDiff,

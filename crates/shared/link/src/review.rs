@@ -307,23 +307,11 @@ fn read_comment(input: &mut In<'_>) -> Result<Comment, LinkError> {
     })
 }
 
-fn write_flag(out: &mut Out, flag: bool) {
-    out.u8(u8::from(flag));
-}
-
-fn read_flag(input: &mut In<'_>) -> Result<bool, LinkError> {
-    match input.u8()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(LinkError::Malformed("a flag is neither 0 nor 1")),
-    }
-}
-
 fn write_thread(out: &mut Out, thread: &Thread) {
     out.text(thread.id.as_str());
     write_anchor(out, &thread.anchor);
-    write_flag(out, thread.resolved);
-    write_flag(out, thread.addressed);
+    out.flag(thread.resolved);
+    out.flag(thread.addressed);
     out.list(&thread.comments, write_comment);
     write_thread_state(out, thread.state);
     out.optional(thread.now.as_ref(), write_placed);
@@ -381,8 +369,8 @@ fn read_thread(input: &mut In<'_>) -> Result<Thread, LinkError> {
     Ok(Thread {
         id: ThreadId::new(input.text()?),
         anchor: read_anchor(input)?,
-        resolved: read_flag(input)?,
-        addressed: read_flag(input)?,
+        resolved: input.flag()?,
+        addressed: input.flag()?,
         comments: input.list(read_comment)?,
         state: read_thread_state(input)?,
         now: input.optional(read_placed)?,
@@ -396,7 +384,7 @@ fn write_round(out: &mut Out, round: &Round) {
         SentBy::Copied => 0,
         SentBy::Delivered => 1,
     });
-    write_flag(out, round.edited);
+    out.flag(round.edited);
     out.optional(round.turn.as_ref(), |out, turn| out.text(turn.as_str()));
 }
 
@@ -409,7 +397,7 @@ fn read_round(input: &mut In<'_>) -> Result<Round, LinkError> {
             1 => SentBy::Delivered,
             _ => return Err(LinkError::Malformed("a round sent in an unknown way")),
         },
-        edited: read_flag(input)?,
+        edited: input.flag()?,
         turn: input.optional(|input| input.text().map(TurnId::new))?,
     })
 }

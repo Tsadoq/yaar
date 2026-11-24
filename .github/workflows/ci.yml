@@ -267,10 +267,6 @@ jobs:
           for p in MacOS/yaar-review Helpers/yaar-keeper Helpers/yaar-claude-hook \
                    Helpers/yaar-claude-tools Helpers/yaar-pi-report; do
             echo "$p: $(lipo -archs "dist/YAAR.app/Contents/$p")"
-            # One call for each processor: with both names in one call lipo reads the second
-            # as another input file and refuses ("requires exactly one input file").
-            lipo "dist/YAAR.app/Contents/$p" -verify_arch arm64
-            lipo "dist/YAAR.app/Contents/$p" -verify_arch x86_64
             codesign --verify --strict --verbose=1 "dist/YAAR.app/Contents/$p"
           done
 
@@ -346,7 +342,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git gcc g++ libc6-dev pkg-config libfontconfig-dev \
-            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file binutils
+            libxkbcommon-x11-dev dpkg-dev file binutils
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -507,7 +503,6 @@ jobs:
     container: ${{ matrix.image }}
     timeout-minutes: 20
     env:
-      VERSION: ${{ needs.version.outputs.version }}
       LATER: ${{ needs.version.outputs.later }}
     steps:
       - name: What a user's system has, and a user

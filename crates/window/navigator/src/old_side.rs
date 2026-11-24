@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use yaar_link::WorkspaceId;
 
-use crate::answers;
+use crate::answers::{self, absolute};
 use crate::lifecycle::{state_of, stop};
 use crate::navigator::{Core, ServerKey, Side};
 use crate::port::{ExportAsk, Told};
@@ -238,8 +238,4 @@ fn link(target: &Path, at: &Path, inside: &Path) {
             target.display()
         );
     }
-}
-
-fn absolute(path: &Path) -> PathBuf {
-    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }

@@ -1,52 +1,22 @@
 //! How the live diff of Flow is drawn: one list of rows of one height.
 
 use std::borrow::Cow;
-use std::cell::RefCell;
 use std::ops::Range;
 use std::path::Path;
-use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::*;
-use yaar_diff::{Hunk, Row, Side};
-use yaar_link::{Author, CommentId, FileStatus, Step, ThreadId};
+use yaar_diff::{Row, Side};
+use yaar_link::{Step, ThreadId};
 
-use crate::draw::ROW_HEIGHT;
-use crate::{Layout, PaneRow, ReviewPane, ShownDiff, Unshown};
-
-const NUMBER_WIDTH: Pixels = px(56.);
-
-const SIGN_WIDTH: Pixels = px(20.);
-
-/// The bytes of a line handed to the text system: a line is never wrapped, so the rest of a
-/// very long one would be shaped for nothing in every frame.
-const DRAWN_BYTES: usize = 1024;
-
-struct InView(Rc<RefCell<Range<usize>>>);
-
-impl UniformListDecoration for InView {
-    fn compute(
-        &self,
-        visible_range: Range<usize>,
-        _bounds: Bounds<Pixels>,
-        _scroll_offset: Point<Pixels>,
-        _item_height: Pixels,
-        _item_count: usize,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> AnyElement {
-        *self.0.borrow_mut() = visible_range;
-        Empty.into_any_element()
-    }
-}
+use crate::draw::{
+    DRAWN_BYTES, InView, NUMBER_WIDTH, ROW_HEIGHT, SIGN_WIDTH, side_name, status_words,
+    unshown_sentence,
+};
+use crate::{Layout, PaneRow, ReviewPane, ShownDiff};
 
 impl ReviewPane {
-    pub(crate) fn render_live(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let _ = window;
+    pub(crate) fn render_live(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme();
         if self.live.change().is_none() {
             return div()
@@ -135,10 +105,10 @@ impl ReviewPane {
             PaneRow::Unshown { why, .. } => row
                 .px_2()
                 .text_color(theme.muted_foreground)
-                .child(unshown_words(*why)),
+                .child(unshown_sentence(*why)),
             PaneRow::Diff { path, row: shown } => self.draw_live_diff(row, index, path, shown, cx),
             PaneRow::Thread { thread } => self.draw_live_thread(row, thread, cx),
-            PaneRow::Comment { thread, comment } => self.draw_live_comment(row, thread, comment),
+            PaneRow::Comment { thread, comment } => self.draw_comment(row, thread, comment, "flow"),
             PaneRow::Read { path } => row
                 .px_2()
                 .gap_3()
@@ -180,34 +150,6 @@ impl ReviewPane {
                     anchor.path.display(),
                     if thread.resolved { ", resolved" } else { "" }
                 )),
-        )
-    }
-
-    fn draw_live_comment(&self, row: Div, thread: &ThreadId, comment: &CommentId) -> Div {
-        let Some(comment) = self
-            .review()
-            .and_then(|review| review.threads.iter().find(|held| held.id == *thread))
-            .and_then(|thread| thread.comments.iter().find(|held| held.id == *comment))
-        else {
-            return row;
-        };
-        let state = match comment.round {
-            Some(round) => format!("round-{round}"),
-            None => "draft".to_owned(),
-        };
-        let who = match (comment.author, comment.round) {
-            (Author::Agent, _) => "Agent".to_owned(),
-            (Author::Reviewer, Some(round)) => format!("You, round {round}"),
-            (Author::Reviewer, None) => "You, draft".to_owned(),
-        };
-        let mut lines = comment.text.lines();
-        let first = lines.next().unwrap_or_default();
-        let more = if lines.next().is_some() { " …" } else { "" };
-        let id = comment.id.clone();
-        row.pl_10().pr_2().child(
-            div()
-                .debug_selector(|| format!("flow-comment-{id}:{state}"))
-                .child(format!("{who}: {first}{more}")),
         )
     }
 
@@ -326,41 +268,12 @@ impl ReviewPane {
     }
 }
 
-fn side_name(side: Side) -> &'static str {
-    match side {
-        Side::Old => "old",
-        Side::New => "new",
-    }
-}
-
-fn marks(diff: &ShownDiff, side: Side, line: u32) -> Vec<Range<usize>> {
-    let lines = |hunk: &Hunk| match side {
-        Side::Old => hunk.old.clone(),
-        Side::New => hunk.new.clone(),
-    };
-    let hunks = diff.diff.hunks();
-    let index = hunks.partition_point(|hunk| lines(hunk).end <= line);
-    if !hunks
-        .get(index)
-        .is_some_and(|hunk| lines(hunk).contains(&line))
-    {
-        return Vec::new();
-    }
-    let emphasis = diff
-        .emphasis
-        .borrow_mut()
-        .entry(index)
-        .or_insert_with(|| Rc::new(diff.diff.emphasis(index)))
-        .clone();
-    emphasis.of(side, line).to_vec()
-}
-
 fn live_line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: Hsla) -> Div {
     let text = diff.text(side, line);
     // Marks count bytes of the line as in the file; where non-text bytes were replaced, nothing is
     // marked.
     let marked = match text {
-        Cow::Borrowed(_) => marks(diff, side, line),
+        Cow::Borrowed(_) => diff.marks(side, line),
         Cow::Owned(_) => Vec::new(),
     };
     let end = text.floor_char_boundary(DRAWN_BYTES);
@@ -383,22 +296,4 @@ fn live_line_text(diff: &ShownDiff, index: usize, side: Side, line: u32, mark: H
         .px_1()
         .overflow_hidden()
         .child(StyledText::new(drawn).with_highlights(highlights))
-}
-
-fn status_words(status: &FileStatus) -> String {
-    match status {
-        FileStatus::Added => "new".to_owned(),
-        FileStatus::Modified => "changed".to_owned(),
-        FileStatus::Deleted => "deleted".to_owned(),
-        FileStatus::Renamed { from } => format!("was {}", from.display()),
-    }
-}
-
-fn unshown_words(why: Unshown) -> &'static str {
-    match why {
-        Unshown::Loading => "Reading the file",
-        Unshown::Binary => "Not text: its lines are not shown",
-        Unshown::TooLarge => "Too large to show",
-        Unshown::Refused => "The Keeper could not read this file",
-    }
 }

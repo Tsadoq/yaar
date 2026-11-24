@@ -5,6 +5,7 @@
 set -euo pipefail
 set -E
 
+HERE=$(cd "$(dirname "$0")" && pwd)
 PROGRAM=macos-launch.sh
 APP=/Applications/YAAR.app
 WINDOW="$APP/Contents/MacOS/yaar-review"
@@ -46,31 +47,10 @@ status_dir=$(mktemp -d) || fail "no scratch folder could be made"
 status_pid_of_query=""
 seen=""
 
-processes_of() {
-    ps -axo uid=,pid=,ppid=,comm= | awk -v uid="$uid" -v want="$1" '
-        $1 == uid {
-            program = $4
-            for (i = 5; i <= NF; i++) program = program " " $i
-            if (program == want) print $2, $3
-        }'
-}
-
-is_gone() {
-    ! kill -0 "$1" 2> /dev/null
-}
-
-# wait_until <seconds> <sentence> <function>: runs the function every 0.2 s until it succeeds,
-# else fails with the sentence and what the function left in $seen.
-wait_until() {
-    local limit=$((SECONDS + $1))
-    while :; do
-        if "$3"; then
-            return 0
-        fi
-        [ "$SECONDS" -lt "$limit" ] || fail "$2 within $1 s: $seen"
-        sleep 0.2
-    done
-}
+# shellcheck source=wait-until.sh
+. "$HERE/wait-until.sh"
+# shellcheck source=macos-processes.sh
+. "$HERE/macos-processes.sh"
 
 # lsappinfo type of bundle id $1: Foreground (Dock icon), UIElement or BackgroundOnly, or nothing.
 app_type() {

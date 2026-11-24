@@ -5,6 +5,7 @@
 set -euo pipefail
 set -E
 
+HERE=$(cd "$(dirname "$0")" && pwd)
 PROGRAM=macos-login-path.sh
 APP=/Applications/YAAR.app
 WINDOW="$APP/Contents/MacOS/yaar-review"
@@ -59,15 +60,6 @@ plain_git() {
     GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git "$@"
 }
 
-processes_of() {
-    ps -axo uid=,pid=,ppid=,comm= | awk -v uid="$uid" -v want="$1" '
-        $1 == uid {
-            program = $4
-            for (i = 5; i <= NF; i++) program = program " " $i
-            if (program == want) print $2, $3
-        }'
-}
-
 # Matched by name, not by full path: the program the shell starts for claude is a link to the
 # stand-in.
 claude_below() {
@@ -84,10 +76,6 @@ claude_below() {
         }'
 }
 
-is_gone() {
-    ! kill -0 "$1" 2> /dev/null
-}
-
 end_process() {
     local pid=$1 limit=$((SECONDS + 10))
     [ -n "$pid" ] || return 0
@@ -102,16 +90,10 @@ end_process() {
 }
 
 seen=""
-wait_until() {
-    local limit=$((SECONDS + $1))
-    while :; do
-        if "$3"; then
-            return 0
-        fi
-        [ "$SECONDS" -lt "$limit" ] || fail "$2 within $1 s: $seen"
-        sleep 0.2
-    done
-}
+# shellcheck source=wait-until.sh
+. "$HERE/wait-until.sh"
+# shellcheck source=macos-processes.sh
+. "$HERE/macos-processes.sh"
 
 # Asks the login shell as the Keeper does (crates/shared/link/src/login.rs): -l -i -c, stdin from
 # /dev/null, launchd's search path in an otherwise bare environment, a 10 s deadline. -i makes zsh

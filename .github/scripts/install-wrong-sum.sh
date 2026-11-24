@@ -1,7 +1,7 @@
 #!/bin/bash
 # Runs the install line against a site whose SHA256SUMS holds one wrong sum: it must refuse with
 # its sentence and install nothing. .github/scripts/install-wrong-sum.sh <rehearsal-dir> [<user>]
-# Serves on 127.0.0.1:8001 (YAAR_WRONG_SUM_PORT) so the job's own site on 8000 keeps its sums.
+# Serves on 127.0.0.1:8001 so the job's own site on 8000 keeps its sums.
 set -euo pipefail
 set -E
 
@@ -29,7 +29,7 @@ trap 'last_command=$BASH_COMMAND' ERR
 
 scratch=""
 into=""
-port=${YAAR_WRONG_SUM_PORT:-8001}
+port=8001
 served=""
 cleanup() {
     local status=$?
@@ -61,9 +61,6 @@ user=${2:-}
 [ -d "$rehearsal/site" ] || usage "$rehearsal/site is not a folder"
 [ -d "$rehearsal/release" ] || usage "$rehearsal/release is not a folder"
 [ -f "$rehearsal/release/SHA256SUMS" ] || usage "$rehearsal/release/SHA256SUMS is not a file"
-case "$port" in
-    '' | *[!0-9]*) usage "YAAR_WRONG_SUM_PORT is a port number, not: $port" ;;
-esac
 rehearsal=$(cd -P "$rehearsal" && pwd) || fail "$rehearsal could not be entered"
 
 system=$(uname -s)

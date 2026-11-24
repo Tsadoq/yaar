@@ -375,7 +375,7 @@ fn log_file(log: Option<&Path>) -> Stdio {
 }
 
 #[cfg(target_os = "linux")]
-fn end_with_the_window(command: &mut Command) {
+pub(crate) fn end_with_the_window(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
     // SAFETY: `getpid` has no preconditions.
@@ -398,9 +398,7 @@ fn end_with_the_window(command: &mut Command) {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn end_with_the_window(command: &mut Command) {
-    let _ = command;
-}
+pub(crate) fn end_with_the_window(_command: &mut Command) {}
 
 fn write_loop(mut input: ChildStdin, queue: Receiver<Outgoing>) {
     while let Ok(Outgoing::Frame(frame)) = queue.recv() {

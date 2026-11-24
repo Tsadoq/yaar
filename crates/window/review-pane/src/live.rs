@@ -46,8 +46,7 @@ pub(crate) struct Live {
 }
 
 impl Live {
-    pub(crate) fn new(cx: &mut Context<ReviewPane>) -> Self {
-        let _ = cx;
+    pub(crate) fn new() -> Self {
         Self {
             change: None,
             files: Vec::new(),

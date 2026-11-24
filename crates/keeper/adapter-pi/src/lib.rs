@@ -47,7 +47,7 @@ mod reporter;
 mod settings;
 
 pub use deliver::{INSTRUCTION, ToPi};
-pub use reporter::{DEADLINE, ReportAnswer, ReportPlace, TOOL_DEADLINE, pass_on};
+pub use reporter::{DEADLINE, TOOL_DEADLINE, pass_on};
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -158,8 +158,8 @@ impl Adapter for Pi {
         Vec::new()
     }
 
-    fn asked(&self, folder: &Path, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
-        self.memory.asked(folder, report)
+    fn asked(&self, _folder: &Path, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
+        self.memory.asked(report)
     }
 
     fn instruction(&self) -> &'static str {
@@ -171,8 +171,8 @@ impl Adapter for Pi {
         Box::new(ToPi)
     }
 
-    fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
-        self.memory.answer(asked, answer)
+    fn answer(&self, _asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
+        self.memory.answer(answer)
     }
 
     fn resume(&self, session: &CliSession, cli_record: Option<&Path>) -> String {

@@ -60,11 +60,6 @@ impl Dialect {
         }
     }
 
-    /// Whether the CLI asks permission at a prompt of its own.
-    pub fn asks_permission(self) -> bool {
-        matches!(self, Dialect::ClaudeCode)
-    }
-
     /// The review an answer to [`Dialect::message_event`] carried; None for an empty answer or one
     /// without.
     pub fn review_in(self, answer: &[u8]) -> Option<String> {
