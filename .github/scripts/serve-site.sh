@@ -22,7 +22,10 @@
 # ended, so that a failed start leaves nothing that holds the port.
 # switch: points the site of the server on <port> at <site-dir> (the link `root`), so that
 # the same address now serves another site, as a new deployment of Pages does; the
-# download folder stays. Used by PKG-06.
+# download folder stays. Used by PKG-06. A client that holds an older copy of a file is
+# given the file whole at every request, whatever its If-Modified-Since says: a new
+# deployment need not hold files newer than the last one's, and apt, told "not modified",
+# keeps the index of the repository it had.
 # stop: ends the server of <port> by the pid it wrote (never by name) and waits for it.
 #
 # Exit codes: 0 served; 1 failed; 2 usage error.
@@ -122,6 +125,14 @@ download = os.path.join(served, "root-download")
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    def send_head(self):
+        # Every request is answered whole. The parent answers 304 to a client whose
+        # If-Modified-Since is not older than the file, to the second, and a site that is
+        # switched to files no newer than the last one's would then keep the old index in
+        # apt's lists.
+        del self.headers["If-Modified-Since"]
+        return super().send_head()
+
     def translate_path(self, path):
         path = urllib.parse.unquote(urllib.parse.urlsplit(path).path)
         parts = [p for p in posixpath.normpath(path).split("/") if p not in ("", ".", "..")]
