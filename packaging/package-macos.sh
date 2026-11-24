@@ -82,6 +82,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 usage() { echo "usage: $SELF <version> <out-dir> <programs-dir>..." >&2; exit 2; }
 refuse() { echo "$SELF: $*" >&2; exit 2; }
 fail() { echo "$SELF: $*" >&2; exit 1; }
+# Each step below says in its own words what failed. This is for a command that is not a step:
+# it still ends the run with a sentence naming the line.
+trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
 
 [ $# -ge 3 ] || usage
 VER=$1; OUT=$2; shift 2
@@ -148,7 +151,8 @@ KEYCHAIN=()
 if [ -n "${SIGN_KEYCHAIN:-}" ]; then KEYCHAIN=(--keychain "$SIGN_KEYCHAIN"); fi
 
 sign() { # codesign with the identity and the keychain: <codesign arguments>
-  codesign --force --sign "$SIGN_IDENTITY" ${KEYCHAIN[@]+"${KEYCHAIN[@]}"} "$@"
+  codesign --force --sign "$SIGN_IDENTITY" ${KEYCHAIN[@]+"${KEYCHAIN[@]}"} "$@" ||
+    fail "codesign could not sign ${*: -1}"
 }
 
 mkdir -p "$OUT"; OUT=$(cd "$OUT" && pwd)
@@ -165,16 +169,16 @@ merge() { # <program> <where it goes>
   if [ ${#ins[@]} -gt 1 ]; then
     lipo -create "${ins[@]}" -output "$2" || fail "lipo could not join $1 of the two folders"
   else
-    cp "${ins[0]}" "$2"
+    cp "${ins[0]}" "$2" || fail "$1 could not be copied from ${PROGDIRS[0]}"
   fi
-  chmod 755 "$2"
+  chmod 755 "$2" || fail "$2 could not be made executable"
 }
 merge yaar-review "$APP/Contents/MacOS/yaar-review"
 for p in "${PROGRAMS[@]}"; do
   if [ "$p" != yaar-review ]; then merge "$p" "$APP/Contents/Helpers/$p"; fi
 done
 
-archs=$(lipo -archs "$APP/Contents/MacOS/yaar-review")
+archs=$(lipo -archs "$APP/Contents/MacOS/yaar-review") || fail "lipo cannot read the processors of yaar-review"
 case $archs in
   *" "*) SUFFIX=universal ;;
   *) SUFFIX=$archs ;;
@@ -186,18 +190,20 @@ rm -f "$ZIP" "$DMG"
 # The icon: one PNG scaled into an icon set. sips and iconutil ship with macOS.
 I="$WORK/AppIcon.iconset"; mkdir -p "$I"
 for s in 16 32 128 256 512; do
-  sips -z $s $s "$HERE/macos/icon-1024.png" --out "$I/icon_${s}x${s}.png" > /dev/null
-  sips -z $((s*2)) $((s*2)) "$HERE/macos/icon-1024.png" --out "$I/icon_${s}x${s}@2x.png" > /dev/null
+  sips -z $s $s "$HERE/macos/icon-1024.png" --out "$I/icon_${s}x${s}.png" > /dev/null ||
+    fail "sips could not scale the icon to ${s}x${s}"
+  sips -z $((s*2)) $((s*2)) "$HERE/macos/icon-1024.png" --out "$I/icon_${s}x${s}@2x.png" > /dev/null ||
+    fail "sips could not scale the icon to $((s*2))x$((s*2))"
 done
-iconutil -c icns "$I" -o "$APP/Contents/Resources/AppIcon.icns"
+iconutil -c icns "$I" -o "$APP/Contents/Resources/AppIcon.icns" || fail "iconutil could not make AppIcon.icns"
 
-cp "$HERE/../LICENSE" "$APP/Contents/Resources/LICENSE"
-cp "$NOTICES" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt"
+cp "$HERE/../LICENSE" "$APP/Contents/Resources/LICENSE" || fail "the LICENSE of the repository could not be copied into the app"
+cp "$NOTICES" "$APP/Contents/Resources/THIRD-PARTY-NOTICES.txt" || fail "$NOTICES could not be copied into the app"
 
 sed -e "s/@VERSION@/$VER/" -e "s/@BUILD@/$VER/" -e "s/@MINOS@/$MIN_MACOS/" \
-  "$HERE/macos/Info.plist.in" > "$APP/Contents/Info.plist"
-plutil -lint "$APP/Contents/Info.plist" > /dev/null
-printf 'APPL????' > "$APP/Contents/PkgInfo"
+  "$HERE/macos/Info.plist.in" > "$APP/Contents/Info.plist" || fail "Info.plist could not be made from $HERE/macos/Info.plist.in"
+plutil -lint "$APP/Contents/Info.plist" > /dev/null || fail "the Info.plist made from Info.plist.in is not a property list"
+printf 'APPL????' > "$APP/Contents/PkgInfo" || fail "PkgInfo could not be written"
 
 notarise() { # <file> <what it is called in a sentence>
   local file=$1 what=$2 json="$WORK/notary.json" status id
@@ -207,8 +213,10 @@ notarise() { # <file> <what it is called in a sentence>
     cat "$json" >&2
     fail "notarytool did not finish for the $what"
   fi
-  status=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | tail -n 1)
-  id=$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | sed -n '1p')
+  status=$(sed -n 's/.*"status"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | tail -n 1) ||
+    fail "the answer of notarytool for the $what could not be read"
+  id=$(sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$json" | sed -n '1p') ||
+    fail "the answer of notarytool for the $what could not be read"
   if [ "$status" != "Accepted" ]; then
     if [ -z "$id" ]; then
       cat "$json" >&2
@@ -228,35 +236,36 @@ for p in "${PROGRAMS[@]}"; do
 done
 # 2. The bundle, which seals the helpers and signs the Window with the bundle's identifier.
 sign --options runtime "${TS[@]}" "$APP"
-codesign --verify --deep --strict --verbose=2 "$APP"
+codesign --verify --deep --strict --verbose=2 "$APP" || fail "the signed bundle does not pass codesign --verify --deep --strict"
 
 if [ "$NOTARIZE" = yes ]; then
   # 3, 4. Apple takes an archive, not a folder.
-  ditto -c -k --keepParent "$APP" "$WORK/submit.zip"
+  ditto -c -k --keepParent "$APP" "$WORK/submit.zip" || fail "ditto could not make the archive of the app to send to Apple"
   notarise "$WORK/submit.zip" "app"
   # 5, 6. The ticket goes into the app itself, so that the .zip and the .dmg made below both
   #       carry an app that opens offline.
-  xcrun stapler staple "$APP"
-  xcrun stapler validate "$APP"
-  codesign --verify --deep --strict --verbose=2 "$APP"
+  xcrun stapler staple "$APP" || fail "stapler could not staple the ticket to the app"
+  xcrun stapler validate "$APP" || fail "stapler finds no valid ticket on the app"
+  codesign --verify --deep --strict --verbose=2 "$APP" || fail "the app no longer passes codesign --verify --deep --strict after stapling"
 fi
 
 # 7. The published .zip: the stapled app when there is a ticket.
-ditto -c -k --keepParent "$APP" "$ZIP"
+ditto -c -k --keepParent "$APP" "$ZIP" || fail "ditto could not make $ZIP"
 
 # 8. The disk image, made from that app and a link to /Applications.
 S="$WORK/dmg"; mkdir -p "$S"
-ditto "$APP" "$S/YAAR.app"
-ln -s /Applications "$S/Applications"
-hdiutil create -quiet -volname "YAAR" -srcfolder "$S" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG"
+ditto "$APP" "$S/YAAR.app" || fail "ditto could not copy the app into the folder of the disk image"
+ln -s /Applications "$S/Applications" || fail "the link Applications could not be made in the folder of the disk image"
+hdiutil create -quiet -volname "YAAR" -srcfolder "$S" -fs HFS+ -format UDZO -imagekey zlib-level=9 "$DMG" ||
+  fail "hdiutil could not make $DMG"
 # 9. The image is signed (no runtime option: it holds no code of its own).
 sign "${TS[@]}" "$DMG"
 
 if [ "$NOTARIZE" = yes ]; then
   # 10, 11.
   notarise "$DMG" "disk image"
-  xcrun stapler staple "$DMG"
-  xcrun stapler validate "$DMG"
+  xcrun stapler staple "$DMG" || fail "stapler could not staple the ticket to the disk image"
+  xcrun stapler validate "$DMG" || fail "stapler finds no valid ticket on the disk image"
 fi
 
 if [ "$SIGN_IDENTITY" = "-" ]; then

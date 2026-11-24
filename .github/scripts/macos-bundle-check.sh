@@ -15,7 +15,9 @@
 #     a builder on a Mac with one target sets "arm64");
 #   - each of the five is signed under the hardened runtime (`codesign -dv` shows
 #     flags=0x10000(runtime)) with no entitlement (`codesign -d --entitlements -` prints
-#     none), and with its identifier: io.github.tsadoq.yaar (the bundle),
+#     none), and with its identifier, in every processor's slice (`codesign -a <processor>`:
+#     without it codesign reports the slice of the processor it runs on only):
+#     io.github.tsadoq.yaar (the bundle),
 #     io.github.tsadoq.yaar.keeper, io.github.tsadoq.yaar.claude-hook,
 #     io.github.tsadoq.yaar.claude-tools, io.github.tsadoq.yaar.pi-report;
 #   - no file named standin-lsp, standin-agent or yaar-script anywhere in the bundle;
@@ -30,6 +32,9 @@
 #     detached at the end whatever happens) holds YAAR.app and a link Applications to
 #     /Applications, and that app is <YAAR.app> in the same way; so the notices and the
 #     Info.plist users get by either file are those checked above.
+# "The same way" also covers the modes: `diff -r` compares names and bytes and not modes, so
+# each of the five is executable in the app of the .zip and of the .dmg, and every file of
+# either copy has the mode it has in <YAAR.app>.
 #
 # Exit codes: 0 all hold; 1 one does not; 2 usage error.
 #
@@ -51,6 +56,8 @@ usage() { echo "usage: $SELF <YAAR.app> <version> <notices> [<packages-dir>]" >&
 APP=$1; VER=$2; NOTICES=$3; PKGS=${4:-}
 
 fail() { echo "$SELF: $*" >&2; exit 1; }
+# A command that fails with no sentence of its own still ends the run with one.
+trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
 
 [ -d "$APP" ] || fail "$APP is not a folder: no app to check"
 [ -f "$NOTICES" ] || fail "$NOTICES is not a file: no notices to compare the app's with"
@@ -63,10 +70,11 @@ MNT=""
 cleanup() {
   if [ -n "$MNT" ]; then
     # A volume can be busy for a moment after the last read: ask again until it lets go.
-    local deadline=$((SECONDS + 15))
-    until hdiutil detach -quiet "$MNT" > /dev/null 2>&1; do
+    local deadline=$((SECONDS + 15)) last forced
+    until last=$(hdiutil detach -quiet "$MNT" 2>&1); do
       if [ "$SECONDS" -ge "$deadline" ]; then
-        hdiutil detach -quiet -force "$MNT" > /dev/null 2>&1 || echo "$SELF: could not detach $MNT" >&2
+        forced=$(hdiutil detach -quiet -force "$MNT" 2>&1) ||
+          echo "$SELF: could not detach $MNT: hdiutil last said \"$last\", and when forced \"$forced\"" >&2
         break
       fi
       sleep 0.2
@@ -110,6 +118,7 @@ want="yaar-claude-hook yaar-claude-tools yaar-keeper yaar-pi-report"
 sorted_words() { printf '%s\n' "$1" | tr -s ' ' '\n' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'; }
 EXPECT_ARCHS=${YAAR_EXPECT_ARCHS:-x86_64 arm64}
 WANT_ARCHS=$(sorted_words "$EXPECT_ARCHS")
+read -ra ARCH_LIST <<< "$WANT_ARCHS"
 
 # <path under Contents>|<what `codesign -dv` reads>|<identifier>
 PROGRAMS=(
@@ -128,16 +137,20 @@ for entry in "${PROGRAMS[@]}"; do
   got=$(sorted_words "$archs")
   [ "$got" = "$WANT_ARCHS" ] || fail "$rel holds the processors \"$archs\", not \"$EXPECT_ARCHS\""
 
-  info=$(codesign -dv "$signed" 2>&1) || fail "$rel is not signed: codesign says: $info"
-  got=$(printf '%s\n' "$info" | sed -n 's/^Identifier=//p')
-  [ "$got" = "$ident" ] || fail "$rel is signed with the identifier \"$got\", not \"$ident\""
-  flags=$(printf '%s\n' "$info" | sed -n 's/^CodeDirectory .*flags=0x[0-9a-f]*(\([^)]*\)).*/\1/p')
-  case ",$flags," in
-    *,runtime,*) ;;
-    *) fail "$rel is signed without the hardened runtime (flags \"$flags\"): sign with --options runtime" ;;
-  esac
-  ents=$(codesign -d --entitlements - "$signed" 2> /dev/null) || fail "codesign cannot read the entitlements of $rel"
-  [ -z "$ents" ] || fail "$rel is signed with entitlements, and the app takes none"
+  # codesign reports the slice of the processor it runs on unless it is told which: ask for
+  # each processor the program holds.
+  for arch in "${ARCH_LIST[@]}"; do
+    info=$(codesign -dv -a "$arch" "$signed" 2>&1) || fail "$rel is not signed in its $arch slice: codesign says: $info"
+    got=$(printf '%s\n' "$info" | sed -n 's/^Identifier=//p')
+    [ "$got" = "$ident" ] || fail "$rel is signed with the identifier \"$got\" in its $arch slice, not \"$ident\""
+    flags=$(printf '%s\n' "$info" | sed -n 's/^CodeDirectory .*flags=0x[0-9a-f]*(\([^)]*\)).*/\1/p')
+    case ",$flags," in
+      *,runtime,*) ;;
+      *) fail "$rel is signed without the hardened runtime in its $arch slice (flags \"$flags\"): sign with --options runtime" ;;
+    esac
+    ents=$(codesign -d -a "$arch" --entitlements - "$signed" 2> /dev/null) || fail "codesign cannot read the entitlements of $rel in its $arch slice"
+    [ -z "$ents" ] || fail "$rel is signed with entitlements in its $arch slice, and the app takes none"
+  done
 done
 
 for name in standin-lsp standin-agent yaar-script; do
@@ -155,11 +168,25 @@ if [ -z "$PKGS" ]; then
   exit 0
 fi
 
-# A file users download holds this very app, byte for byte.
+# "<mode> <path>" of every file of a tree, sorted: diff -r does not read modes.
+modes_in() { (cd "$1" && find . -type f -exec stat -f '%Lp %N' {} + | LC_ALL=C sort); }
+APP_MODES=$(modes_in "$APP")
+
+# A file users download holds this very app, byte for byte, with the modes the app has.
 same_app() { # <the file's name> <the app in it>
-  local diffs
+  local diffs rel got entry only_app only_copy
   if ! diffs=$(diff -r "$APP" "$2" 2>&1); then
     fail "the app in $1 is not the app checked above: $(printf '%s\n' "$diffs" | sed -n '1,3p' | tr '\n' ';')"
+  fi
+  for entry in "${PROGRAMS[@]}"; do
+    rel=${entry%%|*}
+    [ -x "$2/Contents/$rel" ] || fail "$rel is not executable in the app of $1 (mode $(stat -f %Lp "$2/Contents/$rel")): the app would not start"
+  done
+  got=$(modes_in "$2")
+  if [ "$got" != "$APP_MODES" ]; then
+    only_app=$(comm -23 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';')
+    only_copy=$(comm -13 <(printf '%s\n' "$APP_MODES") <(printf '%s\n' "$got") | sed -n '1,3p' | tr '\n' ';')
+    fail "the app in $1 has other file modes than the app checked above: the app has \"$only_app\" where the copy has \"$only_copy\""
   fi
 }
 
