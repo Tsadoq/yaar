@@ -37,9 +37,9 @@
 # `ps -axo uid=,pid=,ppid=,comm=`; (5) the Keeper's own terminal is recorded, not asserted;
 # (6) the app is ended by the trap too, by the pids found, when a step fails half way; (7) a
 # command that stops the script without a sentence of its own is named in one, and the exit
-# code is 1; (8) `--keeper-status` runs in the background with its output in a file, and the
-# step waits up to 30 s for it to end, so that a Window that never answers fails the step in a
-# sentence and not at the job's own timeout.
+# code is 1; (8) `--keeper-status` runs in the background under nohup, standard input from
+# /dev/null and its output in a file, and the step waits up to 30 s for it to end, so that a
+# Window that never answers fails the step in a sentence and not at the job's own timeout.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -228,10 +228,11 @@ foreground() {
     [ "$type_seen" = Foreground ]
 }
 wait_until 30 "LaunchServices did not list $BUNDLE_ID as a Foreground application" foreground
-# The status query runs in the background with its output in a file, and the step waits for it
+# The status query runs in the background, detached (nohup: macOS has no setsid; it execs the
+# program, so $! is the query's own pid) with its output in a file, and the step waits for it
 # up to 30 s: a Window that never answers would hold the step to the job's own timeout with no
 # sentence.
-"$WINDOW" --keeper-status > "$status_dir/out" 2>&1 < /dev/null &
+nohup "$WINDOW" --keeper-status > "$status_dir/out" 2>&1 < /dev/null &
 status_pid_of_query=$!
 query_ended() {
     seen="$WINDOW --keeper-status has printed: $(tr '\n' ' ' < "$status_dir/out")"
