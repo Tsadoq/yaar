@@ -48,11 +48,15 @@
 # uninstall's step 2 also asserts that $dest holds no `.YAAR.app.new.*` and no
 # `.yaar-review-old.*`; (6) the install line is run through `bash -s --`, which is `bash`
 # with no arguments; (7) a command that stops the script without a sentence of its own is
-# named in one, and the exit code is 1; (8) install 1 reads "downloads nothing" from two
-# places: the door's output (it ends on its refusal and names the address once) and a curl and
+# named in one, and the exit code is 1; (8) install 1 reads "downloads nothing" from three
+# places: the door's output (it ends on its refusal and names the address once), a curl and
 # a wget of the step's own, first on the search path of the door's run, which record each call
 # in a file and fail like a machine with no network, so a door that fetches in silence leaves
-# its call there.
+# its call there, and the site's own log: the door's run is given http_proxy, https_proxy,
+# HTTPS_PROXY, ALL_PROXY and all_proxy naming the served site, with no_proxy and NO_PROXY
+# unset, so that a fetch which passes no stand-in (an absolute /usr/bin/curl) reaches no DNS
+# and leaves a line naming example.invalid in the log of the site, served-<port>/log under
+# $RUNNER_TEMP (else $TMPDIR, else /tmp), which the step reads before and after the run.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -138,14 +142,22 @@ scratch=$(mktemp -d) || fail "no scratch folder could be made"
 # written to the log named by $1 and shown; the exit code is left in $line_status.
 # $1: the log, $2: the download address, then the install script's arguments. When
 # $line_path is set it goes first on the search path of the install script only (the step's
-# own curl of install.sh, on the left of the pipe, keeps the real one).
+# own curl of install.sh, on the left of the pipe, keeps the real one). When $line_proxy is
+# set, every proxy variable of the install script's run names it and no_proxy is unset, so
+# that any fetch of that run, by name or by path, goes to that address.
 line_status=0
 line_path=""
+line_proxy=""
 install_line() {
     local log=$1 address=$2
+    local proxies=()
     shift 2
+    if [ -n "$line_proxy" ]; then
+        proxies=(-u no_proxy -u NO_PROXY "http_proxy=$line_proxy" "https_proxy=$line_proxy" "HTTPS_PROXY=$line_proxy" "ALL_PROXY=$line_proxy" "all_proxy=$line_proxy")
+    fi
+    # ${proxies[@]+...}: bash 3.2, macOS's, takes an empty array for an unset variable.
     if curl -fsSL "$base/install.sh" \
-        | env PATH="${line_path:+$line_path:}$PATH" YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$address" YAAR_ALLOW_UNNOTARIZED=1 \
+        | env ${proxies[@]+"${proxies[@]}"} PATH="${line_path:+$line_path:}$PATH" YAAR_BASE_URL="$base" YAAR_DOWNLOAD_URL="$address" YAAR_ALLOW_UNNOTARIZED=1 \
             bash -s -- "$@" > "$log" 2>&1; then
         line_status=0
     else
@@ -190,9 +202,20 @@ if [ "$action" = install ]; then
             || fail "the stand-in $fetcher could not be written in $scratch/door-bin"
         chmod 755 "$scratch/door-bin/$fetcher" || fail "the stand-in $fetcher could not be made executable"
     done
+    # The served site's log, which a fetch that went to the proxy leaves a line in; the lines
+    # naming the address before the run are the baseline.
+    served_log="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/served-$port/log"
+    [ -f "$served_log" ] || fail "$served_log, the log of the site served on port $port, is not there: the step before this one did not serve it with serve-site.sh"
+    named_before=$(awk '/example\.invalid/ { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
     line_path="$scratch/door-bin"
+    line_proxy="$base"
     install_line "$scratch/door.log" https://example.invalid/download
     line_path=""
+    line_proxy=""
+    named_after=$(awk '/example\.invalid/ { n++ } END { print n + 0 }' "$served_log") || fail "$served_log could not be read"
+    if [ "$named_after" -ne "$named_before" ]; then
+        fail "the install line with a download from https://example.invalid tried to reach it through a proxy before it refused: the log of the served site gained $(grep 'example\.invalid' "$served_log" | tail -n 2 | tr '\n' ';')"
+    fi
     if [ -e "$scratch/door-fetches" ]; then
         fail "the install line with a download from https://example.invalid tried to download before it refused: $(head -n 2 "$scratch/door-fetches" | tr '\n' ';')"
     fi
