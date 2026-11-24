@@ -49,8 +49,10 @@
 # nobody reaped counts as gone; `gio launch` is tried plain
 # first and, when it fails, under dbus-run-session, which the step then says (it installs
 # the package dbus only in that case, so that linux-login-path.sh finds the program
-# dbus-run-session exactly when the start needed it); step 2 also fails on a line NoDisplay=true
-# or Hidden=true, which hide the app from the menu that "from the app menu" is about; step 3
+# dbus-run-session exactly when the start needed it); step 2 also fails on a NoDisplay or Hidden
+# that is true (blanks around the key and the '=' allowed, as GLib reads them) and on any
+# OnlyShowIn or NotShowIn in the group [Desktop Entry], which hide the app from the menu that
+# "from the app menu" is about; step 3
 # fails, naming its pid, when a Keeper of <user> from an earlier step still runs after the
 # 20 s it waits for it to leave, because the Keeper that step 4 then names could be that one
 # and not the one the app's own start made; a command that stops the script without a sentence
@@ -198,10 +200,26 @@ apt-get install -y --no-install-recommends desktop-file-utils > "$SCRATCH/apt-df
 for line in Terminal=false Type=Application Exec=yaar-review; do
   grep -qx "$line" "$DESKTOP" || fail "$DESKTOP holds no line '$line': $(grep -E '^(Terminal|Type|Exec)=' "$DESKTOP" | tr '\n' ' ')"
 done
-# An entry the menu hides starts from `gio launch` all the same: the menu is what the row is about.
-for line in NoDisplay=true Hidden=true; do
-  if grep -qx "$line" "$DESKTOP"; then fail "$DESKTOP holds the line '$line': the app menu would not show the app"; fi
-done
+# An entry the menu hides starts from `gio launch` all the same: the menu is what the row is
+# about. The keys are read as GLib's key-file reader reads them: in the group [Desktop Entry]
+# only, with blanks allowed around the key and around the '=' (`NoDisplay = true` hides the
+# app as `NoDisplay=true` does), a boolean being "true" or "1"; OnlyShowIn and NotShowIn hide
+# it from the menus of some desktops, whatever they name.
+HIDES=$(awk '
+  /^[ \t]*\[/ { group = ($0 ~ /^\[Desktop Entry\][ \t]*$/); next }
+  !group { next }
+  {
+    eq = index($0, "=")
+    if (eq == 0) next
+    key = substr($0, 1, eq - 1); value = substr($0, eq + 1)
+    gsub(/^[ \t]+/, "", key); gsub(/[ \t]+$/, "", key)
+    gsub(/^[ \t]+/, "", value); gsub(/[ \t]+$/, "", value)
+    if ((key == "NoDisplay" || key == "Hidden") && (value == "true" || value == "1")) print $0
+    else if ((key == "OnlyShowIn" || key == "NotShowIn") && value != "") print $0
+  }' "$DESKTOP") || fail "awk could not read $DESKTOP"
+if [ -n "$HIDES" ]; then
+  fail "$DESKTOP holds a line that hides the app from a menu: $(printf '%s' "$HIDES" | tr '\n' ';')"
+fi
 STATUS=0
 desktop-file-validate "$DESKTOP" > "$SCRATCH/validate" 2>&1 || STATUS=$?
 if [ "$STATUS" -ne 0 ] || [ -s "$SCRATCH/validate" ]; then

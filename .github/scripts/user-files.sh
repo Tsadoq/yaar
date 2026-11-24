@@ -50,10 +50,13 @@
 #   the user, without following links (`find -P <root> ... -user <uid>`, pruned as above),
 #   each as "<kind> <path>" (kind: d, f, l, s for a socket, o other).
 # present, run after the steps that ran the app and before the uninstall: asserts that the
-#   data folder holds keeper.sock.lock (the Keeper ran as the user and took its lock) and
-#   store.db (the Keeper opened its Store: the worktree step made a workspace). Fails naming
-#   each missing file. This is what makes "the Keeper's lock file included" and "the reviews
-#   stay" clauses that can fail.
+#   data folder holds keeper.sock.lock (the Keeper ran as the user and took its lock),
+#   store.db (the Keeper opened its Store: the worktree step made a workspace) and
+#   agents/pi/extension/yaar.ts (the Keeper writes pi's extension when it starts). Fails
+#   naming each missing file. This is what makes "the Keeper's lock file included", "the
+#   reviews stay" and "pi's extension file stays" clauses that can fail. It also writes the
+#   record of what the uninstall must leave (see check 1 (d)) to the file YAAR_USER_FILES_RECORD
+#   names, else $RUNNER_TEMP/user-files-present; with neither set it fails.
 # check, after the job's uninstall step (`--uninstall`, which keeps the reviews), with <file>
 #   the snapshot taken before the install:
 #   1. A snapshot. (a) Among the judged paths that <file> does not hold, only these may be
@@ -62,7 +65,10 @@
 #      the home. Anything else fails, the lock file keeper.sock.lock first of all. (b) store.db
 #      must be there (the reviews stayed). (c) Every path of <file> must still be there, on
 #      Linux every one, on macOS every judged one: an uninstall that removed a file of the
-#      user's (the planted ones among them) fails, naming it.
+#      user's (the planted ones among them) fails, naming it. (d) Every path in the record
+#      that `present` wrote must still be there: pi's extension file and, when the app had
+#      made it before the uninstall, the folder states. A missing record fails (present did
+#      not run).
 #   2. Runs the install line once more, as the user, with `--uninstall --purge`
 #      (YAAR_BASE_URL=http://127.0.0.1:8000, as the job's other install steps).
 #   3. A snapshot: no judged path that <file> does not hold may be there, but on Linux these,
@@ -93,7 +99,11 @@
 # point 1 found; (6) the home is resolved with `cd -P` before the data folder and the planted
 # places are derived from it, so that a home behind a link (a scratch HOME under macOS's
 # $TMPDIR) is compared with the resolved paths of the walk; (7) a command that stops the
-# script without a sentence of its own is named in one, and the exit code is 1.
+# script without a sentence of its own is named in one, and the exit code is 1; (8) pi's
+# extension, agents/pi/extension/yaar.ts, is written by the Keeper at every start, so present
+# demands it and check (d) asserts it stays; the folder states is written only when a review
+# is taken, which no step of the job makes, so it is held to stay only when present found it
+# there (on the images where the app runs, no step of the job shows that clause for states).
 set -euo pipefail
 
 NAME=user-files.sh
@@ -270,8 +280,15 @@ prunes() {
 take_snapshot() {
   local out=$1 root p first
   local rootlist prunelist
-  rootlist=$(roots)
-  prunelist=$(prunes)
+  # fail inside the substitution says its sentence in the subshell: the parent only ends.
+  rootlist=$(roots) || {
+    SAID=1
+    exit 1
+  }
+  prunelist=$(prunes) || {
+    SAID=1
+    exit 1
+  }
   : > "$SCRATCH/walk.raw"
   while IFS= read -r root; do
     [ -n "$root" ] || continue
@@ -313,9 +330,26 @@ snapshot() {
 
 # ---------------------------------------------------------------------------------- present
 
+# Where present leaves what it saw for check: a file of the job's scratch, never of the user's.
+record_file() {
+  if [ -n "${YAAR_USER_FILES_RECORD:-}" ]; then
+    printf '%s\n' "$YAAR_USER_FILES_RECORD"
+  elif [ -n "${RUNNER_TEMP:-}" ]; then
+    printf '%s\n' "$RUNNER_TEMP/user-files-present"
+  else
+    fail "neither RUNNER_TEMP nor YAAR_USER_FILES_RECORD is set: there is no place for the record of what the app wrote"
+  fi
+}
+
 present() {
-  local bad=0 f
-  for f in keeper.sock.lock store.db; do
+  local bad=0 f record
+  record=$(record_file) || {
+    SAID=1
+    exit 1
+  }
+  # The extension is what pi's own settings may name, so it is a file the app must have
+  # written for "pi's extension file stays" to be a clause that can fail.
+  for f in keeper.sock.lock store.db agents/pi/extension/yaar.ts; do
     if [ ! -e "$DATA_DIR/$f" ]; then
       echo "$NAME: $DATA_DIR/$f is missing: the app did not run as $USER_NAME, or not far enough" >&2
       bad=1
@@ -324,6 +358,13 @@ present() {
     fi
   done
   [ "$bad" -eq 0 ] || fail "the files of the app named above are missing"
+  # What no --uninstall may remove besides store.db, which check looks at by name: pi's
+  # extension, and states/ when the app made it (the job's steps need not).
+  if [ -d "$DATA_DIR/states" ]; then echo "$NAME: there: $DATA_DIR/states"; fi
+  {
+    printf '%s\n' "$DATA_DIR/agents/pi/extension/yaar.ts"
+    if [ -d "$DATA_DIR/states" ]; then printf '%s\n' "$DATA_DIR/states"; fi
+  } > "$record" || fail "cannot write $record"
 }
 
 # ----------------------------------------------------------------------------------- check
@@ -351,9 +392,7 @@ judge() {
 system_written() {
   [ "$OS" = linux ] || return 1
   case $1 in
-    "$HOME_DIR"/.cache/mesa_shader_cache | "$HOME_DIR"/.cache/mesa_shader_cache/* \
-      | "$HOME_DIR"/.cache/mesa_shader_cache_db | "$HOME_DIR"/.cache/mesa_shader_cache_db/* \
-      | "$HOME_DIR/.sudo_as_admin_successful")
+    "$HOME_DIR"/.cache/mesa_shader_cache* | "$HOME_DIR/.sudo_as_admin_successful")
       return 0
       ;;
   esac
@@ -461,7 +500,13 @@ still_there() {
 }
 
 check() {
+  local p record
   [ -f "$FILE" ] || fail "$FILE, the snapshot taken before the install, is missing"
+  record=$(record_file) || {
+    SAID=1
+    exit 1
+  }
+  [ -f "$record" ] || fail "$record, which present writes before the uninstall, is missing: present did not run"
   # 1. After --uninstall.
   take_snapshot "$SCRATCH/after-uninstall"
   leftovers "$FILE" "$SCRATCH/after-uninstall" kept "after --uninstall"
@@ -470,6 +515,13 @@ check() {
     FAILED=1
   fi
   still_there "$FILE" "after --uninstall"
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ ! -e "$p" ]; then
+      echo "$NAME: $p was there before the uninstall and is gone after --uninstall: it stays until --purge" >&2
+      FAILED=1
+    fi
+  done < "$record"
   # 2. The purge.
   echo "$NAME: --uninstall --purge"
   # shellcheck disable=SC2016 # the shell that runs it expands $YAAR_BASE_URL
