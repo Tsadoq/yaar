@@ -43,12 +43,15 @@
 #   key.asc    the public key of YAAR_APT_KEY, beside the two folders (for the tests)
 #
 # The base address is read from packaging/site/base-url and nowhere else. Refuses, changing
-# nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, or
-# when a .deb's Version or Architecture does not match its name. Refuses, after writing, when
-# site/ holds more than 900 MB (`du -sk`): a Pages site may hold 1 GB, and the pool grows by
-# two .deb files a release; the sentence names the versions in the pool, oldest first, and
-# says that the oldest must leave the pool (a later decision of the owner's: they stay on the
-# releases page).
+# nothing, when a package is missing, when a file of PREVIOUS has the name of a new one, when
+# a .deb's Version or Architecture does not match its name (the new ones and every file of
+# PREVIOUS, which must be named <Package>_<Version>_<Architecture>.deb by what it holds), or
+# when a file of PREVIOUS holds the version being released; each sentence names the file and
+# what it holds. Refuses, after writing, when site/ holds more than 900 MB
+# (`du -sk`): a Pages site may hold 1 GB, and the pool grows by two .deb files
+# a release; the sentence names the versions in the pool, oldest first, and says that the
+# oldest must leave the pool (a later decision of the owner's: they stay on the releases
+# page).
 #
 # Exit codes: 0 written; 1 refused or failed (a sentence says why); 2 usage error.
 #
@@ -185,6 +188,16 @@ if [ -n "${PREVIOUS:-}" ]; then
     case $old_name in
       "$DEB_AMD64" | "$DEB_ARM64") fail "$old has the name of a new package: version $VERSION is published already" ;;
     esac
+    # An earlier release's file is what its name says, by its contents: a file that holds
+    # the version being released under another name, or a version other than its name's,
+    # would put two stanzas for one version into the index, or drop an earlier version from it.
+    old_pkg=$(dpkg-deb -f "$old" Package 2> /dev/null) || fail "$old is not a .deb that dpkg-deb can read"
+    old_version=$(dpkg-deb -f "$old" Version) || fail "$old has no Version that dpkg-deb can read"
+    old_arch=$(dpkg-deb -f "$old" Architecture) || fail "$old has no Architecture that dpkg-deb can read"
+    [ "$old_name" = "${old_pkg}_${old_version}_${old_arch}.deb" ] \
+      || fail "$old is named $old_name but holds $old_pkg version $old_version for $old_arch, so its name should be ${old_pkg}_${old_version}_${old_arch}.deb"
+    [ "$old_version" != "$VERSION" ] \
+      || fail "$old holds version $VERSION, the version being released, under the name $old_name: version $VERSION is published already"
     PREVIOUS_DEBS+=("$old")
   done <<< "$PREVIOUS_LIST"
 fi
