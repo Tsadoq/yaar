@@ -6,6 +6,8 @@ use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
+use std::time::Duration;
 
 /// The variables with which a process tells git which repository to use, whatever
 /// folder it runs in. A Keeper started from a shell that has one of them set would read
@@ -24,11 +26,24 @@ const REPOSITORY_VARIABLES: [&str; 8] = [
 
 /// The git program of the user, as the app runs it to read.
 ///
-/// Cheap to clone: it holds only where the program is.
+/// Cheap to clone: it holds only where the program is, the environment it runs in and what
+/// is known of its version.
 #[derive(Debug, Clone)]
 pub struct Git {
     program: PathBuf,
+    /// The environment every run gets: the process's own unless a take ended.
+    environment: GitEnvironment,
+    /// Whether the program has the forms of [`NEWER`], read once from `git version` at the
+    /// first question and shared by every clone.
+    has_newer_forms: Arc<OnceLock<bool>>,
 }
+
+/// The oldest git known to have every form the reads ask for first: `-z` after `worktree
+/// list`, the atom `ahead-behind` of `for-each-ref` and `-Z` after `cat-file --batch`.
+/// Ubuntu 22.04 ships git 2.34 and Debian 12 git 2.39, and each lacks at least one of the
+/// three; such a git is asked in forms that git 2.34 has. Ubuntu 24.04 ships 2.43. The
+/// forms of a git between the two were not checked, so it is asked the older way too.
+const NEWER: (u32, u32) = (2, 43);
 
 /// Where a run of git looks for its repository.
 #[derive(Debug, Clone, Copy)]
@@ -90,7 +105,134 @@ pub(crate) fn unreadable(command: &str, what: impl Into<String>) -> GitError {
     }
 }
 
+/// The environment the Keeper's runs of git get, once the Keeper has taken the user's login
+/// shell's (`yaar_link::login`).
+///
+/// A Keeper started by a Window that the Finder, the Dock or a desktop's menu started has the
+/// system's short search path, so the user's git would run the user's hooks, and filters such
+/// as `git-lfs`, without the programs of the user's login path. The Keeper therefore takes the
+/// login shell's environment once, at its start, on a thread of its own that never holds an
+/// answer to a Window, and hands what it got here. Until the take has ended every run of git
+/// gets the process's own environment, as before slice 10.
+///
+/// - A run that reads (`Git::command`) gets the taken environment when the take has ended
+///   with one, and the process's own otherwise; it never waits.
+/// - A run of the user's own git (`Git::plain`: the creation of a worktree, the commit
+///   control), which runs the user's hooks, first waits for the take to have ended, for at
+///   most the deadline [`GitEnvironment::waiting`] was given, and then gets the taken
+///   environment, or the process's own when the take failed or the wait ran out.
+/// - Either way the variables that name another repository stay removed, and the settings a
+///   read carries are set over the environment, as before.
+///
+/// Cheap to clone: every clone is the same environment. A `Git` made by [`Git::find`] or
+/// [`Git::at`] has [`GitEnvironment::own`], which never waits and is always the process's
+/// own, so that every test and every caller of slices 1 to 9 runs git as before.
+#[derive(Debug, Clone)]
+pub struct GitEnvironment {
+    inner: Arc<Inner>,
+}
+
+/// What every clone of one [`GitEnvironment`] shares.
+#[derive(Debug)]
+struct Inner {
+    /// Where the take stands.
+    take: Mutex<Take>,
+    /// Wakes the runs that wait, when the take ends.
+    ended: Condvar,
+    /// How long a run of the user's own git waits for the take.
+    deadline: Duration,
+}
+
+/// Where the take stands.
+#[derive(Debug)]
+enum Take {
+    /// Under way.
+    UnderWay,
+    /// Ended: with the environment it gave, or with none.
+    Ended(Option<Arc<Vec<(OsString, OsString)>>>),
+}
+
+impl GitEnvironment {
+    /// The process's own environment, for ever: no take was started.
+    pub fn own() -> GitEnvironment {
+        GitEnvironment::in_state(Take::Ended(None), Duration::ZERO)
+    }
+
+    /// A take is under way. A run of the user's own git waits for it at most `deadline`
+    /// (the shell's own deadline, `yaar_link::login::SHELL_DEADLINE`, for the Keeper).
+    pub fn waiting(deadline: Duration) -> GitEnvironment {
+        GitEnvironment::in_state(Take::UnderWay, deadline)
+    }
+
+    fn in_state(take: Take, deadline: Duration) -> GitEnvironment {
+        GitEnvironment {
+            inner: Arc::new(Inner {
+                take: Mutex::new(take),
+                ended: Condvar::new(),
+                deadline,
+            }),
+        }
+    }
+
+    /// The take has ended: with the merged environment it gave, or with none when it failed.
+    /// Wakes every run that waits. A second call changes nothing.
+    pub fn ended(&self, environment: Option<Vec<(OsString, OsString)>>) {
+        let mut take = self.lock();
+        if matches!(*take, Take::UnderWay) {
+            *take = Take::Ended(environment.map(Arc::new));
+            drop(take);
+            self.inner.ended.notify_all();
+        }
+    }
+
+    /// The environment a run gets now, without waiting: the taken one once the take ended
+    /// with one; none (the process's own) before that, or when it failed.
+    pub fn now(&self) -> Option<Vec<(OsString, OsString)>> {
+        self.taken().map(|taken| taken.as_ref().clone())
+    }
+
+    /// [`GitEnvironment::now`], not copied.
+    fn taken(&self) -> Option<Arc<Vec<(OsString, OsString)>>> {
+        match &*self.lock() {
+            Take::Ended(taken) => taken.clone(),
+            Take::UnderWay => None,
+        }
+    }
+
+    /// What a run of the user's own git gets: waits for the take to end, for at most the
+    /// deadline, then as [`GitEnvironment::now`]. The take ends by itself within its own
+    /// deadline, so a run that comes late waits for what is left of it only.
+    fn after_waiting(&self) -> Option<Arc<Vec<(OsString, OsString)>>> {
+        let (take, _) = self
+            .inner
+            .ended
+            .wait_timeout_while(self.lock(), self.inner.deadline, |take| {
+                matches!(take, Take::UnderWay)
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        match &*take {
+            Take::Ended(taken) => taken.clone(),
+            Take::UnderWay => None,
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Take> {
+        self.inner
+            .take
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
 impl Git {
+    /// This git, whose runs get `environment` as the doc of [`GitEnvironment`] says.
+    pub fn with_environment(self, environment: GitEnvironment) -> Git {
+        Git {
+            environment,
+            ..self
+        }
+    }
+
     /// The `git` on the search path of this process.
     pub fn find() -> Result<Git, GitError> {
         let search = std::env::var_os("PATH").ok_or(GitError::NotFound)?;
@@ -100,7 +242,7 @@ impl Git {
             .filter(|folder| folder.is_absolute())
             .map(|folder| folder.join("git"))
             .find(|candidate| is_program(candidate))
-            .map(|program| Git { program })
+            .map(Git::at)
             .ok_or(GitError::NotFound)
     }
 
@@ -108,7 +250,23 @@ impl Git {
     pub fn at(program: impl Into<PathBuf>) -> Git {
         Git {
             program: program.into(),
+            environment: GitEnvironment::own(),
+            has_newer_forms: Arc::new(OnceLock::new()),
         }
+    }
+
+    /// Whether this git has the newer forms of [`NEWER`], from its own answer to `git
+    /// version`, asked once. A version that cannot be read counts as new, as every git
+    /// did before this was asked: git then fails in its own words.
+    pub(crate) fn has_newer_forms(&self) -> bool {
+        *self.has_newer_forms.get_or_init(|| {
+            let mut command = self.command(Place::Folder(Path::new("/")), &[]);
+            command.arg("version");
+            let Ok(answer) = finish(command) else {
+                return true;
+            };
+            says_newer_forms(&String::from_utf8_lossy(&answer.stdout))
+        })
     }
 
     /// Where the program is.
@@ -121,7 +279,8 @@ impl Git {
     /// defines turned off by its key in `hooks_off`, no lock that can be done without,
     /// no question at a terminal, and git's own language.
     pub(crate) fn command(&self, place: Place<'_>, hooks_off: &[OsString]) -> Command {
-        let mut command = Command::new(&self.program);
+        let taken = self.environment.taken();
+        let mut command = self.start(taken.as_deref());
         command.args([
             "-c",
             "core.hooksPath=/dev/null",
@@ -151,10 +310,15 @@ impl Git {
         // would cut at. Settings handed over in the environment are taken whole. They
         // are numbered after those the environment of this process already holds.
         if !hooks_off.is_empty() {
-            let before = std::env::var("GIT_CONFIG_COUNT")
-                .ok()
-                .and_then(|count| count.parse::<usize>().ok())
-                .unwrap_or(0);
+            let before = match &taken {
+                Some(taken) => taken
+                    .iter()
+                    .find(|(name, _)| name == "GIT_CONFIG_COUNT")
+                    .map(|(_, count)| count.to_owned()),
+                None => std::env::var_os("GIT_CONFIG_COUNT"),
+            }
+            .and_then(|count| count.to_str()?.parse::<usize>().ok())
+            .unwrap_or(0);
             for (n, key) in hooks_off.iter().enumerate() {
                 command
                     .env(format!("GIT_CONFIG_KEY_{}", before + n), key)
@@ -170,12 +334,25 @@ impl Git {
     /// identity, signing and language apply. Only the variables that name another
     /// repository are left out, and nothing is asked at a terminal.
     pub(crate) fn plain(&self, folder: &Path) -> Command {
-        let mut command = Command::new(&self.program);
+        let taken = self.environment.after_waiting();
+        let mut command = self.start(taken.as_deref());
         command.arg("-C").arg(folder);
         for name in REPOSITORY_VARIABLES {
             command.env_remove(name);
         }
         command.env("GIT_TERMINAL_PROMPT", "0").stdin(Stdio::null());
+        command
+    }
+
+    /// The program, not yet started, in `taken` when the take gave an environment, and in
+    /// the process's own otherwise.
+    fn start(&self, taken: Option<&Vec<(OsString, OsString)>>) -> Command {
+        let mut command = Command::new(&self.program);
+        if let Some(taken) = taken {
+            command
+                .env_clear()
+                .envs(taken.iter().map(|(name, value)| (name, value)));
+        }
         command
     }
 
@@ -193,6 +370,20 @@ impl Git {
         let mut command = self.command(place, hooks_off);
         command.args(args);
         finish(command)
+    }
+}
+
+/// Whether the git that printed `version` as its answer to `git version` has the forms of
+/// [`NEWER`]. An answer that is not understood counts as new.
+fn says_newer_forms(version: &str) -> bool {
+    let mut numbers = version
+        .strip_prefix("git version ")
+        .unwrap_or("")
+        .split(|c: char| !c.is_ascii_digit())
+        .map(|number| number.parse::<u32>());
+    match (numbers.next(), numbers.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => (major, minor) >= NEWER,
+        _ => true,
     }
 }
 
@@ -318,5 +509,345 @@ impl std::error::Error for GitError {}
 impl From<io::Error> for GitError {
     fn from(e: io::Error) -> Self {
         Self::Io(e)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::mpsc;
+    use std::time::{Duration, Instant};
+
+    /// How long a run that must not wait is given to answer: far more than it needs, far
+    /// less than the deadlines the tests hand to the environment.
+    const ANSWERS_WITHIN: Duration = Duration::from_secs(5);
+
+    /// How long a run that never waits may take to be made: far more than making a command
+    /// takes, even on a loaded machine, and less than a short wait would last.
+    const QUICKLY: Duration = Duration::from_secs(1);
+
+    /// How long a run that must wait is watched before the take ends: the one wait of these
+    /// tests that is not on a fact. A run that does not wait answers within microseconds,
+    /// so this is long enough on a loaded machine too, and a passing run cannot fail on it.
+    const WATCHED_FOR: Duration = Duration::from_millis(300);
+
+    /// How many reads a test makes in a row to tell a read that never waits from one that
+    /// waits a little each time.
+    const READS: usize = 20;
+
+    fn variables(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
+        pairs
+            .iter()
+            .map(|(name, value)| ((*name).into(), (*value).into()))
+            .collect()
+    }
+
+    /// What `command` sets and removes, by name: a removed variable is none.
+    fn set_in(command: &Command) -> HashMap<OsString, Option<OsString>> {
+        command
+            .get_envs()
+            .map(|(name, value)| (name.to_owned(), value.map(OsStr::to_owned)))
+            .collect()
+    }
+
+    fn value(set: &HashMap<OsString, Option<OsString>>, name: &str) -> Option<OsString> {
+        set.get(OsStr::new(name)).cloned().flatten()
+    }
+
+    #[test]
+    fn a_git_has_the_newer_forms_from_2_43_on_and_one_that_says_nothing_clear_is_taken_to_have_them()
+     {
+        for old in [
+            "git version 2.34.1\n",
+            "git version 2.39.5\n",
+            "git version 2.39.5 (Apple Git-154)\n",
+            "git version 2.9.5\n",
+            "git version 1.8.3.1\n",
+        ] {
+            assert!(!says_newer_forms(old), "{old:?}");
+        }
+        for new in [
+            "git version 2.43.0\n",
+            "git version 2.47.3\n",
+            "git version 2.51.0\n",
+            "git version 2.54.0 (Apple Git-160)\n",
+            "git version 2.100.0\n",
+            "git version 3.0.0\n",
+            "git version 2.45.GIT\n",
+            "git version 2.43.0.windows.1\n",
+            "not git\n",
+            "git version \n",
+            "",
+        ] {
+            assert!(says_newer_forms(new), "{new:?}");
+        }
+    }
+
+    #[test]
+    fn the_own_environment_is_none_and_no_end_changes_it() {
+        let own = GitEnvironment::own();
+        assert_eq!(own.now(), None);
+        own.ended(Some(variables(&[("PATH", "/login")])));
+        assert_eq!(own.now(), None, "an environment nobody took was taken");
+    }
+
+    #[test]
+    fn a_take_under_way_gives_none_until_it_ends_and_then_what_it_gave() {
+        let waiting = GitEnvironment::waiting(Duration::from_secs(60));
+        assert_eq!(waiting.now(), None);
+        let taken = variables(&[("PATH", "/login:/usr/bin"), ("X", "1")]);
+        waiting.ended(Some(taken.clone()));
+        assert_eq!(waiting.now(), Some(taken));
+
+        let failed = GitEnvironment::waiting(Duration::from_secs(60));
+        failed.ended(None);
+        assert_eq!(failed.now(), None);
+    }
+
+    #[test]
+    fn a_second_end_changes_nothing() {
+        let first = variables(&[("A", "first")]);
+        let one = GitEnvironment::waiting(Duration::from_secs(60));
+        one.ended(Some(first.clone()));
+        one.ended(Some(variables(&[("A", "second")])));
+        one.ended(None);
+        assert_eq!(one.now(), Some(first));
+
+        let two = GitEnvironment::waiting(Duration::from_secs(60));
+        two.ended(None);
+        two.ended(Some(variables(&[("A", "late")])));
+        assert_eq!(two.now(), None);
+    }
+
+    #[test]
+    fn every_clone_is_the_same_environment() {
+        let waiting = GitEnvironment::waiting(Duration::from_secs(60));
+        let clone = waiting.clone();
+        let git = Git::at("git").with_environment(waiting);
+        clone.ended(Some(variables(&[("PATH", "/login")])));
+        let command = git.plain(Path::new("/"));
+        assert_eq!(
+            value(&set_in(&command), "PATH"),
+            Some(OsString::from("/login"))
+        );
+    }
+
+    #[test]
+    fn a_read_gets_the_taken_environment_and_never_waits() {
+        let waiting = GitEnvironment::waiting(Duration::from_secs(60));
+        let git = Git::at("git").with_environment(waiting.clone());
+        // The take is under way and ends only after the read has answered: a read that
+        // waited for it would not.
+        let (answer_tx, answer) = mpsc::channel();
+        let reader = {
+            let git = git.clone();
+            std::thread::spawn(move || {
+                // Making a command takes microseconds, so a run of them in a row is far
+                // under `QUICKLY` however loaded the machine is; a read that waited even
+                // a short while for the take, on each run, would not be.
+                let started = Instant::now();
+                let mut command = git.command(Place::Folder(Path::new("/")), &[]);
+                for _ in 1..READS {
+                    command = git.command(Place::Folder(Path::new("/")), &[]);
+                }
+                let _ = answer_tx.send((set_in(&command), started.elapsed()));
+            })
+        };
+        let (before, took) = answer
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("a read waited for the take");
+        reader.join().expect("the reader ended");
+        assert!(
+            took < QUICKLY,
+            "{READS} reads took {took:?} while the take was under way: a read waited"
+        );
+        assert_eq!(
+            value(&before, "GIT_OPTIONAL_LOCKS"),
+            Some(OsString::from("0"))
+        );
+        assert_eq!(value(&before, "LOGIN_ONLY"), None, "taken before the end");
+
+        waiting.ended(Some(variables(&[
+            ("LOGIN_ONLY", "yes"),
+            ("LC_ALL", "de_DE"),
+        ])));
+        let after = set_in(&git.command(Place::Folder(Path::new("/")), &[]));
+        assert_eq!(value(&after, "LOGIN_ONLY"), Some(OsString::from("yes")));
+        // What a read carries is set over what was taken.
+        assert_eq!(value(&after, "LC_ALL"), Some(OsString::from("C")));
+        assert_eq!(
+            value(&after, "GIT_OPTIONAL_LOCKS"),
+            Some(OsString::from("0"))
+        );
+    }
+
+    #[test]
+    fn the_variables_that_name_another_repository_stay_removed_from_the_taken_environment() {
+        let taken = GitEnvironment::waiting(Duration::from_secs(60));
+        taken.ended(Some(variables(&[
+            ("GIT_DIR", "/elsewhere"),
+            ("GIT_WORK_TREE", "/elsewhere"),
+            ("PATH", "/login"),
+        ])));
+        let git = Git::at("git").with_environment(taken);
+        for command in [
+            git.command(Place::Folder(Path::new("/")), &[]),
+            git.plain(Path::new("/")),
+        ] {
+            let set = set_in(&command);
+            assert_eq!(value(&set, "GIT_DIR"), None);
+            assert_eq!(value(&set, "GIT_WORK_TREE"), None);
+            assert_eq!(value(&set, "PATH"), Some(OsString::from("/login")));
+        }
+    }
+
+    #[test]
+    fn the_hooks_a_read_turns_off_are_numbered_after_the_settings_of_the_environment_it_gets() {
+        let taken = GitEnvironment::waiting(Duration::from_secs(60));
+        taken.ended(Some(variables(&[
+            ("GIT_CONFIG_COUNT", "2"),
+            ("GIT_CONFIG_KEY_0", "a.b"),
+            ("GIT_CONFIG_VALUE_0", "1"),
+            ("GIT_CONFIG_KEY_1", "c.d"),
+            ("GIT_CONFIG_VALUE_1", "2"),
+        ])));
+        let git = Git::at("git").with_environment(taken);
+        let hooks = [OsString::from("hook.x.enabled")];
+        let set = set_in(&git.command(Place::Folder(Path::new("/")), &hooks));
+        assert_eq!(value(&set, "GIT_CONFIG_COUNT"), Some(OsString::from("3")));
+        assert_eq!(
+            value(&set, "GIT_CONFIG_KEY_2"),
+            Some(OsString::from("hook.x.enabled"))
+        );
+        assert_eq!(
+            value(&set, "GIT_CONFIG_VALUE_2"),
+            Some(OsString::from("false"))
+        );
+        // The settings the environment held are the environment's own, and stay.
+        assert_eq!(value(&set, "GIT_CONFIG_KEY_1"), Some(OsString::from("c.d")));
+    }
+
+    #[test]
+    fn the_users_own_git_waits_for_the_take_and_then_gets_what_it_gave() {
+        let waiting = GitEnvironment::waiting(Duration::from_secs(60));
+        let git = Git::at("git").with_environment(waiting.clone());
+        let (started_tx, started) = mpsc::channel();
+        let (answer_tx, answer) = mpsc::channel();
+        let user = std::thread::spawn(move || {
+            let _ = started_tx.send(());
+            let command = git.plain(Path::new("/"));
+            let _ = answer_tx.send(set_in(&command));
+        });
+        started
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("the run started");
+        assert!(
+            answer.recv_timeout(WATCHED_FOR).is_err(),
+            "the user's own git did not wait for the take"
+        );
+        waiting.ended(Some(variables(&[("PATH", "/login")])));
+        let set = answer
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("the wait ended with the take");
+        user.join().expect("the run ended");
+        assert_eq!(value(&set, "PATH"), Some(OsString::from("/login")));
+    }
+
+    #[test]
+    fn the_users_own_git_gets_the_process_own_when_the_take_failed_and_does_not_wait_after_it() {
+        let waiting = GitEnvironment::waiting(Duration::from_secs(60));
+        let git = Git::at("git").with_environment(waiting.clone());
+        let (started_tx, started) = mpsc::channel();
+        let (answer_tx, answer) = mpsc::channel();
+        let user = {
+            let git = git.clone();
+            std::thread::spawn(move || {
+                let _ = started_tx.send(());
+                let command = git.plain(Path::new("/"));
+                let _ = answer_tx.send(set_in(&command));
+            })
+        };
+        started
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("the run started");
+        assert!(answer.recv_timeout(WATCHED_FOR).is_err());
+        waiting.ended(None);
+        let set = answer
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("the wait ended with the take");
+        user.join().expect("the run ended");
+        assert_eq!(value(&set, "PATH"), None);
+        assert_eq!(
+            value(&set, "GIT_TERMINAL_PROMPT"),
+            Some(OsString::from("0"))
+        );
+
+        // Later runs find the end at once.
+        let (again_tx, again) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = again_tx.send(set_in(&git.plain(Path::new("/"))));
+        });
+        again
+            .recv_timeout(ANSWERS_WITHIN)
+            .expect("a run waited for a take that had ended");
+    }
+
+    #[test]
+    fn the_users_own_git_waits_no_longer_than_the_deadline_and_then_gets_the_process_own() {
+        // Long enough that a wait of twice the deadline, or of any multiple of it, is told
+        // from one of the deadline by more than a loaded machine's delay.
+        let deadline = Duration::from_secs(2);
+        let waiting = GitEnvironment::waiting(deadline);
+        let git = Git::at("git").with_environment(waiting.clone());
+        // The run is on a thread and is waited for with a bound of its own: one that waits
+        // for no deadline at all must fail here and not hang the test for ever.
+        let (answer_tx, answer) = mpsc::channel();
+        let started = Instant::now();
+        let until = started + deadline + Duration::from_secs(1);
+        let user = std::thread::spawn(move || {
+            let command = git.plain(Path::new("/"));
+            let _ = answer_tx.send((set_in(&command), started.elapsed()));
+        });
+        let (set, waited) = answer
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the run waited more than {:?} for a deadline of {deadline:?}",
+                    started.elapsed()
+                )
+            });
+        user.join().expect("the run ended");
+        assert!(waited >= deadline, "the run gave up before the deadline");
+        assert!(
+            waited < deadline + Duration::from_secs(1),
+            "the run waited {waited:?} for a deadline of {deadline:?}"
+        );
+        assert_eq!(value(&set, "PATH"), None);
+        // A take that ends after the wait gave up is still the environment of later reads.
+        waiting.ended(Some(variables(&[("PATH", "/late")])));
+        assert_eq!(waiting.now(), Some(variables(&[("PATH", "/late")])));
+    }
+
+    #[test]
+    fn a_git_made_by_find_or_at_runs_in_the_process_own_environment_and_never_waits() {
+        // Neither waits: each answers in less than the shortest wait an environment of the
+        // Keeper's kind would give, and not only before the longest.
+        let (answer_tx, answer) = mpsc::channel();
+        std::thread::spawn(move || {
+            let found = Git::find().expect("git on the search path");
+            for git in [Git::at("git"), found] {
+                let started = Instant::now();
+                let plain = set_in(&git.plain(Path::new("/")));
+                let read = set_in(&git.command(Place::Folder(Path::new("/")), &[]));
+                let _ = answer_tx.send((plain, read, started.elapsed()));
+            }
+        });
+        for _ in 0..2 {
+            let (plain, read, took) = answer.recv_timeout(ANSWERS_WITHIN).expect("an answer");
+            assert_eq!(value(&plain, "PATH"), None);
+            assert_eq!(value(&read, "PATH"), None);
+            assert!(took < QUICKLY, "a run took {took:?}: it waited");
+        }
     }
 }

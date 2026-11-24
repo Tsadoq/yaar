@@ -6,8 +6,8 @@
 //! 3. No crate of the Window depends on a crate of the Keeper, nor the reverse.
 //! 4. Only `yaar-keeper` depends on an Adapter, and an Adapter depends on shared crates
 //!    only.
-//! 5. The two programs, as built for a user, hold no GPUI test support and no `harness`
-//!    feature.
+//! 5. The programs the packages ship, as built for a user, hold no GPUI test support and
+//!    no `harness` feature.
 //!
 //! "Depends" means through normal and build dependencies, direct or not. What only a
 //! crate's tests use does not count.
@@ -185,7 +185,8 @@ pub fn check(graph: &Graph) -> Vec<String> {
 }
 
 /// Rule 5, on the lines `name version (path)|feature,feature` that
-/// `cargo tree -e normal,build --prefix none -f "{p}|{f}"` prints for the two programs.
+/// `cargo tree -e normal,build --prefix none -f "{p}|{f}"` prints for the programs the
+/// packages ship.
 pub fn check_shipped_features(tree: &str) -> Vec<String> {
     let mut breaches = BTreeSet::new();
     for line in tree.lines() {

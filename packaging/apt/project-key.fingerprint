@@ -1,0 +1,5 @@
+# The fingerprint of the project's key of the apt repository: forty hexadecimal digits on
+# the one line below the comments, written by the owner when he makes the key once
+# (packaging/README.md, "Before the first release"). It is public. Until the line is there
+# the job assemble-release refuses to sign, and a key whose fingerprint differs is refused
+# always: a replaced key cuts every installed copy off from updates with no error.

@@ -6,7 +6,7 @@ mod support;
 
 use std::path::{Path, PathBuf};
 
-use support::{Scratch, commit_all, git, init, program, write};
+use support::{Scratch, an_older_git, commit_all, git, init, program, write};
 use yaar_recorder::{
     Branch, Commit, CommitId, Commits, Git, GitError, Head, Listed, LocalBranch, OpenError, Refs,
     RemoteBranch, Worktree,
@@ -172,8 +172,23 @@ fn what_is_checked_out_is_a_branch_with_or_without_a_commit_or_a_commit_alone() 
 
 #[test]
 fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow() {
+    the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow_on_an_older_git()
+{
     let scratch = Scratch::new();
-    let clone = a_clone(&scratch);
+    an_older_git(&scratch);
+    the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow_with(&scratch);
+}
+
+fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow_with(
+    scratch: &Scratch,
+) {
+    let clone = a_clone(scratch);
     git(
         &clone,
         &["branch", "--quiet", "--track", "follower", "origin/topic"],
@@ -231,7 +246,24 @@ fn the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_foll
 
 #[test]
 fn a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead() {
+    a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead_on_an_older_git()
+ {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead_with(
+        &scratch,
+    );
+}
+
+fn a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead_with(
+    scratch: &Scratch,
+) {
     let repo = scratch.join("repo");
     init(&repo);
     write(&repo, "a.txt", "a\n");
@@ -259,7 +291,21 @@ fn a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_
 
 #[test]
 fn with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails() {
+    with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails_on_an_older_git() {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails_with(&scratch);
+}
+
+fn with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails_with(
+    scratch: &Scratch,
+) {
     let repo = scratch.join("repo");
     init(&repo);
     git(&repo, &["remote", "add", "origin", "/nowhere/origin.git"]);
@@ -289,7 +335,24 @@ fn with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails
 
 #[test]
 fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk() {
+    the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk_on_an_older_git()
+ {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk_with(
+        &scratch,
+    );
+}
+
+fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk_with(
+    scratch: &Scratch,
+) {
     let repo = scratch.join("repo");
     init(&repo);
     write(&repo, "a.txt", "a\n");
@@ -343,8 +406,97 @@ fn the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on
 }
 
 #[test]
-fn a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees() {
+fn a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached() {
+    a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached_on_an_older_git()
+ {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached_with(
+        &scratch,
+    );
+}
+
+fn a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached_with(
+    scratch: &Scratch,
+) {
+    let repo = scratch.join("repo");
+    init(&repo);
+    write(&repo, "a.txt", "a\n");
+    let first = commit_all(&repo, "start");
+    let add = |args: &[&str]| git(&repo, &[&["worktree", "add", "--quiet"], args].concat());
+    add(&["-b", "feat", "../wt with a\nline feed"]);
+    add(&["-b", "stuck", "../on a stick"]);
+    git(
+        &repo,
+        &[
+            "worktree",
+            "lock",
+            "--reason",
+            "on a stick",
+            "../on a stick",
+        ],
+    );
+    add(&["--detach", "../detached"]);
+    add(&["-b", "gone", "../gone"]);
+    std::fs::remove_dir_all(scratch.join("gone")).expect("delete the folder");
+
+    let linked = |folder: &str, head: Head| {
+        let path = scratch.join(folder);
+        Listed {
+            git_dir: PathBuf::from(git(&path, &["rev-parse", "--absolute-git-dir"])),
+            path,
+            head,
+            main: false,
+        }
+    };
+    let mut expected = vec![
+        linked("wt with a\nline feed", branch("feat", &first)),
+        linked("on a stick", branch("stuck", &first)),
+        linked("detached", Head::Detached(CommitId::new(&first))),
+    ];
+    expected.sort_by(|a, b| a.path.cmp(&b.path));
+    let main = Listed {
+        path: repo.clone(),
+        head: branch("main", &first),
+        main: true,
+        git_dir: repo.join(".git"),
+    };
+    // The main one is first; the order of the linked ones is git's, which this test does not fix.
+    let sorted = |mut list: Vec<Listed>| {
+        list[1..].sort_by(|a, b| a.path.cmp(&b.path));
+        list
+    };
+    expected.insert(0, main);
+    assert_eq!(sorted(open(&repo).list().expect("list")), expected);
+    assert_eq!(
+        sorted(open(&scratch.join("on a stick")).list().expect("list")),
+        expected
+    );
+    assert_eq!(
+        sorted(Worktree::list_of(&found(), &repo.join(".git")).expect("list")),
+        expected
+    );
+}
+
+#[test]
+fn a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees() {
+    a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees_with(&Scratch::new());
+}
+
+#[test]
+fn a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees_on_an_older_git() {
+    let scratch = Scratch::new();
+    an_older_git(&scratch);
+    a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees_with(&scratch);
+}
+
+fn a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees_with(scratch: &Scratch) {
     let source = scratch.join("source");
     init(&source);
     write(&source, "a.txt", "a\n");
@@ -374,7 +526,17 @@ fn a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees() {
 
 #[test]
 fn where_there_is_no_repository_any_more_no_worktree_is_listed() {
+    where_there_is_no_repository_any_more_no_worktree_is_listed_with(&Scratch::new());
+}
+
+#[test]
+fn where_there_is_no_repository_any_more_no_worktree_is_listed_on_an_older_git() {
     let scratch = Scratch::new();
+    an_older_git(&scratch);
+    where_there_is_no_repository_any_more_no_worktree_is_listed_with(&scratch);
+}
+
+fn where_there_is_no_repository_any_more_no_worktree_is_listed_with(scratch: &Scratch) {
     let repo = scratch.join("repo");
     init(&repo);
     std::fs::create_dir(scratch.join("plain")).expect("a plain folder");

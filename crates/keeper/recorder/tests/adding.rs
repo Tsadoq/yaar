@@ -6,7 +6,7 @@ mod support;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use support::{Scratch, commit_all, git, init, program, write};
+use support::{Scratch, an_older_git, commit_all, git, init, program, write};
 use yaar_recorder::{AddError, Added, CommitId, Git, Worktree};
 
 fn open(folder: &Path) -> Worktree {
@@ -263,8 +263,25 @@ fn a_folder_with_anything_at_it_is_refused_and_nothing_is_made() {
 
 #[test]
 fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named() {
+    the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named_with(
+        &Scratch::new(),
+    );
+}
+
+#[test]
+fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named_on_an_older_git()
+ {
     let scratch = Scratch::new();
-    let place = place(&scratch);
+    an_older_git(&scratch);
+    the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named_with(
+        &scratch,
+    );
+}
+
+fn the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named_with(
+    scratch: &Scratch,
+) {
+    let place = place(scratch);
     let folder = place.worktrees().join("task-one");
     let at = main_commit(&place.repo);
     let config_before = std::fs::read(place.repo.join(".git/config")).expect("config");
@@ -468,8 +485,18 @@ fn a_branch_that_moved_since_is_not_deleted_when_the_worktree_is_taken_away() {
 
 #[test]
 fn a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git() {
+    a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_with(&Scratch::new());
+}
+
+#[test]
+fn a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_on_an_older_git() {
     let scratch = Scratch::new();
-    let place = place(&scratch);
+    an_older_git(&scratch);
+    a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_with(&scratch);
+}
+
+fn a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_with(scratch: &Scratch) {
+    let place = place(scratch);
     program(
         &place.repo.join(".git/hooks/post-checkout"),
         &format!(

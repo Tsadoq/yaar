@@ -284,17 +284,27 @@ pub fn is_alive(pid: u32) -> bool {
     exists && !has_ended(pid)
 }
 
-/// Whether the process is a zombie, read from `/proc/<pid>/stat`: the state is the first
-/// field after the name, and the name ends at the last `)`.
+/// Whether the process has ended, read from `/proc/<pid>/status`.
 #[cfg(target_os = "linux")]
 fn has_ended(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            stat.rsplit_once(')')
-                .map(|(_, rest)| rest.trim_start().starts_with('Z'))
-        })
-        .unwrap_or(false)
+    std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| ended_in(&status))
+}
+
+/// Whether the status of a process shows it ended for good: a zombie with no other thread
+/// left. The first thread of a process shows as a zombie as soon as it has exited, while
+/// the others, which share its open files, may not have run since the kill. A lock or a
+/// listening socket of the process is held until the last of them is gone.
+#[cfg(any(target_os = "linux", test))]
+fn ended_in(status: &str) -> bool {
+    let field = |name: &str| {
+        status
+            .lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+            .map(str::trim)
+    };
+    let zombie = field("State").is_some_and(|state| state.starts_with('Z'));
+    let alone = field("Threads").and_then(|count| count.parse::<u32>().ok()) == Some(1);
+    zombie && alone
 }
 
 /// Elsewhere the system collects a process nobody waits for.
@@ -313,4 +323,31 @@ pub fn wait_until(limit: Duration, mut done: impl FnMut() -> bool) -> bool {
         std::thread::sleep(Duration::from_millis(10));
     }
     done()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zombie_with_a_thread_still_to_run_has_not_ended() {
+        assert!(!ended_in(
+            "Name:\tyaar-keeper\nState:\tZ (zombie)\nTgid:\t7\nThreads:\t2\n"
+        ));
+    }
+
+    #[test]
+    fn a_zombie_with_no_thread_left_has_ended() {
+        assert!(ended_in(
+            "Name:\tyaar-keeper\nState:\tZ (zombie)\nTgid:\t7\nThreads:\t1\n"
+        ));
+    }
+
+    #[test]
+    fn a_process_that_is_not_a_zombie_has_not_ended() {
+        assert!(!ended_in(
+            "Name:\tyaar-keeper\nState:\tS (sleeping)\nTgid:\t7\nThreads:\t1\n"
+        ));
+        assert!(!ended_in("Name:\tx\nState:\tR (running)\nThreads:\t3\n"));
+    }
 }

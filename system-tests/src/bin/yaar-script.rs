@@ -1,0 +1,547 @@
+//! `yaar-script`: a scripted Window, as one command, for the jobs of the workflow that drive
+//! the installed app where no key can be pressed (row PKG-12). Test support: no package ships
+//! it.
+//!
+//! ```text
+//! yaar-script worktree-with-agent --repository <folder> --branch <new branch> --agent <claude|pi>
+//!             [--socket <path>] [--deadline <seconds>]
+//! yaar-script stop [--socket <path>] [--deadline <seconds>]
+//! ```
+//!
+//! Connects to the Keeper that already listens at `--socket` (default: the socket of
+//! `yaar_link::socket_path()`, where the Keeper of the installed app listens) as a Window
+//! does, with the hello of a Window of this build's version. It never starts a Keeper: when
+//! none listens it says so and exits 2. Then, as a user would with Cmd-Shift-N:
+//!
+//! 1. opens `--repository` as a workspace (the request a Window sends for Open Folder), unless
+//!    the Keeper lists it already;
+//! 2. sends `CreateWorktree` for that repository, from the branch its workspace is on, on the
+//!    new branch `--branch`, with the agent `--agent`, and a terminal of 80 by 24;
+//! 3. waits for the reply `WorktreeCreated`, then for the Keeper's fact that a session of
+//!    that agent runs in the new workspace.
+//!
+//! Each wait lasts at most `--deadline` seconds (default 60). On success it prints one line,
+//! `worktree=<absolute folder> workspace=<id> session=<id>`, and exits 0. A refusal prints the
+//! Keeper's sentence and exits 1; a deadline passed prints which wait ran out and what had
+//! arrived, and exits 1. A command line it does not take prints the usage above and exits 2.
+//!
+//! `stop` is the quit that also stops the agents: it connects as above (exit 2 when no Keeper
+//! listens), says hello, sends the Link's stop (`Message::Shutdown`, whose shape no version
+//! changes), and waits until the socket no longer answers (a connect refused or the socket
+//! gone), for at most `--deadline` seconds (default 20). Done, it prints `stopped` and exits
+//! 0; past the deadline it says so and exits 1.
+
+use std::any::Any;
+use std::io::ErrorKind;
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::{Path, PathBuf};
+use std::process::ExitCode;
+use std::time::{Duration, Instant};
+
+use yaar_link::{Head, Reply, Repository, Request, TerminalSize, Workspace, WorkspaceAgents};
+use yaar_system_tests::Client;
+
+/// What the command line says, and what the help prints when it does not.
+const USAGE: &str = "usage:
+  yaar-script worktree-with-agent --repository <folder> --branch <new branch> --agent <claude|pi>
+              [--socket <path>] [--deadline <seconds>]
+  yaar-script stop [--socket <path>] [--deadline <seconds>]";
+
+/// How long each wait of `worktree-with-agent` lasts when `--deadline` is not given.
+const WORKTREE_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How long `stop` waits for the socket to go quiet when `--deadline` is not given.
+const STOP_DEADLINE: Duration = Duration::from_secs(20);
+
+/// The size of the terminal the agent is started in, as a Window asks for one.
+const TERMINAL: TerminalSize = TerminalSize {
+    columns: 80,
+    rows: 24,
+};
+
+/// What a command asks for.
+#[derive(Debug, PartialEq, Eq)]
+enum Command {
+    /// `worktree-with-agent`.
+    WorktreeWithAgent {
+        repository: PathBuf,
+        branch: String,
+        agent: String,
+        socket: Option<PathBuf>,
+        deadline: Duration,
+    },
+    /// `stop`.
+    Stop {
+        socket: Option<PathBuf>,
+        deadline: Duration,
+    },
+}
+
+/// Why a command did not hold, and the status the process ends with: 1 when the Keeper
+/// refused or a wait ran out, 2 when the command line was not taken or no Keeper listens.
+struct Failure {
+    status: u8,
+    sentence: String,
+}
+
+impl Failure {
+    fn unmet(sentence: String) -> Failure {
+        Failure {
+            status: 1,
+            sentence,
+        }
+    }
+
+    fn unreachable(sentence: String) -> Failure {
+        Failure {
+            status: 2,
+            sentence,
+        }
+    }
+}
+
+/// Reads the command line, without the program's name.
+fn parse(args: &[String]) -> Result<Command, String> {
+    let Some((name, flags)) = args.split_first() else {
+        return Err("no command given".to_owned());
+    };
+    let wants_worktree = match name.as_str() {
+        "worktree-with-agent" => true,
+        "stop" => false,
+        other => return Err(format!("unknown command {other}")),
+    };
+    let mut repository = None;
+    let mut branch = None;
+    let mut agent = None;
+    let mut socket = None;
+    let mut deadline = None;
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        let taken = match flag.as_str() {
+            "--repository" if wants_worktree => &mut repository,
+            "--branch" if wants_worktree => &mut branch,
+            "--agent" if wants_worktree => &mut agent,
+            "--socket" => &mut socket,
+            "--deadline" => &mut deadline,
+            other => return Err(format!("{name} does not take {other}")),
+        };
+        let value = flags
+            .next()
+            .ok_or_else(|| format!("{flag} needs a value"))?;
+        if taken.replace(value.clone()).is_some() {
+            return Err(format!("{flag} is given twice"));
+        }
+    }
+    let socket = socket.map(PathBuf::from);
+    let deadline = match deadline {
+        Some(text) => match text.parse::<u64>() {
+            Ok(seconds) if seconds > 0 => Duration::from_secs(seconds),
+            _ => {
+                return Err(format!(
+                    "--deadline wants a whole number of seconds, not {text}"
+                ));
+            }
+        },
+        None if wants_worktree => WORKTREE_DEADLINE,
+        None => STOP_DEADLINE,
+    };
+    if !wants_worktree {
+        return Ok(Command::Stop { socket, deadline });
+    }
+    let need = |value: Option<String>, flag: &str| value.ok_or_else(|| format!("{flag} is needed"));
+    let agent = need(agent, "--agent")?;
+    if agent != "claude" && agent != "pi" {
+        return Err(format!("--agent is claude or pi, not {agent}"));
+    }
+    Ok(Command::WorktreeWithAgent {
+        repository: PathBuf::from(need(repository, "--repository")?),
+        branch: need(branch, "--branch")?,
+        agent,
+        socket,
+        deadline,
+    })
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let command = match parse(&args) {
+        Ok(command) => command,
+        Err(problem) => {
+            eprintln!("yaar-script: {problem}\n{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    // The scripted client panics with what it saw when a wait runs out; `waiting` turns that
+    // into a sentence, so the panic's own report would only say it twice.
+    std::panic::set_hook(Box::new(|_| {}));
+    // A panic outside `waiting` is still one sentence and a status of this program's own.
+    let done = catch_unwind(AssertUnwindSafe(|| run(command))).unwrap_or_else(|payload| {
+        Err(Failure::unmet(format!(
+            "the scripted client failed: {}",
+            said(&*payload)
+        )))
+    });
+    match done {
+        Ok(line) => {
+            println!("{line}");
+            ExitCode::SUCCESS
+        }
+        Err(failure) => {
+            eprintln!("yaar-script: {}", failure.sentence);
+            ExitCode::from(failure.status)
+        }
+    }
+}
+
+/// Runs the command the command line asked for.
+fn run(command: Command) -> Result<String, Failure> {
+    match command {
+        Command::WorktreeWithAgent {
+            repository,
+            branch,
+            agent,
+            socket,
+            deadline,
+        } => worktree_with_agent(
+            &socket.unwrap_or_else(yaar_link::socket_path),
+            &repository,
+            &branch,
+            &agent,
+            deadline,
+        ),
+        Command::Stop { socket, deadline } => {
+            stop(&socket.unwrap_or_else(yaar_link::socket_path), deadline)
+        }
+    }
+}
+
+/// What a panic of the scripted client said.
+fn said(payload: &(dyn Any + Send)) -> String {
+    payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| {
+            payload
+                .downcast_ref::<&str>()
+                .map(|text| (*text).to_owned())
+        })
+        .unwrap_or_else(|| "no reason given".to_owned())
+}
+
+/// Runs one call of the scripted client, which panics when what it waits for does not
+/// come, and says which wait it was.
+fn waiting<T>(what: &str, call: impl FnOnce() -> T) -> Result<T, Failure> {
+    catch_unwind(AssertUnwindSafe(call))
+        .map_err(|payload| Failure::unmet(format!("{what} did not come: {}", said(&*payload))))
+}
+
+/// Connects to the Keeper that listens at `socket`, as a Window does. None listening is
+/// said at once, and not after the scripted client's own wait for one.
+fn attach(socket: &Path) -> Result<Client, Failure> {
+    let no_keeper = |why: String| {
+        Failure::unreachable(format!("no Keeper listens at {}: {why}", socket.display()))
+    };
+    drop(yaar_link::connect(socket).map_err(|e| no_keeper(e.to_string()))?);
+    catch_unwind(|| Client::attach(socket)).map_err(|payload| no_keeper(said(&*payload)))
+}
+
+/// Sends one request and waits for its reply for at most `deadline`. A refusal is the
+/// Keeper's sentence.
+fn ask(
+    client: &mut Client,
+    what: &str,
+    request: Request,
+    deadline: Duration,
+) -> Result<Reply, Failure> {
+    // The send is guarded too: it panics when the Keeper has closed the connection, as one
+    // that is leaving does between two requests.
+    waiting(what, || {
+        let id = client.send(request);
+        client.wait_for_reply(id, deadline)
+    })?
+    .map_err(|refusal| Failure::unmet(format!("the Keeper refused: {refusal}")))
+}
+
+/// The repository, and the workspace in it, at `folder`, among those the Keeper lists.
+fn listed<'a>(
+    repositories: &'a [Repository],
+    folder: &Path,
+) -> Option<(&'a Repository, &'a Workspace)> {
+    repositories.iter().find_map(|repository| {
+        repository
+            .workspaces
+            .iter()
+            .find(|workspace| {
+                workspace.path == folder
+                    || workspace
+                        .path
+                        .canonicalize()
+                        .is_ok_and(|path| path == folder)
+            })
+            .map(|workspace| (repository, workspace))
+    })
+}
+
+fn workspaces(client: &mut Client, deadline: Duration) -> Result<Vec<Repository>, Failure> {
+    match ask(
+        client,
+        "the list of workspaces",
+        Request::ListWorkspaces,
+        deadline,
+    )? {
+        Reply::Workspaces(repositories) => Ok(repositories),
+        other => Err(Failure::unmet(format!(
+            "asked for the workspaces, the Keeper answered {other:?}"
+        ))),
+    }
+}
+
+/// Opens `repository` as a workspace unless the Keeper lists it, makes a worktree of it
+/// on `branch` with `agent` in it, and says where the worktree is and which session runs.
+fn worktree_with_agent(
+    socket: &Path,
+    repository: &Path,
+    branch: &str,
+    agent: &str,
+    deadline: Duration,
+) -> Result<String, Failure> {
+    let mut client = attach(socket)?;
+    let folder = repository
+        .canonicalize()
+        .unwrap_or_else(|_| repository.to_owned());
+
+    let mut repositories = workspaces(&mut client, deadline)?;
+    if listed(&repositories, &folder).is_none() {
+        ask(
+            &mut client,
+            "the reply to opening the folder",
+            Request::OpenFolder {
+                path: folder.clone(),
+            },
+            deadline,
+        )?;
+        repositories = workspaces(&mut client, deadline)?;
+    }
+    let (repository_id, from) = match listed(&repositories, &folder) {
+        Some((repository, workspace)) => match &workspace.head {
+            Some(Head::Branch(name)) => (repository.id.clone(), name.clone()),
+            _ => {
+                return Err(Failure::unmet(format!(
+                    "{} has no branch checked out, so no worktree can be made from it",
+                    folder.display()
+                )));
+            }
+        },
+        None => {
+            return Err(Failure::unmet(format!(
+                "the Keeper lists no workspace at {} after opening it",
+                folder.display()
+            )));
+        }
+    };
+
+    let reply = ask(
+        &mut client,
+        "the reply WorktreeCreated",
+        Request::CreateWorktree {
+            repository: repository_id,
+            from,
+            branch: branch.to_owned(),
+            agent: agent.to_owned(),
+            size: TERMINAL,
+        },
+        deadline,
+    )?;
+    let Reply::WorktreeCreated { workspace, .. } = reply else {
+        return Err(Failure::unmet(format!(
+            "asked for a worktree, the Keeper answered {reply:?}"
+        )));
+    };
+
+    let running = |agents: &WorkspaceAgents| {
+        agents
+            .sessions
+            .iter()
+            .any(|session| session.agent == agent && session.terminal.is_some())
+    };
+    // The fact may have come while the reply was awaited, and then it is kept; one that has
+    // not come is waited for. Asking first covers a session that started before this
+    // client was told of anything.
+    let listing = match ask(
+        &mut client,
+        "the list of agent sessions",
+        Request::ListAgents,
+        deadline,
+    )? {
+        Reply::Agents(all) => all,
+        other => {
+            return Err(Failure::unmet(format!(
+                "asked for the agents, the Keeper answered {other:?}"
+            )));
+        }
+    };
+    let agents = match listing
+        .into_iter()
+        .find(|agents| agents.workspace == workspace && running(agents))
+    {
+        Some(agents) => agents,
+        None => waiting(
+            &format!("the fact that a session of {agent} runs in the new workspace"),
+            || client.wait_for_agents(&workspace, deadline, running),
+        )?,
+    };
+    let session = agents
+        .sessions
+        .iter()
+        .find(|session| session.agent == agent && session.terminal.is_some())
+        .map(|session| session.id.clone())
+        .ok_or_else(|| Failure::unmet("the session that ran is gone".to_owned()))?;
+
+    let made = workspaces(&mut client, deadline)?;
+    let path = made
+        .iter()
+        .flat_map(|repository| &repository.workspaces)
+        .find(|candidate| candidate.id == workspace)
+        .map(|candidate| candidate.path.clone())
+        .ok_or_else(|| {
+            Failure::unmet(format!(
+                "the Keeper's list holds no workspace {workspace} after it made one"
+            ))
+        })?;
+    Ok(format!(
+        "worktree={} workspace={workspace} session={session}",
+        path.display()
+    ))
+}
+
+/// Sends the Link's stop and waits until nothing answers at `socket`.
+fn stop(socket: &Path, deadline: Duration) -> Result<String, Failure> {
+    let mut client = attach(socket)?;
+    waiting("sending the stop", || client.stop_everything())?;
+    let end = Instant::now() + deadline;
+    let mut last = "the Keeper still answers".to_owned();
+    loop {
+        match yaar_link::connect(socket) {
+            Ok(stream) => drop(stream),
+            Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::ConnectionRefused) => {
+                client.vanish();
+                return Ok("stopped".to_owned());
+            }
+            Err(e) => last = e.to_string(),
+        }
+        if Instant::now() >= end {
+            return Err(Failure::unmet(format!(
+                "the Keeper at {} still answered after {} seconds: {last}",
+                socket.display(),
+                deadline.as_secs()
+            )));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn line(text: &str) -> Vec<String> {
+        text.split_whitespace().map(str::to_owned).collect()
+    }
+
+    #[test]
+    fn a_worktree_command_takes_its_four_flags_and_the_default_deadline() {
+        assert_eq!(
+            parse(&line(
+                "worktree-with-agent --repository /r --branch b --agent claude"
+            )),
+            Ok(Command::WorktreeWithAgent {
+                repository: PathBuf::from("/r"),
+                branch: "b".to_owned(),
+                agent: "claude".to_owned(),
+                socket: None,
+                deadline: Duration::from_secs(60),
+            })
+        );
+    }
+
+    #[test]
+    fn a_stop_command_takes_a_socket_and_a_deadline_of_its_own() {
+        assert_eq!(
+            parse(&line("stop --deadline 5 --socket /s")),
+            Ok(Command::Stop {
+                socket: Some(PathBuf::from("/s")),
+                deadline: Duration::from_secs(5),
+            })
+        );
+        assert_eq!(
+            parse(&line("stop")),
+            Ok(Command::Stop {
+                socket: None,
+                deadline: Duration::from_secs(20),
+            })
+        );
+    }
+
+    #[test]
+    fn what_the_command_line_does_not_say_or_says_wrongly_is_refused() {
+        for wrong in [
+            "",
+            "frobnicate",
+            "worktree-with-agent --repository /r --branch b",
+            "worktree-with-agent --repository /r --agent claude",
+            "worktree-with-agent --repository /r --branch b --agent emacs",
+            "worktree-with-agent --repository /r --branch b --agent claude --deadline 0",
+            "worktree-with-agent --repository /r --branch b --agent claude --deadline soon",
+            "worktree-with-agent --repository /r --repository /s --branch b --agent claude",
+            "worktree-with-agent --repository",
+            "stop --branch b",
+            "stop now",
+        ] {
+            assert!(parse(&line(wrong)).is_err(), "{wrong:?} was taken");
+        }
+    }
+
+    /// A Keeper's socket that says hello to whoever comes and then closes the connection, as
+    /// a Keeper that is leaving does between two requests. Returns once it has closed.
+    fn leaving_keeper(socket: &Path) -> std::thread::JoinHandle<()> {
+        let listener = std::os::unix::net::UnixListener::bind(socket).expect("bind");
+        std::thread::spawn(move || {
+            let mine = yaar_link::Hello::for_this_process("a-keeper-that-leaves");
+            // The first connection is the probe that asks whether a Keeper listens at all
+            // and says nothing; the one that follows is the Window's.
+            for stream in listener.incoming() {
+                let mut stream = stream.expect("accept");
+                if yaar_link::handshake(&mut stream, &mine).is_ok() {
+                    return;
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_keeper_that_closes_between_two_requests_is_a_refusal_with_a_sentence_not_a_panic() {
+        let folder =
+            std::env::temp_dir().join(format!("yaar-script-leaving-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("scratch folder");
+        let socket = folder.join("keeper.sock");
+        let keeper = leaving_keeper(&socket);
+        let mut client = attach(&socket).unwrap_or_else(|f| panic!("attach: {}", f.sentence));
+        keeper.join().expect("the Keeper's thread");
+
+        let asked = ask(
+            &mut client,
+            "the list of workspaces",
+            Request::ListWorkspaces,
+            Duration::from_secs(2),
+        );
+
+        std::fs::remove_dir_all(&folder).expect("remove scratch");
+        let failure = asked.expect_err("a closed Keeper answered");
+        assert_eq!(failure.status, 1);
+        assert!(
+            failure.sentence.contains("the list of workspaces"),
+            "the sentence does not name the request: {}",
+            failure.sentence
+        );
+    }
+}

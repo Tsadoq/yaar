@@ -113,7 +113,7 @@ use yaar_link::{
     Ending, Fact, Message, Program, Refusal, Reply, Request, RequestKind, SOCKET_VARIABLE,
     TERMINAL_VARIABLE, TerminalSize,
 };
-use yaar_recorder::{CommitError, CommitId, Git, Worktree};
+use yaar_recorder::{CommitError, CommitId, Git, GitEnvironment, Worktree};
 use yaar_review_engine::{EngineError, ReviewError, ReviewId, Reviews, Saved, StateWatch};
 use yaar_store::Store;
 use yaar_workspaces::{WorkspaceError, WorkspaceId, Workspaces};
@@ -363,10 +363,11 @@ pub(crate) fn waits_its_turn(kind: RequestKind) -> bool {
 }
 
 impl Parts {
-    /// Starts the parts: finds git, opens the database `yaar_store::FILE_NAME` in the
-    /// folder of `options.data_dir`, and puts Workspaces and the Review engine on both,
-    /// the engine recording the states of worktrees in `states` beside the database; and
-    /// makes the Dock, whose programs tell what they do to the Windows of `shared`.
+    /// Starts the parts: finds git, which runs in `environment`, opens the database
+    /// `yaar_store::FILE_NAME` in the folder of `options.data_dir`, and puts Workspaces and
+    /// the Review engine on both, the engine recording the states of worktrees in `states`
+    /// beside the database; and makes the Dock, whose programs tell what they do to the
+    /// Windows of `shared`.
     ///
     /// A Keeper with no git, or with a database it cannot open, still starts and answers
     /// the hello, so that a Window can say what is wrong; each request is then refused
@@ -374,10 +375,12 @@ impl Parts {
     pub(crate) fn start(
         options: &Options,
         clock: Arc<dyn yaar_recorder::Clock>,
+        environment: GitEnvironment,
         shared: Weak<Shared>,
     ) -> Parts {
         let watching = Arc::new(Watching::new(shared.clone()));
         let kept = Git::find().map_err(|e| e.to_string()).and_then(|git| {
+            let git = git.with_environment(environment);
             let file = options.data_dir.join(yaar_store::FILE_NAME);
             let store = Store::open(&file).map_err(|e| e.to_string())?;
             // The engine asks the watching whether files changed since its newest state,

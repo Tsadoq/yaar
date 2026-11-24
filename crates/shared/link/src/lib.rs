@@ -51,6 +51,7 @@
 //! [`Origin::Agent`], takes its reply and leaves. Both say the same hello.
 
 mod agent;
+pub mod login;
 mod request;
 mod review;
 mod setting;

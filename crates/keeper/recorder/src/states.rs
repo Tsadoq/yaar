@@ -32,7 +32,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::clock::{Clock, SystemClock};
 
-use crate::contents::{Contents, Read, read_kept, stop_kept};
+use crate::contents::{Contents, Read, asked, read_kept, stop_kept};
 use crate::git::{Answer, Git, GitError, Place, finish, finish_with, unreadable};
 use crate::index::IndexCopy;
 use crate::worktree::{
@@ -400,10 +400,14 @@ impl StateStore {
         let mut name = commit.as_bytes().to_vec();
         name.push(b':');
         name.extend_from_slice(path.as_os_str().as_bytes());
+        let has_newer_forms = self.git.has_newer_forms();
+        let Some(name) = asked(has_newer_forms, name, |args| self.run(None, args))? else {
+            return Ok(None);
+        };
         // Asked of the one process the store keeps, which holds no lock of recording.
         match read_kept(
             &self.contents,
-            || Contents::start_in(self.command(None)),
+            || Contents::start_in(self.command(None), has_newer_forms),
             &name,
         )? {
             Read::Blob(content) => Ok(Some(content)),

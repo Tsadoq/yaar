@@ -1,0 +1,15 @@
+YAAR @VERSION@: a desktop app for reviewing what a coding agent changes, while it changes it. You run Claude Code or pi in its terminal, read the diff beside it, comment on lines, and send the comments back to the agent.
+
+**Install**, on macOS 26 or 27 on Apple silicon, Debian 12 or 13, or Ubuntu 22.04, 24.04 or 26.04, on x86-64 or arm64:
+
+```sh
+curl -fsSL @BASE_URL@/install.sh | bash
+```
+
+On macOS it installs the notarised app into `/Applications`. On Debian and Ubuntu it installs the package from the signed apt repository at `@BASE_URL@/apt`, which stays among apt's sources. On another Linux it unpacks the plain archive under `~/.local`.
+
+**Remove:** quit YAAR, then `curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall`. It keeps your reviews; add `--purge` to remove them too.
+
+**By hand:** the `.dmg` for macOS, the `.deb` for each processor, the plain archives. `SHA256SUMS` lists them all and `SHA256SUMS.asc` signs it with the key at `@BASE_URL@/apt/yaar-review.asc`.
+
+An Intel Mac and other Linux systems get builds that nobody has tested.
