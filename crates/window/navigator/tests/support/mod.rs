@@ -1121,17 +1121,21 @@ pub fn is_alive(pid: u32) -> bool {
     !is_zombie(pid)
 }
 
-/// Whether a process that exists has ended and waits for its parent to read how.
+/// Whether a process that exists has ended and waits for its parent to read how. The
+/// first thread of a process shows as a zombie as soon as it has exited, while the others
+/// may not have run since the kill: the process has ended when none is left.
 #[cfg(target_os = "linux")]
 fn is_zombie(pid: u32) -> bool {
-    std::fs::read_to_string(format!("/proc/{pid}/stat"))
-        .ok()
-        .and_then(|stat| {
-            // `pid (name) state ...`, the name any text, so the last `)` ends it.
-            let after_name = stat.rsplit_once(')')?.1;
-            after_name.trim_start().chars().next()
-        })
-        .is_some_and(|state| state == 'Z' || state == 'X')
+    std::fs::read_to_string(format!("/proc/{pid}/status")).is_ok_and(|status| {
+        let field = |name: &str| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix(name)?.strip_prefix(':'))
+                .map(str::trim)
+        };
+        let ended = field("State").is_some_and(|state| state.starts_with(['Z', 'X']));
+        ended && field("Threads").and_then(|count| count.parse::<u32>().ok()) == Some(1)
+    })
 }
 
 /// Whether a process that exists has ended and waits for its parent to read how.
