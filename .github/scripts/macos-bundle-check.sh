@@ -38,13 +38,16 @@
 #
 # Exit codes: 0 all hold; 1 one does not; 2 usage error.
 #
-# Three readings of the list above:
+# Four readings of the list above:
 #   - An app signed ad hoc shows flags=0x10002(adhoc,runtime), so the runtime is taken from
 #     the word in the brackets, not from the number.
 #   - The Window is read from the bundle, whose signature seals it: `codesign -dv` of the
 #     bundle names the identifier and the flags.
 #   - A build on one processor (YAAR_EXPECT_ARCHS names one) is packaged by package-macos.sh
 #     as yaar-review-<version>-macos-<that processor>.zip and .dmg, and those are read.
+#   - "Holds YAAR.app and a link Applications" lets through, at the root of the mounted
+#     volume, only the system's own bookkeeping by exact name: .fseventsd, .Trashes and
+#     .Spotlight-V100. Every other entry, a hidden one too, fails the check.
 set -euo pipefail
 
 SELF=$(basename "$0")
@@ -210,8 +213,9 @@ mkdir "$WORK/mnt"
 hdiutil attach -quiet -nobrowse -readonly -mountpoint "$WORK/mnt" "$DMG" > /dev/null ||
   fail "$(basename "$DMG") cannot be mounted"
 MNT="$WORK/mnt"
-# The volume may carry the system's own hidden bookkeeping (.fseventsd); nothing else shows.
-shown=$(cd "$MNT" && find . -mindepth 1 -maxdepth 1 ! -name '.*' -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
+# The volume may carry the system's own bookkeeping, named exactly below; any other entry,
+# hidden or not, shows and fails.
+shown=$(cd "$MNT" && find . -mindepth 1 -maxdepth 1 ! -name .fseventsd ! -name .Trashes ! -name .Spotlight-V100 -print | sed 's|^\./||' | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')
 [ "$shown" = "Applications YAAR.app" ] || fail "$(basename "$DMG") holds \"$shown\", not YAAR.app and Applications"
 [ -L "$MNT/Applications" ] || fail "Applications in $(basename "$DMG") is not a link"
 link=$(readlink "$MNT/Applications")
