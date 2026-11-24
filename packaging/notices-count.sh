@@ -51,9 +51,16 @@
 # do not) must be exactly `cargo build` followed by --release,
 # --locked, -p <package> and "$@", and nothing else; any other such line is unreadable and
 # fails, named whole, since it may build what the notices do not hold. `exec` is refused with
-# the rest. The packages of the readable lines must be exactly the three sets above, one line
-# for each. One line for several parts would let Cargo merge the features that their packages
-# ask of a shared dependency, and a program would link crates that its part does not list.
+# the rest. A line that changes the arguments the cargo lines pass on, `set --`, `set` with
+# an operand, or `shift`, fails too, named whole, since "$@" is then not the caller's and the
+# cargo lines build something else than they read as; `set -eu` and `set -o pipefail` do not.
+# Quotes are taken out of a line before it is read, so `ca""rgo` is cargo. The packages of
+# the readable lines must be exactly the three sets above, one line for each. One line for
+# several parts would let Cargo merge the features that their packages ask of a shared
+# dependency, and a program would link crates that its part does not list. This reader
+# catches a slip in that script, in the forms listed here; it does not stop an author who
+# sets out to get around it (a sourced file, an eval of a variable), so any change
+# to release-build.sh is read in review.
 #
 # It fails, naming the package, the part and each crate, when:
 #   - a wanted crate is not found (a linked dependency with no entry);
@@ -63,7 +70,8 @@
 #   - a package holds no notices file, or two packages of one system and processor hold
 #     different ones;
 #   - release-build.sh does not build the three parts one by one, as THE BUILD says, or holds a
-#     line that runs cargo and cannot be read (said once, whatever the folder holds).
+#     line that runs cargo and cannot be read, or that changes the arguments of the cargo
+#     lines (said once, whatever the folder holds).
 # Prints one line per package: "<file>: <n> crates in <m> licences, each with its text".
 #
 # Needs cargo (the fetched crates of the lock file; nothing is compiled), jq, gzip, tar,
@@ -239,15 +247,30 @@ check_release_build() {
     {
       line = $0
       sub(/^[ \t]+/, "", line)
-      # Does the line hold cargo as a word? Quotes and the separators and assignments of the
-      # shell are blanks for this: `X=1 cargo`, `command cargo`, `cd d; cargo`, `(cargo` and
-      # `if a; then cargo` all do. So does a word that ends in cargo after a slash, a `$`, a
-      # `:` or a `-` (`/usr/bin/cargo`, `$HOME/.cargo/bin/cargo`, `$CARGO`, `${CARGO:-cargo}`),
-      # in any case, while `$HOME/.cargo` and `--prefix=/cargo` do not.
+      # Quotes are taken out of the line, as the shell takes them out of a word, so that
+      # `ca""rgo` and `"cargo"` are the word cargo; then the separators and assignments of the
+      # shell are blanks, and the line is split into words.
       t = line
-      gsub(/[;&|(){}`"=!\\<>]/, " ", t)
-      gsub(q, " ", t)
+      gsub(/"/, "", t)
+      gsub(q, "", t)
+      gsub(/[;&|(){}`=!\\<>]/, " ", t)
       nt = split(t, tok, /[ \t]+/)
+      # Does the line change the arguments that "$@" stands for on the cargo lines? `shift`,
+      # and `set` followed by anything but options (`set -- "$@" --workspace`, `set x`), or by
+      # a `--` later (`set -eu -- x`), do, and so does `eval set -- ...`, which holds the same
+      # words. `set -eu` and `set -o pipefail` do not. A line that does is named whole: the
+      # cargo lines then build something else than they read as.
+      for (i = 1; i <= nt; i++) {
+        if (tok[i] == "shift") changes = 1
+        if (tok[i] != "set") continue
+        if (i < nt && tok[i + 1] !~ /^[-+][A-Za-z]+$/) changes = 1
+        for (j = i + 1; j <= nt; j++) if (tok[j] == "--") changes = 1
+      }
+      if (changes) { print "args\t" line; changes = 0; next }
+      # Does the line hold cargo as a word? `X=1 cargo`, `command cargo`, `cd d; cargo`,
+      # `(cargo` and `if a; then cargo` all do. So does a word that ends in cargo after a
+      # slash, a `$`, a `:` or a `-` (`/usr/bin/cargo`, `$HOME/.cargo/bin/cargo`, `$CARGO`,
+      # `${CARGO:-cargo}`), in any case, while `$HOME/.cargo` and `--prefix=/cargo` do not.
       holds = 0
       for (i = 1; i <= nt; i++) if (tolower(tok[i]) ~ /(^|[^.]\/|[$:-])cargo$/) holds = 1
       if (!holds) next
@@ -279,6 +302,7 @@ check_release_build() {
   while IFS=$TAB read -r what rest line; do
     case "$what" in
       none) echo "$NAME: $RELEASE_BUILD holds no cargo build line, so what the notices are for is not built there" >&2 ;;
+      args) echo "$NAME: $RELEASE_BUILD: the line '$rest' changes the arguments that \"\$@\" stands for on the cargo lines (\"shift\", or \"set\" with an operand such as \"--\"), so those lines no longer build what they read as" >&2 ;;
       line) echo "$NAME: $RELEASE_BUILD: the line '$rest' runs cargo and is not exactly \"cargo build\" and the words the count reads (--release, --locked, -p <package> and \"\$@\"), so what it builds cannot be read (\"exec\", an assignment, \"command\", a second command or a flag before build are refused)" >&2 ;;
       bad) echo "$NAME: $RELEASE_BUILD: the cargo build line '$line' holds '$rest', which the count cannot read (it reads --release, --locked, -p <package> and \"\$@\")" >&2 ;;
       extra) echo "$NAME: $RELEASE_BUILD: one cargo invocation builds $rest, which is not one part of the notices: Cargo merges the features of the packages of one invocation, so a program would link crates that the notices of its part do not hold" >&2 ;;
