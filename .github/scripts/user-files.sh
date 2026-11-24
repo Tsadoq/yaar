@@ -146,7 +146,7 @@ else
   NOTES_DIR="$HOME_DIR/Library/Application Support/yaar-review-notes"
   REPO_DIR=$HOME_DIR/yaar-review-user-repo
 fi
-[ -n "$HOME_DIR" ] && [ -d "$HOME_DIR" ] || fail "the home of $USER_NAME, '$HOME_DIR', is not a folder"
+if [ -z "$HOME_DIR" ] || [ ! -d "$HOME_DIR" ]; then fail "the home of $USER_NAME, '$HOME_DIR', is not a folder"; fi
 HOME_DIR=$(cd -P "$HOME_DIR" && pwd -P)
 
 # Runs a command as the user, with the one variable it needs; the rest of the environment is
@@ -168,6 +168,7 @@ plant() {
   [ ! -e "$NOTES_DIR" ] || fail "$NOTES_DIR is there already: plant runs once, on a fresh home"
   [ ! -e "$REPO_DIR" ] || fail "$REPO_DIR is there already: plant runs once, on a fresh home"
   run_as mkdir -p "$NOTES_DIR"
+  # shellcheck disable=SC2016 # the shell that runs it expands $1, not this one
   run_as sh -c 'printf "%s\n" "My own notes. No uninstall of the app may touch this file." > "$1"' sh "$NOTES_DIR/notes.txt"
   run_as mkdir -p "$REPO_DIR"
   git_as() {
@@ -176,6 +177,7 @@ plant() {
   git_as init -q -b main
   git_as config user.name "A User"
   git_as config user.email "user@example.invalid"
+  # shellcheck disable=SC2016 # the shell that runs it expands $1, not this one
   run_as sh -c 'printf "%s\n" "a file of the user" > "$1"' sh "$REPO_DIR/README"
   git_as add README
   git_as commit -q -m "The user's own commit"
@@ -185,6 +187,7 @@ plant() {
 # ------------------------------------------------------------------------------- the walk
 
 # One path to a line "<kind> <path>": d, f, l, s, o.
+# shellcheck disable=SC2016 # a program for the sh that find starts
 CLASSIFY='for p; do
   if [ -L "$p" ]; then k=l
   elif [ -d "$p" ]; then k=d
@@ -362,11 +365,11 @@ kept_by_uninstall() {
 describe() {
   local kind size
   if [ -L "$1" ]; then
-    kind=link
+    kind="link"
   elif [ -d "$1" ]; then
     kind=folder
   elif [ -f "$1" ]; then
-    kind=file
+    kind="file"
   elif [ -S "$1" ]; then
     kind=socket
   else
@@ -448,6 +451,7 @@ check() {
   still_there "$FILE" "after --uninstall"
   # 2. The purge.
   echo "$NAME: --uninstall --purge"
+  # shellcheck disable=SC2016 # the shell that runs it expands $YAAR_BASE_URL
   if ! run_as env YAAR_BASE_URL=http://127.0.0.1:8000 bash -c \
     'set -o pipefail; curl -fsSL "$YAAR_BASE_URL/install.sh" | bash -s -- --uninstall --purge'; then
     fail "the install line with --uninstall --purge failed"

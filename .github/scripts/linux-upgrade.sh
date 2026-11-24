@@ -64,6 +64,7 @@ LINES=$(wc -l < "$SCRATCH/madison-before" | tr -d ' ')
 
 # 3. update, then upgrade (not install), as the user with sudo.
 STATUS=0
+# shellcheck disable=SC2024 # the redirect is this script's own, for its scratch folder
 sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update > "$SCRATCH/update" 2>&1 || STATUS=$?
 cat "$SCRATCH/update"
 [ "$STATUS" -eq 0 ] || fail "apt-get update exited with $STATUS"
@@ -73,6 +74,7 @@ if grep -E '^(W|E):' "$SCRATCH/update" > "$SCRATCH/update-bad"; then
   exit 1
 fi
 STATUS=0
+# shellcheck disable=SC2024 # the redirect is this script's own, for its scratch folder
 sudo -n -u "$USER_NAME" sudo -n env DEBIAN_FRONTEND=noninteractive apt-get upgrade -y > "$SCRATCH/upgrade" 2>&1 || STATUS=$?
 cat "$SCRATCH/upgrade"
 [ "$STATUS" -eq 0 ] || fail "apt-get upgrade -y exited with $STATUS"

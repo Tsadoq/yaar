@@ -58,7 +58,7 @@ if [ $# -ne 1 ]; then
   exit 2
 fi
 USER_NAME=$1
-USER_UID=$(id -u "$USER_NAME" 2> /dev/null) || {
+id -u "$USER_NAME" > /dev/null 2>&1 || {
   echo "$NAME: no user $USER_NAME on this system" >&2
   exit 2
 }
@@ -185,6 +185,7 @@ if [ "$STATUS" -ne 0 ] || [ -s "$SCRATCH/validate" ]; then
 fi
 EXEC=$(sed -n 's/^Exec=//p' "$DESKTOP")
 EXEC=${EXEC%% *}
+# shellcheck disable=SC2016 # the shell that runs it expands $1
 RESOLVED=$(env -i PATH="$MENU_PATH" sh -c 'command -v "$1"' sh "$EXEC") || fail "Exec=$EXEC does not resolve on PATH=$MENU_PATH"
 [ "$RESOLVED" = /usr/bin/yaar-review ] || fail "Exec=$EXEC resolves to $RESOLVED on PATH=$MENU_PATH, not to /usr/bin/yaar-review"
 echo "$NAME: 2. $DESKTOP: Terminal=false, Type=Application, Exec=$EXEC, valid, resolves to $RESOLVED"

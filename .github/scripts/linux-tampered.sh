@@ -59,10 +59,10 @@ if [ $# -ne 1 ]; then
   exit 2
 fi
 REHEARSAL=$1
-[ -d "$REHEARSAL/site" ] && [ -d "$REHEARSAL/release" ] || {
+if [ ! -d "$REHEARSAL/site" ] || [ ! -d "$REHEARSAL/release" ]; then
   echo "$NAME: $REHEARSAL holds no site/ and release/" >&2
   exit 2
-}
+fi
 REHEARSAL=$(cd "$REHEARSAL" && pwd)
 HERE=$(cd "$(dirname "$0")" && pwd)
 TESTKEY=/etc/apt/keyrings/yaar-test.asc
@@ -125,7 +125,7 @@ while IFS= read -r deb; do
   size=$(wc -c < "$deb" | tr -d ' ')
   last=$(tail -c 1 "$deb" | od -An -tu1 | tr -d ' ')
   new=$((last ^ 1))
-  printf "$(printf '\\%03o' "$new")" | dd of="$deb" bs=1 seek=$((size - 1)) conv=notrunc 2> /dev/null
+  printf '%b' "\\0$(printf '%o' "$new")" | dd of="$deb" bs=1 seek=$((size - 1)) conv=notrunc 2> /dev/null
   [ "$(wc -c < "$deb" | tr -d ' ')" -eq "$size" ] || fail "$deb changed its length"
   [ "$(tail -c 1 "$deb" | od -An -tu1 | tr -d ' ')" -eq "$new" ] || fail "the last byte of $deb was not changed"
 done <<< "$DEBS"
