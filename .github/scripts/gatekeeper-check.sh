@@ -45,6 +45,8 @@ usage() { echo "usage: $SELF <dir> <version>" >&2; exit 2; }
 DIR=$1; VER=$2
 
 fail() { echo "$SELF: $*" >&2; exit 1; }
+# A command that fails with no sentence of its own still ends the run with one.
+trap 'fail "line $LINENO: $BASH_COMMAND failed"' ERR
 
 # The team: the first line of the file that is neither blank nor a comment.
 TEAMFILE="$REPO/packaging/macos/team-id"
@@ -72,10 +74,11 @@ cleanup() {
   fi
   if [ -n "$MNT" ]; then
     # A volume can be busy for a moment after the last read: ask again until it lets go.
-    local deadline=$((SECONDS + 15))
-    until hdiutil detach -quiet "$MNT" > /dev/null 2>&1; do
+    local deadline=$((SECONDS + 15)) last forced
+    until last=$(hdiutil detach -quiet "$MNT" 2>&1); do
       if [ "$SECONDS" -ge "$deadline" ]; then
-        hdiutil detach -quiet -force "$MNT" > /dev/null 2>&1 || echo "$SELF: could not detach $MNT" >&2
+        forced=$(hdiutil detach -quiet -force "$MNT" 2>&1) ||
+          echo "$SELF: could not detach $MNT: hdiutil last said \"$last\", and when forced \"$forced\"" >&2
         break
       fi
       sleep 0.2
@@ -133,12 +136,15 @@ for i in 0 1; do
 done
 
 # 5. The install line against these files, as a user's Mac runs it.
+command -v python3 > /dev/null || fail "python3 is not here: the server of this check needs it"
 SRV="$WORK/srv"; mkdir "$SRV"
-cp "$ZIP" "$SRV/"
-(cd "$SRV" && shasum -a 256 "$(basename "$ZIP")" > SHA256SUMS)
-PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
+cp "$ZIP" "$SRV/" || fail "$ZIP could not be copied into the folder this check serves"
+(cd "$SRV" && shasum -a 256 "$(basename "$ZIP")" > SHA256SUMS) || fail "shasum could not make the SHA256SUMS of $(basename "$ZIP")"
+PORT=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])') ||
+  fail "python3 could not find a free port on 127.0.0.1"
 URL="http://127.0.0.1:$PORT"
-sed -e "s|@BASE_URL@|$URL|g" -e "s|@TEAM_ID@|$TEAM|g" "$REPO/packaging/install.sh" > "$SRV/install.sh"
+sed -e "s|@BASE_URL@|$URL|g" -e "s|@TEAM_ID@|$TEAM|g" "$REPO/packaging/install.sh" > "$SRV/install.sh" ||
+  fail "install.sh could not be made from $REPO/packaging/install.sh"
 
 # Detached from the step: its own session where setsid exists, else nohup.
 if command -v setsid > /dev/null; then
@@ -158,7 +164,7 @@ done
 
 INSTALL="$WORK/applications"; mkdir "$INSTALL"
 if ! curl -fsSL "$URL/install.sh" |
-  env YAAR_BASE_URL="$URL" YAAR_DOWNLOAD_URL="$URL" YAAR_INSTALL_DIR="$INSTALL" bash > "$WORK/install.log" 2>&1; then
+  env -u YAAR_ALLOW_UNNOTARIZED YAAR_BASE_URL="$URL" YAAR_DOWNLOAD_URL="$URL" YAAR_INSTALL_DIR="$INSTALL" bash > "$WORK/install.log" 2>&1; then
   cat "$WORK/install.log" >&2
   fail "the install line failed on these files"
 fi
