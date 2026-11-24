@@ -55,6 +55,14 @@ dpkg-deb -R "$IN" "$TMP/tree"
 CONTROL=$TMP/tree/DEBIAN/control
 [ "$(grep -c '^Version:' "$CONTROL")" -eq 1 ] || fail "$IN has not exactly one Version line in its control file"
 awk -v new="$NEW" '/^Version:/ { print "Version: " new; next } { print }' "$CONTROL" > "$TMP/control"
+# The time the package was built at is kept: SOURCE_DATE_EPOCH from the environment when it is
+# set, else the time of the input's control file (package-linux.sh gave it SOURCE_DATE_EPOCH),
+# so that two repacks of one .deb are the same bytes.
+if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
+  SOURCE_DATE_EPOCH=$(stat -c %Y "$CONTROL") || fail "cannot read the time of the control file of $IN"
+fi
+export SOURCE_DATE_EPOCH
 cat "$TMP/control" > "$CONTROL"
+touch -d "@$SOURCE_DATE_EPOCH" "$CONTROL"
 dpkg-deb --root-owner-group -Zxz --build "$TMP/tree" "$TARGET" >&2
 printf '%s\n' "$TARGET"

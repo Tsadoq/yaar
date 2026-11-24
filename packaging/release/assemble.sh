@@ -64,6 +64,9 @@
 # https:// and a host, with no '/' at its end; ten capital letters or digits). index.html also takes
 # the key's fingerprint, grouped by four, in place of @FINGERPRINT@, as the key at
 # apt/yaar-review.asc gives it.
+# After the repository is made it refuses when a .deb given to it (the two new ones and every one
+# of PREVIOUS) is not in the pool with its own bytes, or is not in the Packages file of its
+# processor with its Version.
 set -euo pipefail
 umask 022
 # Whatever fails without a sentence of its own ends the script with 1, never with the failing
@@ -171,6 +174,7 @@ done
 # script: a folder of PREVIOUS that cannot be read must not drop a published version from the
 # repository without a word.
 PREVIOUS_DEBS=()
+PREVIOUS_LIST=
 if [ -n "${PREVIOUS:-}" ]; then
   [ -d "$PREVIOUS" ] || fail "PREVIOUS names $PREVIOUS, which is not a folder"
   PREVIOUS_LIST=$(find "$PREVIOUS" -type f -name '*.deb' | LC_ALL=C sort) \
@@ -220,6 +224,37 @@ mkdir "$OUT/site"
 # (the expansion of an empty array is spelled so that bash 3.2 under set -u accepts it)
 "$ROOT/packaging/apt/make-apt-repo.sh" "$OUT/site/apt" "$PKGDIR/$DEB_AMD64" "$PKGDIR/$DEB_ARM64" \
   ${PREVIOUS_DEBS[@]+"${PREVIOUS_DEBS[@]}"}
+# Every .deb given to the repository, the two new ones and those of PREVIOUS, is in the pool
+# with its own bytes and in the index of its processor with its Version, whatever the folder it
+# came from or the tool that indexed it did: an earlier release that dropped out here would
+# stay out of the repository with every other step green.
+# The list is the folder's own listing, not the array the repository was given: a loop that
+# dropped a file from the array would otherwise drop it from this check too.
+INDEXED_LIST="$PKGDIR/$DEB_AMD64
+$PKGDIR/$DEB_ARM64
+$PREVIOUS_LIST"
+while IFS= read -r deb; do
+  [ -n "$deb" ] || continue
+  deb_name=$(basename "$deb")
+  deb_pkg=$(dpkg-deb -f "$deb" Package) || fail "$deb is not a .deb that dpkg-deb can read"
+  deb_version=$(dpkg-deb -f "$deb" Version) || fail "$deb has no Version that dpkg-deb can read"
+  deb_arch=$(dpkg-deb -f "$deb" Architecture) || fail "$deb has no Architecture that dpkg-deb can read"
+  deb_path=pool/main/$(printf %.1s "$deb_pkg")/$deb_pkg/$deb_name
+  [ -f "$OUT/site/apt/$deb_path" ] || fail "$deb_name (version $deb_version, $deb_arch) is not in the pool of $OUT/site/apt: $deb_path is missing"
+  cmp -s "$deb" "$OUT/site/apt/$deb_path" \
+    || fail "$OUT/site/apt/$deb_path is not the file $deb: a published version must keep its bytes"
+  awk -v fn="$deb_path" -v ver="$deb_version" -v arch="$deb_arch" '
+    BEGIN { RS = ""; FS = "\n" }
+    { f = 0; v = 0; a = 0
+      for (i = 1; i <= NF; i++) {
+        if ($i == "Filename: " fn) f = 1
+        if ($i == "Version: " ver) v = 1
+        if ($i == "Architecture: " arch) a = 1
+      }
+      if (f && v && a) found = 1 }
+    END { exit !found }' "$OUT/site/apt/dists/stable/main/binary-$deb_arch/Packages" \
+    || fail "$deb_name (version $deb_version, $deb_arch) is in the pool but not in dists/stable/main/binary-$deb_arch/Packages of $OUT/site/apt"
+done <<< "$INDEXED_LIST"
 cp "$OUT/site/apt/yaar-review.asc" "$OUT/key.asc"
 FPR=$(gpg --batch --show-keys --with-colons "$OUT/key.asc" | awk -F: '$1 == "fpr" { print $10; exit }')
 [ -n "$FPR" ] || fail "no fingerprint in the public key $OUT/site/apt/yaar-review.asc"

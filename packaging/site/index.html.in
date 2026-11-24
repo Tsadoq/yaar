@@ -74,7 +74,7 @@
 <h2>Remove</h2>
 <p>Quit YAAR first, then:</p>
 <pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall</code></pre>
-<p>That removes the app and the files it keeps in your cache and runtime folders. It keeps your reviews, and the extension the app wrote for pi.</p>
+<p>That removes the app and the files it keeps for itself in your cache, runtime and data folders. It keeps your reviews, and the extension the app wrote for pi.</p>
 <pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall --purge</code></pre>
 <p><code>--purge</code> removes your reviews and the whole data folder too.</p>
 <pre><code>curl -fsSL @BASE_URL@/install.sh | bash -s -- --uninstall --stop-agents</code></pre>

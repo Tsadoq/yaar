@@ -102,13 +102,19 @@ for later in "${REPACKED[@]}"; do
   [ "$have" = "$LATER" ] || fail "$pooled holds version $have, not the later version $LATER"
   cmp -s "$later" "$pooled" || fail "$pooled is not the repacked $name"
 done
+# The list of the pool is read in an assignment, where a failure of find stops the script, and
+# each field in an assignment of its own, never inside a test.
+POOLED_ALL=$(find "$OUTDIR/site-later/apt/pool" -type f -name '*.deb') \
+  || fail "cannot list the .deb files under $OUTDIR/site-later/apt/pool"
 while IFS= read -r deb; do
-  arch=$(dpkg-deb -f "$deb" Architecture)
+  arch=$(dpkg-deb -f "$deb" Architecture) || fail "$deb is not a .deb that dpkg-deb can read"
   found=0
   while IFS= read -r pooled; do
     [ -n "$pooled" ] || continue
-    if [ "$(dpkg-deb -f "$pooled" Version)" = "$LATER" ] && [ "$(dpkg-deb -f "$pooled" Architecture)" = "$arch" ]; then found=1; fi
-  done < <(find "$OUTDIR/site-later/apt/pool" -type f -name '*.deb')
+    pooled_version=$(dpkg-deb -f "$pooled" Version) || fail "$pooled is not a .deb that dpkg-deb can read"
+    pooled_arch=$(dpkg-deb -f "$pooled" Architecture) || fail "$pooled is not a .deb that dpkg-deb can read"
+    if [ "$pooled_version" = "$LATER" ] && [ "$pooled_arch" = "$arch" ]; then found=1; fi
+  done <<< "$POOLED_ALL"
   [ "$found" -eq 1 ] || fail "the pool of $OUTDIR/site-later/apt holds no $arch package of version $LATER"
 done <<< "$DEBS"
 echo "$NAME: wrote $OUTDIR/site-later: the pool holds both versions of each processor, $LATER the later"
