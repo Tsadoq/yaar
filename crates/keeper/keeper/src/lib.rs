@@ -493,8 +493,12 @@ fn frame_of(message: &Message) -> io::Result<Vec<u8>> {
 /// that folder first. The lock file lies beside the socket really bound.
 ///
 /// With [`Options::login_shell`] some, the user's login shell runs once on a thread of its
-/// own after the socket is bound; see [`Options::login_shell`]. A shell that gives no
-/// environment is said in one line on the standard error and the Keeper goes on in its own.
+/// own; see [`Options::login_shell`]. The thread starts after the listener is bound and its
+/// permissions are set, and not before: a Keeper that cannot bind (the socket is taken, the
+/// folder is refused) returns the error with no shell run, and a Window that connects as
+/// soon as the socket is there is answered while the shell still runs, as no read waits
+/// for it. A shell that gives no environment is said in one line on the standard error and
+/// the Keeper goes on in its own.
 ///
 /// Returns at once with [`Exit::AlreadyRunning`] when another Keeper holds the socket.
 /// Before it returns for any other reason, every Window still attached is let go and the
