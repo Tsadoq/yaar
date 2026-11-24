@@ -43,12 +43,15 @@
 #
 # THE BUILD: the wanted set of a part is what Cargo links when that part's packages are built
 # together and alone, so .github/scripts/release-build.sh (or the file RELEASE_BUILD_SH
-# names, which the control uses) must build the programs the same way. Its `cargo build`
-# lines are read once, before any package: each may hold only --release, --locked,
-# -p <package> and "$@", and the packages of the lines must be exactly the three sets above,
-# one line for each. One line for several parts would let Cargo merge the features that
-# their packages ask of a shared dependency, and a program would link crates that its part
-# does not list.
+# names, which the control uses) must build the programs the same way. The file is read once,
+# before any package, and read closed: every line that is not a comment and holds `cargo` as
+# a word (a word of the shell: `X=1 cargo`, `command cargo`, `cd d; cargo` and `exec cargo`
+# hold it, `$HOME/.cargo` does not) must be exactly `cargo build` followed by --release,
+# --locked, -p <package> and "$@", and nothing else; any other such line is unreadable and
+# fails, named whole, since it may build what the notices do not hold. `exec` is refused with
+# the rest. The packages of the readable lines must be exactly the three sets above, one line
+# for each. One line for several parts would let Cargo merge the features that their packages
+# ask of a shared dependency, and a program would link crates that its part does not list.
 #
 # It fails, naming the package, the part and each crate, when:
 #   - a wanted crate is not found (a linked dependency with no entry);
@@ -57,18 +60,16 @@
 #     (a dependency with no licence text to reproduce);
 #   - a package holds no notices file, or two packages of one system and processor hold
 #     different ones;
-#   - release-build.sh does not build the three parts one by one, as THE BUILD says (said
-#     once, whatever the folder holds).
+#   - release-build.sh does not build the three parts one by one, as THE BUILD says, or holds a
+#     line that runs cargo and cannot be read (said once, whatever the folder holds).
 # Prints one line per package: "<file>: <n> crates in <m> licences, each with its text".
 #
 # Needs cargo (the fetched crates of the lock file; nothing is compiled), jq, gzip, tar,
-# unzip. The variable RELEASE_BUILD_SH, when set, names the build script to read instead of
+# unzip, and dpkg-deb to read a .deb (it fails when a .deb is there and dpkg-deb is not). The
+# variable RELEASE_BUILD_SH, when set, names the build script to read instead of
 # .github/scripts/release-build.sh.
 # Exit codes: 0 every package counts; 1 a package fails (sentences on standard error);
 # 2 a usage error.
-#
-# Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
-# package fills the body.
 set -eu
 
 NAME=notices-count.sh
@@ -223,7 +224,7 @@ take_notices() {
 RELEASE_BUILD=${RELEASE_BUILD_SH:-$ROOT/.github/scripts/release-build.sh}
 check_release_build() {
   [ -f "$RELEASE_BUILD" ] || { echo "$NAME: $RELEASE_BUILD is not a file, so how the programs are built cannot be read" >&2; return 1; }
-  awk -v parts="$(part_packages 1)|$(part_packages 2)|$(part_packages 3)" '
+  awk -v q="'" -v parts="$(part_packages 1)|$(part_packages 2)|$(part_packages 3)" '
     function sorted(s,   a, n, i, j, t, out) {
       n = split(s, a, " ")
       for (i = 2; i <= n; i++) { t = a[i]; for (j = i - 1; j >= 1 && a[j] > t; j--) a[j + 1] = a[j]; a[j + 1] = t }
@@ -236,16 +237,28 @@ check_release_build() {
     {
       line = $0
       sub(/^[ \t]+/, "", line)
-      sub(/^exec[ \t]+/, "", line)
-      if (line !~ /^cargo[ \t]+build([ \t]|$)/) next
+      # Does the line hold cargo as a word? Quotes and the separators and assignments of the
+      # shell are blanks for this: `X=1 cargo`, `command cargo`, `cd d; cargo`, `(cargo` and
+      # `if a; then cargo` all do, while `$HOME/.cargo` and `--prefix=/cargo` do not.
+      t = line
+      gsub(/[;&|(){}`"=!\\<>]/, " ", t)
+      gsub(q, " ", t)
+      nt = split(t, tok, /[ \t]+/)
+      holds = 0
+      for (i = 1; i <= nt; i++) if (tok[i] == "cargo") holds = 1
+      if (!holds) next
+      # Only a line that is exactly `cargo build` and allowed words is read; any other line
+      # that runs cargo (an env assignment, `command`, `exec`, a second command, a flag
+      # before `build`) is unreadable, since it may build what the notices do not hold.
+      if (line !~ /^cargo[ \t]+build([ \t]|$)/) { print "line\t" line; next }
       n = split(line, w, /[ \t]+/)
       pkgs = ""; bad = 0
       for (i = 3; i <= n; i++) {
         if (w[i] == "--release" || w[i] == "--locked" || w[i] == "\"$@\"") continue
         if (w[i] == "-p" && i < n) { i++; pkgs = pkgs " " w[i]; continue }
-        print "bad\t" w[i]; bad = 1
+        print "bad\t" w[i] "\t" line; bad = 1
       }
-      if (pkgs == "") { print "bad\tno -p <package>"; bad = 1 }
+      if (pkgs == "") { print "bad\tno -p <package>\t" line; bad = 1 }
       if (bad) next
       invocations++
       got[sorted(substr(pkgs, 2))]++
@@ -259,10 +272,11 @@ check_release_build() {
       for (k in want) if (!(k in got)) print "missing\t" k
     }' "$RELEASE_BUILD" > "$TMP/build.read" || fail "$RELEASE_BUILD cannot be read"
   [ -s "$TMP/build.read" ] || return 0
-  while IFS=$TAB read -r what rest; do
+  while IFS=$TAB read -r what rest line; do
     case "$what" in
       none) echo "$NAME: $RELEASE_BUILD holds no cargo build line, so what the notices are for is not built there" >&2 ;;
-      bad) echo "$NAME: $RELEASE_BUILD: a cargo build line holds '$rest', which the count cannot read (it reads --release, --locked, -p <package> and \"\$@\")" >&2 ;;
+      line) echo "$NAME: $RELEASE_BUILD: the line '$rest' runs cargo and is not exactly \"cargo build\" and the words the count reads (--release, --locked, -p <package> and \"\$@\"), so what it builds cannot be read (\"exec\", an assignment, \"command\", a second command or a flag before build are refused)" >&2 ;;
+      bad) echo "$NAME: $RELEASE_BUILD: the cargo build line '$line' holds '$rest', which the count cannot read (it reads --release, --locked, -p <package> and \"\$@\")" >&2 ;;
       extra) echo "$NAME: $RELEASE_BUILD: one cargo invocation builds $rest, which is not one part of the notices: Cargo merges the features of the packages of one invocation, so a program would link crates that the notices of its part do not hold" >&2 ;;
       twice) echo "$NAME: $RELEASE_BUILD: $rest is built by more than one cargo invocation" >&2 ;;
       missing) echo "$NAME: $RELEASE_BUILD: no cargo invocation of its own builds $rest, a part of the notices" >&2 ;;

@@ -33,13 +33,14 @@
 #   9. the invocation of yaar-companion-claude taken out: must fail, naming
 #      "no cargo invocation of its own builds yaar-companion-claude";
 #  10. the invocation of yaar-window made "cargo build --release --locked --workspace": must
-#      fail, naming --workspace, which the count cannot read.
+#      fail, naming --workspace, which the count cannot read;
+#  11. the three cargo invocations kept and a fourth line added after them, a merged build of
+#      the four packages behind an env assignment (CARGO_TERM_COLOR=never cargo build ...):
+#      must fail, naming that line, which the count cannot read (a reader that looks only for
+#      lines that begin with `cargo build` passes it).
 # Each check prints what it did and what the count said.
 #
-# Exit codes: 0 all ten as above; 1 one of them not (a sentence says which); 2 usage error.
-#
-# Exit 99 with "not built yet": the contract of slice 10 fixed this interface; its
-# package fills the body.
+# Exit codes: 0 all eleven as above; 1 one of them not (a sentence says which); 2 usage error.
 set -eu
 
 NAME=notices-can-fail.sh
@@ -164,6 +165,12 @@ build_without_companion() { # file
 # release-build.sh with the invocation of yaar-window made one that names no package.
 build_of_workspace() { # file
   awk '/^[ \t]*cargo build / && /yaar-window/ { print "cargo build --release --locked --workspace \"$@\""; next } { print }' "$1"
+}
+# release-build.sh with a fourth cargo line after the three: a merged build that an env
+# assignment in front of `cargo` hides from a reader that looks for lines beginning with it.
+build_with_env_merged() { # file
+  cat "$1"
+  echo 'CARGO_TERM_COLOR=never cargo build --release --locked -p yaar-window -p yaar-keeper -p yaar-adapter-pi -p yaar-companion-claude "$@"'
 }
 # The notices file with a "Used by:" line for a crate the lock file does not hold added to
 # the first block of PART 1.
@@ -292,5 +299,6 @@ break_build() { # number description transform words...
 break_build 8 "release-build.sh builds the four packages in one cargo invocation" merged_build "one cargo invocation"
 break_build 9 "release-build.sh does not build yaar-companion-claude" build_without_companion "no cargo invocation of its own builds yaar-companion-claude"
 break_build 10 "release-build.sh builds the workspace for the Window" build_of_workspace "--workspace"
+break_build 11 "release-build.sh has a merged build of the four packages behind an env assignment" build_with_env_merged "CARGO_TERM_COLOR=never cargo build --release --locked -p yaar-window -p yaar-keeper -p yaar-adapter-pi -p yaar-companion-claude"
 
-echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked, when the toolkit's Apple crate is missing and when the programs are not built part by part, and passes on both packages as built"
+echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked, when the toolkit's Apple crate is missing and when the programs are not built part by part or a cargo line cannot be read, and passes on both packages as built"
