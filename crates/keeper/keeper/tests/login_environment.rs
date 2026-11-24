@@ -341,8 +341,9 @@ impl Scratch {
             }
             assert!(
                 Instant::now() < deadline,
-                "{} never held {needle:?}; it held {text:?}",
-                file.display()
+                "{} never held {needle:?}; it held {text:?}; the Keeper said {:?}",
+                file.display(),
+                std::fs::read_to_string(self.errors()).unwrap_or_default()
             );
             std::thread::sleep(Duration::from_millis(5));
         }
