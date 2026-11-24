@@ -18,7 +18,8 @@
 # hangs: `setsid` (else `nohup`), standard input from /dev/null, standard output and
 # standard error both to served-<port>/log, never to the step's own streams.
 # Writes the server's process id to served-<port>/pid. Waits, up to 10 s, until GET
-# /install.sh answers 200, and fails otherwise with the log.
+# /install.sh answers 200, and fails otherwise with the log; the process it started is then
+# ended, so that a failed start leaves nothing that holds the port.
 # switch: points the site of the server on <port> at <site-dir> (the link `root`), so that
 # the same address now serves another site, as a new deployment of Pages does; the
 # download folder stays. Used by PKG-06.
@@ -28,8 +29,14 @@
 #
 # What the header leaves: the server is a small handler of python3's standard library (the
 # one `python3 -m http.server` has, with the folder it reads from chosen by the first part
-# of the path), which writes its own process id once it has bound its port, so that the pid
-# is the server's whatever wrapper started it; the files of <release-dir> are linked into
+# of the path, and without the look-up of its own address's name that python3's
+# HTTPServer makes when it binds, which asks the resolver and can stall for many seconds on
+# a machine whose resolver is slow, as GitHub's Mac was once), which writes its own process
+# id once it has bound its port, so that the pid is the server's whatever wrapper started
+# it; a start that is not answered in time ends the process it started, by the process id
+# of the wrapper it ran (the server's own, since neither setsid nor nohup forks here), and
+# says whether the server ever wrote its pid; each look of the wait is cut at 3 s, so that
+# a server that holds a request cannot keep the wait past its own 10 s; the files of <release-dir> are linked into
 # root-download, not copied (a release holds hundreds of megabytes); a stopped server whose
 # process is a zombie that nobody reaped (a container's first process may not reap) counts
 # as ended; a command that stops the script without a sentence of its own is named in one,
@@ -104,6 +111,7 @@ write_handler() {
 import http.server
 import os
 import posixpath
+import socketserver
 import sys
 import urllib.parse
 
@@ -122,17 +130,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return os.path.join(site, *parts)
 
 
+class Server(http.server.ThreadingHTTPServer):
+    def server_bind(self):
+        # HTTPServer's own bind asks the resolver for the name of the address it bound
+        # (socket.getfqdn), which nothing here uses and which can take longer than the
+        # wait of `start`.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
+
 try:
     os.setsid()
 except OSError:
     pass
-server = http.server.ThreadingHTTPServer(("127.0.0.1", port), Handler)
+server = Server(("127.0.0.1", port), Handler)
 tmp = os.path.join(served, "pid.new")
 with open(tmp, "w") as f:
     f.write("%d\n" % os.getpid())
 os.rename(tmp, os.path.join(served, "pid"))
 server.serve_forever()
 PY
+}
+
+# Ends the process `start` started, and waits for it (it is this script's own child).
+end_started() {
+  kill "$started" 2> /dev/null || return 0
+  gone=$(($(date +%s) + 5))
+  while alive "$started"; do
+    if [ "$(date +%s)" -ge "$gone" ]; then
+      kill -9 "$started" 2> /dev/null || true
+      break
+    fi
+    sleep 0.2
+  done
+  wait "$started" 2> /dev/null || true
 }
 
 start() {
@@ -170,7 +203,7 @@ start() {
   code=000
   while :; do
     if [ -s "$dir/pid" ]; then
-      code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/install.sh") || code=000
+      code=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/install.sh") || code=000
       [ "$code" = 200 ] && break
     elif ! kill -0 "$started" 2> /dev/null; then
       print_log "$dir"
@@ -178,7 +211,9 @@ start() {
     fi
     if [ "$(date +%s)" -ge "$deadline" ]; then
       print_log "$dir"
-      fail "GET http://127.0.0.1:$port/install.sh did not answer 200 within 10 s, the last answer was $code"
+      if [ -s "$dir/pid" ]; then written="the server wrote its process id"; else written="the server wrote no process id"; fi
+      end_started
+      fail "GET http://127.0.0.1:$port/install.sh did not answer 200 within 10 s, the last answer was $code ($written; the process was ended)"
     fi
     sleep 0.2
   done
