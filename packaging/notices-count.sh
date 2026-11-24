@@ -32,6 +32,18 @@
 #   - a trailing " (<path>)" that remains is stripped too: a crate from a path prints its
 #     folder there, and that alone never decides whether it is counted;
 #   - "name vX.Y.Z" becomes "name X.Y.Z" (the "v" removed).
+# Cargo works out the dependencies of a proc-macro crate (and of a build script) for the
+# machine it runs on, not for --target, so a plain `cargo tree --target aarch64-unknown-linux-gnu`
+# on an x86-64 machine also prints a crate that only an x86-64 machine would compile into a
+# proc-macro (core_detect 1.0.0, behind rust-i18n's proc-macro): a crate that no aarch64
+# program links and that the notices rightly lack. So the count asks cargo as if it ran on
+# the triple it counts: RUSTC names a stand-in that reports <triple> as the host and answers
+# nothing but cargo's questions (its version, its cfg, its file names; it refuses all else,
+# so it compiles nothing), and CARGO_TARGET_DIR is a folder of the count's own, one for each
+# triple, so that the repository's build folder is not touched. Every edge, a proc-macro's
+# own dependencies included, is then worked out for the package's target whatever machine
+# runs the count, as cargo-about does for the notices. This is exact for the Linux packages,
+# which the jobs build on their own target; for the .zip it is the union over both Mac targets.
 # THE WORKSPACE'S OWN CRATES are left out, and only they: the names of
 # `cargo metadata --locked --offline --no-deps --format-version 1` (`.packages[].name`, read
 # with jq). gpui-pre-apple, the toolkit's Apple crate that Cargo.toml patches in from
@@ -74,7 +86,8 @@
 #     lines (said once, whatever the folder holds).
 # Prints one line per package: "<file>: <n> crates in <m> licences, each with its text".
 #
-# Needs cargo (the fetched crates of the lock file; nothing is compiled), jq, gzip, tar,
+# Needs cargo (the fetched crates of the lock file; nothing is compiled, and the rustc on the
+# path or RUSTC names answers cargo's questions as it would on each counted triple), jq, gzip, tar,
 # unzip, and dpkg-deb to read a .deb (it fails when a .deb is there and dpkg-deb is not). The
 # variable RELEASE_BUILD_SH, when set, names the build script to read instead of
 # .github/scripts/release-build.sh.
@@ -134,6 +147,26 @@ jq -r '.packages[].name' "$TMP/metadata.json" > "$TMP/workspace.unsorted" \
 LC_ALL=C sort -u "$TMP/workspace.unsorted" > "$TMP/workspace"
 [ -s "$TMP/workspace" ] || fail "cargo metadata of $ROOT names no workspace crate"
 
+# The rustc that cargo tree is given (THE WANTED SET says why): it answers the questions
+# cargo asks of a compiler as the machine $NOTICES_HOST would, through the real one
+# ($NOTICES_REAL_RUSTC, the caller's RUSTC or the rustc on the path), and refuses everything
+# else, so that it can never compile. Its version question gets the real answer with the
+# host line changed; a question about cfg, file names or the sysroot gets the target put on
+# it when it has none.
+REAL_RUSTC=${RUSTC:-rustc}
+RUSTC_AS=$TMP/rustc-as-the-triple
+cat > "$RUSTC_AS" << 'STAND_IN'
+#!/bin/sh
+case " $* " in
+  *" -vV "*) "$NOTICES_REAL_RUSTC" "$@" | sed "s/^host: .*/host: $NOTICES_HOST/"; exit ;;
+  *" --target "* | *" --target="*) exec "$NOTICES_REAL_RUSTC" "$@" ;;
+  *--print*) exec "$NOTICES_REAL_RUSTC" "$@" --target "$NOTICES_HOST" ;;
+esac
+echo "notices-count.sh: this rustc only answers cargo's questions and compiles nothing: $*" >&2
+exit 3
+STAND_IN
+chmod +x "$RUSTC_AS"
+
 # The crates cargo links into a part for one target, as lines "name version", sorted and
 # deduplicated, in $TMP/wanted.<part>.<triple>; made once, then kept.
 wanted() {
@@ -143,7 +176,9 @@ wanted() {
   args=""
   for pkg in $(part_packages "$part"); do args="$args -p $pkg"; done
   # shellcheck disable=SC2086
-  (cd "$ROOT" && cargo tree --locked --offline -e normal --target "$triple" $args \
+  (cd "$ROOT" && NOTICES_REAL_RUSTC=$REAL_RUSTC NOTICES_HOST=$triple RUSTC=$RUSTC_AS \
+    CARGO_TARGET_DIR=$TMP/target.$triple \
+    cargo tree --locked --offline -e normal --target "$triple" $args \
     --prefix none --format '{p}') > "$TMP/tree" 2> "$TMP/tree.err" \
     || { cat "$TMP/tree.err" >&2; fail "cargo tree for $triple failed"; }
   # A line is "name vX.Y.Z", then maybe " (proc-macro)", " (*)" and " (<path>)" in some
