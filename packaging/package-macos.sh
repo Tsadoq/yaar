@@ -72,6 +72,9 @@
 # The log says which signature it made, in one line starting "signature: ":
 #   "signature: ad hoc, not notarised (for tests; Gatekeeper refuses it on another Mac)"
 #   "signature: Developer ID <the identity's name>, notarised and stapled"
+#   "signature: Developer ID <the identity's name>, not notarised (Gatekeeper refuses it on
+#   another Mac)" (a Developer ID identity with no NOTARY_* set: a signed package that was
+#   not sent to Apple)
 set -euo pipefail
 
 SELF=$(basename "$0")
