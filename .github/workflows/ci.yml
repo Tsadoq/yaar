@@ -498,9 +498,17 @@ jobs:
         run: |
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            ca-certificates curl git dpkg-dev apt-utils gnupg jq unzip xz-utils python3
+            ca-certificates curl git dpkg-dev apt-utils gnupg jq unzip xz-utils python3 procps
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Two checks of scripts the install jobs rest on, here because this job has what they
+      # need and runs before those jobs: a fault in either shows once, not in eleven jobs.
+      - name: The stand-in server answers at once, ends a start that fails, and never answers 304
+        run: .github/scripts/serve-site-check.sh
+
+      - name: The archive route of the install line finds, checks and refuses on both processors
+        run: .github/scripts/install-archive-check.sh
 
       # cargo reads the lock file to count what each package links; nothing is compiled.
       - name: Rust toolchain named in rust-toolchain.toml

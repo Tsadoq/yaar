@@ -968,9 +968,11 @@ fn list_printed(
 /// The list of an older git, `--porcelain` without `-z`, in the form `-z` gives. Such a git
 /// prints a path as it is, with no quoting, so a line that starts with no field's name is
 /// the rest of the field before it: a path or a reason that holds a line feed. What it
-/// cannot tell is a path whose second line looks like a field, or two line feeds in a row:
-/// such a folder is read as another path, which is no worktree of the repository and is
-/// left out by [`listed`], and never taken for one.
+/// cannot tell is a path whose second line looks like a field, or two line feeds in a row.
+/// Such a folder is read as a shorter path: where that is no worktree of the repository,
+/// [`listed`] leaves it out; where it is one (a folder named as another worktree, a line
+/// feed and a field's name), that worktree is listed a second time or hidden. Only a git
+/// older than 2.43 and a folder named so meet it; with `-z` there is no such limit.
 fn zero_ended(printed: &[u8]) -> Vec<u8> {
     const NAMES: [&[u8]; 7] = [
         b"worktree",

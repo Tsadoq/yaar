@@ -145,8 +145,8 @@ if ! YAAR_CHECK_PIDS="$SCRATCH/pids" YAAR_CHECK_LOOKUP_DELAY=15 PYTHONPATH="$SCR
   sed 's/^/    | /' "$SCRATCH/out" >&2
   fail "case 1: start did not serve when the reverse lookup of 127.0.0.1 takes 15 s (it gave up after $(($(date +%s) - began)) s)"
 fi
-[ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/install.sh")" = 200 ] || fail "case 1: GET /install.sh did not answer 200"
-[ "$(curl -s "http://127.0.0.1:$port/download/package.txt")" = "a package" ] || fail "case 1: GET /download/package.txt did not answer with the file"
+[ "$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/install.sh")" = 200 ] || fail "case 1: GET /install.sh did not answer 200"
+[ "$(curl -s --max-time 3 "http://127.0.0.1:$port/download/package.txt")" = "a package" ] || fail "case 1: GET /download/package.txt did not answer with the file"
 "$SERVE" stop "$port" > /dev/null || fail "case 1: the server could not be stopped"
 echo "$NAME: case 1: the server serves within 10 s though the reverse lookup of 127.0.0.1 takes 15 s"
 
@@ -175,14 +175,14 @@ port=$(free_port)
 PORTS="$PORTS $port"
 "$SERVE" start "$SCRATCH/site-a" "$SCRATCH/release" "$port" > /dev/null || fail "case 3: start did not serve"
 url="http://127.0.0.1:$port/apt/dists/stable/InRelease"
-curl -s -D "$SCRATCH/headers" -o "$SCRATCH/first" "$url" || fail "case 3: the first GET failed"
+curl -s --max-time 3 -D "$SCRATCH/headers" -o "$SCRATCH/first" "$url" || fail "case 3: the first GET failed"
 modified=$(sed -n 's/^[Ll]ast-[Mm]odified: *//p' "$SCRATCH/headers" | tr -d '\r')
 [ -n "$modified" ] || fail "case 3: the first answer has no Last-Modified"
 "$SERVE" switch "$SCRATCH/site-b" "$port" > /dev/null || fail "case 3: switch did not point the server at the second site"
-code=$(curl -s -o "$SCRATCH/second" -w '%{http_code}' -H "If-Modified-Since: $modified" "$url") || fail "case 3: the second GET failed"
+code=$(curl -s --max-time 3 -o "$SCRATCH/second" -w '%{http_code}' -H "If-Modified-Since: $modified" "$url") || fail "case 3: the second GET failed"
 [ "$code" = 200 ] || fail "case 3: a GET after the site changed, with If-Modified-Since: $modified, answered $code and not 200"
 [ "$(cat "$SCRATCH/second")" = "the second site, older by a day" ] || fail "case 3: the answer after the switch is not the second site's file: $(cat "$SCRATCH/second")"
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "If-Modified-Since: $modified" "http://127.0.0.1:$port/download/package.txt") || fail "case 3: the GET of a release file failed"
+code=$(curl -s --max-time 3 -o /dev/null -w '%{http_code}' -H "If-Modified-Since: $modified" "http://127.0.0.1:$port/download/package.txt") || fail "case 3: the GET of a release file failed"
 [ "$code" = 200 ] || fail "case 3: a GET of a release file with If-Modified-Since: $modified answered $code and not 200"
 "$SERVE" stop "$port" > /dev/null || fail "case 3: the server could not be stopped"
 echo "$NAME: case 3: a changed site is served whole to a client that holds the one before"

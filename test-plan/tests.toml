@@ -382,8 +382,9 @@ runs = "ci"
 proves = ["NFR-028"]
 built = [
     ".github/workflows/ci.yml::A later version arrives with apt-get upgrade",
+    ".github/workflows/ci.yml::The stand-in server answers at once, ends a start that fails, and never answers 304",
 ]
-note = "The later version is the same programs repacked, so the row shows apt's upgrade, not a program that differs. A later version that adds a dependency would be kept back by `apt-get upgrade` (it installs no new package); the release that does so says `apt-get install yaar-review` in its notes."
+note = "The later version is the same programs repacked, so the row shows apt's upgrade, not a program that differs. A later version that adds a dependency would be kept back by `apt-get upgrade` (it installs no new package); the release that does so says `apt-get install yaar-review` in its notes. The step rests on the stand-in server answering every request whole: with If-Modified-Since honoured, apt kept the old index whenever the unpacked files of the later site were not newer, which failed the step on Ubuntu 26.04 in the second run; a check of the server in the job assemble holds that."
 
 [[test]]
 id = "PKG-07"
@@ -440,7 +441,7 @@ through = "the commands and the packages of the build"
 driver = "workflow"
 runs = "release"
 proves = ["NFR-028"]
-note = "Every run rehearses it with a key made in the run and thrown away: the step \"One checksum file lists every package of the release\" shows the first clause, and \"The install line refuses a download that does not match SHA256SUMS\", in both install jobs, the second. The row is written as built after a run that publishes."
+note = "Every run rehearses it with a key made in the run and thrown away: the step \"One checksum file lists every package of the release\" shows the first clause, and \"The install line refuses a download that does not match SHA256SUMS\", in both install jobs, the second. The row is written as built after a run that publishes. The archive route is checked for both processors by the step \"The archive route of the install line finds, checks and refuses on both processors\" of the job assemble: the install jobs take the apt route on every image, and the first rehearsal showed that the install line found no archive of an x86-64 processor."
 
 [[test]]
 id = "PKG-11"
@@ -514,6 +515,11 @@ runs = "ci"
 proves = ["FR-001"]
 built = [
     "crates/keeper/recorder/tests/reading.rs::the_changes_since_the_fork_point_are_those_of_gits_own_diff_with_what_is_uncommitted_and_untracked",
+    "crates/keeper/recorder/tests/reading.rs::a_path_with_a_space_a_quote_and_a_line_feed_is_read_as_it_is_on_an_older_git",
+    "crates/keeper/recorder/tests/reading.rs::a_path_that_ends_in_a_carriage_return_is_read_as_it_is",
+    "crates/keeper/recorder/tests/reading.rs::a_path_that_ends_in_a_carriage_return_is_read_as_it_is_on_an_older_git",
+    "crates/keeper/recorder/tests/reading.rs::a_commit_git_does_not_know_and_a_path_the_commit_lacks_both_give_no_content_on_an_older_git",
+    "crates/keeper/recorder/tests/reading.rs::many_reads_of_contents_start_one_git_process_which_ends_with_the_worktree_on_an_older_git",
 ]
 
 [[test]]
@@ -527,6 +533,8 @@ runs = "ci"
 proves = ["FR-002"]
 built = [
     "crates/keeper/workspaces/tests/base.rs::with_nothing_set_the_base_is_the_default_branch_and_the_changes_count_from_where_the_branch_left_it",
+    "crates/keeper/recorder/tests/repository.rs::a_branch_that_is_behind_what_is_checked_out_and_ahead_of_it_counts_only_what_is_ahead_on_an_older_git",
+    "crates/keeper/recorder/tests/repository.rs::with_nothing_committed_there_are_no_branches_and_no_commits_and_nothing_fails_on_an_older_git",
 ]
 
 [[test]]
@@ -568,6 +576,8 @@ built = [
     "crates/keeper/workspaces/tests/create.rs::a_worktree_made_from_a_branch_lies_beside_the_repository_or_in_the_folder_named_and_has_that_branch_as_its_base",
     "crates/keeper/workspaces/tests/create.rs::each_refusal_makes_nothing_and_leaves_the_repository_the_folder_beside_it_and_the_store_as_they_were",
     "crates/keeper/workspaces/tests/create.rs::a_folder_that_is_not_absolute_or_holds_a_dot_dot_is_refused",
+    "crates/keeper/recorder/tests/adding.rs::the_user_s_branch_is_made_in_the_folder_as_an_ordinary_worktree_at_the_commit_named_on_an_older_git",
+    "crates/keeper/recorder/tests/adding.rs::a_hook_of_the_user_that_fails_leaves_nothing_and_gives_the_error_of_git_on_an_older_git",
 ]
 note = "Changed in slice 9: the user names the new branch and the worktree is made from the branch of the workspace on screen, which FR-004 calls the branch it was made from. The folder the user named is the repository's setting, which the Keeper reads and hands over; the test hands it as the Keeper does. What is refused when the folder is set or at creation is shown by tests of the same packages, not by this row."
 
@@ -583,6 +593,7 @@ proves = ["FR-005"]
 built = [
     "crates/keeper/workspaces/tests/base.rs::on_its_base_branch_with_an_upstream_a_workspace_shows_the_commits_not_on_the_upstream_and_what_is_uncommitted",
     "crates/keeper/workspaces/tests/base.rs::a_base_branch_that_follows_a_local_branch_shows_the_commits_not_on_that_branch_and_what_is_uncommitted",
+    "crates/keeper/recorder/tests/repository.rs::the_branches_around_a_clone_are_listed_with_their_distance_and_what_they_follow_on_an_older_git",
 ]
 
 [[test]]
@@ -622,7 +633,14 @@ runs = "ci"
 proves = ["FR-006"]
 built = [
     "crates/keeper/workspaces/tests/open.rs::two_worktrees_of_one_repository_are_listed_under_it_each_named_by_its_branch",
+    "crates/keeper/recorder/src/git.rs::a_git_has_the_newer_forms_from_2_43_on_and_one_that_says_nothing_clear_is_taken_to_have_them",
+    "crates/keeper/recorder/tests/repository.rs::the_worktrees_of_a_repository_are_listed_the_main_one_first_and_only_those_on_disk_on_an_older_git",
+    "crates/keeper/recorder/tests/repository.rs::a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached",
+    "crates/keeper/recorder/tests/repository.rs::a_worktree_whose_folder_holds_a_line_feed_is_listed_with_the_locked_and_the_detached_on_an_older_git",
+    "crates/keeper/recorder/tests/repository.rs::a_repository_with_no_files_checked_out_lists_only_its_linked_worktrees_on_an_older_git",
+    "crates/keeper/recorder/tests/repository.rs::where_there_is_no_repository_any_more_no_worktree_is_listed_on_an_older_git",
 ]
+note = "From slice 10's second run on GitHub: the tests named `_on_an_older_git` run the same assertions against a git that says it is 2.34.1 and refuses what that git refuses (`worktree list -z`, `cat-file -Z`, the atom `ahead-behind`), since no machine of the suite has a git older than 2.43; the real gits 2.34.1 and 2.39.5 are shown by the install jobs of Ubuntu 22.04 and Debian 12 (PKG-12)."
 
 [[test]]
 id = "WS-08"
@@ -1609,6 +1627,9 @@ runs = "ci"
 proves = []
 built = [
     "crates/keeper/recorder/tests/states.rs::every_state_reads_after_its_commit_is_collected_and_after_the_repository_is_deleted",
+    "crates/keeper/recorder/tests/state_reading.rs::forty_reads_of_two_states_and_a_kept_commit_start_one_git_process_which_ends_with_the_store_on_an_older_git",
+    "crates/keeper/recorder/tests/state_reading.rs::a_process_for_contents_that_died_is_started_again_on_an_older_git",
+    "crates/keeper/recorder/tests/state_reading.rs::what_the_store_comes_to_hold_after_the_process_started_is_read_by_that_same_process_on_an_older_git",
 ]
 slice = 3
 
