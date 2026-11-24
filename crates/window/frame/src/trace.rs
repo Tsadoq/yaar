@@ -63,6 +63,9 @@ mod tests {
         assert!(!first_of("another-name"));
     }
 
+    // That the mark prints only once is not read here: it prints to standard error and only
+    // with `YAAR_TRACE_START` set, which a test neither sets nor reads. What is read is that
+    // `mark_once` takes the name.
     #[test]
     fn a_mark_taken_once_is_taken_for_good() {
         mark_once("taken-once");

@@ -929,8 +929,8 @@ pub struct ReviewPane {
     /// What code intelligence keeps: the name the reviewer is on, the asks on their way, the
     /// hover, the list of references, the file view and the place left in the diff.
     navigate: navigate::Navigate,
-    /// Whether the pane asked for the mark of the first diff: set on the first draw of a
-    /// diff with rows, so that the mark is asked for once and not on every frame.
+    /// Whether the pane asked for the mark of the first diff: set on the first draw of
+    /// rows with a line of a diff, so that the mark is asked for once and not on every frame.
     first_diff_marked: bool,
 }
 
