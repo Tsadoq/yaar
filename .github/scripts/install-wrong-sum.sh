@@ -144,7 +144,7 @@ scratch=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/wrong-sum.XXXXXX") || fail 
 
 # --- 1. The package the install line downloads, and a SHA256SUMS with a wrong sum for it.
 package=$(awk -v s="$suffix" '{ f = $2; sub(/^\*/, "", f); n = length(f) - length(s) + 1;
-    if (n > 0 && substr(f, n) == s && f ~ /^yaar-review-[0-9A-Za-z.+~-]+$/) print f }' "$rehearsal/release/SHA256SUMS" | sort | tail -n 1) \
+    if (n > 0 && substr(f, n) == s && f ~ /^yaar-review-[0-9A-Za-z._+~-]+$/) print f }' "$rehearsal/release/SHA256SUMS" | sort | tail -n 1) \
     || fail "$rehearsal/release/SHA256SUMS could not be read"
 [ -n "$package" ] || fail "$rehearsal/release/SHA256SUMS names no file ending in $suffix"
 [ -f "$rehearsal/release/$package" ] || fail "$rehearsal/release/$package, named in SHA256SUMS, is not there"
