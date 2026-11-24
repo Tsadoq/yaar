@@ -68,8 +68,12 @@
 #   only a run that reads the started program's environment would.
 # - The stand-in is found as the process named claude among the descendants of the Keeper
 #   of step 3, since the program the shell starts for that name is a link.
-# - The login shell of step 1 is also asked, with nothing else in its environment, to find
-#   yaar-hook-witness, as the Linux step does: the line in the start-up file works.
+# - The login shell of step 1 is also asked, as the Keeper asks it for its environment
+#   (-l -i -c, standard input from /dev/null, standard error thrown away, launchd's search
+#   path and the home and nothing else in its environment, the Keeper's deadline of 10 s), to
+#   find yaar-hook-witness: the line in the start-up file works, and no file the shell reads
+#   after it sets PATH again (for zsh, -i adds ~/.zshrc after ~/.zprofile). A step that
+#   fails there says so at step 1, and not later at the hook with a sentence about the hook.
 # - The trap is set before the arguments are read, so that no command ends the step with its
 #   own status and words alone (a failed dscl, for one): it is named in one sentence and the
 #   step exits 1. Only the usage error leaves with 2. The start-up file counts as changed once
@@ -206,6 +210,47 @@ wait_until() {
     done
 }
 
+# Asks the login shell $shell where it finds yaar-hook-witness, the way the Keeper asks it
+# for its environment (crates/shared/link/src/login.rs): the arguments -l -i -c (-i makes zsh
+# read ~/.zshrc after ~/.zprofile, which -l -c alone does not, so that a ~/.zshrc that sets
+# PATH outright shows here and not only in the hook), standard input from /dev/null, standard
+# error thrown away, the home as the folder it runs in, launchd's search path in an otherwise
+# empty environment, and the Keeper's deadline of 10 s. The answer follows a marker, as what
+# the Keeper reads follows its own: a start-up file may print. The answer is left in $found;
+# a shell that outlives the deadline fails the step.
+found=""
+ask_the_login_shell() {
+    local out="$scratch/probe.out" pid limit=$((SECONDS + 10)) raw
+    : > "$out"
+    (
+        cd "$home" || exit 1
+        # The Keeper hands the shell its own environment, which launchd gave it: beside HOME
+        # and PATH that holds the user's name, the shell and the temporary folder, and a
+        # start-up file may read them.
+        me=$(id -un)
+        exec env -i HOME="$home" PATH="${launchd_path:-/usr/bin:/bin:/usr/sbin:/sbin}" \
+            USER="$me" LOGNAME="$me" SHELL="$shell" TMPDIR="$(getconf DARWIN_USER_TEMP_DIR)" "$shell" -l -i -c \
+            'printf "yaar-probe-follows:"; command -v yaar-hook-witness' < /dev/null > "$out" 2> /dev/null
+    ) &
+    pid=$!
+    while ! is_gone "$pid"; do
+        if [ "$SECONDS" -ge "$limit" ]; then
+            # What a start-up file started and waits for goes with the shell.
+            pkill -KILL -P "$pid" 2> /dev/null || true
+            kill -KILL "$pid" 2> /dev/null || true
+            wait "$pid" 2> /dev/null || true
+            fail "the login shell of $user, $shell, asked as the Keeper asks it (-l -i -c, standard input from /dev/null), did not answer within 10 s, the deadline the Keeper gives it: a start-up file waits for something"
+        fi
+        sleep 0.2
+    done
+    wait "$pid" 2> /dev/null || true
+    raw=$(cat "$out")
+    case $raw in
+        *yaar-probe-follows:*) found=${raw##*yaar-probe-follows:}; found=${found%%$'\n'*} ;;
+        *) found="" ;;
+    esac
+}
+
 diagnose() {
     {
         echo "---- the processes of ${user:-nobody yet}"
@@ -323,8 +368,8 @@ fi
 printf '\nexport PATH="$HOME/yaar-login-only/bin:$PATH"\n' >> "$startup" \
     || fail "the line that puts $only/bin on the login path could not be appended to $startup, which stays as it was"
 startup_changed=yes
-found=$(env -i HOME="$home" "$shell" -l -c 'command -v yaar-hook-witness' 2> /dev/null || true)
-[ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work"
+ask_the_login_shell
+[ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, asked as the Keeper asks it (-l -i -c), finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work, or a start-up file the shell reads after it sets PATH again (for zsh, -i adds ~/.zshrc after ~/.zprofile), and then the Keeper takes no login path either"
 echo "step 1: $only/bin holds yaar-hook-witness and claude; neither launchd's path nor the runner's holds it; the login shell $shell finds it through $startup"
 
 # --- 2. The repository whose hook needs the login path.

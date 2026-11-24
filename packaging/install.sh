@@ -87,7 +87,9 @@
 #      pi's extension: the socket keeper.sock, its lock keeper.sock.lock, the pieces the
 #      Keeper wrote for Claude Code under agents/ (all of agents/ but agents/pi) and any other
 #      file; on macOS also what the system keeps under the app's identifier: `defaults delete
-#      io.github.tsadoq.yaar` (the documented way, which cfprefsd does not write back), then
+#      io.github.tsadoq.yaar` (the documented way, which cfprefsd does not write back; run only
+#      when `defaults read` finds the domain, so that an app that never ran, or a second
+#      uninstall, is no error whatever words the system uses for a missing domain), then
 #      ~/Library/Preferences/io.github.tsadoq.yaar.plist if still there, ~/Library/Saved
 #      Application State/io.github.tsadoq.yaar.savedState, and the folder
 #      io.github.tsadoq.yaar in `getconf DARWIN_USER_CACHE_DIR`. And the short socket folder
@@ -813,11 +815,12 @@ clean_data_folder() { # <folder>
 # The part of the uninstall that is the system's: what macOS keeps under the app's identifier.
 remove_mac_files() {
   local out cache
-  if ! out=$(defaults delete "$DESKTOP_ID" 2>&1); then
-    case "$out" in
-      *"does not exist"*) ;;
-      *) die "could not delete the preferences of $DESKTOP_ID (defaults said: $out)" ;;
-    esac
+  # Asked first, since the words for a domain that is not there differ between releases of
+  # macOS ("does not exist", "Domain ... not found"): an app that never ran, or an uninstall
+  # run twice, has none, and that is no error. A delete that fails on a domain that is there is.
+  if defaults read "$DESKTOP_ID" > /dev/null 2>&1; then
+    out=$(defaults delete "$DESKTOP_ID" 2>&1) ||
+      die "could not delete the preferences of $DESKTOP_ID (defaults said: $out)"
   fi
   rm -f "$HOME/Library/Preferences/$DESKTOP_ID.plist"
   rm -rf "${HOME:?}/Library/Saved Application State/$DESKTOP_ID.savedState"

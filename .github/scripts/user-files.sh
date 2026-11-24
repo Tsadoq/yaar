@@ -381,19 +381,22 @@ paths_of() {
   cut -c3- "$1" | LC_ALL=C sort -u
 }
 
-# On macOS only a path whose full path holds one of three names is judged.
+# On macOS only a path whose full path holds one of three names is judged. The rule is held
+# once, as an awk function, and each list is read by one awk process: the snapshot of a
+# runner's home has over a hundred thousand paths, and a process for each of them (a `tr`)
+# takes longer than the job may. LC_ALL=C: the case that is ignored is ASCII's, and a path
+# with bytes that are no text is read as it is.
+JUDGED_FN='function judged(path,   lower) {
+  lower = tolower(path)
+  return index(lower, "yaar-review") || index(lower, "io.github.tsadoq") || index(lower, "yaar.app")
+}'
+
 judge() {
-  local p lower
   if [ "$OS" = linux ]; then
     cat
     return 0
   fi
-  while IFS= read -r p; do
-    lower=$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')
-    case $lower in
-      *yaar-review* | *io.github.tsadoq* | *yaar.app*) printf '%s\n' "$p" ;;
-    esac
-  done
+  LC_ALL=C awk "$JUDGED_FN"' judged($0) { print }'
 }
 
 # A path written for any program by Mesa or by sudo (Linux only).
@@ -460,12 +463,8 @@ leftovers() {
   paths_of "$now" > "$SCRATCH/now.paths"
   LC_ALL=C comm -13 "$SCRATCH/before.paths" "$SCRATCH/now.paths" > "$SCRATCH/new.paths"
   if [ "$OS" = macos ]; then
-    while IFS= read -r p; do
-      case $(printf '%s' "$p" | tr '[:upper:]' '[:lower:]') in
-        *yaar-review* | *io.github.tsadoq* | *yaar.app*) ;;
-        *) echo "$NAME: new, not judged: $p" ;;
-      esac
-    done < "$SCRATCH/new.paths"
+    # The prefix goes in by the environment: an awk variable would read its backslashes.
+    PREFIX="$NAME: new, not judged: " LC_ALL=C awk "$JUDGED_FN"' !judged($0) { print ENVIRON["PREFIX"] $0 }' "$SCRATCH/new.paths"
   fi
   judge < "$SCRATCH/new.paths" > "$SCRATCH/judged.paths"
   # ~/.cache is the system's to leave only when nothing but Mesa's cache is under it.
