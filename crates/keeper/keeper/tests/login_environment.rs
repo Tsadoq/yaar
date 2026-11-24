@@ -490,19 +490,21 @@ impl Window {
     /// The reply to `id`, within `within`; none when there was none by then. A connection
     /// that fails is no silence and fails the test.
     fn reply_within(&mut self, id: RequestId, within: Duration) -> Option<Result<Reply, Refusal>> {
-        self.stream
-            .set_read_timeout(Some(within))
-            .expect("set the deadline of a read");
         let deadline = Instant::now() + within;
         let found = loop {
+            // Each read is bounded by what is left of `within`, so that a fact that comes
+            // late does not start the wait again.
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break None;
+            }
+            self.stream
+                .set_read_timeout(Some(left))
+                .expect("set the deadline of a read");
             match read_message(&mut self.stream) {
                 Ok(Message::Reply { to, reply }) if to == id => break Some(reply),
                 Ok(Message::Reply { .. }) => panic!("the reply to a request nobody sent"),
-                Ok(_) => {
-                    if Instant::now() >= deadline {
-                        break None;
-                    }
-                }
+                Ok(_) => {}
                 Err(LinkError::Io(e))
                     if matches!(
                         e.kind(),
@@ -648,7 +650,7 @@ fn a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it() {
     // The shell is under way and held until the test lets it go, which it does not.
     let (shell, held_at) = scratch.wait_for_held();
 
-    let (_, workspace) = window.open(&scratch.repo());
+    let (repository, workspace) = window.open(&scratch.repo());
     let id = window.send(Request::GetChanges { workspace });
 
     // A run that waited for the shell would answer only at the shell's own deadline, ten
@@ -674,6 +676,16 @@ fn a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it() {
     assert!(
         !scratch.released_note().exists(),
         "the shell was let go when the read was answered"
+    );
+
+    // A creation of a worktree waits for the shell that is held, as the user's own git does.
+    // It is in flight when the Keeper is asked to stop: that must not make the Keeper wait
+    // for the shell's deadline, so the shell is ended first and the creation goes on without
+    // it. Its reply, a worktree whose hook found no witness or a refusal, is no part of this.
+    let creation = window.create(&repository);
+    assert!(
+        window.reply_within(creation, WATCHED_FOR).is_none(),
+        "a creation was answered while the login shell was held"
     );
 
     // A Keeper that is asked to stop ends the shell it holds instead of waiting for its

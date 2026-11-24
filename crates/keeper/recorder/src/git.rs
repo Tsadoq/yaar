@@ -492,6 +492,10 @@ mod tests {
     /// so this is long enough on a loaded machine too, and a passing run cannot fail on it.
     const WATCHED_FOR: Duration = Duration::from_millis(300);
 
+    /// How many reads a test makes in a row to tell a read that never waits from one that
+    /// waits a little each time.
+    const READS: usize = 20;
+
     fn variables(pairs: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         pairs
             .iter()
@@ -570,14 +574,25 @@ mod tests {
         let reader = {
             let git = git.clone();
             std::thread::spawn(move || {
-                let command = git.command(Place::Folder(Path::new("/")), &[]);
-                let _ = answer_tx.send(set_in(&command));
+                // Making a command takes microseconds, so a run of them in a row is far
+                // under `QUICKLY` however loaded the machine is; a read that waited even
+                // a short while for the take, on each run, would not be.
+                let started = Instant::now();
+                let mut command = git.command(Place::Folder(Path::new("/")), &[]);
+                for _ in 1..READS {
+                    command = git.command(Place::Folder(Path::new("/")), &[]);
+                }
+                let _ = answer_tx.send((set_in(&command), started.elapsed()));
             })
         };
-        let before = answer
+        let (before, took) = answer
             .recv_timeout(ANSWERS_WITHIN)
             .expect("a read waited for the take");
         reader.join().expect("the reader ended");
+        assert!(
+            took < QUICKLY,
+            "{READS} reads took {took:?} while the take was under way: a read waited"
+        );
         assert_eq!(
             value(&before, "GIT_OPTIONAL_LOCKS"),
             Some(OsString::from("0"))
@@ -716,15 +731,30 @@ mod tests {
         let deadline = Duration::from_secs(2);
         let waiting = GitEnvironment::waiting(deadline);
         let git = Git::at("git").with_environment(waiting.clone());
+        // The run is on a thread and is waited for with a bound of its own: one that waits
+        // for no deadline at all must fail here and not hang the test for ever.
+        let (answer_tx, answer) = mpsc::channel();
         let started = Instant::now();
-        let command = git.plain(Path::new("/"));
-        let waited = started.elapsed();
+        let until = started + deadline + Duration::from_secs(1);
+        let user = std::thread::spawn(move || {
+            let command = git.plain(Path::new("/"));
+            let _ = answer_tx.send((set_in(&command), started.elapsed()));
+        });
+        let (set, waited) = answer
+            .recv_timeout(until.saturating_duration_since(Instant::now()))
+            .unwrap_or_else(|_| {
+                panic!(
+                    "the run waited more than {:?} for a deadline of {deadline:?}",
+                    started.elapsed()
+                )
+            });
+        user.join().expect("the run ended");
         assert!(waited >= deadline, "the run gave up before the deadline");
         assert!(
             waited < deadline + Duration::from_secs(1),
             "the run waited {waited:?} for a deadline of {deadline:?}"
         );
-        assert_eq!(value(&set_in(&command), "PATH"), None);
+        assert_eq!(value(&set, "PATH"), None);
         // A take that ends after the wait gave up is still the environment of later reads.
         waiting.ended(Some(variables(&[("PATH", "/late")])));
         assert_eq!(waiting.now(), Some(variables(&[("PATH", "/late")])));
