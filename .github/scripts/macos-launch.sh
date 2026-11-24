@@ -37,7 +37,9 @@
 # `ps -axo uid=,pid=,ppid=,comm=`; (5) the Keeper's own terminal is recorded, not asserted;
 # (6) the app is ended by the trap too, by the pids found, when a step fails half way; (7) a
 # command that stops the script without a sentence of its own is named in one, and the exit
-# code is 1.
+# code is 1; (8) `--keeper-status` runs in the background with its output in a file, and the
+# step waits up to 30 s for it to end, so that a Window that never answers fails the step in a
+# sentence and not at the job's own timeout.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -85,6 +87,9 @@ uid=$(id -u)
 # The pids of the Window and of the Keeper this step found, which the trap ends.
 window_pid=""
 keeper_pid=""
+# The folder of the status query's output, and the query's pid while it runs.
+status_dir=$(mktemp -d) || fail "no scratch folder could be made"
+status_pid_of_query=""
 # What the last look at the system saw, for the sentence of a wait that ran out.
 seen=""
 
@@ -161,7 +166,7 @@ cleanup() {
         fi
         diagnose
     fi
-    for pid in "$window_pid" "$keeper_pid"; do
+    for pid in "$window_pid" "$keeper_pid" "$status_pid_of_query"; do
         [ -n "$pid" ] || continue
         if ! is_gone "$pid"; then
             kill "$pid" 2> /dev/null
@@ -170,6 +175,7 @@ cleanup() {
             is_gone "$pid" || kill -KILL "$pid" 2> /dev/null
         fi
     done
+    rm -rf "$status_dir"
     exit "$status"
 }
 trap cleanup EXIT
@@ -222,7 +228,21 @@ foreground() {
     [ "$type_seen" = Foreground ]
 }
 wait_until 30 "LaunchServices did not list $BUNDLE_ID as a Foreground application" foreground
-status_line=$("$WINDOW" --keeper-status 2>&1) || fail "$WINDOW --keeper-status failed: $status_line"
+# The status query runs in the background with its output in a file, and the step waits for it
+# up to 30 s: a Window that never answers would hold the step to the job's own timeout with no
+# sentence.
+"$WINDOW" --keeper-status > "$status_dir/out" 2>&1 < /dev/null &
+status_pid_of_query=$!
+query_ended() {
+    seen="$WINDOW --keeper-status has printed: $(tr '\n' ' ' < "$status_dir/out")"
+    is_gone "$status_pid_of_query"
+}
+wait_until 30 "$WINDOW --keeper-status did not end" query_ended
+query_status=0
+wait "$status_pid_of_query" || query_status=$?
+status_pid_of_query=""
+status_line=$(cat "$status_dir/out")
+[ "$query_status" -eq 0 ] || fail "$WINDOW --keeper-status failed with status $query_status: $status_line"
 case "$status_line" in
     *started=false*) ;;
     *) fail "--keeper-status does not say started=false: the app's own start did not start the Keeper: $status_line" ;;
