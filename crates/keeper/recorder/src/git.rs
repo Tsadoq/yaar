@@ -483,6 +483,10 @@ mod tests {
     /// less than the deadlines the tests hand to the environment.
     const ANSWERS_WITHIN: Duration = Duration::from_secs(5);
 
+    /// How long a run that never waits may take to be made: far more than making a command
+    /// takes, even on a loaded machine, and less than a short wait would last.
+    const QUICKLY: Duration = Duration::from_secs(1);
+
     /// How long a run that must wait is watched before the take ends: the one wait of these
     /// tests that is not on a fact. A run that does not wait answers within microseconds,
     /// so this is long enough on a loaded machine too, and a passing run cannot fail on it.
@@ -707,14 +711,18 @@ mod tests {
 
     #[test]
     fn the_users_own_git_waits_no_longer_than_the_deadline_and_then_gets_the_process_own() {
-        let deadline = Duration::from_millis(400);
-        let started = Instant::now();
+        // Long enough that a wait of twice the deadline, or of any multiple of it, is told
+        // from one of the deadline by more than a loaded machine's delay.
+        let deadline = Duration::from_secs(2);
         let waiting = GitEnvironment::waiting(deadline);
         let git = Git::at("git").with_environment(waiting.clone());
+        let started = Instant::now();
         let command = git.plain(Path::new("/"));
+        let waited = started.elapsed();
+        assert!(waited >= deadline, "the run gave up before the deadline");
         assert!(
-            started.elapsed() >= deadline,
-            "the run gave up before the deadline"
+            waited < deadline + Duration::from_secs(1),
+            "the run waited {waited:?} for a deadline of {deadline:?}"
         );
         assert_eq!(value(&set_in(&command), "PATH"), None);
         // A take that ends after the wait gave up is still the environment of later reads.
@@ -724,16 +732,23 @@ mod tests {
 
     #[test]
     fn a_git_made_by_find_or_at_runs_in_the_process_own_environment_and_never_waits() {
-        let git = Git::at("git");
+        // Neither waits: each answers in less than the shortest wait an environment of the
+        // Keeper's kind would give, and not only before the longest.
         let (answer_tx, answer) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = answer_tx.send((
-                set_in(&git.plain(Path::new("/"))),
-                set_in(&git.command(Place::Folder(Path::new("/")), &[])),
-            ));
+            let found = Git::find().expect("git on the search path");
+            for git in [Git::at("git"), found] {
+                let started = Instant::now();
+                let plain = set_in(&git.plain(Path::new("/")));
+                let read = set_in(&git.command(Place::Folder(Path::new("/")), &[]));
+                let _ = answer_tx.send((plain, read, started.elapsed()));
+            }
         });
-        let (plain, read) = answer.recv_timeout(ANSWERS_WITHIN).expect("an answer");
-        assert_eq!(value(&plain, "PATH"), None);
-        assert_eq!(value(&read, "PATH"), None);
+        for _ in 0..2 {
+            let (plain, read, took) = answer.recv_timeout(ANSWERS_WITHIN).expect("an answer");
+            assert_eq!(value(&plain, "PATH"), None);
+            assert_eq!(value(&read, "PATH"), None);
+            assert!(took < QUICKLY, "a run took {took:?}: it waited");
+        }
     }
 }

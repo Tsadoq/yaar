@@ -27,6 +27,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use yaar_link::login::SHELL_DEADLINE;
 use yaar_link::{
     Hello, LinkError, Message, Refusal, Reply, RepositoryId, Request, RequestId, TerminalSize,
     WorkspaceId, handshake, read_message, write_message,
@@ -42,6 +43,11 @@ const DEADLINE: Duration = Duration::from_secs(60);
 /// is held can be told from one that did not.
 const AT_ONCE: Duration = Duration::from_secs(8);
 
+/// How long after the shell began to wait a Keeper that is asked to stop may take to end: less
+/// than the shell's own deadline by a second, so that a Keeper that waited for the shell to
+/// end by itself, instead of ending it, can be told from one that did not.
+const LEAVES_BEFORE: Duration = Duration::from_secs(SHELL_DEADLINE.as_secs() - 1);
+
 /// How long after the shell ended the hook of the creation may run: the creation went on at
 /// once, and a take that never ended would have held it for the shell's whole deadline, ten
 /// seconds. Counted in whole seconds, as `date +%s` gives them.
@@ -52,6 +58,10 @@ const GAP: u64 = 8;
 /// does not wait makes its worktree within it on any machine the tests run on; one that does
 /// is slower than this by the whole of the hold.
 const WATCHED_FOR: Duration = Duration::from_millis(500);
+
+/// A variable the Keeper is started with and the shell sets to another value: the Keeper's own
+/// environment is the base of what the take gives, and wins.
+const MARK: &str = "YAAR_TEST_MARK";
 
 const SIZE: TerminalSize = TerminalSize {
     columns: 80,
@@ -176,9 +186,29 @@ impl Scratch {
         self.root.join("keeper.err")
     }
 
-    /// Where the shell notes that it has begun to wait.
+    /// Where the shell writes its process id when it has begun to wait.
     fn held_note(&self) -> PathBuf {
         self.root.join("held")
+    }
+
+    /// Where the shell notes that it was let go: it never is when it is ended while it waits.
+    fn released_note(&self) -> PathBuf {
+        self.root.join("released")
+    }
+
+    /// What the hook writes the variable [`MARK`] and the search path it found into.
+    fn hook_environment(&self) -> PathBuf {
+        self.root.join("hook-environment")
+    }
+
+    /// The search path the Keeper is started with: the stand-in agent first, and none of the
+    /// folder only the login shell knows.
+    fn keeper_path(&self) -> OsString {
+        let search = std::env::var_os("PATH").expect("a search path");
+        let mut path = self.root.join("fake").into_os_string();
+        path.push(":");
+        path.push(&search);
+        path
     }
 
     /// A script `#!/bin/sh` with `body`, which can be run.
@@ -193,9 +223,10 @@ impl Scratch {
     fn write_shell(&self, shell: Shell) {
         let hold = match shell {
             Shell::Held => format!(
-                "printf held > '{note}'\nexec 3<> '{fifo}'\nread go <&3\n",
+                "printf '%s\\n' \"$$\" > '{note}'\nexec 3<> '{fifo}'\nread go <&3\nprintf released > '{released}'\n",
                 note = self.held_note().display(),
-                fifo = self.root.join("fifo").display()
+                fifo = self.root.join("fifo").display(),
+                released = self.released_note().display()
             ),
             Shell::Failing => String::new(),
         };
@@ -214,7 +245,9 @@ impl Scratch {
                  *) exec /bin/sh \"$@\" ;;\n\
                  esac\n\
                  {hold}\
-                 PATH='{login_only}':\"$PATH\"\nexport PATH\n\
+                 PATH='{login_only}':\"$PATH\"\n\
+                 {MARK}=shell\n\
+                 export PATH {MARK}\n\
                  {end}",
                 login_only = self.root.join("login-only").display()
             ),
@@ -241,9 +274,10 @@ impl Scratch {
         self.program(
             &repo.join(".git/hooks/post-checkout"),
             &format!(
-                "date +%s > '{at}'\necho ran >> '{log}'\nwitness || echo 'no witness' >> '{log}'\nexit 0",
+                "date +%s > '{at}'\nprintf '%s\\n%s\\n' \"${MARK}\" \"$PATH\" > '{seen}'\necho ran >> '{log}'\nwitness || echo 'no witness' >> '{log}'\nexit 0",
                 log = self.hook_log().display(),
-                at = self.root.join("hook-ran-at").display()
+                at = self.root.join("hook-ran-at").display(),
+                seen = self.hook_environment().display()
             ),
         );
     }
@@ -292,10 +326,7 @@ impl Scratch {
     /// path with the stand-in agent first (no `login-only`), the test's shell as the user's,
     /// and the settings of git. Attaches as a Window does, waiting for it to listen.
     fn start_keeper(&mut self) -> Window {
-        let search = std::env::var_os("PATH").expect("a search path");
-        let mut path = self.root.join("fake").into_os_string();
-        path.push(":");
-        path.push(&search);
+        let path = self.keeper_path();
         assert!(
             !std::env::split_paths(&path).any(|folder| folder == self.root.join("login-only")),
             "the folder only the login shell knows is on the search path of the Keeper"
@@ -306,6 +337,7 @@ impl Scratch {
             .env_clear()
             .env("PATH", path)
             .env("SHELL", self.shell())
+            .env(MARK, "keeper")
             .env("TMPDIR", self.root.join("tmp"))
             .env("YAAR_KEEPER_LINGER_MS", "60000")
             .envs(self.git_variables())
@@ -324,13 +356,15 @@ impl Scratch {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
         loop {
-            if let Ok(mut stream) = yaar_link::connect(&self.socket())
-                && handshake(&mut stream, &mine).is_ok()
-            {
+            if let Ok(mut stream) = yaar_link::connect(&self.socket()) {
+                // The handshake waits for a Keeper that does not accept, so it is bounded
+                // as every other read of a test is.
                 stream
                     .set_read_timeout(Some(DEADLINE))
                     .expect("set the deadline of a read");
-                return Window { stream, next_id: 0 };
+                if handshake(&mut stream, &mine).is_ok() {
+                    return Window { stream, next_id: 0 };
+                }
             }
             assert!(
                 Instant::now() < deadline,
@@ -354,6 +388,26 @@ impl Scratch {
                 "{} never held {needle:?}; it held {text:?}; the Keeper said {:?}",
                 file.display(),
                 std::fs::read_to_string(self.errors()).unwrap_or_default()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// Waits for the shell to have begun to wait, and gives its process id and the time it
+    /// was seen.
+    fn wait_for_held(&self) -> (libc::pid_t, Instant) {
+        let text = self.wait_for_text(&self.held_note(), "\n");
+        let pid = text.trim().parse().expect("the process id of the shell");
+        (pid, Instant::now())
+    }
+
+    /// Waits for the process `pid` to be gone.
+    fn wait_until_gone(&self, pid: libc::pid_t) {
+        let deadline = Instant::now() + DEADLINE;
+        while exists(pid) {
+            assert!(
+                Instant::now() < deadline,
+                "the shell {pid} was still there after the Keeper ended"
             );
             std::thread::sleep(Duration::from_millis(5));
         }
@@ -467,6 +521,12 @@ impl Window {
     }
 }
 
+/// Whether a process `pid` is there to be signalled.
+fn exists(pid: libc::pid_t) -> bool {
+    // SAFETY: signal 0 only asks whether the process exists.
+    unsafe { libc::kill(pid, 0) == 0 }
+}
+
 /// The lines of `text`.
 fn lines(text: &str) -> Vec<&str> {
     text.lines().collect()
@@ -478,7 +538,7 @@ fn the_hook_of_a_worktree_finds_a_program_only_the_login_shells_search_path_hold
     scratch.repository();
     let mut window = scratch.start_keeper();
     // The shell is under way and held: the take has begun and has not ended.
-    scratch.wait_for_text(&scratch.held_note(), "held");
+    scratch.wait_for_held();
     let (repository, _) = window.open(&scratch.repo());
 
     let id = window.create(&repository);
@@ -511,6 +571,22 @@ fn the_hook_of_a_worktree_finds_a_program_only_the_login_shells_search_path_hold
         [format!("witness ran in {}", scratch.worktree().display())]
     );
     assert!(scratch.worktree().is_dir());
+
+    // The hook's environment is the Keeper's own with what only the shell has added: the
+    // Keeper's value of a variable both have, and the Keeper's search path first with the
+    // shell's folder after it.
+    let seen = std::fs::read_to_string(scratch.hook_environment()).expect("what the hook saw");
+    let [mark, path] = lines(&seen)[..] else {
+        panic!("the hook saw {seen:?}");
+    };
+    assert_eq!(mark, "keeper", "the shell's value won over the Keeper's");
+    let mut expected: Vec<PathBuf> = std::env::split_paths(&scratch.keeper_path()).collect();
+    expected.push(scratch.root.join("login-only"));
+    let found: Vec<PathBuf> = std::env::split_paths(path).collect();
+    assert!(
+        found.ends_with(&expected),
+        "the hook's search path {found:?} does not end with the Keeper's own, then the shell's folder: {expected:?}"
+    );
     scratch.stop(window);
 }
 
@@ -569,8 +645,8 @@ fn a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it() {
     let mut scratch = Scratch::new(Shell::Held);
     scratch.repository();
     let mut window = scratch.start_keeper();
-    // The shell is under way and held until the test lets it go, after the answer.
-    scratch.wait_for_text(&scratch.held_note(), "held");
+    // The shell is under way and held until the test lets it go, which it does not.
+    let (shell, held_at) = scratch.wait_for_held();
 
     let (_, workspace) = window.open(&scratch.repo());
     let id = window.send(Request::GetChanges { workspace });
@@ -584,6 +660,38 @@ fn a_read_is_answered_while_the_login_shell_is_held_and_never_waits_for_it() {
         matches!(reply, Ok(Reply::Changes(_))),
         "no changes: {reply:?}"
     );
-    scratch.release();
+    // The answer came while the shell was still held: a Keeper that took the shell before it
+    // listened would answer only once the shell had ended, at its deadline.
+    assert!(
+        held_at.elapsed() < AT_ONCE,
+        "the answer came {:?} after the shell began to wait",
+        held_at.elapsed()
+    );
+    assert!(
+        exists(shell),
+        "the shell had ended when the read was answered"
+    );
+    assert!(
+        !scratch.released_note().exists(),
+        "the shell was let go when the read was answered"
+    );
+
+    // A Keeper that is asked to stop ends the shell it holds instead of waiting for its
+    // deadline, and says no fault of it.
     scratch.stop(window);
+    assert!(
+        held_at.elapsed() < LEAVES_BEFORE,
+        "the Keeper ended {:?} after the shell began to wait: it waited for the shell",
+        held_at.elapsed()
+    );
+    scratch.wait_until_gone(shell);
+    assert!(
+        !scratch.released_note().exists(),
+        "the shell went on after it was let go, not ended"
+    );
+    let errors = std::fs::read_to_string(scratch.errors()).expect("the Keeper's errors");
+    assert!(
+        !errors.contains("gave no environment"),
+        "a shell ended for the Keeper's leave was said to have failed: {errors}"
+    );
 }
