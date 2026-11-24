@@ -1,5 +1,6 @@
-# Nothing is published, uploaded or sent to Apple unless the owner starts this workflow by hand
-# on a version tag with the input `publish` on. The job `version` computes that once, and
+# Nothing is published, uploaded or sent to Apple unless this workflow is started on a version tag
+# with the input `publish` on: by the job `release` after a green run on main, when the repository
+# variable RELEASES is `on`, or by hand. The job `version` computes that once, and
 # release-sign-macos, assemble-release and publish run only when it holds.
 name: ci
 
@@ -18,10 +19,12 @@ on:
 permissions:
   contents: read
 
-# A pull request's run gives way to a newer one. A run that publishes is never cancelled,
-# and never cancels the rehearsal of the same tag.
+# A pull request's run gives way to a newer one. Other runs of one branch or tag wait for each
+# other, so that the runs on main go one by one. All runs that publish share one group, whatever
+# their tag: none is cancelled while it runs, but a publishing run that waits is replaced by a
+# newer one that queues, and never starts.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'publish' || 'check' }}
+  group: ${{ github.event_name == 'workflow_dispatch' && inputs.publish && 'ci-publish' || format('ci-{0}-{1}-check', github.workflow, github.ref) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
@@ -56,6 +59,25 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
         run: .github/scripts/what-this-run-is.sh
+
+  commits:
+    name: commits
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # The commits between the head and the tip of the base branch have to be there: the script counts
+      # from their merge base.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Every commit of the pull request, merge commits apart, has a subject of the form type(scope) colon description
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: .github/scripts/commit-lint.sh "origin/$BASE_REF" "$HEAD_SHA"
 
   checks-linux:
     name: checks linux ${{ matrix.arch }}
@@ -170,6 +192,24 @@ jobs:
 
       - name: Layout rules
         run: cargo xtask layout
+
+      - name: The commit check passes each form that is right and names each commit that is wrong
+        run: .github/scripts/commit-lint-check.sh
+
+      - name: The next version and the notes of a tag follow the commit messages, on scratch repositories
+        run: packaging/release/next-version-check.sh
+
+      - name: A bump changes the version in Cargo.toml and Cargo.lock alone, and the lock file still holds
+        run: packaging/release/bump-check.sh
+
+      - name: A release is one push and one run, and nothing goes out when it is off, when there is nothing to release, when main moved or when the tag exists
+        run: packaging/release/release-check.sh
+
+      - name: The notes of a release are the changes of its tag, then the fixed text
+        run: .github/scripts/publish-notes-check.sh
+
+      - name: A release is the latest and the site is deployed only when no published release has a greater version
+        run: .github/scripts/publish-latest-check.sh
 
   macos:
     name: macos universal
@@ -786,9 +826,8 @@ jobs:
           path: final/
           if-no-files-found: error
 
-  # The environment github-pages requires the owner's approval before this job starts. On a first
-  # release, a failure between the Pages deployment and the release made the latest leaves apt
-  # answering and the macOS and archive routes failing: re-run this job alone.
+  # On a first release, a failure between the Pages deployment and the release made the latest
+  # leaves apt answering and the macOS and archive routes failing: re-run this job alone.
   publish:
     name: publish
     needs: [version, checks-linux, macos, install-linux, install-macos, assemble-release]
@@ -806,8 +845,10 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       GH_TOKEN: ${{ github.token }}
     steps:
+      # The whole history: the notes of the release are the commits since the tag before it.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -818,16 +859,52 @@ jobs:
       - name: A draft release with every file
         run: .github/scripts/publish.sh draft final/release "$VERSION"
 
+      # Another run may have published a greater version meanwhile: then this one is published, not as
+      # the latest, and leaves the site as it is.
+      - name: Whether a published release has a greater version
+        id: latest
+        run: .github/scripts/publish.sh latest final/release "$VERSION"
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        if: steps.latest.outputs.latest == 'true'
         with:
           path: final/site
 
       - name: The site, deployed
         id: deployment
+        if: steps.latest.outputs.latest == 'true'
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
-      - name: The release, published as the latest
+      - name: The release, published, as the latest when no published release has a greater version
+        env:
+          YAAR_LATEST: ${{ steps.latest.outputs.latest }}
         run: .github/scripts/publish.sh publish final/release "$VERSION"
 
       - name: The release is tagged on the public repository, and its source holds the licence
+        env:
+          YAAR_LATEST: ${{ steps.latest.outputs.latest }}
         run: .github/scripts/publish.sh check final/release "$VERSION"
+
+  # After a push to main whose every job passed. No secret: the workflow's own token pushes, and a
+  # run started by workflow_dispatch is the one run that token may start.
+  release:
+    name: release
+    needs: [version, checks-linux, macos, package-linux, assemble, install-linux, install-macos]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: write
+    timeout-minutes: 10
+    env:
+      RELEASES: ${{ vars.RELEASES }}
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      # The whole history, and the token kept: the job pushes.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: The next version from the commit messages, released when RELEASES is on
+        run: packaging/release/release.sh
