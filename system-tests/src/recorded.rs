@@ -1,18 +1,18 @@
 //! Recorded events of the real agent CLIs (Claude Code 2.1.323, pi 1.1.0), replayed by the tests.
-//! Their hooks, plugin and server are named `ade`; [`RENAMED`] maps those names to the app's.
+//! Their hooks, plugin and server are named `ade`; `RENAMED` maps those names to the app's.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-pub const FOLDER: &str = "recorded";
+const FOLDER: &str = "recorded";
 
-pub const HAND_MADE: &str = "hand-made";
+const HAND_MADE: &str = "hand-made";
 
 pub const PROJECT: &str = "/home/reviewer/project";
 
 /// Names the recordings carry and the app's names read in their place; an empty name drops a
 /// variable only the recording harness read.
-pub const RENAMED: [(&str, &str); 11] = [
+const RENAMED: [(&str, &str); 11] = [
     ("ADE_TERM_ID", yaar_link::TERMINAL_VARIABLE),
     ("ADE_HOOK_LOG", ""),
     ("ADE_X", ""),
@@ -67,7 +67,7 @@ impl HookRecord {
     }
 }
 
-pub fn path(name: &str) -> PathBuf {
+fn path(name: &str) -> PathBuf {
     let path = folder().join(name);
     assert!(
         path.is_file(),
@@ -78,7 +78,7 @@ pub fn path(name: &str) -> PathBuf {
     path
 }
 
-pub fn hand_made(name: &str) -> PathBuf {
+fn hand_made(name: &str) -> PathBuf {
     let path = folder().join(HAND_MADE).join(name);
     assert!(
         path.is_file(),
@@ -88,7 +88,9 @@ pub fn hand_made(name: &str) -> PathBuf {
     path
 }
 
-pub fn hand_made_hook_events(name: &str) -> Vec<HookRecord> {
+/// The non-empty lines of a hand-made shape after the first, which must say why it was written
+/// by hand.
+fn hand_made_records(name: &str) -> Vec<String> {
     let path = hand_made(name);
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
@@ -105,7 +107,12 @@ pub fn hand_made_hook_events(name: &str) -> Vec<HookRecord> {
         says_why,
         "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
     );
-    lines
+    lines.map(str::to_owned).collect()
+}
+
+pub fn hand_made_hook_events(name: &str) -> Vec<HookRecord> {
+    hand_made_records(name)
+        .iter()
         .enumerate()
         .map(|(number, line)| {
             hook_record(line).unwrap_or_else(|| {
@@ -138,23 +145,8 @@ pub struct AnswerShape {
 }
 
 pub fn hand_made_answers(name: &str) -> Vec<AnswerShape> {
-    let path = hand_made(name);
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
-    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-    let says_why = lines
-        .next()
-        .and_then(|first| serde_json::from_str::<serde_json::Value>(first).ok())
-        .is_some_and(|first| {
-            first["hand_made"]
-                .as_str()
-                .is_some_and(|why| !why.is_empty())
-        });
-    assert!(
-        says_why,
-        "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
-    );
-    lines
+    hand_made_records(name)
+        .iter()
         .enumerate()
         .map(|(number, line)| {
             let value: serde_json::Value = serde_json::from_str(line).unwrap_or_else(|e| {
@@ -279,23 +271,8 @@ pub fn pi_events(name: &str) -> Vec<PiRecord> {
 }
 
 pub fn hand_made_pi_events(name: &str) -> Vec<PiRecord> {
-    let path = hand_made(name);
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("the hand-made shape {} cannot be read: {e}", path.display()));
-    let mut lines = text.lines().filter(|line| !line.trim().is_empty());
-    let says_why = lines
-        .next()
-        .and_then(|first| serde_json::from_str::<serde_json::Value>(first).ok())
-        .is_some_and(|first| {
-            first["hand_made"]
-                .as_str()
-                .is_some_and(|why| !why.is_empty())
-        });
-    assert!(
-        says_why,
-        "the first line of the hand-made shape {name} does not say, under `hand_made`, why it was written by hand"
-    );
-    lines
+    hand_made_records(name)
+        .iter()
         .enumerate()
         .map(|(number, line)| {
             pi_record(line).unwrap_or_else(|| {

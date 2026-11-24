@@ -36,8 +36,6 @@ pub use navigation::{Asking, NavError, Navigation};
 pub use routes::Routes;
 pub use settings::{NOT_KEPT, SettingList};
 pub use settings_screen::SettingsScreen;
-pub use sidebar::{
-    FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow, sidebar_form,
-};
+pub use sidebar::{FULL_WIDTH, RAIL_BELOW, RAIL_WIDTH, Sidebar, SidebarForm, SidebarRow};
 pub use states::RecordedStates;
 pub use view::{Beside, BuildPane, Frame, Opened, Pane, PaneEntry, TurnNotice, open};

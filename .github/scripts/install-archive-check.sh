@@ -1,7 +1,7 @@
 #!/bin/bash
 # The archive route of install.sh for both processors: its own archive is found in SHA256SUMS,
 # installed on the right sum, and a wrong sum is refused. Linux only (exit 2 elsewhere).
-# .github/scripts/install-archive-check.sh [<install.sh>]   default packaging/install.sh
+# .github/scripts/install-archive-check.sh
 set -euo pipefail
 set -E
 
@@ -19,7 +19,7 @@ usage() {
     usage_said=yes
     said=yes
     echo "$NAME: $*" >&2
-    echo "usage: .github/scripts/install-archive-check.sh [<install.sh>]" >&2
+    echo "usage: .github/scripts/install-archive-check.sh" >&2
     exit 2
 }
 
@@ -40,8 +40,8 @@ cleanup() {
 }
 trap cleanup EXIT
 
-[ "$#" -le 1 ] || usage "at most one argument, the install script"
-install=${1:-$HERE/../../packaging/install.sh}
+[ "$#" -eq 0 ] || usage "no argument is taken"
+install=$HERE/../../packaging/install.sh
 [ -f "$install" ] || usage "$install is not a file"
 [ "$(uname -s)" = Linux ] || usage "it runs on Linux only: on $(uname -s) install.sh does not take the archive route"
 for tool in curl tar gzip sha256sum awk; do

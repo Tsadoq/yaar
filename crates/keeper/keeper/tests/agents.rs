@@ -4,28 +4,26 @@ use std::io::Write as _;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
     AgentReport, Fact, Hello, Message, Program, Refusal, Reply, Request, RequestId,
-    SOCKET_VARIABLE, SessionState, Step, TERMINAL_VARIABLE, TerminalId, TerminalSize,
-    WorkspaceAgents, WorkspaceId, handshake, read_message, write_message,
+    SOCKET_VARIABLE, SessionState, Step, TERMINAL_VARIABLE, TerminalId, WorkspaceAgents,
+    WorkspaceId, handshake, read_message, write_message,
 };
 use yaar_store::{EndedBy, StepRecord, Store, TurnEndRecord, TurnId};
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord};
 
+mod support;
+
+use support::{Environment, Process, SIZE, Scratch, git, is_state};
+
 const DEADLINE: Duration = Duration::from_secs(20);
 
 const HOOK_DEADLINE: Duration = Duration::from_secs(2);
-
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
 
 const TOOLS: &str = "claude/turn-tools.jsonl";
 const DIALOGS: &str = "claude/permission-dialogs.jsonl";
@@ -39,54 +37,9 @@ const LAST_FORM: &str = "\\033]9;4;0\\033\\\\";
 const PRINT_THE_NEXT: &[u8] = b"printf 'then-%s\\n' mark\r";
 const THEN: &str = "then-mark";
 
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets git's and the shell's environment; has to be the first statement of a test.
     fn new() -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-agents-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp"] {
-            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
-        }
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-            ("SHELL", "/bin/sh"),
-        ];
-        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
-        // so no other thread exists.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("HOME", root.join("home"));
-            std::env::set_var("TMPDIR", root.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
-        Scratch(root)
+        Scratch::in_tmp("agents", Environment::Full)
     }
 
     fn socket(&self) -> PathBuf {
@@ -200,42 +153,6 @@ impl Scratch {
         assert!(output.stdout.is_empty(), "the hook program printed");
         took
     }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-struct Process(std::process::Child);
-
-impl Process {
-    fn end(&mut self) {
-        let _ = self.0.kill();
-        let _ = self.0.wait();
-    }
-}
-
-impl Drop for Process {
-    fn drop(&mut self) {
-        self.end();
-    }
-}
-
-fn git(folder: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("start git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 struct Window {
@@ -455,10 +372,6 @@ impl Setup {
         let store = self.scratch.store();
         (store, self.scratch)
     }
-}
-
-fn is_state(state: SessionState) -> impl Fn(&WorkspaceAgents) -> bool {
-    move |agents| agents.sessions.iter().any(|session| session.state == state)
 }
 
 fn assert_the_plugin_runs(data: &Path, hook: &Path) {

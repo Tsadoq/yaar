@@ -650,7 +650,7 @@ fn rank(path: &Path, pointer: &Path, shown: &[PathBuf]) -> usize {
     }
 }
 
-fn absolute(path: &Path) -> PathBuf {
+pub(crate) fn absolute(path: &Path) -> PathBuf {
     std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
 }
 

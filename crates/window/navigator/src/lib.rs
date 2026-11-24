@@ -29,7 +29,8 @@ pub use port::{
     PortEnd, RepositoryConsent, ServerState, State, Told, Tree, WorkspaceRoot, port,
 };
 pub use registry::{BUILTIN, Platform, Registry, USER_FILE};
-pub use shell::{LoginShell, SHELL_DEADLINE};
+pub use shell::LoginShell;
+use shell::SHELL_DEADLINE;
 
 pub const STOP_AFTER: Duration = Duration::from_secs(10 * 60);
 

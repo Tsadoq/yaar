@@ -1,43 +1,18 @@
 //! Drawing Flow, and the bar at the top that names both views. The bar lies outside the element
 //! whose listeners pause follow, and its controls call `steered`, never `acted`.
 
-use std::cell::RefCell;
 use std::ops::Range;
-use std::rc::Rc;
 
 use gpui_kit::component::theme::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::*;
 use yaar_link::{FlowForm, Step, TurnEnd};
 
-use crate::draw::ROW_HEIGHT;
+use crate::draw::{InView, ROW_HEIGHT};
 use crate::{Following, ReviewPane, TimelineEntry, ToggleFollow, View};
 
-struct InView(Rc<RefCell<Range<usize>>>);
-
-impl UniformListDecoration for InView {
-    fn compute(
-        &self,
-        visible_range: Range<usize>,
-        _bounds: Bounds<Pixels>,
-        _scroll_offset: Point<Pixels>,
-        _item_height: Pixels,
-        _item_count: usize,
-        _window: &mut Window,
-        _cx: &mut App,
-    ) -> AnyElement {
-        *self.0.borrow_mut() = visible_range;
-        Empty.into_any_element()
-    }
-}
-
 impl ReviewPane {
-    pub(crate) fn render_bar(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> Option<Div> {
-        let _ = window;
+    pub(crate) fn render_bar(&mut self, cx: &mut Context<Self>) -> Option<Div> {
         let theme = cx.theme();
         // Runs `then` on mouse down and never calls `acted`: the bar chooses what Flow shows, it
         // does not read it.
@@ -144,18 +119,14 @@ impl ReviewPane {
         )
     }
 
-    pub(crate) fn render_flow(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    pub(crate) fn render_flow(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let lines = self.follow_lines(cx);
         let list = match self.form {
             FlowForm::Timeline => self.render_timeline(cx),
             FlowForm::LiveDiff => div()
                 .debug_selector(|| "flow-live".to_owned())
                 .size_full()
-                .child(self.render_live(window, cx))
+                .child(self.render_live(cx))
                 .into_any_element(),
         };
         div()

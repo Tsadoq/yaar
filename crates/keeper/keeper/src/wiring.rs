@@ -356,7 +356,7 @@ impl Parts {
             Request::MarkReviewed { review } => {
                 let marked = mark_reviewed(workspaces, reviews, &review, &mut facts);
                 if marked.is_ok() {
-                    self.agents.reviewed(kept, &review);
+                    self.agents.reviewed(&review);
                 }
                 marked
             }
@@ -378,7 +378,7 @@ impl Parts {
                     }),
                 };
             }
-            Request::Report { report } => return self.agents.report(kept, report),
+            Request::Report { report } => return self.agents.report(report),
             Request::ListAgents => self.agents.list(kept),
             Request::GetHistory { workspace } => self.agents.history(kept, &workspace),
             Request::GetUncommitted { workspace, review } => {
@@ -1353,6 +1353,12 @@ fn engine_refusal(error: yaar_review_engine::EngineError) -> Refusal {
         other => Refusal::Failed {
             reason: other.to_string(),
         },
+    }
+}
+
+pub(crate) fn failed(error: impl std::fmt::Display) -> Refusal {
+    Refusal::Failed {
+        reason: error.to_string(),
     }
 }
 

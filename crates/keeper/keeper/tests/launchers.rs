@@ -3,40 +3,24 @@
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use yaar_keeper::{Exit, Options, adapters, run};
 use yaar_link::{
     Hello, Message, Program, Refusal, Reply, Request, RequestId, TerminalId, TerminalInfo,
-    TerminalSize, WorkspaceId, handshake, read_message, write_message,
+    WorkspaceId, handshake, read_message, write_message,
 };
+
+mod support;
+
+use support::{Environment, SIZE, Scratch, git};
 
 const DEADLINE: Duration = Duration::from_secs(20);
 
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
-
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets the process environment; must be a test's first statement.
     fn with_launcher_shell() -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-launchers-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp"] {
-            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
-        }
-        let scratch = Scratch(root);
+        let scratch = Scratch::in_tmp("launchers", Environment::Full);
         let shell = scratch.0.join("shell");
         std::fs::write(
             &shell,
@@ -49,38 +33,7 @@ impl Scratch {
         let mut mode = std::fs::metadata(&shell).expect("the shell").permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
         std::fs::set_permissions(&shell, mode).expect("make it run");
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-        ];
-        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
-        // so no other thread exists.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("SHELL", &shell);
-            std::env::set_var("HOME", scratch.0.join("home"));
-            std::env::set_var("TMPDIR", scratch.0.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
+        scratch.set_env("SHELL", &shell);
         scratch
     }
 
@@ -163,27 +116,6 @@ impl Scratch {
         git(&folder, &["commit", "--quiet", "-m", "first"]);
         folder
     }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn git(folder: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("start git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 struct Window {

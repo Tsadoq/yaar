@@ -224,8 +224,8 @@ fn write_session(out: &mut Out, session: &Session) {
         out.text(review.as_str())
     });
     out.optional(session.attached.as_ref(), write_attachment);
-    write_flag(out, session.turn_from_user);
-    write_flag(out, session.resumable);
+    out.flag(session.turn_from_user);
+    out.flag(session.resumable);
 }
 
 fn read_session(input: &mut In<'_>) -> Result<Session, LinkError> {
@@ -239,21 +239,9 @@ fn read_session(input: &mut In<'_>) -> Result<Session, LinkError> {
         turn: input.optional(|input| Ok(TurnId::new(input.text()?)))?,
         review: input.optional(|input| Ok(ReviewId::new(input.text()?)))?,
         attached: input.optional(read_attachment)?,
-        turn_from_user: read_flag(input)?,
-        resumable: read_flag(input)?,
+        turn_from_user: input.flag()?,
+        resumable: input.flag()?,
     })
-}
-
-fn write_flag(out: &mut Out, flag: bool) {
-    out.u8(u8::from(flag));
-}
-
-fn read_flag(input: &mut In<'_>) -> Result<bool, LinkError> {
-    match input.u8()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        _ => Err(LinkError::Malformed("a flag is neither 0 nor 1")),
-    }
 }
 
 pub(crate) fn write_agent_cli(out: &mut Out, cli: &AgentCli) {

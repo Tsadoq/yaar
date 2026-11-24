@@ -204,12 +204,7 @@ impl Remembered {
         })
     }
 
-    pub(crate) fn asked(
-        &self,
-        folder: &Path,
-        report: &Report<'_>,
-    ) -> Result<Option<Asked>, ReportError> {
-        let _ = folder;
+    pub(crate) fn asked(&self, report: &Report<'_>) -> Result<Option<Asked>, ReportError> {
         let payload = Payload::of(report)?;
         let asks = match payload.event() {
             // A message an extension sent carries no review; the user's does, idle or queued.
@@ -225,8 +220,7 @@ impl Remembered {
         }))
     }
 
-    pub(crate) fn answer(&self, asked: &Asked, answer: &Answer<'_>) -> Vec<u8> {
-        let _ = asked;
+    pub(crate) fn answer(&self, answer: &Answer<'_>) -> Vec<u8> {
         let said = match answer {
             Answer::Allow => return Vec::new(),
             Answer::Replied {

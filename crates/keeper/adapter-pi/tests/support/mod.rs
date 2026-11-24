@@ -52,10 +52,6 @@ pub fn told(record: &PiRecord, event: Event) -> Reported {
     }
 }
 
-pub fn in_project(project: &Path, relative: &str) -> PathBuf {
-    project.join(relative)
-}
-
 pub struct Scratch {
     root: PathBuf,
 }
@@ -70,11 +66,6 @@ impl Scratch {
         let root = temp.join(format!("yaar-adapter-pi-{}-{n}", std::process::id()));
         std::fs::create_dir_all(&root).expect("make the scratch folder");
         Scratch { root }
-    }
-
-    /// The folder, with every link in its path resolved.
-    pub fn path(&self) -> &Path {
-        &self.root
     }
 
     pub fn project(&self) -> PathBuf {

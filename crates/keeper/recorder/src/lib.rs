@@ -19,5 +19,5 @@ pub use states::{
 };
 pub use worktree::{
     AddError, Added, Branch, Change, ChangedPath, Commit, CommitError, CommitId, Commits, Head,
-    Listed, LocalBranch, OpenError, Refs, RemoteBranch, Worktree,
+    Listed, LocalBranch, OpenError, Refs, RemoteBranch, Worktree, resolved,
 };

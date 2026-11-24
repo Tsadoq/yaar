@@ -3,8 +3,6 @@
 
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -14,62 +12,15 @@ use yaar_link::{
     TerminalId, TerminalSize, WorkspaceId, handshake, read_message, write_message,
 };
 
+mod support;
+
+use support::{Environment, SIZE, Scratch, contains, git};
+
 const DEADLINE: Duration = Duration::from_secs(20);
 
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
-
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets the process environment for git and the shell. Must be the first statement of a test.
     fn new() -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-terminals-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp"] {
-            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
-        }
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-            ("SHELL", "/bin/sh"),
-        ];
-        // SAFETY: this runs as the first statement of a test, and nextest gives each test
-        // a process of its own, so no other thread exists yet.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("HOME", root.join("home"));
-            // Where the Keeper's copies of git's file lists and a terminal's programs go.
-            std::env::set_var("TMPDIR", root.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
-        Scratch(root)
+        Scratch::in_tmp("terminals", Environment::Full)
     }
 
     fn socket(&self) -> PathBuf {
@@ -119,27 +70,6 @@ impl Scratch {
         git(&folder, &["commit", "--quiet", "-m", "first"]);
         folder
     }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn git(folder: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("start git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 struct Window {
@@ -261,10 +191,6 @@ fn shell_in(heard: &[u8]) -> Option<u32> {
         let line = line.strip_suffix(['\r', '\n'])?;
         line[line.rfind("shell-")? + "shell-".len()..].parse().ok()
     })
-}
-
-fn contains(bytes: &[u8], text: &str) -> bool {
-    String::from_utf8_lossy(bytes).contains(text)
 }
 
 #[test]

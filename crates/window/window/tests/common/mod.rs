@@ -9,9 +9,7 @@ use gpui_kit::{
     AnyView, Entity, KeystrokeEvent, Modifiers, Subscription, TestAppContext, VisualTestContext,
     point, px,
 };
-use yaar_frame::{
-    BuildPane, Control, Frame, LinkStatus, Models, Opened, PROGRAM_CONTEXT, Pane, Wanted,
-};
+use yaar_frame::{BuildPane, Frame, LinkStatus, Models, Opened, PROGRAM_CONTEXT, Pane, Wanted};
 use yaar_link::{
     ReviewId, SessionId, SessionState, TerminalId, TerminalSize, ThreadId, WorkspaceId,
 };
@@ -472,12 +470,6 @@ pub fn key_of(title: &str) -> String {
         .find(|control| control.title == title)
         .unwrap_or_else(|| panic!("no control is titled {title:?}"))
         .key()
-}
-
-pub fn control_of(key: &str) -> Option<Control> {
-    yaar_window::controls()
-        .into_iter()
-        .find(|control| control.key() == key)
 }
 
 const ROWS_TOLD: usize = 12;

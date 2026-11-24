@@ -650,7 +650,7 @@ pub(crate) fn write_request(out: &mut Out, id: RequestId, request: &Request) {
         } => {
             out.text(workspace.as_str());
             out.path(path);
-            out.u8(u8::from(*viewed));
+            out.flag(*viewed);
         }
         Request::Commit { workspace, message } => {
             out.text(workspace.as_str());
@@ -804,11 +804,7 @@ pub(crate) fn read_request(input: &mut In<'_>) -> Result<(RequestId, Request), L
         RequestKind::SetViewed => Request::SetViewed {
             workspace: WorkspaceId::new(input.text()?),
             path: input.path()?,
-            viewed: match input.u8()? {
-                0 => false,
-                1 => true,
-                _ => return Err(LinkError::Malformed("a flag is neither 0 nor 1")),
-            },
+            viewed: input.flag()?,
         },
         RequestKind::Commit => Request::Commit {
             workspace: WorkspaceId::new(input.text()?),
@@ -969,7 +965,7 @@ pub(crate) fn write_reply(out: &mut Out, to: RequestId, reply: &Result<Reply, Re
                 }
                 Reply::Attached { cut } => {
                     out.u16(14);
-                    out.u8(u8::from(*cut));
+                    out.flag(*cut);
                 }
                 Reply::Uncommitted(files) => {
                     out.u16(15);
@@ -1119,13 +1115,7 @@ pub(crate) fn read_reply(input: &mut In<'_>) -> Result<Answer, LinkError> {
             11 => Reply::Compared(input.list(read_changed_file)?),
             12 => Reply::Turn(read_turn(input)?),
             13 => Reply::Terminals(input.list(read_terminal_info)?),
-            14 => Reply::Attached {
-                cut: match input.u8()? {
-                    0 => false,
-                    1 => true,
-                    _ => return Err(LinkError::Malformed("a flag is neither 0 nor 1")),
-                },
-            },
+            14 => Reply::Attached { cut: input.flag()? },
             15 => Reply::Uncommitted(input.list(read_credited)?),
             16 => Reply::Settings(input.list(read_setting)?),
             17 => Reply::Answer {

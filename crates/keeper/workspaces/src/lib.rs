@@ -786,6 +786,6 @@ fn name_of(git_dir: &Path) -> String {
 }
 
 /// Takes a lock also after a panic of its holder: every call brings what it guards up to date.
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+pub(crate) fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

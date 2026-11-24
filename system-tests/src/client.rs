@@ -176,20 +176,6 @@ impl Client {
         }
     }
 
-    pub fn resize_terminal(
-        &mut self,
-        terminal: &TerminalId,
-        size: TerminalSize,
-    ) -> Result<(), Refusal> {
-        match self.request(Request::ResizeTerminal {
-            terminal: terminal.clone(),
-            size,
-        })? {
-            Reply::Done => Ok(()),
-            other => panic!("asked to resize a terminal, the Keeper answered {other:?}"),
-        }
-    }
-
     pub fn type_into(&mut self, terminal: &TerminalId, bytes: &[u8]) {
         write_message(
             &mut self.stream,
@@ -301,16 +287,6 @@ impl Client {
         }
     }
 
-    pub fn delete_draft(&mut self, review: &ReviewId, comment: &CommentId) -> Result<(), Refusal> {
-        match self.request(Request::DeleteDraft {
-            review: review.clone(),
-            comment: comment.clone(),
-        })? {
-            Reply::Done => Ok(()),
-            other => panic!("asked to delete a draft, the Keeper answered {other:?}"),
-        }
-    }
-
     pub fn copy_review(&mut self, review: &ReviewId) -> Result<(String, u32), Refusal> {
         match self.request(Request::CopyReview {
             review: review.clone(),
@@ -342,16 +318,6 @@ impl Client {
         })? {
             Reply::Done => Ok(()),
             other => panic!("asked to mark a file viewed, the Keeper answered {other:?}"),
-        }
-    }
-
-    pub fn commit(&mut self, workspace: &WorkspaceId, message: &str) -> Result<String, Refusal> {
-        match self.request(Request::Commit {
-            workspace: workspace.clone(),
-            message: message.to_owned(),
-        })? {
-            Reply::Committed { commit } => Ok(commit),
-            other => panic!("asked to commit, the Keeper answered {other:?}"),
         }
     }
 
@@ -387,43 +353,6 @@ impl Client {
         })? {
             Reply::AttachedReview { start } => Ok(start),
             other => panic!("asked to attach a review, the Keeper answered {other:?}"),
-        }
-    }
-
-    pub fn detach_review(&mut self, review: &ReviewId) -> Result<(), Refusal> {
-        match self.request(Request::DetachReview {
-            review: review.clone(),
-        })? {
-            Reply::Done => Ok(()),
-            other => panic!("asked to detach a review, the Keeper answered {other:?}"),
-        }
-    }
-
-    pub fn resolve_thread(
-        &mut self,
-        review: &ReviewId,
-        thread: &ThreadId,
-        resolved: bool,
-    ) -> Result<(), Refusal> {
-        let (review, thread) = (review.clone(), thread.clone());
-        let request = match resolved {
-            true => Request::ResolveThread { review, thread },
-            false => Request::ReopenThread { review, thread },
-        };
-        match self.request(request)? {
-            Reply::Done => Ok(()),
-            other => panic!("asked to resolve or reopen a thread, the Keeper answered {other:?}"),
-        }
-    }
-
-    pub fn resolve_addressed(&mut self, review: &ReviewId) -> Result<(), Refusal> {
-        match self.request(Request::ResolveAddressed {
-            review: review.clone(),
-        })? {
-            Reply::Done => Ok(()),
-            other => {
-                panic!("asked to resolve the addressed threads, the Keeper answered {other:?}")
-            }
         }
     }
 
@@ -515,24 +444,6 @@ impl Client {
         })? {
             Reply::Compared(files) => Ok(files),
             other => panic!("asked to compare two versions, the Keeper answered {other:?}"),
-        }
-    }
-
-    pub fn compare_for_review(
-        &mut self,
-        workspace: &WorkspaceId,
-        review: &ReviewId,
-        from: &str,
-        to: &str,
-    ) -> Result<Vec<CreditedFile>, Refusal> {
-        match self.request(Request::CompareForReview {
-            workspace: workspace.clone(),
-            review: review.clone(),
-            from: from.to_owned(),
-            to: to.to_owned(),
-        })? {
-            Reply::ComparedForReview(files) => Ok(files),
-            other => panic!("asked what a review shows of a change, the Keeper answered {other:?}"),
         }
     }
 

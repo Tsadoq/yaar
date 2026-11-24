@@ -1,6 +1,6 @@
 mod adding;
 
-pub use adding::{AddError, Added};
+pub use adding::{AddError, Added, resolved};
 
 use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};

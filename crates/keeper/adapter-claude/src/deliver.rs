@@ -13,7 +13,7 @@ use yaar_agent::{
 };
 
 use crate::COMMAND;
-use crate::report::Remembered;
+use crate::report::{Remembered, text};
 
 /// Claude Code's limit for one string of a hook's output, in UTF-16 code units: it passes
 /// 10,000 whole and cuts 10,001 to a path and a preview, so a longer review goes to a file.
@@ -160,10 +160,6 @@ fn result(is_error: bool, message: &str) -> Value {
         result["isError"] = json!(true);
     }
     result
-}
-
-fn text<'a>(object: &'a Value, key: &str) -> Option<&'a str> {
-    object.get(key)?.as_str()
 }
 
 pub(crate) fn is_folder_name(name: &str) -> bool {

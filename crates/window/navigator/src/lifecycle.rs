@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use yaar_link::{RepositoryId, WorkspaceId};
 
 use crate::download::{Installed, installed};
-use crate::driver::{Launch, Server, ServerEvent};
+use crate::driver::{Launch, Server, ServerEvent, end_with_the_window};
 use crate::navigator::{Core, Event, ServerKey, Side};
 use crate::port::{Language, Offer, RepositoryConsent, ServerState, State, Told, WorkspaceRoot};
 use crate::registry::{Registry, Row, Source, Vars, expand, expand_json};
@@ -942,32 +942,6 @@ fn spawn_trial(launch: &Launch, args: &[String]) -> std::io::Result<Child> {
     end_with_the_window(&mut command);
     command.spawn()
 }
-
-#[cfg(target_os = "linux")]
-fn end_with_the_window(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    // SAFETY: `getpid` has no preconditions.
-    let parent = unsafe { libc::getpid() };
-    // SAFETY: between the fork and the exec the closure calls `prctl`, `getppid` and `_exit`
-    // only, which are safe there, and touches no memory of this process's.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            // The parent may have ended before the request took effect: its signal would never
-            // come.
-            if libc::getppid() != parent {
-                libc::_exit(1);
-            }
-            Ok(())
-        });
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn end_with_the_window(_command: &mut Command) {}
 
 fn kill_and_reap(child: Option<Child>) {
     if let Some(mut child) = child {

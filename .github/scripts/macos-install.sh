@@ -1,7 +1,7 @@
 #!/bin/bash
 # The install line installs the app on macOS and the uninstall removes it, from the site on 8000.
 # .github/scripts/macos-install.sh install | uninstall   (VERSION must be set)
-# Not notarised: YAAR_ALLOW_UNNOTARIZED=1. YAAR_INSTALL_DIR, YAAR_TEST_PORT override defaults.
+# Not notarised: YAAR_ALLOW_UNNOTARIZED=1. YAAR_INSTALL_DIR overrides the default.
 set -euo pipefail
 set -E
 
@@ -57,10 +57,7 @@ done
 [ -n "${VERSION:-}" ] || fail "VERSION is not set: it is the version the app must have (the job's env)"
 [ -d "${HOME:-}" ] || fail "HOME is not a folder"
 
-port=${YAAR_TEST_PORT:-8000}
-case "$port" in
-    '' | *[!0-9]*) fail "YAAR_TEST_PORT is a port number, not: $port" ;;
-esac
+port=8000
 base="http://127.0.0.1:$port"
 download="$base/download"
 

@@ -12,7 +12,7 @@ use yaar_review_engine::{KEEP_STATES, Presence};
 
 use crate::Shared;
 use crate::agents::Agents;
-use crate::wiring::{Kept, Parts};
+use crate::wiring::{Kept, Parts, failed};
 
 pub(crate) const SWEEP_EVERY: Duration = Duration::from_secs(60 * 60);
 
@@ -95,12 +95,6 @@ fn clean(
     }
     .map_err(|error| error.to_string())?;
     Ok(!expired.states.is_empty())
-}
-
-fn failed(error: impl std::fmt::Display) -> Refusal {
-    Refusal::Failed {
-        reason: error.to_string(),
-    }
 }
 
 pub(crate) struct Sweeps {

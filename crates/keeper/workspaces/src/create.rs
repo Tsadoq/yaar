@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use yaar_recorder::{AddError, Added, Listed, Worktree};
+use yaar_recorder::{AddError, Added, Listed, Worktree, resolved};
 
 use crate::{Base, Refusal, RepositoryId, WorkspaceError, WorkspaceId, Workspaces, lock};
 
@@ -213,27 +213,5 @@ fn refuse_unless_there(folder: &Path) -> Result<(), Refusal> {
         Some(parent) if fs::metadata(parent).is_ok_and(|found| found.is_dir()) => Ok(()),
         Some(parent) => Err(Refusal::NoSuchFolder(parent.to_owned())),
         None => Err(Refusal::NoSuchFolder(folder.to_owned())),
-    }
-}
-
-/// Links resolved as far as the path exists, the rest appended as written, so a folder not
-/// made yet below a worktree is still caught.
-fn resolved(path: &Path) -> PathBuf {
-    let mut rest = Vec::new();
-    let mut at = path;
-    loop {
-        if let Ok(found) = fs::canonicalize(at) {
-            return rest
-                .iter()
-                .rev()
-                .fold(found, |whole, part| whole.join(part));
-        }
-        match (at.parent(), at.file_name()) {
-            (Some(parent), Some(name)) => {
-                rest.push(name);
-                at = parent;
-            }
-            _ => return path.to_owned(),
-        }
     }
 }

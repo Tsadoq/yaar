@@ -27,11 +27,9 @@ use yaar_link::{
 pub use attachment::ADDRESS_EACH_COMMENT;
 pub use consent::{NO_LABEL, NOTHING_TO_INSTALL, YES_LABEL};
 pub use draw::colour_of;
-pub use emulator::{
-    Cell, CellPlace, Color, Cursor, Emulator, HISTORY_LINES, Progress, Screen, Style,
-};
+pub use emulator::{Cell, CellPlace, Color, Cursor, Emulator, Progress, Screen, Style};
 pub use keys::{OptionKey, encode_focus, encode_key, encode_paste, encode_release};
-pub use modes::{IMPLEMENTED_FLAGS, KeyboardFlags, Modes, MouseMode};
+pub use modes::{KeyboardFlags, Modes, MouseMode};
 pub use mouse::{MouseAction, MouseButton, encode_mouse};
 pub use view::{TerminalView, ViewEvent};
 

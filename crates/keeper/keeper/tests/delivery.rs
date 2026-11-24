@@ -5,7 +5,6 @@ use std::io::{BufRead as _, BufReader, Write as _};
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -15,19 +14,18 @@ use yaar_keeper::{Exit, Options, run};
 use yaar_link::{
     AgentReport, Anchor, Author, CommentId, DraftOn, Fact, Hello, Lines, Message, Program, Refusal,
     Reply, Request, RequestId, Review, SOCKET_VARIABLE, SentBy, Side, TERMINAL_VARIABLE,
-    TerminalId, TerminalSize, ThreadId, TurnId, WorkspaceId, WorkspaceReviews, handshake,
-    read_message, write_message,
+    TerminalId, ThreadId, TurnId, WorkspaceId, WorkspaceReviews, handshake, read_message,
+    write_message,
 };
 use yaar_store::Store;
 use yaar_system_tests::program;
 use yaar_system_tests::recorded::{self, HookRecord, PiRecord};
 
-const DEADLINE: Duration = Duration::from_secs(20);
+mod support;
 
-const SIZE: TerminalSize = TerminalSize {
-    columns: 80,
-    rows: 24,
-};
+use support::{Environment, SIZE, Scratch, git};
+
+const DEADLINE: Duration = Duration::from_secs(20);
 
 /// Start (line 0), the user's message (2) and the read of a long review's file (3) of one session.
 const REVIEW_FILE: &str = "claude/review-file-read.jsonl";
@@ -52,54 +50,9 @@ const PI_QUEUED: &str = "pi/queued-message.jsonl";
 /// is the user's message typed then, record 12 the end of the run.
 const PI_TYPED_WHILE_WORKING: &str = "pi-typed-while-working.jsonl";
 
-struct Scratch(PathBuf);
-
 impl Scratch {
-    /// Sets the process environment; must be a test's first statement.
     fn new() -> Scratch {
-        static NEXT: AtomicU32 = AtomicU32::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        // `/tmp` is a link on macOS, and the Keeper names a worktree by its resolved path.
-        let root = Path::new("/tmp")
-            .canonicalize()
-            .expect("the temporary folder")
-            .join(format!("yaar-keeper-delivery-{}-{n}", std::process::id()));
-        for folder in ["home", "tmp"] {
-            std::fs::create_dir_all(root.join(folder)).expect("make the test's folder");
-        }
-        let settings = [
-            ("GIT_CONFIG_GLOBAL", "/dev/null"),
-            ("GIT_CONFIG_NOSYSTEM", "1"),
-            ("GIT_AUTHOR_NAME", "A Test"),
-            ("GIT_AUTHOR_EMAIL", "test@example.invalid"),
-            ("GIT_AUTHOR_DATE", "2026-01-01T12:00:00Z"),
-            ("GIT_COMMITTER_NAME", "A Test"),
-            ("GIT_COMMITTER_EMAIL", "test@example.invalid"),
-            ("GIT_COMMITTER_DATE", "2026-01-01T12:00:00Z"),
-            ("SHELL", "/bin/sh"),
-        ];
-        // SAFETY: the first statement of the test; nextest runs each test in a process of its own,
-        // so no other thread exists.
-        unsafe {
-            for (name, value) in settings {
-                std::env::set_var(name, value);
-            }
-            std::env::set_var("HOME", root.join("home"));
-            std::env::set_var("TMPDIR", root.join("tmp"));
-            for name in [
-                "GIT_DIR",
-                "GIT_WORK_TREE",
-                "GIT_INDEX_FILE",
-                "GIT_CONFIG_COUNT",
-                "GIT_CONFIG_PARAMETERS",
-                "GIT_CONFIG",
-                "ENV",
-                "PS1",
-            ] {
-                std::env::remove_var(name);
-            }
-        }
-        Scratch(root)
+        Scratch::in_tmp("delivery", Environment::Full)
     }
 
     fn socket(&self) -> PathBuf {
@@ -225,27 +178,6 @@ impl Scratch {
             took,
         }
     }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-fn git(folder: &Path, args: &[&str]) {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(folder)
-        .args(args)
-        .stdin(Stdio::null())
-        .output()
-        .expect("start git");
-    assert!(
-        output.status.success(),
-        "git {args:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
 }
 
 struct Answer {

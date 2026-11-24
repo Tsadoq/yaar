@@ -28,7 +28,7 @@ use yaar_store::{
 use yaar_switchboard::{Change, Resumable, State, Switchboard};
 
 use crate::watching::Watching;
-use crate::wiring::{Answered, Kept, Outcome, Parts};
+use crate::wiring::{Answered, Kept, Outcome, Parts, failed};
 use crate::{Options, Shared, lock};
 
 const PID_WATCH: Duration = Duration::from_millis(250);
@@ -295,8 +295,7 @@ impl Agents {
     }
 
     /// The work returned waits up to [`REPORT_WAIT`] for the answer, `Reply::Done` when none comes.
-    pub(crate) fn report(&self, kept: &Kept, report: AgentReport) -> Answered {
-        let _ = kept;
+    pub(crate) fn report(&self, report: AgentReport) -> Answered {
         if !self
             .core
             .described
@@ -452,8 +451,7 @@ impl Agents {
         Ok(Reply::Agents(agents))
     }
 
-    pub(crate) fn reviewed(&self, kept: &Kept, review: &ReviewId) {
-        let _ = kept;
+    pub(crate) fn reviewed(&self, review: &ReviewId) {
         self.push(Work::Reviewed(review.clone()));
     }
 
@@ -1536,12 +1534,6 @@ fn spawn(what: &str, body: impl FnOnce() + Send + 'static) -> JoinHandle<()> {
 fn keep<E: std::fmt::Display>(result: Result<(), E>) {
     if let Err(e) = result {
         eprintln!("yaar-keeper: {e}");
-    }
-}
-
-fn failed(error: impl std::fmt::Display) -> Refusal {
-    Refusal::Failed {
-        reason: error.to_string(),
     }
 }
 

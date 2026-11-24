@@ -143,10 +143,6 @@ impl AgentList {
         cx.notify();
     }
 
-    pub fn link(&self) -> &Entity<KeeperLink> {
-        &self.link
-    }
-
     pub fn all(&self) -> &[WorkspaceAgents] {
         &self.agents
     }
@@ -266,10 +262,6 @@ impl TerminalList {
         if self.awaits_list {
             self.refresh(cx);
         }
-    }
-
-    pub fn link(&self) -> &Entity<KeeperLink> {
-        &self.link
     }
 
     pub fn terminals(&self) -> &[TerminalInfo] {

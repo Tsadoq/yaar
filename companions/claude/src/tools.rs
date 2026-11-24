@@ -7,9 +7,9 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use yaar_link::{Reply, TERMINAL_VARIABLE, socket_path};
+use yaar_link::{Reply, Reporter, TERMINAL_VARIABLE, Unanswered, report_to_keeper, socket_path};
 
-use crate::{Reporter, Unanswered, report_to_keeper};
+use crate::AGENT;
 
 /// The longest the server waits for the Keeper's answer to one call. Claude Code waits
 /// for the tool; the Keeper keeps a reply with one write to the drive.
@@ -147,6 +147,7 @@ fn call(arguments: &Value, place: &ToolPlace) -> Value {
     let from = Reporter {
         socket: &place.socket,
         who: concat!("yaar-claude-tools ", env!("CARGO_PKG_VERSION")),
+        agent: AGENT,
         terminal: place.terminal.as_deref(),
         parent: place.parent,
     };
