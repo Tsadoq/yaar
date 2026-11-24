@@ -48,6 +48,8 @@
 #   - "Holds YAAR.app and a link Applications" lets through, at the root of the mounted
 #     volume, only the system's own bookkeeping by exact name: .fseventsd, .Trashes and
 #     .Spotlight-V100. Every other entry, a hidden one too, fails the check.
+#   - The image is detached at the end whatever happens; a detach that fails even when forced
+#     says so, and ends a check that had passed with exit 1.
 set -euo pipefail
 
 SELF=$(basename "$0")
@@ -71,19 +73,24 @@ WORK=$(mktemp -d)
 WORK=$(cd "$WORK" && pwd -P)
 MNT=""
 cleanup() {
+  local status=$?
   if [ -n "$MNT" ]; then
     # A volume can be busy for a moment after the last read: ask again until it lets go.
     local deadline=$((SECONDS + 15)) last forced
     until last=$(hdiutil detach -quiet "$MNT" 2>&1); do
       if [ "$SECONDS" -ge "$deadline" ]; then
-        forced=$(hdiutil detach -quiet -force "$MNT" 2>&1) ||
+        if ! forced=$(hdiutil detach -quiet -force "$MNT" 2>&1); then
           echo "$SELF: could not detach $MNT: hdiutil last said \"$last\", and when forced \"$forced\"" >&2
+          # A volume still mounted ends a check that passed with 1; a check that failed keeps its own status.
+          if [ "$status" -eq 0 ]; then status=1; fi
+        fi
         break
       fi
       sleep 0.2
     done
   fi
   rm -rf "$WORK"
+  exit "$status"
 }
 trap cleanup EXIT
 

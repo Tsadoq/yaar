@@ -33,7 +33,8 @@
 # exit 0 and that folder's YAAR.app; removes the folder; stops the server by its pid.
 # This script is P3's, built before serve-site.sh exists, and needs nothing of it.
 #
-# Exit codes: 0 all hold; 1 one does not; 2 usage error.
+# Exit codes: 0 all hold; 1 one does not, or the disk image could not be detached at the end
+# (not even forced) after the rest had passed; 2 usage error.
 set -euo pipefail
 
 SELF=$(basename "$0")
@@ -67,6 +68,7 @@ WORK=$(cd "$WORK" && pwd -P)
 MNT=""
 SERVER_PID=""
 cleanup() {
+  local status=$?
   if [ -n "$SERVER_PID" ]; then
     kill "$SERVER_PID" > /dev/null 2>&1 || echo "$SELF: the server $SERVER_PID had stopped before this" >&2
     # Reaped here so that the shell does not report it later; a server told to stop ends on a signal.
@@ -77,14 +79,18 @@ cleanup() {
     local deadline=$((SECONDS + 15)) last forced
     until last=$(hdiutil detach -quiet "$MNT" 2>&1); do
       if [ "$SECONDS" -ge "$deadline" ]; then
-        forced=$(hdiutil detach -quiet -force "$MNT" 2>&1) ||
+        if ! forced=$(hdiutil detach -quiet -force "$MNT" 2>&1); then
           echo "$SELF: could not detach $MNT: hdiutil last said \"$last\", and when forced \"$forced\"" >&2
+          # A volume still mounted ends a check that passed with 1; a check that failed keeps its own status.
+          if [ "$status" -eq 0 ]; then status=1; fi
+        fi
         break
       fi
       sleep 0.2
     done
   fi
   rm -rf "$WORK"
+  exit "$status"
 }
 trap cleanup EXIT
 
