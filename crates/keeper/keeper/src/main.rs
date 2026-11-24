@@ -5,18 +5,24 @@
 //! yaar-keeper --version
 //! ```
 //!
-//! `YAAR_KEEPER_LINGER_MS` sets how long it stays with no Window attached.
+//! `YAAR_KEEPER_LINGER_MS` sets how long it stays with no Window attached. It runs the user's
+//! login shell once (`yaar_link::user_shell`) for the environment of its runs of git.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
 use yaar_keeper::{Exit, Options, run};
+use yaar_link::login::{LoginShell, SHELL_DEADLINE};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() -> ExitCode {
     let mut options = Options::new(VERSION);
+    options.login_shell = Some(LoginShell {
+        program: yaar_link::user_shell(),
+        deadline: SHELL_DEADLINE,
+    });
     let mut args = std::env::args_os().skip(1);
     while let Some(arg) = args.next() {
         match arg.to_str() {

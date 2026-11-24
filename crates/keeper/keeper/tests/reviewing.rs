@@ -150,6 +150,7 @@ impl Scratch {
             data_dir: self.0.join("data"),
             companions,
             home: self.0.join("home"),
+            login_shell: None,
         };
         std::thread::spawn(move || run(options))
     }

@@ -100,6 +100,7 @@ impl Scratch {
             data_dir: root.join("data"),
             companions: None,
             home: root.join("home"),
+            login_shell: None,
         }
     }
 
