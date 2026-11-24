@@ -370,6 +370,10 @@ printf 'the public key of the test\n' > "$F/site/apt/yaar-review.asc"
 : > "$F/site/.nojekyll"
 printf 'the zip of the test\n' > "$F/release/yaar-review-0.1.0-macos-universal.zip"
 printf 'the deb of the test\n' > "$F/release/yaar-review_0.1.0_amd64.deb"
+printf 'the arm deb of the test\n' > "$F/release/yaar-review_0.1.0_arm64.deb"
+printf 'the x86 archive of the test\n' > "$F/release/yaar-review-0.1.0-linux-x86_64.tar.gz"
+printf 'the arm archive of the test\n' > "$F/release/yaar-review-0.1.0-linux-aarch64.tar.gz"
+printf 'the disk image of the test\n' > "$F/release/yaar-review-0.1.0-macos-universal.dmg"
 checksum() {
   if command -v sha256sum > /dev/null; then
     sha256sum "$1" | awk '{ print $1 }'
@@ -378,7 +382,8 @@ checksum() {
   fi
 }
 {
-  for f in yaar-review-0.1.0-macos-universal.zip yaar-review_0.1.0_amd64.deb; do
+  for f in yaar-review-0.1.0-macos-universal.zip yaar-review_0.1.0_amd64.deb yaar-review_0.1.0_arm64.deb \
+    yaar-review-0.1.0-linux-x86_64.tar.gz yaar-review-0.1.0-linux-aarch64.tar.gz yaar-review-0.1.0-macos-universal.dmg; do
     printf '%s  %s\n' "$(checksum "$F/release/$f")" "$f"
   done
 } > "$F/release/SHA256SUMS"
@@ -417,6 +422,48 @@ refuse "a SHA256SUMS that lists nothing" "$S/serve-empty.out" "$S/serve-empty.er
 [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a SHA256SUMS that lists nothing gave exit $REFUSAL_STATUS, not 1"
 grep -q '^serve-release.sh: .*SHA256SUMS' "$S/serve-empty.err" || fail "the refusal of an empty SHA256SUMS does not name serve-release.sh and the file"
 pass "a listed file that is missing, and a SHA256SUMS that lists nothing, are refused by name"
+
+# A SHA256SUMS whose last line has no newline after it is read to its end: the last file
+# listed, changed after the sums were made, is refused by name.
+# (A seventh file, listed last, so that the six packages are all listed whatever happens to
+# the last line.)
+cp -R "$F" "$S/release-nonl"
+last_listed=extra-notes.txt
+printf 'the notes of the test\n' > "$S/release-nonl/release/$last_listed"
+printf '%s  %s\n' "$(checksum "$S/release-nonl/release/$last_listed")" "$last_listed" >> "$S/release-nonl/release/SHA256SUMS"
+printf '%s' "$(cat "$S/release-nonl/release/SHA256SUMS")" > "$S/release-nonl/release/SHA256SUMS"
+[ "$(tail -n 1 "$S/release-nonl/release/SHA256SUMS" | awk '{ print $2 }')" = "$last_listed" ] || fail "the test could not make its SHA256SUMS end with $last_listed"
+printf 'changed after the sums were made\n' >> "$S/release-nonl/release/$last_listed"
+refuse "a SHA256SUMS with no final newline, its last file changed" "$S/serve-nonl.out" "$S/serve-nonl.err" "$S/release-nonl"
+[ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a changed last listed file, no newline after its line, gave exit $REFUSAL_STATUS, not 1"
+grep -q "$last_listed" "$S/serve-nonl.err" || fail "the refusal of a changed last file with no final newline does not name $last_listed (it said: $(cat "$S/serve-nonl.err"))"
+
+# What release-final holds, each missing in turn: the folder is refused, naming it.
+for gone in site/index.html site/apt site/.nojekyll release/SHA256SUMS.asc; do
+  cp -R "$F" "$S/release-gone"
+  rm -rf "${S:?}/release-gone/$gone"
+  refuse "a folder with no $gone" "$S/serve-gone.out" "$S/serve-gone.err" "$S/release-gone"
+  [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a folder with no $gone gave exit $REFUSAL_STATUS, not 1"
+  grep -q "^serve-release.sh: .*$gone" "$S/serve-gone.err" || fail "the refusal of a folder with no $gone does not name it (it said: $(cat "$S/serve-gone.err"))"
+  rm -rf "$S/release-gone"
+done
+
+# Each of the six packages must be listed, and a line must be in the format assemble.sh
+# writes.
+for gone in yaar-review_0.1.0_arm64.deb yaar-review-0.1.0-macos-universal.dmg; do
+  cp -R "$F" "$S/release-five"
+  grep -v " $gone\$" "$F/release/SHA256SUMS" > "$S/release-five/release/SHA256SUMS"
+  refuse "a SHA256SUMS that does not list $gone" "$S/serve-five.out" "$S/serve-five.err" "$S/release-five"
+  [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a SHA256SUMS without $gone gave exit $REFUSAL_STATUS, not 1"
+  grep -q '^serve-release.sh: .*six packages' "$S/serve-five.err" || fail "the refusal of a SHA256SUMS that lists five packages does not say so (it said: $(cat "$S/serve-five.err"))"
+  rm -rf "$S/release-five"
+done
+cp -R "$F" "$S/release-star"
+sed 's/  \(yaar-review_0.1.0_amd64.deb\)$/ *\1/' "$F/release/SHA256SUMS" > "$S/release-star/release/SHA256SUMS"
+refuse "a SHA256SUMS line in binary mode" "$S/serve-star.out" "$S/serve-star.err" "$S/release-star"
+[ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a binary-mode line gave exit $REFUSAL_STATUS, not 1"
+grep -q "two spaces" "$S/serve-star.err" || fail "the refusal of a binary-mode line does not name the format (it said: $(cat "$S/serve-star.err"))"
+pass "the last line of SHA256SUMS counts without a newline, the layout of release-final and the six packages are required, and a binary-mode line is refused with the format"
 
 # Start it, detached, on a free port.
 : > "$S/serve.out"
@@ -473,6 +520,7 @@ pass "the server listens on 127.0.0.1 only"
 
 SERVER_PID=$(sed -n 's/^serve-release.sh: server pid \([0-9][0-9]*\)$/\1/p' "$S/serve.out" | head -n 1)
 [ -n "$SERVER_PID" ] || fail "serve-release.sh did not print the pid of its server (stdout: $(cat "$S/serve.out"))"
+SERVERS="$SERVERS $SERVER_PID"
 kill -0 "$SERVER_PID" 2> /dev/null || fail "the server pid $SERVER_PID that serve-release.sh printed is not running"
 
 # A second server on the busy port is refused.
@@ -524,6 +572,55 @@ grep -q "$(printf '\342\224\214')" "$RESULTS/term-06.txt" || fail "the TERM-06 f
 walk_count real-clis.sh 15 real-clis-dry-run.md
 walk_count linux-hardware.sh 8 linux-hardware-dry-run.md
 pass "screen-walk.sh, real-clis.sh and linux-hardware.sh print their 5, 15 and 8 checks once each and sign"
+
+# The graphics line of linux-hardware.sh, with a stand-in lspci of the test's own: a machine
+# whose lspci lists no display controller gets a sentence in its place (the script ended
+# silently with status 1 when grep found none), the first of several lines is the one taken,
+# and a failing lspci ends the script with a sentence.
+mkdir -p "$S/lspci-bin"
+graphics_with() {
+  # graphics_with <what lspci prints> <its status>: the line and the status of ck_graphics_line.
+  printf '#!/bin/sh\nprintf "%%s\\n" "$LSPCI_SAYS"\nexit "$LSPCI_STATUS"\n' > "$S/lspci-bin/lspci"
+  chmod 755 "$S/lspci-bin/lspci"
+  GRAPHICS_STATUS=0
+  GRAPHICS_LINE=$(env PATH="$S/lspci-bin:$PATH" LSPCI_SAYS="$1" LSPCI_STATUS="$2" bash -c '
+    CK_NAME=graphics-test
+    . "$1"
+    set -euo pipefail
+    ck_graphics_line' _ "$HERE/lib.sh" 2> "$S/graphics.err") || GRAPHICS_STATUS=$?
+}
+graphics_with "00:00.0 Host bridge: Some Corporation" 0
+[ "$GRAPHICS_STATUS" -eq 0 ] || fail "ck_graphics_line ended with status $GRAPHICS_STATUS when lspci lists no display controller (it said: $(cat "$S/graphics.err"))"
+[ "$GRAPHICS_LINE" = "lspci shows no display controller" ] || fail "ck_graphics_line gave '$GRAPHICS_LINE' when lspci lists no display controller"
+graphics_with "00:00.0 Host bridge: Some Corporation
+00:02.0 VGA compatible controller: Intel Corporation
+01:00.0 3D controller: Another Corporation" 0
+[ "$GRAPHICS_LINE" = "00:02.0 VGA compatible controller: Intel Corporation" ] || fail "ck_graphics_line gave '$GRAPHICS_LINE', not the first display line of lspci"
+graphics_with "00:00.0 Host bridge: Some Corporation" 3
+[ "$GRAPHICS_STATUS" -eq 1 ] || fail "ck_graphics_line ended with status $GRAPHICS_STATUS, not 1, when lspci fails"
+grep -q '^graphics-test: lspci failed' "$S/graphics.err" || fail "ck_graphics_line said nothing when lspci fails (it said: $(cat "$S/graphics.err"))"
+pass "the graphics line is the first display line of lspci, a sentence when there is none, and a failing lspci ends it with a sentence"
+
+# Not a dry run, where Linux is what runs this: linux-hardware.sh on a copy of this folder
+# whose memory.sh is a stand-in, with an lspci that lists no display controller, writes its
+# file and says so on standard output.
+if [ "$(uname -s)" = Linux ]; then
+  mkdir -p "$S/lh/bin"
+  cp "$HERE"/*.sh "$S/lh/"
+  printf '#!/bin/sh\necho "memory stand-in: 123 MB"\n' > "$S/lh/memory.sh"
+  chmod 755 "$S/lh/memory.sh"
+  printf '#!/bin/sh\nprintf "00:00.0 Host bridge: Some Corporation\\n"\n' > "$S/lh/bin/lspci"
+  chmod 755 "$S/lh/bin/lspci"
+  { echo ""; lines 8 yes; echo yes; } > "$S/answers-lh.txt"
+  rm -f "$S/calls"
+  run_walker "linux-hardware.sh" "$S/out-lh.txt" "$S/out-lh.txt.err" "$S/answers-lh.txt" \
+    env PATH="$S/lh/bin:$PATH" "$S/lh/linux-hardware.sh"
+  [ "$WALK_STATUS" -eq 0 ] || fail "linux-hardware.sh, with an lspci that lists no display controller, exited $WALK_STATUS (it said: $(cat "$S/out-lh.txt.err"))"
+  grep -q 'lspci shows no display controller' "$RESULTS/linux-hardware.md" || fail "linux-hardware.md does not say that lspci shows no display controller"
+  pass "linux-hardware.sh without --dry-run writes its file when lspci lists no display controller"
+else
+  printf '%s: not shown here: linux-hardware.sh without --dry-run runs on Linux only\n' "$CK_NAME"
+fi
 
 # ---------------------------------------------------------------------------------------
 # What the measuring scripts read, on files made here: nothing is started or posted
@@ -595,6 +692,28 @@ grep -qx 'missed=1 early=1' "$S/edges.err" || fail "typing.sh --analyse did not 
 tmp_clean "typing.sh --analyse"
 pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 399 ms as its own and 401 ms as missed, and takes the mean of the two in the middle for an even count"
 
+# The grace after the next key: a key whose first changed frame comes 10 ms after the next
+# key's post is still matched (110 ms, inside the 20 ms), and the next key meets that same
+# frame 10 ms after its own post (early); a first frame 25 ms after the next key's post is
+# past the grace, so that key is missed, and the next key matches it (25 ms).
+{
+  echo "post $((BASE_NS)) 0 a"
+  echo "post $((BASE_NS + 100000000)) 1 a"
+  echo "post $((BASE_NS + 1000000000)) 2 a"
+  echo "post $((BASE_NS + 1100000000)) 3 a"
+} > "$S/grace.input"
+{
+  echo "start"
+  echo "cap $((BASE_NS + 110000000)) $((BASE_NS + 110000000)) rows=0-9"
+  echo "cap $((BASE_NS + 1125000000)) $((BASE_NS + 1125000000)) rows=0-9"
+  echo "end"
+} > "$S/grace.cap"
+got=$("$HERE/typing.sh" --analyse "$S/grace.input" "$S/grace.cap" 2> "$S/grace.err")
+[ "$got" = "n=2 median=67.50 p95=110.00" ] || fail "typing.sh --analyse gave '$got', not 'n=2 median=67.50 p95=110.00' for the times 110 and 25 ms (stderr: $(cat "$S/grace.err"))"
+grep -qx 'missed=1 early=1' "$S/grace.err" || fail "typing.sh --analyse did not count 1 missed (first frame 25 ms after the next key) and 1 early key (stderr: $(cat "$S/grace.err"))"
+tmp_clean "typing.sh --analyse"
+pass "typing.sh gives a key the 20 ms after the next key's post (a frame 10 ms after it is the key's own, one 25 ms after is not)"
+
 T1=2000000000000
 {
   echo "sstart $BASE_NS dy=30 hz=100 n=100"
@@ -626,6 +745,28 @@ grep -qx 'total: frames=148 seconds=1.50 fps=98.7 long=1 long_pct=0.68' "$S/scro
   || fail "scroll.sh --analyse did not total 148 frames and 1 long gap (got: $(cat "$S/scroll.got"))"
 tmp_clean "scroll.sh --analyse"
 pass "scroll.sh reads frames a second and gaps longer than two refresh intervals, phase by phase"
+
+# The edge of "longer than two refresh intervals" at 100 Hz (20 ms): a gap of exactly 20 ms
+# is not long, one of 21 ms is, so is one of 30 ms, and one of 19 ms is not. One phase of
+# five frames whose four gaps are 20, 21, 19 and 30 ms has two long gaps.
+{
+  echo "sstart $BASE_NS dy=30 hz=100 n=5"
+  echo "send $((BASE_NS + 200000000))"
+} > "$S/edge-scroll.input"
+{
+  echo "start"
+  echo "cap $((BASE_NS + 10000000)) $((BASE_NS + 10000000)) rows=0-9"
+  echo "cap $((BASE_NS + 30000000)) $((BASE_NS + 30000000)) rows=0-9"
+  echo "cap $((BASE_NS + 51000000)) $((BASE_NS + 51000000)) rows=0-9"
+  echo "cap $((BASE_NS + 70000000)) $((BASE_NS + 70000000)) rows=0-9"
+  echo "cap $((BASE_NS + 100000000)) $((BASE_NS + 100000000)) rows=0-9"
+  echo "end"
+} > "$S/edge-scroll.cap"
+"$HERE/scroll.sh" --analyse "$S/edge-scroll.input" "$S/edge-scroll.cap" 100 > "$S/edge-scroll.got"
+grep -qx 'phase 1: frames=5 seconds=0.20 fps=25.0 long=2 long_pct=50.00' "$S/edge-scroll.got" \
+  || fail "scroll.sh --analyse did not read the gaps of 20, 21, 19 and 30 ms at 100 Hz as 2 long ones: 20 ms is not longer than two intervals, 21 ms is (got: $(cat "$S/edge-scroll.got"))"
+tmp_clean "scroll.sh --analyse"
+pass "scroll.sh counts a gap of 21 ms as long at 100 Hz and a gap of 20 ms as not"
 
 {
   echo "2026-11-24 some line of the app's own"

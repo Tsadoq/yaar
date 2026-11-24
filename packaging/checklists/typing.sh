@@ -91,7 +91,6 @@ FAKEINPUT=$(ck_fakeinput)
 REFERENCE=${YAAR_REFERENCE_APP:-Ghostty}
 STREAM="$KIT/tools/stream.pl"
 [ -f "$STREAM" ] || ck_die "no stream.pl at $STREAM: it is the phase 4 kit's output generator"
-APP=$(ck_app_bundle)
 WINDOW_PROGRAM=$(ck_window_program)
 APP_PIDS=$(ck_pids_of "$WINDOW_PROGRAM")
 case $APP_PIDS in
@@ -125,17 +124,24 @@ is_front() {
   [ "$(ck_front_pid)" = "$1" ]
 }
 
+# bring_front <pid>: puts the process with that pid in front, by its pid: asking for an
+# application by name would bring forward whichever instance of it LaunchServices likes,
+# which may be a Ghostty of the owner's own and not the one this script started.
 bring_front() {
-  open -a "$2"
+  case $1 in
+    '' | *[!0-9]*) ck_die "the pid to bring to the front is '$1', not a number" ;;
+  esac
+  osascript -e "tell application \"System Events\" to set frontmost of (first process whose unix id is $1) to true" > /dev/null \
+    || ck_die "could not bring the process $1 to the front (the terminal that runs this needs Accessibility)"
   ck_wait_until 10 is_front "$1" || ck_die "the application (pid $1) did not come to the front in 10 s: another window took the focus"
 }
 
-# type_into <name> <pid> <app to open> <count> <batch>: one capture and one run of keys.
+# type_into <name> <pid> <count> <batch>: one capture and one run of keys.
 type_into() {
-  local name=$1 pid=$2 target=$3 count=$4 batch=$5
-  bring_front "$pid" "$target"
+  local name=$1 pid=$2 count=$3 batch=$4
+  bring_front "$pid"
   ck_cap_start "$OUT/$name.cap" "$pid" "$OUT/$name.capstop"
-  bring_front "$pid" "$target"
+  bring_front "$pid"
   "$FAKEINPUT" type --pid "$pid" --log "$OUT/$name.input" --count "$count" --batch "$batch" \
     || ck_die "fakeinput stopped early on $name (see $OUT/$name.input)"
   ck_cap_stop "$OUT/$name.cap" "$OUT/$name.capstop"
@@ -145,6 +151,16 @@ type_into() {
 # typed into and closed again by its pid. Its pid is the one new process of REF_PROGRAM, by
 # full path, that appears after the start: whichever application is in front says nothing of
 # which process is ours.
+STARTED_REFERENCE=""
+# end_started_reference: the second reference terminal this script started, if it is still
+# there, is ended by its pid (and no other process) when the script ends for any reason.
+end_started_reference() {
+  if [ -n "$STARTED_REFERENCE" ] && kill -0 "$STARTED_REFERENCE" 2> /dev/null; then
+    kill "$STARTED_REFERENCE" 2> /dev/null || true
+  fi
+}
+CK_EXTRA_CLEANUP=end_started_reference
+
 reference() {
   local name=$1 command=$2 pid="" known
   known=$(ck_pids_of "$REF_PROGRAM")
@@ -159,15 +175,17 @@ reference() {
   case $pid in
     *[[:space:]]*) ck_die "more than one new process of $REF_PROGRAM appeared ($(echo "$pid" | tr '\n' ' ')): none was ended, close the one you do not know yourself" ;;
   esac
+  STARTED_REFERENCE=$pid
   # The reference is ready for keys when its terminal has started the command: a child of it.
   has_child() {
     ps -axo pid=,ppid= | awk -v p="$pid" '$2 == p { found = 1 } END { exit !found }'
   }
   ck_wait_until 15 has_child || ck_die "the second $REFERENCE (pid $pid) started no command in 15 s"
-  type_into "$name" "$pid" "$REFERENCE" 210 30
+  type_into "$name" "$pid" 210 30
   kill "$pid"
   gone() { ! kill -0 "$pid" 2> /dev/null; }
   ck_wait_until 10 gone || ck_die "the second $REFERENCE (pid $pid) did not leave in 10 s"
+  STARTED_REFERENCE=""
 }
 
 wait_ready() {
@@ -207,7 +225,7 @@ judge() {
 
 # --- the terminal pane, idle
 wait_ready "Place 1 of 3. In the app, click into a terminal pane and run: cat" "place 1"
-type_into app-terminal-idle "$APP_PID" "$APP" 210 30
+type_into app-terminal-idle "$APP_PID" 210 30
 reference ref-terminal-idle cat
 APP_IDLE=$(summary "$OUT/app-terminal-idle.input" "$OUT/app-terminal-idle.cap" 2> /dev/null)
 REF_IDLE=$(summary "$OUT/ref-terminal-idle.input" "$OUT/ref-terminal-idle.cap" 2> /dev/null)
@@ -215,7 +233,7 @@ judge "terminal idle" "$APP_IDLE" "$REF_IDLE"
 
 # --- the terminal pane while output streams
 wait_ready "Place 2 of 3. In the app, stop what runs in the terminal pane (Ctrl-C), then run: perl '$STREAM' & cat" "place 2"
-type_into app-terminal-stream "$APP_PID" "$APP" 208 0
+type_into app-terminal-stream "$APP_PID" 208 0
 reference ref-terminal-stream "$WRAPPER"
 APP_STREAM=$(summary "$OUT/app-terminal-stream.input" "$OUT/app-terminal-stream.cap" 2> /dev/null)
 REF_STREAM=$(summary "$OUT/ref-terminal-stream.input" "$OUT/ref-terminal-stream.cap" 2> /dev/null)
@@ -223,7 +241,7 @@ judge "terminal while output streams" "$APP_STREAM" "$REF_STREAM"
 
 # --- a comment box
 wait_ready "Place 3 of 3. In the app, stop what runs in the terminal pane, open a comment box on a diff line, and click into it" "place 3"
-type_into app-comment-box "$APP_PID" "$APP" 208 0
+type_into app-comment-box "$APP_PID" 208 0
 APP_COMMENT=$(summary "$OUT/app-comment-box.input" "$OUT/app-comment-box.cap" 2> /dev/null)
 judge "comment box (against $REFERENCE idle)" "$APP_COMMENT" "$REF_IDLE"
 

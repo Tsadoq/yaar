@@ -93,13 +93,9 @@ if [ "$DRY" -eq 1 ]; then
   ck_context "Memory (HW-03)" "not run: dry run"
 else
   KERNEL=$(uname -sr)
-  if command -v lspci > /dev/null; then
-    GRAPHICS=$(lspci | grep -i 'vga\|3d\|display' | head -n 1)
-  else
-    GRAPHICS="lspci is not installed"
-  fi
+  GRAPHICS=$(ck_graphics_line)
   ck_context "Kernel" "$KERNEL"
-  ck_context "Graphics" "${GRAPHICS:-lspci shows no display controller}"
+  ck_context "Graphics" "$GRAPHICS"
   printf 'Open the app on one workspace and leave it idle. Press Return to measure its memory for 60 s: '
   ck_read_line "the memory measure"
   MEMORY_STATUS=0

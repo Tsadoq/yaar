@@ -81,6 +81,21 @@ ck_os() {
   uname -s
 }
 
+# ck_graphics_line: the first line of `lspci` that names a VGA, 3D or display controller; a
+# sentence in its place when there is none or when lspci is not installed. A failing lspci
+# ends the script with a sentence. It reads all of lspci's output, so that pipefail never
+# sees a program ended by a closed pipe. Use it as `X=$(ck_graphics_line)`: it is run in a
+# subshell, and its exit ends the script through set -e.
+ck_graphics_line() {
+  if ! command -v lspci > /dev/null; then
+    printf '%s\n' "lspci is not installed"
+    return 0
+  fi
+  local line
+  line=$(lspci | awk 'tolower($0) ~ /vga|3d|display/ && !seen { print; seen = 1 }') || ck_die "lspci failed, so the graphics line is not known"
+  printf '%s\n' "${line:-lspci shows no display controller}"
+}
+
 # The day's folder of results, made when asked for: ~/yaar-checklists/<YYYY-MM-DD>/
 ck_results_dir() {
   if [ -z "${HOME:-}" ] || [ ! -d "$HOME" ]; then
@@ -386,8 +401,14 @@ ck_write() {
     printf '\n| Item | Title | Answer | Note |\n| --- | --- | --- | --- |\n'
     awk -F'\t' '{ printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4 }' "$CK_WORK/rows.tsv"
     printf '\n## Sign-off\n\n%s\n' "$sign"
-  } > "$tmp" || ck_die "cannot write $tmp"
-  mv "$tmp" "$out" || ck_die "cannot move $tmp to $out"
+  } > "$tmp" || {
+    rm -f "$tmp"
+    ck_die "cannot write $tmp"
+  }
+  mv "$tmp" "$out" || {
+    rm -f "$tmp"
+    ck_die "cannot move $tmp to $out"
+  }
 }
 
 # ---------------------------------------------------------------------------------------

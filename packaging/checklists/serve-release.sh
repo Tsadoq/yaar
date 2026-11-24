@@ -9,8 +9,10 @@
 # (packaging/README.md, "The day of a release"): a folder that holds `site/` (index.html,
 # install.sh, apt/, .nojekyll) and `release/` (the six packages, SHA256SUMS, SHA256SUMS.asc).
 #
-# What it does: checks that the folder is laid out so, and that every file SHA256SUMS lists
-# is there with the checksum listed (what you walk is what the run made); then serves, from
+# What it does: checks that the folder is laid out so (each of those files and folders is
+# there, and SHA256SUMS lists each of the six packages by name), and that every file
+# SHA256SUMS lists, its last line included, is there with the checksum listed (what you walk
+# is what the run made); then serves, from
 # a folder of links in its own scratch, with python3's standard library only:
 #   http://127.0.0.1:<port>/            the site (install.sh, index.html, apt/)
 #   http://127.0.0.1:<port>/download/   the release files, as releases/latest/download serves
@@ -80,7 +82,11 @@ RELEASE="$FOLDER/release"
 [ -d "$SITE" ] || ck_die "$FOLDER holds no site/ folder: it is not laid out as release-final"
 [ -d "$RELEASE" ] || ck_die "$FOLDER holds no release/ folder: it is not laid out as release-final"
 [ -f "$SITE/install.sh" ] || ck_die "$SITE/install.sh is missing"
+[ -f "$SITE/index.html" ] || ck_die "$SITE/index.html is missing: $FOLDER is not laid out as release-final"
+[ -d "$SITE/apt" ] || ck_die "$SITE/apt is missing: $FOLDER is not laid out as release-final"
+[ -e "$SITE/.nojekyll" ] || ck_die "$SITE/.nojekyll is missing: $FOLDER is not laid out as release-final"
 [ -f "$RELEASE/SHA256SUMS" ] || ck_die "$RELEASE/SHA256SUMS is missing"
+[ -f "$RELEASE/SHA256SUMS.asc" ] || ck_die "$RELEASE/SHA256SUMS.asc is missing: $FOLDER is not laid out as release-final"
 
 for tool in python3 curl; do
   command -v "$tool" > /dev/null || ck_die "the tool $tool is missing, which serving and the install line need"
@@ -96,15 +102,42 @@ sha256_of() {
   fi
 }
 
+# A line is "<sha256>  <name>"; the last line counts when it has no newline after it. A name
+# that starts with `*` (the binary mode of sha256sum) is not the format assemble.sh writes
+# and is refused with a sentence that says so.
 COUNT=0
-while read -r sum name; do
-  [ -n "$name" ] || continue
+LISTED=""
+while read -r sum name || [ -n "${sum:-}" ]; do
+  [ -n "${name:-}" ] || continue
+  case $name in
+    \**) ck_die "$RELEASE/SHA256SUMS lists $name: a line is '<sha256>  <name>' with two spaces and no *" ;;
+  esac
   [ -f "$RELEASE/$name" ] || ck_die "$RELEASE/SHA256SUMS lists $name, which is not in $RELEASE"
   got=$(sha256_of "$RELEASE/$name")
   [ "$got" = "$sum" ] || ck_die "$RELEASE/$name does not match its line in SHA256SUMS (listed $sum, found $got)"
+  LISTED="$LISTED$name
+"
   COUNT=$((COUNT + 1))
 done < "$RELEASE/SHA256SUMS"
 [ "$COUNT" -gt 0 ] || ck_die "$RELEASE/SHA256SUMS lists no file"
+
+# The six packages of a release, by the names assemble.sh gives them, each listed.
+lists() {
+  local pattern=$1 listed
+  while IFS= read -r listed; do
+    # shellcheck disable=SC2254
+    case $listed in
+      $pattern) return 0 ;;
+    esac
+  done << LIST
+$LISTED
+LIST
+  return 1
+}
+for pattern in 'yaar-review_*_amd64.deb' 'yaar-review_*_arm64.deb' 'yaar-review-*-linux-x86_64.tar.gz' \
+  'yaar-review-*-linux-aarch64.tar.gz' 'yaar-review-*-macos-universal.zip' 'yaar-review-*-macos-universal.dmg'; do
+  lists "$pattern" || ck_die "$RELEASE/SHA256SUMS lists no $pattern: it does not list the six packages of a release"
+done
 
 W=$(mktemp -d "${TMPDIR:-/tmp}/yaar-serve-release.XXXXXX") || ck_die "cannot make a scratch folder under ${TMPDIR:-/tmp}"
 SERVER_PID=""
