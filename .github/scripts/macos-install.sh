@@ -105,7 +105,7 @@ for tool in curl bash codesign xattr stat find sort cmp ps awk grep; do
 done
 [ -x /usr/libexec/PlistBuddy ] || fail "/usr/libexec/PlistBuddy is not there"
 [ -n "${VERSION:-}" ] || fail "VERSION is not set: it is the version the app must have (the job's env)"
-[ -n "${HOME:-}" ] && [ -d "$HOME" ] || fail "HOME is not a folder"
+[ -d "${HOME:-}" ] || fail "HOME is not a folder"
 
 port=${YAAR_TEST_PORT:-8000}
 case "$port" in
