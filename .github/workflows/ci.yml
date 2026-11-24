@@ -409,7 +409,7 @@ jobs:
           apt-get update
           DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             ca-certificates curl git gcc g++ libc6-dev pkg-config libfontconfig-dev \
-            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file
+            libxkbcommon-x11-dev dpkg-dev apt-utils gnupg file binutils
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
