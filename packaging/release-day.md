@@ -58,8 +58,8 @@ Components: main
 Signed-By: /etc/apt/keyrings/yaar-review.asc
 ```
 
-Then `sudo apt-get update` and `sudo apt-get install yaar-review`. The key's fingerprint, to
-compare with the one the page at `@BASE_URL@` shows:
+Then `sudo apt-get update` and `sudo apt-get install yaar-review`. To check the key, compare
+its fingerprint with the one the site's page shows:
 
 ```sh
 curl -fsSL @BASE_URL@/apt/yaar-review.asc | gpg --show-keys --fingerprint

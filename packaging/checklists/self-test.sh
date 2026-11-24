@@ -26,15 +26,19 @@
 #                    files at /download/, byte for byte; the server listens on 127.0.0.1
 #                    only; a second server on the same port, a folder that is not laid out
 #                    as release-final and a file that disagrees with SHA256SUMS are
-#                    refused with a sentence, as are a listed file that is missing and a
-#                    SHA256SUMS that lists nothing; stopped by the pid it printed, the
+#                    refused with a sentence, as are a listed file that is missing, a
+#                    SHA256SUMS that lists nothing and one that lacks any one of the six
+#                    packages (each dropped in turn, and the sentence names its kind);
+#                    stopped by the pid it printed, the
 #                    script and its server are gone, the port refuses, and no scratch is
 #                    left.
 #   the walkers      screen-walk.sh, real-clis.sh and linux-hardware.sh print their items
 #                    once each in a dry run and call no program of the system.
 #   the measures     typing.sh, scroll.sh and start-time.sh read made-up logs: key to
-#                    screen times (early, 13 ms, 399 ms, 401 ms, the median of an even and
-#                    of an odd count, the 95th percentile below the largest), frames a
+#                    screen times (early, 13 ms, 399 ms, 401 ms, the 20 ms after the next
+#                    key: a frame 19 ms after it is the key's, one exactly 20 ms after is
+#                    not, the median of an even and of an odd count, the 95th percentile
+#                    below the largest), frames a
 #                    second and long gaps, the marks of a start; none leaves anything in
 #                    TMPDIR; start-time.sh --linux gives 1 for any status but 0 and 1 of
 #                    the machine's run (a stand-in for the machine's script, on the Mac).
@@ -448,14 +452,21 @@ for gone in site/index.html site/apt site/.nojekyll release/SHA256SUMS.asc; do
   rm -rf "$S/release-gone"
 done
 
-# Each of the six packages must be listed, and a line must be in the format assemble.sh
-# writes.
-for gone in yaar-review_0.1.0_arm64.deb yaar-review-0.1.0-macos-universal.dmg; do
+# Each of the six packages must be listed, each by its own name: a SHA256SUMS that lacks one
+# of them, whichever it is, is refused and says which kind is missing. (The other five lines
+# stay, so that a pattern that is wider than its package, one that another package satisfies,
+# lets the run through and is seen.)
+for gone in yaar-review_0.1.0_amd64.deb yaar-review_0.1.0_arm64.deb \
+  yaar-review-0.1.0-linux-x86_64.tar.gz yaar-review-0.1.0-linux-aarch64.tar.gz \
+  yaar-review-0.1.0-macos-universal.zip yaar-review-0.1.0-macos-universal.dmg; do
   cp -R "$F" "$S/release-five"
   grep -v " $gone\$" "$F/release/SHA256SUMS" > "$S/release-five/release/SHA256SUMS"
+  [ "$(wc -l < "$S/release-five/release/SHA256SUMS")" -eq "$(($(wc -l < "$F/release/SHA256SUMS") - 1))" ] \
+    || fail "the test could not drop the line of $gone from its SHA256SUMS"
   refuse "a SHA256SUMS that does not list $gone" "$S/serve-five.out" "$S/serve-five.err" "$S/release-five"
   [ "$REFUSAL_STATUS" -eq 1 ] || fail "serve-release.sh on a SHA256SUMS without $gone gave exit $REFUSAL_STATUS, not 1"
-  grep -q '^serve-release.sh: .*six packages' "$S/serve-five.err" || fail "the refusal of a SHA256SUMS that lists five packages does not say so (it said: $(cat "$S/serve-five.err"))"
+  grep -q '^serve-release.sh: .*six packages' "$S/serve-five.err" || fail "the refusal of a SHA256SUMS that lists five packages ($gone is missing) does not say so (it said: $(cat "$S/serve-five.err"))"
+  grep -qF -- "${gone#*0.1.0}" "$S/serve-five.err" || fail "the refusal of a SHA256SUMS without $gone does not name the kind of package that is missing, ${gone#*0.1.0} (it said: $(cat "$S/serve-five.err"))"
   rm -rf "$S/release-five"
 done
 cp -R "$F" "$S/release-star"
@@ -694,10 +705,13 @@ grep -qx 'missed=1 early=1' "$S/edges.err" || fail "typing.sh --analyse did not 
 tmp_clean "typing.sh --analyse"
 pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 399 ms as its own and 401 ms as missed, and takes the mean of the two in the middle for an even count"
 
-# The grace after the next key: a key whose first changed frame comes 10 ms after the next
-# key's post is still matched (110 ms, inside the 20 ms), and the next key meets that same
-# frame 10 ms after its own post (early); a first frame 25 ms after the next key's post is
-# past the grace, so that key is missed, and the next key matches it (25 ms).
+# The grace after the next key is 20 ms and "before" it: a key whose first changed frame
+# comes 19 ms after the next key's post is still matched (119 ms, inside the grace), and the
+# next key meets that same frame 19 ms after its own post, which is no longer early; a first
+# frame exactly 20 ms after the next key's post is not before it, so that key is missed, and
+# the next key matches it (20 ms). The times are 19, 20 and 119 ms: the median is the 20, the
+# 95th percentile (rank 2 of 0 to 2) is the 119, and one key is missed and none is early. A
+# grace of 15 ms or of 24 ms, or a frame at exactly the limit taken as matched, changes n.
 {
   echo "post $((BASE_NS)) 0 a"
   echo "post $((BASE_NS + 100000000)) 1 a"
@@ -706,15 +720,15 @@ pass "typing.sh counts a frame 11 ms after a key as early and 13 ms as its own, 
 } > "$S/grace.input"
 {
   echo "start"
-  echo "cap $((BASE_NS + 110000000)) $((BASE_NS + 110000000)) rows=0-9"
-  echo "cap $((BASE_NS + 1125000000)) $((BASE_NS + 1125000000)) rows=0-9"
+  echo "cap $((BASE_NS + 119000000)) $((BASE_NS + 119000000)) rows=0-9"
+  echo "cap $((BASE_NS + 1120000000)) $((BASE_NS + 1120000000)) rows=0-9"
   echo "end"
 } > "$S/grace.cap"
 got=$("$HERE/typing.sh" --analyse "$S/grace.input" "$S/grace.cap" 2> "$S/grace.err")
-[ "$got" = "n=2 median=67.50 p95=110.00" ] || fail "typing.sh --analyse gave '$got', not 'n=2 median=67.50 p95=110.00' for the times 110 and 25 ms (stderr: $(cat "$S/grace.err"))"
-grep -qx 'missed=1 early=1' "$S/grace.err" || fail "typing.sh --analyse did not count 1 missed (first frame 25 ms after the next key) and 1 early key (stderr: $(cat "$S/grace.err"))"
+[ "$got" = "n=3 median=20.00 p95=119.00" ] || fail "typing.sh --analyse gave '$got', not 'n=3 median=20.00 p95=119.00' for the times 119, 19 and 20 ms (stderr: $(cat "$S/grace.err"))"
+grep -qx 'missed=1 early=0' "$S/grace.err" || fail "typing.sh --analyse did not count 1 missed (first frame exactly 20 ms after the next key) and no early key (stderr: $(cat "$S/grace.err"))"
 tmp_clean "typing.sh --analyse"
-pass "typing.sh gives a key the 20 ms after the next key's post (a frame 10 ms after it is the key's own, one 25 ms after is not)"
+pass "typing.sh gives a key the 20 ms after the next key's post, before it (a frame 19 ms after it is the key's own, one exactly 20 ms after is not)"
 
 T1=2000000000000
 {

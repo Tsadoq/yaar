@@ -26,21 +26,25 @@
 # check: the release's tag points at this run's commit (GITHUB_SHA); the source archive
 #   GitHub made for the tag holds LICENSE with the bytes of the repository's (row PKG-11);
 #   the site answers https://<base>/install.sh and https://<base>/apt/dists/stable/InRelease
-#   with the bytes of final/site (the Pages cache may lag: about 10 minutes of retries in
-#   all, one deadline for the whole check, see below).
+#   with the bytes of final/site (the Pages cache may lag: up to 10 minutes of retries).
 #
 # Exit codes: 0 done; 1 refused or failed (a sentence says which step); 2 usage error.
 #
 # Beyond the header's list:
 #   - <release-dir> must hold the eight files and no other, else it refuses before any gh
 #     call; <version> is letters, digits, '.', '+' and '~' (a usage error, exit 2);
+#   - a placeholder left in the notes after the two replacements (a name of letters, digits
+#     and '_' between two '@', in any case) is refused; any other '@' of the notes (a contact
+#     address) is the text's own;
 #   - which of the three states a release is in (none, a draft, published) is read from
 #     `gh release list --json tagName,isDraft`, 1000 entries; a list that fails is a failure,
 #     never "none". A draft's assets that are not among the eight are deleted
 #     (`gh release delete-asset`), so that the draft holds these files and no others;
-#   - publish and check wait for what they check: the first 5 s every 0.2 s, then every 2 s,
-#     for YAAR_PUBLISH_WAIT seconds (default 60) and YAAR_CHECK_WAIT seconds (default 600).
-#     The workflow sets neither: they are there so that the refusal can be seen in seconds.
+#   - publish and check wait for what they check: the first 5 s every 0.2 s, then every 2 s
+#     (a wait on GitHub or on the site is not asked thousands of times in ten minutes; the
+#     0.2 s of PLAN § 2 is for facts on the same machine), for YAAR_PUBLISH_WAIT seconds
+#     (default 60) and YAAR_CHECK_WAIT seconds (default 600). The workflow sets neither: they
+#     are there so that the refusal can be seen in seconds.
 #     Each is a whole number of seconds with no leading zero (the shell reads 08 as an
 #     error and 010 as 8), else it refuses with exit 2 before any gh call, whatever the
 #     action (a value that is not a number would make a wait that never ends); a wait also
@@ -48,14 +52,19 @@
 #     Past the deadline the sentence says what the last look found;
 #   - check has one deadline, YAAR_CHECK_WAIT seconds from its first look, for its four waits
 #     together (the archive's licence, install.sh, InRelease, the key): each wait gets what is
-#     left, and a wait that finds none left still looks once. So check ends within the
-#     seconds it names, plus the time of its last look, and well inside the job's 20 minutes
-#     with the 60 s of publish and the deployment;
+#     left, and a wait that finds none left still looks once. The time limit of each look
+#     (curl's --max-time, 30 s for a file of the site and 120 s for the archive; git's 60 s)
+#     is capped by what is left of its wait, and is at least 1 s: so the retries are up to
+#     the 10 minutes, and no look runs on past them by more than a second or two. check
+#     ends well inside the job's 20 minutes with the 60 s of publish and the deployment;
 #   - check asks GitHub for the tag with `git ls-remote` (given 60 s, or what is left of
-#     the check's deadline if that is less but at least 10 s, then stopped by its pid and
-#     named) and the source archive with curl, both anonymously: the repository is public,
-#     and the row is about what the public sees; GITHUB_SHA must be set for it. It also
-#     compares the site's apt/yaar-review.asc;
+#     the check's deadline if that is less, at least 1 s) and the source archive with curl,
+#     both anonymously: the repository is public, and the row is about what the public sees;
+#     GITHUB_SHA must be set for it. git runs under `setsid`, standard input from /dev/null,
+#     so that its pid is the id of its whole process group: at its deadline the group is
+#     ended with SIGKILL, git remote-http included, and the sentence says what git last
+#     printed. The job's runner has setsid; without it check refuses. It also compares the
+#     site's apt/yaar-review.asc;
 #   - the site is <release-dir>/../site, as the job lays the artifact out.
 # No token reaches a command line or an output: gh reads GH_TOKEN from the environment, and
 # curl and git are given none.
@@ -147,11 +156,10 @@ render_notes() {
   [ -f "$in" ] || fail "$in is missing"
   b=$(base_url)
   sed -e "s|@VERSION@|$VERSION|g" -e "s|@BASE_URL@|$b|g" "$in" > "$SCRATCH/notes.md" || fail "the notes could not be written"
-  if LEFT=$(grep -o -m1 '@[A-Za-z_][A-Za-z_]*@' "$SCRATCH/notes.md"); then
+  # A placeholder is a name of letters, digits and '_' between two '@', in any case. Any other
+  # '@' (a contact address, a mention) is the text's own.
+  if LEFT=$(grep -o -m1 '@[A-Za-z_][A-Za-z0-9_]*@' "$SCRATCH/notes.md"); then
     fail "$in still holds the placeholder $LEFT after the replacements: the notes must not go out with it"
-  fi
-  if grep -q '@' "$SCRATCH/notes.md"; then
-    fail "the notes rendered from $in hold an '@'"
   fi
 }
 
@@ -170,10 +178,13 @@ release_assets() {
 }
 
 # poll <seconds> <probe...>: runs the probe until it succeeds or the seconds are up. The
-# probe leaves what it saw in $SEEN. The first 5 s every 0.2 s, then every 2 s.
+# probe leaves what it saw in $SEEN. The first 5 s every 0.2 s, then every 2 s: the waits are
+# on GitHub and on the site, which are not asked thousands of times in ten minutes. A look
+# never starts after the deadline, and its own time limit (look_limit) ends it by the deadline.
 SEEN=
+POLL_END=0
 poll() {
-  local deadline=$1 start=$SECONDS elapsed
+  local deadline=$1 start=$SECONDS elapsed pause
   shift
   # A deadline that is no whole number can never be reached: a wait must not start on one.
   case $deadline in
@@ -182,18 +193,35 @@ poll() {
       return 1
       ;;
   esac
+  POLL_END=$((start + deadline))
   while :; do
     if "$@"; then return 0; fi
     elapsed=$((SECONDS - start))
     if [ "$elapsed" -ge "$deadline" ]; then return 1; fi
-    if [ "$elapsed" -lt 5 ]; then sleep 0.2; else sleep 2; fi
+    if [ "$elapsed" -lt 5 ]; then
+      sleep 0.2
+    else
+      # 2 s, or what is left of the wait if that is less, so that no look starts after it.
+      pause=$((deadline - elapsed))
+      [ "$pause" -le 2 ] || pause=2
+      sleep "$pause"
+    fi
   done
+}
+
+# look_limit <cap>: the time limit, in seconds, of one look of the wait that runs: <cap>, or
+# what is left of the wait if that is less, but at least 1 so that a look made at the very
+# end is still limited (curl's --max-time 0 is no limit at all).
+look_limit() {
+  local cap=$1 left=$((POLL_END - SECONDS))
+  [ "$left" -ge 1 ] || left=1
+  if [ "$left" -lt "$cap" ]; then echo "$left"; else echo "$cap"; fi
 }
 
 # probe_same <url> <file>: the address answers with the bytes of the file.
 probe_same() {
   local url=$1 file=$2 code
-  if ! code=$(curl -sSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 30 -o "$SCRATCH/got" -w '%{http_code}' "$url" 2> "$SCRATCH/curl.err"); then
+  if ! code=$(curl -sSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time "$(look_limit 30)" -o "$SCRATCH/got" -w '%{http_code}' "$url" 2> "$SCRATCH/curl.err"); then
     SEEN="curl failed: $(head -n 1 "$SCRATCH/curl.err")"
     return 1
   fi
@@ -285,22 +313,28 @@ case $ACTION in
 
     # The tag, on the public repository, at this run's commit. An annotated tag lists its
     # commit on the line "^{}".
-    # git gets a deadline of its own, 60 s or what is left of the check's if that is less,
-    # but never under 10 s so that it looks once whatever is left: a connection that stalls
-    # would otherwise hold the step until the job's timeout, saying nothing of what it waited
-    # for. It runs in the background as a pid this script started.
+    # git gets a deadline of its own, 60 s or what is left of the check's if that is less, and
+    # at least 1 s so that it looks once whatever is left: a connection that stalls would
+    # otherwise hold the step until the job's timeout, saying nothing of what it waited for.
+    # It runs in the background in a session of its own (setsid, standard input from
+    # /dev/null, output to files), so that its pid is the id of its whole process group: at
+    # the deadline the group is ended, and git's own helper (git remote-http) goes with it.
+    command -v setsid > /dev/null || fail "setsid is missing: it detaches the git that asks GitHub for the tag, so that the deadline can end it with its helper"
     git_limit=60
     [ "$(left)" -ge "$git_limit" ] || git_limit=$(left)
-    [ "$git_limit" -ge 10 ] || git_limit=10
+    [ "$git_limit" -ge 1 ] || git_limit=1
     GIT_TERMINAL_PROMPT=0 GIT_HTTP_LOW_SPEED_LIMIT=1 GIT_HTTP_LOW_SPEED_TIME=30 \
-      git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}" \
+      setsid git ls-remote "https://github.com/$REPO.git" "refs/tags/$TAG" "refs/tags/$TAG^{}" \
       > "$SCRATCH/refs" 2> "$SCRATCH/git.err" < /dev/null &
     git_pid=$!
     git_start=$SECONDS
     while kill -0 "$git_pid" 2> /dev/null; do
       if [ $((SECONDS - git_start)) -ge "$git_limit" ]; then
-        if kill "$git_pid" 2> /dev/null; then wait "$git_pid" 2> /dev/null || :; fi
-        fail "git did not answer within $git_limit s when asked https://github.com/$REPO.git for the tag $TAG"
+        if kill -KILL -- "-$git_pid" 2> /dev/null; then
+          wait "$git_pid" 2> /dev/null || :
+          git_said=$(tail -n 1 "$SCRATCH/git.err") || git_said=
+          fail "git did not answer within $git_limit s when asked https://github.com/$REPO.git for the tag $TAG; the last it printed: ${git_said:-nothing}"
+        fi
       fi
       sleep 0.2
     done
@@ -315,7 +349,7 @@ case $ACTION in
     # Its source archive holds this licence.
     probe_licence() {
       local url="https://github.com/$REPO/archive/refs/tags/$TAG.tar.gz" code entry
-      if ! code=$(curl -sSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time 120 -o "$SCRATCH/source.tar.gz" -w '%{http_code}' "$url" 2> "$SCRATCH/curl.err"); then
+      if ! code=$(curl -sSL --proto '=https' --proto-redir '=https' --tlsv1.2 --max-time "$(look_limit 120)" -o "$SCRATCH/source.tar.gz" -w '%{http_code}' "$url" 2> "$SCRATCH/curl.err"); then
         SEEN="curl failed: $(head -n 1 "$SCRATCH/curl.err")"
         return 1
       fi

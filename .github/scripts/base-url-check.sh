@@ -8,32 +8,40 @@
 #
 # Reads the base, B, as the first line of packaging/site/base-url (`head -n 1`). In
 # README.md, packaging/README.md and packaging/release-day.md, every address that ends in
-# "/install.sh" or "/apt" (followed by a space, a quote, a backquote, the end of the line,
-# "/", "?" or "#"), and every "URIs: <address>" of an apt source shown there (at the start of
-# a line or inside a command or a quote block), is either an address on 127.0.0.1 or
-# localhost, or starts with B, or is the placeholder @BASE_URL@ itself. Any other fails, with
-# its file, line number and the address. Also fails when a file of the three is missing, or
-# when B is not https:// followed by a host, with no "/" at its end.
+# "/install.sh" or "/apt" (followed by a space, a quote, a backquote, the end of the line or
+# "/"), and every line "URIs: <address>" of an apt source shown there, is either an address
+# on 127.0.0.1 or localhost, or starts with B, or is the placeholder @BASE_URL@ itself. Any
+# other fails, with its file, line number and the address. Also fails when a file of the
+# three is missing, or when B is not https:// followed by a host, with no "/" at its end.
 #
 # Exit codes: 0 holds; 1 a text names another address (each named); 2 usage error.
 #
 # Beyond the header's list: an address is read the way curl and a reader read it, so none
-# of these hides one. A quote or a backquote right before a "/" ends no address
-# ("https://x"/install.sh is https://x/install.sh); any other quote or backquote ends what it
-# follows (["https://x/install.sh","y"] holds https://x/install.sh). Markdown emphasis (*, _
-# and ~) around an address is no part of it. A scheme is read in any case (HTTPS://), an
-# address may have no scheme at all when it starts with a host that has a dot
-# (tsadoq.example.org/install.sh) or is localhost, and "?" and "#" end an address as "/"
-# does. A path of the repository (packaging/apt/..., .github/scripts/...) has no dot in its
-# first part and is not an address. The scheme is compared in lower case, so
-# HTTPS://tsadoq.github.io/yaar/install.sh is a copy of the base. A trailing full stop,
-# comma, semicolon or colon is not part of an address ("see https://x/apt."), an address of a
-# text is read up to a space, a bracket or a pipe, and a loopback host is the whole host
-# 127.0.0.1 or localhost with or without a port: a host that only starts like it
-# (127.0.0.1.example.org, localhost@example.org) is another address. A copy of the base is B
-# itself or B followed by "/": https://tsadoq.github.io/yaarx/apt is not one. Run with an
-# argument it prints its usage and exits 2. It reads the files of the repository it lies in,
-# whatever the folder it is run from.
+# of these hides one.
+#   - What may follow "/install.sh" or "/apt" is also "?" or "#". A quote or a backquote
+#     right before a "/" ends no address ("https://x"/install.sh is https://x/install.sh);
+#     any other quote or backquote ends what it follows (["https://x/install.sh","y"] holds
+#     https://x/install.sh). An address of a text is read up to a space, a tab, a CR (a
+#     text with CR LF line ends), a bracket of any kind, a pipe, an ampersand or a
+#     semicolon ("${U:-https://x/install.sh}" and https://x/install.sh&&y hold
+#     https://x/install.sh). Markdown emphasis (*, _ and ~) around an address is no part of
+#     it, and neither is a trailing full stop, comma, semicolon or colon.
+#   - A scheme is read in any case (HTTPS://) and compared in lower case, so
+#     HTTPS://tsadoq.github.io/yaar/install.sh is a copy of the base. An address may have no
+#     scheme at all when it starts with a host that has a dot (tsadoq.example.org/install.sh)
+#     or is localhost. A path of the repository (packaging/apt/..., .github/scripts/...) has
+#     no dot in its first part and is not an address.
+#   - "URIs:" is the field of an apt source wherever it stands in a line (at its start, in a
+#     quote block, inside a command that writes the source), in any case ("uris:" is the
+#     same field to apt). Its value is a list: the first address and every one after it that
+#     starts with a scheme or is the placeholder are held to the base; the first word that
+#     is none ends the list (the command that goes on after a source it writes).
+#   - A loopback host is the whole host 127.0.0.1 or localhost with or without a port: a
+#     host that only starts like it (127.0.0.1.example.org, localhost@example.org) is
+#     another address. A copy of the base is B itself or B followed by "/":
+#     https://tsadoq.github.io/yaarx/apt is not one.
+#   - Run with an argument it prints its usage and exits 2. It reads the files of the
+#     repository it lies in, whatever the folder it is run from.
 set -eu
 
 NAME=base-url-check.sh
@@ -142,22 +150,32 @@ for f in README.md packaging/README.md packaging/release-day.md; do
     }
     {
       line = $0
+      # A text saved with CR LF line ends keeps the CR at the end of its line: it is no part
+      # of an address, and an address that ends the line must still end there.
+      gsub(/\r/, " ", line)
       # A quote or a backquote that stands right before a "/" joins what is before it to
       # what follows: "https://host"/install.sh is the address https://host/install.sh. Any
       # other quote or backquote ends what it follows, so that ["https://x/install.sh","y"]
       # holds the address https://x/install.sh and not https://x/install.sh,y.
       gsub(/["\047`]\//, "/", line)
       gsub(/["\047`]/, " ", line)
-      gsub(/[<>()|\[\]]/, " ", line)
+      gsub(/[<>()|\[\]{}&;]/, " ", line)
       # An apt source shown anywhere in a line (opening it, after "> ", or in a command that
       # writes it) names the address after "URIs:".
-      if (match(line, /URIs:[ \t]*/)) {
+      # The field name is read in any case, as apt reads it, and its value is a list: every
+      # address that follows the first, as long as each starts with a scheme or is the
+      # placeholder, is held as the first is (a command that writes the source goes on with
+      # words that are no address, and those are not).
+      if (match(tolower(line), /uris:[ \t]*/)) {
         rest = substr(line, RSTART + RLENGTH)
-        sub(/[ \t].*$/, "", rest)
-        rest = trimmed(rest)
-        if (rest != "" && !allowed(rest) && !((NR SUBSEP rest) in shown)) {
-          shown[NR, rest] = 1
-          print NR, rest
+        m = split(rest, uris, /[ \t]+/)
+        for (u = 1; u <= m; u++) {
+          uri = trimmed(uris[u])
+          if (u > 1 && uri !~ /^([A-Za-z][A-Za-z0-9+.-]*:|@BASE_URL@)/) break
+          if (uri != "" && !allowed(uri) && !((NR SUBSEP uri) in shown)) {
+            shown[NR, uri] = 1
+            print NR, uri
+          }
         }
       }
       n = split(line, pieces, /[ \t]+/)

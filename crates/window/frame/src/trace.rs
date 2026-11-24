@@ -67,8 +67,9 @@ mod tests {
     }
 
     // That the mark prints only once is not read here: it prints to standard error and only
-    // with `YAAR_TRACE_START` set, which a test neither sets nor reads. What is read is that
-    // `mark_once` takes the name.
+    // with `YAAR_TRACE_START` set, which no test of this process may set. It is read in
+    // `tests/trace_once.rs`, from a child process that has the variable. What is read here
+    // is that `mark_once` takes the name.
     #[test]
     fn a_mark_taken_once_is_taken_for_good() {
         mark_once("taken-once");
