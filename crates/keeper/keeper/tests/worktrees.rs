@@ -193,7 +193,9 @@ impl Scratch {
         std::thread::spawn(move || run(options))
     }
 
-    /// Attaches as a Window does, waiting for the Keeper to listen.
+    /// Attaches as a Window does, waiting for the Keeper to listen, and waiting until it
+    /// serves this Window: a fact told before that is told to a Window that is not there
+    /// yet, and the first reply is the proof that it is.
     fn window(&self) -> Window {
         let mine = Hello::for_this_process("test-window");
         let deadline = Instant::now() + DEADLINE;
@@ -204,7 +206,14 @@ impl Scratch {
                 stream
                     .set_read_timeout(Some(DEADLINE))
                     .expect("set the deadline of a read");
-                return Window { stream, next_id: 0 };
+                let mut window = Window { stream, next_id: 0 };
+                // The Keeper tells a fact to the Windows it serves: its first reply comes
+                // after the Window is one of them. `ListClis` tells no fact and keeps no
+                // state.
+                window
+                    .ask(Request::ListClis)
+                    .expect("the Keeper serves the Window");
+                return window;
             }
             assert!(
                 Instant::now() < deadline,

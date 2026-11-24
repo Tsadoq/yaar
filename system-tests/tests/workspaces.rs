@@ -350,6 +350,9 @@ fn a_base_set_by_one_window_is_told_to_the_other_and_is_still_set_after_the_keep
     let branch = a_branch_with_changes(&world);
     let mut one = world.client();
     let mut other = world.client();
+    // A Window is told every fact from its first reply on, and `other` waits for one that
+    // `one` causes: it asks first. `ListClis` tells no fact and keeps no state.
+    other.clis().expect("the Keeper serves the Window");
     let (repository, workspace) = one
         .open_folder(branch.repo.path())
         .expect("open the folder");
