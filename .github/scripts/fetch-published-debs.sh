@@ -17,8 +17,9 @@
 # 1000 releases (gh's own default is 30, and a published version that dropped out of the list
 # would drop out of the apt repository). A list that fails is a failure, never "none
 # published". A release tag must be letters, digits, '.', '_', '+', '~' and '-', and start
-# with none of '-' or '.'. A .deb with no line of its own in its release's SHA256SUMS, a
-# release with .deb files and no SHA256SUMS, and one .deb name in two releases are refused.
+# with none of '-' or '.'. A .deb with no line of its own, or with more than one line (even
+# two that agree), in its release's SHA256SUMS, a release with .deb files and no SHA256SUMS,
+# and one .deb name in two releases are refused.
 # Nothing is put into <out-dir> before every release has been checked, so a refusal leaves it
 # empty; an <out-dir> that holds files is refused.
 set -euo pipefail
@@ -68,8 +69,10 @@ while IFS= read -r tag; do
     found=1
     deb_name=$(basename "$deb")
     [ -f "$dir/SHA256SUMS" ] || fail "release $tag holds $deb_name and no SHA256SUMS to check it against"
+    lines=$(awk -v n="$deb_name" '$2 == n || $2 == "*" n { c++ } END { print c + 0 }' "$dir/SHA256SUMS")
+    [ "$lines" -ne 0 ] || fail "SHA256SUMS of release $tag has no line for $deb_name"
+    [ "$lines" -eq 1 ] || fail "SHA256SUMS of release $tag has $lines lines for $deb_name: a package has one line, and which of them is right cannot be told"
     want=$(awk -v n="$deb_name" '$2 == n || $2 == "*" n { print $1; exit }' "$dir/SHA256SUMS")
-    [ -n "$want" ] || fail "SHA256SUMS of release $tag has no line for $deb_name"
     have=$(sha256sum "$deb" | awk '{ print $1 }')
     [ "$have" = "$want" ] \
       || fail "$deb_name of release $tag has the SHA-256 $have, not the $want its SHA256SUMS names: it is not what was published"

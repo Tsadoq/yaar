@@ -20,7 +20,9 @@
 #   - every signature is by the key whose fingerprint the repository holds (gpgv's VALIDSIG
 #     names it), the key file holds exactly one key, and the keyring is read in a folder of
 #     the script's own, never the GNUPGHOME of the job, which holds the secret key;
-#   - the text gpgv returns for InRelease is the Release file beside it;
+#   - the text gpgv returns for InRelease is the Release file beside it, and InRelease is that
+#     one clear-signed block and no other text before or after it (gpgv accepts such text,
+#     apt refuses it);
 #   - the hashes are read from that verified text: every file it names (MD5Sum, SHA1, SHA256
 #     and SHA512 sections, whichever it holds; SHA256 it must hold) is there with the size and
 #     hash named, and every Packages file under dists/stable is named in its SHA256 section;
@@ -165,6 +167,18 @@ if [ "$HAVE_KEYRING" -eq 1 ]; then
   if [ -f "$DISTS/InRelease" ]; then
     if gpgv --keyring "$KEYRING" --status-fd 3 --output "$TMP/InRelease.text" "$DISTS/InRelease" 3> "$TMP/status" 2> "$TMP/gpgv.err"; then
       INRELEASE_TEXT=$TMP/InRelease.text
+      # gpgv verifies the signed block wherever it lies in the file; apt reads a file that is
+      # that block and nothing else (it refuses other text around it as NOSPLIT).
+      if ! awk '
+        { line[NR] = $0 }
+        $0 == "-----BEGIN PGP SIGNED MESSAGE-----" { begun++ }
+        $0 == "-----BEGIN PGP SIGNATURE-----" { signed++ }
+        $0 == "-----END PGP SIGNATURE-----" { ended++ }
+        END {
+          exit !(NR > 0 && line[1] == "-----BEGIN PGP SIGNED MESSAGE-----" && line[NR] == "-----END PGP SIGNATURE-----" && begun == 1 && signed == 1 && ended == 1)
+        }' "$DISTS/InRelease"; then
+        fault "$DISTS/InRelease is not one clear-signed block and nothing else (it must start with -----BEGIN PGP SIGNED MESSAGE----- and end with -----END PGP SIGNATURE-----, each once): apt refuses it though gpgv verifies it"
+      fi
       if [ -n "$WANT" ] && ! awk -v want="$WANT" '$1 == "[GNUPG:]" && $2 == "VALIDSIG" && toupper($NF) == want { ok = 1 } END { exit !ok }' "$TMP/status"; then
         fault "$DISTS/InRelease verifies, but not by the key of the fingerprint $WANT"
       fi

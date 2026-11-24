@@ -8,22 +8,29 @@
 #
 # Reads the base, B, as the first line of packaging/site/base-url (`head -n 1`). In
 # README.md, packaging/README.md and packaging/release-day.md, every address that ends in
-# "/install.sh" or "/apt" (followed by a space, a quote, a backquote, the end of the line or
-# "/"), and every line "URIs: <address>" of an apt source shown there, is either an address
-# on 127.0.0.1 or localhost, or starts with B, or is the placeholder @BASE_URL@ itself. Any
+# "/install.sh" or "/apt" (followed by a space, a quote, a backquote, the end of the line,
+# "/", "?" or "#"), and every line "URIs: <address>" of an apt source shown there, is either
+# an address on 127.0.0.1 or localhost, or starts with B, or is the placeholder @BASE_URL@
+# itself. Any
 # other fails, with its file, line number and the address. Also fails when a file of the
 # three is missing, or when B is not https:// followed by a host, with no "/" at its end.
 #
 # Exit codes: 0 holds; 1 a text names another address (each named); 2 usage error.
 #
-# Beyond the header's list: a trailing full stop, comma, semicolon or colon is not part of an
-# address ("see https://x/apt."), an address of a text is read up to a space, a quote, a
-# backquote, a bracket or a pipe, and a loopback host is the whole host 127.0.0.1 or
-# localhost with or without a port: a host that only starts like it (127.0.0.1.example.org,
-# localhost@example.org) is another address. A copy of the base is B itself or B followed by
-# "/": https://tsadoq.github.io/yaarx/apt is not one. Run with an argument it prints its
-# usage and exits 2. It reads the files of the repository it lies in, whatever the folder it
-# is run from.
+# Beyond the header's list: an address is read the way curl and a reader read it, so none
+# of these hides one. A quote or a backquote ends no address ("https://x"/install.sh is
+# https://x/install.sh), a scheme is read in any case (HTTPS://), an address may have no
+# scheme at all when it starts with a host that has a dot (tsadoq.example.org/install.sh) or
+# is localhost, and "?" and "#" end an address as "/" does. A path of the repository
+# (packaging/apt/..., .github/scripts/...) has no dot in its first part and is not an address.
+# The scheme is compared in lower case, so HTTPS://tsadoq.github.io/yaar/install.sh is a copy
+# of the base. A trailing full stop, comma, semicolon or colon is not part of an address ("see
+# https://x/apt."), an address of a text is read up to a space, a bracket or a pipe, and a
+# loopback host is the whole host 127.0.0.1 or localhost with or without a port: a host that
+# only starts like it (127.0.0.1.example.org, localhost@example.org) is another address. A
+# copy of the base is B itself or B followed by "/": https://tsadoq.github.io/yaarx/apt is
+# not one. Run with an argument it prints its usage and exits 2. It reads the files of the
+# repository it lies in, whatever the folder it is run from.
 set -eu
 
 NAME=base-url-check.sh
@@ -66,24 +73,32 @@ for f in README.md packaging/README.md packaging/release-day.md; do
   fi
   # One line of output for each address that is not allowed: "<line> <address>".
   BAD=$(awk -v base="$B" '
+    # The scheme of an address in lower case, whatever case the text wrote it in.
+    function lower_scheme(a,   s) {
+      if (match(a, /^[A-Za-z][A-Za-z]*:\/\//)) {
+        s = substr(a, 1, RLENGTH)
+        return tolower(s) substr(a, RLENGTH + 1)
+      }
+      return a
+    }
     function is_loopback(a,   h) {
-      if (a !~ /^https?:\/\//) return 0
-      h = a
-      sub(/^https?:\/\//, "", h)
+      h = lower_scheme(a)
+      if (h ~ /^https?:\/\//) sub(/^https?:\/\//, "", h)
       sub(/[\/?#].*$/, "", h)
       if (index(h, "@") > 0) return 0
       sub(/:[0-9]*$/, "", h)
       return (h == "127.0.0.1" || h == "localhost")
     }
     function allowed(a,   n) {
+      a = lower_scheme(a)
       if (is_loopback(a)) return 1
       n = length(base)
       if (substr(a, 1, n) == base && (length(a) == n || substr(a, n + 1, 1) == "/")) return 1
       if (substr(a, 1, 10) == "@BASE_URL@") return 1
       return 0
     }
-    # The address a token holds, if it holds one: the token up to the first "/install.sh" or
-    # "/apt" that is followed by "/" or by the end of the token.
+    # The address a piece of text holds, if it holds one: the piece up to the first
+    # "/install.sh" or "/apt" that is followed by "/", "?", "#" or the end of the piece.
     function address_of(tok,   best, k, suf, pos, i, st, en, nxt, sufs) {
       best = ""
       split("/install.sh /apt", sufs, " ")
@@ -94,7 +109,7 @@ for f in README.md packaging/README.md packaging/release-day.md; do
           st = pos + i - 1
           en = st + length(suf) - 1
           nxt = substr(tok, en + 1, 1)
-          if (nxt == "" || nxt == "/") {
+          if (nxt == "" || nxt == "/" || nxt == "?" || nxt == "#") {
             if (best == "" || en < length(best)) best = substr(tok, 1, en)
             break
           }
@@ -102,6 +117,18 @@ for f in README.md packaging/README.md packaging/release-day.md; do
         }
       }
       return best
+    }
+    # Where an address starts in a piece of text, or 0: a scheme (any case) followed by
+    # "://", the placeholder, or a bare host with a dot (or localhost) before its first "/",
+    # which curl accepts as an address too. A path of the repository (packaging/apt/...,
+    # .github/...) has no dot in its first part and is not one.
+    function start_of(piece,   low) {
+      low = tolower(piece)
+      if (match(low, /https?:\/\//)) return RSTART
+      if (match(piece, /@BASE_URL@/)) return RSTART
+      if (match(piece, /^[A-Za-z0-9][A-Za-z0-9-]*(\.[A-Za-z0-9-]+)+(:[0-9]+)?\//)) return 1
+      if (match(piece, /^localhost(:[0-9]+)?\//)) return 1
+      return 0
     }
     {
       line = $0
@@ -111,11 +138,18 @@ for f in README.md packaging/README.md packaging/release-day.md; do
         if (rest != "" && !allowed(rest)) print NR, rest
         next
       }
-      while (match(line, /(https?:\/\/|@BASE_URL@)[^[:space:]"\047`<>()|]*/)) {
-        tok = substr(line, RSTART, RLENGTH)
-        line = substr(line, RSTART + RLENGTH)
-        while (tok ~ /[.,;:]$/) tok = substr(tok, 1, length(tok) - 1)
-        a = address_of(tok)
+      # A quote or a backquote ends no address: "https://host"/install.sh is the address
+      # https://host/install.sh, so they are taken out before the line is cut into pieces at
+      # white space, brackets and pipes.
+      gsub(/["\047`]/, "", line)
+      gsub(/[<>()|\[\]]/, " ", line)
+      n = split(line, pieces, /[ \t]+/)
+      for (j = 1; j <= n; j++) {
+        piece = pieces[j]
+        while (piece ~ /[.,;:]$/) piece = substr(piece, 1, length(piece) - 1)
+        st = start_of(piece)
+        if (st == 0) continue
+        a = address_of(substr(piece, st))
         if (a != "" && !allowed(a)) print NR, a
       }
     }' "$f") || { echo "$NAME: $f could not be read" >&2; FAILED=1; continue; }

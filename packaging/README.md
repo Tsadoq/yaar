@@ -94,9 +94,10 @@ NOTICES=dist/THIRD-PARTY-NOTICES.txt packaging/package-macos.sh "$(packaging/ver
 ```
 
 With one programs folder the app holds that processor's programs; with two it holds universal
-ones, made with `lipo`. It writes `YAAR.app`, `yaar-review-<version>-macos-universal.zip` and
-`yaar-review-<version>-macos-universal.dmg` into `dist`, and the Keeper and the three
-programs beside it lie in `Contents/Helpers/`. The app is signed ad hoc unless
+ones, made with `lipo`. It writes `YAAR.app`, a `.zip` and a `.dmg` into `dist`, named
+`yaar-review-<version>-macos-universal` with two programs folders and
+`yaar-review-<version>-macos-arm64` or `-macos-x86_64` with one (the release holds the
+universal pair). The Keeper and the three programs beside it lie in `Contents/Helpers/`. The app is signed ad hoc unless
 `SIGN_IDENTITY` names a Developer ID Application identity: an ad hoc app runs on the Mac that
 made it, and another Mac's Gatekeeper refuses it. Only the workflow's job
 `release-sign-macos` signs with the Developer ID and has Apple notarise the app and the disk
@@ -395,7 +396,7 @@ waits until `releases/latest/download/SHA256SUMS` answers with the new checksum 
 (`publish.sh publish`), and then checks that the tag on the public repository is the commit of
 the run, that the source archive GitHub made for the tag holds `LICENSE`, and that the site
 answers with the new `install.sh`, `InRelease` and key (`publish.sh check`, which waits up to
-ten minutes for Pages' cache). A published release of that tag with other files is refused: a
+ten minutes in all for Pages' cache). A published release of that tag with other files is refused: a
 published version is never changed.
 
 ### Taking a release back

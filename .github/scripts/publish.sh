@@ -26,7 +26,8 @@
 # check: the release's tag points at this run's commit (GITHUB_SHA); the source archive
 #   GitHub made for the tag holds LICENSE with the bytes of the repository's (row PKG-11);
 #   the site answers https://<base>/install.sh and https://<base>/apt/dists/stable/InRelease
-#   with the bytes of final/site (the Pages cache may lag: up to 10 minutes of retries).
+#   with the bytes of final/site (the Pages cache may lag: up to 10 minutes of retries in
+#   all, one deadline for the whole check, see below).
 #
 # Exit codes: 0 done; 1 refused or failed (a sentence says which step); 2 usage error.
 #
@@ -40,7 +41,14 @@
 #   - publish and check wait for what they check: the first 5 s every 0.2 s, then every 2 s,
 #     for YAAR_PUBLISH_WAIT seconds (default 60) and YAAR_CHECK_WAIT seconds (default 600).
 #     The workflow sets neither: they are there so that the refusal can be seen in seconds.
+#     Each is a whole number of seconds, else it refuses with exit 2 before any gh call,
+#     whatever the action (a value that is not a number would make a wait that never ends).
 #     Past the deadline the sentence says what the last look found;
+#   - check has one deadline, YAAR_CHECK_WAIT seconds from its first look, for its four waits
+#     together (the archive's licence, install.sh, InRelease, the key): each wait gets what is
+#     left, and a wait that finds none left still looks once. So check ends within the
+#     seconds it names, plus the time of its last look, and well inside the job's 20 minutes
+#     with the 60 s of publish and the deployment;
 #   - check asks GitHub for the tag with `git ls-remote` and the source archive with curl,
 #     both anonymously: the repository is public, and the row is about what the public sees;
 #     GITHUB_SHA must be set for it. It also compares the site's apt/yaar-review.asc;
@@ -72,6 +80,17 @@ case $VERSION in
     exit 2
     ;;
 esac
+# Both waits are whole numbers of seconds: anything else would end no wait.
+for var in YAAR_PUBLISH_WAIT YAAR_CHECK_WAIT; do
+  if [ -n "${!var+set}" ]; then
+    case ${!var} in
+      '' | *[!0-9]*)
+        echo "$NAME: $var must be a whole number of seconds, not: ${!var}" >&2
+        exit 2
+        ;;
+    esac
+  fi
+done
 # Before any gh call.
 [ -n "${GH_TOKEN:-}" ] || fail "GH_TOKEN is empty: gh needs the workflow's token, and nothing was called"
 [ -n "${GITHUB_REPOSITORY:-}" ] || fail "GITHUB_REPOSITORY is empty: it names the repository the release lives in, and nothing was called"
@@ -177,11 +196,13 @@ probe_same() {
   return 0
 }
 
-# wait_same <seconds> <url> <file>: said as a sentence when it never answers right.
+# wait_same <seconds> <url> <file>: said as a sentence when it never answers right. WAITED
+# names the whole wait in the sentence when the seconds are what is left of a larger one.
+WAITED=
 wait_same() {
   local seconds=$1 url=$2 file=$3
   if ! poll "$seconds" probe_same "$url" "$file"; then
-    fail "$url did not answer with the bytes of $file within $seconds s; the last look found: $SEEN"
+    fail "$url did not answer with the bytes of $file within ${WAITED:-$seconds s}; the last look found: $SEEN"
   fi
 }
 
@@ -241,6 +262,14 @@ case $ACTION in
     [ -f "$LICENCE" ] || fail "$LICENCE is missing"
     B=$(base_url)
     wait=${YAAR_CHECK_WAIT:-600}
+    # One deadline for the four waits below: each is given what is left of it.
+    WAITED="the $wait s the whole check waits"
+    CHECK_START=$SECONDS
+    left() {
+      local l=$((wait - (SECONDS - CHECK_START)))
+      [ "$l" -gt 0 ] || l=0
+      echo "$l"
+    }
 
     # The tag, on the public repository, at this run's commit. An annotated tag lists its
     # commit on the line "^{}".
@@ -282,14 +311,14 @@ case $ACTION in
       fi
       return 0
     }
-    if ! poll "$wait" probe_licence; then
-      fail "the source archive of $TAG on $REPO does not hold the licence within $wait s; the last look found: $SEEN"
+    if ! poll "$(left)" probe_licence; then
+      fail "the source archive of $TAG on $REPO does not hold the licence within $WAITED; the last look found: $SEEN"
     fi
 
     # The site answers with the new files.
-    wait_same "$wait" "$B/install.sh" "$SITE/install.sh"
-    wait_same "$wait" "$B/apt/dists/stable/InRelease" "$SITE/apt/dists/stable/InRelease"
-    wait_same "$wait" "$B/apt/yaar-review.asc" "$SITE/apt/yaar-review.asc"
+    wait_same "$(left)" "$B/install.sh" "$SITE/install.sh"
+    wait_same "$(left)" "$B/apt/dists/stable/InRelease" "$SITE/apt/dists/stable/InRelease"
+    wait_same "$(left)" "$B/apt/yaar-review.asc" "$SITE/apt/yaar-review.asc"
     echo "$NAME: the tag $TAG of $REPO is at $GITHUB_SHA, its source holds LICENSE, and $B answers with the files of this run"
     ;;
 esac
