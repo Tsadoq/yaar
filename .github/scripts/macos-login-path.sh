@@ -70,6 +70,10 @@
 #   of step 3, since the program the shell starts for that name is a link.
 # - The login shell of step 1 is also asked, with nothing else in its environment, to find
 #   yaar-hook-witness, as the Linux step does: the line in the start-up file works.
+# - The trap is set before the arguments are read, so that no command ends the step with its
+#   own status and words alone (a failed dscl, for one): it is named in one sentence and the
+#   step exits 1. Only the usage error leaves with 2. The start-up file counts as changed once
+#   the line was appended.
 set -euo pipefail
 # -E: the ERR trap below also runs inside functions and command substitutions.
 set -E
@@ -82,6 +86,11 @@ BRANCH=from-the-dock
 
 # Set to the scratch folder once it is made; fail() leaves a marker file in it.
 scratch=""
+# Whether a sentence of the step's own was said: fail sets it in the main shell, and the
+# marker file in the scratch folder tells the same when fail ran in a subshell. usage_said is
+# set by usage alone, the one place that may leave with status 2.
+said=no
+usage_said=no
 # What the step was doing when a command that nobody guarded failed: set -e ends the step
 # with that command's own status and words, and the trap below puts one sentence of the
 # step's own in front of them. Inside a function the line is the one of the outermost call,
@@ -94,6 +103,7 @@ trap 'last_command=$BASH_COMMAND
 # One sentence on standard error, and exit 1. The marker file tells cleanup that a sentence
 # was said, also when fail ran in a subshell and could set no variable of the step's.
 fail() {
+    said=yes
     echo "$PROGRAM: $*" >&2
     if [ -n "$scratch" ]; then
         : > "$scratch/said"
@@ -102,38 +112,22 @@ fail() {
 }
 
 usage() {
+    usage_said=yes
+    said=yes
     echo "$PROGRAM: $*" >&2
     echo "usage: .github/scripts/macos-login-path.sh <test-programs-dir>" >&2
     exit 2
 }
 
-[ "$#" -eq 1 ] || usage "one argument is needed, the folder of the test programs"
-[ "$(uname -s)" = Darwin ] || usage "it runs on macOS, and this is $(uname -s)"
-[ -n "${RUNNER_TEMP:-}" ] || usage "RUNNER_TEMP is not set; the start-up file is copied there"
-[ -d "$RUNNER_TEMP" ] || usage "RUNNER_TEMP is $RUNNER_TEMP, which is not a folder"
-[ -d "$1" ] || usage "$1 is not a folder"
-programs=$(cd "$1" && pwd -P)
-for tool in dscl launchctl open git ps awk; do
-    command -v "$tool" > /dev/null || fail "$tool is not there"
-done
-for program in standin-agent yaar-script; do
-    [ -f "$programs/$program" ] || fail "$programs/$program is missing"
-    chmod +x "$programs/$program"
-done
-[ -x "$WINDOW" ] || fail "$WINDOW is not there: the install step did not put the app in /Applications"
-[ -x "$KEEPER" ] || fail "$KEEPER is not there: the app holds no Keeper"
-user=$(id -un)
-uid=$(id -u)
-[ -d "${HOME:-}" ] || fail "HOME is not a folder"
-home=$(cd "$HOME" && pwd -P)
-shell=$(dscl . -read "/Users/$user" UserShell | sed -n 's/^UserShell: //p')
-[ -n "$shell" ] || fail "dscl gave no login shell for $user"
-
-only="$home/yaar-login-only"
-repository="$home/yaar-login-repo"
-worktrees="$home/yaar-login-repo.worktrees"
-scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
-
+# What the arguments and the user's entry give; empty until they are read, which the trap
+# copes with.
+user=""
+uid=""
+home=""
+programs=""
+only=""
+repository=""
+worktrees=""
 # The processes the step made, which the trap ends by their pids; the start-up file and
 # whether the step changed it.
 window_pid=""
@@ -214,12 +208,15 @@ wait_until() {
 
 diagnose() {
     {
-        echo "---- the processes of $user"
-        ps -U "$uid" -o pid,ppid,stat,etime,command || true
-        echo "---- the output of yaar-script, $scratch/script.log"
-        cat "$scratch/script.log" 2> /dev/null || true
-        echo "---- the witness file, $only/witness"
-        cat "$only/witness" 2> /dev/null || echo "(there is none)"
+        echo "---- the processes of ${user:-nobody yet}"
+        if [ -n "$uid" ]; then ps -U "$uid" -o pid,ppid,stat,etime,command || true; fi
+        # Before the arguments were read there is no scratch folder, and nothing else to show.
+        if [ -n "$scratch" ]; then
+            echo "---- the output of yaar-script, $scratch/script.log"
+            cat "$scratch/script.log" 2> /dev/null || true
+            echo "---- the witness file, $only/witness"
+            cat "$only/witness" 2> /dev/null || echo "(there is none)"
+        fi
     } >&2
 }
 
@@ -228,11 +225,11 @@ cleanup() {
     local status=$? pid
     trap - EXIT ERR
     set +e
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    if [ "$status" -ne 0 ] && [ "$usage_said" = no ]; then
         # A step that fails without a sentence of its own (a command nobody guarded, a
         # signal) exits with that command's status, which the header does not name: say what
         # failed, and exit 1.
-        if [ ! -e "$scratch/said" ]; then
+        if [ "$said" = no ] && [ ! -e "$scratch/said" ]; then
             failed_text=""
             if [ -n "$last_line" ]; then
                 failed_text=$(sed -n "${last_line}s/^[[:space:]]*//p" "$0" 2> /dev/null)
@@ -260,6 +257,34 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+
+[ "$#" -eq 1 ] || usage "one argument is needed, the folder of the test programs"
+[ "$(uname -s)" = Darwin ] || usage "it runs on macOS, and this is $(uname -s)"
+[ -n "${RUNNER_TEMP:-}" ] || usage "RUNNER_TEMP is not set; the start-up file is copied there"
+[ -d "$RUNNER_TEMP" ] || usage "RUNNER_TEMP is $RUNNER_TEMP, which is not a folder"
+[ -d "$1" ] || usage "$1 is not a folder"
+programs=$(cd "$1" && pwd -P) || fail "$1 could not be entered"
+for tool in dscl launchctl open git ps awk; do
+    command -v "$tool" > /dev/null || fail "$tool is not there"
+done
+for program in standin-agent yaar-script; do
+    [ -f "$programs/$program" ] || fail "$programs/$program is missing"
+    chmod +x "$programs/$program" || fail "$programs/$program could not be made executable"
+done
+[ -x "$WINDOW" ] || fail "$WINDOW is not there: the install step did not put the app in /Applications"
+[ -x "$KEEPER" ] || fail "$KEEPER is not there: the app holds no Keeper"
+user=$(id -un) || fail "the name of the user could not be read (id -un failed)"
+uid=$(id -u) || fail "the number of the user could not be read (id -u failed)"
+[ -d "${HOME:-}" ] || fail "HOME is not a folder"
+home=$(cd "$HOME" && pwd -P) || fail "HOME, $HOME, could not be entered"
+shell=$(dscl . -read "/Users/$user" UserShell) || fail "dscl could not read the login shell of $user"
+shell=$(printf '%s\n' "$shell" | sed -n 's/^UserShell: //p')
+[ -n "$shell" ] || fail "dscl gave no login shell for $user"
+
+only="$home/yaar-login-only"
+repository="$home/yaar-login-repo"
+worktrees="$home/yaar-login-repo.worktrees"
+scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
 
 # --- 1. The folder of the login path only, and the line that puts it there.
 [ ! -e "$only" ] || fail "$only is there already: a former run did not end"
@@ -294,9 +319,10 @@ if [ -e "$startup" ]; then
     startup_existed=yes
     cp "$startup" "$scratch/startup.original"
 fi
-startup_changed=yes
 # shellcheck disable=SC2016 # the line is written as it is: $HOME and $PATH are the login shell's
-printf '\nexport PATH="$HOME/yaar-login-only/bin:$PATH"\n' >> "$startup"
+printf '\nexport PATH="$HOME/yaar-login-only/bin:$PATH"\n' >> "$startup" \
+    || fail "the line that puts $only/bin on the login path could not be appended to $startup, which stays as it was"
+startup_changed=yes
 found=$(env -i HOME="$home" "$shell" -l -c 'command -v yaar-hook-witness' 2> /dev/null || true)
 [ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work"
 echo "step 1: $only/bin holds yaar-hook-witness and claude; neither launchd's path nor the runner's holds it; the login shell $shell finds it through $startup"

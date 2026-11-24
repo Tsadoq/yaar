@@ -70,6 +70,11 @@
 # - The folders are removed by the trap only when this run made them.
 # - Xvfb is started with access control off (-ac) and no TCP socket: the app runs as <user>
 #   and the server as root.
+# - The trap is set before the arguments are read, so that no command ends the step with its
+#   own status and words alone: a command that nobody guarded (a redirect that dash refuses
+#   with its own status 2 among them) is named in one sentence and the step exits 1. Only the
+#   usage error leaves with 2. The start-up file counts as changed once the line was appended,
+#   so that a file the append could not touch is not "put back".
 # The scripts handed to `sh -c` are single-quoted on purpose: the user's shell expands them.
 # shellcheck disable=SC2016
 set -euo pipefail
@@ -86,6 +91,11 @@ BRANCH=from-the-menu
 
 # Set to the scratch folder once it is made; fail() leaves a marker file in it.
 scratch=""
+# Whether a sentence of the step's own was said: fail sets it in the main shell, and the
+# marker file in the scratch folder tells the same when fail ran in a subshell. usage_said is
+# set by usage alone, the one place that may leave with status 2.
+said=no
+usage_said=no
 # What the step was doing when a command that nobody guarded failed: set -e ends the step
 # with that command's own status and words, and the trap below puts one sentence of the
 # step's own in front of them. Inside a function the line is the one of the outermost call,
@@ -98,6 +108,7 @@ trap 'last_command=$BASH_COMMAND
 # One sentence on standard error, and exit 1. The marker file tells cleanup that a sentence
 # was said, also when fail ran in a subshell and could set no variable of the step's.
 fail() {
+    said=yes
     echo "$PROGRAM: $*" >&2
     if [ -n "$scratch" ]; then
         : > "$scratch/said"
@@ -106,36 +117,21 @@ fail() {
 }
 
 usage() {
+    usage_said=yes
+    said=yes
     echo "$PROGRAM: $*" >&2
     echo "usage: .github/scripts/linux-login-path.sh <user> <test-programs-dir>" >&2
     exit 2
 }
 
-[ "$#" -eq 2 ] || usage "two arguments are needed, a user and the folder of the test programs"
-user=$1
-[ "$(id -u)" -eq 0 ] || usage "it runs as root, and this is user $(id -un)"
-[ -n "${RUNNER_TEMP:-}" ] || usage "RUNNER_TEMP is not set; the start-up file is copied there"
-[ -d "$RUNNER_TEMP" ] || usage "RUNNER_TEMP is $RUNNER_TEMP, which is not a folder"
-[ -d "$2" ] || usage "$2 is not a folder"
-programs=$(cd "$2" && pwd -P)
-for tool in sudo getent git gio Xvfb ps; do
-    command -v "$tool" > /dev/null || fail "$tool is not installed (linux-launch.sh installs xvfb, xauth, x11-utils and libglib2.0-bin before this step)"
-done
-for program in standin-agent yaar-script; do
-    [ -f "$programs/$program" ] || fail "$programs/$program is missing"
-    chmod +x "$programs/$program"
-done
-entry=$(getent passwd "$user") || fail "there is no user $user"
-home=$(printf '%s\n' "$entry" | cut -d: -f6)
-shell=$(printf '%s\n' "$entry" | cut -d: -f7)
-[ -d "$home" ] || fail "the home of $user, $home, is not a folder"
-[ -n "$shell" ] || shell=/bin/sh
-
-only="$home/yaar-login-only"
-repository="$home/yaar-login-repo"
-worktrees="$home/yaar-login-repo.worktrees"
-scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
-
+# What the arguments and the user's entry give; empty until they are read, which the trap
+# copes with.
+user=""
+home=""
+programs=""
+only=""
+repository=""
+worktrees=""
 # The processes the step made, which the trap ends by their pids; the start-up file and
 # whether the step changed it.
 window_pid=""
@@ -213,14 +209,17 @@ wait_until() {
 
 diagnose() {
     {
-        echo "---- the processes of $user"
-        ps -u "$user" -o pid,ppid,stat,etime,args || true
-        echo "---- the app's standard output and error, $scratch/app.log"
-        cat "$scratch/app.log" 2> /dev/null || true
-        echo "---- the output of yaar-script, $scratch/script.log"
-        cat "$scratch/script.log" 2> /dev/null || true
-        echo "---- the witness file, $only/witness"
-        cat "$only/witness" 2> /dev/null || echo "(there is none)"
+        echo "---- the processes of ${user:-nobody yet}"
+        if [ -n "$user" ]; then ps -u "$user" -o pid,ppid,stat,etime,args || true; fi
+        # Before the arguments were read there is no scratch folder, and nothing else to show.
+        if [ -n "$scratch" ]; then
+            echo "---- the app's standard output and error, $scratch/app.log"
+            cat "$scratch/app.log" 2> /dev/null || true
+            echo "---- the output of yaar-script, $scratch/script.log"
+            cat "$scratch/script.log" 2> /dev/null || true
+            echo "---- the witness file, $only/witness"
+            cat "$only/witness" 2> /dev/null || echo "(there is none)"
+        fi
     } >&2
 }
 
@@ -229,11 +228,11 @@ cleanup() {
     local status=$? pid
     trap - EXIT ERR
     set +e
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    if [ "$status" -ne 0 ] && [ "$usage_said" = no ]; then
         # A step that fails without a sentence of its own (a command nobody guarded, a
-        # signal) exits with that command's status, which the header does not name: say what
-        # failed, and exit 1.
-        if [ ! -e "$scratch/said" ]; then
+        # signal, a redirect that dash refused with its own status 2) exits with that
+        # command's status, which the header does not name: say what failed, and exit 1.
+        if [ "$said" = no ] && [ ! -e "$scratch/said" ]; then
             failed_text=""
             if [ -n "$last_line" ]; then
                 failed_text=$(sed -n "${last_line}s/^[[:space:]]*//p" "$0" 2> /dev/null)
@@ -262,6 +261,31 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+
+[ "$#" -eq 2 ] || usage "two arguments are needed, a user and the folder of the test programs"
+user=$1
+[ "$(id -u)" -eq 0 ] || usage "it runs as root, and this is user $(id -un)"
+[ -n "${RUNNER_TEMP:-}" ] || usage "RUNNER_TEMP is not set; the start-up file is copied there"
+[ -d "$RUNNER_TEMP" ] || usage "RUNNER_TEMP is $RUNNER_TEMP, which is not a folder"
+[ -d "$2" ] || usage "$2 is not a folder"
+programs=$(cd "$2" && pwd -P) || fail "$2 could not be entered"
+for tool in sudo getent git gio Xvfb ps; do
+    command -v "$tool" > /dev/null || fail "$tool is not installed (linux-launch.sh installs xvfb, xauth, x11-utils and libglib2.0-bin before this step)"
+done
+for program in standin-agent yaar-script; do
+    [ -f "$programs/$program" ] || fail "$programs/$program is missing"
+    chmod +x "$programs/$program" || fail "$programs/$program could not be made executable"
+done
+entry=$(getent passwd "$user") || fail "there is no user $user"
+home=$(printf '%s\n' "$entry" | cut -d: -f6)
+shell=$(printf '%s\n' "$entry" | cut -d: -f7)
+[ -d "$home" ] || fail "the home of $user, $home, is not a folder"
+[ -n "$shell" ] || shell=/bin/sh
+
+only="$home/yaar-login-only"
+repository="$home/yaar-login-repo"
+worktrees="$home/yaar-login-repo.worktrees"
+scratch=$(mktemp -d "$RUNNER_TEMP/login-path.XXXXXX") || fail "no scratch folder could be made under $RUNNER_TEMP"
 
 # --- 1. The folder of the login path only, and the line that puts it there.
 [ ! -e "$only" ] || fail "$only is there already: a former run did not end"
@@ -309,8 +333,9 @@ if [ -e "$startup" ]; then
     startup_existed=yes
     cp "$startup" "$scratch/startup.original"
 fi
+as_user sh -c 'printf "\nexport PATH=\"\$HOME/yaar-login-only/bin:\$PATH\"\n" >> "$1"' sh "$startup" \
+    || fail "the line that puts $only/bin on the login path could not be appended to $startup, which stays as it was"
 startup_changed=yes
-as_user sh -c 'printf "\nexport PATH=\"\$HOME/yaar-login-only/bin:\$PATH\"\n" >> "$1"' sh "$startup"
 found=$(as_user "$shell" -l -c 'command -v yaar-hook-witness' 2> /dev/null || true)
 [ "$found" = "$only/bin/yaar-hook-witness" ] || fail "the login shell of $user, $shell, finds yaar-hook-witness at '$found' and not at $only/bin/yaar-hook-witness: the line in $startup does not work"
 echo "step 1: $only/bin holds yaar-hook-witness and claude; only the login shell $shell of $user finds it, through $startup"
