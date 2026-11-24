@@ -302,7 +302,7 @@ built = [
     ".github/workflows/ci.yml::The notices count every linked dependency of the lock file",
     ".github/workflows/ci.yml::The count of the notices can fail",
 ]
-note = "The control of a block with no licence text empties the text after the notices were made: it tests the count, not cargo-about, which takes the SPDX text of a licence when a crate ships no file of its own. The count also reads the build script: the programs are built one cargo invocation for each part of the notices, so that each links what its part's notices name."
+note = "The control of a block with no licence text empties the text after the notices were made: it tests the count, not cargo-about, which takes the SPDX text of a licence when a crate ships no file of its own. The count also reads the build script: the programs are built one cargo invocation for each part of the notices, so that each links what its part's notices name. The fourteenth control counts every package again with cargo shown an x86-64 and then an aarch64 Linux machine and demands the same lines: cargo works out a proc-macro's dependencies for the machine it runs on, and the count of the first rehearsal failed on the x86-64 job for a crate no aarch64 package links."
 
 [[test]]
 id = "PKG-02"

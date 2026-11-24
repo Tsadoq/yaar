@@ -170,7 +170,7 @@ release the latest and waits until `releases/latest/download/SHA256SUMS` answers
 checksum file (`publish.sh publish`), and then checks that the tag on the public repository is
 the commit of the run, that the source archive GitHub made for the tag holds `LICENSE`, and
 that the site answers with the new `install.sh`, `InRelease` and key (`publish.sh check`,
-which waits about ten minutes in all for Pages' cache). A published release of that tag with
+which waits up to ten minutes in all for Pages' cache). A published release of that tag with
 other files is refused: a published version is never changed.
 
 ### The base address

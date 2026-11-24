@@ -45,9 +45,18 @@
 #      `cd "$ROOT"`, so that each "$@" on them is no longer the caller's arguments and each
 #      invocation builds the whole workspace: must fail, naming that line (a reader that
 #      reads "$@" on the cargo lines and does not look at a line that changes it passes it).
+# And on every package of <packages-dir> that carries notices, unchanged (the .debs, the
+# archives of both Linux machines and the .zip; the archive that ends in
+# -linux-aarch64.tar.gz must be there):
+#  14. the count made plainly, and then twice more with cargo shown another machine (RUSTC a
+#      stand-in that reports x86_64-unknown-linux-gnu, then aarch64-unknown-linux-gnu, as
+#      the host and answers only cargo's questions): each must pass and print the same
+#      lines as the plain count (cargo works out a proc-macro's dependencies for the machine
+#      it runs on; a count that lets the machine through wants, on an x86-64 machine, a
+#      crate that no aarch64 package links, and fails there on notices that are right).
 # Each check prints what it did and what the count said.
 #
-# Exit codes: 0 all thirteen as above; 1 one of them not (a sentence says which); 2 usage error.
+# Exit codes: 0 all fourteen as above; 1 one of them not (a sentence says which); 2 usage error.
 set -eu
 
 NAME=notices-can-fail.sh
@@ -76,10 +85,13 @@ ZIP_MEMBER=YAAR.app/Contents/Resources/THIRD-PARTY-NOTICES.txt
 # The one archive and the one .zip the checks break (the folder may hold more).
 ARCHIVE=
 ZIP=
+ARM_ARCHIVE=
 for f in "$DIR"/yaar-review-*-linux-x86_64.tar.gz; do [ -f "$f" ] && ARCHIVE=$f; done
 for f in "$DIR"/yaar-review-*-macos-universal.zip; do [ -f "$f" ] && ZIP=$f; done
+for f in "$DIR"/yaar-review-*-linux-aarch64.tar.gz; do [ -f "$f" ] && ARM_ARCHIVE=$f; done
 [ -n "$ARCHIVE" ] || fail "$DIR holds no yaar-review-<V>-linux-x86_64.tar.gz to break"
 [ -n "$ZIP" ] || fail "$DIR holds no yaar-review-<V>-macos-universal.zip to break"
+[ -n "$ARM_ARCHIVE" ] || fail "$DIR holds no yaar-review-<V>-linux-aarch64.tar.gz, which check 14 counts as if on another machine"
 
 # The workspace's own crates, which the count leaves out: breaking a line of one of them
 # would prove nothing.
@@ -324,4 +336,47 @@ break_build 11 "release-build.sh has a merged build of the four packages behind 
 break_build 12 "release-build.sh has a merged build of the four packages that calls cargo by a path" build_with_path_merged "\"\$HOME/.cargo/bin/cargo\" build --release --locked -p yaar-window -p yaar-keeper -p yaar-adapter-pi -p yaar-companion-claude"
 break_build 13 "release-build.sh changes \"\$@\" with set -- before its cargo lines" build_with_set_args "set -- \"\$@\" --workspace"
 
-echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked, when the toolkit's Apple crate is missing and when the programs are not built part by part, a cargo line cannot be read or a line changes the arguments of the cargo lines, and passes on both packages as built"
+# Check 14: the count of the packages as built does not depend on the machine that runs it.
+# The folder $TMP/hosts holds a link to each package that carries notices; the count of it
+# is made plainly, and then with RUSTC a stand-in that reports FAKE_HOST as the machine's
+# host and answers only the questions cargo asks (its version, its cfg, its file names), and
+# with a target folder of its own, so that the repository's is not touched.
+REAL_RUSTC=${RUSTC:-rustc}
+HOST_RUSTC=$TMP/host-rustc.sh
+cat > "$HOST_RUSTC" << 'STAND_IN'
+#!/bin/sh
+case " $* " in
+  *" -vV "*) "$FAKE_REAL_RUSTC" "$@" | sed "s/^host: .*/host: $FAKE_HOST/"; exit ;;
+  *" --target "* | *" --target="*) exec "$FAKE_REAL_RUSTC" "$@" ;;
+  *--print*) exec "$FAKE_REAL_RUSTC" "$@" --target "$FAKE_HOST" ;;
+esac
+echo "host-rustc.sh: only cargo's questions are answered: $*" >&2
+exit 3
+STAND_IN
+chmod +x "$HOST_RUSTC"
+mkdir "$TMP/hosts"
+DIR_ABS=$(cd "$DIR" && pwd)
+for f in "$DIR_ABS"/yaar-review_*_amd64.deb "$DIR_ABS"/yaar-review_*_arm64.deb \
+         "$DIR_ABS"/yaar-review-*-linux-x86_64.tar.gz "$DIR_ABS"/yaar-review-*-linux-aarch64.tar.gz \
+         "$DIR_ABS"/yaar-review-*-macos-universal.zip; do
+  [ -f "$f" ] && ln -s "$f" "$TMP/hosts/"
+done
+count "$TMP/hosts"
+must_pass "14. every package of $(basename "$DIR_ABS") counted plainly, on this machine"
+cp "$TMP/said" "$TMP/said.plain"
+for host in x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu; do
+  RC=0
+  env "RELEASE_BUILD_SH=$BUILD" "RUSTC=$HOST_RUSTC" "FAKE_REAL_RUSTC=$REAL_RUSTC" "FAKE_HOST=$host" "CARGO_TARGET_DIR=$TMP/host-target-$host" \
+    "$COUNT" "$TMP/hosts" > "$TMP/said" 2>&1 || RC=$?
+  show "14. the same packages counted as on a machine whose host is $host"
+  [ "$RC" = 0 ] || fail "the count exited $RC when cargo took this machine for $host, and 0 on this machine as it is: the count depends on the machine that runs it (a proc-macro's dependencies are worked out for the machine, not for the target)"
+  same=0
+  cmp -s "$TMP/said.plain" "$TMP/said" || same=$?
+  case "$same" in
+    0) ;;
+    1) fail "the count passed when cargo took this machine for $host but printed other lines than on this machine as it is" ;;
+    *) fail "cmp cannot compare the lines of the count" ;;
+  esac
+done
+
+echo "$NAME: the count fails when a crate has no entry, when a block has no text, when the last block of the file has no text, when an entry is for a crate that is not linked, when the toolkit's Apple crate is missing and when the programs are not built part by part, a cargo line cannot be read or a line changes the arguments of the cargo lines, and passes on both packages as built, whichever machine counts them"

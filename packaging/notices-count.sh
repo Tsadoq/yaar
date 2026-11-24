@@ -39,8 +39,10 @@
 # program links and that the notices rightly lack. So the count asks cargo as if it ran on
 # the triple it counts: RUSTC names a stand-in that reports <triple> as the host and answers
 # nothing but cargo's questions (its version, its cfg, its file names; it refuses all else,
-# so it compiles nothing), and CARGO_TARGET_DIR is a folder of the count's own, one for each
-# triple, so that the repository's build folder is not touched. Every edge, a proc-macro's
+# so it compiles nothing). CARGO_TARGET_DIR is a folder of the count's own, one for each
+# triple: the cargo of today writes nothing there for `cargo tree`, and the folder is named
+# so that a cargo that one day keeps the rustc's answers there keeps them apart from the
+# repository's build folder and from the next triple's. Every edge, a proc-macro's
 # own dependencies included, is then worked out for the package's target whatever machine
 # runs the count, as cargo-about does for the notices. This is exact for the Linux packages,
 # which the jobs build on their own target; for the .zip it is the union over both Mac targets.
