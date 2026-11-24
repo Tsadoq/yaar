@@ -32,9 +32,9 @@
 #     preinst, postrm, prerm), conffiles, triggers or other member, since such a file runs as
 #     root at the install or changes the installed system in ways its file list never shows;
 #   - the archive holds the same programs under yaar-review/bin and yaar-review/libexec/
-#     yaar-review, the same desktop entry and icon under yaar-review/share, LICENSE, NOTICE
-#     and THIRD-PARTY-NOTICES.txt (the bytes of <notices>) under yaar-review/share/doc/
-#     yaar-review, and nothing else;
+#     yaar-review, the same desktop entry and icon under yaar-review/share, and LICENSE,
+#     NOTICE, copyright (the bytes of the .deb's) and THIRD-PARTY-NOTICES.txt (the bytes of
+#     <notices>) under yaar-review/share/doc/yaar-review, and nothing else;
 #   - in the container of the job: `apt-get install ./<the .deb>` installs it, each of the
 #     five installed programs' `ldd` lists no "not found", and `/usr/bin/yaar-review --version`
 #     prints "yaar-review <version>". Needs readelf (binutils) and dpkg in that container.
@@ -228,10 +228,11 @@ for f in "share/applications/$ID.desktop" "share/icons/hicolor/256x256/apps/$ID.
   [ -s "$W/tar/yaar-review/$f" ] || fail "$TAR: holds no yaar-review/$f, or it is empty"
   cmp -s "$W/tar/yaar-review/$f" "$W/deb/usr/$f" || fail "$TAR: yaar-review/$f differs from /usr/$f of $DEB"
 done
-for f in LICENSE NOTICE THIRD-PARTY-NOTICES.txt; do
+for f in LICENSE NOTICE copyright THIRD-PARTY-NOTICES.txt; do
   [ -s "$W/tar/yaar-review/share/doc/yaar-review/$f" ] || fail "$TAR: holds no yaar-review/share/doc/yaar-review/$f, or it is empty"
 done
 cmp -s "$W/tar/yaar-review/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt" "$NOTICES" || fail "$TAR: yaar-review/share/doc/yaar-review/THIRD-PARTY-NOTICES.txt is not the bytes of $NOTICES"
+cmp -s "$W/tar/yaar-review/share/doc/yaar-review/copyright" "$W/deb/usr/share/doc/yaar-review/copyright" || fail "$TAR: yaar-review/share/doc/yaar-review/copyright differs from /usr/share/doc/yaar-review/copyright of $DEB"
 cmp -s "$W/tar/yaar-review/share/doc/yaar-review/NOTICE" "$REPO/NOTICE" || fail "$TAR: yaar-review/share/doc/yaar-review/NOTICE differs from $REPO/NOTICE"
 cmp -s "$W/tar/yaar-review/share/doc/yaar-review/LICENSE" "$REPO/LICENSE" || fail "$TAR: yaar-review/share/doc/yaar-review/LICENSE differs from $REPO/LICENSE"
 
