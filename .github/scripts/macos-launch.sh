@@ -61,7 +61,11 @@ fail() {
     exit 1
 }
 
+# Set by usage: only it may leave with status 2, so any other command that fails with 2
+# (grep, cmp or diff on an error) is still named in a sentence and ends the step with 1.
+usage_said=no
 usage() {
+    usage_said=yes
     said=yes
     echo "$PROGRAM: $*" >&2
     echo "usage: .github/scripts/macos-launch.sh" >&2
@@ -118,13 +122,18 @@ wait_until() {
 # ASN:<asn>:`, names its bundle on a line bundleID="<id>" and its type on the line of its
 # pid, type="<type>".
 app_type() {
-    lsappinfo list | awk -v id="$1" '
+    local list
+    list=$(lsappinfo list) || return 1
+    # awk reads the whole list and prints the first type found at the end: a reader that
+    # stopped at the first match would leave the writer with a closed pipe and SIGPIPE,
+    # which pipefail turns into a failure of the step although the type is there.
+    printf '%s\n' "$list" | awk -v id="$1" '
         /^ *[0-9]+\) / { hit = 0 }
         index($0, "bundleID=\"" id "\"") { hit = 1 }
-        hit && match($0, /type="[A-Za-z]+"/) {
-            print substr($0, RSTART + 6, RLENGTH - 7)
-            exit
-        }'
+        hit && found == "" && match($0, /type="[A-Za-z]+"/) {
+            found = substr($0, RSTART + 6, RLENGTH - 7)
+        }
+        END { if (found != "") print found }'
 }
 
 # What explains a failure: the processes of the user with their parents and terminals, and
@@ -145,14 +154,15 @@ cleanup() {
     local status=$? pid limit
     trap - EXIT ERR
     set +e
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ]; then
+    if [ "$status" -ne 0 ] && [ "$usage_said" = no ]; then
         if [ "$said" = no ]; then
             echo "$PROGRAM: ${last_command:-the step} failed with status $status" >&2
             status=1
         fi
         diagnose
     fi
-    for pid in $window_pid $keeper_pid; do
+    for pid in "$window_pid" "$keeper_pid"; do
+        [ -n "$pid" ] || continue
         if ! is_gone "$pid"; then
             kill "$pid" 2> /dev/null
             limit=$((SECONDS + 10))
@@ -182,8 +192,12 @@ both_run() {
     local listed
     listed=$(processes_of "$WINDOW") || fail "the processes of uid $uid could not be listed"
     windows=$(printf '%s' "$listed" | tr '\n' ';')
+    # The pid is kept as soon as it is seen, so that the trap ends a Window that came up
+    # alone when the wait for the Keeper runs out.
+    [ -z "$listed" ] || window_pid=${listed%% *}
     listed=$(processes_of "$KEEPER") || fail "the processes of uid $uid could not be listed"
     keepers=$(printf '%s' "$listed" | tr '\n' ';')
+    [ -z "$listed" ] || keeper_pid=${listed%% *}
     seen="windows (pid, parent): ${windows:-none}; keepers: ${keepers:-none}"
     [ -n "$windows" ] && [ -n "$keepers" ]
 }

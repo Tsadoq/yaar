@@ -66,7 +66,11 @@ fail() {
     exit 1
 }
 
+# Set by usage: only it may leave with status 2, so any other command that fails with 2
+# (grep, cmp or diff on an error) is still named in a sentence and ends the step with 1.
+usage_said=no
 usage() {
+    usage_said=yes
     echo "$NAME: $*" >&2
     echo "usage: .github/scripts/macos-install.sh install | uninstall" >&2
     exit 2
@@ -82,7 +86,7 @@ cleanup() {
     local status=$?
     trap - EXIT ERR
     set +e
-    if [ "$status" -ne 0 ] && [ "$status" -ne 2 ] && [ -n "$scratch" ] && [ ! -e "$scratch/said" ]; then
+    if [ "$status" -ne 0 ] && [ "$usage_said" = no ] && [ -n "$scratch" ] && [ ! -e "$scratch/said" ]; then
         echo "$NAME: ${last_command:-a command} failed with status $status" >&2
         status=1
     fi
@@ -178,6 +182,20 @@ if [ "$action" = install ]; then
         || fail "the install line with a download from https://example.invalid does not say that it downloaded nothing"
     if grep -q 'downloading' "$scratch/door.log"; then
         fail "the install line with a download from https://example.invalid began a download"
+    fi
+    # "Downloads nothing" is shown by what the door's output holds besides its sentence: a
+    # door that said the sentence and then fetched SHA256SUMS (which the script announces
+    # with no "downloading" line) would leave the address in a curl line and end on that
+    # fetch's error, not on the refusal.
+    last=$(grep -v '^[[:space:]]*$' "$scratch/door.log" | tail -n 1) || fail "the output of the install line with a download from https://example.invalid could not be read"
+    case "$last" in
+        *'Nothing was downloaded'*) ;;
+        *) fail "the install line with a download from https://example.invalid does not end on its refusal, so it went on after it: the last line is: $last" ;;
+    esac
+    named=$(awk '/example\.invalid/ { n++ } END { print n + 0 }' "$scratch/door.log")
+    [ "$named" -eq 1 ] || fail "the install line with a download from https://example.invalid names the address on $named lines and not on the one of its refusal: it tried to reach it"
+    if grep -qE 'curl:|could not download' "$scratch/door.log"; then
+        fail "the install line with a download from https://example.invalid ran curl against it: $(grep -E 'curl:|could not download' "$scratch/door.log" | head -n 2 | tr '\n' ' ')"
     fi
     [ ! -e "$app" ] || fail "the install line with a download from https://example.invalid left $app"
     echo "install 1: refused, exit 1, nothing downloaded, no $app"
